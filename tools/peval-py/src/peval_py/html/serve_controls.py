@@ -36,14 +36,11 @@ def render_serve_source_manager(
             "SOURCE_STATUS_CLASS": "loading" if loading else "",
             "REFRESH": escape(messages["serve_refresh"]),
             "SOURCE_MANAGER": escape(messages["serve_source_manager"]),
+            "REPORTS": escape(messages["workspace_reports"]),
             "LANGUAGE_CONTROL": render_language_control(messages, locale),
             "DROP_COPY": escape(messages["serve_drop_copy"]),
             "CLOSE": escape(messages["close"]),
             "ADD_SOURCE": escape(messages["serve_add_source"]),
-            "ADAPTER_DEFAULT_DB_PANEL": render_adapter_default_db_panel(
-                messages,
-                adapter_defaults,
-            ),
             "SOURCE_FORMS": "".join(
                 [
                     render_source_add_form("path", messages, adapter_defaults),
@@ -61,54 +58,17 @@ def render_serve_source_manager(
     )
 
 
-def render_adapter_default_db_panel(
-    messages: dict[str, str],
-    adapter_defaults: dict[str, str],
-) -> str:
-    adapter_ids = available_adapter_ids()
-    if not adapter_ids:
-        return ""
-    selected = next(
-        (adapter_id for adapter_id in adapter_ids if adapter_id in adapter_defaults),
-        adapter_ids[0],
+def render_serve_report_ui(messages: dict[str, str]) -> str:
+    return replace_template_tokens(
+        load_asset_text("serve_report_manager.html"),
+        {
+            "REPORTS": escape(messages["workspace_reports"]),
+            "REPORTS_COPY": escape(messages["workspace_reports_copy"]),
+            "CLOSE": escape(messages["close"]),
+            "REPORT_INVENTORY": escape(messages["report_inventory"]),
+            "REPORT_BINDINGS": escape(messages["report_bindings"]),
+        },
     )
-    options = "".join(
-        render_adapter_default_db_option(adapter_id, selected, adapter_defaults)
-        for adapter_id in adapter_ids
-    )
-    default_db = adapter_defaults.get(selected, "")
-    return f"""
-      <section class="adapter-default-db-panel" aria-label="{escape(messages["serve_adapter_default_db"])}">
-        <div>
-          <strong>{escape(messages["serve_adapter_default_db"])}</strong>
-          <p class="copy">{escape(messages["serve_adapter_default_db_copy"])}</p>
-        </div>
-        <form class="adapter-default-db-form" data-adapter-default-db-form>
-          <label>{escape(messages["serve_adapter"])}
-            <select name="adapter" data-adapter-default-db-select>
-              {options}
-            </select>
-          </label>
-          <label>{escape(messages["serve_default_db"])}
-            <input name="default_db_path" value="{escape(default_db)}" autocomplete="off" data-adapter-default-db-input>
-          </label>
-          <div class="adapter-default-db-actions">
-            <button class="step-toggle-button" type="button" data-adapter-default-db-clear>{escape(messages["serve_clear_adapter_default_db"])}</button>
-            <button class="step-toggle-button primary" type="submit">{escape(messages["serve_save_adapter_default_db"])}</button>
-          </div>
-        </form>
-      </section>"""
-
-
-def render_adapter_default_db_option(
-    adapter_id: str,
-    selected_adapter: str,
-    adapter_defaults: dict[str, str],
-) -> str:
-    default_db = adapter_defaults.get(adapter_id)
-    default_attr = f' data-default-db="{escape(default_db)}"' if default_db else ""
-    selected = " selected" if adapter_id == selected_adapter else ""
-    return f'<option value="{escape(adapter_id)}"{selected}{default_attr}>{escape(adapter_id)}</option>'
 
 
 def render_language_control(messages: dict[str, str], locale: str) -> str:
@@ -148,7 +108,14 @@ def render_source_add_form(
     if kind == "path":
         field_tag = f'<textarea name="{escape(name)}" autocomplete="off" required rows="4" data-path-picker-target aria-describedby="{escape(help_id)}"></textarea>'
     elif kind == "db":
-        field_tag = f'<textarea name="{escape(name)}" autocomplete="off" required rows="2" aria-describedby="{escape(help_id)}"></textarea>'
+        select_adapter_title = escape(messages["serve_select_adapter_for_default_db"])
+        field_tag = f"""<span class="db-path-control">
+                <textarea name="{escape(name)}" autocomplete="off" required rows="2" aria-describedby="{escape(help_id)}"></textarea>
+                <span class="db-default-actions">
+                  <button class="step-toggle-button" type="button" data-adapter-default-db-save disabled title="{select_adapter_title}">{escape(messages["serve_save_adapter_default_db"])}</button>
+                  <button class="step-toggle-button" type="button" data-adapter-default-db-clear disabled title="{select_adapter_title}">{escape(messages["serve_clear_adapter_default_db"])}</button>
+                </span>
+              </span>"""
     else:
         field_tag = f'<input name="{escape(name)}" autocomplete="off" required aria-describedby="{escape(help_id)}">'
     path_picker = ""
@@ -258,14 +225,8 @@ def render_source_list_item(
     adapter = str(source.get("adapter") or "-")
     status = str(source.get("last_status") or "-")
     active = bool(source.get("active", True))
-    snapshot = bool(source.get("snapshot", False))
-    refreshable = bool(source.get("refreshable", not snapshot))
     source_key = str(source.get("source_key") or "")
-    refresh_button = (
-        f'<button type="button" data-source-action="refresh" data-source-key="{escape(source_key)}">{escape(messages["serve_refresh"])}</button>'
-        if refreshable and source_key
-        else f'<span>{escape(messages["serve_snapshot"])}</span>'
-    )
+    trial_key = str(source.get("trial_key") or "")
     source_checkbox = (
         f'<label class="select-box"><input type="checkbox" data-source-row-select="{escape(source_key)}" '
         f'aria-label="{escape(messages["select_source"])}: {escape(source_key)}"><span></span></label>'
@@ -273,6 +234,13 @@ def render_source_list_item(
         else ""
     )
     state_label = messages["serve_active"] if active else messages["serve_archived"]
+    alias_html = escape(alias) if alias else '<span class="muted">-</span>'
+    alias_cell = (
+        f'<span class="editable-source-cell" data-source-inline-edit="alias" '
+        f'data-source-key="{escape(source_key)}" data-trial-key="{escape(trial_key)}" '
+        f'data-value="{escape(alias)}" title="{escape(messages["double_click_to_edit"])}">'
+        f'{alias_html}</span>'
+    )
     return f"""
             <li class="source-row {'archived' if not active else ''}" data-source-row data-source-key="{escape(source_key)}">
               <div class="source-row-select">{source_checkbox}</div>
@@ -280,13 +248,8 @@ def render_source_list_item(
                 <strong>{escape(display_label)}</strong>
                 {render_source_origin(label, alias)}
                 <span>{escape(kind)} / {escape(adapter)} / {escape(status)} / {escape(state_label)}</span>
-                <label class="source-alias-edit">
-                  <span>{escape(messages["serve_source_alias"])}</span>
-                  <input data-source-alias-input data-source-key="{escape(source_key)}" value="{escape(alias)}" autocomplete="off">
-                  <button type="button" data-source-alias-save data-source-key="{escape(source_key)}">{escape(messages["serve_save_alias"])}</button>
-                </label>
+                {alias_cell}
               </div>
-              <div class="source-row-actions">{refresh_button}</div>
             </li>"""
 
 

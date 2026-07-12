@@ -3,6 +3,41 @@ from __future__ import annotations
 from reports_html_support import *
 
 class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
+    def test_workspace_report_chrome_and_catalog_are_serve_only(self) -> None:
+        report = {
+            "schema_version": 19,
+            "includes": ["core"],
+            "trajectory": [],
+            "trajectory_meta": [],
+        }
+        catalog = [
+            {
+                "report_id": "20260710-143012-123456",
+                "filename": "cross-session-report.md",
+                "format": "markdown",
+                "source_keys": ["cell-a", "cell-b"],
+            }
+        ]
+
+        static_html = render_html(report)
+        serve_html = render_serve_html(report, reports=catalog)
+
+        self.assertEqual(
+            script_json(static_html, "peval-py-render-options"),
+            {"mode": "report", "sources": []},
+        )
+        self.assertNotIn('<div class="report-manager-backdrop"', static_html)
+        self.assertNotIn('<aside class="report-reader"', static_html)
+        serve_options = script_json(serve_html, "peval-py-render-options")
+        self.assertEqual(serve_options["reports"], catalog)
+        self.assertIn('data-report-manager-open>Reports</button>', serve_html)
+        self.assertIn('<div class="report-manager-backdrop"', serve_html)
+        self.assertIn('<aside class="report-reader"', serve_html)
+        self.assertIn('data-report-inventory', serve_html)
+        self.assertIn('data-report-bindings', serve_html)
+        self.assertIn('sandbox="allow-scripts"', serve_html)
+        self.assertNotIn('allow-same-origin', serve_html)
+
     def test_serve_html_mode_reuses_report_body_with_export_selection_controls(self) -> None:
         config = ToolConfig(adapter="opencode")
         first = convert_records(read_jsonl(str(FIXTURES / "common_session.jsonl")), config)
@@ -76,16 +111,13 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('data-locale-select', serve_html)
         self.assertIn('class="source-manager-modal"', serve_html)
         self.assertIn("width:min(1480px,calc(100vw - 28px));", serve_html)
-        self.assertIn('class="adapter-default-db-panel"', serve_html)
-        self.assertIn("Adapter default DB", serve_html)
-        self.assertIn("data-adapter-default-db-form", serve_html)
-        self.assertIn("data-adapter-default-db-select", serve_html)
-        self.assertIn("data-adapter-default-db-input", serve_html)
+        self.assertNotIn('class="adapter-default-db-panel"', serve_html)
+        self.assertNotIn("data-adapter-default-db-form", serve_html)
+        self.assertIn("grid-template-rows:auto minmax(0,1fr)", serve_html)
+        self.assertIn("data-adapter-default-db-save", serve_html)
         self.assertIn("data-adapter-default-db-clear", serve_html)
-        self.assertIn(
-            '<option value="opencode" selected data-default-db="/tmp/opencode.db">opencode</option>',
-            serve_html,
-        )
+        self.assertIn("Save as default", serve_html)
+        self.assertIn("保存为默认", zh_serve_html)
         self.assertIn("Upload snapshot", serve_html)
         self.assertIn("report JSON uploads", serve_html)
         self.assertIn("Session / ATIF / runs Path", serve_html)
@@ -109,12 +141,27 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("data-db-add-selected", serve_html)
         self.assertIn("data-db-select-all", serve_html)
         self.assertEqual(serve_html.count('class="source-adapter-select"'), 4)
-        self.assertEqual(serve_html.count('class="source-add-actions"'), 4)
+        self.assertEqual(len(re.findall(r'class="[^"]*\bsource-add-actions\b', serve_html)), 4)
+        db_path_control = re.search(
+            r'<span class="db-path-control">\s*<textarea name="db".*?</textarea>'
+            r'\s*<span class="db-default-actions">(.*?)</span>\s*</span>',
+            serve_html,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(db_path_control)
+        default_actions = db_path_control.group(1)
+        self.assertLess(
+            default_actions.index("data-adapter-default-db-save"),
+            default_actions.index("data-adapter-default-db-clear"),
+        )
+        self.assertNotIn("db-source-add-actions", serve_html)
         self.assertIn('name="adapter" aria-label="Adapter"', serve_html)
         self.assertIn('<option value="auto" selected>Auto</option>', serve_html)
         self.assertIn('<option value="opencode"  data-default-db="/tmp/opencode.db">opencode</option>', serve_html)
         self.assertNotIn('name="alias"', serve_html)
-        self.assertIn('data-source-alias-save', serve_html)
+        self.assertNotIn('data-source-alias-save', serve_html)
+        self.assertNotIn('data-source-alias-input', serve_html)
+        self.assertIn('data-source-inline-edit="alias"', serve_html)
         self.assertIn(
             compact_css_text(
                 ".source-manager-body{min-height:0;display:grid;"
@@ -131,9 +178,19 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
             ),
             compact_serve_html,
         )
+        self.assertIn(
+            compact_css_text(
+                ".db-path-control{display:grid;"
+                "grid-template-columns:minmax(0,1fr) max-content;"
+                "align-items:stretch;gap:8px;min-width:0}"
+            ),
+            compact_serve_html,
+        )
         self.assertNotIn("adapter-choice-group", serve_html)
         self.assertNotIn('type="radio" name="adapter"', serve_html)
-        self.assertIn('data-source-action="refresh"', serve_html)
+        self.assertNotIn('data-source-action="refresh"', serve_html)
+        self.assertNotIn('{ key: "actions", label: t("serve_refresh", "Refresh")', serve_html)
+        self.assertIn('data-refresh-sources', serve_html)
         self.assertNotIn('data-source-action="delete"', serve_html)
         self.assertIn("data-source-bulk-state", serve_html)
         self.assertIn("data-source-bulk-delete", serve_html)
@@ -177,10 +234,11 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('serveApi("/api/config/adapter-default-db"', serve_html)
         self.assertIn('serveApi("/api/path-picker"', serve_html)
         self.assertIn("adapterDefaults: initialAdapterDefaults()", serve_html)
-        self.assertIn("function saveAdapterDefaultDb(form)", serve_html)
+        self.assertIn("function saveAdapterDefaultDb(form, defaultDbPath)", serve_html)
         self.assertIn("function updateAdapterDefaultOptions()", serve_html)
         self.assertIn("function bindAdapterDefaultDbControls()", serve_html)
-        self.assertIn("function saveSourceAlias(button)", serve_html)
+        self.assertIn("function renderServeSourceAliasCell(source)", serve_html)
+        self.assertIn("function saveInlineSourceEdit(cell, field, sourceKey, value)", serve_html)
         self.assertIn('serveApi("/api/db-sessions"', serve_html)
         self.assertIn("function inspectDbSessions(form)", serve_html)
         self.assertIn("function addSelectedDbSessions(form)", serve_html)

@@ -39,9 +39,9 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading), serveStartupPolling: false };
-const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control";
-const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open]";
+const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", draftBindings: new Set(), dirty: false, opener: null }, reportReader: { openId: null, opener: null }, selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading), serveStartupPolling: false };
+const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.report-cell-menu";
+const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.report-cell-menu[open]";
 function closeOpenSubmenus(except = null) {
   document.querySelectorAll(OPEN_SUBMENU_DETAILS_SELECTOR).forEach(details => {
     if (details !== except) details.open = false;

@@ -199,7 +199,9 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertIn('tableId: "timeline"', html)
         self.assertIn("Leaderboard", html)
         self.assertNotIn("leaderboard_eyebrow", html)
+        self.assertNotIn("Each row is one visible session-as-Trial", html)
         self.assertIn("Leaderboard Summary", html)
+        self.assertNotIn("Distribution of metrics across the current visible Leaderboard rows", html)
         self.assertIn('id="leaderboard-summary"', html)
         self.assertIn("data-table-sort", html)
         self.assertIn("selected-row", html)
@@ -215,6 +217,7 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertIn("state.comparisonScrollSyncing", html)
         self.assertIn("bindComparisonScrollSync();", html)
         self.assertIn("Trajectory Overview", html)
+        self.assertNotIn("Rows follow the current Leaderboard order", html)
         self.assertIn("trajectory-overview-title", html)
         self.assertIn(
             compact_css_text(

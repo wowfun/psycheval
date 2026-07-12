@@ -7,7 +7,10 @@ from importlib import import_module
 from typing import Any
 
 from peval_py.html.assets import load_asset_text, render_echarts_script
-from peval_py.html.serve_controls import render_serve_source_manager
+from peval_py.html.serve_controls import (
+    render_serve_report_ui,
+    render_serve_source_manager,
+)
 from peval_py.i18n import messages_for, normalize_locale
 
 
@@ -16,6 +19,7 @@ def render_html(
     locale: str = "en",
     mode: str = "report",
     sources: list[dict[str, Any]] | None = None,
+    reports: list[dict[str, Any]] | None = None,
     adapter_defaults: dict[str, str] | None = None,
     loading: bool = False,
     load_error: str | None = None,
@@ -31,6 +35,7 @@ def render_html(
         "sources": serve_source_payload if normalized_mode == "serve" else [],
     }
     if normalized_mode == "serve":
+        render_options["reports"] = list(reports or [])
         render_options["adapter_defaults"] = adapter_defaults or {}
         render_options["loading"] = bool(loading)
         if load_error:
@@ -49,6 +54,10 @@ def render_html(
         )
         if normalized_mode == "serve"
         else "",
+    )
+    payload = payload.replace(
+        "__SERVE_REPORT_UI__",
+        render_serve_report_ui(messages) if normalized_mode == "serve" else "",
     )
     payload = payload.replace("__ECHARTS_SCRIPT__", render_echarts_script(normalized_mode))
     payload = payload.replace("__CSS__", load_asset_text("report.css"))
@@ -80,6 +89,7 @@ def render_serve_html(
     report: dict[str, Any],
     locale: str = "en",
     sources: list[dict[str, Any]] | None = None,
+    reports: list[dict[str, Any]] | None = None,
     adapter_defaults: dict[str, str] | None = None,
     loading: bool = False,
     load_error: str | None = None,
@@ -89,6 +99,7 @@ def render_serve_html(
         locale=locale,
         mode="serve",
         sources=sources,
+        reports=reports,
         adapter_defaults=adapter_defaults,
         loading=loading,
         load_error=load_error,

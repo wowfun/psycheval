@@ -8,10 +8,7 @@ function renderLeaderboardSummary(rows = leaderboardRows()) {
     : `<p class="leaderboard-summary-empty">${esc(t("leaderboard_summary_empty", "No visible rows to summarize."))}</p>`;
   target.innerHTML = `
     <div class="panel-head">
-      <div>
-        <h2 id="leaderboard-summary-title">${esc(t("leaderboard_summary", "Leaderboard Summary"))}</h2>
-        <p class="copy">${esc(t("leaderboard_summary_copy", "Distribution of metrics across the current visible Leaderboard rows."))}</p>
-      </div>
+      <h2 id="leaderboard-summary-title">${esc(t("leaderboard_summary", "Leaderboard Summary"))}</h2>
     </div>
     ${body}
   `;

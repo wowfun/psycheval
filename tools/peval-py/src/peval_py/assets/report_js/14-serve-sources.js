@@ -1,6 +1,8 @@
 function openServeSourceManager() {
   const manager = document.querySelector("[data-source-manager]");
   if (!manager) return;
+  closeWorkspaceReportManager({ restoreFocus: false });
+  closeWorkspaceReportReader({ restoreFocus: false });
   manager.hidden = false;
   document.body.classList.add("source-manager-open");
 }
@@ -41,6 +43,7 @@ function renderServeSources() {
     })}</li>`;
     bindDataTableControls(list, "sources", () => renderServeSources());
     bindSourceSelectionControls(list);
+    bindInlineSourceEditors(list);
     syncSourceManagerBulkActions(rows);
   }
 }
@@ -69,8 +72,7 @@ function sourceColumns() {
     { key: "label", label: t("source", "Source"), width: "220px", value: source => sourceDisplayLabel(source), html: renderServeSourceLabel, cellTitle: source => source?.label || "" },
     { key: "last_turn_finished_at_ms", label: t("last_turn_end", "Last Turn End"), width: "156px", type: "number", numeric: true, sortable: true, value: source => source?.last_turn_finished_at_ms, format: fmtDate },
     { key: "status", label: t("status", "status"), width: "170px", value: source => sourceStatusText(source), html: renderServeSourceStatus },
-    { key: "alias", label: t("serve_source_alias", "Alias"), width: "240px", value: source => String(source?.source_alias || "").trim() || "-", html: renderServeSourceAliasEdit },
-    { key: "actions", label: t("serve_refresh", "Refresh"), width: "110px", value: () => "", html: renderServeSourceActions }
+    { key: "alias", label: t("serve_source_alias", "Alias"), width: "240px", value: source => String(source?.source_alias || "").trim() || "-", html: renderServeSourceAliasCell }
   ];
 }
 function sourceRows() {
@@ -111,14 +113,10 @@ function renderSourceSelection(source) {
   const checked = key && state.sourceSelection.has(key);
   return `<label class="select-box"><input type="checkbox" data-source-row-select="${esc(key)}" ${checked ? "checked" : ""} aria-label="${esc(t("select_source", "Select source"))}: ${esc(key)}"><span></span></label>`;
 }
-function renderServeSourceAliasEdit(source) {
-  const key = source?.source_key || "";
+function renderServeSourceAliasCell(source) {
   const alias = String(source?.source_alias || "").trim();
-  return `<label class="source-alias-edit">
-    <span>${esc(t("serve_source_alias", "Alias"))}</span>
-    <input data-source-alias-input data-source-key="${esc(key)}" value="${esc(alias)}" autocomplete="off">
-    <button type="button" data-source-alias-save data-source-key="${esc(key)}">${esc(t("serve_save_alias", "Save alias"))}</button>
-  </label>`;
+  const html = alias ? esc(alias) : `<span class="muted">-</span>`;
+  return renderEditableSourceCell(source, "alias", alias, html);
 }
 async function choosePathSourceFiles(button) {
   const form = button?.closest?.("[data-source-add-form]");
@@ -138,15 +136,6 @@ async function choosePathSourceFiles(button) {
     showServeNotice(message, true);
     setServeStatus(message, true);
   }
-}
-function renderServeSourceActions(source) {
-  const key = source?.source_key || "";
-  const snapshot = Boolean(source?.snapshot);
-  const refreshable = source?.refreshable !== false && !snapshot;
-  const refreshButton = refreshable && key
-    ? `<button type="button" data-source-action="refresh" data-source-key="${esc(key)}">${esc(t("serve_refresh", "Refresh"))}</button>`
-    : `<span>${esc(t("serve_snapshot", "snapshot"))}</span>`;
-  return `<div class="source-row-actions">${refreshButton}</div>`;
 }
 function sourceVisibleKeys(rows = sourceRows()) {
   return Array.from(new Set(rows.map(source => String(source?.source_key || "").trim()).filter(Boolean)));
@@ -221,6 +210,7 @@ async function submitServeSourceForm(form) {
     setServeStatus(t("serve_refresh", "Refresh"));
     const payload = await serveApi("/api/sources", { method: "POST", body });
     form.reset();
+    if (kind === "db") syncAdapterDefaultDbControls(form);
     applyServeMutationPayload(payload);
     showImportResultsSummary(payload);
   } catch (error) {
@@ -258,6 +248,7 @@ async function inspectDbSessions(form) {
       }
     });
     if (payload?.adapter) setAdapterChoice(form, payload.adapter);
+    syncAdapterDefaultDbControls(form);
     renderDbSessionPicker(form, payload);
     setServeStatus(t("serve_latest_snapshots", "Latest snapshots"));
   } catch (error) {
@@ -349,6 +340,7 @@ async function addSelectedDbSessions(form) {
       }
     });
     form.reset();
+    syncAdapterDefaultDbControls(form);
     const picker = form.querySelector("[data-db-session-picker]");
     if (picker) {
       picker.hidden = true;

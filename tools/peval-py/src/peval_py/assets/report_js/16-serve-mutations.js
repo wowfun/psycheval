@@ -7,16 +7,6 @@ function formPayload(form) {
   }
   return body;
 }
-async function mutateServeSource(sourceKey, action) {
-  if (!sourceKey || !action) return;
-  if (action === "delete" && !window.confirm(t("serve_delete_confirm", "Delete this source from peval-py state?"))) return;
-  try {
-    const payload = await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}/${encodeURIComponent(action)}`, { method: "POST", body: {} });
-    applyServeMutationPayload(payload);
-  } catch (error) {
-    setServeStatus(error.message || String(error), true);
-  }
-}
 async function mutateSelectedServeSourceState() {
   const rows = sourceRows();
   const sourceKeys = sourceSelectionKeys(rows);
@@ -57,22 +47,6 @@ async function deleteSelectedServeSources() {
     setServeStatus(error.message || String(error), true);
   }
 }
-async function saveSourceAlias(button) {
-  const sourceKey = button?.dataset?.sourceKey;
-  if (!sourceKey) return;
-  const row = button.closest("[data-source-row]");
-  const input = row?.querySelector?.("[data-source-alias-input]");
-  const alias = String(input?.value || "").trim();
-  try {
-    const payload = await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}/alias`, {
-      method: "POST",
-      body: { alias, report_source_state: currentServeSourceMode() }
-    });
-    applyServeMutationPayload(payload, { preserveTrial: selectedKey() });
-  } catch (error) {
-    setServeStatus(error.message || String(error), true);
-  }
-}
 function bindLeaderboardSearchControls(target) {
   if (!serveMode() || !target) return;
   const input = target.querySelector("[data-leaderboard-search-input]");
@@ -84,14 +58,15 @@ function bindLeaderboardSearchControls(target) {
       applyLeaderboardSearchMode();
     });
   }
-  target.querySelectorAll("input[name=\"leaderboard-search-scope\"]").forEach(control => {
+  const control = target.querySelector("[data-leaderboard-search-scope]");
+  if (control) {
     control.addEventListener("click", event => event.stopPropagation());
     control.addEventListener("change", event => {
       event.stopPropagation();
       state.search.scope = control.value === "all" ? "all" : "visible";
       applyLeaderboardSearchMode();
     });
-  });
+  }
 }
 async function applyLeaderboardSearchMode() {
   if (!serveMode()) {
@@ -431,6 +406,7 @@ async function serveApi(path, options = {}) {
 }
 function applyServeMutationPayload(payload, options = {}) {
   hideServeNotice();
+  const reportsChanged = Array.isArray(payload?.reports);
   if (payload?.loading === false) state.serveLoading = false;
   if (payload?.loading === true) state.serveLoading = true;
   if (Array.isArray(payload?.sources)) {
@@ -438,6 +414,7 @@ function applyServeMutationPayload(payload, options = {}) {
     pruneSourceSelection();
     renderServeSources();
   }
+  if (reportsChanged) applyWorkspaceReportCatalog(payload.reports);
   if (payload?.report) {
     const payloadMode = normalizeServeSourceMode(payload.report_source_state || options.sourceMode || currentServeSourceMode());
     if (Array.isArray(payload?.sources)) clearServeReportCacheExcept(payloadMode);
@@ -457,6 +434,7 @@ function applyServeMutationPayload(payload, options = {}) {
     state.rowSelection.clear();
     render(payload.report);
   }
+  if (!payload?.report && reportsChanged) renderComparisonPanels({ trace: false });
   setServeStatus(serveSourceModeStatusText());
 }
 function clearServeReportCacheExcept(mode) {

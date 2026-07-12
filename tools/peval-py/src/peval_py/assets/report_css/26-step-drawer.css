@@ -97,22 +97,15 @@
   .topline,.panel-head,.trace-head,.step>summary,.trajectory-row {
     grid-template-columns:1fr;
   }
-  .source-manager-head,.adapter-default-db-panel,.adapter-default-db-form,.source-manager-body,.source-row {
+  .source-manager-head,.source-manager-body,.source-row {
     grid-template-columns:1fr;
   }
   .serve-source-toolbar {
     align-items:flex-start;
     flex-direction:column;
   }
-  .serve-source-actions,.source-manager-list-actions,.source-row-actions {
+  .serve-source-actions,.source-manager-list-actions {
     justify-content:flex-start;
-  }
-  .source-alias-edit {
-    grid-template-columns:1fr;
-    justify-items:start;
-  }
-  .source-alias-edit input {
-    width:100%;
   }
   .source-manager-backdrop {
     padding:10px;
@@ -127,10 +120,10 @@
   .source-manager-forms {
     overflow:visible;
   }
-  .adapter-default-db-actions {
-    justify-content:flex-start;
+  .leaderboard-actions {
+    justify-items:start;
   }
-  .leaderboard-export {
+  .leaderboard-action-row,.leaderboard-export,.leaderboard-search {
     justify-content:flex-start;
   }
   .info-grid {

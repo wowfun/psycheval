@@ -5,7 +5,7 @@ function renderTrajectoryOverview(rows = leaderboardRows()) {
     ? rows.map(row => renderTrajectoryOverviewRow(row)).join("")
     : `<div class="trajectory-empty">${esc(t("no_matching_rows", "No matching rows"))}</div>`;
   target.innerHTML = `
-    <div class="panel-head"><div><h2 id="trajectory-overview-title">${esc(t("trajectory_overview", "Trajectory Overview"))}</h2><p class="copy">${esc(t("trajectory_overview_copy", "Rows follow the current Leaderboard order. Nodes align by step index and show role initials."))}</p></div>${renderServeSourceStateControls(rows)}</div>
+    <div class="panel-head"><h2 id="trajectory-overview-title">${esc(t("trajectory_overview", "Trajectory Overview"))}</h2>${renderServeSourceStateControls(rows)}</div>
     <div class="trajectory-overview-list">${body}</div>
   `;
   bindTrajectoryControls(target);
@@ -188,5 +188,6 @@ function renderStepDrawer() {
   });
 }
 function setStepDrawerOpen(open) {
+  if (open && serveMode()) closeWorkspaceReportReader({ restoreFocus: false });
   document.body.classList.toggle("step-drawer-open", Boolean(open));
 }

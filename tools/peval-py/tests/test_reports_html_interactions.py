@@ -798,7 +798,22 @@ const result = vm.runInContext(`(() => {{
   state.view = report;
   state.serveSources = sources;
   state.serveSourceMode = "all";
-  state.search.scope = "all";
+  const searchMarkup = renderLeaderboardSearchControls();
+  const scopeListeners = {{}};
+  const scopeControl = {{
+    value: "visible",
+    addEventListener(type, handler) {{ scopeListeners[type] = handler; }}
+  }};
+  const searchTarget = {{
+    querySelector(selector) {{
+      return selector === "[data-leaderboard-search-scope]" ? scopeControl : null;
+    }}
+  }};
+  let applyCount = 0;
+  applyLeaderboardSearchMode = () => {{ applyCount += 1; }};
+  bindLeaderboardSearchControls(searchTarget);
+  scopeControl.value = "all";
+  scopeListeners.change({{ stopPropagation() {{}} }});
   state.search.query = "needle";
   const messageRows = leaderboardRows().map(row => [row.trial_key, row.source_key, row.source_tags]);
   state.search.query = "observed target";
@@ -806,7 +821,17 @@ const result = vm.runInContext(`(() => {{
   state.search.query = "";
   setFilterValue("leaderboard", "source_tags", "blue", true);
   const tagRows = leaderboardRows().map(row => row.trial_key);
-  return JSON.stringify({{ messageRows, observationRows, tagRows }});
+  return JSON.stringify({{
+    messageRows,
+    observationRows,
+    tagRows,
+    applyCount,
+    selectedScope: state.search.scope,
+    hasScopeSelect: searchMarkup.includes("data-leaderboard-search-scope"),
+    hasVisibleOption: searchMarkup.includes('<option value="visible"'),
+    hasAllOption: searchMarkup.includes('<option value="all"'),
+    hasScopeRadios: searchMarkup.includes('type="radio"')
+  }});
 }})()`, context);
 console.log(result);
 """
@@ -827,6 +852,12 @@ console.log(result);
         )
         self.assertEqual(result["observationRows"], ["trial:archived"])
         self.assertEqual(result["tagRows"], ["trial:archived"])
+        self.assertEqual(result["applyCount"], 1)
+        self.assertEqual(result["selectedScope"], "all")
+        self.assertTrue(result["hasScopeSelect"])
+        self.assertTrue(result["hasVisibleOption"])
+        self.assertTrue(result["hasAllOption"])
+        self.assertFalse(result["hasScopeRadios"])
 
     def test_markdown_renderer_renders_analysis_md_headings_tables_and_escapes(self) -> None:
         if not shutil.which("node"):
@@ -1959,6 +1990,9 @@ vm.createContext(context);
 vm.runInContext(asset, context);
 const promise = vm.runInContext(`(async () => {
   applyServeMutationPayload({ sources, report: activeReport, report_source_key: "source-a", report_source_state: "active" });
+  const actionRowStart = nodes.leaderboard.innerHTML.indexOf('class="leaderboard-action-row"');
+  const searchStart = nodes.leaderboard.innerHTML.indexOf('class="leaderboard-search"');
+  const actionRowMarkup = nodes.leaderboard.innerHTML.slice(actionRowStart, searchStart);
   const initial = {
     mode: state.serveSourceMode,
     leaderboardControls: (nodes.leaderboard.innerHTML.match(/data-source-state-controls/g) || []).length,
@@ -1966,6 +2000,12 @@ const promise = vm.runInContext(`(async () => {
     actionLabel: nodes.leaderboard.innerHTML.includes("Archive selected"),
     archivedToggleEnabled: !nodes.leaderboard.innerHTML.includes("data-source-state-toggle  disabled"),
     overviewCheckboxes: (nodes["trajectory-overview"].innerHTML.match(/data-row-select/g) || []).length,
+    unifiedActionRow: actionRowStart >= 0
+      && searchStart > actionRowStart
+      && actionRowMarkup.includes("data-source-state-controls")
+      && actionRowMarkup.includes("data-source-state-action")
+      && actionRowMarkup.includes("data-report-attach")
+      && actionRowMarkup.includes("leaderboard-export"),
   };
   await switchServeSourceMode("archived");
   const afterArchived = {
@@ -2032,6 +2072,7 @@ promise.then(result => console.log(result)).catch(error => { console.error(error
         self.assertTrue(result["initial"]["actionLabel"])
         self.assertTrue(result["initial"]["archivedToggleEnabled"])
         self.assertEqual(result["initial"]["overviewCheckboxes"], 3)
+        self.assertTrue(result["initial"]["unifiedActionRow"])
         self.assertEqual(result["afterArchived"]["mode"], "archived")
         self.assertEqual(result["afterArchived"]["reportRows"], 1)
         self.assertEqual(result["afterArchived"]["selectedSourceKey"], "source-d")
@@ -2053,6 +2094,178 @@ promise.then(result => console.log(result)).catch(error => { console.error(error
         self.assertEqual(result["unavailable"]["mode"], "active")
         self.assertTrue(result["unavailable"]["fetchUnchanged"])
         self.assertTrue(result["unavailable"]["zeroTargetDisabled"])
+
+    def test_sqlite_db_form_manages_adapter_defaults_in_place(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        asset = asset.rsplit("\nrender(data());", 1)[0]
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+function interactiveControl(value = "") {
+  return {
+    value,
+    disabled: false,
+    title: "",
+    listeners: {},
+    addEventListener(type, handler) { this.listeners[type] = handler; }
+  };
+}
+const options = [
+  { value: "auto", dataset: {} },
+  { value: "hermes", dataset: { defaultDb: "/old/hermes.db" } },
+  { value: "opencode", dataset: {} }
+];
+const select = interactiveControl("auto");
+select.tagName = "SELECT";
+select.options = options;
+const field = interactiveControl("");
+const saveButton = interactiveControl();
+const clearButton = interactiveControl();
+const picker = { hidden: true, innerHTML: "" };
+const form = {
+  dataset: { sourceKind: "db" },
+  reset() { select.value = "auto"; field.value = ""; },
+  querySelector(selector) {
+    if (selector === '[name="adapter"]') return select;
+    if (selector === '[name="db"]') return field;
+    if (selector === "[data-adapter-default-db-save]") return saveButton;
+    if (selector === "[data-adapter-default-db-clear]") return clearButton;
+    if (selector === "[data-db-session-picker]") return picker;
+    return null;
+  },
+  querySelectorAll() { return []; }
+};
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve", sources: [], adapter_defaults: { hermes: "/old/hermes.db" } }) }
+};
+const calls = [];
+const context = {
+  document: {
+    body: { classList: { add() {}, remove() {}, toggle() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll(selector) {
+      if (selector === '[data-source-add-form][data-source-kind="db"]') return [form];
+      if (selector === 'select[name="adapter"] option') return options;
+      return [];
+    }
+  },
+  window: { addEventListener() {} },
+  console, JSON, Number, String, Object, Math, Date, Set, Array, RegExp,
+  form, select, field, saveButton, clearButton, options, picker, calls
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+vm.runInContext(`(async () => {
+  selectedAdapterValue = () => select.value === "auto" ? undefined : select.value;
+  formPayload = () => ({ db: field.value, adapter: selectedAdapterValue(form) });
+  setServeStatus = () => {};
+  showServeNotice = () => {};
+  renderDbSessionPicker = () => {};
+  applyServeMutationPayload = () => {};
+  showImportResultsSummary = () => {};
+  serveApi = async (path, options = {}) => {
+    calls.push({ path, body: options.body || null });
+    if (path === "/api/config/adapter-default-db") {
+      if (options.body.default_db_path) {
+        return { adapter: options.body.adapter, default_db_path: "/resolved/new.db", adapter_defaults: { hermes: "/resolved/new.db" } };
+      }
+      return { adapter: options.body.adapter, default_db_path: null, adapter_defaults: {} };
+    }
+    if (path === "/api/db-sessions") return { adapter: "opencode", db: options.body.db, sessions: [] };
+    if (path === "/api/sources") return { sources: [], import_results: [] };
+    throw new Error("unexpected path " + path);
+  };
+  bindAdapterDefaultDbControls();
+  const initial = {
+    saveDisabled: saveButton.disabled,
+    clearDisabled: clearButton.disabled,
+    saveBound: typeof saveButton.listeners.click === "function",
+    clearBound: typeof clearButton.listeners.click === "function"
+  };
+  select.value = "hermes";
+  select.listeners.change();
+  const selected = { path: field.value, saveDisabled: saveButton.disabled, clearDisabled: clearButton.disabled };
+  field.value = "/new/hermes.db";
+  field.listeners.input();
+  await saveAdapterDefaultDb(form, field.value);
+  const saveCall = calls.find(call => call.path === "/api/config/adapter-default-db");
+  const afterSave = { path: field.value, defaults: { ...state.adapterDefaults }, saveCall };
+  await saveAdapterDefaultDb(form, "");
+  const defaultCalls = calls.filter(call => call.path === "/api/config/adapter-default-db");
+  const afterClear = {
+    path: field.value,
+    defaults: { ...state.adapterDefaults },
+    clearDisabled: clearButton.disabled,
+    clearCall: defaultCalls[1]
+  };
+  select.value = "auto";
+  field.value = "/tmp/opencode.db";
+  syncAdapterDefaultDbControls(form);
+  await inspectDbSessions(form);
+  const afterInspect = { adapter: select.value, path: field.value, saveDisabled: saveButton.disabled, clearDisabled: clearButton.disabled };
+  await submitServeSourceForm(form);
+  const afterReset = { adapter: select.value, path: field.value, saveDisabled: saveButton.disabled, clearDisabled: clearButton.disabled };
+  console.log(JSON.stringify({ initial, selected, afterSave, afterClear, afterInspect, afterReset }));
+})().catch(error => { console.error(error && error.stack || error); process.exitCode = 1; });`, context);
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertEqual(
+            result["initial"],
+            {
+                "saveDisabled": True,
+                "clearDisabled": True,
+                "saveBound": True,
+                "clearBound": True,
+            },
+        )
+        self.assertEqual(
+            result["selected"],
+            {"path": "/old/hermes.db", "saveDisabled": False, "clearDisabled": False},
+        )
+        self.assertEqual(
+            result["afterSave"]["saveCall"],
+            {
+                "path": "/api/config/adapter-default-db",
+                "body": {"adapter": "hermes", "default_db_path": "/new/hermes.db"},
+            },
+        )
+        self.assertEqual(result["afterSave"]["path"], "/resolved/new.db")
+        self.assertEqual(result["afterSave"]["defaults"], {"hermes": "/resolved/new.db"})
+        self.assertEqual(
+            result["afterClear"]["clearCall"],
+            {
+                "path": "/api/config/adapter-default-db",
+                "body": {"adapter": "hermes", "default_db_path": ""},
+            },
+        )
+        self.assertEqual(result["afterClear"]["path"], "/resolved/new.db")
+        self.assertEqual(result["afterClear"]["defaults"], {})
+        self.assertTrue(result["afterClear"]["clearDisabled"])
+        self.assertEqual(
+            result["afterInspect"],
+            {
+                "adapter": "opencode",
+                "path": "/tmp/opencode.db",
+                "saveDisabled": False,
+                "clearDisabled": True,
+            },
+        )
+        self.assertEqual(
+            result["afterReset"],
+            {"adapter": "auto", "path": "", "saveDisabled": True, "clearDisabled": True},
+        )
 
     def test_source_manager_selection_batches_state_and_delete_actions(self) -> None:
         if not shutil.which("node"):
@@ -2173,6 +2386,9 @@ const promise = vm.runInContext(`(async () => {
     rowCheckboxes: (nodes.list.innerHTML.match(/data-source-row-select/g) || []).length,
     headerCheckbox: nodes.list.innerHTML.includes("data-source-select-visible"),
     perRowDeleteRemoved: !nodes.list.innerHTML.includes('data-source-action="delete"'),
+    perRowRefreshRemoved: !nodes.list.innerHTML.includes('data-source-action="refresh"'),
+    inlineAlias: nodes.list.innerHTML.includes('data-source-inline-edit="alias"'),
+    aliasButtonRemoved: !nodes.list.innerHTML.includes("data-source-alias-save"),
     bulkDisabled: nodes.stateButton.disabled && nodes.deleteButton.disabled,
   };
   state.sourceSelection.add("source-a");
@@ -2221,6 +2437,9 @@ promise.then(result => console.log(result)).catch(error => { console.error(error
         self.assertEqual(result["initial"]["rowCheckboxes"], 2)
         self.assertTrue(result["initial"]["headerCheckbox"])
         self.assertTrue(result["initial"]["perRowDeleteRemoved"])
+        self.assertTrue(result["initial"]["perRowRefreshRemoved"])
+        self.assertTrue(result["initial"]["inlineAlias"])
+        self.assertTrue(result["initial"]["aliasButtonRemoved"])
         self.assertTrue(result["initial"]["bulkDisabled"])
         self.assertEqual(result["selectedActive"]["label"], "Archive selected")
         self.assertEqual(result["selectedActive"]["action"], "archived")
@@ -2743,6 +2962,416 @@ console.log(result);
         self.assertGreaterEqual(result["rafCalls"], 4)
 
 
+    def test_workspace_report_cells_render_zero_one_many_and_isolate_clicks(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        asset = asset.rsplit("\nrender(data());", 1)[0]
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+const listeners = { control: [], preview: [] };
+const probe = { opened: null, menuClosed: false };
+const control = {
+  addEventListener(type, handler) { if (type === "click") listeners.control.push(handler); }
+};
+const details = { removeAttribute(name) { if (name === "open") probe.menuClosed = true; } };
+const preview = {
+  dataset: { reportPreview: "20260710-130000-000000" },
+  addEventListener(type, handler) { if (type === "click") listeners.preview.push(handler); },
+  closest(selector) { return selector === "details" ? details : null; }
+};
+const target = {
+  querySelectorAll(selector) {
+    if (selector === "[data-workspace-report-control]") return [control];
+    if (selector === "[data-report-preview]") return [preview];
+    if (selector === "[data-report-attach]") return [];
+    return [];
+  }
+};
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve", sources: [], reports: [] }) }
+};
+const context = {
+  document: {
+    body: { classList: { add() {}, remove() {}, toggle() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; }
+  },
+  window: { addEventListener() {} },
+  console, JSON, Number, String, Object, Math, Date, Set, Array, RegExp,
+  target, listeners, probe
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+const result = vm.runInContext(`(() => {
+  state.selectedTrial = "trial-before";
+  state.workspaceReports = [
+    { report_id: "20260710-120000-000000", filename: "one.md", format: "markdown", source_keys: ["cell-a"] },
+    { report_id: "20260710-125000-000000", filename: "older.html", format: "html", source_keys: ["cell-b"] },
+    { report_id: "20260710-130000-000000", filename: "newer.md", format: "markdown", source_keys: ["cell-b"] }
+  ];
+  openWorkspaceReportReader = reportId => { probe.opened = reportId; };
+  const zero = renderWorkspaceReportCell({ source_key: "cell-none" });
+  const one = renderWorkspaceReportCell({ source_key: "cell-a" });
+  const many = renderWorkspaceReportCell({ source_key: "cell-b" });
+  const columnKeys = leaderboardColumns().map(column => column.key);
+  bindWorkspaceReportLeaderboardControls(target);
+  const event = { preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
+  listeners.control.forEach(handler => handler(event));
+  listeners.preview.forEach(handler => handler(event));
+  return JSON.stringify({ zero, one, many, columnKeys, event, probe, selectedTrial: state.selectedTrial });
+})()`, context);
+console.log(result);
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertIn("&mdash;", result["zero"])
+        self.assertIn("one.md", result["one"])
+        self.assertIn("2 reports", result["many"])
+        self.assertLess(result["many"].index("newer.md"), result["many"].index("older.html"))
+        alias_index = result["columnKeys"].index("source_alias")
+        self.assertEqual(result["columnKeys"][alias_index + 1], "workspace_reports")
+        self.assertTrue(result["event"]["stopped"])
+        self.assertTrue(result["event"]["prevented"])
+        self.assertEqual(result["probe"]["opened"], "20260710-130000-000000")
+        self.assertTrue(result["probe"]["menuClosed"])
+        self.assertEqual(result["selectedTrial"], "trial-before")
+
+    def test_workspace_report_attach_cancel_preserves_selection_and_success_opens_reader(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        asset = asset.rsplit("\nrender(data());", 1)[0]
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve", sources: [], reports: [] }) }
+};
+const context = {
+  document: {
+    body: { classList: { add() {}, remove() {}, toggle() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; }
+  },
+  window: { addEventListener() {} },
+  console, JSON, Number, String, Object, Math, Date, Set, Array, RegExp
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+vm.runInContext(`(async () => {
+  const probe = { calls: [], renders: 0, opened: null, statuses: [] };
+  const button = { disabled: false };
+  visibleSelectedSourceKeys = () => ["cell-a"];
+  renderComparisonPanels = () => { probe.renders += 1; };
+  openWorkspaceReportReader = reportId => { probe.opened = reportId; };
+  setServeStatus = (message, error = false) => probe.statuses.push({ message, error });
+  state.rowSelection.add("trial-a");
+  serveApi = async (path, options) => {
+    probe.calls.push({ path, body: options?.body || null });
+    return { paths: [] };
+  };
+  await attachWorkspaceReport(button);
+  const afterCancel = {
+    selected: Array.from(state.rowSelection),
+    renders: probe.renders,
+    opened: probe.opened,
+    calls: probe.calls.slice(),
+    disabled: button.disabled
+  };
+  probe.calls = [];
+  serveApi = async (path, options) => {
+    probe.calls.push({ path, body: options?.body || null });
+    if (path === "/api/path-picker") return { paths: ["/tmp/report.md"] };
+    return {
+      report_id: "20260710-140000-000000",
+      reports: [{ report_id: "20260710-140000-000000", filename: "report.md", format: "markdown", source_keys: ["cell-a"] }]
+    };
+  };
+  await attachWorkspaceReport(button);
+  const afterSuccess = {
+    selected: Array.from(state.rowSelection),
+    renders: probe.renders,
+    opened: probe.opened,
+    calls: probe.calls,
+    reportIds: workspaceReports().map(report => report.report_id),
+    disabled: button.disabled
+  };
+  console.log(JSON.stringify({ afterCancel, afterSuccess }));
+})().catch(error => { console.error(error); process.exitCode = 1; });`, context);
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertEqual(result["afterCancel"]["selected"], ["trial-a"])
+        self.assertEqual(result["afterCancel"]["renders"], 0)
+        self.assertIsNone(result["afterCancel"]["opened"])
+        self.assertEqual(
+            result["afterCancel"]["calls"],
+            [{"path": "/api/path-picker", "body": {"multiple": False}}],
+        )
+        self.assertFalse(result["afterCancel"]["disabled"])
+        self.assertEqual(result["afterSuccess"]["selected"], [])
+        self.assertEqual(result["afterSuccess"]["renders"], 1)
+        self.assertEqual(result["afterSuccess"]["opened"], "20260710-140000-000000")
+        self.assertEqual(
+            result["afterSuccess"]["calls"],
+            [
+                {"path": "/api/path-picker", "body": {"multiple": False}},
+                {
+                    "path": "/api/reports",
+                    "body": {"path": "/tmp/report.md", "source_keys": ["cell-a"]},
+                },
+            ],
+        )
+        self.assertEqual(result["afterSuccess"]["reportIds"], ["20260710-140000-000000"])
+        self.assertFalse(result["afterSuccess"]["disabled"])
+
+    def test_workspace_report_empty_catalog_payload_and_reader_step_mutual_exclusion(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        asset = asset.rsplit("\nrender(data());", 1)[0]
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+function classList() {
+  return {
+    values: new Set(),
+    add(name) { this.values.add(name); },
+    remove(name) { this.values.delete(name); },
+    toggle(name, force) {
+      const active = force === undefined ? !this.values.has(name) : Boolean(force);
+      if (active) this.values.add(name); else this.values.delete(name);
+      return active;
+    },
+    contains(name) { return this.values.has(name); }
+  };
+}
+const closeButton = { listeners: {}, focusCount: 0, addEventListener(type, handler) { this.listeners[type] = handler; }, focus() { this.focusCount += 1; } };
+const reader = {
+  hidden: true,
+  innerHTML: "",
+  querySelectorAll(selector) { return selector === "[data-report-reader-close]" ? [closeButton] : []; },
+  querySelector(selector) { return selector === "[data-report-reader-close]" ? closeButton : null; }
+};
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve", sources: [], reports: [] }) },
+  "workspace-report-reader": reader
+};
+const bodyClasses = classList();
+const context = {
+  document: {
+    activeElement: null,
+    body: { classList: bodyClasses },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; }
+  },
+  window: { addEventListener() {} },
+  requestAnimationFrame(callback) { callback(); },
+  console, JSON, Number, String, Object, Math, Date, Set, Array, RegExp,
+  reader, bodyClasses, closeButton
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+const result = vm.runInContext(`(() => {
+  const report = { report_id: "20260710-150000-000000", filename: "reader.html", format: "html", source_keys: ["cell-a"] };
+  state.workspaceReports = [report];
+  let comparisonRenders = 0;
+  let sourcesAtCatalog = null;
+  renderComparisonPanels = () => { comparisonRenders += 1; };
+  renderServeSources = () => {};
+  pruneSourceSelection = () => {};
+  setServeStatus = () => {};
+  const applyCatalog = applyWorkspaceReportCatalog;
+  applyWorkspaceReportCatalog = reports => {
+    sourcesAtCatalog = state.serveSources.map(source => source.source_key);
+    applyCatalog(reports);
+  };
+  applyServeMutationPayload({
+    reports: [],
+    sources: [{ source_key: "cell-ready", artifact_dir: "runs/default/a/s/c", last_status: "ok" }]
+  });
+  const emptyPayload = { reportCount: workspaceReports().length, comparisonRenders, sourcesAtCatalog };
+  state.workspaceReports = [report];
+  renderStepDrawer = () => setStepDrawerOpen(Boolean(state.selectedStep));
+  state.selectedStep = { trialKey: "trial-a", stepId: "1" };
+  setStepDrawerOpen(true);
+  openWorkspaceReportReader(report.report_id);
+  const readerOpen = {
+    readerHidden: reader.hidden,
+    reportClass: bodyClasses.contains("report-reader-open"),
+    stepClass: bodyClasses.contains("step-drawer-open"),
+    selectedStep: state.selectedStep,
+    sandbox: reader.innerHTML.includes('sandbox="allow-scripts"'),
+    sameOrigin: reader.innerHTML.includes("allow-same-origin")
+  };
+  state.selectedStep = { trialKey: "trial-a", stepId: "2" };
+  setStepDrawerOpen(true);
+  const stepOpen = {
+    readerHidden: reader.hidden,
+    reportClass: bodyClasses.contains("report-reader-open"),
+    stepClass: bodyClasses.contains("step-drawer-open"),
+    openReportId: state.reportReader.openId
+  };
+  return JSON.stringify({ emptyPayload, readerOpen, stepOpen, closeFocusCount: closeButton.focusCount });
+})()`, context);
+console.log(result);
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertEqual(
+            result["emptyPayload"],
+            {
+                "reportCount": 0,
+                "comparisonRenders": 1,
+                "sourcesAtCatalog": ["cell-ready"],
+            },
+        )
+        self.assertFalse(result["readerOpen"]["readerHidden"])
+        self.assertTrue(result["readerOpen"]["reportClass"])
+        self.assertFalse(result["readerOpen"]["stepClass"])
+        self.assertIsNone(result["readerOpen"]["selectedStep"])
+        self.assertTrue(result["readerOpen"]["sandbox"])
+        self.assertFalse(result["readerOpen"]["sameOrigin"])
+        self.assertTrue(result["stepOpen"]["readerHidden"])
+        self.assertFalse(result["stepOpen"]["reportClass"])
+        self.assertTrue(result["stepOpen"]["stepClass"])
+        self.assertIsNone(result["stepOpen"]["openReportId"])
+        self.assertGreaterEqual(result["closeFocusCount"], 1)
+
+    def test_workspace_report_manager_search_rebind_and_delete(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        asset = asset.rsplit("\nrender(data());", 1)[0]
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+const bindingTarget = { innerHTML: "" };
+const manager = { hidden: true };
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve", sources: [], reports: [] }) }
+};
+const context = {
+  document: {
+    body: { classList: { add() {}, remove() {}, toggle() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector(selector) {
+      if (selector === "[data-report-bindings]") return bindingTarget;
+      if (selector === "[data-report-manager]") return manager;
+      return null;
+    },
+    querySelectorAll() { return []; }
+  },
+  window: { addEventListener() {}, confirm() { return true; } },
+  console, JSON, Number, String, Object, Math, Date, Set, Array, RegExp,
+  bindingTarget
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+vm.runInContext(`(async () => {
+  const report = { report_id: "20260710-160000-000000", filename: "manager.md", format: "markdown", source_keys: [] };
+  state.workspaceReports = [report];
+  state.reportManager.selectedId = report.report_id;
+  syncWorkspaceReportDraft();
+  state.serveSources = [
+    { source_key: "cell-active", label: "Active session", trial_session_id: "active", active: true, artifact_dir: "runs/a", last_status: "ok" },
+    { source_key: "cell-archived", label: "Archived session", trial_session_id: "archived", active: false, artifact_dir: "runs/b", last_status: "ok" },
+    { source_key: "cell-missing", label: "Missing session", active: true, artifact_dir: "runs/c", last_status: "missing" }
+  ];
+  renderWorkspaceReportBindings();
+  const initial = {
+    readable: readableWorkspaceReportSources().map(source => source.source_key),
+    saveDisabled: bindingTarget.innerHTML.includes("data-report-bindings-save disabled")
+  };
+  state.reportManager.search = "archived";
+  const searchMatches = filteredWorkspaceReportSources().map(source => source.source_key);
+  state.reportManager.search = "";
+  state.reportManager.draftBindings.add("cell-active");
+  state.reportManager.draftBindings.add("cell-archived");
+  state.reportManager.dirty = workspaceReportBindingsChanged();
+  renderWorkspaceReportBindings();
+  const changed = {
+    dirty: state.reportManager.dirty,
+    saveDisabled: bindingTarget.innerHTML.includes("data-report-bindings-save disabled")
+  };
+  const calls = [];
+  renderComparisonPanels = () => {};
+  setWorkspaceReportManagerStatus = () => {};
+  serveApi = async (path, options) => {
+    calls.push({ path, body: options?.body || null });
+    if (path.endsWith("/delete")) return { reports: [] };
+    return { reports: [{ ...report, source_keys: ["cell-active", "cell-archived"] }] };
+  };
+  await saveWorkspaceReportBindings();
+  const afterSave = {
+    sourceKeys: workspaceReportForId(report.report_id).source_keys,
+    dirty: state.reportManager.dirty
+  };
+  await deleteWorkspaceReport(report.report_id);
+  console.log(JSON.stringify({ initial, searchMatches, changed, afterSave, calls, remaining: workspaceReports().length }));
+})().catch(error => { console.error(error); process.exitCode = 1; });`, context);
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertEqual(result["initial"]["readable"], ["cell-active", "cell-archived"])
+        self.assertTrue(result["initial"]["saveDisabled"])
+        self.assertEqual(result["searchMatches"], ["cell-archived"])
+        self.assertTrue(result["changed"]["dirty"])
+        self.assertFalse(result["changed"]["saveDisabled"])
+        self.assertEqual(result["afterSave"]["sourceKeys"], ["cell-active", "cell-archived"])
+        self.assertFalse(result["afterSave"]["dirty"])
+        self.assertEqual(
+            result["calls"],
+            [
+                {
+                    "path": "/api/reports/20260710-160000-000000/bindings",
+                    "body": {"source_keys": ["cell-active", "cell-archived"]},
+                },
+                {
+                    "path": "/api/reports/20260710-160000-000000/delete",
+                    "body": {},
+                },
+            ],
+        )
+        self.assertEqual(result["remaining"], 0)
+
     def test_html_submenu_outside_click_closer_only_targets_menus(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -2754,6 +3383,7 @@ const vm = require("vm");
 const asset = __ASSET__;
 const exportMenu = { id: "export", open: true };
 const filterMenu = { id: "filter", open: true };
+const reportMenu = { id: "report", open: true };
 const timelineSection = { id: "timeline", open: true };
 const handlers = [];
 const documentStub = {
@@ -2764,10 +3394,10 @@ const documentStub = {
   getElementById: () => null,
   querySelector: () => null,
   querySelectorAll(selector) {
-    if (selector !== ".export-menu[open],.filter-control[open]") {
+    if (selector !== ".export-menu[open],.filter-control[open],.report-cell-menu[open]") {
       throw new Error(`unexpected selector: ${selector}`);
     }
-    return [exportMenu, filterMenu].filter(details => details.open);
+    return [exportMenu, filterMenu, reportMenu].filter(details => details.open);
   },
 };
 const context = {
@@ -2785,6 +3415,7 @@ const context = {
   RegExp,
   exportMenu,
   filterMenu,
+  reportMenu,
   timelineSection,
   handlers,
 };
@@ -2795,12 +3426,14 @@ const result = vm.runInContext(`
   const clickHandler = handlers.find(item => item.type === "click" && item.capture).handler;
   filterMenu.open = true;
   exportMenu.open = true;
+  reportMenu.open = true;
   clickHandler({ target: { closest: selector => selector === SUBMENU_DETAILS_SELECTOR ? exportMenu : null } });
-  const insideExport = { exportOpen: exportMenu.open, filterOpen: filterMenu.open, timelineOpen: timelineSection.open };
+  const insideExport = { exportOpen: exportMenu.open, filterOpen: filterMenu.open, reportOpen: reportMenu.open, timelineOpen: timelineSection.open };
   filterMenu.open = true;
   exportMenu.open = true;
+  reportMenu.open = true;
   clickHandler({ target: { closest: () => null } });
-  const outside = { exportOpen: exportMenu.open, filterOpen: filterMenu.open, timelineOpen: timelineSection.open };
+  const outside = { exportOpen: exportMenu.open, filterOpen: filterMenu.open, reportOpen: reportMenu.open, timelineOpen: timelineSection.open };
   JSON.stringify({ insideExport, outside, clickHandlerCapture: Boolean(clickHandler) });
 `, context);
 console.log(result);
@@ -2818,10 +3451,10 @@ console.log(result);
 
         self.assertEqual(
             result["insideExport"],
-            {"exportOpen": True, "filterOpen": False, "timelineOpen": True},
+            {"exportOpen": True, "filterOpen": False, "reportOpen": False, "timelineOpen": True},
         )
         self.assertEqual(
             result["outside"],
-            {"exportOpen": False, "filterOpen": False, "timelineOpen": True},
+            {"exportOpen": False, "filterOpen": False, "reportOpen": False, "timelineOpen": True},
         )
         self.assertTrue(result["clickHandlerCapture"])

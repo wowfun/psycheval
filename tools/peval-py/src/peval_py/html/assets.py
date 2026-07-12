@@ -21,6 +21,7 @@ ASSET_BUNDLES = {
         "report_css/22-source-forms.css",
         "report_css/24-source-list-export.css",
         "report_css/26-step-drawer.css",
+        "report_css/28-workspace-reports.css",
     ],
     "report.js": [
         "report_js/00-runtime.js",
@@ -32,6 +33,7 @@ ASSET_BUNDLES = {
         "report_js/12-serve-controls.js",
         "report_js/14-serve-sources.js",
         "report_js/16-serve-mutations.js",
+        "report_js/18-workspace-reports.js",
         "report_js/20-analysis-metrics.js",
         "report_js/22-analysis-notes.js",
         "report_js/24-analysis-rendering.js",

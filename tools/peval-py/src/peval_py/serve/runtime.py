@@ -10,6 +10,7 @@ from peval_py.report import empty_report
 from peval_py.serve.reporting import mutation_payload
 from peval_py.serve.sources import load_serve_inputs
 from peval_py.state import ServeStateStore
+from peval_py.workspace_reports import WorkspaceReportLibrary
 
 
 class ServeRuntime:
@@ -22,6 +23,10 @@ class ServeRuntime:
     ) -> None:
         self.store = store
         self.config = config
+        self.workspace_reports = WorkspaceReportLibrary(
+            store.paths.root,
+            store.source_payload,
+        )
         self._lock = Lock()
         self._ready = Event()
         self._ready.set()
@@ -150,8 +155,14 @@ class ServeRuntime:
             source_key=source_key,
             source_state=source_state,
         )
+        payload["reports"] = self.workspace_reports.catalog(payload["sources"])
         payload["loading"] = False
         return payload
+
+    def workspace_report_catalog(self) -> list[dict[str, Any]]:
+        self.ensure_ready()
+        sources = self.store.source_payload()
+        return self.workspace_reports.catalog(sources)
 
     def empty_envelope(
         self,
@@ -164,6 +175,7 @@ class ServeRuntime:
             "report": empty_report("serve"),
             "report_source_key": None,
             "report_source_state": "active",
+            "reports": self.workspace_reports.catalog([]),
             "loading": loading,
         }
         if error:

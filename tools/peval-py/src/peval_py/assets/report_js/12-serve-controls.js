@@ -1,7 +1,14 @@
 function bindGlobalControls() {
   if (state.boundGlobalControls) return;
   document.addEventListener("keydown", event => {
+    if (event.defaultPrevented) return;
+    if (event.key === "Escape" && closeWorkspaceReportManager()) {
+      return;
+    }
     if (event.key === "Escape" && closeServeSourceManager()) {
+      return;
+    }
+    if (event.key === "Escape" && closeWorkspaceReportReader()) {
       return;
     }
     if (event.key !== "Escape" || !state.selectedStep) return;
@@ -14,7 +21,7 @@ function bindGlobalControls() {
   document.addEventListener("click", event => {
     if (!state.selectedStep) return;
     const target = event.target;
-    if (target?.closest?.("#step-drawer") || target?.closest?.("[data-source-manager]") || target?.closest?.("[data-step-id]") || target?.closest?.("[data-timeline-step-id]") || target?.closest?.("[data-timeline-chart]")) return;
+    if (target?.closest?.("#step-drawer") || target?.closest?.("#workspace-report-reader") || target?.closest?.("[data-report-manager]") || target?.closest?.("[data-workspace-report-control]") || target?.closest?.("[data-source-manager]") || target?.closest?.("[data-step-id]") || target?.closest?.("[data-timeline-step-id]") || target?.closest?.("[data-timeline-chart]")) return;
     state.selectedStep = null;
     renderComparisonPanels();
   });
@@ -45,6 +52,7 @@ function bindGlobalControls() {
   state.boundGlobalControls = true;
 }
 function bindServeSourceControls() {
+  bindWorkspaceReportGlobalControls();
   document.querySelectorAll("[data-source-manager-open]").forEach(button => {
     button.addEventListener("click", event => {
       event.preventDefault();
@@ -127,18 +135,6 @@ function bindServeSourceControls() {
   const sourceList = document.querySelector("[data-source-list]");
   if (sourceList) {
     sourceList.addEventListener("click", event => {
-      const aliasButton = event.target?.closest?.("[data-source-alias-save]");
-      if (aliasButton) {
-        event.preventDefault();
-        saveSourceAlias(aliasButton);
-        return;
-      }
-      const button = event.target?.closest?.("[data-source-action]");
-      if (button) {
-        event.preventDefault();
-        mutateServeSource(button.dataset.sourceKey, button.dataset.sourceAction);
-        return;
-      }
       if (event.target?.closest?.("button,input,select,textarea,label")) return;
       const row = event.target?.closest?.("[data-source-row]");
       const sourceKey = row?.dataset?.sourceKey;
@@ -160,49 +156,62 @@ async function changeServeLocale(locale) {
   }
 }
 function bindAdapterDefaultDbControls() {
-  bindAdapterDefaultDbConfigForm();
   document.querySelectorAll("[data-source-add-form][data-source-kind=\"db\"]").forEach(form => {
     const select = form.querySelector("[name=\"adapter\"]");
-    if (!select) return;
-    select.addEventListener("change", () => applyDefaultDbToForm(form, { force: true }));
+    const field = dbFieldFor(form);
+    const saveButton = form.querySelector("[data-adapter-default-db-save]");
+    const clearButton = form.querySelector("[data-adapter-default-db-clear]");
+    if (!select || !field || !saveButton || !clearButton) return;
+    select.addEventListener("change", () => {
+      applyDefaultDbToForm(form, { force: true });
+      syncAdapterDefaultDbControls(form);
+    });
+    field.addEventListener("input", () => syncAdapterDefaultDbControls(form));
+    saveButton.addEventListener("click", event => {
+      event.preventDefault();
+      saveAdapterDefaultDb(form, String(field.value || "").trim());
+    });
+    clearButton.addEventListener("click", event => {
+      event.preventDefault();
+      saveAdapterDefaultDb(form, "");
+    });
     applyDefaultDbToForm(form);
+    syncAdapterDefaultDbControls(form);
   });
 }
-function bindAdapterDefaultDbConfigForm() {
-  const form = document.querySelector("[data-adapter-default-db-form]");
-  if (!form) return;
-  const select = form.querySelector("[name=\"adapter\"]");
-  const input = form.querySelector("[name=\"default_db_path\"]");
-  if (!select || !input) return;
-  select.addEventListener("change", () => syncAdapterDefaultDbForm(form));
-  form.addEventListener("submit", event => {
-    event.preventDefault();
-    saveAdapterDefaultDb(form);
-  });
-  form.querySelector("[data-adapter-default-db-clear]")?.addEventListener("click", event => {
-    event.preventDefault();
-    input.value = "";
-    saveAdapterDefaultDb(form);
-  });
-  syncAdapterDefaultDbForm(form);
+function syncAdapterDefaultDbControls(form) {
+  const adapter = selectedAdapterValue(form);
+  const field = dbFieldFor(form);
+  const saveButton = form?.querySelector?.("[data-adapter-default-db-save]");
+  const clearButton = form?.querySelector?.("[data-adapter-default-db-clear]");
+  if (!field || !saveButton || !clearButton) return;
+  const path = String(field.value || "").trim();
+  const hasAdapter = Boolean(adapter);
+  const hasDefault = Boolean(adapter && adapterDefaults()[adapter]);
+  saveButton.disabled = !hasAdapter || !path;
+  clearButton.disabled = !hasAdapter || !hasDefault;
+  const adapterTitle = hasAdapter ? "" : t("serve_select_adapter_for_default_db", "Select a specific adapter to manage its default DB");
+  saveButton.title = adapterTitle || (!path ? t("serve_enter_db_for_default", "Enter a DB path to save as default") : "");
+  clearButton.title = adapterTitle;
 }
-function syncAdapterDefaultDbForm(form) {
-  const select = form?.querySelector?.("[name=\"adapter\"]");
-  const input = form?.querySelector?.("[name=\"default_db_path\"]");
-  if (!select || !input) return;
-  input.value = adapterDefaults()[select.value] || "";
+function syncAllAdapterDefaultDbControls() {
+  document.querySelectorAll("[data-source-add-form][data-source-kind=\"db\"]").forEach(syncAdapterDefaultDbControls);
 }
-async function saveAdapterDefaultDb(form) {
-  const adapter = String(form?.querySelector?.("[name=\"adapter\"]")?.value || "").trim();
-  const input = form?.querySelector?.("[name=\"default_db_path\"]");
-  const defaultDbPath = String(input?.value || "").trim();
-  if (!adapter) return;
+async function saveAdapterDefaultDb(form, defaultDbPath) {
+  const adapter = selectedAdapterValue(form);
+  if (!adapter) {
+    const message = t("serve_select_adapter_for_default_db", "Select a specific adapter to manage its default DB");
+    setServeStatus(message, true);
+    showServeNotice(message, true);
+    syncAdapterDefaultDbControls(form);
+    return false;
+  }
   try {
     const payload = await serveApi("/api/config/adapter-default-db", {
       method: "POST",
       body: {
         adapter,
-        default_db_path: defaultDbPath
+        default_db_path: String(defaultDbPath || "").trim()
       }
     });
     state.adapterDefaults = payload?.adapter_defaults && typeof payload.adapter_defaults === "object"
@@ -210,16 +219,19 @@ async function saveAdapterDefaultDb(form) {
       : { ...adapterDefaults(), [adapter]: payload?.default_db_path || "" };
     if (!payload?.default_db_path) delete state.adapterDefaults[adapter];
     updateAdapterDefaultOptions();
-    syncAdapterDefaultDbForm(form);
     applyUpdatedAdapterDefaultToDbForms(adapter);
+    syncAllAdapterDefaultDbControls();
     const message = payload?.default_db_path
       ? t("serve_adapter_default_db_saved", "Adapter default DB saved")
       : t("serve_adapter_default_db_cleared", "Adapter default DB cleared");
     setServeStatus(message);
     showServeNotice(message);
+    return true;
   } catch (error) {
     setServeStatus(error.message || String(error), true);
     showServeNotice(error.message || String(error), true);
+    syncAllAdapterDefaultDbControls();
+    return false;
   }
 }
 function updateAdapterDefaultOptions() {
@@ -236,6 +248,7 @@ function applyUpdatedAdapterDefaultToDbForms(adapter) {
   document.querySelectorAll("[data-source-add-form][data-source-kind=\"db\"]").forEach(form => {
     const selected = selectedAdapterValue(form);
     applyDefaultDbToForm(form, { force: Boolean(selected && selected === adapter) });
+    syncAdapterDefaultDbControls(form);
   });
 }
 function dbFieldFor(form) {

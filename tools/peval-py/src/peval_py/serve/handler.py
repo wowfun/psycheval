@@ -4,7 +4,7 @@ import json
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from peval_py.config import ToolConfig, write_workspace_adapter_default_db, write_workspace_locale
 from peval_py.html import render_serve_html
@@ -29,6 +29,28 @@ from peval_py.serve.reporting import single_query_value
 from peval_py.serve.runtime import ServeRuntime
 from peval_py.serve.sources import add_source_payload, db_sessions_payload
 from peval_py.state import ServeStateStore
+from peval_py.workspace_reports import (
+    WorkspaceReportNotFound,
+    render_workspace_report_preview,
+)
+
+
+REPORT_PREVIEW_CSP = "; ".join(
+    [
+        "default-src 'none'",
+        "sandbox allow-scripts",
+        "script-src 'unsafe-inline' http: https: data: blob:",
+        "style-src 'unsafe-inline' http: https: data: blob:",
+        "img-src http: https: data: blob:",
+        "media-src http: https: data: blob:",
+        "font-src http: https: data: blob:",
+        "connect-src http: https: data: blob:",
+        "frame-src http: https: data: blob:",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'none'",
+    ]
+)
 
 
 def make_handler(
@@ -61,6 +83,7 @@ def make_handler(
                             envelope["report"],
                             locale=runtime.config.locale,
                             sources=envelope["sources"],
+                            reports=envelope.get("reports", []),
                             adapter_defaults=runtime.config.adapter_default_db_paths,
                             loading=bool(envelope.get("loading")),
                             load_error=envelope.get("error"),
@@ -92,6 +115,17 @@ def make_handler(
                     return
                 if path == "/api/sources":
                     self.write_json(runtime.source_envelope(refresh=True))
+                    return
+                report_action = report_action_path(path)
+                if report_action is not None:
+                    report_id, action = report_action
+                    if action != "preview":
+                        raise HttpError(404, "unknown report action")
+                    try:
+                        report = runtime.workspace_reports.read(report_id)
+                    except ValueError as exc:
+                        raise HttpError(404, str(exc)) from exc
+                    self.write_report_preview(render_workspace_report_preview(report))
                     return
                 raise HttpError(404, "not found")
             except HttpError as exc:
@@ -149,6 +183,20 @@ def make_handler(
                         self.write_json({"paths": pick_file_paths(multiple=multiple)})
                     except PathPickerUnavailable as exc:
                         raise HttpError(503, str(exc)) from exc
+                    return
+                if path == "/api/reports":
+                    runtime.ensure_ready()
+                    source_keys = source_keys_payload(payload) or []
+                    report_id = runtime.workspace_reports.import_file(
+                        required_string(payload, "path"),
+                        source_keys,
+                    )
+                    self.write_json(
+                        {
+                            "reports": runtime.workspace_report_catalog(),
+                            "report_id": report_id,
+                        }
+                    )
                     return
                 if path == "/api/sources/state":
                     runtime.ensure_ready()
@@ -215,6 +263,25 @@ def make_handler(
                             source_key=source_keys[0] if source_keys else None,
                         )
                     )
+                    return
+
+                report_action = report_action_path(path)
+                if report_action is not None:
+                    runtime.ensure_ready()
+                    report_id, action = report_action
+                    try:
+                        if action == "bindings":
+                            runtime.workspace_reports.replace_bindings(
+                                report_id,
+                                source_keys_payload(payload) or [],
+                            )
+                        elif action == "delete":
+                            runtime.workspace_reports.delete(report_id)
+                        else:
+                            raise HttpError(404, "unknown report action")
+                    except WorkspaceReportNotFound as exc:
+                        raise HttpError(404, str(exc)) from exc
+                    self.write_json({"reports": runtime.workspace_report_catalog()})
                     return
 
                 source_action = source_action_path(path)
@@ -289,20 +356,25 @@ def make_handler(
 
         def require_same_origin(self) -> None:
             origin = self.headers.get("Origin")
-            if origin and not self.is_same_origin(origin):
+            if origin is not None and not self.is_same_origin(origin, origin_header=True):
                 raise HttpError(403, "mutating APIs require same-origin Origin")
             referer = self.headers.get("Referer")
-            if not origin and referer and not self.is_same_origin(referer):
+            if referer is not None and not self.is_same_origin(referer):
                 raise HttpError(403, "mutating APIs require same-origin Referer")
 
-        def is_same_origin(self, value: str) -> bool:
-            parsed = urlsplit(value)
-            if not parsed.scheme or not parsed.netloc:
-                return True
+        def is_same_origin(self, value: str, *, origin_header: bool = False) -> bool:
+            try:
+                parsed = urlsplit(value)
+            except ValueError:
+                return False
+            if parsed.scheme != "http" or not parsed.netloc:
+                return False
+            if origin_header and (parsed.path or parsed.query or parsed.fragment):
+                return False
             host = self.headers.get("Host")
             if not host:
                 return False
-            return parsed.scheme == "http" and parsed.netloc.lower() == host.lower()
+            return parsed.netloc.lower() == host.lower()
 
         def write_html(self, html: str, status: int = 200) -> None:
             data = html.encode("utf-8")
@@ -327,6 +399,17 @@ def make_handler(
             self.end_headers()
             self.wfile.write(data)
 
+        def write_report_preview(self, data: bytes, status: int = 200) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Security-Policy", REPORT_PREVIEW_CSP)
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def write_error(self, status: int, message: str) -> None:
             if urlsplit(self.path).path.startswith("/api/"):
                 self.write_json({"error": message}, status=status)
@@ -334,3 +417,13 @@ def make_handler(
             self.write_html(f"{status} {message}\n", status=status)
 
     return ServeHandler
+
+
+def report_action_path(path: str) -> tuple[str, str] | None:
+    prefix = "/api/reports/"
+    if not path.startswith(prefix):
+        return None
+    parts = path[len(prefix) :].split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise HttpError(404, "unknown report action")
+    return unquote(parts[0]), parts[1]

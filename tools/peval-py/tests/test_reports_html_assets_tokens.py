@@ -49,6 +49,15 @@ class PevalPyReportHtmlAssetTokenTests(unittest.TestCase):
         html = render_html(report)
         compact_css = compact_css_text(css)
 
+        def css_declarations(selector: str) -> set[str]:
+            match = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+            self.assertIsNotNone(match, f"missing CSS rule for {selector}")
+            return {
+                compact_css_text(declaration)
+                for declaration in match.group(1).split(";")
+                if declaration.strip()
+            }
+
         self.assertIn("report_css/06-leaderboard-summary.css", ASSET_BUNDLES["report.css"])
         self.assertIn("report_js/06-leaderboard-summary.js", ASSET_BUNDLES["report.js"])
         self.assertIn("report_js/09-source-state-controls.js", ASSET_BUNDLES["report.js"])
@@ -63,6 +72,8 @@ class PevalPyReportHtmlAssetTokenTests(unittest.TestCase):
         self.assertIn(".timeline-section-body", css)
         self.assertIn(".source-adapter-select", css)
         self.assertIn(".source-add-actions", css)
+        self.assertIn("grid-template-columns:minmax(0,1fr)max-content", css_declarations(".db-path-control"))
+        self.assertIn("grid-template-rows:repeat(2,minmax(0,1fr))", css_declarations(".db-default-actions"))
         self.assertIn(".source-form select", css)
         self.assertNotIn(".adapter-choice-group", css)
         for level in range(1, 11):
@@ -106,6 +117,8 @@ class PevalPyReportHtmlAssetTokenTests(unittest.TestCase):
         self.assertIn(".source-state-controls", css)
         self.assertIn(".source-state-toggle", css)
         self.assertIn(".source-state-action", css)
+        self.assertIn("grid-row:2", css_declarations(".report-manager-status"))
+        self.assertIn("grid-row:3", css_declarations(".report-manager-body"))
         self.assertNotIn(".leaderboard-summary-count", css)
         self.assertNotIn(".leaderboard-summary-distribution", css)
         self.assertNotIn("--summary-whisker-left", css)
@@ -214,9 +227,9 @@ class PevalPyReportHtmlAssetTokenTests(unittest.TestCase):
         self.assertIn("function openTimelineStep", js)
         self.assertIn("function bindTimelineControls", js)
         self.assertIn("function initTimelineWaterfallChart", js)
-        self.assertIn('const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control"', js)
+        self.assertIn('const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.report-cell-menu"', js)
         self.assertIn(
-            'const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open]"',
+            'const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.report-cell-menu[open]"',
             js,
         )
         self.assertIn("function closeOpenSubmenus", js)

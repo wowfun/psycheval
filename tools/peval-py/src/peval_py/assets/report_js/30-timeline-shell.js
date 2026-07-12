@@ -9,13 +9,13 @@ function renderTimelineDiagnostics(trajectory, meta) {
     ? renderTimelineDetailTable(trace.stages, trace.model)
     : `<p class="timeline-empty">${esc(t("timeline_empty", "No timed step or tool durations available."))}</p>`;
   return `<section class="selected-extra timeline-diagnostics">
-    ${renderTimelineSection("timeline-waterfall-section", t("timeline_waterfall", "Timeline Waterfall"), t("timeline_waterfall_copy", "Flat active-latency trace for meaningful delay."), `<span class="timeline-total">${esc(fmtTimelineDuration(trace.model.active_total_ms))}</span>`, waterfall)}
-    ${renderTimelineSection("timeline-table-section", t("timeline_detail_table", "Timeline Detail Table"), t("timeline_table_copy", "Flat latency stages with true wall timing."), "", table)}
+    ${renderTimelineSection("timeline-waterfall-section", t("timeline_waterfall", "Timeline Waterfall"), `<span class="timeline-total">${esc(fmtTimelineDuration(trace.model.active_total_ms))}</span>`, waterfall)}
+    ${renderTimelineSection("timeline-table-section", t("timeline_detail_table", "Timeline Detail Table"), "", table)}
   </section>`;
 }
-function renderTimelineSection(className, title, copy, meta, body) {
+function renderTimelineSection(className, title, meta, body) {
   return `<details class="timeline-section ${esc(className)}" open>
-    <summary class="timeline-head"><div><h3>${esc(title)}</h3><p class="copy">${esc(copy)}</p></div>${meta || ""}</summary>
+    <summary class="timeline-head"><div><h3>${esc(title)}</h3></div>${meta || ""}</summary>
     <div class="timeline-section-body">${body}</div>
   </details>`;
 }

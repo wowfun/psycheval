@@ -1,0 +1,26 @@
+  <div class="report-manager-backdrop" data-report-manager hidden data-serve-only>
+    <section class="report-manager-modal" role="dialog" aria-modal="true" aria-labelledby="report-manager-title">
+      <header class="report-manager-head">
+        <div>
+          <h2 id="report-manager-title">__REPORTS__</h2>
+          <p class="copy">__REPORTS_COPY__</p>
+        </div>
+        <button class="report-manager-close" type="button" data-report-manager-close aria-label="__CLOSE__">__CLOSE__</button>
+      </header>
+      <p class="report-manager-status" data-report-manager-status aria-live="polite" hidden></p>
+      <div class="report-manager-body">
+        <section class="report-inventory-panel" aria-labelledby="report-inventory-title">
+          <div class="report-manager-section-head">
+            <h3 id="report-inventory-title">__REPORT_INVENTORY__</h3>
+            <span data-report-count></span>
+          </div>
+          <div class="report-inventory" data-report-inventory></div>
+        </section>
+        <section class="report-bindings-panel" aria-labelledby="report-bindings-title">
+          <h3 id="report-bindings-title">__REPORT_BINDINGS__</h3>
+          <div data-report-bindings></div>
+        </section>
+      </div>
+    </section>
+  </div>
+  <aside class="report-reader" id="workspace-report-reader" hidden data-serve-only></aside>

@@ -511,7 +511,7 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 status, _, html = request_text(port, "/")
                 self.assertEqual(status, 200)
                 self.assertIn(
-                    f'<option value="opencode" selected data-default-db="{expected}">opencode</option>',
+                    f'<option value="opencode"  data-default-db="{expected}">opencode</option>',
                     html,
                 )
 

@@ -28,7 +28,12 @@ function leaderboardColumns() {
     } }
   ];
   return serveMode()
-    ? [{ key: "source_tags", label: t("tags", "Tags"), width: "156px", filterable: true, filterValues: row => sourceTagsFor(row), value: row => sourceTagsValue(row), html: row => renderSourceTagsCell(row) }, ...columns]
+    ? [
+        { key: "source_tags", label: t("tags", "Tags"), width: "156px", filterable: true, filterValues: row => sourceTagsFor(row), value: row => sourceTagsValue(row), html: row => renderSourceTagsCell(row) },
+        ...columns.slice(0, 2),
+        workspaceReportLeaderboardColumn(),
+        ...columns.slice(2)
+      ]
     : columns;
 }
 function displayLeaderboardColumns() {
@@ -47,7 +52,7 @@ function renderLeaderboard(rows = leaderboardRows()) {
   if (!target) return;
   const columns = displayLeaderboardColumns();
   target.innerHTML = `
-    <div class="panel-head"><div><h2 id="leaderboard-title">${esc(t("leaderboard", "Leaderboard"))}</h2><p class="copy">${esc(t("leaderboard_copy", "Each row is one visible session-as-Trial. Numeric cells shade by column value; rows update the selected Trial."))}</p></div>${renderLeaderboardPanelControls(rows)}</div>
+    <div class="panel-head"><h2 id="leaderboard-title">${esc(t("leaderboard", "Leaderboard"))}</h2>${renderLeaderboardPanelControls(rows)}</div>
     ${renderDataTable({
       tableId: "leaderboard",
       columns,
@@ -62,7 +67,10 @@ function renderLeaderboard(rows = leaderboardRows()) {
 }
 function renderLeaderboardPanelControls(rows) {
   if (!serveMode()) return "";
-  return `<div class="leaderboard-actions">${renderServeSourceStateControls(rows)}<div class="leaderboard-action-stack">${renderLeaderboardExportControls()}${renderLeaderboardSearchControls()}</div></div>`;
+  return `<div class="leaderboard-actions">
+    <div class="leaderboard-action-row">${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardExportControls()}</div>
+    ${renderLeaderboardSearchControls()}
+  </div>`;
 }
 function renderLeaderboardExportControls() {
   if (!serveMode()) return "";
@@ -83,10 +91,10 @@ function renderLeaderboardSearchControls() {
   const scope = searchScope();
   return `<div class="leaderboard-search" data-leaderboard-search>
     <input type="search" data-leaderboard-search-input value="${esc(query)}" placeholder="${esc(t("search_sessions", "Search sessions"))}" aria-label="${esc(t("search_sessions", "Search sessions"))}">
-    <div class="leaderboard-search-scope" role="group" aria-label="${esc(t("search_scope", "Search scope"))}">
-      <label><input type="radio" name="leaderboard-search-scope" value="visible" ${scope === "visible" ? "checked" : ""}> <span>${esc(t("search_visible_sessions", "Visible sessions"))}</span></label>
-      <label><input type="radio" name="leaderboard-search-scope" value="all" ${scope === "all" ? "checked" : ""}> <span>${esc(t("search_all_sessions", "All sessions"))}</span></label>
-    </div>
+    <select class="leaderboard-search-scope" data-leaderboard-search-scope aria-label="${esc(t("search_scope", "Search scope"))}">
+      <option value="visible" ${scope === "visible" ? "selected" : ""}>${esc(t("search_visible_sessions", "Visible sessions"))}</option>
+      <option value="all" ${scope === "all" ? "selected" : ""}>${esc(t("search_all_sessions", "All sessions"))}</option>
+    </select>
   </div>`;
 }
 function leaderboardRows() {
@@ -322,6 +330,7 @@ function bindLeaderboardControls() {
   bindServeSourceStateControls(target);
   bindServeExportControls(target);
   bindLeaderboardSearchControls(target);
+  bindWorkspaceReportLeaderboardControls(target);
   bindInlineSourceEditors(target);
   bindTrialSelection(target);
 }

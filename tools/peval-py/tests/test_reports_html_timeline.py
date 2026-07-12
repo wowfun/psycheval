@@ -266,8 +266,8 @@ console.log(result);
         self.assertNotIn("timeline", payload)
         self.assertIn("Timeline Waterfall", html)
         self.assertIn("Timeline Detail Table", html)
-        self.assertIn("Flat active-latency trace", html)
-        self.assertIn("Flat latency stages with true wall timing", html)
+        self.assertNotIn("Flat active-latency trace", html)
+        self.assertNotIn("Flat latency stages with true wall timing", html)
         self.assertIn(
             "https://cdn.jsdelivr.net/npm/echarts@6.0.0/dist/echarts.min.js",
             html,
