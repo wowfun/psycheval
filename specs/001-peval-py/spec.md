@@ -23,6 +23,10 @@ same command tree.
   tags, inline display-metadata editing, existing-tag quick selection,
   Source Manager row selection with batch source actions, and first-User-step
   details from Leaderboard row selection
+- serve-only workspace report attachments that bind one imported Markdown or
+  HTML analysis report to one or more exact Leaderboard source rows, expose the
+  associations in a Reports column, preview reports in an isolated left-side
+  reader, and provide report inventory, rebinding, and deletion management
 - Source Manager import of complete Trial cells from local external `runs/`
   trees into the selected peval-py workspace, including a local native file
   picker that can fill the Path import textarea with absolute file paths
@@ -73,8 +77,15 @@ and the workspace log directory. Serve source state is stored beside each Trial
 cell under `.peval/state.json` only when local source overlay data exists;
 source identity and display summary are derived from the Trial cell path and
 agent artifacts. Display metadata such as aliases and tags belongs to this
-overlay, not to the canonical Trial trajectory artifacts.
+overlay, not to the canonical Trial trajectory artifacts. Workspace report
+attachments are separate durable workspace artifacts under
+`<workspace>/reports/<report-id>/`; they do not become Trial annotations,
+source overlays, or fields in canonical report JSON.
 Peval-py does not create, read, or write a workspace `state.db`. `serve`
+with an explicit `-r/--root` may initialize a missing peval-py workspace, and
+that same first invocation must load the newly created workspace configuration
+before rendering Source Manager so its adapter `default_db_path` values are
+immediately effective. `serve`
 startup must bind the local HTTP server before importing explicit CLI sources
 or scanning workspace `runs/` Trial cells; while that background startup scan is
 running, the served page must show an explicit loading status in the top Sources

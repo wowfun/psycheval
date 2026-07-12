@@ -13,6 +13,9 @@ workflows:
 - workspace state owns peval-py workspace discovery, cell-local source overlays,
   Trial cell artifacts, snapshot discovery, source lifecycle mutations, and
   report composition over persisted artifacts.
+- workspace reports owns imported report packages, time-ordered identities,
+  exact source bindings, tolerant catalog projection, content reads,
+  rebinding, and deletion behind one filesystem-backed interface.
 - report building owns report JSON v19 assembly, timing metadata, annotations,
   automatic analysis metrics, and input data references.
 - analysis owns cached analysis and notes reads, analysis import compilation,
@@ -40,6 +43,7 @@ The intended dependency flow is:
 cli/serve workflows -> inputs, workspace, report, html
 inputs              -> adapters, input tables, workspace snapshot reader
 workspace           -> repository, artifacts, report, analysis overlays
+workspace reports   -> local filesystem and current source-key projection
 report              -> analysis schema/cache interfaces, redaction
 html                -> assets and i18n
 ```
@@ -67,13 +71,18 @@ report:
 {
   "sources": [],
   "report": {},
-  "report_source_key": "source-key"
+  "report_source_key": "source-key",
+  "reports": []
 }
 ```
 
 `report` and `report_source_key` are omitted only when no readable source can be
 selected. The browser must treat absent report data as an empty report and must
 not keep stale report content after all sources become unreadable.
+`reports` is lightweight workspace metadata and never contains report bodies.
+Its source-key arrays include only bindings that resolve to current readable
+Trial cells; valid report packages with no current bindings remain in the list
+for management.
 
 During startup, the serve runtime may return `loading = true` with an empty
 report while the background initial load imports explicit source flags and scans

@@ -158,12 +158,39 @@ DB or file no longer refreshes successfully.
 `peval-py serve` keeps static reports CDN-based, but serves ECharts local-first
 from `<workspace>/.cache/echarts/6.0.0/echarts.min.js` and falls back to the
 fixed CDN URL if the local script fails. Its Source Manager exposes configured
-default DB paths, alias editing, Last Turn End sorting, and an
+default DB paths through the SQLite DB form's Save/Clear default actions, alias
+editing, Last Turn End sorting, and an
 English/Simplified Chinese selector that persists top-level `locale` in
 `peval-py.toml`. The Path source field also accepts another workspace root,
 `runs/`, `runs/<analysis_eval_slug>`, or a directory above Trial cells; serve
 recursively imports complete cells into the current workspace as snapshots and
 leaves the external workspace unchanged.
+
+`peval-py serve` can also attach an existing Markdown or HTML analysis report
+to one or more sessions. Select visible Leaderboard rows, choose
+`Attach report (N)`, and pick one local `.md`, `.markdown`, `.html`, or `.htm`
+file. The Reports column opens attached files in a sandboxed left-side preview.
+Use the toolbar's Reports Manager to preview imported reports, replace their
+bindings across readable active and archived sessions, or permanently delete
+them. This workflow is serve-only and does not change exported report JSON or
+static HTML reports.
+
+Each imported report is copied to `<workspace>/reports/<id>/` with a
+`state.json` that contains only workspace-relative Trial cell paths:
+
+```json
+{
+  "source_keys": [
+    "runs/default/agent-a/c2/c2_t001"
+  ]
+}
+```
+
+You can edit these bindings by hand. A cell that cannot be found is ignored
+without rewriting `state.json`, and its association returns if the same cell
+path becomes readable again. Imports accept one UTF-8 file up to 20 MiB and
+copy only that file. Relative sibling images, styles, scripts, and other assets
+are not imported; embed them in the report or use external URLs when needed.
 
 CSV example:
 

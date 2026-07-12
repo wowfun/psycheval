@@ -9,9 +9,49 @@ defaults only. Peval-py does not create, read, or write a workspace
 `state.db`; existing files with that name are ignored by peval-py workspace
 state.
 
+When `serve -r <workspace>` selects a root whose `peval-py.toml` does not yet
+exist, serve creates the workspace before resolving its effective runtime
+configuration. The initial process must therefore expose the generated adapter
+`default_db_path` values to Source Manager without requiring a restart. Config
+precedence remains workspace `peval-py.toml`, then explicit `-c/--config`, then
+CLI overrides.
+
 Serve may create an ECharts cache at
 `<workspace>/.cache/echarts/6.0.0/echarts.min.js` and a structured append-only
 log at `<workspace>/logs/peval-py-serve.jsonl`.
+
+Imported workspace analysis reports are durable artifacts, not cache entries.
+Each report is stored as one package:
+
+```text
+<workspace>/reports/<report-id>/
+  <original-name>.md|markdown|html|htm
+  state.json
+```
+
+`<report-id>` uses the local time-ordered form
+`YYYYMMDD-HHMMSS-ffffff`; a same-microsecond collision appends `-2`, `-3`, and
+so on. `state.json` contains only an ordered, de-duplicated `source_keys`
+array whose values are workspace-relative Trial cell paths such as
+`runs/default/agent-a/c2/c2_t001`; the id, filename, format, and import time are
+derived from the package directory and its one supported report file. Relative
+cell references are intentionally human-editable and must not be absolute,
+contain `..`, escape the workspace, or identify a path outside `runs/`. Imports
+accept one regular UTF-8 file no larger than 20 MiB, copy its bytes into a
+hidden temporary package, and atomically rename the completed package into
+place. The source path is not retained or watched.
+
+Report bindings identify exact Trial-cell sources rather than display session
+ids or composed-report Trial keys. Serve mutations translate opaque runtime
+source keys to relative cell paths before persistence; catalog reads preserve
+all persisted paths but project only their currently resolved runtime source
+keys. Missing sessions are silently omitted without rewriting state, so a
+matching cell that later reappears restores the association. A valid report
+with no current binding remains visible in report inventory. Explicit rebinding
+atomically replaces the full source-key array and requires at least one current
+readable source. Explicit deletion permanently removes the whole report
+package. Incomplete temporary packages and committed but invalid packages do
+not fail serve startup and do not enter the catalog.
 
 Runtime source state lives beside each Trial cell in
 `<cell>/.peval/state.json`. Missing `.peval/` or missing

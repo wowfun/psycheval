@@ -217,9 +217,11 @@ single-row Leaderboard and Trajectory Overview sections. Multi-session HTML
 renders Report Notes, Leaderboard, optional Leaderboard Summary, Trajectory
 Overview, then the selected Trial trajectory. The comparison panels are
 runtime-only projections synthesized from `trajectory[]`, `trajectory_meta[]`,
-and `trajectory.final_metrics`; they are not stored in report JSON. They render
-one primary section title without a duplicate eyebrow label. `Leaderboard` is a
-preserved report UI term and remains English in localized reports.
+and `trajectory.final_metrics`; they are not stored in report JSON. Report-body
+section headers render only their primary title, status, metadata, or actionable
+controls; they do not render explanatory description copy below the title.
+`Leaderboard` is a preserved report UI term and remains English in localized
+reports.
 `peval-py` treats each input session as one Trial. Multi-session HTML no longer
 renders a separate Visible Heatmap panel. The Leaderboard shows the canonical
 session id, a serve-only Tags column immediately to the left of Session, a
@@ -274,7 +276,11 @@ Leaderboard horizontal table scrolling remains independent. The rendered
 comparison sections must not show benchmark, task, task-set, task-family, or
 matrix task-axis fields.
 
-Serve-mode Leaderboard search renders below the Export menu. It is a
+The serve-mode Leaderboard header groups `Show archived`, the dynamic
+Archive/Activate action, `Attach report (N)`, and `Export` on one action row;
+the search controls render together on the row below it. Search scope is one
+compact select with `Visible sessions` and `All sessions` options rather than
+two separate radio buttons. Leaderboard search is a
 case-insensitive literal text search over each session's step messages,
 reasoning content, tool calls, and observations from both trajectory and
 metadata. `Visible sessions` searches within the current active or archived
@@ -289,14 +295,30 @@ Serve UI mode keeps the report body as the primary mental model rather than
 turning the page into a separate dashboard. It shows a compact source/status
 toolbar with a persistent language select above the report title and opens
 source management in a near-full-screen workbench modal dialog.
+The same toolbar exposes `Reports`, which opens a separate near-full-screen
+workspace report manager rather than mixing reports into Source Manager. The
+manager lists every valid report package newest-first, including reports with
+zero current bindings. Selecting a report shows a searchable checklist of all
+readable active and archived source rows; saving replaces its complete binding
+set, Preview closes the manager and opens the shared report reader, and Delete
+requires filename confirmation before permanently removing the package.
+The manager body fills all modal height remaining below the header and optional
+status row. When the status row is hidden, its grid track collapses and must not
+leave unused space below the inventory and binding panels.
 The modal supports Session/ATIF path, DB, and input-table source forms, upload
-of JSONL, ATIF JSON, or peval-py report JSON snapshots, explicit per-row
-refresh where provenance remains refreshable, source checkbox selection,
-Reload-adjacent batch Archive/Activate/Delete actions, and per-source status
-display. The
-modal exposes an adapter default SQLite DB configuration strip above the source
-forms and source list; saving a non-empty path updates that adapter's
-`default_db_path`, while saving or clearing an empty value removes that default.
+of JSONL, ATIF JSON, or peval-py report JSON snapshots, source checkbox
+selection, Reload-adjacent batch Archive/Activate/Delete actions, and
+per-source status display. The source list does not render a per-row Refresh
+column; the toolbar `Reload` action is its refresh entry point.
+The SQLite DB form manages adapter defaults in place. `Save as default` saves
+the current non-empty DB path for the explicitly selected adapter, and `Clear
+default` removes that adapter's saved value without clearing the DB input. Both
+controls are disabled while Adapter is `auto`; `Save as default` is also
+disabled for an empty DB path, while `Clear default` is enabled only when the
+selected adapter currently has a default. The two default-value controls form
+a vertical action group immediately to the right of the DB path field, ordered
+`Save as default` then `Clear default`; they do not occupy the form's bottom
+Inspect/Adapter/Add action row.
 Session/ATIF/runs path and DB path fields accept one or more
 whitespace-separated paths and honor single- or double-quoted paths. Ordinary
 Session/ATIF paths and DB sessions are converted immediately into canonical
@@ -311,16 +333,18 @@ still inspects exactly one DB path at a time. Adapter choices in the source mana
   the adapter override and lets existing inference/default adapter rules apply.
   When an adapter has a configured `default_db_path`, the DB form exposes that
   path as a default so the user can inspect/import without retyping the SQLite
-  path. Source add forms accept an optional alias field. The DB form includes an
-  Inspect action that lists adapter-owned sessions in the modal, supports
-  checkbox multi-select, and adds selected sessions as independent DB sources.
+  path. When Inspect infers a concrete adapter, the default-management controls
+  immediately follow that inferred selection. Source add forms accept an optional
+  alias field. The DB form includes an Inspect action that lists adapter-owned
+  sessions in the modal, supports checkbox multi-select, and adds selected
+  sessions as independent DB sources.
 	  Failed source imports show a transient error containing the concrete server
 	  message and must not persist the failed source or show it in the source list.
 	  Source aliases can be edited from the source list and affect only display in
 	  the source list, the Leaderboard Session Alias column, Trajectory Overview,
 	  and selected Trial summary; Evidence/Input Source continues to show the
-	  original path. Serve Leaderboard Session Alias and Tags cells are also
-	  editable by double-clicking the cell. Enter or blur saves, Escape cancels,
+	  original path. Source Manager Alias cells and serve Leaderboard Session Alias
+	  and Tags cells share the same double-click editor. Enter or blur saves, Escape cancels,
 	  and editing controls do not select the Trial row. Tags are split on English
 	  and Chinese commas, stored as ordered unique strings, and empty input clears
 	  the tag list. The Tags editor also shows existing tags from loaded serve
@@ -350,11 +374,26 @@ still inspects exactly one DB path at a time. Adapter choices in the source mana
 	on the left side of each row; checking either surface updates the same
 	selection set without selecting the Trial. If a batch Archive or Activate
 	action moves every visible readable source out of the current active/archived
-	view, the browser automatically switches to the target view and renders its
-	full report, selecting the first moved readable source. If the target view has
-	no readable sources, the switch does not leave the current report view and the
-	browser shows an actionable status message instead. Static HTML
-	reports do not render these source-state controls.
+view, the browser automatically switches to the target view and renders its
+full report, selecting the first moved readable source. If the target view has
+no readable sources, the switch does not leave the current report view and the
+browser shows an actionable status message instead. Static HTML
+reports do not render these source-state controls.
+
+Serve Leaderboard adds a `Reports` column immediately after `Session Alias`.
+The cell joins by stable source key: no reports renders an em dash, one report
+renders its filename as a button, and multiple reports render an `N reports`
+menu ordered newest-first. Report controls stop row-click propagation and do
+not select a Trial or open Step details. With visible rows checked,
+`Attach report (N)` invokes the native picker for one file, imports it against
+the checked source keys, clears row selection on success, and opens the new
+report in a left-side reader. Picker cancellation leaves state unchanged.
+
+The report reader is a temporary inspector, not a persistent sidebar. On
+desktop it reserves its left-side width; on narrow screens it becomes a bottom
+sheet. It is mutually exclusive with the right-side Step details drawer and
+supports a close button and Escape. Markdown and HTML previews load through a
+sandboxed iframe so report content never enters the canonical report DOM.
 
 `serve` does not refresh original path or DB sources on startup unless source
 flags were supplied on that invocation, and imported path/DB sources do not
@@ -390,6 +429,28 @@ Mutating APIs require JSON `POST` requests and must reject non-same-origin
 `Origin` or `Referer` headers. Localhost binding is the only network exposure
 model in this version; there is no token, account, or remote-host authentication
 surface.
+Explicit `Origin: null` and malformed Origin or Referer values are cross-origin
+and must be rejected; this prevents an opaque-origin report preview from
+calling serve mutations.
+
+`POST /api/reports` accepts JSON `{ "path": "ABSOLUTE_PATH", "source_keys":
+["cell_..."] }`, requires at least one current readable source, imports one
+supported file, and returns the refreshed report catalog plus the imported
+report id. `POST /api/reports/<report-id>/bindings` accepts `{ "source_keys":
+[...] }` and atomically replaces all bindings. `POST
+/api/reports/<report-id>/delete` permanently removes the package. These routes
+use the normal same-origin JSON mutation rules.
+
+`GET /api/reports/<report-id>/preview` returns an isolated HTML document. HTML
+reports preserve their original body. Markdown reports are rendered server-side
+with a CommonMark-capable parser configured to disable raw HTML while retaining
+report-friendly tables and strikethrough. Preview responses use
+`sandbox="allow-scripts"` without same-origin, form, popup, download, or
+top-navigation privileges. Their CSP permits HTTP/HTTPS external scripts,
+styles, images, media, frames, and requests plus inline/data/blob resources,
+while disabling objects, base URLs, and form actions. Responses also set
+`Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`. Only the
+selected file is copied; relative sibling assets are not imported.
 
 `GET /assets/echarts/6.0.0/echarts.min.js` serves the workspace ECharts cache.
 It must not expose arbitrary file paths. On cache miss, the endpoint may fetch
@@ -484,9 +545,10 @@ string writes an empty `notes.md`; delete semantics are not part of v1.
 
 In serve UI mode, the Leaderboard may add a row-selection checkbox column at
 the start of the existing full column set. Header and row checkboxes control
-export selection only; they must not change the selected Trial, open the Step
-details drawer, or change the filtered/sorted row set. Clicking a Leaderboard
-row remains the canonical selected-Trial interaction. The Trajectory Overview
+visible-row bulk actions such as export, source-state mutation, and report
+attachment; they must not change the selected Trial, open either details
+drawer, or change the filtered/sorted row set. Clicking a Leaderboard row
+remains the canonical selected-Trial interaction. The Trajectory Overview
 continues to follow the currently filtered and sorted Leaderboard rows and
 does not follow checkbox state.
 

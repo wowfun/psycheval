@@ -321,14 +321,23 @@ Coverage must verify:
   session row selects that Trial and opens the step drawer on its first User
   step when one exists; sessions without a User step remain selectable without
   opening stale step details.
+- serve UI mode adds a workspace Reports toolbar entry, serve-only Reports
+  column, selected-visible-row Attach action, isolated left report reader, and
+  dedicated report manager without changing static report output or report
+  JSON. Tests cover zero/one/multiple report cells, click isolation, attach
+  success/cancel/error, reader and Step drawer mutual exclusion, inventory
+  including zero-binding reports, active/archived binding search, full binding
+  replacement, confirmed permanent deletion, and explicit report-manager grid
+  placement that keeps the body in the flexible final row when status is hidden.
 - serve UI source manager renders Session/ATIF/runs path, DB, and input-table
   forms, JSONL/ATIF JSON/report JSON upload affordance, a native file picker
   trigger for the Path textarea, concise `auto` adapter inference helper copy
-  beside each source path input, explicit row refresh controls only where
-  provenance remains refreshable, source checkbox selection, Reload-adjacent
-  batch Archive/Activate/Delete controls, non-refreshable artifact labels, and
-  latest source status without a persistent sidebar, duplicate form titles, or
-  add-form alias fields.
+  beside each source path input, SQLite DB in-place Save/Clear default controls
+  arranged vertically to the DB path field's right, disabled default management
+  for `auto`, source checkbox selection,
+  Reload-adjacent batch Archive/Activate/Delete controls, no per-row Refresh
+  column, and latest source status without a persistent sidebar, duplicate form
+  titles, or add-form alias fields.
 - serve UI source manager renders a DB Inspect control, adapter single-choice
   controls defaulting to `auto`, session multi-select table, select-all-visible
   control, and add-selected action only in serve mode.
@@ -592,7 +601,8 @@ Coverage must verify:
   and cell-local notes, refresh-log rows, and no non-peval-py table writes.
 - HTML interaction tests cover Leaderboard visible-scope search, all-session
   search over active and archived sources, disabled mixed-state batch
-  Archive/Activate, inline alias/tag editing, existing-tag quick selection,
+  Archive/Activate, the single-select search-scope control, inline alias/tag
+  editing, existing-tag quick selection,
   flattened Any tag filters,
   startup loading status rendering and ready-state recovery,
   inline edit click isolation from row selection, first-User-step drawer
@@ -606,7 +616,10 @@ Coverage must verify:
 - CLI smoke tests cover `init --root`, `init --root --json`, `serve -p`,
   `serve -d`, `serve -i`, persistent save-and-refresh behavior, default
   `58010..58029` port fallback, strict explicit-port failure, config-free
-  defaults, and missing-workspace diagnostics.
+  defaults, missing-workspace diagnostics, and a first `serve -r` invocation on
+  a new root exposing the generated adapter default DB paths to Source Manager
+  without a restart. The first-run case also preserves workspace, explicit
+  `-c/--config`, and CLI override precedence.
 - HTTP tests use only the Python standard library and temporary workspaces. They
   verify `/`, report JSON, source listing, add source, archive/activate, refresh,
   JSONL upload, ATIF JSON upload, report JSON upload, unsupported upload
@@ -617,12 +630,24 @@ Coverage must verify:
   explicit-adapter retries through `/api/sources`, recursive external `runs/`
   import through `/api/sources`, `/api/sources/{source_key}/alias`, local native
   path picker results and unavailable-picker errors through `/api/path-picker`,
+  workspace report import/rebinding/deletion and isolated Markdown/HTML preview,
+  `Origin: null` rejection, preview CSP/referrer/nosniff headers, report catalog
+  refresh after source disappearance and recovery,
   batch `/api/sources/state`, and the ECharts cached asset route using fake
   cache/download paths rather than real network.
 - serve UI HTML and interaction tests verify the near-full-screen Source Manager
   workbench structure, adapter default DB configuration controls, mutable
   adapter default state in `report.js`, and continued DB form autofill from
   configured adapter defaults.
+- workspace report storage tests cover time-ordered ids and collision suffixes,
+  byte-preserving atomic imports, UTF-8/format/size validation, exact relative
+  Trial-cell bindings, state files containing only `source_keys`, rejection of
+  absolute/traversing/out-of-workspace cell references, invalid package isolation,
+  silent missing-source projection and recovery, atomic binding replacement,
+  permanent deletion, and traversal-safe reads. Markdown preview tests cover
+  nested lists, block quotes, fenced code, tables, emphasis, links,
+  strikethrough, and raw HTML escaping; HTML preview fixtures cover inline
+  scripts and external asset references without making live network requests.
 - legacy top-level `report` and `convert` commands are rejected.
 - translated evaluation docs exist under `docs/i18n/zh-CN/...`, the peval-py
   tool README translation exists beside `tools/peval-py/README.md`, English

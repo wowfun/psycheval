@@ -139,11 +139,34 @@ source DB/file 无法成功刷新，也能显示 notes/analysis 的更新。
 
 `peval-py serve` 保持静态报告继续使用 CDN，但在 serve 页面中会优先从
 `<workspace>/.cache/echarts/6.0.0/echarts.min.js` 提供 ECharts，本地脚本失败时
-回退到固定 CDN URL。Source Manager 会暴露配置好的默认 DB path、source alias 编辑，
-Last Turn End 排序，并提供 English/简体中文选择器；语言选择会把顶层 `locale`
-持久化到 `peval-py.toml`。Path 来源字段也可以输入另一个 workspace root、
+回退到固定 CDN URL。Source Manager 会在 SQLite DB 表单内提供默认 DB 的保存/清除
+操作，并提供 source alias 编辑、Last Turn End 排序和 English/简体中文选择器；语言选择
+会把顶层 `locale` 持久化到 `peval-py.toml`。Path 来源字段也可以输入另一个 workspace root、
 `runs/`、`runs/<analysis_eval_slug>`，或 Trial cell 上层目录；serve 会递归导入完整
 cell 到当前 workspace 作为 snapshot，并保持外部 workspace 不变。
+
+`peval-py serve` 也可以把已有的 Markdown 或 HTML 分析报告绑定到一个或多个
+session。先勾选 Leaderboard 中当前可见的行，再点击 `Attach report (N)`，并选择一个
+本地 `.md`、`.markdown`、`.html` 或 `.htm` 文件。Reports 列会在左侧的沙箱预览器中
+打开已绑定的报告。工具栏中的 Reports Manager 可以预览导入的报告、替换它们与
+active 或 archived 可读 session 的绑定，或永久删除报告。这个工作流只在 serve
+页面中提供，不会修改导出的 report JSON 或静态 HTML 报告。
+
+每个导入的报告都会复制到 `<workspace>/reports/<id>/`。其中的 `state.json` 只包含
+相对于 workspace 的 Trial cell 路径：
+
+```json
+{
+  "source_keys": [
+    "runs/default/agent-a/c2/c2_t001"
+  ]
+}
+```
+
+你可以直接编辑这些绑定。找不到某个 cell 时，serve 会忽略它，但不会改写
+`state.json`；相同的 cell 路径恢复可读后，关联也会恢复。每次只能导入一个不超过
+20 MiB 的 UTF-8 文件，并且只复制所选文件。报告引用的相对 sibling 图片、样式、
+脚本或其他资源不会随报告导入；需要时请把资源嵌入报告，或使用外部 URL。
 
 CSV 示例：
 
