@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from serve_state_support import *
+from peval_py.cli import main as cli_main
+from peval_py.config import load_config
 
 DERIVED_SOURCE_STATE_FIELDS = {
     "source_key",
@@ -63,6 +65,47 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 os.chdir(old_cwd)
                 if old_env is not None:
                     os.environ["PEVAL_ROOT"] = old_env
+
+    def test_first_serve_on_new_root_uses_generated_adapter_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "new-workspace"
+            bound = threading.Event()
+            captured: dict[str, object] = {}
+
+            def bind_ephemeral_server(host, _requested_port, handler):
+                server = LocalHTTPServer((host, 0), handler)
+                captured["server"] = server
+                bound.set()
+                return server
+
+            def run_cli() -> None:
+                captured["returncode"] = cli_main(
+                    ["serve", "-r", str(root), "--port", "0"]
+                )
+
+            with patch(
+                "peval_py.serve.lifecycle.bind_server",
+                side_effect=bind_ephemeral_server,
+            ):
+                thread = threading.Thread(target=run_cli, daemon=True)
+                thread.start()
+                self.assertTrue(bound.wait(timeout=5), captured)
+                server = captured["server"]
+                try:
+                    status, _, html = request_text(server.server_port, "/")
+                    self.assertEqual(status, 200)
+                    options = script_json(html, "peval-py-render-options")
+                    expected = load_config(
+                        None,
+                        workspace_root=str(root),
+                    ).adapter_default_db_paths
+                    self.assertTrue((root / "peval-py.toml").is_file())
+                    self.assertEqual(options["adapter_defaults"], expected)
+                finally:
+                    server.shutdown()
+                    thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(captured.get("returncode"), 0)
 
     def test_port_policy_fallback_and_explicit_strict_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

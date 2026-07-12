@@ -43,6 +43,11 @@ def main(argv: list[str] | None = None) -> int:
             workspace_root = validated_workspace_root(args)
             run_import_analysis_command(args, workspace_root)
             return 0
+        if args.command == "serve":
+            from peval_py.serve import run_serve_command
+
+            run_serve_command(args)
+            return 0
         workspace_root, inferred_workspace_root = workspace_root_for_args(args)
         config = apply_overrides(
             load_config(args.config, workspace_root=workspace_root),
@@ -53,11 +58,6 @@ def main(argv: list[str] | None = None) -> int:
             config.adapter,
         )
         config = config_for_adapter(config, adapter_assignments.default_adapter)
-        if args.command == "serve":
-            from peval_py.serve import run_serve_command
-
-            run_serve_command(args, config, adapter_assignments)
-            return 0
         if args.command == "view" and getattr(args, "mode", "inspect") == "inspect":
             from peval_py.inspection import validate_inspect_raw_only_args
 

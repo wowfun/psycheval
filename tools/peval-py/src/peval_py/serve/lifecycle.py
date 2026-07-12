@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from argparse import Namespace
-from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from peval_py.config import ToolConfig
-from peval_py.inputs import AdapterAssignments
+from peval_py.config import apply_overrides, config_for_adapter, load_config
+from peval_py.inputs import parse_adapter_assignments
 from peval_py.serve.constants import DEFAULT_PORT_END, DEFAULT_PORT_START, LOCALHOSTS
 from peval_py.serve.handler import make_handler
 from peval_py.serve.runtime import ServeRuntime
@@ -18,15 +17,24 @@ class LocalHTTPServer(HTTPServer):
 
 def run_serve_command(
     args: Namespace,
-    config: ToolConfig,
-    adapter_assignments: AdapterAssignments,
 ) -> None:
     host = validate_localhost(getattr(args, "host", None) or "127.0.0.1")
     store = open_workspace_state(getattr(args, "root", None))
-    config = replace(config, workspace_root=str(store.paths.root))
     server: HTTPServer | None = None
     runtime: ServeRuntime | None = None
     try:
+        config = apply_overrides(
+            load_config(
+                getattr(args, "config", None),
+                workspace_root=str(store.paths.root),
+            ),
+            args,
+        )
+        adapter_assignments = parse_adapter_assignments(
+            getattr(args, "adapter", None) or [],
+            config.adapter,
+        )
+        config = config_for_adapter(config, adapter_assignments.default_adapter)
         runtime = ServeRuntime(store, config, initialize_snapshot=False)
         handler = make_handler(runtime)
         server = bind_server(host, getattr(args, "port", None), handler)
