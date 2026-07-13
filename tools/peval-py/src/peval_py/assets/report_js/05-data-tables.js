@@ -55,15 +55,23 @@ function renderLeaderboard(rows = leaderboardRows()) {
   if (!target) return;
   const columns = displayLeaderboardColumns();
   target.innerHTML = `
-    <div class="panel-head"><h2 id="leaderboard-title">${esc(t("leaderboard", "Leaderboard"))}</h2>${renderLeaderboardPanelControls(rows)}</div>
+    <div class="panel-head leaderboard-panel-head">
+      <div class="leaderboard-title-stack">
+        <h2 id="leaderboard-title">${esc(t("leaderboard", "Leaderboard"))}</h2>
+        ${renderLeaderboardSearchControls()}
+      </div>
+      ${renderLeaderboardPanelControls(rows)}
+    </div>
     ${renderDataTable({
       tableId: "leaderboard",
       columns,
       rows,
       filterOptionsRows: reportRows(),
       rowClass: row => `clickable-row ${(serveMode() ? row.source_key === state.selectedSourceKey : row.trial_key === selectedKey()) ? "selected-row" : ""}`,
-      rowAttrs: row => `data-trial-key="${esc(row.trial_key)}"`,
-      rowTitle: row => row.trial_key,
+      rowAttrs: row => serveMode()
+        ? `data-source-key="${esc(row.source_key)}"`
+        : `data-trial-key="${esc(row.trial_key)}"`,
+      rowTitle: row => serveMode() ? (row.artifact_trial_key || row.trial_key) : row.trial_key,
     })}
 `;
   bindLeaderboardControls();
@@ -72,7 +80,6 @@ function renderLeaderboardPanelControls(rows) {
   if (!serveMode()) return "";
   return `<div class="leaderboard-actions">
     <div class="leaderboard-action-row">${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardExportControls()}</div>
-    ${renderLeaderboardSearchControls()}
   </div>`;
 }
 function renderLeaderboardExportControls() {

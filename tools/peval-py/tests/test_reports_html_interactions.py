@@ -398,6 +398,69 @@ console.log(result);
         self.assertTrue(result["afterNoUser"]["stopped"])
         self.assertEqual(result["afterNoUser"]["renderCount"], 2)
 
+    def test_serve_leaderboard_search_is_below_the_left_title(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js").rsplit("\nrender(data());", 1)[0]
+        script = r"""
+const vm = require("vm");
+const leaderboard = {
+  innerHTML: "",
+  querySelector() { return null; },
+  querySelectorAll() { return []; }
+};
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve", sources: [] }) },
+  leaderboard
+};
+const context = {
+  document: {
+    body: { classList: { toggle() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; }
+  },
+  window: { addEventListener() {} },
+  console, JSON, Number, String, Object, Math, Date, Set, Array, RegExp, leaderboard
+};
+vm.createContext(context);
+vm.runInContext(__ASSET__, context);
+const result = vm.runInContext(`(() => {
+  renderServeSourceStateControls = () => '<span data-source-state-controls></span>';
+  renderAttachWorkspaceReportAction = () => '<button data-report-attach></button>';
+  renderLeaderboardExportControls = () => '<span class="leaderboard-export"></span>';
+  const row = normalizeCatalogRow({ source_key: "source-1", trial_key: "trial-1", trial_session_id: "session-1", readable: true });
+  state.catalogRows = [row];
+  renderLeaderboard([row]);
+  const html = leaderboard.innerHTML;
+  const titleStackStart = html.indexOf('class="leaderboard-title-stack"');
+  const titleEnd = html.indexOf('</h2>', titleStackStart);
+  const searchStart = html.indexOf('class="leaderboard-search"');
+  const actionsStart = html.indexOf('class="leaderboard-actions"');
+  const searchCount = (html.match(/class="leaderboard-search"/g) || []).length;
+  return JSON.stringify({
+    titleStackStart,
+    titleEnd,
+    searchStart,
+    actionsStart,
+    searchInsideTitleStack: titleStackStart >= 0 && titleEnd > titleStackStart && searchStart > titleEnd && searchStart < actionsStart,
+    searchCount
+  });
+})()`, context);
+console.log(result);
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+        self.assertTrue(result["searchInsideTitleStack"])
+        self.assertEqual(result["searchCount"], 1)
+
     def test_path_picker_fills_path_textarea_and_preserves_input_on_cancel_or_error(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -2096,7 +2159,8 @@ const promise = vm.runInContext(`(async () => {
   applyServeMutationPayload({ sources, report: activeReport, report_source_key: "source-a", report_source_state: "active" });
   const actionRowStart = nodes.leaderboard.innerHTML.indexOf('class="leaderboard-action-row"');
   const searchStart = nodes.leaderboard.innerHTML.indexOf('class="leaderboard-search"');
-  const actionRowMarkup = nodes.leaderboard.innerHTML.slice(actionRowStart, searchStart);
+  const titleEnd = nodes.leaderboard.innerHTML.indexOf("</h2>");
+  const actionRowMarkup = nodes.leaderboard.innerHTML.slice(actionRowStart);
   const initial = {
     mode: state.serveSourceMode,
     leaderboardControls: (nodes.leaderboard.innerHTML.match(/data-source-state-controls/g) || []).length,
@@ -2105,11 +2169,13 @@ const promise = vm.runInContext(`(async () => {
     archivedToggleEnabled: !nodes.leaderboard.innerHTML.includes("data-source-state-toggle  disabled"),
     overviewCheckboxes: (nodes["trajectory-overview"].innerHTML.match(/data-row-select/g) || []).length,
     unifiedActionRow: actionRowStart >= 0
-      && searchStart > actionRowStart
+      && searchStart >= 0
       && actionRowMarkup.includes("data-source-state-controls")
       && actionRowMarkup.includes("data-source-state-action")
       && actionRowMarkup.includes("data-report-attach")
       && actionRowMarkup.includes("leaderboard-export"),
+    searchBelowTitle: titleEnd >= 0 && searchStart > titleEnd && searchStart < actionRowStart
+      && nodes.leaderboard.innerHTML.includes('class="leaderboard-title-stack"'),
   };
   await switchServeSourceMode("archived");
   const afterArchived = {
@@ -2177,6 +2243,7 @@ promise.then(result => console.log(result)).catch(error => { console.error(error
         self.assertTrue(result["initial"]["archivedToggleEnabled"])
         self.assertEqual(result["initial"]["overviewCheckboxes"], 3)
         self.assertTrue(result["initial"]["unifiedActionRow"])
+        self.assertTrue(result["initial"]["searchBelowTitle"])
         self.assertEqual(result["afterArchived"]["mode"], "archived")
         self.assertEqual(result["afterArchived"]["reportRows"], 1)
         self.assertEqual(result["afterArchived"]["selectedSourceKey"], "source-d")

@@ -11,34 +11,48 @@ function renderTrajectoryOverview(rows = leaderboardRows()) {
   bindTrajectoryControls(target);
 }
 function renderTrajectoryOverviewRow(row) {
-  const trajectory = trajectoryFor(row.trial_key);
-  const steps = trajectory?.steps || [];
-  const selected = row.trial_key === selectedKey();
+  const catalogSourceKey = serveMode() ? row.source_key : null;
+  const trajectory = catalogSourceKey ? null : trajectoryFor(row.trial_key);
+  const steps = catalogSourceKey ? catalogStepOutline(row.step_outline) : listValue(trajectory?.steps);
+  const selected = catalogSourceKey ? catalogSourceKey === state.selectedSourceKey : row.trial_key === selectedKey();
   const session = sourceDisplayFor(row);
   const agent = agentNameFor(row);
   const secondary = sourceAliasFor(row) ? `${sourceIdentityFor(row)} / ${agent}` : agent;
-  const timingModel = trajectoryOverviewTimingModel(row.trial_key);
+  const timingModel = trajectoryOverviewTimingModel(row.trial_key, steps, catalogSourceKey);
   const selection = serveMode() ? `<div class="trajectory-select">${renderRowSelection(row)}</div>` : "";
   const classes = ["trajectory-row", serveMode() ? "trajectory-row-selectable" : "", selected ? "selected-row" : ""].filter(Boolean).join(" ");
-  return `<div class="${esc(classes)}" data-trial-key="${esc(row.trial_key)}" title="${esc(row.trial_key)}">${selection}<div class="trajectory-label"><strong>${esc(session)}</strong><span>${esc(secondary)}</span></div><div class="trajectory-track">${steps.map((step, index) => renderTrajectoryNode(step, index, row.trial_key, timingModel)).join("")}</div></div>`;
+  const identityAttr = catalogSourceKey
+    ? `data-source-key="${esc(catalogSourceKey)}"`
+    : `data-trial-key="${esc(row.trial_key)}"`;
+  const identity = catalogSourceKey || row.trial_key;
+  return `<div class="${esc(classes)}" ${identityAttr} title="${esc(row.trial_key)}">${selection}<div class="trajectory-label"><strong>${esc(session)}</strong><span>${esc(secondary)}</span></div><div class="trajectory-track">${steps.map((step, index) => renderTrajectoryNode(step, index, identity, timingModel, { catalogSourceKey })).join("")}</div></div>`;
 }
-function trajectoryOverviewTimingModel(trialKey) {
+function trajectoryOverviewTimingModel(trialKey, steps = [], catalogSourceKey = null) {
+  if (catalogSourceKey) {
+    return { meta: null, maxStepDurationMs: maxPositiveMetric(steps.map(item => item.duration_ms)) };
+  }
   const meta = metaFor(trialKey);
-  const steps = meta?.steps || [];
-  return { meta, maxStepDurationMs: maxPositiveMetric(steps.map(item => item.duration_ms)) };
+  return { meta, maxStepDurationMs: maxPositiveMetric(listValue(meta?.steps).map(item => item.duration_ms)) };
 }
 function overviewStepMeta(meta, stepId) {
   return (meta?.steps || []).find(item => String(item.step_id) === String(stepId)) || {};
 }
-function renderTrajectoryNode(step, index, trialKey, timingModel) {
+function renderTrajectoryNode(step, index, trialKey, timingModel, options = {}) {
   const rawStepId = step?.step_id ?? index + 1;
   const stepId = String(rawStepId);
-  const selected = state.selectedStep?.trialKey === trialKey && String(state.selectedStep?.stepId) === stepId;
-  const stepDuration = overviewStepMeta(timingModel?.meta, rawStepId).duration_ms;
+  const selected = options.catalogSourceKey
+    ? state.selectedSourceKey === options.catalogSourceKey && String(state.selectedStep?.stepId) === stepId
+    : state.selectedStep?.trialKey === trialKey && String(state.selectedStep?.stepId) === stepId;
+  const stepDuration = options.catalogSourceKey
+    ? step?.duration_ms
+    : overviewStepMeta(timingModel?.meta, rawStepId).duration_ms;
   const ratio = timingRatio(stepDuration, timingModel?.maxStepDurationMs);
   const classes = ["trajectory-node", selected ? "selected-node" : "", trajectoryDurationHeatClass(ratio)].filter(Boolean).join(" ");
   const label = stepTitle(step, index, stepDuration, ratio);
-  return `<button class="${esc(classes)}" type="button" data-trial-key="${esc(trialKey)}" data-step-id="${esc(stepId)}" title="${esc(label)}" aria-label="${esc(label)}"><span class="trajectory-node-letter">${esc(roleLetter(step?.source))}</span></button>`;
+  const identityAttr = options.catalogSourceKey
+    ? `data-source-key="${esc(options.catalogSourceKey)}"`
+    : `data-trial-key="${esc(trialKey)}"`;
+  return `<button class="${esc(classes)}" type="button" ${identityAttr} data-step-id="${esc(stepId)}" title="${esc(label)}" aria-label="${esc(label)}"><span class="trajectory-node-letter">${esc(roleLetter(step?.source))}</span></button>`;
 }
 function roleLetter(source) {
   const role = lower(source);
@@ -61,14 +75,23 @@ function bindTrajectoryControls(target) {
   target.querySelectorAll("[data-step-id]").forEach(node => {
     node.addEventListener("click", event => {
       event.stopPropagation();
+      if (serveMode()) {
+        selectServeDetail(node.dataset.sourceKey, { stepId: node.dataset.stepId });
+        return;
+      }
       state.selectedTrial = node.dataset.trialKey;
       state.selectedStep = { trialKey: node.dataset.trialKey, stepId: node.dataset.stepId };
       renderComparisonPanels();
     });
   });
-  target.querySelectorAll(".trajectory-row[data-trial-key]").forEach(row => {
+  const rowSelector = serveMode() ? ".trajectory-row[data-source-key]" : ".trajectory-row[data-trial-key]";
+  target.querySelectorAll(rowSelector).forEach(row => {
     row.addEventListener("click", event => {
       event.stopPropagation();
+      if (serveMode()) {
+        selectServeDetail(row.dataset.sourceKey);
+        return;
+      }
       state.selectedTrial = row.getAttribute("data-trial-key");
       state.selectedStep = null;
       renderComparisonPanels();

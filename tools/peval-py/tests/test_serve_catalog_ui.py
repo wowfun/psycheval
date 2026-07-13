@@ -86,6 +86,123 @@ Promise.resolve(result).then(value => console.log(value));
         self.assertEqual(result["normalizedTrialKey"], "cell-page-two")
         self.assertEqual(result["total"], 2)
 
+    def test_catalog_selection_resolves_source_keys_to_detail_trial_steps(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required for report.js catalog selection coverage")
+        asset = load_asset_text("report.js").rsplit("\nrender(data());", 1)[0]
+        script = r"""
+const vm = require("vm");
+const reports = {
+  "source-user": {
+    trajectory: [{ session_id: "session-user", steps: [
+      { step_id: 1, source: "agent", message: "before" },
+      { step_id: 2, source: "User", message: "first user" }
+    ], final_metrics: {} }],
+    trajectory_meta: [{ trial_key: "trial-user", status: "passed", steps: [] }]
+  },
+  "source-node": {
+    trajectory: [{ session_id: "session-node", steps: [
+      { step_id: 4, source: "agent", message: "open this step" }
+    ], final_metrics: {} }],
+    trajectory_meta: [{ trial_key: "trial-node", status: "passed", steps: [] }]
+  },
+  "source-no-user": {
+    trajectory: [{ session_id: "session-no-user", steps: [
+      { step_id: 9, source: "agent", message: "no user message" }
+    ], final_metrics: {} }],
+    trajectory_meta: [{ trial_key: "trial-no-user", status: "passed", steps: [] }]
+  }
+};
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve", sources: [] }) },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" }
+};
+const calls = [];
+const context = {
+  document: {
+    body: { classList: { toggle() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; }
+  },
+  window: { addEventListener() {} },
+  fetch: async path => {
+    const sourceKey = new URL(path, "http://localhost").searchParams.get("source_key");
+    calls.push(sourceKey);
+    return { ok: true, statusText: "OK", text: async () => JSON.stringify({ artifact_revision: `rev-${sourceKey}`, report: reports[sourceKey] }) };
+  },
+  console, JSON, Number, String, Object, Math, Date, Set, Array, RegExp, URL,
+  reports, calls,
+  requestAnimationFrame(callback) { callback(); }
+};
+vm.createContext(context);
+vm.runInContext(__ASSET__, context);
+const result = vm.runInContext(`(async () => {
+  const rows = [
+    normalizeCatalogRow({ source_key: "source-user", trial_key: "trial-user", trial_session_id: "session-user", readable: true, step_outline: [{ step_id: 1, source: "agent", duration_ms: 20, message: "do not render" }, { step_id: 2, source: "user", duration_ms: 30 }] }),
+    normalizeCatalogRow({ source_key: "source-node", trial_key: "trial-node", trial_session_id: "session-node", readable: true, step_outline: [{ step_id: 4, source: "agent", duration_ms: 40 }] }),
+    normalizeCatalogRow({ source_key: "source-no-user", trial_key: "trial-no-user", trial_session_id: "session-no-user", readable: true, step_outline: [{ step_id: 9, source: "agent", duration_ms: 50 }] })
+  ];
+  state.catalogRows = rows;
+  state.serveSources = rows;
+  render = view => { state.view = view; };
+  const userRow = { dataset: { sourceKey: "source-user" }, listeners: {}, addEventListener(type, handler) { this.listeners[type] = handler; } };
+  const noUserRow = { dataset: { sourceKey: "source-no-user" }, listeners: {}, addEventListener(type, handler) { this.listeners[type] = handler; } };
+  let pending = null;
+  const select = selectServeDetail;
+  selectServeDetail = (...args) => pending = select(...args);
+  bindTrialSelection({ querySelectorAll(selector) { return selector === "tr[data-source-key]" ? [userRow, noUserRow] : []; } });
+  userRow.listeners.click({ stopPropagation() {} });
+  await pending;
+  const afterUser = { source: state.selectedSourceKey, trial: state.selectedTrial, step: state.selectedStep };
+  noUserRow.listeners.click({ stopPropagation() {} });
+  await pending;
+  const afterNoUser = { source: state.selectedSourceKey, trial: state.selectedTrial, step: state.selectedStep };
+
+  const node = { dataset: { sourceKey: "source-node", stepId: "4" }, listeners: {}, addEventListener(type, handler) { this.listeners[type] = handler; } };
+  bindServeSourceStateControls = () => {};
+  bindServeSelectionControls = () => {};
+  bindTrajectoryControls({ querySelectorAll(selector) {
+    if (selector === "[data-step-id]") return [node];
+    return [];
+  } });
+  node.listeners.click({ stopPropagation() {} });
+  await pending;
+  const afterNode = { source: state.selectedSourceKey, trial: state.selectedTrial, step: state.selectedStep };
+  const userOutline = renderTrajectoryOverviewRow(rows[0]);
+  const nodeOutline = renderTrajectoryOverviewRow(rows[1]);
+  return JSON.stringify({ calls, afterUser, afterNoUser, afterNode, userOutline, nodeOutline });
+})()`, context);
+Promise.resolve(result).then(value => console.log(value)).catch(error => { console.error(error && error.stack || error); process.exit(1); });
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertEqual(result["calls"], ["source-user", "source-no-user", "source-node"])
+        self.assertEqual(
+            result["afterUser"],
+            {"source": "source-user", "trial": "trial-user", "step": {"trialKey": "trial-user", "stepId": "2"}},
+        )
+        self.assertEqual(
+            result["afterNoUser"],
+            {"source": "source-no-user", "trial": "trial-no-user", "step": None},
+        )
+        self.assertEqual(
+            result["afterNode"],
+            {"source": "source-node", "trial": "trial-node", "step": {"trialKey": "trial-node", "stepId": "4"}},
+        )
+        self.assertIn('data-source-key="source-user"', result["userOutline"])
+        self.assertIn('data-step-id="2"', result["userOutline"])
+        self.assertIn('data-source-key="source-node"', result["nodeOutline"])
+        self.assertIn('data-step-id="4"', result["nodeOutline"])
+        self.assertNotIn("do not render", result["userOutline"])
+
 
 if __name__ == "__main__":
     unittest.main()

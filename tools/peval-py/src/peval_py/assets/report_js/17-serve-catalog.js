@@ -14,11 +14,23 @@ function normalizeCatalogRow(row) {
     artifact_trial_key: row?.trial_key || null,
     trial_key: sourceKey,
     source_key: sourceKey,
+    step_outline: catalogStepOutline(row?.step_outline),
     session_id: row?.trial_session_id || row?.session_id || "-",
     finished_at_ms: row?.last_turn_finished_at_ms,
     source_active: row?.active !== false,
     status: row?.status || row?.last_status || "unknown"
   };
+}
+
+function catalogStepOutline(value) {
+  return listValue(value).flatMap(item => {
+    if (!item || item.step_id === null || item.step_id === undefined) return [];
+    const rawSource = lower(item.source);
+    const source = rawSource === "assistant" ? "agent" : ["system", "user", "agent"].includes(rawSource) ? rawSource : "unknown";
+    const outline = { step_id: item.step_id, source };
+    if (hasMetricValue(item.duration_ms)) outline.duration_ms = Number(item.duration_ms);
+    return [outline];
+  });
 }
 
 function leaderboardRows() {
@@ -41,12 +53,14 @@ function trialIndexFor(trialKey) {
 
 function trajectoryFor(trialKey) {
   const index = trialIndexFor(trialKey);
+  if (serveMode() && index < 0) return { steps: [] };
   return (state.view?.trajectory || [])[index >= 0 ? index : selectedIndex()] || { steps: [] };
 }
 
 function metaFor(trialKey) {
   const metas = state.view?.trajectory_meta || [];
   const index = trialIndexFor(trialKey);
+  if (serveMode() && index < 0) return { steps: [] };
   return metas[index >= 0 ? index : selectedIndex()] || { steps: [] };
 }
 
@@ -182,7 +196,6 @@ function renderLeaderboardPanelControls(rows) {
   const selectedCount = state.rowSelection.size;
   return `<div class="leaderboard-actions">
     <div class="leaderboard-action-row">${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardExportControls()}</div>
-    ${renderLeaderboardSearchControls()}
     <div class="catalog-page-controls" data-catalog-page-controls>
       <button type="button" class="step-toggle-button" data-catalog-prev ${state.catalogPage.page <= 1 ? "disabled" : ""}>‹</button>
       <span>${esc(catalogPageLabel())}</span>
@@ -355,19 +368,52 @@ async function pollServeStartupSources() {
   return loadCatalogPage();
 }
 
-function selectServeSource(sourceKey) {
-  loadServeSourceReport(sourceKey);
+function catalogRowForSourceKey(sourceKey) {
+  return listValue(state.catalogRows).find(row => row?.source_key === sourceKey) || null;
 }
 
-async function loadServeSourceReport(sourceKey) {
+function loadedServeDetailIsCurrent(sourceKey) {
+  const row = catalogRowForSourceKey(sourceKey);
+  return sourceKey === state.selectedSourceKey
+    && listValue(state.view?.trajectory_meta).length > 0
+    && (!row?.artifact_revision || row.artifact_revision === state.selectedArtifactRevision);
+}
+
+function detailStepSelection(report, trialKey, selection = {}) {
+  if (selection.stepId !== null && selection.stepId !== undefined) {
+    const step = listValue(report?.trajectory?.[0]?.steps).find(item => String(item?.step_id) === String(selection.stepId));
+    return step ? { trialKey, stepId: String(step.step_id) } : null;
+  }
+  return selection.firstUserStep ? firstUserStepSelection(trialKey, report) : null;
+}
+
+function applyServeDetailSelection(sourceKey, report, artifactRevision, selection = {}) {
+  const trialKey = listValue(report?.trajectory_meta)[0]?.trial_key || null;
+  state.selectedSourceKey = sourceKey;
+  state.selectedArtifactRevision = artifactRevision || null;
+  state.selectedTrial = trialKey;
+  state.selectedStep = trialKey ? detailStepSelection(report, trialKey, selection) : null;
+  render(report || emptyServeReport());
+}
+
+function selectServeDetail(sourceKey, selection = {}) {
+  if (!sourceKey) return Promise.resolve();
+  if (loadedServeDetailIsCurrent(sourceKey)) {
+    applyServeDetailSelection(sourceKey, state.view, state.selectedArtifactRevision, selection);
+    return Promise.resolve();
+  }
+  return loadServeSourceReport(sourceKey, selection);
+}
+
+function selectServeSource(sourceKey) {
+  return selectServeDetail(sourceKey);
+}
+
+async function loadServeSourceReport(sourceKey, selection = {}) {
   if (!sourceKey) return;
   try {
     const envelope = await serveApi(`/api/report?source_key=${encodeURIComponent(sourceKey)}`);
-    state.selectedSourceKey = sourceKey;
-    state.selectedArtifactRevision = envelope.artifact_revision || null;
-    state.selectedTrial = listValue(envelope?.report?.trajectory_meta)[0]?.trial_key || null;
-    state.selectedStep = null;
-    render(envelope.report || emptyServeReport());
+    applyServeDetailSelection(sourceKey, envelope.report || emptyServeReport(), envelope.artifact_revision, selection);
     setServeStatus(serveSourceModeStatusText());
   } catch (error) {
     setServeStatus(error.message || String(error), true);

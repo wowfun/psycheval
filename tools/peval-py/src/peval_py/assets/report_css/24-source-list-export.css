@@ -127,13 +127,19 @@
   gap:7px;
   justify-items:end;
 }
+.leaderboard-title-stack {
+  display:grid;
+  justify-items:start;
+  gap:7px;
+  min-width:0;
+}
 .leaderboard-action-row {
   flex-wrap:wrap;
 }
 .leaderboard-search {
   display:flex;
   align-items:center;
-  justify-content:flex-end;
+  justify-content:flex-start;
   gap:6px;
   flex-wrap:wrap;
 }

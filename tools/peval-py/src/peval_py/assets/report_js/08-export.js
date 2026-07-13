@@ -41,11 +41,12 @@ function bindServeExportControls(target) {
   });
 }
 function bindTrialSelection(root) {
-  root.querySelectorAll("tr[data-trial-key]").forEach(node => {
+  const selector = serveMode() ? "tr[data-source-key]" : "tr[data-trial-key]";
+  root.querySelectorAll(selector).forEach(node => {
     node.addEventListener("click", event => {
       event.stopPropagation();
       if (serveMode()) {
-        loadServeSourceReport(node.getAttribute("data-trial-key"));
+        selectServeDetail(node.dataset.sourceKey, { firstUserStep: true });
         return;
       }
       state.selectedTrial = node.getAttribute("data-trial-key");
@@ -56,8 +57,9 @@ function bindTrialSelection(root) {
     });
   });
 }
-function firstUserStepSelection(trialKey) {
-  const step = listValue(trajectoryFor(trialKey)?.steps).find(item => {
+function firstUserStepSelection(trialKey, view = state.view) {
+  const index = listValue(view?.trajectory_meta).findIndex(meta => meta?.trial_key === trialKey);
+  const step = listValue(view?.trajectory?.[index >= 0 ? index : 0]?.steps).find(item => {
     return lower(item?.source) === "user" && item?.step_id !== null && item?.step_id !== undefined;
   });
   return step ? { trialKey, stepId: String(step.step_id) } : null;
