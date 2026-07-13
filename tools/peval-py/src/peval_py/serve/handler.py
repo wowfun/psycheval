@@ -4,7 +4,7 @@ import json
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from peval_py.config import ToolConfig, write_workspace_adapter_default_db, write_workspace_locale
 from peval_py.html import render_serve_html
@@ -12,6 +12,7 @@ from peval_py.i18n import normalize_locale
 from peval_py.serve.assets import ECHARTS_ASSET_PATH, cached_echarts_asset
 from peval_py.serve.constants import MAX_JSON_BODY_BYTES
 from peval_py.serve.errors import HttpError
+from peval_py.serve.exports import build_serve_export
 from peval_py.serve.payloads import (
     adapter_default_db_payload,
     adapter_override_payload,
@@ -21,16 +22,15 @@ from peval_py.serve.payloads import (
     required_string,
     source_action_path,
     source_keys_payload,
-    source_state_payload,
     tags_payload,
 )
 from peval_py.serve.path_picker import PathPickerUnavailable, pick_file_paths
-from peval_py.serve.reporting import single_query_value
 from peval_py.serve.runtime import ServeRuntime
 from peval_py.serve.sources import add_source_payload, db_sessions_payload
-from peval_py.state import ServeStateStore
+from peval_py.state import CatalogBusyError, CatalogQuery, ServeStateStore
 from peval_py.workspace_reports import (
     WorkspaceReportNotFound,
+    render_workspace_report_reader_page,
     render_workspace_report_preview,
 )
 
@@ -49,6 +49,17 @@ REPORT_PREVIEW_CSP = "; ".join(
         "object-src 'none'",
         "base-uri 'none'",
         "form-action 'none'",
+    ]
+)
+
+REPORT_READER_CSP = "; ".join(
+    [
+        "default-src 'none'",
+        "frame-src 'self'",
+        "style-src 'unsafe-inline'",
+        "base-uri 'none'",
+        "form-action 'none'",
+        "frame-ancestors 'none'",
     ]
 )
 
@@ -77,59 +88,65 @@ def make_handler(
             path = parsed_url.path
             try:
                 if path == "/":
-                    envelope = runtime.source_envelope(refresh=True)
                     self.write_html(
                         render_serve_html(
-                            envelope["report"],
+                            runtime.shell_report(),
                             locale=runtime.config.locale,
-                            sources=envelope["sources"],
-                            reports=envelope.get("reports", []),
+                            sources=[],
+                            reports=[],
                             adapter_defaults=runtime.config.adapter_default_db_paths,
-                            loading=bool(envelope.get("loading")),
-                            load_error=envelope.get("error"),
+                            loading=not runtime.catalog.has_generation or runtime.is_loading(),
+                            load_error=runtime.load_error(),
                         )
                     )
                     return
                 if path == ECHARTS_ASSET_PATH:
                     self.write_js(cached_echarts_asset(store))
                     return
+                if path == "/api/catalog":
+                    self.write_json(runtime.catalog_page(catalog_query(parsed_url.query)).to_dict())
+                    return
                 if path == "/api/report":
                     source_key = single_query_value(parsed_url.query, "source_key")
-                    source_state = (
-                        "active"
-                        if source_key
-                        else source_state_payload(
-                            single_query_value(parsed_url.query, "source_state"),
-                            allow_all=True,
-                        )
-                    )
+                    if not source_key:
+                        raise HttpError(400, "source_key is required")
                     try:
-                        self.write_json(
-                            runtime.report(
-                                source_keys=[source_key] if source_key else None,
-                                source_state=source_state,
-                            )
-                        )
+                        self.write_json(runtime.detail(source_key).to_dict())
                     except ValueError as exc:
                         raise HttpError(400, str(exc)) from exc
                     return
                 if path == "/api/sources":
-                    self.write_json(runtime.source_envelope(refresh=True))
+                    self.write_json(runtime.source_envelope())
+                    return
+                if path == "/api/reports":
+                    self.write_json({"reports": runtime.workspace_report_catalog()})
+                    return
+                operation_id = operation_status_path(path)
+                if operation_id is not None:
+                    try:
+                        self.write_json(runtime.operation(operation_id).to_dict())
+                    except ValueError as exc:
+                        raise HttpError(404, str(exc)) from exc
                     return
                 report_action = report_action_path(path)
                 if report_action is not None:
                     report_id, action = report_action
-                    if action != "preview":
+                    if action not in {"preview", "open"}:
                         raise HttpError(404, "unknown report action")
                     try:
                         report = runtime.workspace_reports.read(report_id)
                     except ValueError as exc:
                         raise HttpError(404, str(exc)) from exc
-                    self.write_report_preview(render_workspace_report_preview(report))
+                    if action == "preview":
+                        self.write_report_preview(render_workspace_report_preview(report))
+                    else:
+                        self.write_report_reader(render_workspace_report_reader_page(report))
                     return
                 raise HttpError(404, "not found")
             except HttpError as exc:
                 self.write_error(exc.status, exc.message)
+            except CatalogBusyError as exc:
+                self.write_error(409, str(exc))
             except Exception as exc:  # noqa: BLE001 - HTTP boundary.
                 self.write_error(500, str(exc))
 
@@ -137,8 +154,17 @@ def make_handler(
             path = urlsplit(self.path).path
             try:
                 payload = self.read_json_payload()
+                if path == "/api/catalog/resolve":
+                    self.write_json(
+                        {
+                            "generation": runtime.catalog.generation,
+                            "source_keys": runtime.resolve_keys(source_keys_payload(payload) or []),
+                        }
+                    )
+                    return
                 if path == "/api/config/locale":
                     runtime.ensure_ready()
+                    self.require_workspace_writable()
                     locale = normalize_locale(required_string(payload, "locale"))
                     write_workspace_locale(store.paths.config_path, locale)
                     runtime.set_config(replace(runtime.config, locale=locale))
@@ -146,6 +172,7 @@ def make_handler(
                     return
                 if path == "/api/config/adapter-default-db":
                     runtime.ensure_ready()
+                    self.require_workspace_writable()
                     adapter_id, raw_db_path = adapter_default_db_payload(payload)
                     resolved = write_workspace_adapter_default_db(
                         store.paths.config_path,
@@ -184,8 +211,22 @@ def make_handler(
                     except PathPickerUnavailable as exc:
                         raise HttpError(503, str(exc)) from exc
                     return
+                if path == "/api/exports":
+                    export_kind = required_string(payload, "kind")
+                    export_query = catalog_query_payload(payload.get("query"))
+                    export = build_serve_export(
+                        runtime.catalog,
+                        store,
+                        runtime.config,
+                        kind=export_kind,
+                        query=export_query,
+                        source_keys=source_keys_payload(payload),
+                    )
+                    self.write_download(export.content, export.content_type, export.filename)
+                    return
                 if path == "/api/reports":
                     runtime.ensure_ready()
+                    self.require_workspace_writable()
                     source_keys = source_keys_payload(payload) or []
                     report_id = runtime.workspace_reports.import_file(
                         required_string(payload, "path"),
@@ -204,70 +245,101 @@ def make_handler(
                     if not source_keys:
                         raise HttpError(400, "source_keys must include at least one source")
                     active = required_bool(payload, "active")
-                    report_source_state = source_state_payload(
-                        payload.get("report_source_state"),
-                        field="report_source_state",
+                    rows = [runtime.catalog.row_for_key(key) for key in source_keys]
+                    operation = runtime.start_operation(
+                        "activate" if active else "archive",
+                        rows,
+                        lambda row: source_state_operation(store, row, active),
                     )
-                    for source_key in source_keys:
-                        store.source_by_key(source_key)
-                    for source_key in source_keys:
-                        store.set_source_active(source_key, active)
-                    self.write_json(
-                        runtime.mutation_envelope(
-                            source_state=report_source_state,
-                        )
+                    self.write_json(operation.to_dict(), status=202)
+                    return
+                if path == "/api/sources/delete":
+                    runtime.ensure_ready()
+                    source_keys = source_keys_payload(payload)
+                    if not source_keys:
+                        raise HttpError(400, "source_keys must include at least one source")
+                    rows = [runtime.catalog.row_for_key(key) for key in source_keys]
+                    operation = runtime.start_operation(
+                        "delete",
+                        rows,
+                        lambda row: delete_source_operation(store, row),
                     )
+                    self.write_json(operation.to_dict(), status=202)
                     return
                 if path == "/api/sources":
                     runtime.ensure_ready()
-                    result = add_source_payload(store, runtime.config, payload)
-                    response = runtime.mutation_envelope(
-                        source_key=result.keys[0] if result.keys else None,
+                    operation_payloads = source_operation_payloads(payload)
+                    if len(operation_payloads) > 1:
+                        operation = runtime.start_operation(
+                            "source-import",
+                            operation_payloads,
+                            lambda item: {
+                                **({"path": item.get("path")} if item.get("path") else {}),
+                                **(
+                                    {"session_id": item.get("session_id")}
+                                    if item.get("session_id")
+                                    else {}
+                                ),
+                                **add_source_result_payload(
+                                    add_source_payload(store, runtime.config, item)
+                                ),
+                            },
+                        )
+                        self.write_json(operation.to_dict(), status=202)
+                        return
+                    response = runtime.mutate(
+                        "source-import",
+                        [],
+                        lambda: add_source_result_payload(
+                            add_source_payload(store, runtime.config, payload)
+                        ),
                     )
-                    if result.import_results is not None:
-                        response["import_results"] = result.import_results
                     self.write_json(response)
                     return
                 if path == "/api/sources/reload":
                     runtime.ensure_ready()
-                    store.sync_artifact_sources(runtime.config)
-                    self.write_json(runtime.mutation_envelope())
+                    operation = runtime.start_operation("reload", [None], lambda _item: None)
+                    self.write_json(operation.to_dict(), status=202)
                     return
                 if path == "/api/upload":
                     runtime.ensure_ready()
                     filename = required_string(payload, "filename")
                     content = required_string(payload, "content")
                     adapter = adapter_override_payload(payload)
-                    keys = store.ingest_upload(
-                        filename,
-                        content,
-                        runtime.config,
-                        adapter=adapter,
-                    )
                     upload_alias = alias_payload(payload)
-                    if upload_alias is not None:
-                        for source_key in keys:
-                            store.set_source_alias(source_key, upload_alias)
                     self.write_json(
-                        runtime.mutation_envelope(
-                            source_key=keys[0] if keys else None,
+                        runtime.mutate(
+                            "upload",
+                            [],
+                            lambda: upload_source(
+                                store,
+                                runtime.config,
+                                filename,
+                                content,
+                                adapter,
+                                upload_alias,
+                            ),
                         )
                     )
                     return
                 if path == "/api/refresh":
                     runtime.ensure_ready()
-                    source_keys = source_keys_payload(payload)
-                    store.refresh_sources(source_keys, runtime.config)
-                    self.write_json(
-                        runtime.mutation_envelope(
-                            source_key=source_keys[0] if source_keys else None,
-                        )
+                    source_keys = source_keys_payload(payload) or []
+                    if not source_keys:
+                        raise HttpError(400, "source_keys must include at least one source")
+                    rows = [runtime.catalog.row_for_key(key) for key in source_keys]
+                    operation = runtime.start_operation(
+                        "refresh",
+                        rows,
+                        lambda row: refresh_source_operation(store, runtime.config, row),
                     )
+                    self.write_json(operation.to_dict(), status=202)
                     return
 
                 report_action = report_action_path(path)
                 if report_action is not None:
                     runtime.ensure_ready()
+                    self.require_workspace_writable()
                     report_id, action = report_action
                     try:
                         if action == "bindings":
@@ -288,48 +360,37 @@ def make_handler(
                 if source_action is not None:
                     runtime.ensure_ready()
                     source_key, action = source_action
-                    mutation_source_state = "active"
+                    row = runtime.catalog.row_for_key(source_key)
                     if action == "archive":
-                        store.set_source_active(source_key, False)
+                        mutate = lambda: store.set_source_active_row(row, False)
                     elif action == "activate":
-                        store.set_source_active(source_key, True)
+                        mutate = lambda: store.set_source_active_row(row, True)
                     elif action == "refresh":
-                        store.refresh_sources([source_key], runtime.config)
+                        mutate = lambda: store.refresh_source(row, runtime.config)
                     elif action == "delete":
-                        store.delete_source(source_key)
+                        mutate = lambda: store.delete_source_row(row)
                     elif action == "alias":
-                        mutation_source_state = source_state_payload(
-                            payload.get("report_source_state"),
-                            field="report_source_state",
-                            allow_all=True,
-                        )
-                        store.set_source_alias(source_key, alias_payload(payload))
+                        mutate = lambda: store.set_source_alias_row(row, alias_payload(payload))
                     elif action == "tags":
-                        mutation_source_state = source_state_payload(
-                            payload.get("report_source_state"),
-                            field="report_source_state",
-                            allow_all=True,
-                        )
-                        store.set_source_tags(source_key, tags_payload(payload))
+                        mutate = lambda: store.set_source_tags_row(row, tags_payload(payload))
                     elif action == "notes":
-                        store.save_source_notes(
-                            source_key,
+                        mutate = lambda: store.save_source_notes_row(
+                            row,
                             markdown_payload(payload),
                             runtime.config,
                         )
                     else:
                         raise HttpError(404, "unknown source action")
                     self.write_json(
-                        runtime.mutation_envelope(
-                            source_key=None if action == "delete" else source_key,
-                            source_state=mutation_source_state,
-                        )
+                        runtime.mutate(action, [source_key], mutate)
                     )
                     return
 
                 raise HttpError(404, "not found")
             except HttpError as exc:
                 self.write_error(exc.status, exc.message)
+            except CatalogBusyError as exc:
+                self.write_error(409, str(exc))
             except Exception as exc:  # noqa: BLE001 - HTTP boundary.
                 self.write_error(400, str(exc))
 
@@ -361,6 +422,10 @@ def make_handler(
             referer = self.headers.get("Referer")
             if referer is not None and not self.is_same_origin(referer):
                 raise HttpError(403, "mutating APIs require same-origin Referer")
+
+        def require_workspace_writable(self) -> None:
+            if runtime.is_loading():
+                raise HttpError(409, "serve catalog is checking runs")
 
         def is_same_origin(self, value: str, *, origin_header: bool = False) -> bool:
             try:
@@ -399,10 +464,35 @@ def make_handler(
             self.end_headers()
             self.wfile.write(data)
 
+        def write_download(
+            self,
+            data: bytes,
+            content_type: str,
+            filename: str,
+            status: int = 200,
+        ) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def write_report_preview(self, data: bytes, status: int = 200) -> None:
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Security-Policy", REPORT_PREVIEW_CSP)
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def write_report_reader(self, data: bytes, status: int = 200) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Security-Policy", REPORT_READER_CSP)
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "no-store")
@@ -427,3 +517,152 @@ def report_action_path(path: str) -> tuple[str, str] | None:
     if len(parts) != 2 or not parts[0] or not parts[1]:
         raise HttpError(404, "unknown report action")
     return unquote(parts[0]), parts[1]
+
+
+def operation_status_path(path: str) -> str | None:
+    prefix = "/api/operations/"
+    if not path.startswith(prefix):
+        return None
+    operation_id = unquote(path[len(prefix) :]).strip()
+    if not operation_id or "/" in operation_id:
+        raise HttpError(404, "unknown operation")
+    return operation_id
+
+
+def single_query_value(query: str, key: str) -> str | None:
+    values = parse_qs(query).get(key) or []
+    for value in values:
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def catalog_query(raw_query: str) -> CatalogQuery:
+    values = parse_qs(raw_query, keep_blank_values=True)
+
+    def first(key: str, default: str) -> str:
+        raw = values.get(key)
+        return str(raw[0]) if raw else default
+
+    def integer(key: str, default: int) -> int:
+        try:
+            return int(first(key, str(default)))
+        except ValueError as exc:
+            raise HttpError(400, f"{key} must be an integer") from exc
+
+    def many(*keys: str) -> tuple[str, ...]:
+        result: list[str] = []
+        for key in keys:
+            for raw in values.get(key, []):
+                result.extend(part.strip() for part in str(raw).split(",") if part.strip())
+        return tuple(dict.fromkeys(result))
+
+    try:
+        return CatalogQuery(
+            state=first("state", "active"),
+            page=integer("page", 1),
+            page_size=integer("page_size", 100),
+            search=first("search", ""),
+            sort=first("sort", "last_turn_end"),
+            direction=first("direction", "desc"),
+            tags=many("tag", "tags"),
+            agents=many("agent", "agents"),
+            models=many("model", "models"),
+            results=many("result", "results"),
+            include_unreadable=first("surface", "leaderboard") == "sources",
+        ).normalized()
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
+
+
+def source_operation_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_path = payload.get("path")
+    if isinstance(raw_path, str):
+        lines = [line.strip() for line in raw_path.splitlines() if line.strip()]
+        if len(lines) > 1:
+            return [{**payload, "path": line} for line in lines]
+    session_ids = payload.get("session_ids")
+    if isinstance(session_ids, list) and len(session_ids) > 1:
+        return [
+            {
+                **payload,
+                "session_ids": None,
+                "session_id": str(session_id),
+            }
+            for session_id in session_ids
+        ]
+    return [payload]
+
+
+def catalog_query_payload(value: Any) -> CatalogQuery:
+    if value is None:
+        return CatalogQuery()
+    if not isinstance(value, dict):
+        raise HttpError(400, "query must be an object")
+    try:
+        return CatalogQuery(
+            state=str(value.get("state") or "active"),
+            page=1,
+            page_size=100,
+            search=str(value.get("search") or ""),
+            sort=str(value.get("sort") or "last_turn_end"),
+            direction=str(value.get("direction") or "desc"),
+            tags=tuple(value.get("tags") or ()),
+            agents=tuple(value.get("agents") or ()),
+            models=tuple(value.get("models") or ()),
+            results=tuple(value.get("results") or ()),
+        ).normalized()
+    except (TypeError, ValueError) as exc:
+        raise HttpError(400, str(exc)) from exc
+
+
+def add_source_result_payload(result: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {"source_keys": list(result.keys)}
+    if result.import_results is not None:
+        payload["import_results"] = list(result.import_results)
+    return payload
+
+
+def source_state_operation(
+    store: ServeStateStore,
+    row: dict[str, Any],
+    active: bool,
+) -> dict[str, Any]:
+    store.set_source_active_row(row, active)
+    return {"source_key": row["source_key"]}
+
+
+def refresh_source_operation(
+    store: ServeStateStore,
+    config: ToolConfig,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    store.refresh_source(row, config)
+    return {"source_key": row["source_key"]}
+
+
+def delete_source_operation(
+    store: ServeStateStore,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    store.delete_source_row(row)
+    return {"source_key": row["source_key"]}
+
+
+def upload_source(
+    store: ServeStateStore,
+    config: ToolConfig,
+    filename: str,
+    content: str,
+    adapter: str | None,
+    alias: str | None,
+) -> dict[str, Any]:
+    keys = store.ingest_upload(
+        filename,
+        content,
+        config,
+        adapter=adapter,
+        source_alias=alias,
+    )
+    return {"source_keys": keys}

@@ -227,6 +227,7 @@ class StateIngestMixin:
         content: str,
         config: ToolConfig,
         adapter: str | None = None,
+        source_alias: str | None = None,
     ) -> list[str]:
         if len(content.encode("utf-8")) > UPLOAD_LIMIT_BYTES:
             raise ValueError("uploaded source exceeds 20 MiB limit")
@@ -243,6 +244,7 @@ class StateIngestMixin:
                 label,
                 config,
                 materialize_annotations=True,
+                source_alias=source_alias,
             )
         if isinstance(parsed_json, dict) and is_atif_trajectory(parsed_json):
             conversion = convert_atif_trajectory(parsed_json)
@@ -257,7 +259,13 @@ class StateIngestMixin:
                 config_for_adapter(config, "atif"),
                 [],
             )
-            return self.ingest_report_snapshot(report, label, config, adapter="atif")
+            return self.ingest_report_snapshot(
+                report,
+                label,
+                config,
+                adapter="atif",
+                source_alias=source_alias,
+            )
         if not label.endswith(".jsonl"):
             raise ValueError("uploaded source must be JSONL, ATIF JSON, or report JSON")
         source_config = config_for_adapter(config, adapter or config.adapter)
@@ -268,6 +276,7 @@ class StateIngestMixin:
             adapter_id=source_config.adapter,
             session_hint=Path(label).stem or "session",
             source_kind="upload",
+            source_alias=source_alias,
         )
         report = build_multi_report(
             [report_session_for_loaded(session, source_config)],
@@ -279,6 +288,7 @@ class StateIngestMixin:
             label,
             source_config,
             adapter=source_config.adapter,
+            source_alias=source_alias,
         )
 
     def ingest_report_snapshot(
@@ -289,6 +299,7 @@ class StateIngestMixin:
         *,
         adapter: str | None = None,
         materialize_annotations: bool = False,
+        source_alias: str | None = None,
     ) -> list[str]:
         trajectories = report.get("trajectory")
         metas = report.get("trajectory_meta")
@@ -323,7 +334,7 @@ class StateIngestMixin:
                 "session_id": optional_str(
                     trajectory.get("session_id") or meta.get("trial_key")
                 ),
-                "source_alias": None,
+                "source_alias": source_alias,
                 "agent_name": None,
                 "agent_version": None,
                 "model": None,

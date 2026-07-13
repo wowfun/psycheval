@@ -33,6 +33,7 @@ ASSET_BUNDLES = {
         "report_js/12-serve-controls.js",
         "report_js/14-serve-sources.js",
         "report_js/16-serve-mutations.js",
+        "report_js/17-serve-catalog.js",
         "report_js/18-workspace-reports.js",
         "report_js/20-analysis-metrics.js",
         "report_js/22-analysis-notes.js",

@@ -29,7 +29,6 @@ class StateQueryMixin:
         source_keys: list[str] | None = None,
         source_state: str = "active",
     ) -> dict[str, Any]:
-        annotation_config = self.annotation_config(config)
         active_filter: bool | None = None
         if source_keys is None:
             if source_state == "active":
@@ -50,8 +49,18 @@ class StateQueryMixin:
             missing = [key for key in source_keys if key not in found]
             if missing:
                 raise ValueError(f"unknown source: {missing[0]}")
+        return self.report_for_rows(rows, config, strict=bool(source_keys))
+
+    def report_for_rows(
+        self,
+        rows: list[dict[str, Any]],
+        config: ToolConfig | None = None,
+        *,
+        strict: bool = True,
+    ) -> dict[str, Any]:
         if not rows:
             return empty_report("serve")
+        annotation_config = self.annotation_config(config)
         readable_rows: list[dict[str, Any]] = []
         stored: list[dict[str, dict[str, Any]]] = []
         errors: list[str] = []
@@ -61,7 +70,7 @@ class StateQueryMixin:
                 readable_rows.append(row)
             except Exception as exc:  # noqa: BLE001 - tolerate missing artifacts in full serve reports.
                 errors.append(f"{row.get('source_key')}: {exc}")
-        if errors and source_keys:
+        if errors and strict:
             raise ValueError(errors[0])
         if not readable_rows:
             return empty_report("serve")

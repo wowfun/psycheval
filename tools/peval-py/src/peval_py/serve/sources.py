@@ -151,7 +151,13 @@ def recursive_trial_cell_sessions(
         if path.is_dir():
             raise HttpError(400, f"no complete Trial cells found under: {path}")
         return []
-    return [loaded_trial_cell_import_session(cell, config) for cell in cells]
+    return [
+        replace(
+            loaded_trial_cell_import_session(cell, config),
+            artifact_eval_slug=config.analysis_eval_slug,
+        )
+        for cell in cells
+    ]
 
 
 def remap_path_assignments(

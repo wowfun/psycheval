@@ -339,9 +339,12 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
                 try:
-                    status, _, raw_report = request_text(server.server_port, "/api/report")
+                    status, _, raw_report = request_text(
+                        server.server_port,
+                        f"/api/report?source_key={keys[0]}",
+                    )
                     self.assertEqual(status, 200)
-                    api_report = json.loads(raw_report)
+                    api_report = json.loads(raw_report)["report"]
                     self.assertEqual(
                         api_report["annotations"]["analysis"][0]["md_report"],
                         "Live overlay analysis.",

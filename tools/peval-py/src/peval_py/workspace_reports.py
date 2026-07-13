@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 from markdown_it import MarkdownIt
@@ -382,4 +383,21 @@ def render_workspace_report_preview(report: WorkspaceReport) -> bytes:
         "img{max-width:100%}"
         "</style></head><body>"
         f"{rendered}</body></html>"
+    ).encode("utf-8")
+
+
+def render_workspace_report_reader_page(report: WorkspaceReport) -> bytes:
+    """Render a top-level shell that preserves the preview iframe sandbox."""
+    title = html.escape(report.filename)
+    preview_path = f"/api/reports/{quote(report.report_id, safe='')}/preview"
+    return (
+        "<!doctype html>\n"
+        '<html><head><meta charset="utf-8">'
+        f"<title>{title}</title>"
+        "<style>html,body,iframe{width:100%;height:100%;margin:0;border:0}"
+        "body{overflow:hidden;background:#fffdf8}</style>"
+        "</head><body>"
+        f'<iframe src="{preview_path}" title="{title}" sandbox="allow-scripts" '
+        'referrerpolicy="no-referrer"></iframe>'
+        "</body></html>"
     ).encode("utf-8")

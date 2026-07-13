@@ -66,6 +66,13 @@ class PevalPyServeStateNotesDbTests(unittest.TestCase):
                     json.dumps(sample_report(config)),
                     config,
                 )
+                request_json(
+                    port,
+                    "POST",
+                    "/api/sources/reload",
+                    {},
+                    origin=origin,
+                )
                 status, _, snapshot_error = request_json(
                     port,
                     "POST",

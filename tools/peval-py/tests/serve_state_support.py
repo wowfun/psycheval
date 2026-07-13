@@ -3,6 +3,7 @@ from __future__ import annotations
 import http.client
 import os
 import threading
+import time
 
 from peval_py_test_support import *
 
@@ -130,7 +131,118 @@ def request_json(
     result = json.loads(raw)
     response_headers = {key.lower(): value for key, value in response.getheaders()}
     conn.close()
+    if response.status in {200, 202} and isinstance(result, dict) and (
+        result.get("operation_id") or result.get("generation")
+    ):
+        original_status = response.status
+        if result.get("operation_id"):
+            result = wait_for_catalog_operation(port, str(result["operation_id"]))
+        result = hydrate_legacy_catalog_response(port, result, payload)
+        if original_status == 202:
+            return 200, response_headers, result
     return response.status, response_headers, result
+
+
+def raw_get_json(port: int, path: str) -> tuple[int, dict]:
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("GET", path)
+    response = conn.getresponse()
+    raw = response.read().decode("utf-8")
+    conn.close()
+    return response.status, json.loads(raw)
+
+
+def wait_for_catalog_operation(port: int, operation_id: str) -> dict:
+    for _attempt in range(500):
+        status, operation = raw_get_json(port, f"/api/operations/{operation_id}")
+        if status != 200:
+            return operation
+        if operation.get("state") not in {"queued", "running"}:
+            return operation
+        time.sleep(0.01)
+    raise AssertionError(f"catalog operation did not finish: {operation_id}")
+
+
+def hydrate_legacy_catalog_response(
+    port: int,
+    result: dict,
+    request_payload: dict,
+) -> dict:
+    sources: list[dict] = []
+    page_number = 1
+    while True:
+        status, page = raw_get_json(
+            port,
+            f"/api/catalog?state=all&surface=sources&page={page_number}&page_size=100",
+        )
+        if status != 200:
+            break
+        sources.extend(page.get("items") or [])
+        if len(sources) >= int(page.get("total") or 0):
+            break
+        page_number += 1
+    hydrated = {**result, "sources": sources, "loading": False}
+    report_state = str(request_payload.get("report_source_state") or "active")
+    report_sources = [
+        source
+        for source in sources
+        if source.get("readable") is not False
+        and (
+            report_state == "all"
+            or (report_state == "archived" and source.get("active") is False)
+            or (report_state == "active" and source.get("active") is not False)
+        )
+    ]
+    hydrated["report"] = legacy_catalog_report(port, report_sources)
+    hydrated["report_source_key"] = report_sources[0]["source_key"] if report_sources else None
+    hydrated["report_source_state"] = report_state
+    status, reports = raw_get_json(port, "/api/reports")
+    hydrated["reports"] = reports.get("reports", []) if status == 200 else []
+    if result.get("operation_id") and result.get("operation_type") == "source-import":
+        entries: list[dict] = []
+        for item in sorted(
+            [*(result.get("successes") or []), *(result.get("failures") or [])],
+            key=lambda entry: int(entry.get("index") or 0),
+        ):
+            source = item.get("item") if isinstance(item.get("item"), dict) else {}
+            entry = {
+                "path": item.get("path") or source.get("path"),
+                "status": item.get("status"),
+            }
+            if item.get("source_keys") is not None:
+                entry["source_keys"] = item.get("source_keys")
+            if item.get("error"):
+                entry["error"] = item["error"]
+            entries.append(entry)
+        hydrated["import_results"] = entries
+    elif isinstance(result.get("result"), dict):
+        if result["result"].get("import_results") is not None:
+            hydrated["import_results"] = result["result"]["import_results"]
+    return hydrated
+
+
+def legacy_catalog_report(port: int, sources: list[dict]) -> dict:
+    combined = {
+        "schema_version": 19,
+        "includes": ["core"],
+        "trajectory": [],
+        "trajectory_meta": [],
+        "annotations": {"notes": [], "analysis": [], "report_notes": []},
+    }
+    for source in sources:
+        status, envelope = raw_get_json(
+            port,
+            f"/api/report?source_key={source['source_key']}",
+        )
+        if status != 200:
+            continue
+        report = envelope.get("report") or {}
+        combined["trajectory"].extend(report.get("trajectory") or [])
+        combined["trajectory_meta"].extend(report.get("trajectory_meta") or [])
+        annotations = report.get("annotations") or {}
+        for key in ("notes", "analysis", "report_notes"):
+            combined["annotations"][key].extend(annotations.get(key) or [])
+    return combined
 
 
 def request_bytes(port: int, path: str) -> tuple[int, dict[str, str], bytes]:

@@ -64,7 +64,9 @@ class StateMutationMixin:
         self.write_source_state(cell_dir, state)
 
     def set_source_active(self, source_key: str, active: bool) -> None:
-        row = self.source_by_key(source_key)
+        self.set_source_active_row(self.source_by_key(source_key), active)
+
+    def set_source_active_row(self, row: dict[str, Any], active: bool) -> None:
         cell_dir = self.resolve_artifact_dir(str(row["artifact_dir"]))
         state = {**row, **self.read_source_state(cell_dir)}
         state["active"] = bool(active)
@@ -72,7 +74,9 @@ class StateMutationMixin:
         self.write_source_state(cell_dir, state)
 
     def set_source_alias(self, source_key: str, alias: str | None) -> None:
-        row = self.source_by_key(source_key)
+        self.set_source_alias_row(self.source_by_key(source_key), alias)
+
+    def set_source_alias_row(self, row: dict[str, Any], alias: str | None) -> None:
         cell_dir = self.resolve_artifact_dir(str(row["artifact_dir"]))
         state = {**row, **self.read_source_state(cell_dir)}
         state["source_alias"] = alias or None
@@ -80,7 +84,9 @@ class StateMutationMixin:
         self.write_source_state(cell_dir, state)
 
     def set_source_tags(self, source_key: str, tags: list[str]) -> None:
-        row = self.source_by_key(source_key)
+        self.set_source_tags_row(self.source_by_key(source_key), tags)
+
+    def set_source_tags_row(self, row: dict[str, Any], tags: list[str]) -> None:
         cell_dir = self.resolve_artifact_dir(str(row["artifact_dir"]))
         state = {**row, **self.read_source_state(cell_dir)}
         state["source_tags"] = self.source_tags_from_state({"source_tags": tags})
@@ -88,7 +94,9 @@ class StateMutationMixin:
         self.write_source_state(cell_dir, state)
 
     def delete_source(self, source_key: str) -> None:
-        row = self.source_by_key(source_key)
+        self.delete_source_row(self.source_by_key(source_key))
+
+    def delete_source_row(self, row: dict[str, Any]) -> None:
         artifact_dir = row.get("artifact_dir")
         if artifact_dir:
             remove_artifact_dir(
@@ -102,7 +110,14 @@ class StateMutationMixin:
         markdown: str,
         config: ToolConfig,
     ) -> None:
-        source = self.source_by_key(source_key)
+        self.save_source_notes_row(self.source_by_key(source_key), markdown, config)
+
+    def save_source_notes_row(
+        self,
+        source: dict[str, Any],
+        markdown: str,
+        config: ToolConfig,
+    ) -> None:
         if not source.get("refreshable") or source.get("snapshot"):
             raise ValueError("notes.md can only be saved for refreshable sources")
         if not source.get("artifact_dir"):
