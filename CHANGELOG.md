@@ -8,6 +8,9 @@
 - Reworked `peval-py serve` around a rebuildable SQLite catalog with incremental
   reconciliation, literal search and facets, paginated summaries, on-demand
   details, cross-page selection, serialized mutations, and bounded exports.
+- Fixed canonical Step selection for Leaderboard and Trajectory Overview,
+  added compact catalog outlines, and moved session search below the Leaderboard
+  title.
 
 ## 2026-07-11
 
