@@ -39,7 +39,10 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", draftBindings: new Set(), dirty: false, opener: null }, reportReader: { openId: null, opener: null }, selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading), serveStartupPolling: false };
+const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerPage: { page: 1, page_size: 100, total: 0 }, catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", tags: [], agents: [], models: [], results: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: new Set(), dirty: false, opener: null }, reportReader: { openId: null, opener: null, width: null }, selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading), serveStartupPolling: false };
+state.leaderboardSummaryGroupBy = "agent";
+state.leaderboardSummaryTableOpen = false;
+state.leaderboardSummaryStatistic = "mean";
 const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.report-cell-menu";
 const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.report-cell-menu[open]";
 function closeOpenSubmenus(except = null) {
@@ -287,11 +290,14 @@ function sourceTagsValue(row) {
 function sourceTagsEditValue(row) {
   return sourceTagsFor(row).join(", ");
 }
-function renderSourceTagsCell(row) {
+function renderReadOnlySourceTags(row) {
   const tags = sourceTagsFor(row);
-  const html = tags.length
+  return tags.length
     ? `<span class="source-tag-list">${tags.map(tag => `<span class="source-tag-chip">${esc(tag)}</span>`).join("")}</span>`
     : `<span class="muted">-</span>`;
+}
+function renderSourceTagsCell(row) {
+  const html = renderReadOnlySourceTags(row);
   return renderEditableSourceCell(row, "tags", sourceTagsEditValue(row), html);
 }
 function renderEditableSourceCell(row, field, value, html) {
@@ -338,8 +344,7 @@ function renderComparisonPanels(options = {}) {
   const rows = leaderboardRows();
   syncSelectionWithVisibleRows(rows);
   renderLeaderboard(rows);
-  if (rows.length > 1 && $("leaderboard-summary")) renderLeaderboardSummary(rows);
-  else if ($("leaderboard-summary")) $("leaderboard-summary").innerHTML = "";
+  if ($("leaderboard-summary")) renderLeaderboardSummary(rows);
   renderTrajectoryOverview(rows);
   restoreComparisonScrollState(scrollState);
   bindComparisonScrollSync();

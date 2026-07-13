@@ -40,10 +40,11 @@ function renderServeSources() {
       rowClass: source => ["source-table-row", source?.active === false ? "archived" : "", source?.last_status === "missing" ? "missing" : "", source?.source_key && source.source_key === state.selectedSourceKey ? "selected-row" : ""].filter(Boolean).join(" "),
       rowAttrs: source => `data-source-row data-source-key="${esc(source?.source_key || "")}"`,
       rowTitle: source => source?.source_key || source?.label || ""
-    })}</li>`;
+    })}</li>${renderSourceManagerPagination()}`;
     bindDataTableControls(list, "sources", () => renderServeSources());
     bindSourceSelectionControls(list);
     bindInlineSourceEditors(list);
+    bindSourceManagerPagination(list);
     syncSourceManagerBulkActions(rows);
   }
 }
@@ -72,7 +73,8 @@ function sourceColumns() {
     { key: "label", label: t("source", "Source"), width: "220px", value: source => sourceDisplayLabel(source), html: renderServeSourceLabel, cellTitle: source => source?.label || "" },
     { key: "last_turn_finished_at_ms", label: t("last_turn_end", "Last Turn End"), width: "156px", type: "number", numeric: true, sortable: true, value: source => source?.last_turn_finished_at_ms, format: fmtDate },
     { key: "status", label: t("status", "status"), width: "170px", value: source => sourceStatusText(source), html: renderServeSourceStatus },
-    { key: "alias", label: t("serve_source_alias", "Alias"), width: "240px", value: source => String(source?.source_alias || "").trim() || "-", html: renderServeSourceAliasCell }
+    { key: "alias", label: t("serve_source_alias", "Alias"), width: "240px", value: source => String(source?.source_alias || "").trim() || "-", html: renderServeSourceAliasCell },
+    { key: "source_tags", label: t("tags", "Tags"), width: "180px", value: source => sourceTagsValue(source), html: renderReadOnlySourceTags }
   ];
 }
 function sourceRows() {

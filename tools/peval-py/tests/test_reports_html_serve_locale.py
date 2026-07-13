@@ -37,6 +37,11 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('data-report-bindings', serve_html)
         self.assertIn('sandbox="allow-scripts"', serve_html)
         self.assertNotIn('allow-same-origin', serve_html)
+        self.assertIn('data-report-reader-open-tab', serve_html)
+        self.assertIn('target="_blank"', serve_html)
+        self.assertIn('rel="noopener"', serve_html)
+        self.assertIn('data-report-reader-resize', serve_html)
+        self.assertIn('aria-orientation="vertical"', serve_html)
 
     def test_serve_html_mode_reuses_report_body_with_export_selection_controls(self) -> None:
         config = ToolConfig(adapter="opencode")
@@ -220,6 +225,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('key: "finished_at_ms"', serve_html)
         self.assertIn("function sourceColumns()", serve_html)
         self.assertIn("last_turn_finished_at_ms", serve_html)
+        self.assertIn('{ key: "source_tags", label: t("tags", "Tags"), width: "180px"', serve_html)
         self.assertIn("source-table", serve_html)
         self.assertIn("sourceSelection: new Set()", serve_html)
         self.assertIn('bindDataTableControls(list, "sources"', serve_html)
@@ -331,12 +337,16 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("Trajectory Overview", english_html)
         self.assertIn('"leaderboard_summary": "Leaderboard Summary"', english_html)
         self.assertIn(
-            '"leaderboard_summary_distributions": "Leaderboard Summary Distributions"',
+            '"leaderboard_summary_hint": "Compare one statistic at a time; '
+            'expand the table for the full distribution."',
             english_html,
         )
         self.assertIn('"model_call_duration": "Model call duration"', english_html)
         self.assertIn('"summary_statistic": "Statistic"', english_html)
-        self.assertIn('"summary_distribution": "Distribution"', english_html)
+        self.assertIn('"summary_group_by": "Group by"', english_html)
+        self.assertIn('"summary_show_table": "Show summary table"', english_html)
+        self.assertNotIn('"summary_missing"', english_html)
+        self.assertNotIn('"summary_total"', english_html)
         self.assertIn('"show_archived": "Show archived"', english_html)
         self.assertIn('"archive_selected": "Archive selected"', english_html)
         self.assertIn('"activate_selected": "Activate selected"', english_html)
@@ -358,10 +368,16 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("<h1>Agent 轨迹报告</h1>", zh_html)
         self.assertIn('"leaderboard": "Leaderboard"', zh_html)
         self.assertIn('"leaderboard_summary": "Leaderboard 汇总"', zh_html)
-        self.assertIn('"leaderboard_summary_distributions": "Leaderboard 汇总分布"', zh_html)
+        self.assertIn(
+            '"leaderboard_summary_hint": "一次比较一个统计值；需要完整分布时再展开表格。"',
+            zh_html,
+        )
         self.assertIn('"model_call_duration": "模型调用耗时"', zh_html)
         self.assertIn('"summary_statistic": "统计项"', zh_html)
-        self.assertIn('"summary_distribution": "分布"', zh_html)
+        self.assertIn('"summary_group_by": "分组方式"', zh_html)
+        self.assertIn('"summary_show_table": "展开汇总表"', zh_html)
+        self.assertNotIn('"summary_missing"', zh_html)
+        self.assertNotIn('"summary_total"', zh_html)
         self.assertIn('"show_archived": "显示已归档"', zh_html)
         self.assertIn('"archive_selected": "归档所选"', zh_html)
         self.assertIn('"activate_selected": "启用所选"', zh_html)

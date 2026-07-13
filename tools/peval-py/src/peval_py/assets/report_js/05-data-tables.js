@@ -27,19 +27,22 @@ function leaderboardColumns() {
       return text && text !== noteSnippetFor(row.trial_key) ? text : "";
     } }
   ];
-  return serveMode()
-    ? [
-        { key: "source_tags", label: t("tags", "Tags"), width: "156px", filterable: true, filterValues: row => sourceTagsFor(row), value: row => sourceTagsValue(row), html: row => renderSourceTagsCell(row) },
-        ...columns.slice(0, 2),
-        workspaceReportLeaderboardColumn(),
-        ...columns.slice(2)
-      ]
-    : columns;
+  if (!serveMode()) return columns;
+  const serveColumns = columns.map(column => ["session_id", "analysised"].includes(column.key)
+    ? { ...column, filterable: false }
+    : column);
+  return [
+    { key: "source_tags", label: t("tags", "Tags"), width: "156px", filterable: true, filterValues: row => sourceTagsFor(row), value: row => sourceTagsValue(row), html: row => renderSourceTagsCell(row) },
+    ...serveColumns.slice(0, 2),
+    workspaceReportLeaderboardColumn(),
+    ...serveColumns.slice(2)
+  ];
 }
 function displayLeaderboardColumns() {
   return serveMode() ? [selectionColumn(), ...leaderboardColumns()] : leaderboardColumns();
 }
 function agentNameFor(row) {
+  if (serveMode()) return row?.agent_name || row?.adapter || "-";
   const name = trajectoryFor(row?.trial_key)?.agent?.name;
   return name || row?.adapter || "-";
 }
@@ -58,7 +61,7 @@ function renderLeaderboard(rows = leaderboardRows()) {
       columns,
       rows,
       filterOptionsRows: reportRows(),
-      rowClass: row => `clickable-row ${row.trial_key === selectedKey() ? "selected-row" : ""}`,
+      rowClass: row => `clickable-row ${(serveMode() ? row.source_key === state.selectedSourceKey : row.trial_key === selectedKey()) ? "selected-row" : ""}`,
       rowAttrs: row => `data-trial-key="${esc(row.trial_key)}"`,
       rowTitle: row => row.trial_key,
     })}
@@ -303,6 +306,10 @@ function bindDataTableControls(root, tableId, onChange) {
   root.querySelectorAll("[data-table-sort]").forEach(button => {
     button.addEventListener("click", event => {
       event.stopPropagation();
+      if (serveMode() && tableId === "leaderboard") {
+        requestCatalogSort(button.dataset.tableSort);
+        return;
+      }
       toggleDataTableSort(tableId, button.dataset.tableSort);
       rerender();
     });
@@ -311,6 +318,10 @@ function bindDataTableControls(root, tableId, onChange) {
     input.addEventListener("change", event => {
       event.stopPropagation();
       setFilterValue(tableId, input.dataset.filterKey, input.value, input.checked);
+      if (serveMode() && tableId === "leaderboard") {
+        requestCatalogFacets();
+        return;
+      }
       rerender();
     });
   });
@@ -318,6 +329,10 @@ function bindDataTableControls(root, tableId, onChange) {
     button.addEventListener("click", event => {
       event.stopPropagation();
       clearFilter(tableId, button.dataset.filterClear);
+      if (serveMode() && tableId === "leaderboard") {
+        requestCatalogFacets();
+        return;
+      }
       rerender();
     });
   });
@@ -333,4 +348,5 @@ function bindLeaderboardControls() {
   bindWorkspaceReportLeaderboardControls(target);
   bindInlineSourceEditors(target);
   bindTrialSelection(target);
+  bindLeaderboardCatalogControls(target);
 }

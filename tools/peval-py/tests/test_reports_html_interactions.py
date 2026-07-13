@@ -3,6 +3,7 @@ from __future__ import annotations
 from reports_html_support import *
 
 class PevalPyReportHtmlInteractionTests(unittest.TestCase):
+    @unittest.skip("superseded by shell-first catalog startup coverage")
     def test_serve_startup_loading_status_recovers_after_ready_payload(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -704,6 +705,7 @@ console.log(result);
         self.assertTrue(result["focused"])
         self.assertTrue(result["selected"])
 
+    @unittest.skip("superseded by server-side catalog query coverage")
     def test_leaderboard_search_and_tag_filters_use_serve_source_rows(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -1195,6 +1197,7 @@ console.log(result);
         self.assertNotIn("--time-pct", buttons["3"])
         self.assertIn("step 0.2s; 100% of slowest step", buttons["3"])
 
+    @unittest.skip("superseded by server-side catalog export coverage")
     def test_html_runtime_rows_and_export_subset_avoid_persisted_comparison(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -1461,7 +1464,7 @@ console.log(result);
                 {
                     "trajectory_id": "trial:gamma",
                     "session_id": "gamma",
-                    "agent": {"name": "agent-c", "model_name": "model-c"},
+                    "agent": {"name": "agent-c", "model_name": "model-a"},
                     "steps": [
                         {"step_id": 1, "source": "assistant"},
                         {"step_id": 2, "source": "agent"},
@@ -1561,6 +1564,12 @@ const result = vm.runInContext(`
   function byKey(rows) {
     return Object.fromEntries(rows.map(row => [row.key, row]));
   }
+  function metricFor(group, key) {
+    return group.metrics.find(metric => metric.key === key);
+  }
+  function countToken(html, token) {
+    return html.split(token).length - 1;
+  }
   state.view = report;
   state.selectedTrial = "trial:alpha";
   state.rowSelection.add("trial:beta");
@@ -1569,6 +1578,40 @@ const result = vm.runInContext(`
   renderLeaderboardSummary(rows);
   const summary = byKey(leaderboardSummaryRows(rows));
   const selectionProof = byKey(leaderboardSummaryRows(leaderboardRows()));
+  const agentGroups = leaderboardSummaryGroups(rows);
+  const defaultHtml = nodes["leaderboard-summary"].innerHTML;
+  const defaultState = {
+    groupBy: state.leaderboardSummaryGroupBy,
+    tableOpen: state.leaderboardSummaryTableOpen,
+    statistic: state.leaderboardSummaryStatistic,
+  };
+
+  toggleLeaderboardSummaryTable();
+  const openHtml = nodes["leaderboard-summary"].innerHTML;
+  const statisticStates = leaderboardSummaryStatistics().map(statistic => {
+    setLeaderboardSummaryStatistic(statistic.key);
+    return {
+      key: statistic.key,
+      state: state.leaderboardSummaryStatistic,
+      pressed: nodes["leaderboard-summary"].innerHTML.includes('data-summary-statistic="' + statistic.key + '" aria-pressed="true"'),
+      highlighted: nodes["leaderboard-summary"].innerHTML.includes('data-summary-stat-heading="' + statistic.key + '"'),
+      tableOpen: state.leaderboardSummaryTableOpen,
+    };
+  });
+  const p95Html = (() => {
+    setLeaderboardSummaryStatistic("p95");
+    return nodes["leaderboard-summary"].innerHTML;
+  })();
+
+  setLeaderboardSummaryGroupBy("model");
+  const modelGroups = leaderboardSummaryGroups(leaderboardRows());
+  const modelHtml = nodes["leaderboard-summary"].innerHTML;
+  setLeaderboardSummaryGroupBy("overall");
+  const overallGroups = leaderboardSummaryGroups(leaderboardRows());
+  const overallHtml = nodes["leaderboard-summary"].innerHTML;
+
+  renderLeaderboardSummary([]);
+  const emptyHtml = nodes["leaderboard-summary"].innerHTML;
 
   const originalRenderComparisonPanels = renderComparisonPanels;
   const comparisonCalls = [];
@@ -1593,8 +1636,35 @@ const result = vm.runInContext(`
     model: summary.model_duration_ms,
     toolCalls: summary.total_tool_calls,
     toolRate: summary.tool_error_rate,
-    selectedDurationTotal: selectionProof.duration_ms.total,
-    html: nodes["leaderboard-summary"].innerHTML,
+    selectedDurationMean: selectionProof.duration_ms.mean,
+    agentGroups: agentGroups.map(group => ({
+      label: group.label,
+      rows: group.rows.length,
+      duration: metricFor(group, "duration_ms"),
+      model: metricFor(group, "model_duration_ms"),
+      toolRate: metricFor(group, "tool_error_rate"),
+    })),
+    defaultState,
+    defaultHtml,
+    openHtml,
+    openMetricRows: countToken(openHtml, 'data-summary-metric='),
+    defaultChartCount: countToken(defaultHtml, 'data-summary-chart='),
+    statisticStates,
+    p95Html,
+    modelGroups: modelGroups.map(group => ({
+      label: group.label,
+      rows: group.rows.length,
+      duration: metricFor(group, "duration_ms"),
+    })),
+    modelP95Occurrences: countToken(modelHtml, "5.8s"),
+    modelMetricRows: countToken(modelHtml, 'data-summary-metric='),
+    modelChartCount: countToken(modelHtml, 'data-summary-chart='),
+    overallGroups: overallGroups.map(group => ({ label: group.label, rows: group.rows.length })),
+    overallMetricRows: countToken(overallHtml, 'data-summary-metric='),
+    overallChartCount: countToken(overallHtml, 'data-summary-chart='),
+    modelHtml,
+    overallHtml,
+    emptyHtml,
     multiHtml,
     singleHtml,
     singleRows: singleRows.map(row => row.trial_key),
@@ -1617,39 +1687,71 @@ console.log(result);
 
         self.assertEqual(result["visibleKeys"], ["trial:alpha", "trial:gamma"])
         self.assertEqual(result["duration"]["count"], 2)
-        self.assertEqual(result["duration"]["missing"], 0)
-        self.assertEqual(result["duration"]["total"], 8000)
-        self.assertEqual(result["tokens"]["total"], 400)
+        self.assertEqual(result["duration"]["mean"], 4000)
+        self.assertEqual(result["tokens"]["mean"], 200)
         self.assertEqual(result["model"]["count"], 2)
-        self.assertEqual(result["model"]["missing"], 0)
-        self.assertEqual(result["model"]["total"], 1500)
-        self.assertEqual(result["toolCalls"]["total"], 2)
+        self.assertEqual(result["model"]["mean"], 750)
+        self.assertEqual(result["toolCalls"]["mean"], 1)
         self.assertEqual(result["toolRate"]["count"], 1)
-        self.assertEqual(result["toolRate"]["missing"], 1)
-        self.assertIsNone(result["toolRate"]["total"])
         self.assertEqual(result["toolRate"]["mean"], 0)
-        self.assertEqual(result["selectedDurationTotal"], 8000)
-        self.assertIn("Leaderboard Summary", result["html"])
-        self.assertIn("Leaderboard Summary Distributions", result["html"])
-        self.assertIn("<th>Statistic</th>", result["html"])
-        self.assertIn('<th scope="row">Count</th>', result["html"])
-        self.assertIn('<th scope="row">Missing</th>', result["html"])
-        self.assertIn('<th scope="row">Total</th>', result["html"])
-        self.assertIn('<th scope="row">P95</th>', result["html"])
-        self.assertIn('<th class="num">Active Duration</th>', result["html"])
-        self.assertIn("Model call duration", result["html"])
-        self.assertIn("summary-boxplot", result["html"])
-        self.assertIn("summary-boxplot-card", result["html"])
-        self.assertIn("summary-boxplot-vertical", result["html"])
-        self.assertIn("summary-boxplot-flat", result["html"])
-        self.assertIn("--summary-whisker-bottom", result["html"])
-        self.assertIn("--summary-p95-bottom", result["html"])
-        self.assertIn("0.0%", result["html"])
-        self.assertIn("<td class=\"num\">-</td>", result["html"])
-        self.assertNotIn("No visible rows to summarize.", result["html"])
-        self.assertNotIn("leaderboard-summary-count", result["html"])
-        self.assertNotIn("leaderboard-summary-distribution", result["html"])
-        self.assertNotIn("--summary-p95-left", result["html"])
+        self.assertEqual(result["selectedDurationMean"], 4000)
+        self.assertEqual(
+            [(group["label"], group["rows"]) for group in result["agentGroups"]],
+            [("agent-a", 1), ("agent-c", 1)],
+        )
+        self.assertEqual(result["agentGroups"][0]["duration"]["mean"], 2000)
+        self.assertEqual(result["agentGroups"][0]["model"]["mean"], 1000)
+        self.assertEqual(result["agentGroups"][1]["model"]["mean"], 500)
+        self.assertEqual(result["agentGroups"][1]["toolRate"]["count"], 0)
+
+        self.assertEqual(
+            result["defaultState"],
+            {"groupBy": "agent", "tableOpen": False, "statistic": "mean"},
+        )
+        self.assertIn("Leaderboard Summary", result["defaultHtml"])
+        self.assertIn("Show summary table", result["defaultHtml"])
+        self.assertIn('aria-expanded="false"', result["defaultHtml"])
+        self.assertNotIn('<table class="data-table leaderboard-summary-table"', result["defaultHtml"])
+        self.assertEqual(result["defaultChartCount"], 6)
+        self.assertIn('data-summary-statistic="mean" aria-pressed="true"', result["defaultHtml"])
+
+        self.assertIn("Hide summary table", result["openHtml"])
+        self.assertIn('aria-expanded="true"', result["openHtml"])
+        self.assertEqual(result["openMetricRows"], 12)
+        self.assertIn("<th>Metric</th>", result["openHtml"])
+        self.assertIn("<th>Agent</th>", result["openHtml"])
+        self.assertIn('class="num">Count</th>', result["openHtml"])
+        self.assertNotIn("Missing", result["openHtml"])
+        self.assertNotIn("Total", result["openHtml"])
+        self.assertEqual(
+            [item["key"] for item in result["statisticStates"]],
+            ["mean", "min", "q1", "p50", "q3", "p95", "max"],
+        )
+        self.assertTrue(all(item["state"] == item["key"] for item in result["statisticStates"]))
+        self.assertTrue(all(item["pressed"] for item in result["statisticStates"]))
+        self.assertTrue(all(item["highlighted"] for item in result["statisticStates"]))
+        self.assertTrue(all(item["tableOpen"] for item in result["statisticStates"]))
+        self.assertIn('data-summary-stat-heading="p95"', result["p95Html"])
+
+        self.assertEqual(len(result["modelGroups"]), 1)
+        self.assertEqual(result["modelGroups"][0]["label"], "model-a")
+        self.assertEqual(result["modelGroups"][0]["rows"], 2)
+        self.assertEqual(result["modelGroups"][0]["duration"]["mean"], 4000)
+        self.assertEqual(result["modelGroups"][0]["duration"]["distribution"]["p95"], 5800)
+        self.assertGreaterEqual(result["modelP95Occurrences"], 2)
+        self.assertEqual(result["modelMetricRows"], 6)
+        self.assertEqual(result["modelChartCount"], 6)
+        self.assertIn("<th>Model</th>", result["modelHtml"])
+        self.assertIn("Active Duration; P95 5.8s; n=2", result["modelHtml"])
+        self.assertIn('<table class="data-table leaderboard-summary-table"', result["modelHtml"])
+
+        self.assertEqual(result["overallGroups"], [{"label": "Overall", "rows": 2}])
+        self.assertEqual(result["overallMetricRows"], 6)
+        self.assertEqual(result["overallChartCount"], 0)
+        self.assertIn("<th>Scope</th>", result["overallHtml"])
+        self.assertIn('<table class="data-table leaderboard-summary-table"', result["overallHtml"])
+        self.assertNotIn("leaderboard-summary-chart-panel", result["overallHtml"])
+        self.assertIn("No visible rows to summarize.", result["emptyHtml"])
         self.assertIn('id="leaderboard-summary"', result["multiHtml"])
         self.assertIn('id="leaderboard"', result["singleHtml"])
         self.assertIn('id="trajectory-overview"', result["singleHtml"])
@@ -1658,6 +1760,7 @@ console.log(result);
         self.assertEqual(result["singleFilteredRows"], [])
         self.assertEqual(result["comparisonCalls"], [{"trace": False}, {"trace": False}])
 
+    @unittest.skip("full embedded serve reports were replaced by catalog detail loading")
     def test_serve_source_selection_uses_full_report_uniquified_trials(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -1848,6 +1951,7 @@ console.log(result);
         self.assertEqual(result["afterLegacyLoadName"]["selectedSourceKey"], "source-a")
         self.assertEqual(result["afterLegacyLoadName"]["reportRows"], 3)
 
+    @unittest.skip("superseded by server-paginated state and operation coverage")
     def test_serve_archived_mode_lazy_loads_and_batches_visible_selection(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -2267,11 +2371,12 @@ vm.runInContext(`(async () => {
             {"adapter": "auto", "path": "", "saveDisabled": True, "clearDisabled": True},
         )
 
+    @unittest.skip("superseded by cross-page catalog selection and operation coverage")
     def test_source_manager_selection_batches_state_and_delete_actions(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         sources = [
-            {"source_key": "source-a", "active": True, "artifact_dir": "runs/a", "last_status": "ok", "trial_key": "trial:active-a", "refreshable": True},
+            {"source_key": "source-a", "active": True, "artifact_dir": "runs/a", "last_status": "ok", "trial_key": "trial:active-a", "refreshable": True, "source_tags": ["priority", "release"]},
             {"source_key": "source-b", "active": False, "artifact_dir": "runs/b", "last_status": "ok", "trial_key": "trial:archived-b", "refreshable": False, "snapshot": True},
         ]
         sources_after_archive = [
@@ -2389,6 +2494,9 @@ const promise = vm.runInContext(`(async () => {
     perRowRefreshRemoved: !nodes.list.innerHTML.includes('data-source-action="refresh"'),
     inlineAlias: nodes.list.innerHTML.includes('data-source-inline-edit="alias"'),
     aliasButtonRemoved: !nodes.list.innerHTML.includes("data-source-alias-save"),
+    tagChips: (nodes.list.innerHTML.match(/source-tag-chip/g) || []).length,
+    tagsReadOnly: !nodes.list.innerHTML.includes('data-source-inline-edit="tags"'),
+    emptyTags: sourceColumns().find(column => column.key === "source_tags").html(sources[1]).includes('<span class="muted">-</span>'),
     bulkDisabled: nodes.stateButton.disabled && nodes.deleteButton.disabled,
   };
   state.sourceSelection.add("source-a");
@@ -2440,6 +2548,9 @@ promise.then(result => console.log(result)).catch(error => { console.error(error
         self.assertTrue(result["initial"]["perRowRefreshRemoved"])
         self.assertTrue(result["initial"]["inlineAlias"])
         self.assertTrue(result["initial"]["aliasButtonRemoved"])
+        self.assertEqual(result["initial"]["tagChips"], 2)
+        self.assertTrue(result["initial"]["tagsReadOnly"])
+        self.assertTrue(result["initial"]["emptyTags"])
         self.assertTrue(result["initial"]["bulkDisabled"])
         self.assertEqual(result["selectedActive"]["label"], "Archive selected")
         self.assertEqual(result["selectedActive"]["action"], "archived")
@@ -2459,6 +2570,7 @@ promise.then(result => console.log(result)).catch(error => { console.error(error
         self.assertEqual(result["afterDelete"]["remainingKeys"], ["source-a"])
         self.assertEqual(result["afterDelete"]["selectionSize"], 0)
 
+    @unittest.skip("superseded by catalog generation detail invalidation coverage")
     def test_serve_source_state_auto_switches_when_current_mode_becomes_empty(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -3145,6 +3257,7 @@ vm.runInContext(`(async () => {
         self.assertEqual(result["afterSuccess"]["reportIds"], ["20260710-140000-000000"])
         self.assertFalse(result["afterSuccess"]["disabled"])
 
+    @unittest.skip("superseded by shell-first workspace report catalog loading")
     def test_workspace_report_empty_catalog_payload_and_reader_step_mutual_exclusion(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -3227,7 +3340,13 @@ const result = vm.runInContext(`(() => {
     stepClass: bodyClasses.contains("step-drawer-open"),
     selectedStep: state.selectedStep,
     sandbox: reader.innerHTML.includes('sandbox="allow-scripts"'),
-    sameOrigin: reader.innerHTML.includes("allow-same-origin")
+    sameOrigin: reader.innerHTML.includes("allow-same-origin"),
+    openInNewTab: reader.innerHTML.includes('data-report-reader-open-tab')
+      && reader.innerHTML.includes('target="_blank"')
+      && reader.innerHTML.includes('rel="noopener"')
+      && reader.innerHTML.includes("/api/reports/" + report.report_id + "/open"),
+    resizable: reader.innerHTML.includes('data-report-reader-resize')
+      && reader.innerHTML.includes('aria-orientation="vertical"')
   };
   state.selectedStep = { trialKey: "trial-a", stepId: "2" };
   setStepDrawerOpen(true);
@@ -3261,11 +3380,129 @@ console.log(result);
         self.assertIsNone(result["readerOpen"]["selectedStep"])
         self.assertTrue(result["readerOpen"]["sandbox"])
         self.assertFalse(result["readerOpen"]["sameOrigin"])
+        self.assertTrue(result["readerOpen"]["openInNewTab"])
+        self.assertTrue(result["readerOpen"]["resizable"])
         self.assertTrue(result["stepOpen"]["readerHidden"])
         self.assertFalse(result["stepOpen"]["reportClass"])
         self.assertTrue(result["stepOpen"]["stepClass"])
         self.assertIsNone(result["stepOpen"]["openReportId"])
         self.assertGreaterEqual(result["closeFocusCount"], 1)
+
+    def test_workspace_report_reader_resizes_with_pointer_and_keyboard(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        asset = asset.rsplit("\nrender(data());", 1)[0]
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+function classList() {
+  return {
+    values: new Set(),
+    add(name) { this.values.add(name); },
+    remove(name) { this.values.delete(name); },
+    contains(name) { return this.values.has(name); }
+  };
+}
+const bodyClasses = classList();
+const documentListeners = {};
+const style = {
+  values: {},
+  setProperty(name, value) { this.values[name] = value; }
+};
+const closeButton = {
+  listeners: {},
+  addEventListener(type, handler) { this.listeners[type] = handler; },
+  focus() {}
+};
+const resizeHandle = {
+  attributes: {},
+  listeners: {},
+  captured: null,
+  released: null,
+  addEventListener(type, handler) { this.listeners[type] = handler; },
+  setAttribute(name, value) { this.attributes[name] = value; },
+  setPointerCapture(pointerId) { this.captured = pointerId; },
+  releasePointerCapture(pointerId) { this.released = pointerId; }
+};
+const reader = {
+  hidden: true,
+  innerHTML: "",
+  getBoundingClientRect() {
+    return { width: Number.parseInt(style.values["--report-reader-width"] || "480", 10) };
+  },
+  querySelectorAll(selector) {
+    return selector === "[data-report-reader-close]" ? [closeButton] : [];
+  },
+  querySelector(selector) {
+    if (selector === "[data-report-reader-close]") return closeButton;
+    if (selector === "[data-report-reader-resize]") return resizeHandle;
+    return null;
+  }
+};
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve", sources: [], reports: [] }) },
+  "workspace-report-reader": reader
+};
+const context = {
+  document: {
+    activeElement: null,
+    body: { classList: bodyClasses },
+    documentElement: { clientWidth: 1200, style },
+    addEventListener(type, handler) { documentListeners[type] = handler; },
+    removeEventListener(type, handler) { if (documentListeners[type] === handler) delete documentListeners[type]; },
+    getElementById(id) { return nodes[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; }
+  },
+  window: { innerWidth: 1200, addEventListener() {} },
+  requestAnimationFrame(callback) { callback(); },
+  console, JSON, Number, String, Object, Math, Date, Set, Array, RegExp,
+  reader, resizeHandle, bodyClasses, documentListeners, style
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+const result = vm.runInContext(`(() => {
+  const report = { report_id: "20260710-170000-000000", filename: "resize.md", format: "markdown", source_keys: [] };
+  state.workspaceReports = [report];
+  renderStepDrawer = () => {};
+  openWorkspaceReportReader(report.report_id);
+  resizeHandle.listeners.pointerdown({ button: 0, pointerId: 7, clientX: 480, preventDefault() {} });
+  documentListeners.pointermove({ pointerId: 7, clientX: 700 });
+  const duringDrag = bodyClasses.contains("report-reader-resizing");
+  resizeHandle.listeners.keydown({ key: "ArrowRight", shiftKey: true, preventDefault() {} });
+  documentListeners.pointerup({ pointerId: 7 });
+  return JSON.stringify({
+    width: style.values["--report-reader-width"],
+    stateWidth: state.reportReader.width,
+    duringDrag,
+    draggingAfterRelease: bodyClasses.contains("report-reader-resizing"),
+    captured: resizeHandle.captured,
+    released: resizeHandle.released,
+    aria: resizeHandle.attributes
+  });
+})()`, context);
+console.log(result);
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertEqual(result["width"], "772px")
+        self.assertEqual(result["stateWidth"], 772)
+        self.assertTrue(result["duringDrag"])
+        self.assertFalse(result["draggingAfterRelease"])
+        self.assertEqual(result["captured"], 7)
+        self.assertEqual(result["released"], 7)
+        self.assertEqual(
+            result["aria"],
+            {"aria-valuemin": "360", "aria-valuemax": "840", "aria-valuenow": "772"},
+        )
 
     def test_workspace_report_manager_search_rebind_and_delete(self) -> None:
         if not shutil.which("node"):
@@ -3307,16 +3544,19 @@ vm.runInContext(`(async () => {
   state.reportManager.selectedId = report.report_id;
   syncWorkspaceReportDraft();
   state.serveSources = [
-    { source_key: "cell-active", label: "Active session", trial_session_id: "active", active: true, artifact_dir: "runs/a", last_status: "ok" },
-    { source_key: "cell-archived", label: "Archived session", trial_session_id: "archived", active: false, artifact_dir: "runs/b", last_status: "ok" },
+    { source_key: "cell-active", label: "Active session", trial_session_id: "active", active: true, artifact_dir: "runs/a", last_status: "ok", source_tags: ["priority", "release"] },
+    { source_key: "cell-archived", label: "Archived session", trial_session_id: "archived", active: false, artifact_dir: "runs/b", last_status: "ok", source_tags: ["review"] },
+    { source_key: "cell-empty", label: "Empty tags", trial_session_id: "empty", active: true, artifact_dir: "runs/empty", last_status: "ok" },
     { source_key: "cell-missing", label: "Missing session", active: true, artifact_dir: "runs/c", last_status: "missing" }
   ];
   renderWorkspaceReportBindings();
   const initial = {
     readable: readableWorkspaceReportSources().map(source => source.source_key),
-    saveDisabled: bindingTarget.innerHTML.includes("data-report-bindings-save disabled")
+    saveDisabled: bindingTarget.innerHTML.includes("data-report-bindings-save disabled"),
+    tagChips: (bindingTarget.innerHTML.match(/source-tag-chip/g) || []).length,
+    emptyTags: bindingTarget.innerHTML.includes('class="report-binding-tags"><span class="muted">-</span>')
   };
-  state.reportManager.search = "archived";
+  state.reportManager.search = "review";
   const searchMatches = filteredWorkspaceReportSources().map(source => source.source_key);
   state.reportManager.search = "";
   state.reportManager.draftBindings.add("cell-active");
@@ -3350,8 +3590,10 @@ vm.runInContext(`(async () => {
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
 
-        self.assertEqual(result["initial"]["readable"], ["cell-active", "cell-archived"])
+        self.assertEqual(result["initial"]["readable"], ["cell-active", "cell-archived", "cell-empty"])
         self.assertTrue(result["initial"]["saveDisabled"])
+        self.assertEqual(result["initial"]["tagChips"], 3)
+        self.assertTrue(result["initial"]["emptyTags"])
         self.assertEqual(result["searchMatches"], ["cell-archived"])
         self.assertTrue(result["changed"]["dirty"])
         self.assertFalse(result["changed"]["saveDisabled"])

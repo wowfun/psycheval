@@ -44,6 +44,10 @@ function bindTrialSelection(root) {
   root.querySelectorAll("tr[data-trial-key]").forEach(node => {
     node.addEventListener("click", event => {
       event.stopPropagation();
+      if (serveMode()) {
+        loadServeSourceReport(node.getAttribute("data-trial-key"));
+        return;
+      }
       state.selectedTrial = node.getAttribute("data-trial-key");
       const sourceKey = sourceKeyForTrialKey(state.selectedTrial);
       if (sourceKey) state.selectedSourceKey = sourceKey;

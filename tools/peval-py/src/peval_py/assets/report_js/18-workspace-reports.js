@@ -6,6 +6,18 @@ function reportMessage(key, fallback, values = {}) {
   return message;
 }
 
+const REPORT_READER_MIN_WIDTH = 360;
+const REPORT_READER_MIN_WORKSPACE_WIDTH = 360;
+const REPORT_READER_KEYBOARD_STEP = 24;
+
+function workspaceReportPreviewPath(report) {
+  return `/api/reports/${encodeURIComponent(report.report_id)}/preview`;
+}
+
+function workspaceReportOpenPath(report) {
+  return `/api/reports/${encodeURIComponent(report.report_id)}/open`;
+}
+
 function normalizedWorkspaceReports(reports = state.workspaceReports) {
   return listValue(reports)
     .filter(report => report && report.report_id && report.filename)
@@ -174,6 +186,33 @@ function openWorkspaceReportManager(opener = null) {
   document.body.classList.add("report-manager-open");
   renderWorkspaceReportManager();
   focusSoon(manager.querySelector?.("[data-report-manager-close]"));
+  loadWorkspaceReportManagerData();
+}
+
+async function loadWorkspaceReportManagerData(changes = {}) {
+  if (typeof URLSearchParams !== "function" || typeof fetch !== "function") return;
+  state.reportManager.page = Math.max(1, Number(changes.page || state.reportManager.page || 1));
+  const params = new URLSearchParams({
+    state: "all",
+    surface: "sources",
+    page: String(state.reportManager.page),
+    page_size: "100",
+    search: state.reportManager.search || "",
+    sort: "last_turn_end",
+    direction: "desc"
+  });
+  try {
+    const [reportsPayload, page] = await Promise.all([
+      serveApi("/api/reports"),
+      serveApi(`/api/catalog?${params.toString()}`)
+    ]);
+    applyWorkspaceReportCatalog(reportsPayload?.reports || []);
+    state.reportManager.pageData = page;
+    state.reportManager.sourceRows = listValue(page?.items).filter(source => source?.readable !== false);
+    renderWorkspaceReportManager();
+  } catch (error) {
+    setWorkspaceReportManagerStatus(error.message || String(error), true);
+  }
 }
 
 function closeWorkspaceReportManager(options = {}) {
@@ -262,11 +301,33 @@ function renderWorkspaceReportBindings() {
     <div class="report-binding-list" data-report-binding-list>${sourceRows}</div>
     <div class="report-binding-footer">
       <span>${esc(reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount }))}</span>
+      <span class="catalog-page-controls">
+        <button class="step-toggle-button" type="button" data-report-bindings-prev ${Number(state.reportManager.pageData?.page || 1) <= 1 ? "disabled" : ""}>‹</button>
+        <span>${esc(reportBindingPageLabel())}</span>
+        <button class="step-toggle-button" type="button" data-report-bindings-next ${reportBindingPageEnd() >= Number(state.reportManager.pageData?.total || 0) ? "disabled" : ""}>›</button>
+      </span>
       <button class="step-toggle-button primary" type="button" data-report-bindings-save ${selectedCount && workspaceReportBindingsChanged() ? "" : "disabled"}>${esc(t("report_save_bindings", "Save bindings"))}</button>
     </div>`;
 }
 
+function reportBindingPageEnd() {
+  const page = Number(state.reportManager.pageData?.page || 1);
+  const size = Number(state.reportManager.pageData?.page_size || 100);
+  return Math.min(Number(state.reportManager.pageData?.total || 0), page * size);
+}
+
+function reportBindingPageLabel() {
+  const page = Number(state.reportManager.pageData?.page || 1);
+  const size = Number(state.reportManager.pageData?.page_size || 100);
+  const total = Number(state.reportManager.pageData?.total || 0);
+  if (!total) return "0 / 0";
+  return `${(page - 1) * size + 1}-${reportBindingPageEnd()} / ${total}`;
+}
+
 function readableWorkspaceReportSources() {
+  if (state.reportManager.sourceRows.length || typeof fetch === "function") {
+    return listValue(state.reportManager.sourceRows);
+  }
   return readableServeSources("all");
 }
 
@@ -283,6 +344,7 @@ function workspaceReportSourceSearchText(source) {
     source?.source_key,
     source?.trial_session_id,
     source?.session_id,
+    sourceTagsFor(source).join(" "),
     source?.active === false ? t("serve_archived", "archived") : t("serve_active", "active")
   ].filter(Boolean).join(" ").toLowerCase();
 }
@@ -298,6 +360,7 @@ function renderWorkspaceReportBindingSource(source) {
       <strong>${esc(sourceDisplayLabel(source))}</strong>
       <code>${esc(session)}</code>
     </span>
+    <span class="report-binding-tags">${renderReadOnlySourceTags(source)}</span>
     <span class="report-binding-state ${source?.active === false ? "archived" : ""}">${esc(stateLabel)}</span>
   </label>`;
 }
@@ -338,9 +401,17 @@ function bindWorkspaceReportBindingControls(manager = document.querySelector("[d
   const search = manager.querySelector?.("[data-report-binding-search]");
   search?.addEventListener?.("input", () => {
     state.reportManager.search = String(search.value || "");
-    renderWorkspaceReportBindings();
-    bindWorkspaceReportBindingControls(manager);
-    focusWorkspaceReportSearch();
+    clearTimeout(state.reportManager.searchTimer);
+    state.reportManager.searchTimer = setTimeout(() => {
+      loadWorkspaceReportManagerData({ page: 1 });
+      focusWorkspaceReportSearch();
+    }, 150);
+  });
+  manager.querySelector?.("[data-report-bindings-prev]")?.addEventListener?.("click", () => {
+    loadWorkspaceReportManagerData({ page: Math.max(1, Number(state.reportManager.page || 1) - 1) });
+  });
+  manager.querySelector?.("[data-report-bindings-next]")?.addEventListener?.("click", () => {
+    loadWorkspaceReportManagerData({ page: Number(state.reportManager.page || 1) + 1 });
   });
   manager.querySelector?.("[data-report-bindings-save]")?.addEventListener?.("click", saveWorkspaceReportBindings);
 }
@@ -423,16 +494,95 @@ function renderWorkspaceReportReader() {
         <h2 id="report-reader-title">${esc(report.filename)}</h2>
         <p class="copy">${esc(report.format.toUpperCase())} &middot; ${esc(reportMessage("report_sessions_count", "{count} sessions", { count: report.source_keys.length }))}</p>
       </div>
-      <button class="report-reader-close" type="button" data-report-reader-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
+      <div class="report-reader-actions">
+        <a class="report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>
+        <button class="report-reader-close" type="button" data-report-reader-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
+      </div>
     </header>
-    <iframe class="report-reader-frame" src="/api/reports/${encodeURIComponent(report.report_id)}/preview" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
-  </div>`;
+    <iframe class="report-reader-frame" src="${workspaceReportPreviewPath(report)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+  </div>
+  <div class="report-reader-resize" data-report-reader-resize role="separator" aria-orientation="vertical" tabindex="0" aria-label="${esc(t("report_resize", "Resize report reader"))}"></div>`;
   target.hidden = false;
   document.body.classList.add("report-reader-open");
+  bindWorkspaceReportReaderControls(target);
+  focusSoon(target.querySelector?.("[data-report-reader-close]"));
+}
+
+function bindWorkspaceReportReaderControls(target) {
   target.querySelectorAll?.("[data-report-reader-close]").forEach(button => {
     button.addEventListener("click", () => closeWorkspaceReportReader());
   });
-  focusSoon(target.querySelector?.("[data-report-reader-close]"));
+  const resizeHandle = target.querySelector?.("[data-report-reader-resize]");
+  if (!resizeHandle) return;
+  syncWorkspaceReportReaderResizeHandle(target);
+  resizeHandle.addEventListener("pointerdown", event => {
+    if (event.button !== undefined && event.button !== 0) return;
+    event.preventDefault();
+    const pointerId = event.pointerId;
+    document.body.classList.add("report-reader-resizing");
+    resizeHandle.setPointerCapture?.(pointerId);
+    const resize = moveEvent => {
+      if (pointerId !== undefined && moveEvent.pointerId !== undefined && moveEvent.pointerId !== pointerId) return;
+      setWorkspaceReportReaderWidth(moveEvent.clientX, target);
+    };
+    const finish = finishEvent => {
+      if (pointerId !== undefined && finishEvent.pointerId !== undefined && finishEvent.pointerId !== pointerId) return;
+      document.body.classList.remove("report-reader-resizing");
+      resizeHandle.releasePointerCapture?.(pointerId);
+      document.removeEventListener("pointermove", resize);
+      document.removeEventListener("pointerup", finish);
+      document.removeEventListener("pointercancel", finish);
+    };
+    document.addEventListener("pointermove", resize);
+    document.addEventListener("pointerup", finish);
+    document.addEventListener("pointercancel", finish);
+  });
+  resizeHandle.addEventListener("keydown", event => {
+    const direction = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+    if (!direction) return;
+    event.preventDefault();
+    const step = event.shiftKey ? REPORT_READER_KEYBOARD_STEP * 3 : REPORT_READER_KEYBOARD_STEP;
+    setWorkspaceReportReaderWidth(currentWorkspaceReportReaderWidth(target) + direction * step, target);
+  });
+}
+
+function reportReaderViewportWidth() {
+  const documentWidth = Number(document.documentElement?.clientWidth || 0);
+  const windowWidth = Number(window.innerWidth || 0);
+  return documentWidth || windowWidth || 1180;
+}
+
+function reportReaderMaximumWidth() {
+  return Math.max(REPORT_READER_MIN_WIDTH, reportReaderViewportWidth() - REPORT_READER_MIN_WORKSPACE_WIDTH);
+}
+
+function currentWorkspaceReportReaderWidth(target = $("workspace-report-reader")) {
+  const remembered = Number(state.reportReader.width);
+  if (Number.isFinite(remembered) && remembered > 0) return remembered;
+  const measured = Number(target?.getBoundingClientRect?.().width || 0);
+  if (Number.isFinite(measured) && measured > 0) return measured;
+  return Math.min(720, Math.round(reportReaderViewportWidth() * 0.44));
+}
+
+function setWorkspaceReportReaderWidth(width, target = $("workspace-report-reader")) {
+  const maximum = reportReaderMaximumWidth();
+  const numeric = Number(width);
+  const next = Math.round(Math.min(maximum, Math.max(REPORT_READER_MIN_WIDTH, Number.isFinite(numeric) ? numeric : currentWorkspaceReportReaderWidth(target))));
+  state.reportReader.width = next;
+  document.documentElement?.style?.setProperty("--report-reader-width", `${next}px`);
+  syncWorkspaceReportReaderResizeHandle(target, next);
+  state.timelineChart?.resize?.();
+  return next;
+}
+
+function syncWorkspaceReportReaderResizeHandle(target = $("workspace-report-reader"), width = currentWorkspaceReportReaderWidth(target)) {
+  const handle = target?.querySelector?.("[data-report-reader-resize]");
+  if (!handle) return;
+  const maximum = reportReaderMaximumWidth();
+  const current = Math.round(Math.min(maximum, Math.max(REPORT_READER_MIN_WIDTH, Number(width))));
+  handle.setAttribute?.("aria-valuemin", String(REPORT_READER_MIN_WIDTH));
+  handle.setAttribute?.("aria-valuemax", String(maximum));
+  handle.setAttribute?.("aria-valuenow", String(current));
 }
 
 function closeWorkspaceReportReader(options = {}) {

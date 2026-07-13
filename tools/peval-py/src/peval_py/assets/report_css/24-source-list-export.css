@@ -38,7 +38,7 @@
   margin:0;
 }
 .source-table {
-  min-width:820px;
+  min-width:1012px;
 }
 .source-table th,.source-table td {
   vertical-align:middle;
@@ -314,4 +314,13 @@
 .select-box input:focus-visible+span {
   outline:2px solid color-mix(in oklch,var(--focus),transparent 35%);
   outline-offset:2px;
+}
+.catalog-page-controls {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 8px;
+  justify-content: flex-end;
 }
