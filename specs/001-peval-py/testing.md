@@ -635,10 +635,16 @@ Coverage must verify:
   flattened Any tag filters,
   startup loading status rendering and ready-state recovery,
   inline edit click isolation from row selection, first-User-step drawer
-  selection from Leaderboard rows, Path picker textarea filling with
+  selection from both static and source-key-backed Leaderboard rows, selected
+  Step opening from every catalog-backed Trajectory Overview row, and no-drawer
+  handling for sources without a user Step, the serve search control below the
+  left-aligned Leaderboard title, Path picker textarea filling with
   newline-separated absolute paths while preserving existing input on
   cancel/error, export scope after search, and source-key mapping after
   filtering.
+- Catalog tests cover compact `step_outline` projection without message,
+  reasoning, tool, observation, or report content, and rebuild the disposable
+  catalog when its projection schema changes.
 - Timeline HTML tests cover `N.M` numbering for Waterfall labels/tooltips and
   Detail Table rows, including multiple Timeline items derived from one source
   step and stable `#` sorting by trace order.

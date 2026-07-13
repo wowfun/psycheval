@@ -98,7 +98,12 @@ or reconciling workspace `runs/` Trial cells. `GET /` returns a shell without
 embedded source summaries or report data. With a valid catalog the shell may
 immediately query the last committed generation while the toolbar shows
 `Checking runs`; without one it shows an empty loading shell until the first
-generation commits. `serve` must not depend
+generation commits. Catalog pages may include a compact `step_outline` for
+each readable Trial: source step ids, normalized roles, and optional durations
+only. They never include step messages, reasoning, tool data, observations, or
+report blobs. Serve selection uses the catalog `source_key` to load a detail,
+then uses that detail's canonical `trial_key` for any selected Step drawer.
+`serve` must not depend
 on unrelated Rust peval workspace files such as `peval.toml`, `datasets/`,
 `scripts/`, eval templates, or `$PSYCHEVO_HOME/peval-config.toml`.
 CLI path input resolution treats Windows drive paths and UNC paths as

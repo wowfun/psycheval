@@ -210,7 +210,16 @@ writes either JSON or HTML:
   serve-specific controls around that body. Serve-mode table export writes the
   current row selection, or all currently visible filtered rows when no rows are
   selected, as a default `.xlsx` workbook rather than CSV. JSON report and HTML
-  report exports keep their existing behavior.
+  report exports keep their existing behavior. In serve mode, Leaderboard rows
+  load their source detail and open its first `user` Step when present;
+  Trajectory Overview nodes load their own source detail and open the specified
+  Step. The catalog row identity remains `source_key`, while the drawer uses the
+  loaded detail's canonical `trial_key`; a row with no `user` Step leaves the
+  drawer closed. Overview nodes are rendered from compact catalog outlines, not
+  another source's loaded trajectory.
+  The serve Leaderboard keeps its search controls left-aligned directly below
+  the `Leaderboard` title, while archive, report-attachment, export, and page
+  actions remain in the right-side action area.
 
 Single-session HTML renders the current Run, Result, Evidence, Steps, and
 single-row Leaderboard and Trajectory Overview sections. Multi-session HTML

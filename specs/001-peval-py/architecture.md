@@ -84,8 +84,10 @@ The shared value types are:
   direction, and Tags/Agent/Model/Result facets.
 - `CatalogPage`: generation, checking/stale flags, total, page, page size,
   summary items, and low-cardinality facets.
-- `CatalogRow`: source and Leaderboard summary fields plus
-  `artifact_revision`.
+- `CatalogRow`: source and Leaderboard summary fields, `artifact_revision`,
+  and a compact `step_outline[]` of `{step_id, source, duration_ms?}` for
+  Trajectory Overview. It contains no step body content and is distinct from a
+  one-cell detail report.
 - `DetailEnvelope`: generation, artifact revision, source key, and one-cell
   report.
 - `OperationStatus`: operation id/type/state, completed/total counts, successes,
@@ -99,6 +101,10 @@ Source mutations return only the committed generation and compact change
 metadata. Reload and multi-item writer requests return `202` with an operation
 id, whose progress is read from `GET /api/operations/<id>`. Browser code then
 requeries the current catalog page and refreshes only a changed selected detail.
+Browser interactions identify catalog rows and overview nodes by `source_key`.
+After a detail response arrives, the browser resolves a selected Step against
+that report's canonical `trial_key`; callers must not use the catalog identity
+as a drawer trial key.
 
 A valid old generation remains readable while the catalog reports
 `checking = true` and the next generation is built in one transaction. Without

@@ -85,11 +85,15 @@ count, and error summary. The log is evidence only; it is not a source index
 and is not required to compose reports.
 
 Active and archived readable sources are catalog summary rows and may be queried
-independently or together. Sources whose artifacts are missing or invalid remain
+independently or together. Each readable row may include a compact
+`step_outline` with source `step_id`, normalized role, and optional duration so
+the browser can render Trajectory Overview without loading step bodies. Sources
+whose artifacts are missing or invalid remain
 Source Manager rows with `last_status = "missing"` or `last_status = "error"`,
 but are excluded from Leaderboard results and detail loading. The state layer
 keeps only canonical Trial artifacts plus per-cell source state; the catalog
-stores summaries and search text, never historical report blobs.
+stores summaries and search text, never historical report blobs or step body
+content.
 
 Canonical Trial artifacts live under the peval run tree. The minimum persisted
 unit is the Trial cell:
