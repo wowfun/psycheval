@@ -16,6 +16,7 @@ from peval_py.serve.exports import (
     build_serve_export,
 )
 from peval_py.state import CatalogQuery, WorkspaceCatalog, open_workspace_state
+from peval_py.state.catalog import CATALOG_SCHEMA_VERSION
 
 
 class WorkspaceCatalogTests(unittest.TestCase):
@@ -177,6 +178,51 @@ class WorkspaceCatalogTests(unittest.TestCase):
             self.assertEqual(payload["model_duration_ms"], 250)
             store.close()
 
+    def test_catalog_projects_compact_step_outline_without_step_bodies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cell = self.write_cell(root, 1)
+            trajectory_path = cell / "agent" / "trajectory.json"
+            trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
+            trajectory["steps"] = [
+                {
+                    "step_id": "user-step",
+                    "source": "User",
+                    "message": "must not enter the catalog",
+                    "reasoning_content": "private reasoning",
+                },
+                {
+                    "step_id": 7,
+                    "source": "assistant",
+                    "message": "must not enter either",
+                    "tool_calls": [{"arguments": {"token": "secret"}}],
+                },
+            ]
+            trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
+            meta_path = cell / "agent" / "trajectory_meta.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta["steps"] = [
+                {"step_id": "user-step", "duration_ms": 125},
+                {"step_id": 7, "duration_ms": 250},
+            ]
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+            store, catalog = self.catalog(root)
+            catalog.reconcile()
+            payload = catalog.query(CatalogQuery()).items[0].payload
+
+            self.assertEqual(
+                payload["step_outline"],
+                [
+                    {"step_id": "user-step", "source": "user", "duration_ms": 125},
+                    {"step_id": 7, "source": "agent", "duration_ms": 250},
+                ],
+            )
+            self.assertNotIn("must not enter", json.dumps(payload))
+            self.assertNotIn("private reasoning", json.dumps(payload))
+            self.assertNotIn("secret", json.dumps(payload))
+            store.close()
+
     def test_paging_facets_literal_search_short_search_and_key_resolution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -229,7 +275,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
             rebuilt.reconcile()
             self.assertEqual(rebuilt.query(CatalogQuery()).total, 1)
             with rebuilt._connect() as connection:
-                rebuilt._set_meta(connection, "schema_version", "999")
+                rebuilt._set_meta(connection, "schema_version", str(CATALOG_SCHEMA_VERSION - 1))
                 connection.commit()
             version_rebuilt = WorkspaceCatalog(catalog.store, catalog.config)
             self.assertFalse(version_rebuilt.has_generation)

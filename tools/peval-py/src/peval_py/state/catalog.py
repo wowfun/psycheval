@@ -25,7 +25,7 @@ from peval_py.state.constants import SOURCE_STATUS_MISSING, SOURCE_STATUS_OK
 from peval_py.state.store import ServeStateStore
 
 
-CATALOG_SCHEMA_VERSION = 4
+CATALOG_SCHEMA_VERSION = 5
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 CATALOG_RELATIVE_PATH = Path(".cache/peval-py/serve-catalog.sqlite3")
@@ -926,6 +926,7 @@ def _catalog_summary(
     return {
         "trial_key": optional_str(meta.get("trial_key") or trajectory.get("trajectory_id")),
         "trial_session_id": optional_str(trajectory.get("session_id")),
+        "step_outline": _step_outline(trajectory, meta),
         "last_turn_finished_at_ms": optional_int(meta.get("finished_at_ms")),
         "status": optional_str(meta.get("status")) or "unknown",
         "duration_ms": optional_int(meta.get("duration_ms")),
@@ -940,6 +941,31 @@ def _catalog_summary(
         "analysised": analysis_present,
         "model": optional_str(agent.get("model_name")),
     }
+
+
+def _step_outline(trajectory: dict[str, Any], meta: dict[str, Any]) -> list[dict[str, Any]]:
+    metadata_by_step_id = {
+        str(step.get("step_id")): step
+        for step in meta.get("steps", [])
+        if isinstance(step, dict) and step.get("step_id") is not None
+    }
+    outline: list[dict[str, Any]] = []
+    for step in trajectory.get("steps", []):
+        if not isinstance(step, dict) or step.get("step_id") is None:
+            continue
+        step_id = step["step_id"]
+        source = str(step.get("source") or "").strip().lower()
+        normalized_source = "agent" if source == "assistant" else source
+        if normalized_source not in {"system", "user", "agent"}:
+            normalized_source = "unknown"
+        item: dict[str, Any] = {"step_id": step_id, "source": normalized_source}
+        duration = _optional_number(
+            metadata_by_step_id.get(str(step_id), {}).get("duration_ms")
+        )
+        if duration is not None:
+            item["duration_ms"] = duration
+        outline.append(item)
+    return outline
 
 
 def _measured_model_duration_ms(
