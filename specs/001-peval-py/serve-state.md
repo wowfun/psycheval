@@ -16,7 +16,16 @@ configuration. The initial process must therefore expose the generated adapter
 precedence remains workspace `peval-py.toml`, then explicit `-c/--config`, then
 CLI overrides.
 
-Serve may create an ECharts cache at
+Serve may create a derived catalog at
+`<workspace>/.cache/peval-py/serve-catalog.sqlite3`. It uses SQLite WAL, an
+explicit schema version, and committed catalog generations. SQLite FTS5 with a
+trigram tokenizer is a serve runtime requirement and is probed at startup; an
+unavailable build fails with a clear startup error. Schema mismatch, corruption,
+or an incomplete generation causes deletion and a cold rebuild rather than a
+migration. The catalog contains no canonical user data and must be reconstructible
+from Trial artifacts and `.peval/state.json`.
+
+Serve may also create an ECharts cache at
 `<workspace>/.cache/echarts/6.0.0/echarts.min.js` and a structured append-only
 log at `<workspace>/logs/peval-py-serve.jsonl`.
 
@@ -75,14 +84,12 @@ Refresh and import attempts append JSONL records to
 count, and error summary. The log is evidence only; it is not a source index
 and is not required to compose reports.
 
-Active sources with readable artifacts compose the default served report.
-Archived sources remain in their cell-local state files and can be restored, but
-they do not contribute Trial rows. Sources whose artifact directory is missing
-or unreadable remain listed in source management with `last_status = "missing"`
-or `last_status = "error"` when their cell-local state can still be found, but
-they are skipped when composing multi-source serve reports. The state layer
-keeps only the canonical Trial artifacts plus per-cell source state; it does not
-preserve every historical report blob.
+Active and archived readable sources are catalog summary rows and may be queried
+independently or together. Sources whose artifacts are missing or invalid remain
+Source Manager rows with `last_status = "missing"` or `last_status = "error"`,
+but are excluded from Leaderboard results and detail loading. The state layer
+keeps only canonical Trial artifacts plus per-cell source state; the catalog
+stores summaries and search text, never historical report blobs.
 
 Canonical Trial artifacts live under the peval run tree. The minimum persisted
 unit is the Trial cell:
@@ -106,12 +113,34 @@ and `notes.md` are the persisted annotation truth for that Trial. Session-root
 `analysis.json`, `analysis.md`, and `notes.md` belong to the whole session and
 are reserved but not read by this version.
 
-`serve` startup binds the local HTTP server first, then imports explicit CLI
-sources and scans `<workspace>/runs/<analysis_eval_slug>/*/*/*` for complete
-Trial cells in the background. Until this initial load completes, the browser
-may receive an empty report and source payload marked as loading. Explicit
-source reload still scans the run tree synchronously and derives source rows
-from artifacts plus optional `.peval/state.json` overlays. The
+`serve` startup binds the local HTTP server first, publishes the last valid
+catalog generation immediately when present, then imports explicit CLI sources
+and reconciles `<workspace>/runs/<analysis_eval_slug>/<agent>/<session>/<cell>`
+in the background. Discovery uses fixed-depth `scandir`, set-based identity
+deduplication, and never follows symlinks. It does not search other eval slugs.
+Each candidate receives a fingerprint covering `agent/trajectory.json`,
+`agent/trajectory_meta.json`, `.peval/state.json`, `notes.md`, `analysis.json`,
+and `analysis.md`. An unchanged cell does not parse JSON; a new or changed cell
+parses trajectory and meta at most once during reconciliation. Removed cells
+are absent from the next generation. A malformed cell is isolated as an error
+or missing Source Manager row and does not abort publication.
+
+Rows persist all Leaderboard summary fields, source state, and one normalized
+search document. FTS5 trigram search is case-insensitive literal search over
+messages, reasoning, tool calls, observations, session id, alias, tags, agent,
+model, and status. Queries shorter than three characters use an escaped
+case-insensitive `LIKE` over the cached search document. Search syntax is never
+interpreted as an FTS expression supplied by the user.
+
+Reconciliation constructs the next generation in one SQLite transaction and
+atomically publishes it after all candidates are processed. Readers continue
+to page, search, and load unchanged details from the prior generation while the
+catalog reports `Checking runs`. With no valid generation, the shell remains in
+an empty loading state. No watcher or periodic scan is used: generations change
+only at startup validation, explicit Reload, import, or a mutation performed by
+the running process.
+
+The
 Path source form may also import a local external workspace root, `runs/`,
 `runs/<eval>`, or a directory above Trial cells; that import recursively finds
 complete Trial cells, copies each cell into the current workspace run tree, and
@@ -133,10 +162,11 @@ ignored until a session/report artifact model exists.
 
 The Source Manager Path form accepts line-delimited batch input. Blank lines are
 ignored. Each non-blank line is parsed and imported independently, so one bad
-path does not block later paths. Multi-line requests return the normal source
-mutation envelope plus `import_results[]` entries with per-line `status`,
-`source_keys`, or `error`. Single-line failures keep the existing HTTP error
-response behavior. The same Path form may call same-origin `POST
+path does not block later paths. Multi-line Path/runs imports, multi-session
+imports, Reload, and bulk archive/activate/delete enter the same background
+writer queue. Operations continue after per-item failures and expose ordered
+success/failure results plus completed/total progress. On completion a reconcile
+publishes disk truth as one new generation. The same Path form may call same-origin `POST
 /api/path-picker` to open a local native file picker and fill the textarea with
 absolute file paths, one per line. Browser-native file inputs are not used for
 this path-fill behavior because they do not expose absolute filesystem paths to
@@ -148,15 +178,20 @@ an adapter. The path tokens must identify exactly one available adapter, or the
 mutation fails with a clear adapter-choice error. Batch Path imports keep this
 as a per-line error so later inferable lines can still import.
 
-Serve source mutation endpoints return a shared JSON envelope with `sources`
-and, when a readable source exists, `report` plus `report_source_key`. Reload,
-add, upload, archive, activate, refresh, alias, notes, and delete actions use
-this envelope so the browser can clear stale report state consistently when no
-source is readable. Source aliases remain display metadata and API/state
-capability, but the Source Manager add/upload forms do not expose alias inputs;
-aliases are edited from the source list or provided by non-UI callers. `GET
-/api/sources` may return `loading = true` during startup; after startup it
-returns the current source list and the current active report envelope.
+One workspace permits one writer operation at a time. While reconciliation or
+an operation is active, reads use the committed generation but all write
+requests receive `409`; the browser disables writer controls. A second serve
+process may read a committed generation, but cannot acquire the catalog writer
+lease and receives a clear cache-busy error. The process retains only the
+current and most recently completed operation status.
+
+Serve source mutation endpoints return compact generation/change envelopes and
+never return a full source list or all-source report. Source aliases remain
+display metadata and API/state capability, but the Source Manager add/upload
+forms do not expose alias inputs; aliases are edited from the source list or
+provided by non-UI callers. Browser clients requery their current catalog page,
+resolve retained cross-page selections, and conditionally reload the selected
+detail after a mutation commits.
 
 `peval-py init` writes only the Python-owned serve state described above.
 Existing unrelated workspace files, including any old workspace `state.db`, are

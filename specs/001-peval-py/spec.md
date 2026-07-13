@@ -14,19 +14,21 @@ same command tree.
 - offline trajectory export of one session from JSONL or SQLite `messages` rows
 - ATIF v1.7 trajectory projection
 - single-session and session-comparison JSON/HTML report generation, including
-  single-row HTML comparison panels
+  single-row HTML comparison panels and a grouped, metric-first Leaderboard
+  Summary for multi-session comparisons
 - minimal `peval-py serve` workspace initialization for local report state
-- a local `serve` web UI over a saved peval-py workspace, backed by a
-  Python-owned file-backed state layer, with active and archived source
-  comparison views that recover to the target view when a batch source-state
-  action empties the current view, plus serve-only Leaderboard search, source
-  tags, inline display-metadata editing, existing-tag quick selection,
-  Source Manager row selection with batch source actions, and first-User-step
-  details from Leaderboard row selection
+- a local `serve` web UI over a saved peval-py workspace, backed by canonical
+  Trial-cell artifacts and a rebuildable SQLite serve catalog, with
+  server-paginated active and archived source views, literal full-text search,
+  source tags, inline display-metadata editing, cross-page selection, queued
+  batch source actions, and on-demand single-Trial details; Source Manager and
+  workspace report bindings show each session's tags as read-only columns
 - serve-only workspace report attachments that bind one imported Markdown or
   HTML analysis report to one or more exact Leaderboard source rows, expose the
   associations in a Reports column, preview reports in an isolated left-side
-  reader, and provide report inventory, rebinding, and deletion management
+  reader whose width can be resized horizontally, allow that same isolated
+  reader to be opened in a new browser tab, and provide report inventory,
+  rebinding, and deletion management
 - Source Manager import of complete Trial cells from local external `runs/`
   trees into the selected peval-py workspace, including a local native file
   picker that can fill the Path import textarea with absolute file paths
@@ -81,15 +83,22 @@ overlay, not to the canonical Trial trajectory artifacts. Workspace report
 attachments are separate durable workspace artifacts under
 `<workspace>/reports/<report-id>/`; they do not become Trial annotations,
 source overlays, or fields in canonical report JSON.
-Peval-py does not create, read, or write a workspace `state.db`. `serve`
+Peval-py does not create, read, or write a workspace `state.db`. `serve` may
+create `<workspace>/.cache/peval-py/serve-catalog.sqlite3` as a disposable,
+versioned projection of Trial artifacts and `.peval/state.json`. This catalog
+is never a fact source: deleting it must only require a rebuild, and CLI
+`view`, `export`, and `import`, read-only workspace snapshots, and static HTML
+reports must neither create nor modify it. `serve`
 with an explicit `-r/--root` may initialize a missing peval-py workspace, and
 that same first invocation must load the newly created workspace configuration
 before rendering Source Manager so its adapter `default_db_path` values are
 immediately effective. `serve`
 startup must bind the local HTTP server before importing explicit CLI sources
-or scanning workspace `runs/` Trial cells; while that background startup scan is
-running, the served page must show an explicit loading status in the top Sources
-toolbar instead of presenting the empty shell as no data. `serve` must not depend
+or reconciling workspace `runs/` Trial cells. `GET /` returns a shell without
+embedded source summaries or report data. With a valid catalog the shell may
+immediately query the last committed generation while the toolbar shows
+`Checking runs`; without one it shows an empty loading shell until the first
+generation commits. `serve` must not depend
 on unrelated Rust peval workspace files such as `peval.toml`, `datasets/`,
 `scripts/`, eval templates, or `$PSYCHEVO_HOME/peval-config.toml`.
 CLI path input resolution treats Windows drive paths and UNC paths as

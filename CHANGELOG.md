@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-07-13
+
+- Improved serve report browsing with resizable previews, sandbox-preserving
+  new-tab opening, read-only session Tags, and richer Leaderboard grouping and
+  charts.
+- Reworked `peval-py serve` around a rebuildable SQLite catalog with incremental
+  reconciliation, literal search and facets, paginated summaries, on-demand
+  details, cross-page selection, serialized mutations, and bounded exports.
+
 ## 2026-07-11
 
 - Refined the serve UI with denser report sections, compact Leaderboard

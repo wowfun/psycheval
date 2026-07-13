@@ -13,6 +13,10 @@ workflows:
 - workspace state owns peval-py workspace discovery, cell-local source overlays,
   Trial cell artifacts, snapshot discovery, source lifecycle mutations, and
   report composition over persisted artifacts.
+- workspace catalog owns the serve-only fixed-depth run scan, artifact
+  fingerprints, disposable SQLite projection, generation publication,
+  server-side summary queries, single-cell detail loading, source-key
+  resolution, and serialized writer operations behind one interface.
 - workspace reports owns imported report packages, time-ordered identities,
   exact source bindings, tolerant catalog projection, content reads,
   rebinding, and deletion behind one filesystem-backed interface.
@@ -43,6 +47,7 @@ The intended dependency flow is:
 cli/serve workflows -> inputs, workspace, report, html
 inputs              -> adapters, input tables, workspace snapshot reader
 workspace           -> repository, artifacts, report, analysis overlays
+workspace catalog   -> workspace artifacts, report, SQLite
 workspace reports   -> local filesystem and current source-key projection
 report              -> analysis schema/cache interfaces, redaction
 html                -> assets and i18n
@@ -62,33 +67,44 @@ should import the deepest stable module it owns when working inside the package,
 but external callers should prefer the facade unless a lower-level module is
 documented as an extension point.
 
-## Serve Response Envelope
+## Workspace Catalog Interface
 
-Serve source mutations return a source list and may also return the selected
-report:
+`WorkspaceCatalog` is the only serve seam that exposes catalog behavior. Its
+public interface provides `reconcile()`, `query(CatalogQuery)`,
+`load_detail(source_key)`, `resolve_keys(keys)`, and `start_operation(...)`.
+Callers do not traverse `runs/` or issue SQLite directly. The module is deep:
+it hides fixed-depth discovery, fingerprinting, parsing, schema/version checks,
+FTS, transaction boundaries, generation publication, operation serialization,
+and detail report composition. Tests exercise this interface with real
+temporary Trial files and SQLite rather than a test-only storage port.
 
-```json
-{
-  "sources": [],
-  "report": {},
-  "report_source_key": "source-key",
-  "reports": []
-}
-```
+The shared value types are:
 
-`report` and `report_source_key` are omitted only when no readable source can be
-selected. The browser must treat absent report data as an empty report and must
-not keep stale report content after all sources become unreadable.
-`reports` is lightweight workspace metadata and never contains report bodies.
-Its source-key arrays include only bindings that resolve to current readable
-Trial cells; valid report packages with no current bindings remain in the list
-for management.
+- `CatalogQuery`: source state, page, page size, literal search, sort and
+  direction, and Tags/Agent/Model/Result facets.
+- `CatalogPage`: generation, checking/stale flags, total, page, page size,
+  summary items, and low-cardinality facets.
+- `CatalogRow`: source and Leaderboard summary fields plus
+  `artifact_revision`.
+- `DetailEnvelope`: generation, artifact revision, source key, and one-cell
+  report.
+- `OperationStatus`: operation id/type/state, completed/total counts, successes,
+  and failures.
 
-During startup, the serve runtime may return `loading = true` with an empty
-report while the background initial load imports explicit source flags and scans
-workspace Trial cells. Handlers use the runtime snapshot for `GET /` and
-`GET /api/sources`; they should not synchronously scan the workspace on the
-first page request.
+## Serve HTTP Envelopes
+
+`GET /` returns only the serve shell. `GET /api/catalog` returns a
+`CatalogPage`; `GET /api/report?source_key=...` returns one `DetailEnvelope`.
+Source mutations return only the committed generation and compact change
+metadata. Reload and multi-item writer requests return `202` with an operation
+id, whose progress is read from `GET /api/operations/<id>`. Browser code then
+requeries the current catalog page and refreshes only a changed selected detail.
+
+A valid old generation remains readable while the catalog reports
+`checking = true` and the next generation is built in one transaction. Without
+a valid catalog, APIs expose an empty loading generation until the first commit.
+Handlers must not synchronously scan the workspace or construct an all-source
+report for the page shell.
 
 ## Assets
 

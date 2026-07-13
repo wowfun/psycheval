@@ -43,6 +43,31 @@ implementation branches. Asset tests must verify ordered bundle loading,
 embedded render options, Leaderboard Summary assets, and JavaScript syntax for
 every split asset file.
 
+Serve catalog tests use real temporary Trial-cell filesystems and real SQLite
+through `WorkspaceCatalog`. They cover cold build, warm zero-parse reconcile,
+one-cell change, deletion, corrupt/version-mismatched cache rebuild,
+configured-slug-only discovery, symlink exclusion, per-cell parse failure
+isolation, and atomic generation publication. Instrumented artifact reads assert
+that cold reconcile reads each complete trajectory/meta at most once, an
+unchanged reconcile parses no artifacts, and detail loading reads only its
+target cell.
+
+SQLite query coverage includes 100-row paging, stable sorting,
+active/archived/all state, Tags/Agent/Model/Result facets, FTS5 Chinese and
+English literal queries, escaped short-query fallback, and cross-page key
+resolution. HTTP and asset tests cover shell-first startup,
+stale-while-revalidate, `Checking runs`, write rejection with `409`, paging
+state, default detail selection, changed/missing detail behavior, cross-page
+selection, operation progress, and partial failures. Export coverage includes
+all-filtered XLSX, current-page JSON/HTML fallback, exact 100-cell and 50-MiB
+boundaries, and selected-cell-only output.
+
+Wall-clock service objectives are measured only by the opt-in harness
+`tools/peval-py/scripts/benchmark_serve_catalog.py --cells 10000`: shell about
+0.5 seconds, warm catalog about 1 second, cold rebuild about 10 seconds, and
+single-cell detail p95 about 300 ms on a development machine. The default suite
+asserts I/O counts and invariants rather than machine-dependent timing.
+
 Coverage must verify:
 
 - Psychevo SQLite `messages` extraction orders rows by `session_seq`.
@@ -432,13 +457,17 @@ Coverage must verify:
   label.
 - Leaderboard Summary renders below Leaderboard and above Trajectory Overview in
   static and serve HTML only when at least two rows are available. Tests cover
-  that its transposed table and separate vertical box plots use only
-  `leaderboardRows()` visible rows, row selection does not affect the summary, no
-  separate visible-row count badge is rendered, model-call duration sums only
-  non-estimated agent/assistant step durations per Trial, tool error rate treats
-  no-tool rows as missing while preserving valid `0%` rows, and single-Trial
-  reports render Leaderboard and Trajectory Overview without rendering the
-  comparison summary section.
+  that Agent grouping, the collapsed metric-first table, and the selected-stat
+  horizontal charts use only `leaderboardRows()` visible rows; row selection
+  does not affect the summary. Interaction coverage switches Overall, Agent,
+  and Model grouping, opens and closes the table, switches Mean, Min, Q1, P50,
+  Q3, P95, and Max, verifies the selected statistic against the table data, and
+  verifies Overall omits its one-bar charts and an empty filtered scope renders
+  an explicit empty state. Model-call duration sums only
+  non-estimated agent/assistant step durations per Trial and is available on
+  serve catalog rows; tool error rate treats no-tool rows as missing while
+  preserving valid `0%` rows. Single-Trial reports render Leaderboard and
+  Trajectory Overview without rendering the comparison summary section.
 - Empty report runtime coverage verifies comparison panels can be absent without
   crashing selected-Trial rendering, and notes editor rendering never reads
   `markdown` from a null editor state.
@@ -676,6 +705,10 @@ The primary peval-py package validation command is:
 ```sh
 UV_PROJECT_ENVIRONMENT=.venv uv run --project tools/peval-py python -m unittest discover -s tools/peval-py/tests
 ```
+
+Catalog changes validate in order: focused catalog tests, focused HTTP tests,
+Node interaction tests, the opt-in 10K benchmark, `node --check` for changed
+assets, the full unittest discovery command, then `git diff --check`.
 
 Smoke validation should also run representative CLI commands against fixtures
 and inspect generated JSON with:

@@ -249,15 +249,30 @@ section below the Leaderboard derived only from the current visible Leaderboard
 rows. Single-row reports render Leaderboard and Trajectory Overview but do not
 render the Leaderboard Summary section or its empty state. The summary is a
 runtime-only projection, is not stored in report JSON, and is not affected by
-serve row selection. It displays active duration, tokens, turns, measured
-model-call duration, Tool Calls, and tool error rate with a transposed summary
-table and a separate per-metric vertical box plot panel. The table uses
-statistics as rows and metrics as columns, while the distribution panel renders
-one vertical plot per metric on that metric's own scale. Measured model-call
+serve row selection. Its independent, in-memory Group by control defaults to
+Agent and switches among Overall, Agent, and Model without changing Leaderboard
+filters or selection. Agent and Model groups use stable name ordering. The full
+summary table is collapsed on each page load and expands in place without
+persisting its disclosure state. It is metric-first, with columns `Metric`,
+`Agent`/`Model`/`Scope`, `Count`, `Mean`, `Min`, `Q1`, `P50`, `Q3`, `P95`, and
+`Max`; each of active duration, tokens, turns, measured model-call duration,
+Tool Calls, and tool error rate forms one row group containing one row per
+current Agent or Model, or one Overall row. Missing and Total columns are not
+rendered. A multi-session report whose filters leave no visible rows keeps the
+section in place and renders an explicit empty state.
+
+Agent and Model grouping render one horizontal comparison chart for each metric.
+An independent Statistic control defaults to Mean and switches all six charts
+among Mean, Min, Q1, P50, Q3, P95, and Max. Each metric uses its own scale, each
+bar exposes its formatted value and contributing session count, and the chart's
+accessible name conveys the same information without relying on color. Overall
+grouping omits the single-bar charts. The Statistic control also lightly
+emphasizes the matching table column when the table is open. Measured model-call
 duration is the per-Trial sum of non-estimated agent/assistant step
 `duration_ms` values; estimated model timing and non-model steps are omitted.
-Tool error rate rows with no tool calls are treated as missing values, while
-`0%` error rates are valid. The
+Serve catalog rows expose that derived sum so grouped summaries do not require
+eagerly loading every Trial detail. Tool error rate rows with no tool calls are
+treated as missing values, while `0%` error rates are valid. The
 filter control appears inline on the right side of the filtered column label,
 similar to a spreadsheet table header, instead of occupying a second header
 line. `Analysised` displays `True` only when the Trial's analysis annotation
@@ -278,18 +293,24 @@ matrix task-axis fields.
 
 The serve-mode Leaderboard header groups `Show archived`, the dynamic
 Archive/Activate action, `Attach report (N)`, and `Export` on one action row;
-the search controls render together on the row below it. Search scope is one
-compact select with `Visible sessions` and `All sessions` options rather than
-two separate radio buttons. Leaderboard search is a
-case-insensitive literal text search over each session's step messages,
-reasoning content, tool calls, and observations from both trajectory and
-metadata. `Visible sessions` searches within the current active or archived
-view; `All sessions` lazily loads `GET /api/report?source_state=all` and
-temporarily projects matching active and archived rows together. Search is an
-additional row filter combined with table filters, selection, Leaderboard
-Summary, Trajectory Overview, and export scope. While the all-session search
-projection is active, batch Archive/Activate is disabled so mixed active and
-archived rows cannot be mutated through one ambiguous action.
+the search controls render together on the row below it. Leaderboard search is
+a case-insensitive literal query submitted to `GET /api/catalog`. It searches
+cached step messages, reasoning, tool calls, observations, session id, alias,
+tags, agent, model, and status. Search combines with state and the Tags, Agent,
+Model, and Result facets; Session is intentionally not a facet because its high
+cardinality belongs in global search. Facet options and counts come from the
+catalog query rather than from the current page.
+
+Serve Leaderboard, Source Manager, and workspace report bindings share the
+same server-side query semantics. The first response contains at most 100
+summary rows; page size defaults to and is capped at 100. The default order is
+Last Turn End descending with source key as the stable tie breaker. The page
+shell contains no embedded source rows, report, or token estimates. After the
+first catalog page loads, serve selects the first failed readable cell, or the
+latest readable cell when none failed, and requests that cell's detail. A
+catalog generation change reloads the detail only when its
+`artifact_revision` changed; if it disappeared, serve selects again by the
+same rule.
 
 Serve UI mode keeps the report body as the primary mental model rather than
 turning the page into a separate dashboard. It shows a compact source/status
@@ -299,16 +320,21 @@ The same toolbar exposes `Reports`, which opens a separate near-full-screen
 workspace report manager rather than mixing reports into Source Manager. The
 manager lists every valid report package newest-first, including reports with
 zero current bindings. Selecting a report shows a searchable checklist of all
-readable active and archived source rows; saving replaces its complete binding
-set, Preview closes the manager and opens the shared report reader, and Delete
-requires filename confirmation before permanently removing the package.
+readable active and archived source rows. Each binding row includes a read-only
+Tags column sourced from the session's ordered `source_tags`; the manager's
+search matches those tags, and an empty tag list displays `-`. Saving replaces
+its complete binding set, Preview closes the manager and opens the shared report
+reader, and Delete requires filename confirmation before permanently removing
+the package.
 The manager body fills all modal height remaining below the header and optional
 status row. When the status row is hidden, its grid track collapses and must not
 leave unused space below the inventory and binding panels.
 The modal supports Session/ATIF path, DB, and input-table source forms, upload
 of JSONL, ATIF JSON, or peval-py report JSON snapshots, source checkbox
 selection, Reload-adjacent batch Archive/Activate/Delete actions, and
-per-source status display. The source list does not render a per-row Refresh
+per-source status display. Its table includes a read-only Tags column sourced
+from ordered `source_tags`, using the same chip presentation as Leaderboard and
+displaying `-` when empty. The source list does not render a per-row Refresh
 column; the toolbar `Reload` action is its refresh entry point.
 The SQLite DB form manages adapter defaults in place. `Save as default` saves
 the current non-empty DB path for the explicitly selected adapter, and `Clear
@@ -501,30 +527,24 @@ converts to a different canonical cell identity, refresh fails and keeps the
 existing source/artifact unchanged instead of silently changing one source into
 another Trial.
 
-`POST /api/sources/reload` scans the workspace `runs/<analysis_eval_slug>` tree
-for complete Trial cells, registers new artifact sources, updates lightweight
-source summaries, marks missing registered artifacts, and returns the standard
-serve mutation payload. Serve's main view always embeds or returns a report for
-all active readable sources, including initial `GET /`, refresh, add/reload,
-archive/activate/delete, alias, tags, and notes mutations. `GET
-/api/report?source_state=active|archived|all` returns the full readable source
-report for that source state; omitted `source_state` means `active`, while
-`all` is a read-only projection over active and archived readable sources. `GET
-/api/report?source_key=KEY` returns a report for one readable source and takes
-precedence over `source_state`; missing or unreadable sources fail with a clear
-JSON error. `GET /api/report` remains available for explicit full-report loads
-and exports. `POST /api/sources/state` accepts JSON
-`{ "source_keys": [...], "active": true|false, "report_source_state":
-"active"|"archived" }`, updates all listed sources' active flags, and returns a
-standard mutation payload whose `report` is rebuilt for `report_source_state`.
-Mutation payload `report_source_key` is only a selection hint for the browser;
-it does not mean the payload `report` has been narrowed to that source. Mutation
-payloads may include `report_source_state` so the browser can keep the active or
-archived report cache coherent. Source-state Archive/Activate mutations do not
-accept `all` as `report_source_state`. `POST
-/api/sources/{source_key}/alias` accepts JSON `{ "alias": "...",
-"report_source_state": "active|archived|all" }`, updates only the display alias
-for that source, and does not refresh or mutate the original source file or DB.
+`GET /api/catalog` accepts state, page, page size, literal search, sort,
+direction, and Tags/Agent/Model/Result facets, and returns generation,
+checking/stale flags, total, page metadata, summary rows, and facets. `GET
+/api/report?source_key=KEY` reads only one readable source and returns
+generation, artifact revision, source key, and its one-cell report. Interactive
+serve routes do not provide `source_state=active|archived|all` all-source report
+loading.
+
+`POST /api/sources/reload` and multi-item source import/state/delete requests
+return `202` with an operation id. `GET /api/operations/<id>` exposes operation
+type/state, completed/total, successes, and failures. Single-item mutations may
+complete synchronously but return only a compact generation/change envelope;
+none return `{ sources, report }`. During checking or any writer operation,
+all write routes return `409` and the UI disables their controls. `POST
+/api/sources/state` accepts `{ "source_keys": [...], "active": true|false }`.
+`POST /api/sources/{source_key}/alias` accepts JSON `{ "alias": "..." }`,
+updates only the display alias, and does not refresh or mutate the original
+source file or DB.
 An empty alias clears the alias. `POST /api/sources/{source_key}/tags` accepts
 JSON `{ "tags": "a,b，c", "report_source_state": "active|archived|all" }`,
 persists normalized source tags, and clears the tag list on empty input. `POST
@@ -539,31 +559,35 @@ is required.
 requires the same JSON POST and same-origin checks as other mutating APIs, and
 writes UTF-8 `notes.md` only for refreshable sources with a persisted Trial
 cell. The Markdown payload is limited to 1 MiB after UTF-8 encoding. On success,
-the server writes `<artifact_dir>/notes.md`, refreshes that source immediately,
-and returns the standard mutation payload `{ sources, report }`. Saving an empty
+the server writes `<artifact_dir>/notes.md`, reconciles the changed cell, and
+returns a compact generation/change envelope. Saving an empty
 string writes an empty `notes.md`; delete semantics are not part of v1.
 
-In serve UI mode, the Leaderboard may add a row-selection checkbox column at
-the start of the existing full column set. Header and row checkboxes control
-visible-row bulk actions such as export, source-state mutation, and report
-attachment; they must not change the selected Trial, open either details
-drawer, or change the filtered/sorted row set. Clicking a Leaderboard row
-remains the canonical selected-Trial interaction. The Trajectory Overview
-continues to follow the currently filtered and sorted Leaderboard rows and
-does not follow checkbox state.
+In serve UI mode, the Leaderboard adds a row-selection checkbox column. Ordinary
+checkbox selection is keyed by source key and survives paging, search, and facet
+changes. The UI displays a global selected count and Clear action; bulk actions
+use all selected keys, not only visible keys. On generation changes it calls
+catalog key resolution and removes missing selections. Selection does not
+change the selected Trial or open a drawer. More than 100 selected rows blocks
+JSON and HTML export explicitly; XLSX export, report binding, and queued source
+mutations may use the full selection.
 
-  Serve UI mode renders one Leaderboard `Export` menu in the panel header. Its
-  menu items are `Table`, `JSON Report`, and `HTML Report`. All serve exports use
-  the same row scope rule: visible checked rows when at least one currently
-  visible row is checked, otherwise the current filtered and sorted visible row
-  set. Checked rows hidden by filters remain checked in UI state but are excluded
-  from the current export scope until they become visible again. JSON and HTML
-  exports create report subsets for that same export scope; table export defaults
-  to CSV and must not introduce an Excel dependency.
+Serve UI mode renders one Leaderboard `Export` menu with `Table`, `JSON Report`,
+and `HTML Report`. `POST /api/exports` handles all three. Table export receives
+the current `CatalogQuery` and exports every matching summary as XLSX. JSON and
+HTML receive explicit source keys; when none are selected the browser sends the
+current page's keys. They are rejected before report construction when more
+than 100 cells are requested or the combined trajectory/meta input size exceeds
+50 MiB, and include only the requested cells.
   Export and data-table filter menus close when the user clicks outside the open
   menu or opens another menu, while clicks inside the menu keep it open. This
   submenu behavior applies only to menu-like `<details>` controls and must not
   auto-close Timeline diagnostic sections or Step detail sections.
+
+Workspace Report binding lists load catalog pages instead of embedding all
+sources. Binding drafts persist across pages, and saved relative Trial-cell
+paths continue to resolve through catalog source-key/path mapping. Missing
+bindings remain durable and reappear when the matching cell returns.
 
 The Trajectory Overview section below the Leaderboard renders one row per
 session in the same order as the currently filtered and sorted Leaderboard
