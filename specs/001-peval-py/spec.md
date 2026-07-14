@@ -21,7 +21,9 @@ same command tree.
   Trial-cell artifacts and a rebuildable SQLite serve catalog, with
   server-paginated active and archived source views, literal full-text search,
   source tags, inline display-metadata editing, cross-page selection, queued
-  batch source actions, and on-demand single-Trial details; Source Manager and
+  batch source actions, and on-demand single-Trial details; selecting a later
+  Leaderboard or Trajectory Overview row preserves both panels' internal scroll
+  positions across the complete detail-load rerender; Source Manager and
   workspace report bindings show each session's tags as read-only columns
 - serve-only workspace report attachments that bind one imported Markdown or
   HTML analysis report to one or more exact Leaderboard source rows, expose the

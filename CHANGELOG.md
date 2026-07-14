@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-07-14
+
+- Fixed later-row selection in serve Leaderboard and Trajectory Overview so
+  loading Trial details no longer resets either panel to its first row.
+
 ## 2026-07-13
 
 - Improved serve report browsing with resizable previews, sandbox-preserving

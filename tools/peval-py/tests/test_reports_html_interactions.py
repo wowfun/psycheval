@@ -2984,6 +2984,103 @@ console.log(result);
             [["sync", 1], ["leaderboard", 1], ["overview", 1], ["trace"], ["drawer"]],
         )
 
+    def test_serve_detail_selection_preserves_comparison_scroll_positions(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        self.assertIn("\nrender(data());", asset)
+        asset = asset.rsplit("\nrender(data());", 1)[0]
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+const report = {
+  schema_version: 19,
+  includes: ["core"],
+  annotations: {},
+  trajectory: [{ trajectory_id: "trial:late", session_id: "late", steps: [], final_metrics: {} }],
+  trajectory_meta: [{ trial_key: "trial:late", status: "passed", steps: [] }]
+};
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve", sources: [] }) },
+  "report-notes": { innerHTML: "" },
+};
+const comparison = {};
+Object.defineProperty(comparison, "innerHTML", {
+  get() { return this.value || ""; },
+  set(value) {
+    this.value = value;
+    context.leaderboardWrap = { scrollTop: 0, scrollLeft: 0, addEventListener() {} };
+    context.overviewList = { scrollTop: 0, scrollLeft: 0, addEventListener() {} };
+  }
+});
+nodes.comparison = comparison;
+const context = {
+  leaderboardWrap: { scrollTop: 240, scrollLeft: 44, addEventListener() {} },
+  overviewList: { scrollTop: 320, scrollLeft: 0, addEventListener() {} },
+  document: {
+    body: { classList: { toggle() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector(selector) {
+      if (selector === "#leaderboard .table-wrap") return context.leaderboardWrap;
+      if (selector === "#trajectory-overview .trajectory-overview-list") return context.overviewList;
+      return null;
+    },
+    querySelectorAll() { return []; },
+  },
+  window: { addEventListener() {} },
+  report,
+  console,
+  JSON,
+  Number,
+  String,
+  Object,
+  Math,
+  Date,
+  Set,
+  Array,
+  RegExp,
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+const result = vm.runInContext(`(() => {
+  syncSelectedSourceFromView = () => {};
+  renderServeSources = () => {};
+  bindGlobalControls = () => {};
+  scheduleServeStartupPoll = () => {};
+  leaderboardRows = () => [{ trial_key: "trial:late", source_key: "source-late" }];
+  syncSelectionWithVisibleRows = () => {};
+  renderLeaderboard = () => {};
+  renderTrajectoryOverview = () => {};
+  renderTrace = () => {};
+  renderStepDrawer = () => {};
+  applyServeDetailSelection("source-late", report, "revision-2");
+  return JSON.stringify({
+    leaderboardTop: leaderboardWrap.scrollTop,
+    leaderboardLeft: leaderboardWrap.scrollLeft,
+    overviewTop: overviewList.scrollTop
+  });
+})()`, context);
+console.log(result);
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertEqual(result["leaderboardTop"], 240)
+        self.assertEqual(result["leaderboardLeft"], 44)
+        self.assertEqual(result["overviewTop"], 320)
+
     def test_comparison_panel_scroll_progress_syncs_in_both_directions(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")

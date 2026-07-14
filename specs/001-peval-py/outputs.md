@@ -293,9 +293,11 @@ list cap their vertical viewport at roughly 10 rows and scroll after that
 without truncating rows, filters, sorting, selection, metric shading, or export
 scope. Selecting a Leaderboard row, Trajectory Overview row, or Trajectory
 Overview node must preserve those internal scroll positions across the selected
-Trial rerender instead of jumping either panel back to the first row. User
-scrolling in either capped panel also synchronizes the other panel by vertical
-scroll progress so the two views stay aligned across the same filtered row set;
+Trial rerender instead of jumping either panel back to the first row, including
+when serve mode loads an on-demand Trial detail and replaces the comparison
+shell. User scrolling in either capped panel also synchronizes the other panel
+by vertical scroll progress so the two views stay aligned across the same
+filtered row set;
 Leaderboard horizontal table scrolling remains independent. The rendered
 comparison sections must not show benchmark, task, task-set, task-family, or
 matrix task-axis fields.

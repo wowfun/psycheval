@@ -139,6 +139,7 @@ function renderReportNotes(notes) {
   $("report-notes").innerHTML = notes.length ? `<div class="report-note-list">${notes.map(note => `<article class="report-note"><strong>${esc(note.label || t("report_note", "Report note"))}</strong><div class="note-body">${renderMarkdown(note.markdown || "")}</div></article>`).join("")}</div>` : "";
 }
 function renderComparison() {
+  const scrollState = comparisonScrollState();
   const rows = reportRows();
   if (!rows.length) {
     $("comparison").innerHTML = "";
@@ -149,7 +150,7 @@ function renderComparison() {
     ${rows.length > 1 ? `<section class="leaderboard-summary panel" aria-labelledby="leaderboard-summary-title" id="leaderboard-summary"></section>` : ""}
     <section class="trajectory-overview panel" aria-labelledby="trajectory-overview-title" id="trajectory-overview"></section>
   `;
-  renderComparisonPanels({ trace: false });
+  renderComparisonPanels({ trace: false }, scrollState);
 }
 function notesFor(trialKey) {
   return (state.view?.annotations?.notes || []).filter(note => note.trial_key === trialKey);
@@ -339,8 +340,10 @@ function searchJson(value) {
     return String(value || "");
   }
 }
-function renderComparisonPanels(options = {}) {
-  const scrollState = options.preserveScroll === false ? null : comparisonScrollState();
+function renderComparisonPanels(
+  options = {},
+  scrollState = options.preserveScroll === false ? null : comparisonScrollState()
+) {
   const rows = leaderboardRows();
   syncSelectionWithVisibleRows(rows);
   renderLeaderboard(rows);

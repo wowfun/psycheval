@@ -479,9 +479,11 @@ Coverage must verify:
   classes on nodes while leaving untimed or zero-duration nodes neutral, includes
   duration text in node title/aria labels, and row/node clicks update the
   selected Trial panel without resetting the Leaderboard or Trajectory Overview
-  internal scroll positions. Leaderboard and Trajectory Overview vertical scroll
-  progress stays synchronized in both directions while keeping Leaderboard
-  horizontal scroll independent.
+  internal scroll positions. Coverage includes the complete serve detail
+  selection path that replaces the comparison shell after loading a different
+  Trial. Leaderboard and Trajectory Overview vertical scroll progress stays
+  synchronized in both directions while keeping Leaderboard horizontal scroll
+  independent.
 - Clicking a Trajectory Overview node opens a Step details drawer that reuses
   the final Steps section's expanded step markup, supports close and Escape,
   closes when the user clicks blank page space outside the drawer, swaps content
