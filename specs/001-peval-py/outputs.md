@@ -85,11 +85,13 @@ writes either JSON or HTML:
   message content first, then render tool-call and observation blocks in
   ascending per-block `timestamp_ms` order when metadata timestamps are
   available; untimed blocks keep their original relative order after timed
-  blocks. The page head contains only the localized report title; agent/model
-  and metric summaries stay inside the Run and Result sections instead of
-  appearing as a separate top banner. Report typography uses a 15px body text
-  baseline, with compact labels, chips, table headers, and code blocks no
-  smaller than 12px.
+  blocks. Static HTML uses the localized `Agent Trajectory Report` / `Agent
+  轨迹报告` title in both the page head and visible heading. Serve uses the
+  distinct localized `Eval Workspace` / `评测工作台` title in those same
+  locations; agent/model and metric summaries stay inside the Run and Result
+  sections instead of appearing as a separate top banner. Report typography
+  uses a 15px body text baseline, with compact labels, chips, table headers,
+  and code blocks no smaller than 12px.
 - HTML keeps page-level titles for navigation but avoids repeated titles inside
   a single context. The selected Trial Analysis panel does not repeat
   `computed` or `cached` as a chip plus heading, and automatic metrics render
@@ -245,24 +247,38 @@ Result, and `Analysised` columns provide multi-value filters whose values are
 collected from the complete Leaderboard row set. Empty selections are
 equivalent to no filter, values within one column are OR-ed, and multiple
 filtered columns are AND-ed. Serve-mode Tags filters flatten each tag into its
-own option; selecting multiple tags matches rows with any selected tag.
+own option; selecting multiple tags matches rows with any selected tag. Filter
+checkboxes and `Clear` edit a menu-local draft without changing the table. Only
+`Apply` atomically replaces that column's committed selection and refreshes the
+table once. Closing the menu by clicking outside it or pressing Escape discards
+the draft; reopening starts from the committed selection. The filter button's
+count reports committed values only. Candidate options include committed values
+that no longer occur in the current data so they can still be removed.
 Filtering happens before sorting and before metric shading. If filters hide the
 currently selected Trial and visible rows remain, HTML selects the first visible
 Trial; if filters hide all rows, the selected Trial detail remains visible but
 no Leaderboard row is selected. Leaderboard active duration, tokens, Tool Calls,
 and Turns cells show per-column metric intensity directly as cell background
 shading; each metric column computes its own scale from the currently visible
-filtered rows, missing values remain unshaded, and Cost is not shaded. When two
-or more rows are available, static and serve HTML render a Leaderboard Summary
-section below the Leaderboard derived only from the current visible Leaderboard
-rows. Single-row reports render Leaderboard and Trajectory Overview but do not
-render the Leaderboard Summary section or its empty state. The summary is a
-runtime-only projection, is not stored in report JSON, and is not affected by
-serve row selection. Its independent, in-memory Group by control defaults to
-Agent and switches among Overall, Agent, and Model without changing Leaderboard
-filters or selection. Agent and Model groups use stable name ordering. The full
-summary table is collapsed on each page load and expands in place without
-persisting its disclosure state. It is metric-first, with columns `Metric`,
+filtered rows, missing values remain unshaded, and Cost is not shaded. Static
+HTML renders a Leaderboard Summary only for two or more rows; serve always
+keeps its Summary shell available, including zero- and one-row filters. The
+summary is a runtime-only projection, is not stored in report JSON, and is not
+affected by serve row selection. Its Group by control defaults to Agent and
+switches among Overall, Agent, and Model without changing Leaderboard filters
+or selection. Agent and Model groups use stable name ordering. In serve, a
+`Save view` action immediately to the right of that grouping control opens a
+name-and-notes dialog. Before naming the view, that dialog directly displays
+only the non-default current Search, Tags, Agent, Model, Result, and
+non-active source filters, plus the Group by value that will be saved; an All
+filter and active source state are omitted from both the dialog and persisted
+view configuration. Saved views are applied from the right-side Saved views
+area rather than a Summary-header menu. Applying a view resets the page and
+transient selection and uses the default Last Turn End descending order;
+pagination, sort, metric statistic, disclosure state, and selection are not
+persisted. The full summary table is collapsed on
+each page load and expands in place without persisting its disclosure state. It
+is metric-first, with columns `Metric`,
 `Agent`/`Model`/`Scope`, `Count`, `Mean`, `Min`, `Q1`, `P50`, `Q3`, `P95`, and
 `Max`; each of active duration, tokens, turns, measured model-call duration,
 Tool Calls, and tool error rate forms one row group containing one row per
@@ -309,8 +325,11 @@ a case-insensitive literal query submitted to `GET /api/catalog`. It searches
 cached step messages, reasoning, tool calls, observations, session id, alias,
 tags, agent, model, and status. Search combines with state and the Tags, Agent,
 Model, and Result facets; Session is intentionally not a facet because its high
-cardinality belongs in global search. Facet options and counts come from the
-catalog query rather than from the current page.
+cardinality belongs in global search. Facet options and counts cover the complete
+readable catalog for the current Active, Archived, or All source state rather
+than the current page or filtered result. Search and Tags, Agent, Model, and
+Result selections continue to constrain `items` and `total` but do not constrain
+the returned facet candidates or counts.
 
 Serve Leaderboard, Source Manager, and workspace report bindings share the
 same server-side query semantics. The first response contains at most 100
@@ -323,10 +342,24 @@ catalog generation change reloads the detail only when its
 `artifact_revision` changed; if it disappeared, serve selects again by the
 same rule.
 
+When one or more valid saved views exist, serve adds a responsive right-side
+workspace rail. Each card directly shows the view name, Markdown-rendered
+notes, whole-query match count, its metric-by-group distribution table, and
+Mean bar charts for the same six Leaderboard Summary metrics. Each card has an
+explicit Apply action. Its distribution table is independently collapsed by default,
+using the same disclosure treatment as the main Leaderboard Summary. The rail
+header includes a disabled `Cancel application` action until a view is applied;
+that action restores active source state, empty filters/search, Last Turn End
+descending, Agent grouping, Mean statistic, collapsed summary disclosures, and
+no transient selection. The rail's calculations cover every readable catalog row that
+matches each saved view, never just the first 100-page response, and the
+server returns compact group statistics rather than the matching rows. It
+becomes a normal single-column section on narrow viewports.
+
 Serve UI mode keeps the report body as the primary mental model rather than
 turning the page into a separate dashboard. It shows a compact source/status
-toolbar with a persistent language select above the report title and opens
-source management in a near-full-screen workbench modal dialog.
+toolbar with a persistent language select above the Eval Workspace title and
+opens source management in a near-full-screen workbench modal dialog.
 The same toolbar exposes `Reports`, which opens a separate near-full-screen
 workspace report manager rather than mixing reports into Source Manager. The
 manager lists every valid report package newest-first, including reports with
@@ -545,6 +578,14 @@ checking/stale flags, total, page metadata, summary rows, and facets. `GET
 generation, artifact revision, source key, and its one-cell report. Interactive
 serve routes do not provide `source_state=active|archived|all` all-source report
 loading.
+
+`GET /api/views` lists valid saved-view definitions. `POST /api/views` accepts
+`{name, filters, group_by, notes, overwrite}`; a same-name write without
+`overwrite` returns a conflict, and `overwrite: true` atomically replaces the
+file. `GET /api/views/summary` returns the current catalog generation and
+whole-query group statistics for every valid view. These APIs are serve-only,
+use the normal same-origin JSON mutation rules, and reject writes while the
+catalog is checking runs.
 
 `POST /api/sources/reload` and multi-item source import/state/delete requests
 return `202` with an operation id. `GET /api/operations/<id>` exposes operation

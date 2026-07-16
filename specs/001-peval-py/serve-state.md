@@ -62,6 +62,32 @@ readable source. Explicit deletion permanently removes the whole report
 package. Incomplete temporary packages and committed but invalid packages do
 not fail serve startup and do not enter the catalog.
 
+Saved Leaderboard views are durable, human-editable workspace artifacts. Each
+regular UTF-8 file directly under `<workspace>/views/` has the form
+
+```md
+---
+schema_version: 1
+group_by: agent
+---
+User notes.
+```
+
+The filename stem is the view name and the Markdown body is its notes. Filters
+use the same state, literal search, Tags, Agent, Model, and Result semantics as
+the serve Leaderboard; `group_by` is exactly `overall`, `agent`, or `model`.
+Only non-default filters are written: omitted filters mean `active` source state
+with an empty Search, Tags, Agent, Model, and Result selection. When any filter
+is non-default, `filters` contains only that setting; `state: active` and any
+empty/All filter are never written. The save dialog likewise shows only the
+non-default filters, while always showing the selected grouping.
+View names may be Unicode but are one filename stem: empty names, path
+separators, `.`, `..`, and control characters are invalid. Saves write a
+temporary sibling then atomically replace `<workspace>/views/<view-name>.md`.
+Existing views require explicit overwrite confirmation. Symlinks, malformed
+frontmatter, and unsupported schema or values are ignored during discovery so
+they cannot break serve startup or the valid-view catalog.
+
 Runtime source state lives beside each Trial cell in
 `<cell>/.peval/state.json`. Missing `.peval/` or missing
 `.peval/state.json` is not an error: a complete Trial cell without local source

@@ -17,7 +17,8 @@ same command tree.
   single-row HTML comparison panels and a grouped, metric-first Leaderboard
   Summary for multi-session comparisons
 - minimal `peval-py serve` workspace initialization for local report state
-- a local `serve` web UI over a saved peval-py workspace, backed by canonical
+- a local `serve` web UI named `Eval Workspace` in English and `评测工作台` in
+  Simplified Chinese, over a saved peval-py workspace, backed by canonical
   Trial-cell artifacts and a rebuildable SQLite serve catalog, with
   server-paginated active and archived source views, literal full-text search,
   source tags, inline display-metadata editing, cross-page selection, queued
@@ -31,6 +32,10 @@ same command tree.
   reader whose width can be resized horizontally, allow that same isolated
   reader to be opened in a new browser tab, and provide report inventory,
   rebinding, and deletion management
+- serve-only saved Leaderboard views stored as human-editable Markdown files,
+  with durable catalog filters, summary grouping, and user notes; saved views
+  can be reapplied and, when one or more exist, compared in a right-side
+  workspace summary rail
 - Source Manager import of complete Trial cells from local external `runs/`
   trees into the selected peval-py workspace, including a local native file
   picker that can fill the Path import textarea with absolute file paths

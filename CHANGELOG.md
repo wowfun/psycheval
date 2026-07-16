@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-07-15
+
+- Added durable Leaderboard saved views with Markdown notes, persisted filters
+  and grouping, atomic overwrite, full-catalog summaries, and an apply/cancel
+  workspace rail.
+- Improved serve filtering and browsing with draft Apply menus, complete-catalog
+  facet candidates, and race-safe saved-view refresh and selection handling.
+- Renamed the `peval-py serve` homepage to Eval Workspace / 评测工作台 while
+  keeping exported static HTML reports distinct.
+
 ## 2026-07-14
 
 - Fixed later-row selection in serve Leaderboard and Trajectory Overview so

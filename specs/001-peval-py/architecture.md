@@ -20,6 +20,9 @@ workflows:
 - workspace reports owns imported report packages, time-ordered identities,
   exact source bindings, tolerant catalog projection, content reads,
   rebinding, and deletion behind one filesystem-backed interface.
+- workspace views owns saved-view Markdown frontmatter/body validation,
+  traversal-safe atomic persistence, tolerant discovery, and definitions used
+  for catalog-wide summary projections.
 - report building owns report JSON v19 assembly, timing metadata, annotations,
   automatic analysis metrics, and input data references.
 - analysis owns cached analysis and notes reads, analysis import compilation,
@@ -49,6 +52,7 @@ inputs              -> adapters, input tables, workspace snapshot reader
 workspace           -> repository, artifacts, report, analysis overlays
 workspace catalog   -> workspace artifacts, report, SQLite
 workspace reports   -> local filesystem and current source-key projection
+workspace views     -> local filesystem and CatalogQuery-compatible values
 report              -> analysis schema/cache interfaces, redaction
 html                -> assets and i18n
 ```
@@ -71,7 +75,8 @@ documented as an extension point.
 
 `WorkspaceCatalog` is the only serve seam that exposes catalog behavior. Its
 public interface provides `reconcile()`, `query(CatalogQuery)`,
-`load_detail(source_key)`, `resolve_keys(keys)`, and `start_operation(...)`.
+`load_detail(source_key)`, `resolve_keys(keys)`, whole-query saved-view summary
+projection, and `start_operation(...)`.
 Callers do not traverse `runs/` or issue SQLite directly. The module is deep:
 it hides fixed-depth discovery, fingerprinting, parsing, schema/version checks,
 FTS, transaction boundaries, generation publication, operation serialization,

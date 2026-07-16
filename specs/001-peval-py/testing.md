@@ -454,7 +454,11 @@ Coverage must verify:
   a column are OR-ed, filtered columns are AND-ed, metric shading uses filtered
   visible rows, the Trajectory Overview reuses the same filtered and sorted
   rows, and filter buttons render inline to the right of each filterable column
-  label.
+  label. Shared Leaderboard and Timeline interaction coverage verifies checkbox
+  and Clear changes stay in a menu-local draft, multiple values commit through
+  one Apply action and one refresh, outside click and Escape discard the draft,
+  and reopening reflects only committed values. Committed values missing from
+  the candidate data remain removable options.
 - Leaderboard Summary renders below Leaderboard and above Trajectory Overview in
   static and serve HTML only when at least two rows are available. Tests cover
   that Agent grouping, the collapsed metric-first table, and the selected-stat
@@ -568,10 +572,12 @@ Coverage must verify:
   use an optional `tiktoken` module, falls back to a deterministic byte-length
   estimate, resolves estimates through the selected Trial key in the rendered
   Steps rail, and does not mutate report JSON data while rendering.
-- HTML report title and comparison UI labels remain English by default and
-  switch to Simplified Chinese only when the normalized locale is `zh-CN`, while
-  the selected Trial Run, Result, Notes, and Evidence sections also localize and
-  only the final Steps detail section remains English. Simplified Chinese
+- Static HTML report title and comparison UI labels remain English by default
+  and switch to Simplified Chinese only when the normalized locale is `zh-CN`;
+  serve HTML instead renders `Eval Workspace` / `评测工作台` in both its page
+  title and visible heading. The selected Trial Run, Result, Notes, and
+  Evidence sections also localize and only the final Steps detail section
+  remains English. Simplified Chinese
   reports preserve selected domain terms in English, including Run, Result,
   Notes, Evidence, Steps/events, Session, variant, evaluator, reasoning,
   selected trial trajectory, Turns, Tool Calls, tool success / total, cache
@@ -646,7 +652,11 @@ Coverage must verify:
   filtering.
 - Catalog tests cover compact `step_outline` projection without message,
   reasoning, tool, observation, or report content, and rebuild the disposable
-  catalog when its projection schema changes.
+  catalog when its projection schema changes. Catalog unit and HTTP coverage
+  also verify that filtered `items` and `total` retain the requested search and
+  facet constraints while returned facet candidates and counts ignore those
+  constraints, span the complete readable current source state, and respect the
+  Active, Archived, and All boundary.
 - Timeline HTML tests cover `N.M` numbering for Waterfall labels/tooltips and
   Detail Table rows, including multiple Timeline items derived from one source
   step and stable `#` sorting by trace order.
@@ -685,6 +695,21 @@ Coverage must verify:
   nested lists, block quotes, fenced code, tables, emphasis, links,
   strikethrough, and raw HTML escaping; HTML preview fixtures cover inline
   scripts and external asset references without making live network requests.
+- workspace view storage tests cover YAML frontmatter/body round trips,
+  Unicode names and notes, duplicate conflict then atomic overwrite, invalid
+  names, malformed or symlinked files, valid-view discovery isolation, and
+  omission/defaulting of All filters and active source state.
+- saved-view HTTP and catalog tests cover same-origin writes, checking-time
+  rejection, filter/group validation, all-match summary statistics beyond a
+  100-row page, and Overall/Agent/Model grouping parity with Leaderboard
+  Summary metric and missing-value semantics.
+- assembled serve UI interaction tests cover the Summary save controls,
+  race-safe save/list refresh, single-view rail visibility, removal of the
+  header Saved views menu, independent collapsed saved-view table disclosures,
+  and Apply/Cancel-application default restoration; they also cover empty and
+  single-row states, the save dialog's displayed non-default filters and
+  grouping, dialog and overwrite flow, static-mode exclusion, and the rail's
+  notes, charts, and apply action.
 - legacy top-level `report` and `convert` commands are rejected.
 - translated evaluation docs exist under `docs/i18n/zh-CN/...`, the peval-py
   tool README translation exists beside `tools/peval-py/README.md`, English
