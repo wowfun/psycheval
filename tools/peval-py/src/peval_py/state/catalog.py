@@ -250,7 +250,7 @@ class WorkspaceCatalog:
                 for record in records
             )
             facets = (
-                self._facets(connection, where, parameters)
+                self._facets(connection, *self._facet_scope_where(query))
                 if include_facets
                 else _empty_facets()
             )
@@ -264,6 +264,49 @@ class WorkspaceCatalog:
             items=items,
             facets=facets,
         )
+
+    def summarize_saved_views(
+        self,
+        views: Sequence[tuple[str, CatalogQuery, str]],
+    ) -> dict[str, Any]:
+        """Return compact full-query metrics for saved view definitions.
+
+        This deliberately bypasses `CatalogQuery` pagination while retaining its
+        filtering semantics. All summaries read one committed SQLite generation.
+        """
+        normalized = [
+            (str(name), query.normalized(), str(group_by))
+            for name, query, group_by in views
+        ]
+        with self._connect(readonly=True) as connection:
+            generation = self._meta_int(connection, "generation", 0)
+            valid = self._meta_int(connection, "valid_generation", 0) == 1
+            if not valid:
+                return {
+                    "generation": 0,
+                    "checking": self.checking,
+                    "stale": self.checking,
+                    "views": [
+                        _saved_view_summary(name, group_by, [])
+                        for name, _query, group_by in normalized
+                    ],
+                }
+            summaries: list[dict[str, Any]] = []
+            for name, query, group_by in normalized:
+                where, parameters = self._query_where(query)
+                rows = [
+                    json.loads(str(record[0]))
+                    for record in connection.execute(
+                        f"SELECT row_json FROM cells WHERE {where}", parameters
+                    )
+                ]
+                summaries.append(_saved_view_summary(name, group_by, rows))
+        return {
+            "generation": generation,
+            "checking": self.checking,
+            "stale": self.checking,
+            "views": summaries,
+        }
 
     def load_detail(self, source_key: str) -> DetailEnvelope:
         with self._connect(readonly=True) as connection:
@@ -614,14 +657,8 @@ class WorkspaceCatalog:
         return sorted(found, key=lambda path: path.as_posix())
 
     def _query_where(self, query: CatalogQuery) -> tuple[str, list[Any]]:
-        clauses: list[str] = []
-        parameters: list[Any] = []
-        if not query.include_unreadable:
-            clauses.append("readable = 1")
-        if query.state == "active":
-            clauses.append("active = 1")
-        elif query.state == "archived":
-            clauses.append("active = 0")
+        scope_where, parameters = self._facet_scope_where(query)
+        clauses = [] if scope_where == "1" else [scope_where]
         if query.search:
             if len(query.search) < 3:
                 clauses.append("search_doc LIKE ? ESCAPE '\\' COLLATE NOCASE")
@@ -648,6 +685,16 @@ class WorkspaceCatalog:
             clauses.append(f"{column} IN ({placeholders})")
             parameters.extend(values)
         return " AND ".join(clauses) if clauses else "1", parameters
+
+    def _facet_scope_where(self, query: CatalogQuery) -> tuple[str, list[Any]]:
+        clauses: list[str] = []
+        if not query.include_unreadable:
+            clauses.append("readable = 1")
+        if query.state == "active":
+            clauses.append("active = 1")
+        elif query.state == "archived":
+            clauses.append("active = 0")
+        return " AND ".join(clauses) if clauses else "1", []
 
     def _facets(
         self, connection: sqlite3.Connection, where: str, parameters: list[Any]
@@ -910,6 +957,103 @@ def _artifact_updated_at_ms(cell_dir: Path) -> int:
         except OSError:
             continue
     return max(values) if values else 0
+
+
+_SAVED_VIEW_SUMMARY_METRICS = (
+    ("duration_ms", "duration"),
+    ("tokens", "number"),
+    ("turns", "number"),
+    ("model_duration_ms", "duration"),
+    ("total_tool_calls", "number"),
+    ("tool_error_rate", "percent"),
+)
+
+
+def _saved_view_summary(
+    name: str,
+    group_by: str,
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    if group_by == "overall":
+        grouped["overall"] = rows
+    else:
+        for row in rows:
+            if group_by == "model":
+                label = str(row.get("model") or "-")
+            else:
+                label = str(row.get("agent_name") or row.get("adapter") or "-")
+            grouped.setdefault(label, []).append(row)
+    groups = [
+        {
+            "key": key,
+            "label": key,
+            "count": len(group_rows),
+            "metrics": _saved_view_metric_rows(group_rows),
+        }
+        for key, group_rows in sorted(grouped.items(), key=lambda item: item[0].casefold())
+    ]
+    return {
+        "name": name,
+        "group_by": group_by,
+        "matched_count": len(rows),
+        "groups": groups,
+    }
+
+
+def _saved_view_metric_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    metrics: list[dict[str, Any]] = []
+    for key, value_type in _SAVED_VIEW_SUMMARY_METRICS:
+        values = [
+            value
+            for value in (_saved_view_metric_value(row, key) for row in rows)
+            if value is not None
+        ]
+        metrics.append(
+            {
+                "key": key,
+                "type": value_type,
+                "count": len(values),
+                "mean": sum(values) / len(values) if values else None,
+                "distribution": _saved_view_distribution(values),
+            }
+        )
+    return metrics
+
+
+def _saved_view_metric_value(row: dict[str, Any], key: str) -> float | None:
+    if key != "tool_error_rate":
+        return _optional_number(row.get(key))
+    calls = _optional_number(row.get("total_tool_calls"))
+    if calls is None or calls == 0:
+        return None
+    errors = _optional_number(row.get("total_tool_errors"))
+    return (errors or 0) / calls
+
+
+def _saved_view_distribution(values: list[float]) -> dict[str, float] | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return {
+        "min": ordered[0],
+        "q1": _saved_view_percentile(ordered, 25),
+        "p50": _saved_view_percentile(ordered, 50),
+        "q3": _saved_view_percentile(ordered, 75),
+        "p95": _saved_view_percentile(ordered, 95),
+        "max": ordered[-1],
+    }
+
+
+def _saved_view_percentile(ordered: list[float], percentile: int) -> float:
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * (percentile / 100)
+    lower = int(position)
+    upper = min(len(ordered) - 1, lower + 1)
+    if lower == upper:
+        return ordered[lower]
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 
 def _catalog_summary(

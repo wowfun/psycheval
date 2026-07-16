@@ -33,6 +33,7 @@ from peval_py.workspace_reports import (
     render_workspace_report_reader_page,
     render_workspace_report_preview,
 )
+from peval_py.workspace_views import WorkspaceViewConflict
 
 
 REPORT_PREVIEW_CSP = "; ".join(
@@ -120,6 +121,12 @@ def make_handler(
                     return
                 if path == "/api/reports":
                     self.write_json({"reports": runtime.workspace_report_catalog()})
+                    return
+                if path == "/api/views":
+                    self.write_json({"views": runtime.workspace_view_catalog()})
+                    return
+                if path == "/api/views/summary":
+                    self.write_json(runtime.workspace_view_summaries())
                     return
                 operation_id = operation_status_path(path)
                 if operation_id is not None:
@@ -236,6 +243,29 @@ def make_handler(
                         {
                             "reports": runtime.workspace_report_catalog(),
                             "report_id": report_id,
+                        }
+                    )
+                    return
+                if path == "/api/views":
+                    runtime.ensure_ready()
+                    self.require_workspace_writable()
+                    overwrite = payload.get("overwrite")
+                    if not isinstance(overwrite, bool):
+                        raise HttpError(400, "overwrite must be true or false")
+                    try:
+                        view = runtime.workspace_views.save(
+                            name=required_string(payload, "name"),
+                            filters=payload.get("filters"),
+                            group_by=payload.get("group_by"),
+                            notes=payload.get("notes", ""),
+                            overwrite=overwrite,
+                        )
+                    except WorkspaceViewConflict as exc:
+                        raise HttpError(409, str(exc)) from exc
+                    self.write_json(
+                        {
+                            "view": view.to_dict(),
+                            "views": runtime.workspace_view_catalog(),
                         }
                     )
                     return

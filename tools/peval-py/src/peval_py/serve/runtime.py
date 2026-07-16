@@ -18,6 +18,7 @@ from peval_py.state import (
     WorkspaceCatalog,
 )
 from peval_py.workspace_reports import WorkspaceReportLibrary
+from peval_py.workspace_views import WorkspaceViewLibrary
 
 
 class ServeRuntime:
@@ -35,6 +36,7 @@ class ServeRuntime:
             store.paths.root,
             self._all_catalog_rows,
         )
+        self.workspace_views = WorkspaceViewLibrary(store.paths.root)
         self._lock = Lock()
         self._ready = Event()
         self._ready.set()
@@ -116,6 +118,23 @@ class ServeRuntime:
 
     def catalog_page(self, query: CatalogQuery) -> CatalogPage:
         return self.catalog.query(query)
+
+    def workspace_view_catalog(self) -> list[dict[str, Any]]:
+        return [view.to_dict() for view in self.workspace_views.list()]
+
+    def workspace_view_summaries(self) -> dict[str, Any]:
+        views = self.workspace_views.list()
+        payload = self.catalog.summarize_saved_views(
+            [(view.name, view.filters, view.group_by) for view in views]
+        )
+        summaries = {item["name"]: item for item in payload["views"]}
+        return {
+            **payload,
+            "views": [
+                {**view.to_dict(), **summaries.get(view.name, {})}
+                for view in views
+            ],
+        }
 
     def detail(self, source_key: str) -> DetailEnvelope:
         self.ensure_ready()

@@ -262,6 +262,110 @@ class WorkspaceCatalogTests(unittest.TestCase):
             self.assertEqual(catalog.resolve_keys(selected), selected[:2])
             store.close()
 
+    def test_facets_cover_complete_readable_current_source_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            definitions = [
+                (0, "alpha", "passed", "needle active", True),
+                (1, "beta", "failed", "other active", True),
+                (2, "archived", "passed", "other archived", False),
+                (3, "ghost", "passed", "unreadable", True),
+            ]
+            for index, tag, status, text, active in definitions:
+                cell = self.write_cell(root, index, status=status, text=text)
+                state_path = cell / ".peval" / "state.json"
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(
+                    json.dumps({"active": active, "source_tags": [tag]}),
+                    encoding="utf-8",
+                )
+                if tag == "ghost":
+                    (cell / "agent" / "trajectory.json").write_text("{", encoding="utf-8")
+
+            store, catalog = self.catalog(root)
+            try:
+                catalog.reconcile()
+                active = catalog.query(
+                    CatalogQuery(
+                        search="needle",
+                        tags=("alpha",),
+                        results=("passed",),
+                    )
+                )
+                self.assertEqual(active.total, 1)
+                self.assertEqual(
+                    {item["value"]: item["count"] for item in active.facets["tags"]},
+                    {"alpha": 1, "beta": 1},
+                )
+                self.assertEqual(
+                    {item["value"]: item["count"] for item in active.facets["results"]},
+                    {"failed": 1, "passed": 1},
+                )
+
+                archived = catalog.query(
+                    CatalogQuery(state="archived", tags=("archived",))
+                )
+                self.assertEqual(archived.total, 1)
+                self.assertEqual(
+                    [item["value"] for item in archived.facets["tags"]],
+                    ["archived"],
+                )
+
+                all_states = catalog.query(
+                    CatalogQuery(state="all", search="needle", tags=("alpha",))
+                )
+                self.assertEqual(all_states.total, 1)
+                self.assertEqual(
+                    {item["value"] for item in all_states.facets["tags"]},
+                    {"alpha", "beta", "archived"},
+                )
+                self.assertNotIn("ghost", {item["value"] for item in all_states.facets["tags"]})
+            finally:
+                store.close()
+
+    def test_saved_view_summaries_cover_entire_matching_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index in range(125):
+                cell = self.write_cell(root, index)
+                trajectory_path = cell / "agent" / "trajectory.json"
+                trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
+                trajectory["agent"]["model_name"] = "model-a" if index % 4 else "model-b"
+                trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
+                meta_path = cell / "agent" / "trajectory_meta.json"
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                meta["duration_ms"] = index
+                meta_path.write_text(json.dumps(meta), encoding="utf-8")
+                if index % 2 == 0:
+                    state_path = cell / ".peval" / "state.json"
+                    state_path.parent.mkdir(parents=True, exist_ok=True)
+                    state_path.write_text(json.dumps({"source_tags": ["even"]}), encoding="utf-8")
+
+            store, catalog = self.catalog(root)
+            try:
+                catalog.reconcile()
+                self.assertEqual(len(catalog.query(CatalogQuery()).items), 100)
+                payload = catalog.summarize_saved_views(
+                    [
+                        ("all", CatalogQuery(), "overall"),
+                        ("even", CatalogQuery(tags=("even",)), "model"),
+                    ]
+                )
+                all_view, even_view = payload["views"]
+                self.assertEqual(all_view["matched_count"], 125)
+                self.assertEqual(all_view["groups"][0]["count"], 125)
+                duration = all_view["groups"][0]["metrics"][0]
+                self.assertEqual(duration["count"], 125)
+                self.assertEqual(duration["mean"], 62)
+                self.assertEqual(duration["distribution"]["p50"], 62)
+                self.assertEqual(even_view["matched_count"], 63)
+                self.assertEqual(
+                    [(group["label"], group["count"]) for group in even_view["groups"]],
+                    [("model-a", 31), ("model-b", 32)],
+                )
+            finally:
+                store.close()
+
     def test_corrupt_and_version_mismatched_cache_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
