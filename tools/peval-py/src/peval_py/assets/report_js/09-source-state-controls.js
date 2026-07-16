@@ -3,9 +3,7 @@ function renderServeSourceStateControls(rows = leaderboardRows()) {
   const mode = currentServeSourceMode();
   const allMode = mode === "all";
   const archived = mode === "archived";
-  const targetMode = archived ? "active" : "archived";
-  const targetReadableCount = readableServeSources(targetMode).length;
-  const toggleDisabled = allMode || targetReadableCount < 1 ? "disabled" : "";
+  const toggleDisabled = allMode ? "disabled" : "";
   const selectedCount = visibleSelectedSourceKeys(rows).length;
   const actionLabel = archived
     ? t("activate_selected", "Activate selected")
@@ -42,38 +40,6 @@ function visibleSelectedSourceKeys(rows = leaderboardRows()) {
     .map(row => sourceKeyForTrialKey(row.trial_key))
     .filter(Boolean);
   return Array.from(new Set(keys));
-}
-
-async function switchServeSourceMode(mode) {
-  const nextMode = normalizeServeSourceMode(mode);
-  if (nextMode === currentServeSourceMode()) return;
-  if (readableServeSources(nextMode).length < 1) {
-    setServeStatus(t("archived_view_unavailable", "No sessions are available in that view. Use Sources to manage archived sessions."), true);
-    renderComparisonPanels({ trace: false });
-    return;
-  }
-  state.rowSelection.clear();
-  state.selectedStep = null;
-  const cached = state.serveReportCache?.[nextMode];
-  if (cached) {
-    state.serveSourceMode = nextMode;
-    state.selectedSourceKey = readableSourceKey(null, nextMode);
-    state.selectedTrial = trialKeyForServeSource(state.selectedSourceKey, cached, nextMode) || null;
-    render(cached);
-    setServeStatus(serveSourceModeStatusText(nextMode));
-    return;
-  }
-  try {
-    const report = await serveApi(`/api/report?source_state=${encodeURIComponent(nextMode)}`);
-    applyServeMutationPayload(
-      { report, report_source_state: nextMode },
-      { selectedSourceKey: readableSourceKey(null, nextMode) }
-    );
-    setServeStatus(serveSourceModeStatusText(nextMode));
-  } catch (error) {
-    setServeStatus(error.message || String(error), true);
-    renderComparisonPanels({ trace: false });
-  }
 }
 
 async function mutateVisibleServeSourceState() {

@@ -1634,6 +1634,13 @@ console.log(result);
 
         self.assertIn('data-filter-apply="status"', result["markup"])
         self.assertIn('value="missing" checked', result["markup"])
+        self.assertRegex(
+            result["markup"],
+            r'<div class="filter-menu-head"><strong>Result</strong><div class="filter-menu-actions">'
+            r'<button class="filter-clear"[^>]*data-filter-clear="status"[^>]*>Clear</button>'
+            r'<button class="filter-apply"[^>]*data-filter-apply="status"[^>]*>Apply</button>'
+            r'</div></div><div class="filter-options">',
+        )
         self.assertEqual(result["staged"]["committed"], ["passed"])
         self.assertEqual(result["staged"]["renderCount"], 0)
         self.assertTrue(result["staged"]["menuOpen"])
@@ -2312,258 +2319,6 @@ console.log(result);
         self.assertEqual(result["afterLegacyLoadName"]["selectedSourceKey"], "source-a")
         self.assertEqual(result["afterLegacyLoadName"]["reportRows"], 3)
 
-    @unittest.skip("superseded by server-paginated state and operation coverage")
-    def test_serve_archived_mode_lazy_loads_and_batches_visible_selection(self) -> None:
-        if not shutil.which("node"):
-            self.skipTest("node is required to execute report.js interaction helpers")
-        sources = [
-            {"source_key": "source-a", "active": True, "artifact_dir": "runs/a", "last_status": "ok", "trial_key": "trial:active-a"},
-            {"source_key": "source-b", "active": True, "artifact_dir": "runs/b", "last_status": "ok", "trial_key": "trial:active-b"},
-            {"source_key": "source-c", "active": True, "artifact_dir": "runs/c", "last_status": "ok", "trial_key": "trial:active-c"},
-            {"source_key": "source-d", "active": False, "artifact_dir": "runs/d", "last_status": "ok", "trial_key": "trial:archived-d"},
-        ]
-        sources_after_archive = [
-            {**sources[0], "active": False},
-            sources[1],
-            sources[2],
-            sources[3],
-        ]
-        active_report = {
-            "schema_version": 19,
-            "includes": ["core"],
-            "trajectory": [
-                {"trajectory_id": "trial:active-a", "session_id": "active-a", "steps": [], "final_metrics": {"extra": {"total_turns": 1}}},
-                {"trajectory_id": "trial:active-b", "session_id": "active-b", "steps": [], "final_metrics": {"extra": {"total_turns": 2}}},
-                {"trajectory_id": "trial:active-c", "session_id": "active-c", "steps": [], "final_metrics": {"extra": {"total_turns": 3}}},
-            ],
-            "trajectory_meta": [
-                {"trial_key": "trial:active-a", "status": "passed", "duration_ms": 1000, "steps": [], "warnings": []},
-                {"trial_key": "trial:active-b", "status": "failed", "duration_ms": 2000, "steps": [], "warnings": []},
-                {"trial_key": "trial:active-c", "status": "passed", "duration_ms": 3000, "steps": [], "warnings": []},
-            ],
-        }
-        active_after_archive = {
-            **active_report,
-            "trajectory": active_report["trajectory"][1:],
-            "trajectory_meta": active_report["trajectory_meta"][1:],
-        }
-        archived_report = {
-            "schema_version": 19,
-            "includes": ["core"],
-            "trajectory": [
-                {"trajectory_id": "trial:archived-d", "session_id": "archived-d", "steps": [], "final_metrics": {"extra": {"total_turns": 4}}},
-            ],
-            "trajectory_meta": [
-                {"trial_key": "trial:archived-d", "status": "passed", "duration_ms": 4000, "steps": [], "warnings": []},
-            ],
-        }
-        asset = load_asset_text("report.js")
-        self.assertIn("\nrender(data());", asset)
-        asset = asset.rsplit("\nrender(data());", 1)[0]
-        script = """
-const vm = require("vm");
-const asset = __ASSET__;
-const activeReport = __ACTIVE_REPORT__;
-const archivedReport = __ARCHIVED_REPORT__;
-const sources = __SOURCES__;
-const sourcesAfterArchive = __SOURCES_AFTER_ARCHIVE__;
-const activeAfterArchive = __ACTIVE_AFTER_ARCHIVE__;
-const nodes = {};
-function makeNode(id) {
-  const node = {
-    id,
-    textContent: "",
-    hidden: false,
-    dataset: {},
-    classList: { add() {}, remove() {}, toggle() {} },
-    addEventListener() {},
-    querySelector() { return null; },
-    querySelectorAll() { return []; },
-    closest() { return null; },
-    _innerHTML: "",
-  };
-  Object.defineProperty(node, "innerHTML", {
-    get() { return this._innerHTML; },
-    set(value) {
-      this._innerHTML = String(value || "");
-      for (const match of this._innerHTML.matchAll(/id="([^"]+)"/g)) {
-        if (!nodes[match[1]]) nodes[match[1]] = makeNode(match[1]);
-      }
-    },
-  });
-  return node;
-}
-[
-  "peval-py-i18n",
-  "peval-py-token-estimates",
-  "peval-py-render-options",
-  "report-notes",
-  "comparison",
-  "trace",
-  "step-drawer",
-].forEach(id => nodes[id] = makeNode(id));
-nodes["peval-py-i18n"].textContent = "{}";
-nodes["peval-py-token-estimates"].textContent = "{}";
-nodes["peval-py-render-options"].textContent = JSON.stringify({ mode: "serve", sources });
-const fetchCalls = [];
-function response(payload) {
-  return { ok: true, statusText: "OK", text: async () => JSON.stringify(payload) };
-}
-const context = {
-  nodes,
-  document: {
-    body: { classList: { add() {}, remove() {}, toggle() {} } },
-    addEventListener() {},
-    getElementById(id) { return nodes[id] || null; },
-    querySelector() { return null; },
-    querySelectorAll() { return []; },
-  },
-  window: { addEventListener() {} },
-  console,
-  JSON,
-  Number,
-  String,
-  Object,
-  Math,
-  Date,
-  Set,
-  Array,
-  RegExp,
-  requestAnimationFrame(callback) { callback(); },
-  fetch: async (path, options = {}) => {
-    const body = options.body ? JSON.parse(options.body) : null;
-    fetchCalls.push({ path, body });
-    if (String(path).includes("source_state=archived")) return response(archivedReport);
-    if (String(path) === "/api/sources/state") {
-      return response({
-        sources: sourcesAfterArchive,
-        report: activeAfterArchive,
-        report_source_key: "source-b",
-        report_source_state: "active",
-      });
-    }
-    throw new Error(`unexpected fetch ${path}`);
-  },
-  activeReport,
-  archivedReport,
-  sources,
-  sourcesAfterArchive,
-  activeAfterArchive,
-  fetchCalls,
-};
-vm.createContext(context);
-vm.runInContext(asset, context);
-const promise = vm.runInContext(`(async () => {
-  applyServeMutationPayload({ sources, report: activeReport, report_source_key: "source-a", report_source_state: "active" });
-  const actionRowStart = nodes.leaderboard.innerHTML.indexOf('class="leaderboard-action-row"');
-  const searchStart = nodes.leaderboard.innerHTML.indexOf('class="leaderboard-search"');
-  const titleEnd = nodes.leaderboard.innerHTML.indexOf("</h2>");
-  const actionRowMarkup = nodes.leaderboard.innerHTML.slice(actionRowStart);
-  const initial = {
-    mode: state.serveSourceMode,
-    leaderboardControls: (nodes.leaderboard.innerHTML.match(/data-source-state-controls/g) || []).length,
-    overviewControls: (nodes["trajectory-overview"].innerHTML.match(/data-source-state-controls/g) || []).length,
-    actionLabel: nodes.leaderboard.innerHTML.includes("Archive selected"),
-    archivedToggleEnabled: !nodes.leaderboard.innerHTML.includes("data-source-state-toggle  disabled"),
-    overviewCheckboxes: (nodes["trajectory-overview"].innerHTML.match(/data-row-select/g) || []).length,
-    unifiedActionRow: actionRowStart >= 0
-      && searchStart >= 0
-      && actionRowMarkup.includes("data-source-state-controls")
-      && actionRowMarkup.includes("data-source-state-action")
-      && actionRowMarkup.includes("data-report-attach")
-      && actionRowMarkup.includes("leaderboard-export"),
-    searchBelowTitle: titleEnd >= 0 && searchStart > titleEnd && searchStart < actionRowStart
-      && nodes.leaderboard.innerHTML.includes('class="leaderboard-title-stack"'),
-  };
-  await switchServeSourceMode("archived");
-  const afterArchived = {
-    mode: state.serveSourceMode,
-    reportRows: reportRows().length,
-    selectedSourceKey: state.selectedSourceKey,
-    checkedInLeaderboard: nodes.leaderboard.innerHTML.includes("data-source-state-toggle checked"),
-    checkedInOverview: nodes["trajectory-overview"].innerHTML.includes("data-source-state-toggle checked"),
-    actionLabel: nodes.leaderboard.innerHTML.includes("Activate selected"),
-    archivedFetches: fetchCalls.filter(call => String(call.path).includes("source_state=archived")).length,
-    hasSummary: nodes.comparison.innerHTML.includes('id="leaderboard-summary"'),
-  };
-  await switchServeSourceMode("active");
-  await switchServeSourceMode("archived");
-  const cachedFetches = fetchCalls.filter(call => String(call.path).includes("source_state=archived")).length;
-  await switchServeSourceMode("active");
-  setFilterValue("leaderboard", "status", "passed", true);
-  state.rowSelection.add("trial:active-a");
-  state.rowSelection.add("trial:active-b");
-  renderComparisonPanels({ trace: false });
-  const activeSingleSelection = {
-    actionEnabled: nodes.leaderboard.innerHTML.includes("data-source-state-action >Archive selected"),
-    overviewChecked: nodes["trajectory-overview"].innerHTML.includes('data-row-select="trial:active-a" checked'),
-  };
-  await mutateVisibleServeSourceState();
-  const statePost = fetchCalls.find(call => call.path === "/api/sources/state");
-  const afterArchive = {
-    mode: state.serveSourceMode,
-    reportRows: reportRows().length,
-    selectedSourceKey: state.selectedSourceKey,
-    rowSelectionSize: state.rowSelection.size,
-    statePayload: statePost.body,
-  };
-  const callsBeforeUnavailable = fetchCalls.length;
-  state.serveSources = [sources[0], sources[1], sources[2]];
-  state.serveReportCache = { active: activeReport };
-  state.serveSourceMode = "active";
-  render(activeReport);
-  const zeroTargetDisabled = nodes.leaderboard.innerHTML.includes("data-source-state-toggle  disabled");
-  await switchServeSourceMode("archived");
-  const unavailable = {
-    mode: state.serveSourceMode,
-    fetchUnchanged: fetchCalls.length === callsBeforeUnavailable,
-    zeroTargetDisabled,
-  };
-  return JSON.stringify({ initial, afterArchived, cachedFetches, activeSingleSelection, afterArchive, unavailable });
-})()`, context);
-promise.then(result => console.log(result)).catch(error => { console.error(error && error.stack || error); process.exit(1); });
-""".replace("__ASSET__", json.dumps(asset)).replace("__ACTIVE_REPORT__", json.dumps(active_report)).replace("__ARCHIVED_REPORT__", json.dumps(archived_report)).replace("__SOURCES__", json.dumps(sources)).replace("__SOURCES_AFTER_ARCHIVE__", json.dumps(sources_after_archive)).replace("__ACTIVE_AFTER_ARCHIVE__", json.dumps(active_after_archive))
-        node = subprocess.run(
-            ["node"],
-            input=script,
-            text=True,
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
-        self.assertEqual(node.returncode, 0, node.stderr)
-        result = json.loads(node.stdout)
-
-        self.assertEqual(result["initial"]["mode"], "active")
-        self.assertEqual(result["initial"]["leaderboardControls"], 1)
-        self.assertEqual(result["initial"]["overviewControls"], 1)
-        self.assertTrue(result["initial"]["actionLabel"])
-        self.assertTrue(result["initial"]["archivedToggleEnabled"])
-        self.assertEqual(result["initial"]["overviewCheckboxes"], 3)
-        self.assertTrue(result["initial"]["unifiedActionRow"])
-        self.assertTrue(result["initial"]["searchBelowTitle"])
-        self.assertEqual(result["afterArchived"]["mode"], "archived")
-        self.assertEqual(result["afterArchived"]["reportRows"], 1)
-        self.assertEqual(result["afterArchived"]["selectedSourceKey"], "source-d")
-        self.assertTrue(result["afterArchived"]["checkedInLeaderboard"])
-        self.assertTrue(result["afterArchived"]["checkedInOverview"])
-        self.assertTrue(result["afterArchived"]["actionLabel"])
-        self.assertEqual(result["afterArchived"]["archivedFetches"], 1)
-        self.assertFalse(result["afterArchived"]["hasSummary"])
-        self.assertEqual(result["cachedFetches"], 1)
-        self.assertTrue(result["activeSingleSelection"]["actionEnabled"])
-        self.assertTrue(result["activeSingleSelection"]["overviewChecked"])
-        self.assertEqual(result["afterArchive"]["mode"], "active")
-        self.assertEqual(result["afterArchive"]["reportRows"], 2)
-        self.assertEqual(result["afterArchive"]["selectedSourceKey"], "source-b")
-        self.assertEqual(result["afterArchive"]["rowSelectionSize"], 0)
-        self.assertEqual(result["afterArchive"]["statePayload"]["source_keys"], ["source-a"])
-        self.assertFalse(result["afterArchive"]["statePayload"]["active"])
-        self.assertEqual(result["afterArchive"]["statePayload"]["report_source_state"], "active")
-        self.assertEqual(result["unavailable"]["mode"], "active")
-        self.assertTrue(result["unavailable"]["fetchUnchanged"])
-        self.assertTrue(result["unavailable"]["zeroTargetDisabled"])
-
     def test_sqlite_db_form_manages_adapter_defaults_in_place(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -2934,271 +2689,6 @@ promise.then(result => console.log(result)).catch(error => { console.error(error
         self.assertEqual(result["afterDelete"]["deletePath"], "/api/sources/source-b/delete")
         self.assertEqual(result["afterDelete"]["remainingKeys"], ["source-a"])
         self.assertEqual(result["afterDelete"]["selectionSize"], 0)
-
-    @unittest.skip("superseded by catalog generation detail invalidation coverage")
-    def test_serve_source_state_auto_switches_when_current_mode_becomes_empty(self) -> None:
-        if not shutil.which("node"):
-            self.skipTest("node is required to execute report.js interaction helpers")
-        sources = [
-            {"source_key": "source-a", "active": True, "artifact_dir": "runs/a", "last_status": "ok", "trial_key": "trial:active-a"},
-            {"source_key": "source-d", "active": False, "artifact_dir": "runs/d", "last_status": "ok", "trial_key": "trial:archived-d"},
-        ]
-        active_single = {
-            "schema_version": 19,
-            "includes": ["core"],
-            "trajectory": [
-                {"trajectory_id": "trial:active-a", "session_id": "active-a", "steps": [], "final_metrics": {"extra": {"total_turns": 1}}},
-            ],
-            "trajectory_meta": [
-                {"trial_key": "trial:active-a", "status": "passed", "duration_ms": 1000, "steps": [], "warnings": []},
-            ],
-            "annotations": {"notes": []},
-        }
-        archived_single = {
-            "schema_version": 19,
-            "includes": ["core"],
-            "trajectory": [
-                {"trajectory_id": "trial:archived-d", "session_id": "archived-d", "steps": [], "final_metrics": {"extra": {"total_turns": 2}}},
-            ],
-            "trajectory_meta": [
-                {"trial_key": "trial:archived-d", "status": "passed", "duration_ms": 2000, "steps": [], "warnings": []},
-            ],
-            "annotations": {"notes": [{"trial_key": "trial:archived-d", "source": "cell", "label": "notes.md", "markdown": "Archived note."}]},
-        }
-        active_after_activate = {
-            "schema_version": 19,
-            "includes": ["core"],
-            "trajectory": [
-                active_single["trajectory"][0],
-                archived_single["trajectory"][0],
-            ],
-            "trajectory_meta": [
-                active_single["trajectory_meta"][0],
-                archived_single["trajectory_meta"][0],
-            ],
-            "annotations": {"notes": archived_single["annotations"]["notes"]},
-        }
-        archived_after_archive = {
-            "schema_version": 19,
-            "includes": ["core"],
-            "trajectory": [
-                active_single["trajectory"][0],
-                archived_single["trajectory"][0],
-            ],
-            "trajectory_meta": [
-                active_single["trajectory_meta"][0],
-                archived_single["trajectory_meta"][0],
-            ],
-            "annotations": {"notes": archived_single["annotations"]["notes"]},
-        }
-        empty_active = {"schema_version": 19, "includes": ["core"], "trajectory": [], "trajectory_meta": [], "annotations": {"notes": []}}
-        empty_archived = {"schema_version": 19, "includes": ["core"], "trajectory": [], "trajectory_meta": [], "annotations": {"notes": []}}
-        asset = load_asset_text("report.js")
-        self.assertIn("\nrender(data());", asset)
-        asset = asset.rsplit("\nrender(data());", 1)[0]
-        script = """
-const vm = require("vm");
-const asset = __ASSET__;
-const scenarios = __SCENARIOS__;
-
-function makeNodeFactory(nodes) {
-  return function makeNode(id) {
-    const node = {
-      id,
-      textContent: "",
-      hidden: false,
-      dataset: {},
-      classList: { add() {}, remove() {}, toggle() {} },
-      addEventListener() {},
-      querySelector() { return null; },
-      querySelectorAll() { return []; },
-      closest() { return null; },
-      _innerHTML: "",
-    };
-    Object.defineProperty(node, "innerHTML", {
-      get() { return this._innerHTML; },
-      set(value) {
-        this._innerHTML = String(value || "");
-        for (const match of this._innerHTML.matchAll(/id="([^"]+)"/g)) {
-          if (!nodes[match[1]]) nodes[match[1]] = makeNode(match[1]);
-        }
-      },
-    });
-    return node;
-  };
-}
-
-function response(payload) {
-  return { ok: true, statusText: "OK", text: async () => JSON.stringify(payload) };
-}
-
-function createContext(scenario) {
-  const nodes = {};
-  const makeNode = makeNodeFactory(nodes);
-  [
-    "peval-py-i18n",
-    "peval-py-token-estimates",
-    "peval-py-render-options",
-    "report-notes",
-    "comparison",
-    "trace",
-    "step-drawer",
-  ].forEach(id => nodes[id] = makeNode(id));
-  nodes["peval-py-i18n"].textContent = "{}";
-  nodes["peval-py-token-estimates"].textContent = "{}";
-  nodes["peval-py-render-options"].textContent = JSON.stringify({ mode: "serve", sources: scenario.sources });
-  const fetchCalls = [];
-  const context = {
-    nodes,
-    scenario,
-    fetchCalls,
-    document: {
-      body: { classList: { add() {}, remove() {}, toggle() {} } },
-      addEventListener() {},
-      getElementById(id) { return nodes[id] || null; },
-      querySelector() { return null; },
-      querySelectorAll() { return []; },
-    },
-    window: { addEventListener() {} },
-    console,
-    JSON,
-    Number,
-    String,
-    Object,
-    Math,
-    Date,
-    Set,
-    Array,
-    RegExp,
-    requestAnimationFrame(callback) { callback(); },
-    fetch: async (path, options = {}) => {
-      const body = options.body ? JSON.parse(options.body) : null;
-      fetchCalls.push({ path, body });
-      if (String(path) === "/api/sources/state") return response(scenario.statePayload);
-      if (String(path).includes(`source_state=${scenario.targetMode}`)) return response(scenario.targetReport);
-      throw new Error(`unexpected fetch ${path}`);
-    },
-  };
-  vm.createContext(context);
-  vm.runInContext(asset, context);
-  return context;
-}
-
-async function runScenario(scenario) {
-  const context = createContext(scenario);
-  const result = await vm.runInContext(`(async () => {
-    applyServeMutationPayload({
-      sources: scenario.sources,
-      report: scenario.initialReport,
-      report_source_key: scenario.initialSourceKey,
-      report_source_state: scenario.initialMode,
-    });
-    const nullEditorResult = (() => {
-      try {
-        return renderNotesEditor(undefined);
-      } catch (error) {
-        return error.message;
-      }
-    })();
-    state.rowSelection.add(scenario.selectedTrial);
-    state.notesEditor = { trialKey: scenario.selectedTrial, markdown: "draft", error: "", saving: false };
-    renderComparisonPanels({ trace: false });
-    await mutateVisibleServeSourceState();
-    return JSON.stringify({
-      nullEditorResult,
-      mode: state.serveSourceMode,
-      reportRows: reportRows().length,
-      selectedSourceKey: state.selectedSourceKey,
-      selectedTrial: state.selectedTrial,
-      rowSelectionSize: state.rowSelection.size,
-      hasLeaderboard: nodes.leaderboard.innerHTML.includes("Leaderboard"),
-      hasOverview: nodes["trajectory-overview"].innerHTML.includes("Trajectory Overview"),
-      comparisonLength: nodes.comparison.innerHTML.length,
-      traceLength: nodes.trace.innerHTML.length,
-      targetFetches: fetchCalls.filter(call => String(call.path).includes("source_state=" + scenario.targetMode)).length,
-      statePayload: fetchCalls.find(call => call.path === "/api/sources/state").body,
-    });
-  })()`, context);
-  return JSON.parse(result);
-}
-
-Promise.all(scenarios.map(runScenario))
-  .then(result => console.log(JSON.stringify(result)))
-  .catch(error => { console.error(error && error.stack || error); process.exit(1); });
-""".replace("__ASSET__", json.dumps(asset)).replace("__SCENARIOS__", json.dumps([
-            {
-                "name": "activate-last-archived",
-                "sources": sources,
-                "initialMode": "archived",
-                "targetMode": "active",
-                "initialSourceKey": "source-d",
-                "selectedTrial": "trial:archived-d",
-                "initialReport": archived_single,
-                "targetReport": active_after_activate,
-                "statePayload": {
-                    "sources": [sources[0], {**sources[1], "active": True}],
-                    "report": empty_archived,
-                    "report_source_key": None,
-                    "report_source_state": "archived",
-                },
-            },
-            {
-                "name": "archive-last-active",
-                "sources": sources,
-                "initialMode": "active",
-                "targetMode": "archived",
-                "initialSourceKey": "source-a",
-                "selectedTrial": "trial:active-a",
-                "initialReport": active_single,
-                "targetReport": archived_after_archive,
-                "statePayload": {
-                    "sources": [{**sources[0], "active": False}, sources[1]],
-                    "report": empty_active,
-                    "report_source_key": None,
-                    "report_source_state": "active",
-                },
-            },
-        ]))
-        node = subprocess.run(
-            ["node"],
-            input=script,
-            text=True,
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
-        self.assertEqual(node.returncode, 0, node.stderr)
-        activate, archive = json.loads(node.stdout)
-
-        self.assertEqual(activate["nullEditorResult"], "")
-        self.assertEqual(activate["mode"], "active")
-        self.assertEqual(activate["reportRows"], 2)
-        self.assertEqual(activate["selectedSourceKey"], "source-d")
-        self.assertEqual(activate["selectedTrial"], "trial:archived-d")
-        self.assertEqual(activate["rowSelectionSize"], 0)
-        self.assertTrue(activate["hasLeaderboard"])
-        self.assertTrue(activate["hasOverview"])
-        self.assertGreater(activate["comparisonLength"], 0)
-        self.assertGreater(activate["traceLength"], 0)
-        self.assertEqual(activate["targetFetches"], 1)
-        self.assertEqual(activate["statePayload"]["source_keys"], ["source-d"])
-        self.assertTrue(activate["statePayload"]["active"])
-        self.assertEqual(activate["statePayload"]["report_source_state"], "archived")
-
-        self.assertEqual(archive["nullEditorResult"], "")
-        self.assertEqual(archive["mode"], "archived")
-        self.assertEqual(archive["reportRows"], 2)
-        self.assertEqual(archive["selectedSourceKey"], "source-a")
-        self.assertEqual(archive["selectedTrial"], "trial:active-a")
-        self.assertEqual(archive["rowSelectionSize"], 0)
-        self.assertTrue(archive["hasLeaderboard"])
-        self.assertTrue(archive["hasOverview"])
-        self.assertGreater(archive["comparisonLength"], 0)
-        self.assertGreater(archive["traceLength"], 0)
-        self.assertEqual(archive["targetFetches"], 1)
-        self.assertEqual(archive["statePayload"]["source_keys"], ["source-a"])
-        self.assertFalse(archive["statePayload"]["active"])
-        self.assertEqual(archive["statePayload"]["report_source_state"], "active")
 
     def test_comparison_panel_rerenders_preserve_scroll_positions(self) -> None:
         if not shutil.which("node"):
@@ -4076,7 +3566,7 @@ vm.runInContext(`(async () => {
         )
         self.assertEqual(result["remaining"], 0)
 
-    def test_saved_views_render_independent_rail_cards_and_apply_full_query(self) -> None:
+    def test_saved_views_render_index_and_apply_selected_views_as_snapshot(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         asset = load_asset_text("report.js")
@@ -4141,35 +3631,109 @@ const result = vm.runInContext(`(async () => {
   const controls = renderWorkspaceViewControls();
   renderWorkspaceViewRail();
   const collapsedRail = rail.innerHTML;
+  state.workspaceViewSelection = new Set(["Focused model"]);
+  renderWorkspaceViewRail();
+  const partialSelectionRail = rail.innerHTML;
+  setFilterValues("workspace-views", "tags", ["daily"]);
+  renderWorkspaceViewRail();
+  const dailyRail = rail.innerHTML;
+  const visibleDaily = workspaceViewRows().map(view => view.name);
+  setVisibleSelection(workspaceViewRows(), workspaceViewColumns()[0], true);
+  const afterVisibleSelect = Array.from(state.workspaceViewSelection);
+  setVisibleSelection(workspaceViewRows(), workspaceViewColumns()[0], false);
+  const afterVisibleClear = Array.from(state.workspaceViewSelection);
+  setFilterValues("workspace-views", "models", ["m1"]);
+  renderWorkspaceViewRail();
+  const zeroRail = rail.innerHTML;
+  clearFilter("workspace-views", "tags");
+  clearFilter("workspace-views", "models");
+  setFilterValues("workspace-views", "group_by", ["agent", "model"]);
+  const groupOrRows = workspaceViewRows().map(view => view.name);
+  clearFilter("workspace-views", "group_by");
+  state.workspaceViewSelection.clear();
+  renderWorkspaceViewRail();
   toggleWorkspaceViewTable("Agent slice");
   const firstTableOpenRail = rail.innerHTML;
   toggleWorkspaceViewTable("Focused model");
   const bothTablesOpenRail = rail.innerHTML;
-  const probe = {};
-  loadCatalogPage = async (changes, options) => { probe.changes = changes; probe.options = options; };
+  state.workspaceViewSelection = new Set(["Agent slice", "Focused model"]);
+  renderWorkspaceViewRail();
+  const selectedRail = rail.innerHTML;
+  const downloads = [];
+  serveDownload = (kind, body, filename) => { downloads.push({ kind, body, filename }); };
+  leaderboardRows = () => [{ source_key: "visible-2" }, { source_key: "visible-1" }];
+  const probe = { calls: [] };
+  loadCatalogPage = async (changes, options) => { probe.calls.push({ changes, options }); };
+  state.leaderboardSummaryGroupBy = "model";
+  state.leaderboardSummaryTableOpen = true;
+  state.leaderboardSummaryStatistic = "p95";
+  exportLeaderboardSummary();
+  exportSelectedWorkspaceViews();
+  state.catalogQuery = {
+    state: "archived", page: 3, page_size: 25, search: "needle",
+    sort: "session", direction: "asc", tags: ["daily"], agents: ["alpha"],
+    models: ["m1"], results: ["failed"], views: ["Agent slice"],
+  };
+  state.rowSelection.add("chosen-source");
+  state.selectedSourceKey = "visible-2";
+  state.selectedStep = { trialKey: "trial-two", stepId: "7" };
+  setFilterValues("workspace-views", "tags", ["daily"]);
+  exportCurrentScope("workspace_html");
+  state.rowSelection.clear();
+  clearFilter("workspace-views", "tags");
   state.rowSelection.add("old-row");
   state.sourceSelection.add("old-source");
   state.selectedSourceKey = "old-source";
   state.selectedTrial = "old-trial";
   state.selectedStep = { stepId: "old" };
-  await applyWorkspaceView("Focused model");
-  const applyQuery = probe.changes;
+  await applySelectedWorkspaceViews();
+  const applyQuery = probe.calls[0].changes;
   const appliedRail = rail.innerHTML;
-  await cancelWorkspaceViewApplication();
-  const cancelQuery = probe.changes;
+  const afterApply = {
+    applied: Array.from(state.workspaceAppliedViewNames),
+    groupBy: state.leaderboardSummaryGroupBy,
+    summaryTableOpen: state.leaderboardSummaryTableOpen,
+    statistic: state.leaderboardSummaryStatistic,
+  };
+  state.workspaceViewSelection.delete("Agent slice");
+  renderWorkspaceViewRail();
+  const draftChangedRail = rail.innerHTML;
+  state.rowSelection.add("kept-row");
+  state.sourceSelection.add("kept-source");
+  state.selectedSourceKey = "kept-source";
+  state.selectedTrial = "kept-trial";
+  state.selectedStep = { trialKey: "kept-trial", stepId: "2" };
+  await clearWorkspaceViewConditions();
+  const clearQuery = probe.calls[1].changes;
   const canceledRail = rail.innerHTML;
+  RENDER_OPTIONS.mode = "report";
+  const staticSummaryActions = renderLeaderboardSummaryActions();
   return JSON.stringify({
     controls,
     railHidden: rail.hidden,
     railHtml: rail.innerHTML,
     collapsedRail,
+    partialSelectionRail,
+    dailyRail,
+    visibleDaily,
+    afterVisibleSelect,
+    afterVisibleClear,
+    zeroRail,
+    groupOrRows,
     firstTableOpenRail,
     bothTablesOpenRail,
+    selectedRail,
+    downloads,
     applyQuery,
-    cancelQuery,
+    clearQuery,
     appliedRail,
+    draftChangedRail,
     canceledRail,
-    force: probe.options.force,
+    staticSummaryActions,
+    force: probe.calls.map(call => call.options.force),
+    afterApply,
+    appliedAfterClear: Array.from(state.workspaceAppliedViewNames),
+    selectedAfterClear: Array.from(state.workspaceViewSelection),
     groupBy: state.leaderboardSummaryGroupBy,
     summaryTableOpen: state.leaderboardSummaryTableOpen,
     statistic: state.leaderboardSummaryStatistic,
@@ -4197,38 +3761,130 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
 
         self.assertIn('data-view-save', result["controls"])
         self.assertNotIn("workspace-view-menu", result["controls"])
-        self.assertNotIn("data-view-apply", result["controls"])
+        self.assertNotIn("data-view-apply-selected", result["controls"])
         self.assertFalse(result["railHidden"])
         self.assertIn("Agent slice", result["railHtml"])
         self.assertIn("Focused model", result["railHtml"])
         self.assertIn("Context note.", result["railHtml"])
         self.assertIn("Source: archived", result["railHtml"])
         self.assertIn('data-view-chart="tokens"', result["railHtml"])
+        self.assertIn("workspace-view-index-table", result["collapsedRail"])
+        self.assertIn("Name", result["collapsedRail"])
+        self.assertIn("Tags", result["collapsedRail"])
+        self.assertIn("Models", result["collapsedRail"])
+        self.assertIn("Group by", result["collapsedRail"])
+        self.assertIn("Other conditions", result["collapsedRail"])
+        self.assertIn("Notes", result["collapsedRail"])
+        self.assertIn("data-view-select-visible", result["collapsedRail"])
+        self.assertIn('title="Context note."', result["collapsedRail"])
+        self.assertIn('data-view-edit-field="notes" tabindex="0"', result["collapsedRail"])
+        self.assertEqual(result["collapsedRail"].count("data-view-select="), 2)
+        self.assertIn('data-partial="true"', result["partialSelectionRail"])
+        self.assertEqual(result["visibleDaily"], ["Agent slice"])
+        self.assertEqual(result["dailyRail"].count('data-workspace-view="'), 1)
+        self.assertEqual(result["afterVisibleSelect"], ["Focused model", "Agent slice"])
+        self.assertEqual(result["afterVisibleClear"], ["Focused model"])
+        self.assertIn("workspace-view-index", result["zeroRail"])
+        self.assertNotIn('data-workspace-view="', result["zeroRail"])
+        self.assertEqual(result["groupOrRows"], ["Agent slice", "Focused model"])
+        self.assertIn("data-view-apply-selected disabled", result["collapsedRail"])
+        self.assertIn("data-view-export-selected disabled", result["collapsedRail"])
+        self.assertIn("data-view-delete-selected disabled", result["collapsedRail"])
+        self.assertNotIn("data-view-cancel-application", result["collapsedRail"])
+        self.assertNotIn('data-view-apply="', result["collapsedRail"])
         self.assertEqual(result["collapsedRail"].count('aria-expanded="false"'), 2)
         self.assertEqual(result["firstTableOpenRail"].count('aria-expanded="true"'), 1)
         self.assertEqual(result["bothTablesOpenRail"].count('aria-expanded="true"'), 2)
-        self.assertIn("data-view-cancel-application disabled", result["collapsedRail"])
-        self.assertIn("data-view-cancel-application", result["appliedRail"])
-        self.assertNotIn("data-view-cancel-application disabled", result["appliedRail"])
-        self.assertIn("data-view-cancel-application disabled", result["canceledRail"])
+        self.assertNotIn("data-view-apply-selected disabled", result["selectedRail"])
+        self.assertNotIn("data-view-export-selected disabled", result["selectedRail"])
+        self.assertNotIn("data-view-delete-selected disabled", result["selectedRail"])
+        self.assertEqual(
+            result["downloads"],
+            [
+                {
+                    "kind": "summary_xlsx",
+                    "body": {
+                        "kind": "summary_xlsx",
+                        "summary": {
+                            "scope": "leaderboard",
+                            "source_keys": ["visible-2", "visible-1"],
+                            "group_by": "model",
+                            "statistic": "p95",
+                        },
+                    },
+                    "filename": "peval-leaderboard-summary.xlsx",
+                },
+                {
+                    "kind": "summary_xlsx",
+                    "body": {
+                        "kind": "summary_xlsx",
+                        "summary": {
+                            "scope": "saved_views",
+                            "views": ["Agent slice", "Focused model"],
+                        },
+                    },
+                    "filename": "peval-saved-views.xlsx",
+                },
+                {
+                    "kind": "workspace_html",
+                    "body": {
+                        "kind": "workspace_html",
+                        "query": {
+                            "state": "archived",
+                            "search": "needle",
+                            "sort": "session",
+                            "direction": "asc",
+                            "tags": ["daily"],
+                            "agents": ["alpha"],
+                            "models": ["m1"],
+                            "results": ["failed"],
+                            "views": ["Agent slice"],
+                        },
+                        "selected_source_keys": ["chosen-source"],
+                        "presentation": {
+                            "summary_group_by": "model",
+                            "summary_statistic": "p95",
+                            "summary_table_open": True,
+                            "selected_source_key": "visible-2",
+                            "selected_step_id": "7",
+                            "visible_view_names": ["Agent slice"],
+                            "workspace_view_filters": {
+                                "tags": ["daily"],
+                                "models": [],
+                                "group_by": [],
+                            },
+                            "open_view_tables": ["Agent slice"],
+                        },
+                    },
+                    "filename": "peval-workspace-snapshot.html",
+                },
+            ],
+        )
+        self.assertEqual(result["appliedRail"].count("workspace-view-card leaderboard-summary applied"), 2)
+        self.assertEqual(result["draftChangedRail"].count("workspace-view-card leaderboard-summary applied"), 2)
         self.assertEqual(
             result["applyQuery"],
             {
-                "state": "archived",
+                "state": "all",
                 "page": 1,
                 "page_size": 100,
-                "search": "error",
+                "search": "",
                 "sort": "last_turn_end",
                 "direction": "desc",
                 "tags": [],
                 "agents": [],
-                "models": ["m1"],
+                "models": [],
                 "results": [],
+                "views": ["Agent slice", "Focused model"],
             },
         )
-        self.assertTrue(result["force"])
+        self.assertEqual(result["afterApply"]["applied"], ["Agent slice", "Focused model"])
+        self.assertEqual(result["afterApply"]["groupBy"], "model")
+        self.assertTrue(result["afterApply"]["summaryTableOpen"])
+        self.assertEqual(result["afterApply"]["statistic"], "p95")
+        self.assertEqual(result["force"], [True, True])
         self.assertEqual(
-            result["cancelQuery"],
+            result["clearQuery"],
             {
                 "state": "active",
                 "page": 1,
@@ -4240,6 +3896,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 "agents": [],
                 "models": [],
                 "results": [],
+                "views": [],
             },
         )
         self.assertEqual(result["groupBy"], "agent")
@@ -4249,11 +3906,15 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
             result["search"],
             {"query": "", "scope": "visible", "normalSourceMode": "active"},
         )
-        self.assertEqual(result["rowSelection"], 0)
-        self.assertEqual(result["sourceSelection"], 0)
-        self.assertIsNone(result["selectedSourceKey"])
-        self.assertIsNone(result["selectedTrial"])
-        self.assertIsNone(result["selectedStep"])
+        self.assertEqual(result["appliedAfterClear"], [])
+        self.assertNotIn("data-summary-export-xlsx", result["staticSummaryActions"])
+        self.assertNotIn("data-view-save", result["staticSummaryActions"])
+        self.assertEqual(result["selectedAfterClear"], [])
+        self.assertEqual(result["rowSelection"], 1)
+        self.assertEqual(result["sourceSelection"], 1)
+        self.assertEqual(result["selectedSourceKey"], "kept-source")
+        self.assertEqual(result["selectedTrial"], "kept-trial")
+        self.assertEqual(result["selectedStep"], {"trialKey": "kept-trial", "stepId": "2"})
         self.assertEqual(
             result["table"],
             {
@@ -4384,6 +4045,246 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertNotIn("workspace-view-menu", result["railHtml"])
         self.assertEqual(result["status"], {"message": "View saved", "error": False})
 
+    def test_saved_view_cells_edit_in_place_and_batch_delete_once(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js").rsplit("\nrender(data());", 1)[0]
+        script = r"""
+const vm = require("vm");
+const asset = __ASSET__;
+const rail = {
+  hidden: true,
+  innerHTML: "",
+  scrollTop: 187,
+  classList: { toggle() {}, add() {}, remove() {} },
+  querySelector() { return null; },
+  querySelectorAll() { return []; },
+};
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve" }) },
+  "workspace-views": rail,
+};
+const probe = { confirms: [], calls: [], reloads: 0, statuses: [] };
+const context = {
+  document: {
+    body: { classList: { toggle() {}, add() {}, remove() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+  },
+  window: {
+    addEventListener() {},
+    confirm(message) { probe.confirms.push(message); return true; },
+  },
+  console, JSON, Number, String, Object, Math, Date, Set, Array, RegExp, Promise,
+  setTimeout, clearTimeout, probe, rail,
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+const result = vm.runInContext(`(async () => {
+  const view = { name: "Daily", filters: { results: ["passed"] }, group_by: "agent", notes: "Long **Markdown** note" };
+  const other = { name: "Other", filters: {}, group_by: "model", notes: "" };
+  state.workspaceViews = [view, other];
+  state.workspaceViewsLoaded = true;
+  state.workspaceViewSelection = new Set(["Daily"]);
+  state.workspaceAppliedViewNames = new Set(["Daily", "Other"]);
+  state.workspaceViewTableOpen = new Set(["Daily"]);
+  refreshWorkspaceViews = async () => {};
+  reloadAppliedWorkspaceViews = async () => { probe.reloads += 1; };
+  setServeStatus = (message, error) => probe.statuses.push({ message, error: Boolean(error) });
+  serveApi = async (path, options) => {
+    probe.calls.push({ path, body: options?.body || null });
+    if (path === "/api/views/update") {
+      return { view: { ...view, name: "Renamed" }, views: [{ ...view, name: "Renamed" }, other] };
+    }
+    if (path === "/api/views/delete") return { deleted: ["Renamed"], views: [other] };
+    throw new Error("unexpected request: " + path);
+  };
+  const status = { textContent: "" };
+  const buttons = [{ disabled: false }, { disabled: false }];
+  const cell = {
+    querySelector(selector) { return selector === "[data-view-edit-status]" ? status : null; },
+    querySelectorAll() { return buttons; },
+  };
+  await saveWorkspaceViewInlineEdit(cell, "Daily", "name", "Renamed");
+  const renamed = {
+    selection: Array.from(state.workspaceViewSelection),
+    applied: Array.from(state.workspaceAppliedViewNames),
+    open: Array.from(state.workspaceViewTableOpen),
+    reloads: probe.reloads,
+  };
+  await saveWorkspaceViewInlineEdit(cell, "Renamed", "tags", "daily，nightly,daily");
+  const tagUpdateCall = probe.calls[probe.calls.length - 1];
+  const successfulApi = serveApi;
+  const conflictStatus = { textContent: "" };
+  const conflictButtons = [{ disabled: false }, { disabled: false }];
+  const conflictCell = {
+    innerHTML: "editor remains mounted",
+    querySelector(selector) { return selector === "[data-view-edit-status]" ? conflictStatus : null; },
+    querySelectorAll() { return conflictButtons; },
+  };
+  serveApi = async () => { throw new Error("saved view already exists: Other"); };
+  await saveWorkspaceViewInlineEdit(conflictCell, "Renamed", "name", "Other");
+  const conflict = {
+    status: conflictStatus.textContent,
+    buttonsDisabled: conflictButtons.map(button => button.disabled),
+    html: conflictCell.innerHTML,
+  };
+  serveApi = successfulApi;
+
+  const editorInput = {
+    value: "state: archived\\nagents:\\n  - beta\\nresults:\\n  - failed\\n",
+    handlers: {},
+    addEventListener(type, handler) { this.handlers[type] = handler; },
+    focus() {},
+    select() {},
+  };
+  const editorButtons = {
+    save: { addEventListener(type, handler) { this.handler = handler; } },
+    cancel: { addEventListener(type, handler) { this.handler = handler; } },
+  };
+  let editorHtml = "";
+  const editorCell = {
+    dataset: { viewNavigate: "Renamed", viewEditField: "other_conditions" },
+    get innerHTML() { return editorHtml; },
+    set innerHTML(value) { editorHtml = value; },
+    querySelector(selector) {
+      if (selector === "[data-view-inline-editor]") return editorHtml ? {} : null;
+      if (selector === "[data-view-edit-control]") return editorInput;
+      if (selector === "[data-view-edit-save]") return editorButtons.save;
+      if (selector === "[data-view-edit-cancel]") return editorButtons.cancel;
+      return null;
+    },
+  };
+  beginWorkspaceViewInlineEdit(editorCell);
+  let keyboardSave = null;
+  saveWorkspaceViewInlineEdit = async (_cell, name, field, value) => { keyboardSave = { name, field, value }; };
+  editorInput.handlers.keydown({ key: "Enter", ctrlKey: true, metaKey: false, preventDefault() {} });
+  await Promise.resolve();
+  const renamedView = workspaceViewForName("Renamed");
+  const tagConfiguration = workspaceViewConfigurationEditValue(renamedView, "tags", "daily，nightly,daily");
+  const modelConfiguration = workspaceViewConfigurationEditValue(renamedView, "models", "m1, m2");
+  const groupConfiguration = workspaceViewConfigurationEditValue(renamedView, "group_by", "overall");
+  const otherConfiguration = workspaceViewConfigurationEditValue(renamedView, "other_conditions", editorInput.value);
+
+  const navCell = {
+    dataset: { viewNavigate: "Other" },
+    handlers: {},
+    addEventListener(type, handler) { this.handlers[type] = handler; },
+  };
+  const navTarget = {
+    querySelectorAll(selector) { return selector === "[data-view-navigate]" ? [navCell] : []; },
+  };
+  let navigations = 0;
+  let edits = 0;
+  navigateToWorkspaceView = () => { navigations += 1; };
+  beginWorkspaceViewInlineEdit = () => { edits += 1; };
+  bindWorkspaceViewControls(navTarget);
+  const mouseEvent = { target: { closest() { return null; } }, preventDefault() {}, stopPropagation() {} };
+  navCell.handlers.click(mouseEvent);
+  navCell.handlers.click(mouseEvent);
+  navCell.handlers.dblclick(mouseEvent);
+  await new Promise(resolve => setTimeout(resolve, 250));
+  const afterDoubleClick = { navigations, edits };
+  navCell.handlers.click(mouseEvent);
+  await new Promise(resolve => setTimeout(resolve, 250));
+  const afterSingleClick = { navigations, edits };
+
+  state.workspaceViewSelection = new Set(["Renamed"]);
+  await deleteSelectedWorkspaceViews();
+  setStepDrawerOpen(true);
+  const railScrollWhileCovered = rail.scrollTop;
+  setStepDrawerOpen(false);
+  return JSON.stringify({
+    renamed,
+    tagUpdateCall,
+    conflict,
+    editorHtml,
+    keyboardSave,
+    tagConfiguration,
+    modelConfiguration,
+    groupConfiguration,
+    otherConfiguration,
+    afterDoubleClick,
+    afterSingleClick,
+    confirms: probe.confirms,
+    calls: probe.calls,
+    appliedAfterDelete: Array.from(state.workspaceAppliedViewNames),
+    selectedAfterDelete: Array.from(state.workspaceViewSelection),
+    reloads: probe.reloads,
+    railScrollWhileCovered,
+    railScrollAfterClose: rail.scrollTop,
+  });
+})()`, context);
+Promise.resolve(result).then(value => console.log(value)).catch(error => { console.error(error); process.exit(1); });
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertEqual(result["renamed"]["selection"], ["Renamed"])
+        self.assertEqual(result["renamed"]["applied"], ["Other", "Renamed"])
+        self.assertEqual(result["renamed"]["open"], ["Renamed"])
+        self.assertEqual(result["renamed"]["reloads"], 1)
+        self.assertEqual(result["tagUpdateCall"]["path"], "/api/views/update")
+        self.assertEqual(result["tagUpdateCall"]["body"]["field"], "configuration")
+        self.assertIn('tags:\n    - "daily"\n    - "nightly"', result["tagUpdateCall"]["body"]["value"])
+        self.assertIn('results:\n    - "passed"', result["tagUpdateCall"]["body"]["value"])
+        self.assertIn("already exists", result["conflict"]["status"])
+        self.assertEqual(result["conflict"]["buttonsDisabled"], [False, False])
+        self.assertEqual(result["conflict"]["html"], "editor remains mounted")
+        self.assertIn("<textarea", result["editorHtml"])
+        self.assertIn("data-view-edit-save", result["editorHtml"])
+        self.assertIn("data-view-edit-cancel", result["editorHtml"])
+        self.assertEqual(
+            result["keyboardSave"],
+            {
+                "name": "Renamed",
+                "field": "other_conditions",
+                "value": "state: archived\nagents:\n  - beta\nresults:\n  - failed\n",
+            },
+        )
+        self.assertIn('tags:\n    - "daily"\n    - "nightly"', result["tagConfiguration"])
+        self.assertIn('results:\n    - "passed"', result["tagConfiguration"])
+        self.assertIn('models:\n    - "m1"\n    - "m2"', result["modelConfiguration"])
+        self.assertIn('group_by: "overall"', result["groupConfiguration"])
+        self.assertIn('state: archived', result["otherConfiguration"])
+        self.assertIn('agents:\n    - beta', result["otherConfiguration"])
+        self.assertIn('results:\n    - failed', result["otherConfiguration"])
+        self.assertEqual(result["afterDoubleClick"], {"navigations": 0, "edits": 1})
+        self.assertEqual(result["afterSingleClick"], {"navigations": 1, "edits": 1})
+        self.assertEqual(len(result["confirms"]), 1)
+        self.assertIn("1", result["confirms"][0])
+        self.assertEqual(
+            result["calls"],
+            [
+                {
+                    "path": "/api/views/update",
+                    "body": {"name": "Daily", "field": "name", "value": "Renamed"},
+                },
+                {
+                    "path": "/api/views/update",
+                    "body": {
+                        "name": "Renamed",
+                        "field": "configuration",
+                        "value": 'filters:\n  tags:\n    - "daily"\n    - "nightly"\n  results:\n    - "passed"\ngroup_by: "agent"\n',
+                    },
+                },
+                {"path": "/api/views/delete", "body": {"names": ["Renamed"]}},
+            ],
+        )
+        self.assertEqual(result["appliedAfterDelete"], ["Other"])
+        self.assertEqual(result["selectedAfterDelete"], [])
+        self.assertEqual(result["reloads"], 3)
+        self.assertEqual(result["railScrollWhileCovered"], 187)
+        self.assertEqual(result["railScrollAfterClose"], 187)
+
     def test_saved_view_dialog_confirms_then_retries_atomic_overwrite(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -4447,6 +4348,9 @@ const result = vm.runInContext(`(async () => {
   state.leaderboardSummaryGroupBy = "agent";
   openWorkspaceViewSaveDialog();
   const savedConfiguration = configuration.innerHTML;
+  const defaultName = nameInput.value;
+  const allDefaultName = workspaceViewDefaultName({ tags: [] }, "overall");
+  const longDefaultName = workspaceViewDefaultName({ tags: ["x".repeat(160)] }, "model");
   nameInput.value = "Daily";
   notesInput.value = "Original notes";
   serveApi = async (path, options) => {
@@ -4457,7 +4361,7 @@ const result = vm.runInContext(`(async () => {
   refreshWorkspaceViews = async (...args) => { probe.refreshArgs = args; };
   setServeStatus = (message, error) => { probe.status = { message, error: Boolean(error) }; };
   await saveWorkspaceView(dialog);
-  return JSON.stringify({ calls: probe.calls, confirm: probe.confirm, refreshArgs: probe.refreshArgs, status: probe.status, hidden: dialog.hidden, views: state.workspaceViews, savedConfiguration });
+  return JSON.stringify({ calls: probe.calls, confirm: probe.confirm, refreshArgs: probe.refreshArgs, status: probe.status, hidden: dialog.hidden, views: state.workspaceViews, savedConfiguration, defaultName, allDefaultName, longDefaultName });
 })()`, context);
 result.then(value => console.log(value)).catch(error => { console.error(error); process.exit(1); });
 """.replace("__ASSET__", json.dumps(asset))
@@ -4478,6 +4382,10 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertIn("<dt>Agent</dt><dd>alpha</dd>", result["savedConfiguration"])
         self.assertIn("<dt>Result</dt><dd>passed</dd>", result["savedConfiguration"])
         self.assertIn("<dt>Group by</dt><dd>Agent</dd>", result["savedConfiguration"])
+        self.assertEqual(result["defaultName"], "daily - agent")
+        self.assertEqual(result["allDefaultName"], "All - overall")
+        self.assertEqual(len(result["longDefaultName"]), 120)
+        self.assertTrue(result["longDefaultName"].endswith(" - model"))
         self.assertNotIn("<dt>Source</dt>", result["savedConfiguration"])
         self.assertNotIn("<dt>Model</dt>", result["savedConfiguration"])
         self.assertEqual([call["path"] for call in result["calls"]], ["/api/views", "/api/views"])

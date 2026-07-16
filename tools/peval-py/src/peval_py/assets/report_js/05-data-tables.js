@@ -1,10 +1,15 @@
-function selectionColumn() {
+function selectionColumn(options = {}) {
   return {
     key: "__select",
     width: "46px",
     select: true,
     label: t("select_rows", "Select rows"),
-    html: row => renderRowSelection(row)
+    selectionKey: row => row?.trial_key || "",
+    selectionSet: () => state.rowSelection,
+    rowInputAttr: key => `data-row-select="${esc(key)}"`,
+    headerInputAttr: "data-select-visible",
+    rowAriaLabel: key => `${t("select_row_for_export", "Select row for export")}: ${key}`,
+    ...options,
   };
 }
 function leaderboardColumns() {
@@ -27,7 +32,7 @@ function leaderboardColumns() {
       return text && text !== noteSnippetFor(row.trial_key) ? text : "";
     } }
   ];
-  if (!serveMode()) return columns;
+  if (!workspaceDisplayMode()) return columns;
   const serveColumns = columns.map(column => ["session_id", "analysised"].includes(column.key)
     ? { ...column, filterable: false }
     : column);
@@ -42,7 +47,7 @@ function displayLeaderboardColumns() {
   return serveMode() ? [selectionColumn(), ...leaderboardColumns()] : leaderboardColumns();
 }
 function agentNameFor(row) {
-  if (serveMode()) return row?.agent_name || row?.adapter || "-";
+  if (workspaceDisplayMode()) return row?.agent_name || row?.adapter || "-";
   const name = trajectoryFor(row?.trial_key)?.agent?.name;
   return name || row?.adapter || "-";
 }
@@ -90,7 +95,7 @@ function renderLeaderboardExportControls() {
       <div class="export-menu-panel">
         <button type="button" data-export-kind="xlsx">${esc(t("export_xlsx_table", "Table (.xlsx)"))}</button>
         <button type="button" data-export-kind="json">${esc(t("export_json_report", "JSON report"))}</button>
-        <button type="button" data-export-kind="html">${esc(t("export_html_report", "HTML report"))}</button>
+        <button type="button" data-export-kind="workspace_html">${esc(t("export_workspace_snapshot", "Workspace snapshot (.html)"))}</button>
       </div>
     </details>
   </div>`;
@@ -249,7 +254,7 @@ function renderDataTable({ tableId, columns, rows, tableClass = "", shellClass =
   return `<div class="${esc(shellClasses)}"><div class="table-wrap"><table class="${esc(classes)}" data-table-id="${esc(tableId)}"><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div></div>`;
 }
 function renderTableHeader(tableId, column, controls, rows = [], filterOptionsRows = rows) {
-  if (column.select) return renderSelectionHeader(rows);
+  if (column.select) return renderSelectionHeader(rows, column);
   if (column.sourceSelect) return renderSourceSelectionHeader(rows);
   const active = controls.sort === column.key;
   const mark = active ? (controls.direction === "desc" ? "&#9660;" : "&#9650;") : "&#8597;";
@@ -269,19 +274,47 @@ function renderFilterControl(tableId, column, rows) {
   const optionHtml = options.length
     ? options.map(value => `<label class="filter-option"><input type="checkbox" data-filter-key="${esc(column.key)}" value="${esc(value)}" ${selected.has(value) ? "checked" : ""}><span>${esc(filterLabel(column, value))}</span></label>`).join("")
     : `<p class="filter-empty">${esc(t("no_matching_rows", "No matching rows"))}</p>`;
-  return `<details class="filter-control ${count ? "active" : ""}" data-filter-menu="${esc(column.key)}"><summary class="filter-button" aria-label="${esc(t("filter", "Filter"))} ${esc(column.label)}"><span class="filter-icon">&#9662;</span>${countText}</summary><div class="filter-menu"><div class="filter-menu-head"><strong>${esc(column.label)}</strong><button class="filter-clear" type="button" data-filter-clear="${esc(column.key)}" ${count ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button></div><div class="filter-options">${optionHtml}</div><div class="filter-menu-actions"><button class="filter-apply" type="button" data-filter-apply="${esc(column.key)}" disabled>${esc(t("apply", "Apply"))}</button></div></div></details>`;
+  return `<details class="filter-control ${count ? "active" : ""}" data-filter-menu="${esc(column.key)}"><summary class="filter-button" aria-label="${esc(t("filter", "Filter"))} ${esc(column.label)}"><span class="filter-icon">&#9662;</span>${countText}</summary><div class="filter-menu"><div class="filter-menu-head"><strong>${esc(column.label)}</strong><div class="filter-menu-actions"><button class="filter-clear" type="button" data-filter-clear="${esc(column.key)}" ${count ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button><button class="filter-apply" type="button" data-filter-apply="${esc(column.key)}" disabled>${esc(t("apply", "Apply"))}</button></div></div><div class="filter-options">${optionHtml}</div></div></details>`;
 }
-function renderSelectionHeader(rows) {
-  const visible = rows.filter(row => row?.trial_key);
-  const selected = visible.filter(row => state.rowSelection.has(row.trial_key));
-  const checked = visible.length > 0 && selected.length === visible.length;
-  const partial = selected.length > 0 && selected.length < visible.length;
-  return `<th class="select-col"><label class="select-box"><input type="checkbox" data-select-visible ${checked ? "checked" : ""} ${partial ? "data-partial=\"true\"" : ""} aria-label="${esc(t("select_visible_rows", "Select visible rows"))}"><span></span></label></th>`;
+function selectionSetForColumn(column) {
+  const value = typeof column?.selectionSet === "function" ? column.selectionSet() : column?.selectionSet;
+  return value instanceof Set ? value : state.rowSelection;
+}
+function selectionKeyForRow(row, column) {
+  const value = typeof column?.selectionKey === "function" ? column.selectionKey(row) : row?.trial_key;
+  return String(value || "");
+}
+function visibleSelectionState(rows, column) {
+  const keys = rows.map(row => selectionKeyForRow(row, column)).filter(Boolean);
+  const selected = selectionSetForColumn(column);
+  const selectedCount = keys.filter(key => selected.has(key)).length;
+  return {
+    keys,
+    checked: keys.length > 0 && selectedCount === keys.length,
+    partial: selectedCount > 0 && selectedCount < keys.length,
+  };
+}
+function setVisibleSelection(rows, column, checked) {
+  const selected = selectionSetForColumn(column);
+  visibleSelectionState(rows, column).keys.forEach(key => {
+    if (checked) selected.add(key);
+    else selected.delete(key);
+  });
+}
+function renderSelectionHeader(rows, column = selectionColumn()) {
+  const selection = visibleSelectionState(rows, column);
+  const inputAttr = column.headerInputAttr || "data-select-visible";
+  return `<th class="select-col"><label class="select-box"><input type="checkbox" ${inputAttr} ${selection.checked ? "checked" : ""} ${selection.partial ? "data-partial=\"true\"" : ""} aria-label="${esc(column.headerAriaLabel || t("select_visible_rows", "Select visible rows"))}"><span></span></label></th>`;
+}
+function renderDataSelection(row, column = selectionColumn()) {
+  const key = selectionKeyForRow(row, column);
+  const checked = selectionSetForColumn(column).has(key);
+  const inputAttr = typeof column.rowInputAttr === "function" ? column.rowInputAttr(key, row) : `data-row-select="${esc(key)}"`;
+  const ariaLabel = typeof column.rowAriaLabel === "function" ? column.rowAriaLabel(key, row) : `${t("select_row_for_export", "Select row for export")}: ${key}`;
+  return `<label class="select-box"><input type="checkbox" ${inputAttr} ${checked ? "checked" : ""} aria-label="${esc(ariaLabel)}"><span></span></label>`;
 }
 function renderRowSelection(row) {
-  const key = row.trial_key || "";
-  const checked = state.rowSelection.has(key);
-  return `<label class="select-box"><input type="checkbox" data-row-select="${esc(key)}" ${checked ? "checked" : ""} aria-label="${esc(t("select_row_for_export", "Select row for export"))}: ${esc(key)}"><span></span></label>`;
+  return renderDataSelection(row, selectionColumn());
 }
 function tableOptionValue(option, row, fallback = "") {
   return typeof option === "function" ? option(row) : (option || fallback);
@@ -294,11 +327,14 @@ function renderTableRow(row, columns, rows, options = {}) {
   return `<tr class="${esc(className)}"${attrs ? ` ${attrs}` : ""}${titleAttr}>${columns.map(column => renderDataCell(row, column, rows)).join("")}</tr>`;
 }
 function renderDataCell(row, column, rows) {
-  if (column.select || column.sourceSelect) return `<td class="select-col">${column.html(row)}</td>`;
-  const classes = [column.numeric ? "num" : "", column.metric ? metricCellShade(row, column, rows) : "", column.className || ""].filter(Boolean).join(" ");
+  if (column.select) return `<td class="select-col">${column.html ? column.html(row) : renderDataSelection(row, column)}</td>`;
+  if (column.sourceSelect) return `<td class="select-col">${column.html(row)}</td>`;
+  const className = typeof column.className === "function" ? column.className(row) : column.className;
+  const classes = [column.numeric ? "num" : "", column.metric ? metricCellShade(row, column, rows) : "", className || ""].filter(Boolean).join(" ");
   const html = column.html ? column.html(row) : esc(tableText(row, column));
   const title = column.cellTitle ? column.cellTitle(row) : "";
-  return `<td class="${classes}" ${title ? `title="${esc(title)}"` : ""}>${html}</td>`;
+  const attrs = typeof column.cellAttrs === "function" ? column.cellAttrs(row) : (column.cellAttrs || "");
+  return `<td class="${classes}"${attrs ? ` ${attrs}` : ""}${title ? ` title="${esc(title)}"` : ""}>${html}</td>`;
 }
 function metricCellShade(row, column, rows) {
   const value = column.value(row);

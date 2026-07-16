@@ -33,7 +33,10 @@ function renderLeaderboardSummaryActions() {
   const workspaceControls = typeof renderWorkspaceViewControls === "function"
     ? renderWorkspaceViewControls()
     : "";
-  return `<div class="leaderboard-summary-actions">${renderLeaderboardSummaryGroupControl()}${workspaceControls}</div>`;
+  const exportControl = serveMode()
+    ? `<button type="button" class="step-toggle-button leaderboard-summary-export" data-summary-export-xlsx ${leaderboardRows().length ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>`
+    : "";
+  return `<div class="leaderboard-summary-actions">${renderLeaderboardSummaryGroupControl()}${workspaceControls}${exportControl}</div>`;
 }
 
 function renderLeaderboardSummaryGroupControl() {
@@ -248,6 +251,12 @@ function bindLeaderboardSummaryControls(target) {
   });
   target.querySelectorAll("[data-summary-statistic]").forEach(button => {
     button.addEventListener("click", () => setLeaderboardSummaryStatistic(button.dataset.summaryStatistic));
+  });
+  target.querySelectorAll("[data-summary-export-xlsx]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      exportLeaderboardSummary();
+    });
   });
   if (typeof bindWorkspaceViewControls === "function") bindWorkspaceViewControls(target);
 }

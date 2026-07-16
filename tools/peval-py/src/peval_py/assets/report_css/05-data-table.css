@@ -291,6 +291,7 @@ th.num .filter-menu {
   margin-bottom:8px;
 }
 .filter-menu-head strong {
+  min-width:0;
   font:700 12px/1 var(--mono);
   text-transform:uppercase;
   color:var(--muted);
@@ -318,10 +319,9 @@ th.num .filter-menu {
 }
 .filter-menu-actions {
   display:flex;
-  justify-content:flex-end;
-  margin-top:10px;
-  padding-top:10px;
-  border-top:1px solid var(--rule);
+  flex:none;
+  align-items:center;
+  gap:6px;
 }
 .filter-apply {
   border:1px solid var(--ink);

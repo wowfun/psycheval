@@ -13,6 +13,7 @@ function scriptJson(id, fallback) {
 const I18N = scriptJson("peval-py-i18n", {});
 const TOKEN_ESTIMATES = scriptJson("peval-py-token-estimates", {});
 const RENDER_OPTIONS = scriptJson("peval-py-render-options", { mode: "report" });
+const WORKSPACE_SNAPSHOT = scriptJson("peval-py-workspace-snapshot", null);
 function t(key, fallback) { return Object.prototype.hasOwnProperty.call(I18N, key) ? I18N[key] : (fallback ?? key); }
 function statusLabel(value) {
   const raw = String(value || "-");
@@ -31,6 +32,8 @@ function fmtScore(value) { return hasMetricValue(value) ? Number(value).toLocale
 function hasMetricValue(value) { return value !== null && value !== undefined && value !== "" && !Number.isNaN(Number(value)); }
 function data() { return JSON.parse($("peval-py-data").textContent || "{}"); }
 function serveMode() { return RENDER_OPTIONS?.mode === "serve"; }
+function workspaceSnapshotMode() { return RENDER_OPTIONS?.mode === "workspace_snapshot"; }
+function workspaceDisplayMode() { return serveMode() || workspaceSnapshotMode(); }
 function initialAdapterDefaults() {
   return RENDER_OPTIONS?.adapter_defaults && typeof RENDER_OPTIONS.adapter_defaults === "object"
     ? { ...RENDER_OPTIONS.adapter_defaults }
@@ -39,10 +42,29 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerPage: { page: 1, page_size: 100, total: 0 }, catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", tags: [], agents: [], models: [], results: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: new Set(), dirty: false, opener: null }, reportReader: { openId: null, opener: null, width: null }, workspaceViews: [], workspaceViewSummaries: [], workspaceViewsLoaded: false, workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(), workspaceAppliedViewName: null, workspaceViewSave: { opener: null }, selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading), serveStartupPolling: false };
+const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerPage: { page: 1, page_size: 100, total: 0 }, catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: new Set(), dirty: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading), serveStartupPolling: false };
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";
+if (workspaceSnapshotMode()) {
+  const presentation = WORKSPACE_SNAPSHOT?.presentation || {};
+  state.leaderboardSummaryGroupBy = presentation.summary_group_by || "agent";
+  state.leaderboardSummaryTableOpen = Boolean(presentation.summary_table_open);
+  state.leaderboardSummaryStatistic = presentation.summary_statistic || "mean";
+  state.tables["workspace-views"] = {
+    sort: null,
+    direction: "asc",
+    filters: {
+      tags: listValue(presentation.workspace_view_filters?.tags),
+      models: listValue(presentation.workspace_view_filters?.models),
+      group_by: listValue(presentation.workspace_view_filters?.group_by),
+    },
+  };
+  state.selectedTrial = WORKSPACE_SNAPSHOT?.source_trial_keys?.[state.selectedSourceKey] || null;
+  if (presentation.selected_step_id !== null && presentation.selected_step_id !== undefined && state.selectedTrial) {
+    state.selectedStep = { trialKey: state.selectedTrial, stepId: String(presentation.selected_step_id) };
+  }
+}
 const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.report-cell-menu";
 const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.report-cell-menu[open]";
 function closeOpenSubmenus(except = null) {
@@ -68,7 +90,7 @@ function synthesizedReportRow(trajectory, meta, index = -1) {
   const totalToolCalls = hasMetricValue(finalMetric(metrics, "total_tool_calls")) ? Number(finalMetric(metrics, "total_tool_calls")) : 0;
   const totalToolErrors = hasMetricValue(finalMetric(metrics, "total_tool_errors")) ? Number(finalMetric(metrics, "total_tool_errors")) : 0;
   const agent = trajectory?.agent || {};
-  const source = serveMode() ? sourceForTrialIndex(index) : null;
+  const source = workspaceDisplayMode() ? sourceForTrialIndex(index) : null;
   return {
     trial_key: meta?.trial_key,
     session_id: trajectory?.session_id || "-",
@@ -153,7 +175,7 @@ function renderComparison() {
   }
   $("comparison").innerHTML = `
     <section class="leaderboard panel" aria-labelledby="leaderboard-title" id="leaderboard"></section>
-    ${rows.length > 1 || serveMode() ? `<section class="leaderboard-summary panel" aria-labelledby="leaderboard-summary-title" id="leaderboard-summary"></section>` : ""}
+    ${rows.length > 1 || workspaceDisplayMode() ? `<section class="leaderboard-summary panel" aria-labelledby="leaderboard-summary-title" id="leaderboard-summary"></section>` : ""}
     <section class="trajectory-overview panel" aria-labelledby="trajectory-overview-title" id="trajectory-overview"></section>
   `;
   renderComparisonPanels({ trace: false }, scrollState);

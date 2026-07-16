@@ -9,6 +9,85 @@ from peval_py.html.assets import load_asset_text
 
 
 class ServeCatalogUiTests(unittest.TestCase):
+    def test_archived_toggle_queries_target_catalog_and_can_return_from_empty_state(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required for report.js archived-toggle coverage")
+        asset = load_asset_text("report.js").rsplit("\nrender(data());", 1)[0]
+        script = r"""
+const vm = require("vm");
+const nodes = {
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve", sources: [] }) },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" }
+};
+const context = {
+  document: {
+    body: { classList: { add() {}, remove() {}, toggle() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+  },
+  window: { addEventListener() {} },
+  console, JSON, Number, String, Object, Math, Date, Set, Array, RegExp, URLSearchParams,
+  setTimeout(callback) { callback(); return 1; },
+  clearTimeout() {},
+};
+vm.createContext(context);
+vm.runInContext(__ASSET__, context);
+const result = vm.runInContext(`(async () => {
+  const active = normalizeCatalogRow({ source_key: "active-1", active: true, readable: true });
+  state.serveSources = [active];
+  state.catalogRows = [active];
+  state.catalogPage = { generation: 1, page: 1, page_size: 100, total: 1, facets: {} };
+  state.catalogQuery = { ...state.catalogQuery, state: "active", page: 1 };
+  state.serveSourceMode = "active";
+  const activeControls = renderServeSourceStateControls();
+  const requests = [];
+  const renders = [];
+  serveApi = async path => {
+    requests.push(path);
+    const target = new URLSearchParams(path.split("?", 2)[1]).get("state");
+    if (target === "archived") return { generation: 1, page: 1, page_size: 100, total: 0, facets: {}, items: [] };
+    return { generation: 1, page: 1, page_size: 100, total: 1, facets: {}, items: [active] };
+  };
+  renderServeSources = () => renders.push("sources");
+  renderComparison = () => renders.push("comparison");
+  setWorkspaceWriteControlsDisabled = () => {};
+  setServeStatus = () => {};
+  ensureCatalogDetail = async () => renders.push("detail");
+  await switchServeSourceMode("archived");
+  const emptyArchived = { mode: state.serveSourceMode, total: state.catalogPage.total, rows: state.catalogRows.length };
+  const archivedControls = renderServeSourceStateControls();
+  await switchServeSourceMode("active");
+  state.serveSourceMode = "all";
+  const allControls = renderServeSourceStateControls();
+  return JSON.stringify({ activeControls, archivedControls, allControls, requests, renders, emptyArchived, finalMode: state.serveSourceMode });
+})()`, context);
+Promise.resolve(result).then(value => console.log(value)).catch(error => { console.error(error && error.stack || error); process.exit(1); });
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        active_toggle = result["activeControls"].split("data-source-state-toggle", 1)[1].split(">", 1)[0]
+        archived_toggle = result["archivedControls"].split("data-source-state-toggle", 1)[1].split(">", 1)[0]
+        all_toggle = result["allControls"].split("data-source-state-toggle", 1)[1].split(">", 1)[0]
+        self.assertNotIn("disabled", active_toggle)
+        self.assertIn("checked", archived_toggle)
+        self.assertNotIn("disabled", archived_toggle)
+        self.assertIn("checked", all_toggle)
+        self.assertIn("disabled", all_toggle)
+        self.assertEqual(result["emptyArchived"], {"mode": "archived", "total": 0, "rows": 0})
+        catalog_requests = [path for path in result["requests"] if path.startswith("/api/catalog?")]
+        self.assertEqual(len(catalog_requests), 2)
+        self.assertIn("state=archived", catalog_requests[0])
+        self.assertIn("state=active", catalog_requests[1])
+        self.assertEqual(result["renders"], ["sources", "comparison", "detail"] * 2)
+        self.assertEqual(result["finalMode"], "all")
+
     def test_catalog_rows_default_detail_and_cross_page_selection(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required for report.js catalog state coverage")

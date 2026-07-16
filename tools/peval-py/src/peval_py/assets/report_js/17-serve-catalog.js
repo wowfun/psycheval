@@ -65,6 +65,11 @@ function metaFor(trialKey) {
 }
 
 function sourceForTrialKey(trialKey) {
+  if (workspaceSnapshotMode()) {
+    const sourceKey = Object.entries(WORKSPACE_SNAPSHOT?.source_trial_keys || {})
+      .find(([_key, reportTrialKey]) => String(reportTrialKey) === String(trialKey))?.[0];
+    return listValue(state.serveSources).find(source => source?.source_key === sourceKey) || null;
+  }
   if (!serveMode()) return null;
   const direct = listValue(state.serveSources).find(source => source?.source_key === trialKey);
   if (direct) return direct;
@@ -75,6 +80,7 @@ function sourceForTrialKey(trialKey) {
 }
 
 function sourceKeyForTrialKey(trialKey) {
+  if (workspaceSnapshotMode()) return sourceForTrialKey(trialKey)?.source_key || null;
   if (serveMode() && listValue(state.serveSources).some(source => source?.source_key === trialKey)) return trialKey;
   return sourceForTrialKey(trialKey)?.source_key || state.selectedSourceKey || null;
 }
@@ -85,6 +91,7 @@ function trialKeyForServeSource(sourceKey, view = state.view) {
 }
 
 function sourceForTrialIndex(index) {
+  if (workspaceSnapshotMode()) return index >= 0 ? listValue(state.serveSources)[index] || null : null;
   if (!serveMode() || index < 0) return null;
   return listValue(state.serveSources).find(source => source?.source_key === state.selectedSourceKey) || null;
 }
@@ -201,7 +208,7 @@ function renderLeaderboardPanelControls(rows) {
       <span>${esc(catalogPageLabel())}</span>
       <button type="button" class="step-toggle-button" data-catalog-next ${catalogPageEnd() >= state.catalogPage.total ? "disabled" : ""}>›</button>
       <span>${esc(String(t("selected_count", "{count} selected")).replace("{count}", String(selectedCount)))}</span>
-      <button type="button" class="step-toggle-button" data-catalog-clear-selection ${selectedCount ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button>
+      <button type="button" class="step-toggle-button" data-catalog-clear-conditions ${leaderboardConditionsAreDefault() ? "disabled" : ""}>${esc(t("clear_conditions", "Clear conditions"))}</button>
     </div>
   </div>`;
 }
@@ -235,11 +242,29 @@ function bindLeaderboardCatalogControls(target) {
     event.stopPropagation();
     loadCatalogPage({ page: Number(state.catalogQuery.page || 1) + 1 });
   });
-  target.querySelector("[data-catalog-clear-selection]")?.addEventListener("click", event => {
+  target.querySelector("[data-catalog-clear-conditions]")?.addEventListener("click", event => {
     event.stopPropagation();
-    state.rowSelection.clear();
-    renderComparisonPanels({ trace: false });
+    clearWorkspaceViewConditions();
   });
+}
+
+function leaderboardConditionsAreDefault() {
+  const query = state.catalogQuery || {};
+  const filters = tableControls("leaderboard").filters || {};
+  return state.workspaceViewSelection.size < 1
+    && !listValue(query.views).length
+    && normalizeServeSourceMode(query.state) === "active"
+    && !String(query.search || "")
+    && !listValue(query.tags).length
+    && !listValue(query.agents).length
+    && !listValue(query.models).length
+    && !listValue(query.results).length
+    && catalogSortKey(query.sort) === "last_turn_end"
+    && String(query.direction || "desc") === "desc"
+    && !Object.values(filters).some(value => listValue(value).length)
+    && state.leaderboardSummaryGroupBy === "agent"
+    && state.leaderboardSummaryStatistic === "mean"
+    && !state.leaderboardSummaryTableOpen;
 }
 
 function requestCatalogSort(key) {
@@ -284,6 +309,7 @@ function catalogQueryString(surface = "leaderboard") {
   listValue(query.agents).forEach(value => params.append("agent", value));
   listValue(query.models).forEach(value => params.append("model", value));
   listValue(query.results).forEach(value => params.append("result", value));
+  listValue(query.views).forEach(value => params.append("view", value));
   return params.toString();
 }
 
@@ -526,17 +552,68 @@ function exportCurrentScope(kind) {
     });
     return;
   }
+  if (kind === "workspace_html") {
+    const viewControls = tableControls("workspace-views");
+    const visibleViews = typeof workspaceViewRows === "function" ? workspaceViewRows() : [];
+    serveDownload("workspace_html", {
+      kind: "workspace_html",
+      query: {
+        state: state.catalogQuery.state || "active",
+        search: state.catalogQuery.search || "",
+        sort: state.catalogQuery.sort || "last_turn_end",
+        direction: state.catalogQuery.direction || "desc",
+        tags: listValue(state.catalogQuery.tags),
+        agents: listValue(state.catalogQuery.agents),
+        models: listValue(state.catalogQuery.models),
+        results: listValue(state.catalogQuery.results),
+        views: listValue(state.catalogQuery.views),
+      },
+      selected_source_keys: Array.from(state.rowSelection),
+      presentation: {
+        summary_group_by: state.leaderboardSummaryGroupBy,
+        summary_statistic: state.leaderboardSummaryStatistic,
+        summary_table_open: Boolean(state.leaderboardSummaryTableOpen),
+        selected_source_key: state.selectedSourceKey || null,
+        selected_step_id: state.selectedStep?.stepId ?? null,
+        visible_view_names: visibleViews.map(view => view.name),
+        workspace_view_filters: {
+          tags: listValue(viewControls.filters?.tags),
+          models: listValue(viewControls.filters?.models),
+          group_by: listValue(viewControls.filters?.group_by),
+        },
+        open_view_tables: visibleViews
+          .map(view => view.name)
+          .filter(name => state.workspaceViewTableOpen.has(name)),
+      },
+    }, "peval-workspace-snapshot.html");
+    return;
+  }
   const keys = state.rowSelection.size
     ? Array.from(state.rowSelection)
     : state.catalogRows.map(row => row.source_key).filter(Boolean);
   if (keys.length > 100) {
-    setServeStatus(t("serve_export_cell_limit", "JSON/HTML export is limited to 100 cells"), true);
+    setServeStatus(t("serve_export_cell_limit", "JSON export is limited to 100 cells"), true);
     return;
   }
   serveDownload(kind, { kind, source_keys: keys });
 }
 
-async function serveDownload(kind, body) {
+function exportLeaderboardSummary() {
+  if (!serveMode()) return;
+  const sourceKeys = leaderboardRows().map(row => row?.source_key).filter(Boolean);
+  if (!sourceKeys.length) return;
+  return serveDownload("summary_xlsx", {
+    kind: "summary_xlsx",
+    summary: {
+      scope: "leaderboard",
+      source_keys: sourceKeys,
+      group_by: state.leaderboardSummaryGroupBy,
+      statistic: state.leaderboardSummaryStatistic
+    }
+  }, "peval-leaderboard-summary.xlsx");
+}
+
+async function serveDownload(kind, body, requestedFilename = "") {
   try {
     const response = await fetch("/api/exports", {
       method: "POST",
@@ -549,7 +626,7 @@ async function serveDownload(kind, body) {
       throw new Error(payload?.error || response.statusText);
     }
     const blob = await response.blob();
-    const filename = kind === "xlsx" ? "peval-leaderboard.xlsx" : kind === "html" ? "peval-report.html" : "peval-report-v19.json";
+    const filename = requestedFilename || (kind === "xlsx" ? "peval-leaderboard.xlsx" : kind === "workspace_html" ? "peval-workspace-snapshot.html" : "peval-report-v19.json");
     downloadBlob(filename, blob.type || "application/octet-stream", blob);
   } catch (error) {
     setServeStatus(error.message || String(error), true);

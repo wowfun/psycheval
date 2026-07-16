@@ -25,7 +25,8 @@ function normalizedWorkspaceReports(reports = state.workspaceReports) {
       report_id: String(report.report_id),
       filename: String(report.filename),
       format: lower(report.format) === "html" ? "html" : "markdown",
-      source_keys: Array.from(new Set(listValue(report.source_keys).map(key => String(key || "").trim()).filter(Boolean)))
+      source_keys: Array.from(new Set(listValue(report.source_keys).map(key => String(key || "").trim()).filter(Boolean))),
+      preview_base64: typeof report.preview_base64 === "string" ? report.preview_base64 : "",
     }))
     .sort((left, right) => right.report_id.localeCompare(left.report_id, undefined, { numeric: true }));
 }
@@ -96,7 +97,7 @@ function renderAttachWorkspaceReportAction(rows = leaderboardRows()) {
 }
 
 function bindWorkspaceReportLeaderboardControls(target) {
-  if (!serveMode() || !target) return;
+  if (!workspaceDisplayMode() || !target) return;
   target.querySelectorAll("[data-workspace-report-control]").forEach(control => {
     control.addEventListener("click", event => event.stopPropagation());
   });
@@ -109,6 +110,7 @@ function bindWorkspaceReportLeaderboardControls(target) {
     });
   });
   target.querySelectorAll("[data-report-attach]").forEach(button => {
+    if (!serveMode()) return;
     button.addEventListener("click", event => {
       event.preventDefault();
       event.stopPropagation();
@@ -487,6 +489,8 @@ function renderWorkspaceReportReader() {
   const target = $("workspace-report-reader");
   const report = workspaceReportForId(state.reportReader.openId);
   if (!target || !report) return;
+  const previewUrl = workspaceSnapshotMode() ? workspaceSnapshotReportPreviewUrl(report) : workspaceReportPreviewPath(report);
+  const openTab = workspaceSnapshotMode() ? "" : `<a class="report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>`;
   target.innerHTML = `<div class="report-reader-panel" role="dialog" aria-modal="false" aria-labelledby="report-reader-title">
     <header class="report-reader-head">
       <div>
@@ -495,17 +499,25 @@ function renderWorkspaceReportReader() {
         <p class="copy">${esc(report.format.toUpperCase())} &middot; ${esc(reportMessage("report_sessions_count", "{count} sessions", { count: report.source_keys.length }))}</p>
       </div>
       <div class="report-reader-actions">
-        <a class="report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>
+        ${openTab}
         <button class="report-reader-close" type="button" data-report-reader-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
       </div>
     </header>
-    <iframe class="report-reader-frame" src="${workspaceReportPreviewPath(report)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+    <iframe class="report-reader-frame" src="${esc(previewUrl)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
   </div>
   <div class="report-reader-resize" data-report-reader-resize role="separator" aria-orientation="vertical" tabindex="0" aria-label="${esc(t("report_resize", "Resize report reader"))}"></div>`;
   target.hidden = false;
   document.body.classList.add("report-reader-open");
   bindWorkspaceReportReaderControls(target);
   focusSoon(target.querySelector?.("[data-report-reader-close]"));
+}
+
+function workspaceSnapshotReportPreviewUrl(report) {
+  if (state.reportReader.objectUrl) URL.revokeObjectURL?.(state.reportReader.objectUrl);
+  const binary = atob(report.preview_base64 || "");
+  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+  state.reportReader.objectUrl = URL.createObjectURL(new Blob([bytes], { type: "text/html; charset=utf-8" }));
+  return state.reportReader.objectUrl;
 }
 
 function bindWorkspaceReportReaderControls(target) {
@@ -596,6 +608,8 @@ function closeWorkspaceReportReader(options = {}) {
   const opener = state.reportReader.opener;
   state.reportReader.openId = null;
   state.reportReader.opener = null;
+  if (state.reportReader.objectUrl) URL.revokeObjectURL?.(state.reportReader.objectUrl);
+  state.reportReader.objectUrl = null;
   if (options.restoreFocus !== false) focusSoon(opener);
   return true;
 }
