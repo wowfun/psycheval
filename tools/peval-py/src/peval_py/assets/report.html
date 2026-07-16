@@ -11,12 +11,17 @@ __CSS__
 <body class="__BODY_CLASS__">
 <div class="workspace">
   __SERVE_SOURCE_MANAGER__
-  <section class="topline">
-    <h1>__TITLE__</h1>
-  </section>
-  <section id="report-notes"></section>
-  <section class="panel-stack" id="comparison"></section>
-  <section class="trace-panel" id="trace"></section>
+  <div class="workspace-content">
+    <main class="workspace-main">
+      <section class="topline">
+        <h1>__TITLE__</h1>
+      </section>
+      <section id="report-notes"></section>
+      <section class="panel-stack" id="comparison"></section>
+      <section class="trace-panel" id="trace"></section>
+    </main>
+    __SERVE_VIEWS_RAIL__
+  </div>
 </div>
 __SERVE_REPORT_UI__
 <aside class="step-drawer" id="step-drawer" hidden></aside>

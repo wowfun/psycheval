@@ -154,14 +154,17 @@ function filterOptions(column, rows) {
   const values = rows.flatMap(row => filterValues(row, column));
   return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
 }
-function setFilterValue(tableId, key, value, checked) {
+function setFilterValues(tableId, key, values) {
   const controls = tableControls(tableId);
+  const selected = Array.from(new Set(listValue(values).map(value => String(value))));
+  if (selected.length) controls.filters[key] = selected;
+  else delete controls.filters[key];
+}
+function setFilterValue(tableId, key, value, checked) {
   const selected = new Set(activeFilterValues(tableId, key));
   if (checked) selected.add(value);
   else selected.delete(value);
-  const values = Array.from(selected);
-  if (values.length) controls.filters[key] = values;
-  else delete controls.filters[key];
+  setFilterValues(tableId, key, Array.from(selected));
 }
 function clearFilter(tableId, key) {
   delete tableControls(tableId).filters[key];
@@ -259,13 +262,14 @@ function renderTableHeader(tableId, column, controls, rows = [], filterOptionsRo
 }
 function renderFilterControl(tableId, column, rows) {
   const selected = new Set(activeFilterValues(tableId, column.key));
-  const options = filterOptions(column, rows);
+  const options = Array.from(new Set([...filterOptions(column, rows), ...selected]))
+    .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
   const count = selected.size;
   const countText = count ? `<span class="filter-count">${esc(`${count} ${t("selected_count", "selected")}`)}</span>` : "";
   const optionHtml = options.length
     ? options.map(value => `<label class="filter-option"><input type="checkbox" data-filter-key="${esc(column.key)}" value="${esc(value)}" ${selected.has(value) ? "checked" : ""}><span>${esc(filterLabel(column, value))}</span></label>`).join("")
     : `<p class="filter-empty">${esc(t("no_matching_rows", "No matching rows"))}</p>`;
-  return `<details class="filter-control ${count ? "active" : ""}" data-filter-menu="${esc(column.key)}"><summary class="filter-button" aria-label="${esc(t("filter", "Filter"))} ${esc(column.label)}"><span class="filter-icon">&#9662;</span>${countText}</summary><div class="filter-menu"><div class="filter-menu-head"><strong>${esc(column.label)}</strong><button class="filter-clear" type="button" data-filter-clear="${esc(column.key)}" ${count ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button></div><div class="filter-options">${optionHtml}</div></div></details>`;
+  return `<details class="filter-control ${count ? "active" : ""}" data-filter-menu="${esc(column.key)}"><summary class="filter-button" aria-label="${esc(t("filter", "Filter"))} ${esc(column.label)}"><span class="filter-icon">&#9662;</span>${countText}</summary><div class="filter-menu"><div class="filter-menu-head"><strong>${esc(column.label)}</strong><button class="filter-clear" type="button" data-filter-clear="${esc(column.key)}" ${count ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button></div><div class="filter-options">${optionHtml}</div><div class="filter-menu-actions"><button class="filter-apply" type="button" data-filter-apply="${esc(column.key)}" disabled>${esc(t("apply", "Apply"))}</button></div></div></details>`;
 }
 function renderSelectionHeader(rows) {
   const visible = rows.filter(row => row?.trial_key);
@@ -324,25 +328,78 @@ function bindDataTableControls(root, tableId, onChange) {
   root.querySelectorAll("[data-filter-key]").forEach(input => {
     input.addEventListener("change", event => {
       event.stopPropagation();
-      setFilterValue(tableId, input.dataset.filterKey, input.value, input.checked);
-      if (serveMode() && tableId === "leaderboard") {
-        requestCatalogFacets();
-        return;
-      }
-      rerender();
+      const menu = dataTableFilterMenu(root, input.dataset.filterKey);
+      syncDataTableFilterDraft(menu, tableId, input.dataset.filterKey);
     });
   });
   root.querySelectorAll("[data-filter-clear]").forEach(button => {
     button.addEventListener("click", event => {
       event.stopPropagation();
-      clearFilter(tableId, button.dataset.filterClear);
+      const key = button.dataset.filterClear;
+      const menu = dataTableFilterMenu(root, key);
+      menu?.querySelectorAll?.("[data-filter-key]").forEach(input => { input.checked = false; });
+      syncDataTableFilterDraft(menu, tableId, key);
+    });
+  });
+  root.querySelectorAll("[data-filter-apply]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.stopPropagation();
+      const key = button.dataset.filterApply;
+      const menu = dataTableFilterMenu(root, key);
+      const values = dataTableFilterDraftValues(menu);
+      setFilterValues(tableId, key, values);
+      if (menu) menu.open = false;
       if (serveMode() && tableId === "leaderboard") {
-        requestCatalogFacets();
+        setDataTableFilterApplyDisabled(root, true);
+        const request = requestCatalogFacets();
+        if (request?.finally) request.finally(() => setDataTableFilterApplyDisabled(root, false));
         return;
       }
       rerender();
     });
   });
+  root.querySelectorAll("[data-filter-menu]").forEach(menu => {
+    menu.addEventListener("toggle", () => resetDataTableFilterDraft(menu, tableId));
+    menu.addEventListener("keydown", event => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      menu.open = false;
+      resetDataTableFilterDraft(menu, tableId);
+    });
+  });
+}
+function dataTableFilterMenu(root, key) {
+  return Array.from(root?.querySelectorAll?.("[data-filter-menu]") || [])
+    .find(menu => menu.dataset.filterMenu === key) || null;
+}
+function dataTableFilterDraftValues(menu) {
+  return Array.from(menu?.querySelectorAll?.("[data-filter-key]") || [])
+    .filter(input => input.checked)
+    .map(input => input.value);
+}
+function sameDataTableFilterValues(left, right) {
+  if (left.length !== right.length) return false;
+  const expected = new Set(right);
+  return left.every(value => expected.has(value));
+}
+function syncDataTableFilterDraft(menu, tableId, key) {
+  if (!menu) return;
+  const values = dataTableFilterDraftValues(menu);
+  const clear = menu.querySelector?.("[data-filter-clear]");
+  const apply = menu.querySelector?.("[data-filter-apply]");
+  if (clear) clear.disabled = values.length === 0;
+  if (apply) apply.disabled = sameDataTableFilterValues(values, activeFilterValues(tableId, key));
+}
+function resetDataTableFilterDraft(menu, tableId) {
+  if (!menu) return;
+  const key = menu.dataset.filterMenu;
+  const selected = new Set(activeFilterValues(tableId, key));
+  menu.querySelectorAll?.("[data-filter-key]").forEach(input => { input.checked = selected.has(input.value); });
+  syncDataTableFilterDraft(menu, tableId, key);
+}
+function setDataTableFilterApplyDisabled(root, disabled) {
+  root?.querySelectorAll?.("[data-filter-apply]").forEach(button => { button.disabled = disabled; });
 }
 function bindLeaderboardControls() {
   const target = $("leaderboard");

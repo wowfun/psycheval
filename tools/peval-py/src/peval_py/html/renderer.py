@@ -40,8 +40,9 @@ def render_html(
         render_options["loading"] = bool(loading)
         if load_error:
             render_options["load_error"] = load_error
+    title_key = "serve_title" if normalized_mode == "serve" else "title"
     payload = load_asset_text("report.html").replace("__LANG__", escape(normalized_locale))
-    payload = payload.replace("__TITLE__", escape(messages["title"]))
+    payload = payload.replace("__TITLE__", escape(messages[title_key]))
     payload = payload.replace("__BODY_CLASS__", escape(f"{normalized_mode}-mode"))
     payload = payload.replace(
         "__SERVE_SOURCE_MANAGER__",
@@ -58,6 +59,12 @@ def render_html(
     payload = payload.replace(
         "__SERVE_REPORT_UI__",
         render_serve_report_ui(messages) if normalized_mode == "serve" else "",
+    )
+    payload = payload.replace(
+        "__SERVE_VIEWS_RAIL__",
+        '<aside class="workspace-views" id="workspace-views" hidden data-serve-only></aside>'
+        if normalized_mode == "serve"
+        else "",
     )
     payload = payload.replace("__ECHARTS_SCRIPT__", render_echarts_script(normalized_mode))
     payload = payload.replace("__CSS__", load_asset_text("report.css"))

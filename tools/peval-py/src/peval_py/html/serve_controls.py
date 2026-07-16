@@ -67,6 +67,13 @@ def render_serve_report_ui(messages: dict[str, str]) -> str:
             "CLOSE": escape(messages["close"]),
             "REPORT_INVENTORY": escape(messages["report_inventory"]),
             "REPORT_BINDINGS": escape(messages["report_bindings"]),
+            "SAVE_VIEW": escape(messages["save_view"]),
+            "VIEW_CURRENT_CONFIGURATION": escape(messages["view_current_configuration"]),
+            "SAVED_VIEWS": escape(messages["saved_views"]),
+            "VIEW_NAME": escape(messages["view_name"]),
+            "VIEW_NOTES": escape(messages["view_notes"]),
+            "SAVE": escape(messages["save"]),
+            "CANCEL": escape(messages["cancel"]),
         },
     )
 

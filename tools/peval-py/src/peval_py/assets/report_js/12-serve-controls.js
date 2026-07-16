@@ -2,6 +2,9 @@ function bindGlobalControls() {
   if (state.boundGlobalControls) return;
   document.addEventListener("keydown", event => {
     if (event.defaultPrevented) return;
+    if (event.key === "Escape" && closeWorkspaceViewSaveDialog()) {
+      return;
+    }
     if (event.key === "Escape" && closeWorkspaceReportManager()) {
       return;
     }
@@ -48,7 +51,10 @@ function bindGlobalControls() {
   window.addEventListener("resize", () => {
     if (state.timelineChart) state.timelineChart.resize();
   });
-  if (serveMode()) bindServeSourceControls();
+  if (serveMode()) {
+    bindServeSourceControls();
+    bindWorkspaceViewDialog();
+  }
   state.boundGlobalControls = true;
 }
 function bindServeSourceControls() {

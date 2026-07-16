@@ -145,7 +145,7 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 )
                 self.assertEqual(comparison["reportRows"], 0)
                 self.assertFalse(comparison["hasLeaderboard"])
-                self.assertFalse(comparison["hasSummary"])
+                self.assertTrue(comparison["hasSummary"])
                 self.assertFalse(comparison["hasOverview"])
             finally:
                 server.shutdown()
@@ -436,7 +436,8 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 status, _, html = request_text(port, "/")
                 self.assertEqual(status, 200)
                 self.assertIn('<html lang="zh-CN">', html)
-                self.assertIn("<h1>Agent 轨迹报告</h1>", html)
+                self.assertIn("<title>评测工作台</title>", html)
+                self.assertIn("<h1>评测工作台</h1>", html)
 
                 status, _, body = request_json(
                     port,

@@ -5,10 +5,12 @@ function renderLeaderboardSummary(rows = leaderboardRows()) {
   if (!visibleRows.length) {
     target.innerHTML = `
       <div class="panel-head leaderboard-summary-head">
-        <h2 id="leaderboard-summary-title">${esc(t("leaderboard_summary", "Leaderboard Summary"))}</h2>
+        <div><h2 id="leaderboard-summary-title">${esc(t("leaderboard_summary", "Leaderboard Summary"))}</h2></div>
+        ${renderLeaderboardSummaryActions()}
       </div>
       <p class="leaderboard-summary-empty">${esc(t("leaderboard_summary_empty", "No visible rows to summarize."))}</p>
     `;
+    bindLeaderboardSummaryControls(target);
     return;
   }
 
@@ -19,12 +21,19 @@ function renderLeaderboardSummary(rows = leaderboardRows()) {
         <h2 id="leaderboard-summary-title">${esc(t("leaderboard_summary", "Leaderboard Summary"))}</h2>
         <p>${esc(t("leaderboard_summary_hint", "Compare one statistic at a time; expand the table for the full distribution."))}</p>
       </div>
-      ${renderLeaderboardSummaryGroupControl()}
+      ${renderLeaderboardSummaryActions()}
     </div>
     ${renderLeaderboardSummaryTableDisclosure(groups)}
     ${state.leaderboardSummaryGroupBy === "overall" ? "" : renderLeaderboardSummaryCharts(groups)}
   `;
   bindLeaderboardSummaryControls(target);
+}
+
+function renderLeaderboardSummaryActions() {
+  const workspaceControls = typeof renderWorkspaceViewControls === "function"
+    ? renderWorkspaceViewControls()
+    : "";
+  return `<div class="leaderboard-summary-actions">${renderLeaderboardSummaryGroupControl()}${workspaceControls}</div>`;
 }
 
 function renderLeaderboardSummaryGroupControl() {
@@ -240,6 +249,7 @@ function bindLeaderboardSummaryControls(target) {
   target.querySelectorAll("[data-summary-statistic]").forEach(button => {
     button.addEventListener("click", () => setLeaderboardSummaryStatistic(button.dataset.summaryStatistic));
   });
+  if (typeof bindWorkspaceViewControls === "function") bindWorkspaceViewControls(target);
 }
 
 function setLeaderboardSummaryGroupBy(value) {

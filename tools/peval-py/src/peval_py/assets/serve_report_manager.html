@@ -24,3 +24,27 @@
     </section>
   </div>
   <aside class="report-reader" id="workspace-report-reader" hidden data-serve-only></aside>
+  <div class="view-save-backdrop" data-view-save-dialog hidden data-serve-only>
+    <section class="view-save-dialog" role="dialog" aria-modal="true" aria-labelledby="view-save-title">
+      <header class="view-save-head">
+        <h2 id="view-save-title">__SAVE_VIEW__</h2>
+        <button type="button" data-view-save-cancel aria-label="__CANCEL__">__CANCEL__</button>
+      </header>
+      <form data-view-save-form>
+        <section class="view-current-configuration" aria-labelledby="view-current-configuration-title">
+          <h3 id="view-current-configuration-title">__VIEW_CURRENT_CONFIGURATION__</h3>
+          <dl data-view-current-configuration></dl>
+        </section>
+        <label>__VIEW_NAME__
+          <input name="name" autocomplete="off" required maxlength="120" data-view-name-input>
+        </label>
+        <label>__VIEW_NOTES__
+          <textarea name="notes" rows="7" data-view-notes-input></textarea>
+        </label>
+        <div class="view-save-actions">
+          <button type="button" data-view-save-cancel>__CANCEL__</button>
+          <button type="submit" class="step-toggle-button">__SAVE__</button>
+        </div>
+      </form>
+    </section>
+  </div>

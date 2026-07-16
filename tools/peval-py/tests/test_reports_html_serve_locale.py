@@ -80,6 +80,8 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         compact_serve_html = compact_css_text(serve_html)
 
         self.assertIn('<body class="report-mode">', static_html)
+        self.assertIn("<title>Agent Trajectory Report</title>", static_html)
+        self.assertIn("<h1>Agent Trajectory Report</h1>", static_html)
         self.assertNotIn('class="serve-import-panel"', static_html)
         self.assertNotIn('class="source-manager-modal"', static_html)
         self.assertNotIn('<form class="source-form"', static_html)
@@ -106,6 +108,10 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
             {"opencode": "/tmp/opencode.db"},
         )
         self.assertIn('<body class="serve-mode">', serve_html)
+        self.assertIn("<title>Eval Workspace</title>", serve_html)
+        self.assertIn("<h1>Eval Workspace</h1>", serve_html)
+        self.assertIn("<title>评测工作台</title>", zh_serve_html)
+        self.assertIn("<h1>评测工作台</h1>", zh_serve_html)
         self.assertIn('/assets/echarts/6.0.0/echarts.min.js', serve_html)
         self.assertIn(
             "this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/echarts@6.0.0/dist/echarts.min.js'",
@@ -331,6 +337,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         zh_html = render_html(report, locale="zh-CN")
 
         self.assertIn('<html lang="en">', english_html)
+        self.assertIn("<title>Agent Trajectory Report</title>", english_html)
         self.assertIn("<h1>Agent Trajectory Report</h1>", english_html)
         self.assertIn("Leaderboard", english_html)
         self.assertIn("Leaderboard Summary", english_html)
@@ -356,6 +363,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('"agent": "Agent"', english_html)
         self.assertIn('"filter": "Filter"', english_html)
         self.assertIn('"clear": "Clear"', english_html)
+        self.assertIn('"apply": "Apply"', english_html)
         self.assertIn('"selected_count": "selected"', english_html)
         self.assertIn('"step_details": "Step details"', english_html)
         self.assertIn('"open_step_details": "Open step details"', english_html)
@@ -365,6 +373,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertNotIn("visible_heatmap", english_html)
 
         self.assertIn('<html lang="zh-CN">', zh_html)
+        self.assertIn("<title>Agent 轨迹报告</title>", zh_html)
         self.assertIn("<h1>Agent 轨迹报告</h1>", zh_html)
         self.assertIn('"leaderboard": "Leaderboard"', zh_html)
         self.assertIn('"leaderboard_summary": "Leaderboard 汇总"', zh_html)
@@ -388,6 +397,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('"trajectory_overview": "轨迹概览"', zh_html)
         self.assertIn('"filter": "筛选"', zh_html)
         self.assertIn('"clear": "清除"', zh_html)
+        self.assertIn('"apply": "应用"', zh_html)
         self.assertIn('"selected_count": "已选"', zh_html)
         self.assertIn('"step_details": "Step 详情"', zh_html)
         self.assertIn('"open_step_details": "打开 Step 详情"', zh_html)

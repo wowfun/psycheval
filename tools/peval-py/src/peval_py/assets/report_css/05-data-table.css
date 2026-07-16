@@ -316,6 +316,27 @@ th.num .filter-menu {
   display:grid;
   gap:7px;
 }
+.filter-menu-actions {
+  display:flex;
+  justify-content:flex-end;
+  margin-top:10px;
+  padding-top:10px;
+  border-top:1px solid var(--rule);
+}
+.filter-apply {
+  border:1px solid var(--ink);
+  border-radius:999px;
+  background:var(--ink);
+  color:var(--surface);
+  min-height:30px;
+  padding:0 12px;
+  font:700 12px/1 var(--mono);
+  cursor:pointer;
+}
+.filter-apply:disabled {
+  opacity:.45;
+  cursor:default;
+}
 .filter-option {
   display:flex;
   align-items:flex-start;

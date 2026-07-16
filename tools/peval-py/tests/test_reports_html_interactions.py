@@ -1480,6 +1480,304 @@ console.log(result);
         self.assertEqual(result["subsetAnalysisKeys"], ["trial:one", "trial:two"])
         self.assertEqual(result["legacyRowCount"], 0)
 
+    def test_data_table_filters_stage_multiple_values_until_apply(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        self.assertIn("\nrender(data());", asset)
+        asset = asset.rsplit("\nrender(data());", 1)[0]
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+function control(dataset = {}) {
+  return {
+    dataset,
+    checked: false,
+    disabled: false,
+    open: false,
+    value: "",
+    listeners: {},
+    addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); },
+    dispatch(type, event = {}) {
+      const payload = {
+        key: event.key,
+        defaultPrevented: false,
+        stopped: false,
+        preventDefault() { this.defaultPrevented = true; },
+        stopPropagation() { this.stopped = true; },
+      };
+      (this.listeners[type] || []).forEach(handler => handler(payload));
+      return payload;
+    },
+  };
+}
+const passed = control({ filterKey: "status" });
+passed.value = "passed";
+passed.checked = true;
+const failed = control({ filterKey: "status" });
+failed.value = "failed";
+const clear = control({ filterClear: "status" });
+const apply = control({ filterApply: "status" });
+const menu = control({ filterMenu: "status" });
+menu.open = true;
+menu.querySelectorAll = selector => selector === "[data-filter-key]" ? [passed, failed] : [];
+menu.querySelector = selector => selector === "[data-filter-apply]" ? apply : null;
+const root = {
+  querySelectorAll(selector) {
+    if (selector === "[data-filter-key]") return [passed, failed];
+    if (selector === "[data-filter-clear]") return [clear];
+    if (selector === "[data-filter-apply]") return [apply];
+    if (selector === "[data-filter-menu]") return [menu];
+    return [];
+  },
+};
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-i18n": { textContent: JSON.stringify({ apply: "Apply" }) },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "report" }) },
+};
+const context = {
+  document: {
+    body: { classList: { add() {}, remove() {}, toggle() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+  },
+  window: { addEventListener() {} },
+  console,
+  JSON,
+  Number,
+  String,
+  Object,
+  Math,
+  Date,
+  Set,
+  Array,
+  RegExp,
+  root,
+  menu,
+  passed,
+  failed,
+  clear,
+  apply,
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+const result = vm.runInContext(`(() => {
+  tableControls("leaderboard").filters.status = ["passed"];
+  const column = { key: "status", label: "Result", filterable: true, value: row => row.status };
+  tableControls("preview").filters.status = ["passed", "missing"];
+  const markup = renderFilterControl("preview", column, [{ status: "passed" }]);
+  let renderCount = 0;
+  bindDataTableControls(root, "leaderboard", () => { renderCount += 1; });
+
+  failed.checked = true;
+  failed.dispatch("change");
+  const staged = {
+    committed: activeFilterValues("leaderboard", "status"),
+    renderCount,
+    menuOpen: menu.open,
+  };
+
+  clear.dispatch("click");
+  const clearedDraft = {
+    checked: [passed.checked, failed.checked],
+    committed: activeFilterValues("leaderboard", "status"),
+    renderCount,
+  };
+
+  menu.open = false;
+  menu.dispatch("toggle");
+  const discarded = { checked: [passed.checked, failed.checked] };
+
+  menu.open = true;
+  menu.dispatch("toggle");
+  failed.checked = true;
+  apply.dispatch("click");
+  const applied = {
+    committed: activeFilterValues("leaderboard", "status"),
+    renderCount,
+    menuOpen: menu.open,
+  };
+
+  menu.open = true;
+  failed.checked = false;
+  const escape = menu.dispatch("keydown", { key: "Escape" });
+  return JSON.stringify({
+    markup,
+    staged,
+    clearedDraft,
+    discarded,
+    applied,
+    escaped: {
+      checked: [passed.checked, failed.checked],
+      menuOpen: menu.open,
+      defaultPrevented: escape.defaultPrevented,
+      stopped: escape.stopped,
+    },
+  });
+})()`, context);
+console.log(result);
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertIn('data-filter-apply="status"', result["markup"])
+        self.assertIn('value="missing" checked', result["markup"])
+        self.assertEqual(result["staged"]["committed"], ["passed"])
+        self.assertEqual(result["staged"]["renderCount"], 0)
+        self.assertTrue(result["staged"]["menuOpen"])
+        self.assertEqual(result["clearedDraft"]["checked"], [False, False])
+        self.assertEqual(result["clearedDraft"]["committed"], ["passed"])
+        self.assertEqual(result["clearedDraft"]["renderCount"], 0)
+        self.assertEqual(result["discarded"]["checked"], [True, False])
+        self.assertEqual(result["applied"]["committed"], ["passed", "failed"])
+        self.assertEqual(result["applied"]["renderCount"], 1)
+        self.assertFalse(result["applied"]["menuOpen"])
+        self.assertEqual(result["escaped"]["checked"], [True, True])
+        self.assertFalse(result["escaped"]["menuOpen"])
+        self.assertTrue(result["escaped"]["defaultPrevented"])
+        self.assertTrue(result["escaped"]["stopped"])
+
+    def test_serve_data_table_filter_apply_requests_all_values_once(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        self.assertIn("\nrender(data());", asset)
+        asset = asset.rsplit("\nrender(data());", 1)[0]
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+function control(dataset = {}) {
+  return {
+    dataset,
+    checked: false,
+    disabled: false,
+    open: false,
+    value: "",
+    listeners: {},
+    addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); },
+    dispatch(type) {
+      const event = { stopPropagation() {}, preventDefault() {} };
+      (this.listeners[type] || []).forEach(handler => handler(event));
+    },
+  };
+}
+const alpha = control({ filterKey: "source_tags" });
+alpha.value = "alpha";
+alpha.checked = true;
+const beta = control({ filterKey: "source_tags" });
+beta.value = "beta";
+beta.checked = true;
+const apply = control({ filterApply: "source_tags" });
+const menu = control({ filterMenu: "source_tags" });
+menu.open = true;
+menu.querySelectorAll = selector => selector === "[data-filter-key]" ? [alpha, beta] : [];
+menu.querySelector = selector => selector === "[data-filter-apply]" ? apply : null;
+const root = {
+  querySelectorAll(selector) {
+    if (selector === "[data-filter-key]") return [alpha, beta];
+    if (selector === "[data-filter-apply]") return [apply];
+    if (selector === "[data-filter-menu]") return [menu];
+    return [];
+  },
+};
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve" }) },
+};
+const context = {
+  document: {
+    body: { classList: { add() {}, remove() {}, toggle() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+  },
+  window: { addEventListener() {} },
+  console,
+  JSON,
+  Number,
+  String,
+  Object,
+  Math,
+  Date,
+  Set,
+  Array,
+  RegExp,
+  Promise,
+  root,
+  menu,
+  apply,
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+const result = vm.runInContext(`(async () => {
+  let resolveRequest;
+  const pending = new Promise(resolve => { resolveRequest = resolve; });
+  const calls = [];
+  loadCatalogPage = (changes, options) => {
+    calls.push({ changes, options });
+    return pending;
+  };
+  bindDataTableControls(root, "leaderboard", () => {});
+  apply.dispatch("click");
+  const during = {
+    calls,
+    committed: activeFilterValues("leaderboard", "source_tags"),
+    menuOpen: menu.open,
+    applyDisabled: apply.disabled,
+  };
+  resolveRequest();
+  await pending;
+  await Promise.resolve();
+  return JSON.stringify({ during, applyDisabledAfter: apply.disabled });
+})()`, context);
+result.then(value => console.log(value)).catch(error => { console.error(error); process.exit(1); });
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertEqual(
+            result["during"]["calls"],
+            [
+                {
+                    "changes": {
+                        "page": 1,
+                        "tags": ["alpha", "beta"],
+                        "agents": [],
+                        "models": [],
+                        "results": [],
+                    },
+                    "options": {"force": True},
+                }
+            ],
+        )
+        self.assertEqual(result["during"]["committed"], ["alpha", "beta"])
+        self.assertFalse(result["during"]["menuOpen"])
+        self.assertTrue(result["during"]["applyDisabled"])
+        self.assertFalse(result["applyDisabledAfter"])
+
     def test_leaderboard_summary_uses_filtered_visible_rows(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -3777,6 +4075,424 @@ vm.runInContext(`(async () => {
             ],
         )
         self.assertEqual(result["remaining"], 0)
+
+    def test_saved_views_render_independent_rail_cards_and_apply_full_query(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        self.assertIn("\nrender(data());", asset)
+        asset = asset.rsplit("\nrender(data());", 1)[0]
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+function node() {
+  return {
+    hidden: true,
+    innerHTML: "",
+    classList: { toggle() {}, add() {}, remove() {} },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+  };
+}
+const rail = node();
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve" }) },
+  "workspace-views": rail,
+};
+const documentStub = {
+  body: { classList: { toggle() {}, add() {}, remove() {} } },
+  addEventListener() {},
+  getElementById(id) { return nodes[id] || null; },
+  querySelector() { return null; },
+  querySelectorAll() { return []; },
+};
+const context = {
+  document: documentStub,
+  window: { addEventListener() {} },
+  console,
+  JSON,
+  Number,
+  String,
+  Object,
+  Math,
+  Date,
+  Set,
+  Array,
+  RegExp,
+  rail,
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+const result = vm.runInContext(`(async () => {
+  const metric = (key, type, mean) => ({ key, type, count: 2, mean, distribution: { min: mean, q1: mean, p50: mean, q3: mean, p95: mean, max: mean } });
+  const metrics = () => [metric("duration_ms", "duration", 1200), metric("tokens", "number", 8), metric("turns", "number", 2), metric("model_duration_ms", "duration", 700), metric("total_tool_calls", "number", 3), metric("tool_error_rate", "percent", 0.25)];
+  state.workspaceViews = [
+    { name: "Agent slice", filters: { state: "active", search: "", tags: ["daily"], agents: ["alpha"], models: [], results: ["passed"] }, group_by: "agent", notes: "Context note." },
+    { name: "Focused model", filters: { state: "archived", search: "error", tags: [], agents: [], models: ["m1"], results: [] }, group_by: "model", notes: "" },
+  ];
+  state.workspaceViewSummaries = [
+    { name: "Agent slice", matched_count: 2, groups: [{ key: "alpha", label: "alpha", count: 2, metrics: metrics() }] },
+    { name: "Focused model", matched_count: 2, groups: [{ key: "m1", label: "m1", count: 2, metrics: metrics() }] },
+  ];
+  const controls = renderWorkspaceViewControls();
+  renderWorkspaceViewRail();
+  const collapsedRail = rail.innerHTML;
+  toggleWorkspaceViewTable("Agent slice");
+  const firstTableOpenRail = rail.innerHTML;
+  toggleWorkspaceViewTable("Focused model");
+  const bothTablesOpenRail = rail.innerHTML;
+  const probe = {};
+  loadCatalogPage = async (changes, options) => { probe.changes = changes; probe.options = options; };
+  state.rowSelection.add("old-row");
+  state.sourceSelection.add("old-source");
+  state.selectedSourceKey = "old-source";
+  state.selectedTrial = "old-trial";
+  state.selectedStep = { stepId: "old" };
+  await applyWorkspaceView("Focused model");
+  const applyQuery = probe.changes;
+  const appliedRail = rail.innerHTML;
+  await cancelWorkspaceViewApplication();
+  const cancelQuery = probe.changes;
+  const canceledRail = rail.innerHTML;
+  return JSON.stringify({
+    controls,
+    railHidden: rail.hidden,
+    railHtml: rail.innerHTML,
+    collapsedRail,
+    firstTableOpenRail,
+    bothTablesOpenRail,
+    applyQuery,
+    cancelQuery,
+    appliedRail,
+    canceledRail,
+    force: probe.options.force,
+    groupBy: state.leaderboardSummaryGroupBy,
+    summaryTableOpen: state.leaderboardSummaryTableOpen,
+    statistic: state.leaderboardSummaryStatistic,
+    search: state.search,
+    rowSelection: state.rowSelection.size,
+    sourceSelection: state.sourceSelection.size,
+    selectedSourceKey: state.selectedSourceKey,
+    selectedTrial: state.selectedTrial,
+    selectedStep: state.selectedStep,
+    table: state.tables.leaderboard,
+  });
+})()`, context);
+result.then(value => console.log(value)).catch(error => { console.error(error); process.exit(1); });
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertIn('data-view-save', result["controls"])
+        self.assertNotIn("workspace-view-menu", result["controls"])
+        self.assertNotIn("data-view-apply", result["controls"])
+        self.assertFalse(result["railHidden"])
+        self.assertIn("Agent slice", result["railHtml"])
+        self.assertIn("Focused model", result["railHtml"])
+        self.assertIn("Context note.", result["railHtml"])
+        self.assertIn("Source: archived", result["railHtml"])
+        self.assertIn('data-view-chart="tokens"', result["railHtml"])
+        self.assertEqual(result["collapsedRail"].count('aria-expanded="false"'), 2)
+        self.assertEqual(result["firstTableOpenRail"].count('aria-expanded="true"'), 1)
+        self.assertEqual(result["bothTablesOpenRail"].count('aria-expanded="true"'), 2)
+        self.assertIn("data-view-cancel-application disabled", result["collapsedRail"])
+        self.assertIn("data-view-cancel-application", result["appliedRail"])
+        self.assertNotIn("data-view-cancel-application disabled", result["appliedRail"])
+        self.assertIn("data-view-cancel-application disabled", result["canceledRail"])
+        self.assertEqual(
+            result["applyQuery"],
+            {
+                "state": "archived",
+                "page": 1,
+                "page_size": 100,
+                "search": "error",
+                "sort": "last_turn_end",
+                "direction": "desc",
+                "tags": [],
+                "agents": [],
+                "models": ["m1"],
+                "results": [],
+            },
+        )
+        self.assertTrue(result["force"])
+        self.assertEqual(
+            result["cancelQuery"],
+            {
+                "state": "active",
+                "page": 1,
+                "page_size": 100,
+                "search": "",
+                "sort": "last_turn_end",
+                "direction": "desc",
+                "tags": [],
+                "agents": [],
+                "models": [],
+                "results": [],
+            },
+        )
+        self.assertEqual(result["groupBy"], "agent")
+        self.assertFalse(result["summaryTableOpen"])
+        self.assertEqual(result["statistic"], "mean")
+        self.assertEqual(
+            result["search"],
+            {"query": "", "scope": "visible", "normalSourceMode": "active"},
+        )
+        self.assertEqual(result["rowSelection"], 0)
+        self.assertEqual(result["sourceSelection"], 0)
+        self.assertIsNone(result["selectedSourceKey"])
+        self.assertIsNone(result["selectedTrial"])
+        self.assertIsNone(result["selectedStep"])
+        self.assertEqual(
+            result["table"],
+            {
+                "sort": "finished_at_ms",
+                "direction": "desc",
+                "filters": {
+                    "source_tags": [],
+                    "agent": [],
+                    "model": [],
+                    "status": [],
+                },
+            },
+        )
+
+    def test_saved_view_save_coalesces_stale_refresh_and_renders_singleton_rail(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        self.assertIn("\nrender(data());", asset)
+        asset = asset.rsplit("\nrender(data());", 1)[0]
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+const nameInput = { value: "Daily" };
+const notesInput = { value: "Review this cohort." };
+const dialog = {
+  hidden: false,
+  querySelector(selector) {
+    if (selector === "[data-view-name-input]") return nameInput;
+    if (selector === "[data-view-notes-input]") return notesInput;
+    return null;
+  },
+};
+const rail = {
+  hidden: true,
+  innerHTML: "",
+  classList: { toggle() {}, add() {}, remove() {} },
+  querySelector() { return null; },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+let resolveStale;
+const staleList = new Promise(resolve => { resolveStale = resolve; });
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve" }) },
+  "workspace-views": rail,
+};
+const context = {
+  document: {
+    body: { classList: { toggle() {}, add() {}, remove() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector(selector) { return selector === "[data-view-save-dialog]" ? dialog : null; },
+    querySelectorAll() { return []; },
+  },
+  window: { addEventListener() {} },
+  console,
+  JSON,
+  Number,
+  String,
+  Object,
+  Math,
+  Date,
+  Set,
+  Array,
+  RegExp,
+  Promise,
+  rail,
+  dialog,
+  staleList,
+  resolveStale,
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+const result = vm.runInContext(`(async () => {
+  const view = { name: "Daily", filters: {}, group_by: "agent", notes: "Review this cohort." };
+  const probe = { listCalls: 0, status: null };
+  serveApi = async (path, options = {}) => {
+    if (path === "/api/views" && options.method === "POST") return { views: [view] };
+    if (path === "/api/views") {
+      probe.listCalls += 1;
+      return probe.listCalls === 1 ? staleList : { views: [view] };
+    }
+    if (path === "/api/views/summary") {
+      return { generation: 7, views: [{ name: "Daily", matched_count: 1, groups: [] }] };
+    }
+    throw new Error("unexpected request: " + path);
+  };
+  setServeStatus = (message, error) => { probe.status = { message, error: Boolean(error) }; };
+  const initialRefresh = refreshWorkspaceViews();
+  await Promise.resolve();
+  const saved = saveWorkspaceView(dialog);
+  await Promise.resolve();
+  resolveStale({ views: [] });
+  await Promise.all([initialRefresh, saved]);
+  return JSON.stringify({
+    listCalls: probe.listCalls,
+    names: state.workspaceViews.map(view => view.name),
+    summaries: state.workspaceViewSummaries,
+    railHidden: rail.hidden,
+    railHtml: rail.innerHTML,
+    status: probe.status,
+  });
+})()`, context);
+result.then(value => console.log(value)).catch(error => { console.error(error); process.exit(1); });
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertEqual(result["listCalls"], 2)
+        self.assertEqual(result["names"], ["Daily"])
+        self.assertEqual(result["summaries"], [{"name": "Daily", "matched_count": 1, "groups": []}])
+        self.assertFalse(result["railHidden"])
+        self.assertIn("Daily", result["railHtml"])
+        self.assertIn("1 matching sessions", result["railHtml"])
+        self.assertIn('data-view-table-toggle="Daily" aria-expanded="false"', result["railHtml"])
+        self.assertNotIn("workspace-view-menu", result["railHtml"])
+        self.assertEqual(result["status"], {"message": "View saved", "error": False})
+
+    def test_saved_view_dialog_confirms_then_retries_atomic_overwrite(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        self.assertIn("\nrender(data());", asset)
+        asset = asset.rsplit("\nrender(data());", 1)[0]
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+const nameInput = { value: "Daily" };
+const notesInput = { value: "Original notes" };
+const configuration = { innerHTML: "" };
+const dialog = {
+  hidden: true,
+  dataset: {},
+  querySelector(selector) {
+    if (selector === "[data-view-name-input]") return nameInput;
+    if (selector === "[data-view-notes-input]") return notesInput;
+    if (selector === "[data-view-current-configuration]") return configuration;
+    return null;
+  },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-i18n": { textContent: JSON.stringify({ view_overwrite_confirm: "Replace {name}?", view_saved: "Saved" }) },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "serve" }) },
+};
+const context = {
+  document: {
+    body: { classList: { add() {}, remove() {}, toggle() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector(selector) { return selector === "[data-view-save-dialog]" ? dialog : null; },
+    querySelectorAll() { return []; },
+  },
+  window: { addEventListener() {}, confirm(message) { probe.confirm = message; return true; } },
+  console,
+  JSON,
+  Number,
+  String,
+  Object,
+  Math,
+  Date,
+  Set,
+  Array,
+  RegExp,
+  dialog,
+  configuration,
+  nameInput,
+  notesInput,
+};
+const probe = { calls: [] };
+context.probe = probe;
+vm.createContext(context);
+vm.runInContext(asset, context);
+const result = vm.runInContext(`(async () => {
+  state.catalogQuery = { state: "active", search: "needle", tags: ["daily"], agents: ["alpha"], models: [], results: ["passed"] };
+  state.leaderboardSummaryGroupBy = "agent";
+  openWorkspaceViewSaveDialog();
+  const savedConfiguration = configuration.innerHTML;
+  nameInput.value = "Daily";
+  notesInput.value = "Original notes";
+  serveApi = async (path, options) => {
+    probe.calls.push({ path, body: options.body });
+    if (probe.calls.length === 1) throw new Error("saved view already exists: Daily");
+    return { views: [{ name: "Daily", filters: options.body.filters, group_by: "agent", notes: "Original notes" }] };
+  };
+  refreshWorkspaceViews = async (...args) => { probe.refreshArgs = args; };
+  setServeStatus = (message, error) => { probe.status = { message, error: Boolean(error) }; };
+  await saveWorkspaceView(dialog);
+  return JSON.stringify({ calls: probe.calls, confirm: probe.confirm, refreshArgs: probe.refreshArgs, status: probe.status, hidden: dialog.hidden, views: state.workspaceViews, savedConfiguration });
+})()`, context);
+result.then(value => console.log(value)).catch(error => { console.error(error); process.exit(1); });
+""".replace("__ASSET__", json.dumps(asset))
+        node = subprocess.run(
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertEqual(result["confirm"], "Replace Daily?")
+        self.assertIn("<dt>Search sessions</dt><dd>needle</dd>", result["savedConfiguration"])
+        self.assertIn("<dt>Tags</dt><dd>daily</dd>", result["savedConfiguration"])
+        self.assertIn("<dt>Agent</dt><dd>alpha</dd>", result["savedConfiguration"])
+        self.assertIn("<dt>Result</dt><dd>passed</dd>", result["savedConfiguration"])
+        self.assertIn("<dt>Group by</dt><dd>Agent</dd>", result["savedConfiguration"])
+        self.assertNotIn("<dt>Source</dt>", result["savedConfiguration"])
+        self.assertNotIn("<dt>Model</dt>", result["savedConfiguration"])
+        self.assertEqual([call["path"] for call in result["calls"]], ["/api/views", "/api/views"])
+        self.assertFalse(result["calls"][0]["body"]["overwrite"])
+        self.assertTrue(result["calls"][1]["body"]["overwrite"])
+        self.assertEqual(result["calls"][1]["body"]["filters"]["search"], "needle")
+        self.assertEqual(result["calls"][1]["body"]["filters"]["tags"], ["daily"])
+        self.assertEqual(
+            result["calls"][1]["body"]["filters"],
+            {"search": "needle", "tags": ["daily"], "agents": ["alpha"], "results": ["passed"]},
+        )
+        self.assertEqual(result["refreshArgs"], [])
+        self.assertEqual(result["status"], {"message": "Saved", "error": False})
+        self.assertTrue(result["hidden"])
+        self.assertEqual(result["views"][0]["name"], "Daily")
 
     def test_html_submenu_outside_click_closer_only_targets_menus(self) -> None:
         if not shutil.which("node"):

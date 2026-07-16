@@ -260,13 +260,13 @@ function requestCatalogSort(key) {
 
 function requestCatalogFacets() {
   const filters = tableControls("leaderboard").filters || {};
-  loadCatalogPage({
+  return loadCatalogPage({
     page: 1,
     tags: listValue(filters.source_tags),
     agents: listValue(filters.agent),
     models: listValue(filters.model),
     results: listValue(filters.status)
-  });
+  }, { force: true });
 }
 
 function catalogQueryString(surface = "leaderboard") {
@@ -294,7 +294,11 @@ function catalogSortKey(key) {
 async function loadCatalogPage(changes = {}, options = {}) {
   if (!serveMode()) return;
   if (state.catalogLoading) {
-    if (options.force) setTimeout(() => loadCatalogPage(changes, options), 50);
+    if (options.force) {
+      return new Promise(resolve => {
+        setTimeout(() => resolve(loadCatalogPage(changes, options)), 50);
+      });
+    }
     return;
   }
   state.catalogQuery = { ...state.catalogQuery, ...changes };
@@ -319,6 +323,10 @@ async function loadCatalogPage(changes = {}, options = {}) {
       setServeStatus(serveSourceModeStatusText());
     }
     await ensureCatalogDetail(previousGeneration !== Number(page.generation || 0));
+    if (typeof refreshWorkspaceViews === "function" && (
+      !state.workspaceViewsLoaded
+      || (workspaceViews().length >= 1 && Number(state.workspaceViewSummaryGeneration) !== Number(page.generation || 0))
+    )) refreshWorkspaceViews();
   } catch (error) {
     setServeStatus(error.message || String(error), true);
   } finally {
