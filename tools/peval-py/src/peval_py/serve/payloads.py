@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -13,7 +14,210 @@ from peval_py.inputs import infer_adapter_from_path, validate_selected_adapter
 from peval_py.serve.constants import WINDOWS_DRIVE_MOUNT_ROOT, WINDOWS_DRIVE_PATH_RE
 from peval_py.serve.errors import HttpError
 from peval_py.session_select import list_adapter_sessions
-from peval_py.state import ServeStateStore
+from peval_py.state import CatalogQuery, ServeStateStore
+
+
+SUMMARY_GROUP_BY_VALUES = frozenset({"overall", "agent", "model"})
+SUMMARY_STATISTIC_VALUES = frozenset(
+    {"mean", "min", "q1", "p50", "q3", "p95", "max"}
+)
+
+
+@dataclass(frozen=True)
+class SummaryExportPayload:
+    scope: str
+    source_keys: tuple[str, ...] = ()
+    views: tuple[str, ...] = ()
+    group_by: str = "agent"
+    statistic: str = "mean"
+
+
+@dataclass(frozen=True)
+class WorkspaceSnapshotPresentation:
+    summary_group_by: str
+    summary_statistic: str
+    summary_table_open: bool
+    selected_source_key: str | None
+    selected_step_id: str | None
+    visible_view_names: tuple[str, ...]
+    workspace_view_filters: dict[str, tuple[str, ...]]
+    open_view_tables: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class WorkspaceSnapshotExportPayload:
+    query: CatalogQuery
+    view_names: tuple[str, ...]
+    selected_source_keys: tuple[str, ...]
+    presentation: WorkspaceSnapshotPresentation
+
+
+def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPayload:
+    if not isinstance(payload, dict):
+        raise HttpError(400, "export payload must be an object")
+    if set(payload) != {"kind", "query", "selected_source_keys", "presentation"}:
+        raise HttpError(
+            400,
+            "workspace snapshot fields must be kind, query, selected_source_keys, and presentation",
+        )
+    query_value = payload.get("query")
+    if not isinstance(query_value, dict):
+        raise HttpError(400, "query must be an object")
+    query_fields = {
+        "state", "search", "sort", "direction", "tags", "agents", "models",
+        "results", "views",
+    }
+    if set(query_value) != query_fields:
+        raise HttpError(400, "workspace snapshot query fields are invalid")
+    try:
+        query = CatalogQuery(
+            state=_required_text(query_value.get("state"), "query state"),
+            page=1,
+            page_size=100,
+            search=_string_value(query_value.get("search"), "query search"),
+            sort=_required_text(query_value.get("sort"), "query sort"),
+            direction=_required_text(query_value.get("direction"), "query direction"),
+            tags=tuple(_string_array(query_value.get("tags"), "query tags")),
+            agents=tuple(_string_array(query_value.get("agents"), "query agents")),
+            models=tuple(_string_array(query_value.get("models"), "query models")),
+            results=tuple(_string_array(query_value.get("results"), "query results")),
+        ).normalized()
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
+    view_names = tuple(_string_array(query_value.get("views"), "query views"))
+    selected = tuple(
+        _string_array(payload.get("selected_source_keys"), "selected_source_keys")
+    )
+
+    presentation_value = payload.get("presentation")
+    if not isinstance(presentation_value, dict):
+        raise HttpError(400, "presentation must be an object")
+    presentation_fields = {
+        "summary_group_by", "summary_statistic", "summary_table_open",
+        "selected_source_key", "selected_step_id", "visible_view_names",
+        "workspace_view_filters", "open_view_tables",
+    }
+    if set(presentation_value) != presentation_fields:
+        raise HttpError(400, "workspace snapshot presentation fields are invalid")
+    group_by = presentation_value.get("summary_group_by")
+    statistic = presentation_value.get("summary_statistic")
+    if group_by not in SUMMARY_GROUP_BY_VALUES:
+        raise HttpError(400, "summary_group_by must be overall, agent, or model")
+    if statistic not in SUMMARY_STATISTIC_VALUES:
+        raise HttpError(
+            400,
+            "summary_statistic must be mean, min, q1, p50, q3, p95, or max",
+        )
+    table_open = presentation_value.get("summary_table_open")
+    if not isinstance(table_open, bool):
+        raise HttpError(400, "summary_table_open must be true or false")
+    selected_source_key = _nullable_text(
+        presentation_value.get("selected_source_key"), "selected_source_key"
+    )
+    raw_step_id = presentation_value.get("selected_step_id")
+    if raw_step_id is not None and not isinstance(raw_step_id, (str, int)):
+        raise HttpError(400, "selected_step_id must be a string, integer, or null")
+    filters = presentation_value.get("workspace_view_filters")
+    if not isinstance(filters, dict) or set(filters) != {"tags", "models", "group_by"}:
+        raise HttpError(400, "workspace_view_filters fields must be tags, models, and group_by")
+    filter_values = {
+        key: tuple(_string_array(filters.get(key), f"workspace_view_filters {key}"))
+        for key in ("tags", "models", "group_by")
+    }
+    invalid_groups = [value for value in filter_values["group_by"] if value not in SUMMARY_GROUP_BY_VALUES]
+    if invalid_groups:
+        raise HttpError(400, "workspace_view_filters group_by values are invalid")
+    presentation = WorkspaceSnapshotPresentation(
+        summary_group_by=group_by,
+        summary_statistic=statistic,
+        summary_table_open=table_open,
+        selected_source_key=selected_source_key,
+        selected_step_id=None if raw_step_id is None else str(raw_step_id),
+        visible_view_names=tuple(
+            _string_array(presentation_value.get("visible_view_names"), "visible_view_names")
+        ),
+        workspace_view_filters=filter_values,
+        open_view_tables=tuple(
+            _string_array(presentation_value.get("open_view_tables"), "open_view_tables")
+        ),
+    )
+    return WorkspaceSnapshotExportPayload(
+        query=query,
+        view_names=view_names,
+        selected_source_keys=selected,
+        presentation=presentation,
+    )
+
+
+def _string_array(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise HttpError(400, f"{field} must be a string array")
+    return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+
+def _string_value(value: Any, field: str) -> str:
+    if not isinstance(value, str):
+        raise HttpError(400, f"{field} must be a string")
+    return value
+
+
+def _required_text(value: Any, field: str) -> str:
+    text = _string_value(value, field).strip()
+    if not text:
+        raise HttpError(400, f"{field} must be a non-empty string")
+    return text
+
+
+def _nullable_text(value: Any, field: str) -> str | None:
+    if value is None:
+        return None
+    return _required_text(value, field)
+
+
+def summary_export_payload(value: Any) -> SummaryExportPayload:
+    if not isinstance(value, dict):
+        raise HttpError(400, "summary must be an object")
+    scope = value.get("scope")
+    if scope == "leaderboard":
+        expected = {"scope", "source_keys", "group_by", "statistic"}
+        if set(value) != expected:
+            raise HttpError(
+                400,
+                "leaderboard summary fields must be scope, source_keys, group_by, and statistic",
+            )
+        group_by = value.get("group_by")
+        statistic = value.get("statistic")
+        if group_by not in SUMMARY_GROUP_BY_VALUES:
+            raise HttpError(400, "group_by must be overall, agent, or model")
+        if statistic not in SUMMARY_STATISTIC_VALUES:
+            raise HttpError(
+                400,
+                "statistic must be mean, min, q1, p50, q3, p95, or max",
+            )
+        return SummaryExportPayload(
+            scope=scope,
+            source_keys=tuple(
+                _ordered_string_values(value.get("source_keys"), "source_keys")
+            ),
+            group_by=group_by,
+            statistic=statistic,
+        )
+    if scope == "saved_views":
+        if set(value) != {"scope", "views"}:
+            raise HttpError(400, "saved views summary fields must be scope and views")
+        return SummaryExportPayload(
+            scope=scope,
+            views=tuple(_ordered_string_values(value.get("views"), "views")),
+        )
+    raise HttpError(400, "summary scope must be leaderboard or saved_views")
+
+
+def _ordered_string_values(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise HttpError(400, f"{field} must include at least one value")
+    if any(not isinstance(item, str) or not item.strip() for item in value):
+        raise HttpError(400, f"{field} must be a non-empty string array")
+    return list(dict.fromkeys(value))
 
 def adapter_default_db_payload(payload: dict[str, Any]) -> tuple[str, str | None]:
     adapter_id = validate_selected_adapter(

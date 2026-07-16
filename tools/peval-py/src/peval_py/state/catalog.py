@@ -205,8 +205,10 @@ class WorkspaceCatalog:
         query: CatalogQuery,
         *,
         include_facets: bool = True,
+        any_queries: Sequence[CatalogQuery] = (),
     ) -> CatalogPage:
         query = query.normalized()
+        normalized_any_queries = tuple(item.normalized() for item in any_queries)
         with self._connect(readonly=True) as connection:
             generation = self._meta_int(connection, "generation", 0)
             valid = self._meta_int(connection, "valid_generation", 0) == 1
@@ -221,7 +223,7 @@ class WorkspaceCatalog:
                     items=(),
                     facets=_empty_facets(),
                 )
-            where, parameters = self._query_where(query)
+            where, parameters = self._combined_query_where(query, normalized_any_queries)
             total = int(
                 connection.execute(
                     f"SELECT count(*) FROM cells WHERE {where}", parameters
@@ -250,7 +252,10 @@ class WorkspaceCatalog:
                 for record in records
             )
             facets = (
-                self._facets(connection, *self._facet_scope_where(query))
+                self._facets(
+                    connection,
+                    *self._combined_facet_where(query, normalized_any_queries),
+                )
                 if include_facets
                 else _empty_facets()
             )
@@ -264,6 +269,78 @@ class WorkspaceCatalog:
             items=items,
             facets=facets,
         )
+
+    @contextmanager
+    def read_snapshot_rows(
+        self,
+        query: CatalogQuery,
+        *,
+        any_queries: Sequence[CatalogQuery] | Callable[[], Sequence[CatalogQuery]] = (),
+        selected_source_keys: Sequence[str] = (),
+    ) -> Iterator[tuple[int, list[dict[str, Any]]]]:
+        """Hold one catalog generation while a read-only export is assembled."""
+        if not self._writer_lock.acquire(blocking=False):
+            raise CatalogBusyError("serve catalog is busy with another writer operation")
+        try:
+            if self.checking:
+                raise CatalogBusyError("serve catalog is checking runs")
+            normalized = query.normalized()
+            resolved_any_queries = any_queries() if callable(any_queries) else any_queries
+            normalized_any = tuple(item.normalized() for item in resolved_any_queries)
+            selected = list(
+                dict.fromkeys(str(key) for key in selected_source_keys if str(key))
+            )
+            with self._connect(readonly=True) as connection:
+                generation = self._meta_int(connection, "generation", 0)
+                if self._meta_int(connection, "valid_generation", 0) != 1:
+                    raise ValueError("serve catalog has no valid generation")
+                if selected:
+                    found: set[str] = set()
+                    for chunk in _chunks(selected, 500):
+                        placeholders = ",".join("?" for _ in chunk)
+                        found.update(
+                            str(record[0])
+                            for record in connection.execute(
+                                f"SELECT source_key FROM cells WHERE source_key IN ({placeholders})",
+                                chunk,
+                            )
+                        )
+                    missing = next((key for key in selected if key not in found), None)
+                    if missing is not None:
+                        raise ValueError(f"unknown source: {missing}")
+                where, parameters = self._combined_query_where(normalized, normalized_any)
+                sort_expression = _sort_expression(normalized.sort)
+                direction = "ASC" if normalized.direction == "asc" else "DESC"
+                records = connection.execute(
+                    f"""
+                    SELECT source_key, row_json FROM cells
+                    WHERE {where}
+                    ORDER BY ({sort_expression} IS NULL) ASC,
+                             {sort_expression} {direction}, source_key ASC
+                    """,
+                    parameters,
+                ).fetchall()
+                selected_set = set(selected)
+                rows = [
+                    json.loads(str(record["row_json"]))
+                    for record in records
+                    if not selected or str(record["source_key"]) in selected_set
+                ]
+            yield generation, rows
+        finally:
+            self._writer_lock.release()
+
+    @contextmanager
+    def workspace_write_guard(self) -> Iterator[None]:
+        """Serialize file-backed workspace writes with catalog snapshots."""
+        if not self._writer_lock.acquire(blocking=False):
+            raise CatalogBusyError("serve catalog is busy with another writer operation")
+        try:
+            if self.checking:
+                raise CatalogBusyError("serve catalog is checking runs")
+            yield
+        finally:
+            self._writer_lock.release()
 
     def summarize_saved_views(
         self,
@@ -306,6 +383,50 @@ class WorkspaceCatalog:
             "checking": self.checking,
             "stale": self.checking,
             "views": summaries,
+        }
+
+    def summarize_source_keys(
+        self,
+        source_keys: Sequence[str],
+        *,
+        name: str,
+        group_by: str,
+    ) -> dict[str, Any]:
+        """Summarize one explicit readable-row snapshot in one generation."""
+        ordered = list(dict.fromkeys(str(key) for key in source_keys if str(key)))
+        if not ordered:
+            raise ValueError("source_keys must include at least one source")
+        with self._connect(readonly=True) as connection:
+            generation = self._meta_int(connection, "generation", 0)
+            valid = self._meta_int(connection, "valid_generation", 0) == 1
+            if not valid:
+                raise ValueError("serve catalog has no valid generation")
+            records: dict[str, sqlite3.Row] = {}
+            for chunk in _chunks(ordered, 500):
+                placeholders = ",".join("?" for _ in chunk)
+                records.update(
+                    {
+                        str(record["source_key"]): record
+                        for record in connection.execute(
+                            f"SELECT source_key, readable, row_json FROM cells "
+                            f"WHERE source_key IN ({placeholders})",
+                            chunk,
+                        )
+                    }
+                )
+            rows: list[dict[str, Any]] = []
+            for source_key in ordered:
+                record = records.get(source_key)
+                if record is None:
+                    raise ValueError(f"unknown source: {source_key}")
+                if not bool(record["readable"]):
+                    raise ValueError(f"source is not readable: {source_key}")
+                rows.append(json.loads(str(record["row_json"])))
+        return {
+            "generation": generation,
+            "checking": self.checking,
+            "stale": self.checking,
+            "summary": _saved_view_summary(name, group_by, rows),
         }
 
     def load_detail(self, source_key: str) -> DetailEnvelope:
@@ -685,6 +806,43 @@ class WorkspaceCatalog:
             clauses.append(f"{column} IN ({placeholders})")
             parameters.extend(values)
         return " AND ".join(clauses) if clauses else "1", parameters
+
+    def _combined_query_where(
+        self,
+        refinement: CatalogQuery,
+        any_queries: Sequence[CatalogQuery],
+    ) -> tuple[str, list[Any]]:
+        if not any_queries:
+            return self._query_where(refinement)
+        any_clauses: list[str] = []
+        parameters: list[Any] = []
+        for query in any_queries:
+            where, query_parameters = self._query_where(query)
+            any_clauses.append(f"({where})")
+            parameters.extend(query_parameters)
+        refinement_where, refinement_parameters = self._query_where(refinement)
+        parameters.extend(refinement_parameters)
+        return (
+            f"({' OR '.join(any_clauses)}) AND ({refinement_where})",
+            parameters,
+        )
+
+    def _combined_facet_where(
+        self,
+        refinement: CatalogQuery,
+        any_queries: Sequence[CatalogQuery],
+    ) -> tuple[str, list[Any]]:
+        if not any_queries:
+            return self._facet_scope_where(refinement)
+        any_clauses: list[str] = []
+        parameters: list[Any] = []
+        for query in any_queries:
+            where, query_parameters = self._query_where(query)
+            any_clauses.append(f"({where})")
+            parameters.extend(query_parameters)
+        scope_where, scope_parameters = self._facet_scope_where(refinement)
+        parameters.extend(scope_parameters)
+        return f"({' OR '.join(any_clauses)}) AND ({scope_where})", parameters
 
     def _facet_scope_where(self, query: CatalogQuery) -> tuple[str, list[Any]]:
         clauses: list[str] = []

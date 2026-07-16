@@ -1,25 +1,157 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
 import tempfile
 import threading
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
 from cli_inputs_support import write_trial_cell_artifacts
 from peval_py.config import ToolConfig
 from peval_py.serve.exports import (
+    MAX_REPORT_EXPORT_CELLS,
     MAX_REPORT_EXPORT_INPUT_BYTES,
     build_serve_export,
+    build_workspace_snapshot_export,
 )
-from peval_py.state import CatalogQuery, WorkspaceCatalog, open_workspace_state
+from peval_py.serve.payloads import WorkspaceSnapshotPresentation
+from peval_py.state import (
+    CatalogBusyError,
+    CatalogQuery,
+    WorkspaceCatalog,
+    open_workspace_state,
+)
 from peval_py.state.catalog import CATALOG_SCHEMA_VERSION
+from peval_py.workspace_reports import WorkspaceReportLibrary
+from peval_py.workspace_views import WorkspaceViewLibrary
 
 
 class WorkspaceCatalogTests(unittest.TestCase):
+    def test_snapshot_rows_hold_one_generation_validate_selection_and_preserve_sort(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_cell(root, 1)
+            self.write_cell(root, 2)
+            store, catalog = self.catalog(root)
+            catalog.reconcile()
+            expected = [
+                item.source_key
+                for item in catalog.query(
+                    CatalogQuery(sort="last_turn_end", direction="asc")
+                ).items
+            ]
+            resolver_called = False
+
+            def resolve_view_queries():
+                nonlocal resolver_called
+                resolver_called = True
+                with self.assertRaisesRegex(CatalogBusyError, "writer operation"):
+                    with catalog.workspace_write_guard():
+                        pass
+                return ()
+
+            with catalog.read_snapshot_rows(
+                CatalogQuery(sort="last_turn_end", direction="asc"),
+                any_queries=resolve_view_queries,
+            ) as (generation, rows):
+                self.assertEqual(generation, catalog.generation)
+                self.assertEqual([row["source_key"] for row in rows], expected)
+                with self.assertRaisesRegex(CatalogBusyError, "writer operation"):
+                    catalog.mutate(lambda: None)
+                with self.assertRaisesRegex(CatalogBusyError, "writer operation"):
+                    with catalog.workspace_write_guard():
+                        pass
+            self.assertTrue(resolver_called)
+
+            with catalog.read_snapshot_rows(
+                CatalogQuery(search="session-0001"),
+                selected_source_keys=expected,
+            ) as (_generation, rows):
+                self.assertEqual([row["trial_session_id"] for row in rows], ["session-0001"])
+
+            with self.assertRaisesRegex(ValueError, "unknown source"):
+                with catalog.read_snapshot_rows(
+                    CatalogQuery(), selected_source_keys=["unknown"]
+                ):
+                    pass
+
+            self.assertTrue(catalog._writer_lock.acquire(blocking=False))
+            try:
+                with self.assertRaisesRegex(CatalogBusyError, "writer operation"):
+                    with catalog.read_snapshot_rows(CatalogQuery()):
+                        pass
+            finally:
+                catalog._writer_lock.release()
+            store.close()
+
+    def test_workspace_snapshot_limits_include_unique_bound_report_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_cell(root, 1)
+            store, catalog = self.catalog(root)
+            catalog.reconcile()
+            rows = [item.to_dict() for item in catalog.query(CatalogQuery()).items]
+            reports = WorkspaceReportLibrary(root, catalog.binding_rows)
+            report_path = root / "bound.md"
+            report_path.write_text("# Bound\n\n" + ("x" * 128), encoding="utf-8")
+            reports.import_file(report_path, [rows[0]["source_key"]])
+            views = WorkspaceViewLibrary(root)
+            presentation = WorkspaceSnapshotPresentation(
+                summary_group_by="agent",
+                summary_statistic="mean",
+                summary_table_open=False,
+                selected_source_key=None,
+                selected_step_id=None,
+                visible_view_names=(),
+                workspace_view_filters={"tags": (), "models": (), "group_by": ()},
+                open_view_tables=(),
+            )
+            import peval_py.serve.exports as export_module
+
+            self.assertEqual(MAX_REPORT_EXPORT_CELLS, 100)
+            with patch.object(export_module, "MAX_REPORT_EXPORT_CELLS", 0):
+                with self.assertRaisesRegex(ValueError, "limited to 0 cells"):
+                    build_workspace_snapshot_export(
+                        catalog,
+                        store,
+                        views,
+                        reports,
+                        catalog.config,
+                        query=CatalogQuery(),
+                        query_view_names=(),
+                        selected_source_keys=(),
+                        presentation=presentation,
+                        echarts_js=b"window.echarts={};",
+                    )
+
+            row_bytes = int(rows[0].get("input_bytes") or 0)
+            report_bytes = report_path.stat().st_size
+            with patch.object(
+                export_module,
+                "MAX_REPORT_EXPORT_INPUT_BYTES",
+                row_bytes + report_bytes - 1,
+            ):
+                with self.assertRaisesRegex(ValueError, "report input exceeds"):
+                    build_workspace_snapshot_export(
+                        catalog,
+                        store,
+                        views,
+                        reports,
+                        catalog.config,
+                        query=CatalogQuery(),
+                        query_view_names=(),
+                        selected_source_keys=(),
+                        presentation=presentation,
+                        echarts_js=b"window.echarts={};",
+                    )
+            self.assertEqual(MAX_REPORT_EXPORT_INPUT_BYTES, 50 * 1024 * 1024)
+            store.close()
+
     def catalog(self, root: Path, *, slug: str = "default") -> tuple[object, WorkspaceCatalog]:
         (root / "peval-py.toml").write_text(
             f'analysis_eval_slug = "{slug}"\n', encoding="utf-8"
@@ -366,6 +498,71 @@ class WorkspaceCatalogTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_saved_view_queries_or_full_predicates_then_apply_and_refinement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            definitions = [
+                (0, "red", "passed", "needle zero", True),
+                (1, "red", "failed", "other one", True),
+                (2, "blue", "passed", "needle two", False),
+                (3, "green", "passed", "needle three", True),
+            ]
+            for index, tag, status, text, active in definitions:
+                cell = self.write_cell(root, index, status=status, text=text)
+                state_path = cell / ".peval" / "state.json"
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(
+                    json.dumps({"active": active, "source_tags": [tag]}),
+                    encoding="utf-8",
+                )
+
+            store, catalog = self.catalog(root)
+            try:
+                catalog.reconcile()
+                view_queries = [
+                    CatalogQuery(state="active", tags=("red",)),
+                    CatalogQuery(state="all", search="needle"),
+                ]
+                union = catalog.query(
+                    CatalogQuery(state="all", sort="last_turn_end", direction="asc"),
+                    any_queries=view_queries,
+                )
+                self.assertEqual(union.total, 4)
+                self.assertEqual(len({item.source_key for item in union.items}), 4)
+                self.assertEqual(
+                    {item["value"]: item["count"] for item in union.facets["tags"]},
+                    {"red": 2, "blue": 1, "green": 1},
+                )
+
+                refined = catalog.query(
+                    CatalogQuery(
+                        state="all",
+                        sort="last_turn_end",
+                        direction="asc",
+                        results=("passed",),
+                    ),
+                    any_queries=view_queries,
+                )
+                self.assertEqual(refined.total, 3)
+                self.assertEqual(
+                    [item.payload["session_id"] for item in refined.items],
+                    ["session-0000", "session-0002", "session-0003"],
+                )
+
+                exported = build_serve_export(
+                    catalog,
+                    store,
+                    catalog.config,
+                    kind="xlsx",
+                    query=CatalogQuery(state="all", results=("passed",)),
+                    view_queries=view_queries,
+                )
+                with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+                    worksheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                self.assertEqual(worksheet.count("<row "), 4)
+            finally:
+                store.close()
+
     def test_corrupt_and_version_mismatched_cache_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -419,7 +616,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
             self.assertEqual(fresh.total, 2)
             store.close()
 
-    def test_json_html_export_limits_are_checked_before_report_build(self) -> None:
+    def test_json_export_limits_are_checked_before_report_build(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for index in range(101):
@@ -446,7 +643,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
                         catalog,
                         store,
                         catalog.config,
-                        kind="html",
+                        kind="json",
                         source_keys=[*hundred_keys, second_page.items[0].source_key],
                     )
                 report_builder.assert_not_called()
@@ -467,10 +664,10 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 catalog,
                 store,
                 catalog.config,
-                kind="html",
+                kind="json",
                 source_keys=[source_key],
             )
-            self.assertIn(b"<!doctype html>", exact.content)
+            self.assertEqual(len(json.loads(exact.content)["trajectory"]), 1)
             row["input_bytes"] = MAX_REPORT_EXPORT_INPUT_BYTES + 1
             with catalog._connect() as connection:
                 connection.execute(

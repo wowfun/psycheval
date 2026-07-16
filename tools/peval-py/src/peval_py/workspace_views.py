@@ -25,6 +25,10 @@ class WorkspaceViewConflict(ValueError):
     pass
 
 
+class WorkspaceViewNotFound(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class WorkspaceView:
     name: str
@@ -86,6 +90,78 @@ class WorkspaceViewLibrary:
             if temp_path.exists() and not temp_path.is_symlink():
                 temp_path.unlink()
         return view
+
+    def get(self, name: Any) -> WorkspaceView:
+        if not self._views_root_is_safe():
+            raise WorkspaceViewNotFound(f"saved view does not exist: {name}")
+        path = self._path_for_name(validate_view_name(name))
+        if path.is_symlink() or not path.is_file():
+            raise WorkspaceViewNotFound(f"saved view does not exist: {name}")
+        try:
+            return self._read(path)
+        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            raise ValueError(f"saved view is not readable: {name}") from exc
+
+    def update(self, *, name: Any, field: Any, value: Any) -> WorkspaceView:
+        view = self.get(name)
+        field_name = str(field or "").strip().lower()
+        if field_name == "name":
+            return self._rename(view, value)
+        if not isinstance(value, str):
+            raise ValueError(f"saved view {field_name or 'value'} must be a string")
+        if field_name == "notes":
+            return self.save(
+                name=view.name,
+                filters=view_filters_dict(view.filters),
+                group_by=view.group_by,
+                notes=value,
+                overwrite=True,
+            )
+        if field_name == "configuration":
+            filters, group_by = editable_view_configuration(value)
+            return self.save(
+                name=view.name,
+                filters=filters,
+                group_by=group_by,
+                notes=view.notes,
+                overwrite=True,
+            )
+        raise ValueError("saved view field must be name, configuration, or notes")
+
+    def delete(self, names: Any) -> list[str]:
+        if not isinstance(names, list) or not names:
+            raise ValueError("names must include at least one saved view")
+        validated = [validate_view_name(name) for name in names]
+        if len(set(validated)) != len(validated):
+            raise ValueError("names must not contain duplicate saved views")
+        if not self._views_root_is_safe():
+            raise WorkspaceViewNotFound(f"saved view does not exist: {validated[0]}")
+        paths: list[Path] = []
+        for name in validated:
+            path = self._path_for_name(name)
+            if path.is_symlink() or not path.is_file():
+                raise WorkspaceViewNotFound(f"saved view does not exist: {name}")
+            self._read(path)
+            paths.append(path)
+        for path in paths:
+            path.unlink()
+        return validated
+
+    def _rename(self, view: WorkspaceView, value: Any) -> WorkspaceView:
+        new_name = validate_view_name(value)
+        if new_name == view.name:
+            return view
+        source = self._path_for_name(view.name)
+        target = self._path_for_name(new_name)
+        if target.exists() or target.is_symlink():
+            raise WorkspaceViewConflict(f"saved view already exists: {new_name}")
+        source.replace(target)
+        return WorkspaceView(
+            name=new_name,
+            filters=view.filters,
+            group_by=view.group_by,
+            notes=view.notes,
+        )
 
     def _read(self, path: Path) -> WorkspaceView:
         if path.resolve().parent != self.views_root.resolve():
@@ -217,6 +293,28 @@ def view_filters_from_dict(value: Any) -> CatalogQuery:
     ).normalized()
 
 
+def editable_view_configuration(value: Any) -> tuple[dict[str, Any], str]:
+    if not isinstance(value, str):
+        raise ValueError("saved view configuration must be YAML text")
+    payload = yaml.safe_load(value)
+    required_fields = {"group_by"}
+    allowed_fields = required_fields | {"filters"}
+    if (
+        not isinstance(payload, dict)
+        or not required_fields.issubset(payload)
+        or not set(payload).issubset(allowed_fields)
+    ):
+        raise ValueError(
+            "saved view configuration must contain group_by and optional filters"
+        )
+    filters = payload.get("filters")
+    view_filters_from_dict(filters)
+    group_by = str(payload["group_by"] or "").strip().lower()
+    if group_by not in VIEW_GROUP_BY_VALUES:
+        raise ValueError("group_by must be overall, agent, or model")
+    return filters or {}, group_by
+
+
 def render_view_markdown(view: WorkspaceView) -> str:
     payload = {"schema_version": VIEW_SCHEMA_VERSION}
     filters = view_filters_dict(view.filters)
@@ -225,3 +323,12 @@ def render_view_markdown(view: WorkspaceView) -> str:
     payload["group_by"] = view.group_by
     header = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).strip()
     return f"---\n{header}\n---\n{view.notes}"
+
+
+def render_editable_view_configuration(view: WorkspaceView) -> str:
+    payload: dict[str, Any] = {}
+    filters = view_filters_dict(view.filters)
+    if filters:
+        payload["filters"] = filters
+    payload["group_by"] = view.group_by
+    return yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).strip()

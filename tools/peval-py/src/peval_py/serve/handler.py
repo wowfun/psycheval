@@ -12,7 +12,11 @@ from peval_py.i18n import normalize_locale
 from peval_py.serve.assets import ECHARTS_ASSET_PATH, cached_echarts_asset
 from peval_py.serve.constants import MAX_JSON_BODY_BYTES
 from peval_py.serve.errors import HttpError
-from peval_py.serve.exports import build_serve_export
+from peval_py.serve.exports import (
+    build_serve_export,
+    build_summary_serve_export,
+    build_workspace_snapshot_export,
+)
 from peval_py.serve.payloads import (
     adapter_default_db_payload,
     adapter_override_payload,
@@ -22,7 +26,9 @@ from peval_py.serve.payloads import (
     required_string,
     source_action_path,
     source_keys_payload,
+    summary_export_payload,
     tags_payload,
+    workspace_snapshot_export_payload,
 )
 from peval_py.serve.path_picker import PathPickerUnavailable, pick_file_paths
 from peval_py.serve.runtime import ServeRuntime
@@ -33,7 +39,7 @@ from peval_py.workspace_reports import (
     render_workspace_report_reader_page,
     render_workspace_report_preview,
 )
-from peval_py.workspace_views import WorkspaceViewConflict
+from peval_py.workspace_views import WorkspaceViewConflict, WorkspaceViewNotFound
 
 
 REPORT_PREVIEW_CSP = "; ".join(
@@ -105,7 +111,14 @@ def make_handler(
                     self.write_js(cached_echarts_asset(store))
                     return
                 if path == "/api/catalog":
-                    self.write_json(runtime.catalog_page(catalog_query(parsed_url.query)).to_dict())
+                    try:
+                        page = runtime.catalog_page(
+                            catalog_query(parsed_url.query),
+                            view_names=catalog_view_names(parsed_url.query),
+                        )
+                    except WorkspaceViewNotFound as exc:
+                        raise HttpError(400, str(exc)) from exc
+                    self.write_json(page.to_dict())
                     return
                 if path == "/api/report":
                     source_key = single_query_value(parsed_url.query, "source_key")
@@ -159,6 +172,7 @@ def make_handler(
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlsplit(self.path).path
+            self._workspace_write_lease = None
             try:
                 payload = self.read_json_payload()
                 if path == "/api/catalog/resolve":
@@ -220,13 +234,61 @@ def make_handler(
                     return
                 if path == "/api/exports":
                     export_kind = required_string(payload, "kind")
-                    export_query = catalog_query_payload(payload.get("query"))
+                    if export_kind.strip().lower() == "summary_xlsx":
+                        summary_request = summary_export_payload(payload.get("summary"))
+                        if summary_request.scope == "leaderboard":
+                            sheets = [
+                                runtime.leaderboard_summary_worksheet(
+                                    summary_request.source_keys,
+                                    group_by=summary_request.group_by,
+                                    statistic=summary_request.statistic,
+                                )
+                            ]
+                        else:
+                            sheets = runtime.workspace_view_summary_worksheets(
+                                summary_request.views
+                            )
+                        export = build_summary_serve_export(
+                            sheets,
+                            runtime.config,
+                            scope=summary_request.scope,
+                        )
+                        self.write_download(
+                            export.content,
+                            export.content_type,
+                            export.filename,
+                        )
+                        return
+                    if export_kind.strip().lower() == "workspace_html":
+                        snapshot_request = workspace_snapshot_export_payload(payload)
+                        export = build_workspace_snapshot_export(
+                            runtime.catalog,
+                            store,
+                            runtime.workspace_views,
+                            runtime.workspace_reports,
+                            runtime.config,
+                            query=snapshot_request.query,
+                            query_view_names=snapshot_request.view_names,
+                            selected_source_keys=snapshot_request.selected_source_keys,
+                            presentation=snapshot_request.presentation,
+                            echarts_js=cached_echarts_asset(store),
+                        )
+                        self.write_download(
+                            export.content,
+                            export.content_type,
+                            export.filename,
+                        )
+                        return
+                    raw_export_query = payload.get("query")
+                    export_query = catalog_query_payload(raw_export_query)
+                    view_names = catalog_view_names_payload(raw_export_query)
                     export = build_serve_export(
                         runtime.catalog,
                         store,
                         runtime.config,
                         kind=export_kind,
                         query=export_query,
+                        view_queries=runtime.workspace_view_queries(view_names),
                         source_keys=source_keys_payload(payload),
                     )
                     self.write_download(export.content, export.content_type, export.filename)
@@ -243,6 +305,43 @@ def make_handler(
                         {
                             "reports": runtime.workspace_report_catalog(),
                             "report_id": report_id,
+                        }
+                    )
+                    return
+                if path == "/api/views/update":
+                    runtime.ensure_ready()
+                    self.require_workspace_writable()
+                    value = payload.get("value")
+                    if not isinstance(value, str):
+                        raise HttpError(400, "value must be a string")
+                    try:
+                        view = runtime.workspace_views.update(
+                            name=required_string(payload, "name"),
+                            field=required_string(payload, "field"),
+                            value=value,
+                        )
+                    except WorkspaceViewConflict as exc:
+                        raise HttpError(409, str(exc)) from exc
+                    except WorkspaceViewNotFound as exc:
+                        raise HttpError(404, str(exc)) from exc
+                    self.write_json(
+                        {
+                            "view": view.to_dict(),
+                            "views": runtime.workspace_view_catalog(),
+                        }
+                    )
+                    return
+                if path == "/api/views/delete":
+                    runtime.ensure_ready()
+                    self.require_workspace_writable()
+                    try:
+                        deleted = runtime.workspace_views.delete(payload.get("names"))
+                    except WorkspaceViewNotFound as exc:
+                        raise HttpError(404, str(exc)) from exc
+                    self.write_json(
+                        {
+                            "deleted": deleted,
+                            "views": runtime.workspace_view_catalog(),
                         }
                     )
                     return
@@ -423,6 +522,11 @@ def make_handler(
                 self.write_error(409, str(exc))
             except Exception as exc:  # noqa: BLE001 - HTTP boundary.
                 self.write_error(400, str(exc))
+            finally:
+                lease = self._workspace_write_lease
+                self._workspace_write_lease = None
+                if lease is not None:
+                    lease.__exit__(None, None, None)
 
         def read_json_payload(self) -> dict[str, Any]:
             self.require_same_origin()
@@ -456,6 +560,11 @@ def make_handler(
         def require_workspace_writable(self) -> None:
             if runtime.is_loading():
                 raise HttpError(409, "serve catalog is checking runs")
+            if self._workspace_write_lease is not None:
+                return
+            lease = runtime.catalog.workspace_write_guard()
+            lease.__enter__()
+            self._workspace_write_lease = lease
 
         def is_same_origin(self, value: str, *, origin_header: bool = False) -> bool:
             try:
@@ -566,6 +675,24 @@ def single_query_value(query: str, key: str) -> str | None:
         if text:
             return text
     return None
+
+
+def catalog_view_names(raw_query: str) -> tuple[str, ...]:
+    values = parse_qs(raw_query, keep_blank_values=True)
+    names = [str(value).strip() for value in values.get("view", []) if str(value).strip()]
+    return tuple(dict.fromkeys(names))
+
+
+def catalog_view_names_payload(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, dict):
+        raise HttpError(400, "query must be an object")
+    raw_names = value.get("views", [])
+    if not isinstance(raw_names, list) or any(not isinstance(name, str) for name in raw_names):
+        raise HttpError(400, "query views must be a string array")
+    names = [name.strip() for name in raw_names if name.strip()]
+    return tuple(dict.fromkeys(names))
 
 
 def catalog_query(raw_query: str) -> CatalogQuery:

@@ -25,6 +25,49 @@ def render_html(
     load_error: str | None = None,
 ) -> str:
     normalized_mode = normalize_render_mode(mode)
+    return _render_html_document(
+        report,
+        locale=locale,
+        mode=normalized_mode,
+        sources=sources,
+        reports=reports,
+        adapter_defaults=adapter_defaults,
+        loading=loading,
+        load_error=load_error,
+    )
+
+
+def render_workspace_snapshot_html(
+    report: dict[str, Any],
+    snapshot: dict[str, Any],
+    locale: str,
+    echarts_js: str,
+) -> str:
+    return _render_html_document(
+        report,
+        locale=locale,
+        mode="workspace_snapshot",
+        sources=list_value(snapshot.get("catalog_rows")),
+        reports=list_value(snapshot.get("reports")),
+        snapshot=snapshot,
+        echarts_js=echarts_js,
+    )
+
+
+def _render_html_document(
+    report: dict[str, Any],
+    *,
+    locale: str,
+    mode: str,
+    sources: list[dict[str, Any]] | None = None,
+    reports: list[dict[str, Any]] | None = None,
+    adapter_defaults: dict[str, str] | None = None,
+    loading: bool = False,
+    load_error: str | None = None,
+    snapshot: dict[str, Any] | None = None,
+    echarts_js: str | None = None,
+) -> str:
+    normalized_mode = mode
     normalized_locale = normalize_locale(locale)
     messages = messages_for(normalized_locale)
     serve_source_payload = (
@@ -32,7 +75,7 @@ def render_html(
     )
     render_options: dict[str, Any] = {
         "mode": normalized_mode,
-        "sources": serve_source_payload if normalized_mode == "serve" else [],
+        "sources": serve_source_payload if normalized_mode in {"serve", "workspace_snapshot"} else [],
     }
     if normalized_mode == "serve":
         render_options["reports"] = list(reports or [])
@@ -40,10 +83,17 @@ def render_html(
         render_options["loading"] = bool(loading)
         if load_error:
             render_options["load_error"] = load_error
-    title_key = "serve_title" if normalized_mode == "serve" else "title"
+    elif normalized_mode == "workspace_snapshot":
+        render_options["reports"] = list(reports or [])
+    title_key = "serve_title" if normalized_mode in {"serve", "workspace_snapshot"} else "title"
     payload = load_asset_text("report.html").replace("__LANG__", escape(normalized_locale))
     payload = payload.replace("__TITLE__", escape(messages[title_key]))
-    payload = payload.replace("__BODY_CLASS__", escape(f"{normalized_mode}-mode"))
+    body_class = (
+        "serve-mode workspace-snapshot-mode"
+        if normalized_mode == "workspace_snapshot"
+        else f"{normalized_mode}-mode"
+    )
+    payload = payload.replace("__BODY_CLASS__", escape(body_class))
     payload = payload.replace(
         "__SERVE_SOURCE_MANAGER__",
         render_serve_source_manager(
@@ -58,15 +108,37 @@ def render_html(
     )
     payload = payload.replace(
         "__SERVE_REPORT_UI__",
-        render_serve_report_ui(messages) if normalized_mode == "serve" else "",
+        render_serve_report_ui(messages)
+        if normalized_mode == "serve"
+        else (
+            '<aside class="report-reader" id="workspace-report-reader" hidden></aside>'
+            if normalized_mode == "workspace_snapshot"
+            else ""
+        ),
     )
     payload = payload.replace(
-        "__SERVE_VIEWS_RAIL__",
-        '<aside class="workspace-views" id="workspace-views" hidden data-serve-only></aside>'
-        if normalized_mode == "serve"
+        "__SERVE_SIDE_REGION__",
+        (
+            '<div class="workspace-side-region" id="workspace-side-region">'
+            '<aside class="workspace-views" id="workspace-views" hidden data-serve-only></aside>'
+            '<aside class="step-drawer" id="step-drawer" hidden></aside>'
+            "</div>"
+        )
+        if normalized_mode in {"serve", "workspace_snapshot"}
         else "",
     )
-    payload = payload.replace("__ECHARTS_SCRIPT__", render_echarts_script(normalized_mode))
+    payload = payload.replace(
+        "__REPORT_STEP_DRAWER__",
+        '<aside class="step-drawer" id="step-drawer" hidden></aside>'
+        if normalized_mode == "report"
+        else "",
+    )
+    if normalized_mode == "workspace_snapshot":
+        inline_echarts = str(echarts_js or "").replace("</script", "<\\/script")
+        echarts_script = f"<script>{inline_echarts}</script>"
+    else:
+        echarts_script = render_echarts_script(normalized_mode)
+    payload = payload.replace("__ECHARTS_SCRIPT__", echarts_script)
     payload = payload.replace("__CSS__", load_asset_text("report.css"))
     payload = payload.replace("__JS__", load_asset_text("report.js"))
     payload = payload.replace(
@@ -82,6 +154,16 @@ def render_html(
     payload = payload.replace(
         "__I18N__",
         safe_json_for_script(json.dumps(messages, ensure_ascii=False)),
+    )
+    payload = payload.replace(
+        "__WORKSPACE_SNAPSHOT_DATA__",
+        (
+            '<script type="application/json" id="peval-py-workspace-snapshot">'
+            + safe_json_for_script(json.dumps(snapshot or {}, ensure_ascii=False))
+            + "</script>"
+        )
+        if normalized_mode == "workspace_snapshot"
+        else "",
     )
     payload = payload.replace(
         "__RENDER_OPTIONS__",

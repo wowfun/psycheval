@@ -7,6 +7,7 @@ from pathlib import Path
 from peval_py.workspace_views import (
     WorkspaceViewConflict,
     WorkspaceViewLibrary,
+    WorkspaceViewNotFound,
     render_view_markdown,
 )
 
@@ -88,6 +89,71 @@ class WorkspaceViewLibraryTests(unittest.TestCase):
             )
             self.assertEqual(default_view.filters.state, "active")
 
+    def test_update_rename_configuration_notes_and_prevalidated_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            library = WorkspaceViewLibrary(root)
+            library.save(
+                name="Daily",
+                filters=filters(tags=["old"]),
+                group_by="agent",
+                notes="Original",
+                overwrite=False,
+            )
+            library.save(
+                name="Existing",
+                filters=filters(),
+                group_by="overall",
+                notes="Keep",
+                overwrite=False,
+            )
+
+            configured = library.update(
+                name="Daily",
+                field="configuration",
+                value=(
+                    "filters:\n"
+                    "  state: archived\n"
+                    "  search: failure\n"
+                    "  tags: [red, blue]\n"
+                    "group_by: model\n"
+                ),
+            )
+            self.assertEqual(configured.filters.state, "archived")
+            self.assertEqual(configured.filters.search, "failure")
+            self.assertEqual(configured.filters.tags, ("red", "blue"))
+            self.assertEqual(configured.group_by, "model")
+            self.assertEqual(configured.notes, "Original")
+
+            emptied = library.update(name="Daily", field="notes", value="")
+            self.assertEqual(emptied.notes, "")
+            renamed = library.update(name="Daily", field="name", value="Renamed")
+            self.assertEqual(renamed.name, "Renamed")
+            self.assertFalse((root / "views" / "Daily.md").exists())
+            self.assertTrue((root / "views" / "Renamed.md").is_file())
+
+            with self.assertRaisesRegex(WorkspaceViewConflict, "already exists"):
+                library.update(name="Renamed", field="name", value="Existing")
+            with self.assertRaisesRegex(ValueError, "optional filters"):
+                library.update(
+                    name="Renamed",
+                    field="configuration",
+                    value="schema_version: 1\ngroup_by: agent\n",
+                )
+            with self.assertRaisesRegex(ValueError, "group_by"):
+                library.update(
+                    name="Renamed",
+                    field="configuration",
+                    value="filters: {}\n",
+                )
+
+            with self.assertRaisesRegex(WorkspaceViewNotFound, "Missing"):
+                library.delete(["Renamed", "Missing"])
+            self.assertTrue((root / "views" / "Renamed.md").is_file())
+            self.assertTrue((root / "views" / "Existing.md").is_file())
+            self.assertEqual(library.delete(["Renamed", "Existing"]), ["Renamed", "Existing"])
+            self.assertEqual(library.list(), [])
+
     def test_invalid_or_unsafe_files_do_not_enter_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside_tmp:
             root = Path(tmp)
@@ -114,6 +180,12 @@ class WorkspaceViewLibraryTests(unittest.TestCase):
                 pass
 
             self.assertEqual([view.name for view in library.list()], ["valid"])
+            with self.assertRaisesRegex(ValueError, "filename stem"):
+                library.update(name="valid", field="name", value="../escape")
+            if (views / "linked.md").is_symlink():
+                with self.assertRaisesRegex(WorkspaceViewNotFound, "linked"):
+                    library.delete(["linked"])
+                self.assertEqual(target.read_text(encoding="utf-8"), "outside")
             for invalid in ("", ".", "..", "a/b", "a\\b", "bad\nname"):
                 with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                     library.save(

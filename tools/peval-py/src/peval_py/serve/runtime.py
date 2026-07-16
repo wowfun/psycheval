@@ -8,6 +8,7 @@ from peval_py.config import ToolConfig
 from peval_py.inputs import AdapterAssignments
 from peval_py.report import empty_report
 from peval_py.serve.sources import load_serve_inputs
+from peval_py.serve.summary_xlsx import SummaryWorksheet
 from peval_py.state import (
     CatalogBusyError,
     CatalogPage,
@@ -18,7 +19,7 @@ from peval_py.state import (
     WorkspaceCatalog,
 )
 from peval_py.workspace_reports import WorkspaceReportLibrary
-from peval_py.workspace_views import WorkspaceViewLibrary
+from peval_py.workspace_views import WorkspaceViewLibrary, render_editable_view_configuration
 
 
 class ServeRuntime:
@@ -116,8 +117,20 @@ class ServeRuntime:
             self.config = config
             self.catalog.config = config
 
-    def catalog_page(self, query: CatalogQuery) -> CatalogPage:
-        return self.catalog.query(query)
+    def catalog_page(
+        self,
+        query: CatalogQuery,
+        *,
+        view_names: Sequence[str] = (),
+    ) -> CatalogPage:
+        return self.catalog.query(
+            query,
+            any_queries=self.workspace_view_queries(view_names),
+        )
+
+    def workspace_view_queries(self, names: Sequence[str]) -> list[CatalogQuery]:
+        ordered = list(dict.fromkeys(str(name) for name in names if str(name)))
+        return [self.workspace_views.get(name).filters for name in ordered]
 
     def workspace_view_catalog(self) -> list[dict[str, Any]]:
         return [view.to_dict() for view in self.workspace_views.list()]
@@ -135,6 +148,60 @@ class ServeRuntime:
                 for view in views
             ],
         }
+
+    def leaderboard_summary_worksheet(
+        self,
+        source_keys: Sequence[str],
+        *,
+        group_by: str,
+        statistic: str,
+    ) -> SummaryWorksheet:
+        payload = self.catalog.summarize_source_keys(
+            source_keys,
+            name="Leaderboard Summary",
+            group_by=group_by,
+        )
+        summary = payload["summary"]
+        return SummaryWorksheet(
+            name="Leaderboard Summary",
+            group_by=group_by,
+            matched_count=int(summary["matched_count"]),
+            groups=summary["groups"],
+            statistic=statistic,
+            metadata=(
+                ("Scope", "Current visible Leaderboard page"),
+                ("Group", group_by),
+                ("Match count", int(summary["matched_count"])),
+                ("Chart statistic", statistic),
+            ),
+        )
+
+    def workspace_view_summary_worksheets(
+        self,
+        names: Sequence[str],
+    ) -> list[SummaryWorksheet]:
+        views = [self.workspace_views.get(name) for name in names]
+        payload = self.catalog.summarize_saved_views(
+            [(view.name, view.filters, view.group_by) for view in views]
+        )
+        return [
+            SummaryWorksheet(
+                name=view.name,
+                group_by=view.group_by,
+                matched_count=int(summary["matched_count"]),
+                groups=summary["groups"],
+                statistic="mean",
+                metadata=(
+                    ("Name", view.name),
+                    ("Configuration", render_editable_view_configuration(view)),
+                    ("Notes", view.notes),
+                    ("Group", view.group_by),
+                    ("Match count", int(summary["matched_count"])),
+                    ("Chart statistic", "mean"),
+                ),
+            )
+            for view, summary in zip(views, payload["views"])
+        ]
 
     def detail(self, source_key: str) -> DetailEnvelope:
         self.ensure_ready()
