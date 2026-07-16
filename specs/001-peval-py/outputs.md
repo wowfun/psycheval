@@ -151,7 +151,7 @@ writes either JSON or HTML:
   categorized as `Error`. Retained-session idle gaps are
   intentionally omitted from Timeline diagnostics; they remain represented by
   Trial `wall_duration_ms` outside the Timeline.
-- Timeline Waterfall uses the fixed ECharts 6.0.0 CDN build from
+- Timeline Waterfall uses the fixed ECharts 6.0.0 build from
   `https://cdn.jsdelivr.net/npm/echarts@6.0.0/dist/echarts.min.js`. It renders a
   cumulative active-latency Gantt with a shared x-axis, category-colored
   rectangular bars, per-stage duration labels on or beside bars, user/system
@@ -168,6 +168,10 @@ writes either JSON or HTML:
   do not leave excessive empty space. The active-latency x-axis uses stable
   nice tick intervals and interval-aware labels, so short traces do not collapse
 	  multiple ticks into the same rounded value.
+  Workspace snapshots inline the complete cached ECharts file and never load a
+  chart runtime from a CDN. Snapshot export fails clearly if the cache cannot be
+  obtained, instead of producing a nominally offline file with a network
+  dependency.
 - Timeline Detail Table preserves true wall start, end, duration, and
   active-share values. It uses heuristic categories
   (`I/O`, `Agent`, `Network`, `External`, `Tool`, and `Error`) derived from step
@@ -209,10 +213,15 @@ writes either JSON or HTML:
   leaderboard row checkboxes, or report-export controls. Serve UI mode reuses
   the same Leaderboard, Trajectory Overview, selected Trial trajectory, Step
   details drawer, state transitions, and visual tokens, then adds only
-  serve-specific controls around that body. Serve-mode table export writes the
+  serve-specific controls around that body. A third workspace-snapshot mode
+  reuses the same analysis/read-only display modules over embedded data, but is
+  neither static report mode nor live serve mode and starts no API polling.
+  Serve-mode table export writes the
   current row selection, or all currently visible filtered rows when no rows are
-  selected, as a default `.xlsx` workbook rather than CSV. JSON report and HTML
-  report exports keep their existing behavior. In serve mode, Leaderboard rows
+  selected, as a default `.xlsx` workbook rather than CSV. JSON report export
+  keeps its existing behavior; the old serve-only HTML report export is
+  replaced by a workspace snapshot. CLI/static `render_html` behavior remains
+  unchanged. In serve mode, Leaderboard rows
   load their source detail and open its first `user` Step when present;
   Trajectory Overview nodes load their own source detail and open the specified
   Step. The catalog row identity remains `source_key`, while the drawer uses the
@@ -248,12 +257,14 @@ collected from the complete Leaderboard row set. Empty selections are
 equivalent to no filter, values within one column are OR-ed, and multiple
 filtered columns are AND-ed. Serve-mode Tags filters flatten each tag into its
 own option; selecting multiple tags matches rows with any selected tag. Filter
-checkboxes and `Clear` edit a menu-local draft without changing the table. Only
-`Apply` atomically replaces that column's committed selection and refreshes the
-table once. Closing the menu by clicking outside it or pressing Escape discards
-the draft; reopening starts from the committed selection. The filter button's
-count reports committed values only. Candidate options include committed values
-that no longer occur in the current data so they can still be removed.
+checkboxes and `Clear` edit a menu-local draft without changing the table. The
+menu header places `Clear` before `Apply`, with `Apply` immediately to its
+right. Only `Apply` atomically replaces that column's committed selection and
+refreshes the table once. Closing the menu by clicking outside it or pressing
+Escape discards the draft; reopening starts from the committed selection. The
+filter button's count reports committed values only. Candidate options include
+committed values that no longer occur in the current data so they can still be
+removed.
 Filtering happens before sorting and before metric shading. If filters hide the
 currently selected Trial and visible rows remain, HTML selects the first visible
 Trial; if filters hide all rows, the selected Trial detail remains visible but
@@ -272,11 +283,16 @@ name-and-notes dialog. Before naming the view, that dialog directly displays
 only the non-default current Search, Tags, Agent, Model, Result, and
 non-active source filters, plus the Group by value that will be saved; an All
 filter and active source state are omitted from both the dialog and persisted
-view configuration. Saved views are applied from the right-side Saved views
-area rather than a Summary-header menu. Applying a view resets the page and
-transient selection and uses the default Last Turn End descending order;
-pagination, sort, metric statistic, disclosure state, and selection are not
-persisted. The full summary table is collapsed on
+view configuration. Saved views are selected from the right-side Saved views
+index rather than a Summary-header menu or per-card action. Applying one or
+more selected views resets the catalog page and uses the default Last Turn End
+descending order. Each selected view remains one complete filter predicate;
+the predicates are OR-ed and overlapping sessions occur once. Later Search,
+Tags, Agent, Model, and Result filters refine that union with AND, while later
+sort changes remain independent. Applying saved views does not change the
+current Summary grouping, statistic, or disclosure state. Pagination, sort,
+metric statistic, disclosure state, and selection are not persisted in the
+view file. The full summary table is collapsed on
 each page load and expands in place without persisting its disclosure state. It
 is metric-first, with columns `Metric`,
 `Agent`/`Model`/`Scope`, `Count`, `Mean`, `Min`, `Q1`, `P50`, `Q3`, `P95`, and
@@ -343,18 +359,67 @@ catalog generation change reloads the detail only when its
 same rule.
 
 When one or more valid saved views exist, serve adds a responsive right-side
-workspace rail. Each card directly shows the view name, Markdown-rendered
-notes, whole-query match count, its metric-by-group distribution table, and
-Mean bar charts for the same six Leaderboard Summary metrics. Each card has an
-explicit Apply action. Its distribution table is independently collapsed by default,
-using the same disclosure treatment as the main Leaderboard Summary. The rail
-header includes a disabled `Cancel application` action until a view is applied;
-that action restores active source state, empty filters/search, Last Turn End
-descending, Agent grouping, Mean statistic, collapsed summary disclosures, and
-no transient selection. The rail's calculations cover every readable catalog row that
-matches each saved view, never just the first 100-page response, and the
-server returns compact group statistics rather than the matching rows. It
-becomes a normal single-column section on narrow viewports.
+workspace rail whose desktop width is `clamp(620px, 44vw, 760px)`. A Saved
+views index immediately below the title reuses the common Leaderboard data-table
+renderer, filter-menu draft, Clear/Apply, and visible-selection behavior. Its
+fixed columns are Select, Name, Tags, Models, Group by, Other conditions, and
+Notes. The header checkbox selects or clears only the currently filter-visible
+view rows and displays checked/indeterminate state; hidden selections are
+preserved, and Apply, Export Excel, and Delete continue to operate on the global
+selected-view set. Apply and Delete actions sit above the table's upper-right
+corner and are disabled without a selection; there is no per-card Apply action
+or Cancel-application action.
+
+Tags, Models, and Group by expose local multi-select filters whose candidate
+values come from every valid saved view. Values within one column are OR-ed and
+columns are AND-ed. The index and cards both render the same ordered
+`workspaceViewRows()` projection. A zero-result filter therefore retains the
+index and its Clear/Apply affordances while rendering an empty cards region.
+Notes are truncated in the index and expose their complete text on hover and
+keyboard focus. Clicking a non-interactive row cell scrolls the rail to the
+corresponding card. Double-clicking Name, Tags, Models, Group by, Other
+conditions, or Notes opens an in-cell editor with explicit Save and Cancel
+actions. Name uses a text input; Tags and Models use an ordered, de-duplicated
+English/Chinese-comma editor; Group by uses an Overall/Agent/Model select;
+Other conditions uses YAML limited to state, search, agents, and results; and
+Notes uses a Markdown textarea. Configuration-cell saves merge these edited
+fields with the untouched view definition and submit one complete YAML fragment
+through the existing atomic `field: "configuration"` update. Escape cancels;
+Enter saves Name; Ctrl/Cmd+Enter saves textareas. Conflicts and validation
+errors leave the editor open.
+
+The Save view dialog pre-fills its name as `<tag1>,<tag2> - <group>` or
+`All - <group>` when no Tags filter is active. The group suffix uses the stable
+`agent`, `model`, or `overall` value. Long tag prefixes are truncated before the
+suffix so the complete name remains within 120 characters.
+
+Each card directly shows the view name, Markdown-rendered notes, whole-query
+match count, its independently collapsed metric-by-group distribution table,
+and Mean bar charts for the same six Leaderboard Summary metrics. Desktop cards
+place two charts per row. The index toolbar also exposes `Export Excel`; it is
+disabled without a selection and exports the selected views in their index
+order as one workbook with one worksheet per view. The rail's calculations cover every readable catalog
+row that matches each saved view, never just the first 100-page response, and
+the server returns compact group statistics rather than matching rows. Saved
+views and the Step drawer occupy one shared right-side region: opening a Step
+covers the rail without changing its scroll position, and closing it reveals
+that same rail state. On narrow viewports the rail becomes a normal full-width
+section, charts reduce to one column where necessary, and the Step drawer keeps
+its bottom-sheet behavior.
+
+On desktop, opening either the Saved views rail or Step drawer lets the main
+`.workspace` use the complete viewport width (`width: 100%; max-width: none`)
+while preserving page padding and the clamped right-side width. Ordinary
+single-column serve and static reports retain the 1180px maximum. At 1180px and
+below the layout remains single-column.
+
+The Leaderboard page controls replace the row-selection `Clear` action with
+`Clear conditions`; the header checkbox remains the row-selection reset.
+`Clear conditions` removes applied and draft saved-view selections, Search,
+source/facet filters, and custom sorting, then restores active sources, Last
+Turn End descending, Agent grouping, Mean statistic, and collapsed Summary
+disclosures. It preserves Leaderboard row selection and any still-valid current
+detail.
 
 Serve UI mode keeps the report body as the primary mental model rather than
 turning the page into a separate dashboard. It shows a compact source/status
@@ -433,9 +498,9 @@ still inspects exactly one DB path at a time. Adapter choices in the source mana
 	In serve UI mode, Leaderboard and Trajectory Overview each expose the same
 	serve-only source-state controls in the panel header: a `Show archived` switch
 	and a dynamic primary action. The main report opens in the active-source view.
-	When the switch is enabled, the browser lazily loads the archived-source report
-	and Leaderboard, Leaderboard Summary, and Trajectory Overview all project from
-	that archived report. Active and archived views are mutually exclusive; archived
+	When the switch is enabled, the browser queries the archived catalog and
+	Leaderboard, Leaderboard Summary, and Trajectory Overview all project from
+	that result. Active and archived views are mutually exclusive; archived
 	rows are not appended to active rows. The dynamic action is `Archive` in the
 	active view and `Activate` in the archived view, operates only on checked rows
 	that are currently visible in `leaderboardRows()`, and ignores hidden checked
@@ -446,8 +511,12 @@ still inspects exactly one DB path at a time. Adapter choices in the source mana
 	action moves every visible readable source out of the current active/archived
 view, the browser automatically switches to the target view and renders its
 full report, selecting the first moved readable source. If the target view has
-no readable sources, the switch does not leave the current report view and the
-browser shows an actionable status message instead. Static HTML
+no readable sources, the target mode renders its normal empty state and the
+switch remains operable so the user can return. The UI never disables an
+active/archived switch by inferring another state's availability from the
+current catalog page. A composed saved-view query with state `all` remains
+checked and disabled so toggling cannot discard its mixed-state predicate.
+Static HTML
 reports do not render these source-state controls.
 
 Serve Leaderboard adds a `Reports` column immediately after `Session Alias`.
@@ -572,8 +641,11 @@ existing source/artifact unchanged instead of silently changing one source into
 another Trial.
 
 `GET /api/catalog` accepts state, page, page size, literal search, sort,
-direction, and Tags/Agent/Model/Result facets, and returns generation,
-checking/stale flags, total, page metadata, summary rows, and facets. `GET
+direction, Tags/Agent/Model/Result facets, and repeated `view` names, and
+returns generation, checking/stale flags, total, page metadata, summary rows,
+and facets. Valid named views form an OR base query; the ordinary search and
+facet parameters are an AND refinement over that base. Unknown view names fail
+clearly rather than silently broadening the query. `GET
 /api/report?source_key=KEY` reads only one readable source and returns
 generation, artifact revision, source key, and its one-cell report. Interactive
 serve routes do not provide `source_state=active|archived|all` all-source report
@@ -582,10 +654,14 @@ loading.
 `GET /api/views` lists valid saved-view definitions. `POST /api/views` accepts
 `{name, filters, group_by, notes, overwrite}`; a same-name write without
 `overwrite` returns a conflict, and `overwrite: true` atomically replaces the
-file. `GET /api/views/summary` returns the current catalog generation and
-whole-query group statistics for every valid view. These APIs are serve-only,
-use the normal same-origin JSON mutation rules, and reject writes while the
-catalog is checking runs.
+file. `POST /api/views/update` accepts `{name, field, value}`, where `field` is
+exactly `name`, `configuration`, or `notes`; configuration is the YAML fragment
+described above and a name conflict returns `409`. `POST /api/views/delete`
+accepts `{names}` and removes a validated non-empty selection. `GET
+/api/views/summary` returns the current catalog generation and whole-query
+group statistics for every valid view. These APIs are serve-only, use the
+normal same-origin JSON mutation rules, and reject writes while the catalog is
+checking runs.
 
 `POST /api/sources/reload` and multi-item source import/state/delete requests
 return `202` with an operation id. `GET /api/operations/<id>` exposes operation
@@ -621,20 +697,119 @@ changes. The UI displays a global selected count and Clear action; bulk actions
 use all selected keys, not only visible keys. On generation changes it calls
 catalog key resolution and removes missing selections. Selection does not
 change the selected Trial or open a drawer. More than 100 selected rows blocks
-JSON and HTML export explicitly; XLSX export, report binding, and queued source
+JSON and workspace-snapshot export explicitly; XLSX export, report binding, and queued source
 mutations may use the full selection.
 
 Serve UI mode renders one Leaderboard `Export` menu with `Table`, `JSON Report`,
-and `HTML Report`. `POST /api/exports` handles all three. Table export receives
-the current `CatalogQuery` and exports every matching summary as XLSX. JSON and
-HTML receive explicit source keys; when none are selected the browser sends the
-current page's keys. They are rejected before report construction when more
-than 100 cells are requested or the combined trajectory/meta input size exceeds
-50 MiB, and include only the requested cells.
+and `Workspace snapshot (.html)`. `POST /api/exports` handles all three. Table export receives
+the current catalog query, including applied `views`, and exports every
+matching summary as XLSX. JSON keeps the existing explicit-source behavior.
+Workspace snapshot receives the complete catalog query without pagination and
+the browser's global selected source-key set. With a non-empty selection it
+exports selected keys intersected with the full query; otherwise it exports all
+query matches. Query order is preserved. Unknown selected keys, an empty
+selection/query intersection, or a zero-match query fail clearly without a
+scope fallback.
+
+Workspace snapshot requests use `kind: "workspace_html"` with `query`,
+`selected_source_keys`, and `presentation`. Query contains state, search, sort,
+direction, Tags/Agent/Model/Result facets, and saved-view names. Presentation
+contains Summary group/statistic/disclosure, selected source/step, visible view
+names, Saved Views Tags/Models/Group-by filters, and open view-table names. The
+final scope is capped at 100 rows and 50 MiB of Trial input plus unique bound
+Workspace Report content. Limits reject the whole export without truncation.
+
+```json
+{
+  "kind": "workspace_html",
+  "query": {
+    "state": "active",
+    "search": "",
+    "sort": "last_turn_end",
+    "direction": "desc",
+    "tags": [],
+    "agents": [],
+    "models": [],
+    "results": [],
+    "views": []
+  },
+  "selected_source_keys": [],
+  "presentation": {
+    "summary_group_by": "agent",
+    "summary_statistic": "mean",
+    "summary_table_open": false,
+    "selected_source_key": null,
+    "selected_step_id": null,
+    "visible_view_names": [],
+    "workspace_view_filters": {
+      "tags": [],
+      "models": [],
+      "group_by": []
+    },
+    "open_view_tables": []
+  }
+}
+```
+
+`peval-workspace-snapshot.html` embeds the complete ordered catalog scope,
+report data, exact source-to-uniquified-Trial mapping, presentation state,
+visible Saved View definitions/summaries, associated Workspace Report metadata
+and previews, CSS, JavaScript, and cached ECharts. It permits local table
+sorting/filtering, row/step switching, Summary and Saved View disclosures, and
+report previews. It does not render archive/selection/edit/save/delete/export,
+Source Manager, or Report Manager controls and performs no workspace API
+requests after opening. Markdown reports use the existing safe renderer. Raw
+HTML is encoded in the projection, materialized as a Blob only when opened, and
+displayed in an iframe with `sandbox="allow-scripts"` and no same-origin
+permission. The offline reader has no new-tab action. The facade adds
+`render_workspace_snapshot_html(report, snapshot, locale, echarts_js)` while
+the existing `render_html` and `render_serve_html` interfaces and outputs remain
+unchanged.
   Export and data-table filter menus close when the user clicks outside the open
   menu or opens another menu, while clicks inside the menu keep it open. This
   submenu behavior applies only to menu-like `<details>` controls and must not
   auto-close Timeline diagnostic sections or Step detail sections.
+
+Serve mode additionally places a direct `Export Excel` action in the
+Leaderboard Summary header. It exports exactly the rows in the currently
+rendered Leaderboard page after Search and column filters; pagination still
+defines the page boundary, and Leaderboard row-checkbox selection does not
+change this scope. The request snapshots those ordered `source_keys`, the
+current Summary `group_by`, and selected chart statistic. A missing source
+invalidates the whole request rather than silently changing the workbook.
+
+Summary Excel requests use `POST /api/exports` with `kind: "summary_xlsx"`.
+Leaderboard requests contain
+`summary: {scope: "leaderboard", source_keys: string[], group_by:
+"overall"|"agent"|"model", statistic:
+"mean"|"min"|"q1"|"p50"|"q3"|"p95"|"max"}`. Saved-view requests contain
+`summary: {scope: "saved_views", views: string[]}`; names are ordered,
+de-duplicated, non-empty, and resolved from the latest view definitions. A
+missing or invalid view rejects the whole export. Saved-view worksheets always
+chart Mean to match their on-screen cards. Existing raw Leaderboard Table,
+and JSON export payloads and filenames remain unchanged; CLI/static HTML
+rendering remains unchanged.
+
+`peval-leaderboard-summary.xlsx` contains one `Leaderboard Summary` worksheet.
+`peval-saved-views.xlsx` contains one worksheet per selected view. View names
+are made legal Excel sheet names by replacing forbidden characters, trimming
+to 31 characters, and adding deterministic case-insensitive collision
+suffixes. Each worksheet starts with metadata; saved-view metadata includes
+Name, editable Configuration YAML without `schema_version`, raw Markdown
+Notes, Group, Match count, and Chart statistic. Below it is a real filterable
+table with repeated `Metric`, `Group`, `Count`, `Mean`, `Min`, `Q1`, `P50`,
+`Q3`, `P95`, and `Max` values. The table header is frozen. Numeric cells stay
+numeric: duration values use Excel durations, error rates use percentages,
+missing statistics are blank, and valid zeroes remain present.
+
+Every non-empty summary worksheet embeds six Excel-native horizontal bar
+charts in a two-column by three-row grid to the right of the table. Each chart
+references the worksheet table's group labels and the requested statistic
+column; charts are OOXML workbook chart parts, not screenshots. A saved view
+with zero matches still receives metadata and an empty-state table header but
+no charts. Workbook string writes disable automatic formula and URL conversion
+and use literal string cells for names, configuration, notes, and labels.
+Static HTML reports do not expose either serve-only summary export action.
 
 Workspace Report binding lists load catalog pages instead of embedding all
 sources. Binding drafts persist across pages, and saved relative Trial-cell

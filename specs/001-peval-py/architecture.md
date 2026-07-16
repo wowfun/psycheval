@@ -21,17 +21,20 @@ workflows:
   exact source bindings, tolerant catalog projection, content reads,
   rebinding, and deletion behind one filesystem-backed interface.
 - workspace views owns saved-view Markdown frontmatter/body validation,
-  traversal-safe atomic persistence, tolerant discovery, and definitions used
-  for catalog-wide summary projections.
+  traversal-safe atomic create/update/rename/delete, tolerant discovery, and
+  definitions used for catalog-wide summary and OR-query projections.
 - report building owns report JSON v19 assembly, timing metadata, annotations,
   automatic analysis metrics, and input data references.
 - analysis owns cached analysis and notes reads, analysis import compilation,
   note writes, and path safety for Trial cell annotation artifacts.
 - HTML rendering owns package asset loading, safe payload injection, serve shell
-  markup, and token estimates.
+  markup, token estimates, and the offline workspace-snapshot projection and
+  renderer. Snapshot rendering is independent from report JSON v19 and live
+  serve polling.
 - serve owns local HTTP protocol handling, startup background loading, route
   controllers, request payload validation, source mutation response envelopes,
-  and ECharts cache serving.
+  ECharts cache serving, catalog-generation snapshot scope resolution, and
+  in-memory Excel summary workbook composition.
 
 Adapters must not import the refactored internals directly. The adapter-facing
 modules `peval_py.config`, `peval_py.sources`, and `peval_py.redaction` remain
@@ -53,6 +56,9 @@ workspace           -> repository, artifacts, report, analysis overlays
 workspace catalog   -> workspace artifacts, report, SQLite
 workspace reports   -> local filesystem and current source-key projection
 workspace views     -> local filesystem and CatalogQuery-compatible values
+serve Excel export  -> workspace catalog summaries, workspace views, XlsxWriter
+workspace snapshot  -> workspace catalog, report building, workspace views,
+                       workspace reports, HTML rendering, cached ECharts
 report              -> analysis schema/cache interfaces, redaction
 html                -> assets and i18n
 ```
@@ -86,7 +92,8 @@ temporary Trial files and SQLite rather than a test-only storage port.
 The shared value types are:
 
 - `CatalogQuery`: source state, page, page size, literal search, sort and
-  direction, and Tags/Agent/Model/Result facets.
+  direction, Tags/Agent/Model/Result facets, and optional saved-view OR
+  predicates resolved by the serve runtime.
 - `CatalogPage`: generation, checking/stale flags, total, page, page size,
   summary items, and low-cardinality facets.
 - `CatalogRow`: source and Leaderboard summary fields, `artifact_revision`,
@@ -101,7 +108,19 @@ The shared value types are:
 ## Serve HTTP Envelopes
 
 `GET /` returns only the serve shell. `GET /api/catalog` returns a
-`CatalogPage`; `GET /api/report?source_key=...` returns one `DetailEnvelope`.
+`CatalogPage`; repeated saved-view names are resolved by the serve runtime and
+passed to the catalog as one OR predicate plus the ordinary AND refinement.
+`GET /api/report?source_key=...` returns one `DetailEnvelope`.
+`POST /api/exports` validates the existing table/report export payloads, a
+summary-workbook payload, or the workspace-snapshot payload. Summary export
+resolves every requested source or saved view against one committed catalog
+generation before passing compact grouped statistics to the Excel writer. The
+writer does not scan workspace artifacts or reinterpret saved-view predicates.
+Workspace-snapshot export holds one non-blocking catalog read guard for scope
+resolution, full Trial loading, saved-view summaries, and report bindings. Its
+projection records the exact `source_key` to uniquified report `trial_key`
+mapping so duplicate raw Trial keys remain navigable offline. A concurrent
+writer produces a clear busy response rather than a mixed-generation file.
 Source mutations return only the committed generation and compact change
 metadata. Reload and multi-item writer requests return `202` with an operation
 id, whose progress is read from `GET /api/operations/<id>`. Browser code then

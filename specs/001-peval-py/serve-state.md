@@ -87,6 +87,33 @@ temporary sibling then atomically replace `<workspace>/views/<view-name>.md`.
 Existing views require explicit overwrite confirmation. Symlinks, malformed
 frontmatter, and unsupported schema or values are ignored during discovery so
 they cannot break serve startup or the valid-view catalog.
+Serve may update a valid view's filename, configuration fragment, or Markdown
+notes in place. Configuration edits are YAML mappings containing exactly an
+optional `filters` field and required `group_by`; `schema_version` remains
+storage-owned and is not editable in the browser. Renaming never overwrites an
+existing view. Update writes retain the same validation and temporary-sibling
+atomic replacement rules as create, while a rename uses one traversal-safe
+same-directory move. Batch deletion validates every requested name and regular
+file before removing any view; symlinked, missing, duplicate, or invalid names
+fail the request rather than deleting a partial selection.
+
+Summary-workbook and workspace-snapshot exports are derived output and write no
+workspace state.
+Leaderboard Summary export resolves an explicit ordered source-key snapshot
+against one committed catalog generation. Saved Views export resolves the
+selected definitions from the current `views/` catalog and computes every
+worksheet summary from that same committed generation. Export therefore cannot
+partially omit a concurrently missing source or view, and it never modifies the
+Markdown view format.
+
+Workspace-snapshot export acquires the catalog's non-blocking read guard before
+resolving its complete query and keeps that guard through Trial/report/view
+projection. A writer already holding the workspace operation lock causes the
+request to fail as busy. The derived file embeds only Workspace Reports bound
+to the final source-key scope; each report is counted and embedded once. The
+50 MiB input budget includes the final Trial inputs plus those unique report
+contents, while the packaged cached ECharts runtime is not counted as user
+workspace input.
 
 Runtime source state lives beside each Trial cell in
 `<cell>/.peval/state.json`. Missing `.peval/` or missing

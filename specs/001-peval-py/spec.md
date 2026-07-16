@@ -33,9 +33,18 @@ same command tree.
   reader to be opened in a new browser tab, and provide report inventory,
   rebinding, and deletion management
 - serve-only saved Leaderboard views stored as human-editable Markdown files,
-  with durable catalog filters, summary grouping, and user notes; saved views
-  can be reapplied and, when one or more exist, compared in a right-side
-  workspace summary rail
+  with durable catalog filters, summary grouping, and user notes; one or more
+  saved views render in an editable, filterable right-side analysis rail whose
+  index and analysis cards share one visible-row projection, may be selected
+  together as an OR query, share that rail with the covering Step drawer, and
+  may be exported together as a native-chart Excel workbook
+- serve-only Excel export of the current visible Leaderboard Summary page,
+  preserving grouped numeric statistics as worksheet values and embedding six
+  native horizontal bar charts for the selected statistic
+- serve-only export of the current complete Leaderboard query as a single-file,
+  offline, read-only Eval Workspace snapshot with its complete Trial details,
+  presentation state, visible saved views, associated Workspace Reports, and
+  cached chart runtime
 - Source Manager import of complete Trial cells from local external `runs/`
   trees into the selected peval-py workspace, including a local native file
   picker that can fill the Path import textarea with absolute file paths

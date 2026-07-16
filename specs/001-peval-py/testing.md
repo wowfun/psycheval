@@ -340,7 +340,8 @@ Coverage must verify:
 - serve UI HTML mode reuses the static report body while rendering a compact
   source/status toolbar, modal source manager, a Leaderboard row-selection
   checkbox column, a header select-visible checkbox, and one Leaderboard
-  `Export` menu with `Table`, `JSON Report`, and `HTML Report` choices.
+  `Export` menu with `Table`, `JSON Report`, and `Workspace snapshot (.html)`
+  choices.
   Leaderboard and Trajectory Overview also render synchronized serve-only
   `Show archived` and bulk Archive/Activate controls. Clicking a Leaderboard
   session row selects that Trial and opens the step drawer on its first User
@@ -415,12 +416,13 @@ Coverage must verify:
   delayed initial load completes, a top-toolbar scanning status instead of a
   misleading normal empty-source status, and a full `/api/sources` envelope
   after the background load finishes.
-- serve main-view archived mode is lazy and mutually exclusive with active mode:
-  `GET /api/report?source_state=archived` returns archived readable sources,
-  `GET /api/report` remains active by default, `source_key` report loads still
-  return single-source detail, archived reports are fetched only when the browser
-  first switches modes, and switching is disabled with a status message when the
-  target readable source count is zero.
+- serve main-view archived mode is lazy and mutually exclusive with active mode.
+  Assembled `report.js` tests start from an active catalog page containing only
+  active rows and prove that Show archived remains enabled, switching requests
+  `/api/catalog?state=archived`, rerenders the report surfaces, and can switch
+  back through the active catalog. An empty target renders its normal empty
+  state and still allows switching back. Saved-view mixed-state `all` mode keeps
+  the switch checked and disabled.
 - serve UI bulk source-state actions use only checked rows currently visible in
   `leaderboardRows()`: tests cover hidden checked rows being ignored, Source
   Manager selection not affecting the payload, successful archive/activate
@@ -430,10 +432,16 @@ Coverage must verify:
   rejection for `POST /api/sources/state`. HTTP tests keep backend payload
   semantics stable: `/api/sources/state` may return an empty report for the
   requested `report_source_state`; the browser owns the automatic fallback load.
-- serve UI export helpers use visible checked rows when any currently visible
-  rows are checked, otherwise the current visible filtered and sorted rows.
-  Checked rows hidden by filters remain selected in UI state but are excluded
-  from the current export scope until visible again.
+- serve workspace-snapshot export tests cover no-selection full-query scope,
+  global-selection intersection with the full query, saved-view OR predicates,
+  later AND refinements, query sorting, unknown keys/views, empty intersections,
+  duplicate Trial-key mapping, zero matches, 100-row and combined 50-MiB limits,
+  one-generation read guards, writer-busy errors, content type, and
+  `peval-workspace-snapshot.html` filename. Renderer tests verify complete
+  analysis/catalog/presentation/view/report projection, inline ECharts with no
+  external core asset, zero runtime fetch, absence of write controls, sandboxed
+  Blob report previews, escaped Markdown, isolated raw HTML, and no reader
+  new-tab link.
 - HTML does not render the old Summary, Session Heatmap, or Session Table
   labels in multi-session reports.
 - HTML renders Report Notes, Leaderboard, Trajectory Overview, selected Trial
@@ -499,6 +507,9 @@ Coverage must verify:
   the drawer width so report content is not hidden behind it. The drawer remains
   scrollable when browser zoom or short viewports make its content taller than
   the available screen height.
+- layout tests assert that desktop Saved Views/Step-drawer split selectors make
+  `.workspace` full-width with no maximum, ordinary `.workspace` keeps its
+  1180px maximum, and the 1180px breakpoint still collapses to one column.
 - HTML renders the peval-style Run, Result, Evidence, and Usage Breakdown
   sections for single-session reports.
 - HTML report typography keeps the body text baseline at 15px and compact
@@ -698,18 +709,41 @@ Coverage must verify:
 - workspace view storage tests cover YAML frontmatter/body round trips,
   Unicode names and notes, duplicate conflict then atomic overwrite, invalid
   names, malformed or symlinked files, valid-view discovery isolation, and
-  omission/defaulting of All filters and active source state.
+  omission/defaulting of All filters and active source state. They also cover
+  safe rename, rename conflict, Notes and configuration update, strict editable
+  YAML fields, and prevalidated multi-view deletion without partial mutation.
 - saved-view HTTP and catalog tests cover same-origin writes, checking-time
   rejection, filter/group validation, all-match summary statistics beyond a
   100-row page, and Overall/Agent/Model grouping parity with Leaderboard
-  Summary metric and missing-value semantics.
+  Summary metric and missing-value semantics. Composite-query tests cover OR
+  across full view predicates, overlapping-row deduplication, later AND
+  refinements, paging/sorting/facets, missing names, and XLSX export parity.
+- summary-workbook tests cover strict Leaderboard and Saved Views request
+  validation, ordered de-duplication, missing-source/view whole-request
+  failure, and exact visible-page versus whole-view summary scope. XLSX ZIP/XML
+  assertions verify legal unique worksheet names, native chart/drawing parts,
+  six chart series linked to the selected statistic, numeric duration and
+  percentage cells, preserved zeroes and blanks, literal formula-like strings,
+  frozen headers, and the no-chart zero-match case.
 - assembled serve UI interaction tests cover the Summary save controls,
   race-safe save/list refresh, single-view rail visibility, removal of the
   header Saved views menu, independent collapsed saved-view table disclosures,
-  and Apply/Cancel-application default restoration; they also cover empty and
-  single-row states, the save dialog's displayed non-default filters and
-  grouping, dialog and overwrite flow, static-mode exclusion, and the rail's
-  notes, charts, and apply action.
+  index columns, draft multi-select filter menus, within-column OR and
+  between-column AND, visible select-all/indeterminate state, hidden selection
+  preservation, index/card visible-row parity, zero-result filtering, OR Apply,
+  in-cell edit commit/cancel/errors, batch delete,
+  row-to-card navigation, Notes truncation/full-text access, and Clear
+  conditions restoration with row selection preserved. They also cover empty
+  and single-row states, the save dialog's displayed non-default filters and
+  grouping, generated `<tags> - <group>`/`All - <group>` default and 120-character
+  truncation, Tags/Models comma editors, Group-by select, Other-conditions YAML,
+  preservation of unedited configuration, dialog and overwrite flow,
+  static-mode exclusion, two-column chart
+  layout, shared Step-drawer covering behavior, and narrow-screen fallbacks.
+  They also cover the Leaderboard Summary visible-row export payload, Saved
+  Views multi-selection export order, disabled export actions without eligible
+  rows/selections, download filenames, and absence of serve-only Summary Excel
+  controls from static report output.
 - legacy top-level `report` and `convert` commands are rejected.
 - translated evaluation docs exist under `docs/i18n/zh-CN/...`, the peval-py
   tool README translation exists beside `tools/peval-py/README.md`, English

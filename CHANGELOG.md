@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-07-16
+
+- Reworked serve Saved Views around an editable index with draft multi-selection,
+  batch deletion, OR-composed filtering, shared data-table controls, and a
+  two-chart analysis rail.
+- Added atomic view mutations, complete-catalog queries, Leaderboard reset and
+  layout fixes, and reversible archived-view switching.
+- Added serve-only XLSX exports for Leaderboard Summary and Saved Views, plus a
+  bounded read-only HTML workspace snapshot with catalog, analysis, views,
+  previews, and cached ECharts.
+
 ## 2026-07-15
 
 - Added durable Leaderboard saved views with Markdown notes, persisted filters
