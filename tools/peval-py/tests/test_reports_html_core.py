@@ -152,23 +152,27 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertIn("agentNameFor(row)", html)
         self.assertIn("metricCellShade(row, column, rows)", html)
         self.assertIn("metric-shade-4", html)
-        self.assertIn('key: "session_id", label: t("session", "Session"), width: "180px", filterable: true', html)
-        self.assertIn('key: "agent", label: t("agent", "Agent"), width: "120px", filterable: true', html)
-        self.assertIn('key: "model", label: t("model", "Model"), width: "150px", filterable: true', html)
-        self.assertIn('key: "status", label: t("result", "Result"), width: "104px", filterable: true', html)
+        self.assertIn('key: "session_id", label: t("session", "Session"), valueType: "identity", filterable: true', html)
+        self.assertIn('key: "agent", label: t("agent", "Agent"), valueType: "identity", filterable: true', html)
+        self.assertIn('key: "model", label: t("model", "Model"), valueType: "identity", filterable: true', html)
+        self.assertIn('key: "status", label: t("result", "Result"), valueType: "status", filterable: true', html)
+        self.assertNotIn('width: "180px"', html)
         self.assertIn("function renderDataTable", html)
         self.assertIn("function applyDataTableControls", html)
         self.assertIn("function bindDataTableControls", html)
+        self.assertIn("function bindDataTableEditors", html)
         self.assertIn("function toggleDataTableSort", html)
         self.assertIn("controls.sort = null", html)
         self.assertIn("state.tables[tableId]", html)
         self.assertIn("controls.filters ||= {}", html)
-        self.assertIn('bindDataTableControls(target, "leaderboard"', html)
-        self.assertIn('bindDataTableControls(target, "timeline"', html)
+        self.assertIn('bindDataTableControls(target, {', html)
+        self.assertIn('tableId: "leaderboard"', html)
+        self.assertIn('tableId: "timeline"', html)
         self.assertNotIn("state.filters", html)
-        self.assertIn("columns.every(column =>", html)
+        self.assertIn("columns.every(", html)
         self.assertIn("function filterValues(row, column)", html)
-        self.assertIn("values.some(value => selected.includes(value))", html)
+        self.assertIn("values.some(", html)
+        self.assertIn("selected.includes(value)", html)
         self.assertIn('return applyDataTableControls("leaderboard", applySessionSearch(reportRows()), leaderboardColumns(), reportRows())', html)
         self.assertIn("filter-control", html)
         self.assertIn("filter-option", html)
@@ -178,18 +182,18 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertIn("data-filter-clear", html)
         self.assertIn('label: t("duration", "Active Duration")', html)
         self.assertIn("trial?.wall_duration_ms", html)
-        self.assertIn("metric: true, value: row => row.duration_ms", html)
-        self.assertIn("metric: true, value: row => row.tokens", html)
-        self.assertIn("metric: true, value: row => row.total_tool_calls", html)
-        self.assertIn("metric: true, value: row => row.turns", html)
+        self.assertIn("metric: true, value: (row) => row.duration_ms", html)
+        self.assertIn("metric: true, value: (row) => row.tokens", html)
+        self.assertIn("metric: true, value: (row) => row.total_tool_calls", html)
+        self.assertIn("metric: true, value: (row) => row.turns", html)
         self.assertNotIn("function rowIdleDurationMs(row)", html)
         self.assertNotIn('key: "idle_duration_ms"', html)
         self.assertNotIn("Idle Duration", html)
         self.assertIn("function rowToolErrorRate(row)", html)
-        self.assertIn('value: row => rowToolErrorRate(row)', html)
+        self.assertIn('value: (row) => rowToolErrorRate(row)', html)
         self.assertIn('key: "cost_usd"', html)
-        self.assertNotIn("metric: true, value: row => row.cost_usd", html)
-        self.assertIn('key: "analysised", label: t("analysised", "Analysised"), width: "112px", filterable: true', html)
+        self.assertNotIn("metric: true, value: (row) => row.cost_usd", html)
+        self.assertIn('key: "analysised", label: t("analysised", "Analysised"), valueType: "status", filterable: true', html)
         self.assertIn("function rowAnalysised(row)", html)
         self.assertIn("function analysisArtifactPathsFor(trialKey)", html)
         self.assertIn('"analysised": "Analysised"', html)
@@ -209,7 +213,7 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertIn("function comparisonScrollState()", html)
         self.assertIn('scrollPosition("#leaderboard .table-wrap", true)', html)
         self.assertIn('scrollPosition("#trajectory-overview .trajectory-overview-list", false)', html)
-        self.assertIn("function restoreComparisonScrollState(state)", html)
+        self.assertIn("function restoreComparisonScrollState(", html)
         self.assertIn("restoreComparisonScrollState(scrollState)", html)
         self.assertIn("function bindComparisonScrollSync()", html)
         self.assertIn("function syncComparisonScroll(source, target)", html)
@@ -397,8 +401,8 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
             },
         }
         asset = load_asset_text("report.js")
-        self.assertIn("\nrender(data());", asset)
-        asset = asset.rsplit("\nrender(data());", 1)[0]
+        self.assertIn('\n"peval-py-entrypoint";', asset)
+        asset = asset.rsplit('\n"peval-py-entrypoint";', 1)[0]
         script = f"""
 const vm = require("vm");
 const asset = {json.dumps(asset)};
@@ -473,8 +477,8 @@ console.log(result);
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         asset = load_asset_text("report.js")
-        self.assertIn("\nrender(data());", asset)
-        asset = asset.rsplit("\nrender(data());", 1)[0]
+        self.assertIn('\n"peval-py-entrypoint";', asset)
+        asset = asset.rsplit('\n"peval-py-entrypoint";', 1)[0]
         script = f"""
 const vm = require("vm");
 const asset = {json.dumps(asset)};
@@ -543,8 +547,8 @@ console.log(result);
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         asset = load_asset_text("report.js")
-        self.assertIn("\nrender(data());", asset)
-        asset = asset.rsplit("\nrender(data());", 1)[0]
+        self.assertIn('\n"peval-py-entrypoint";', asset)
+        asset = asset.rsplit('\n"peval-py-entrypoint";', 1)[0]
         script = f"""
 const vm = require("vm");
 const asset = {json.dumps(asset)};

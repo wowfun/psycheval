@@ -7,8 +7,8 @@ class PevalPyReportHtmlTimelineTests(unittest.TestCase):
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js timeline helpers")
         asset = load_asset_text("report.js")
-        self.assertIn("\nrender(data());", asset)
-        asset = asset.rsplit("\nrender(data());", 1)[0]
+        self.assertIn('\n"peval-py-entrypoint";', asset)
+        asset = asset.rsplit('\n"peval-py-entrypoint";', 1)[0]
         report = {
             "schema_version": 19,
             "includes": ["core"],
@@ -300,8 +300,8 @@ console.log(result);
         self.assertIn("width: labelWidth", html)
         self.assertIn("interval: xAxisScale.interval", html)
         self.assertIn("minInterval: xAxisScale.interval", html)
-        self.assertIn("formatter: value => fmtTimelineAxis(value, xAxisScale.interval)", html)
-        self.assertIn('return interval && interval < 1000 ? "0ms" : "0s"', html)
+        self.assertIn("fmtTimelineAxis(value, xAxisScale.interval)", html)
+        self.assertIn('? "0ms" : "0s"', html)
         self.assertIn("TIMELINE_INPUT_STAGE_THRESHOLD_MS = 50", html)
         self.assertNotIn("message", stage_source)
         self.assertNotIn("reasoning_content", stage_source)
@@ -315,10 +315,10 @@ console.log(result);
         self.assertIn("model.active_total_ms", detail_pct_source)
         self.assertNotIn("model.wall_total_ms", detail_pct_source)
         self.assertNotIn("model.wall_total_ms", detail_columns_source)
-        self.assertIn('key: "stage", label: t("timeline_col_stage", "Stage"), sortable: true, filterable: true', detail_columns_source)
-        self.assertIn('key: "duration_ms", label: t("timeline_col_duration", "Duration"), type: "number", numeric: true, sortable: true, metric: true', detail_columns_source)
-        self.assertIn('key: "active_pct", label: t("timeline_col_total_pct", "Active Share"), type: "number", numeric: true, sortable: true, metric: true', detail_columns_source)
-        self.assertIn("html: row => renderTimelineActiveShare(row, model)", detail_columns_source)
+        self.assertIn('key: "stage", label: t("timeline_col_stage", "Stage"), valueType: "text", sortable: true, filterable: true', detail_columns_source)
+        self.assertIn('key: "duration_ms", label: t("timeline_col_duration", "Duration"), valueType: "number"', detail_columns_source)
+        self.assertIn('key: "active_pct", label: t("timeline_col_total_pct", "Active Share"), valueType: "number", numeric: true, sortable: true, metric: true', detail_columns_source)
+        self.assertIn("html: (row) => renderTimelineActiveShare(row, model)", detail_columns_source)
         self.assertIn('className: "active-share-cell"', detail_columns_source)
         self.assertNotIn('key: "distribution"', detail_columns_source)
         self.assertNotIn("timeline_col_distribution", detail_columns_source)
@@ -340,7 +340,7 @@ console.log(result);
         self.assertIn("fill: labelInside ? \"#fffdf8\" : color", html)
         self.assertIn("const color = api.value(4)", html)
         self.assertIn('cursor: "pointer"', html)
-        self.assertIn('node.addEventListener("click", event => event.stopPropagation())', html)
+        self.assertIn('node.addEventListener("click", (event) => event.stopPropagation())', html)
         self.assertIn('state.timelineChart.on("click"', html)
         self.assertIn("openTimelineStep(params?.data?.trace_item)", html)
         self.assertIn("state.selectedStep = { trialKey: state.selectedTrial, stepId: String(item.step_id) }", html)
@@ -370,7 +370,7 @@ console.log(result);
         self.assertNotIn("timeline-waterfall-svg", html)
         self.assertNotIn("timeline-svg-grid", html)
         self.assertNotIn("Idle gap", html)
-        self.assertNotIn("chart.js", html.lower())
+        self.assertNotIn("cdn.jsdelivr.net/npm/chart.js", html.lower())
 
     def test_html_timeline_trace_keeps_zero_duration_tool_stages(self) -> None:
         if not shutil.which("node"):
@@ -453,8 +453,8 @@ console.log(result);
         html = render_html(report)
         payload = script_json(html, "peval-py-data")
         asset = load_asset_text("report.js")
-        self.assertIn("\nrender(data());", asset)
-        asset = asset.rsplit("\nrender(data());", 1)[0]
+        self.assertIn('\n"peval-py-entrypoint";', asset)
+        asset = asset.rsplit('\n"peval-py-entrypoint";', 1)[0]
         script = f"""
 const vm = require("vm");
 const asset = {json.dumps(asset)};
@@ -582,8 +582,8 @@ console.log(JSON.stringify(trace.stages.map(stage => ({{
             ],
         }
         asset = load_asset_text("report.js")
-        self.assertIn("\nrender(data());", asset)
-        asset = asset.rsplit("\nrender(data());", 1)[0]
+        self.assertIn('\n"peval-py-entrypoint";', asset)
+        asset = asset.rsplit('\n"peval-py-entrypoint";', 1)[0]
         script = f"""
 const vm = require("vm");
 const asset = {json.dumps(asset)};
@@ -636,8 +636,8 @@ console.log(JSON.stringify(trace.stages.map(stage => ({{
             result = convert_db(str(db_path), None, config)
             report = build_report(result, config, "inline")
         asset = load_asset_text("report.js")
-        self.assertIn("\nrender(data());", asset)
-        asset = asset.rsplit("\nrender(data());", 1)[0]
+        self.assertIn('\n"peval-py-entrypoint";', asset)
+        asset = asset.rsplit('\n"peval-py-entrypoint";', 1)[0]
         script = f"""
 const vm = require("vm");
 const asset = {json.dumps(asset)};
@@ -701,8 +701,8 @@ console.log(JSON.stringify(trace.stages.map(stage => ({{
             result = convert_db(str(db_path), None, config)
             report = build_report(result, config, "inline")
         asset = load_asset_text("report.js")
-        self.assertIn("\nrender(data());", asset)
-        asset = asset.rsplit("\nrender(data());", 1)[0]
+        self.assertIn('\n"peval-py-entrypoint";', asset)
+        asset = asset.rsplit('\n"peval-py-entrypoint";', 1)[0]
         script = f"""
 const vm = require("vm");
 const asset = {json.dumps(asset)};

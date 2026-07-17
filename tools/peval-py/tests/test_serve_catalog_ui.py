@@ -12,7 +12,7 @@ class ServeCatalogUiTests(unittest.TestCase):
     def test_archived_toggle_queries_target_catalog_and_can_return_from_empty_state(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required for report.js archived-toggle coverage")
-        asset = load_asset_text("report.js").rsplit("\nrender(data());", 1)[0]
+        asset = load_asset_text("report.js").rsplit('\n"peval-py-entrypoint";', 1)[0]
         script = r"""
 const vm = require("vm");
 const nodes = {
@@ -91,7 +91,7 @@ Promise.resolve(result).then(value => console.log(value)).catch(error => { conso
     def test_catalog_rows_default_detail_and_cross_page_selection(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required for report.js catalog state coverage")
-        asset = load_asset_text("report.js").rsplit("\nrender(data());", 1)[0]
+        asset = load_asset_text("report.js").rsplit('\n"peval-py-entrypoint";', 1)[0]
         script = r"""
 const vm = require("vm");
 const nodes = {
@@ -168,7 +168,7 @@ Promise.resolve(result).then(value => console.log(value));
     def test_catalog_selection_resolves_source_keys_to_detail_trial_steps(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required for report.js catalog selection coverage")
-        asset = load_asset_text("report.js").rsplit("\nrender(data());", 1)[0]
+        asset = load_asset_text("report.js").rsplit('\n"peval-py-entrypoint";', 1)[0]
         script = r"""
 const vm = require("vm");
 const reports = {

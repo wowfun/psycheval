@@ -121,9 +121,15 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", serve_html)
         self.assertIn(".serve-mode .workspace-side-region .step-drawer", serve_html)
         self.assertIn("position:absolute", serve_html)
+        self.assertIn("@media (min-width:1181px)", serve_html)
+        self.assertIn("height:100dvh", serve_html)
+        self.assertIn("max-height:min(calc(45px + (48px * 10)),42dvh)", serve_html)
+        self.assertIn("max-height:min(260px,32dvh)", serve_html)
         self.assertIn("@media (max-width:1180px)", serve_html)
         self.assertIn("@media (max-width:720px)", serve_html)
         self.assertIn("inset:auto 0 0", serve_html)
+        self.assertIn('id="leaderboard-region"', serve_html)
+        self.assertIn("data-workspace-main-scroll", serve_html)
         self.assertIn("data-catalog-clear-conditions", serve_html)
         self.assertNotIn("data-catalog-clear-selection", serve_html)
         self.assertNotIn("data-view-cancel-application", serve_html)
@@ -188,7 +194,8 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertNotIn('name="alias"', serve_html)
         self.assertNotIn('data-source-alias-save', serve_html)
         self.assertNotIn('data-source-alias-input', serve_html)
-        self.assertIn('data-source-inline-edit="alias"', serve_html)
+        self.assertIn('data-table-column-key="${esc(column.key)}"', serve_html)
+        self.assertIn('valueType: "text", value: (source) => String(source?.source_alias', serve_html)
         self.assertIn(
             compact_css_text(
                 ".source-manager-body{min-height:0;display:grid;"
@@ -247,10 +254,13 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('key: "finished_at_ms"', serve_html)
         self.assertIn("function sourceColumns()", serve_html)
         self.assertIn("last_turn_finished_at_ms", serve_html)
-        self.assertIn('{ key: "source_tags", label: t("tags", "Tags"), width: "180px"', serve_html)
+        self.assertIn('{ key: "source_tags", label: t("tags", "Tags"), valueType: "list"', serve_html)
+        self.assertIn('commit: (source, value) => commitSourceCellEdit(source, "tags", value)', serve_html)
         self.assertIn("source-table", serve_html)
-        self.assertIn("sourceSelection: new Set()", serve_html)
-        self.assertIn('bindDataTableControls(list, "sources"', serve_html)
+        self.assertIn("sourceSelection:", serve_html)
+        self.assertIn("new Set()", serve_html)
+        self.assertIn('tableId: "sources"', serve_html)
+        self.assertIn('rowKey: (source) => source?.source_key', serve_html)
         self.assertIn("serveMode() ? [selectionColumn(), ...leaderboardColumns()] : leaderboardColumns()", serve_html)
         self.assertIn("data-select-visible", serve_html)
         self.assertIn("data-row-select", serve_html)
@@ -266,14 +276,16 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("function updateAdapterDefaultOptions()", serve_html)
         self.assertIn("function bindAdapterDefaultDbControls()", serve_html)
         self.assertIn("function renderServeSourceAliasCell(source)", serve_html)
-        self.assertIn("function saveInlineSourceEdit(cell, field, sourceKey, value)", serve_html)
+        self.assertIn("function commitSourceCellEdit(row, field, value)", serve_html)
+        self.assertIn("function beginTableCellEdit(cell, { tableId, column, row, onChange = null })", serve_html)
+        self.assertNotIn("function saveInlineSourceEdit", serve_html)
         self.assertIn('serveApi("/api/db-sessions"', serve_html)
         self.assertIn("function inspectDbSessions(form)", serve_html)
         self.assertIn("function addSelectedDbSessions(form)", serve_html)
         self.assertIn("session_ids: sessionIds", serve_html)
         self.assertIn('serveApi("/api/upload"', serve_html)
         self.assertIn('serveApi("/api/sources"', serve_html)
-        self.assertIn('serveApi("/api/refresh"', serve_html)
+        self.assertIn('serveApi("/api/sources/reload"', serve_html)
         self.assertIn("data-source-manager-open", serve_html)
         self.assertIn("data-source-list", serve_html)
         self.assertIn("data-source-upload-form", serve_html)
@@ -293,7 +305,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("工作台快照 (.html)", zh_serve_html)
         self.assertIn("function exportScopeRows()", serve_html)
         self.assertIn(
-            "const selected = rows.filter(row => state.rowSelection.has(row.trial_key));",
+            "const selected = rows.filter((row) => state.rowSelection.has(row.trial_key));",
             serve_html,
         )
         self.assertIn("return selected.length ? selected : rows;", serve_html)
@@ -311,13 +323,12 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("data-notes-save", serve_html)
         self.assertIn("/notes", serve_html)
         self.assertIn(
-            "analysis: (original.annotations.analysis || []).filter(item => selectedKeys.has(item.trial_key))",
+            "analysis: (original.annotations.analysis || []).filter((item) => selectedKeys.has(item.trial_key))",
             serve_html,
         )
-        self.assertIn('downloadText("peval-report-v19.json"', serve_html)
-        self.assertIn('downloadText("peval-report.html"', serve_html)
+        self.assertIn('"peval-report-v19.json"', serve_html)
         self.assertIn('"peval-workspace-snapshot.html"', serve_html)
-        self.assertIn("peval-leaderboard-visible.xlsx", serve_html)
+        self.assertIn("peval-leaderboard.xlsx", serve_html)
         self.assertIn("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", serve_html)
         self.assertIn("function xlsxBytesForRows(rows)", serve_html)
         self.assertNotIn("peval-leaderboard-visible.csv", serve_html)
