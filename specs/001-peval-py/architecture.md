@@ -35,6 +35,9 @@ workflows:
   controllers, request payload validation, source mutation response envelopes,
   ECharts cache serving, catalog-generation snapshot scope resolution, and
   in-memory Excel summary workbook composition.
+- the browser application owns embedded bootstrap parsing, normalized report and
+  catalog projections, UI state, common report rendering, and the three
+  static/serve/workspace-snapshot mode adapters behind one application interface.
 
 Adapters must not import the refactored internals directly. The adapter-facing
 modules `peval_py.config`, `peval_py.sources`, and `peval_py.redaction` remain
@@ -65,6 +68,42 @@ html                -> assets and i18n
 
 This prevents cycles where workspace state imports input loading while input
 loading imports workspace snapshot state.
+
+Browser startup and packaging use these explicit seams:
+
+```text
+entry -> application lifecycle + selected mode runtime
+entry -> shared report runtime + workspace rail effects
+shared runtime <-> focused render/interaction modules through named ESM imports
+focused modal lifecycle -> DOM/focus primitives only
+```
+
+The first ESM migration preserves existing render coordination while replacing
+implicit file order and last-declaration-wins behavior. Follow-up extractions
+should move shared state and pure selectors toward leaf modules and reduce cycles;
+they must not recreate a global concatenation contract to do so.
+
+The browser entry is the only module with startup side effects. Browser modules
+communicate through explicit imports rather than concatenation-order globals and
+must not redeclare a symbol to override an earlier asset. Shared report state is
+owned by the runtime module; focused modules own their rendering and event
+binding behavior behind named exports.
+
+## Browser Application Interface
+
+`createReportApp({ platform, bootstrap, modeRuntime })` is the browser
+application seam. It returns `start()` and `destroy()`; tests use the same
+interface as the production entry. The platform owns the document/window
+lifecycle, while focused browser tests install isolated jsdom globals and fake
+network or timing behavior before importing modules that read browser APIs.
+
+Static report, workspace snapshot, and live serve are selected explicitly at the
+mode seam. Static report performs local report interactions only. Workspace
+snapshot projects embedded data and must not start runtime requests. Live serve
+enables catalog/detail requests, polling, mutations, downloads, and stale-response
+rejection in the shared runtime modules. Catalog rows keep separate UI key,
+`source_key`, and canonical report `trial_key` identities; a catalog identity
+must never be written into the report identity field.
 
 ## Package Facades
 
@@ -138,11 +177,19 @@ report for the page shell.
 
 ## Assets
 
-Report assets are source files, not generated artifacts. CSS and JavaScript may
-be split into ordered package assets and concatenated by the Python asset loader
-without a build step. The ordering must keep bootstrap/state helpers before
-renderers and keep the final startup call last.
+Browser JavaScript source is an explicit ESM graph under `tools/peval-py/web`.
+One side-effect entry is bundled with pinned esbuild tooling into a deterministic,
+unminified, single-file ESM package asset. The generated `report.js` is committed,
+contains no external import or chunk, and is verified byte-for-byte against the
+source graph. Wheels include the generated asset but not the source graph;
+sdists include both. Building or running the Python package never invokes Node.
+
+CSS remains split into ordered package assets and concatenated by the Python
+asset loader. HTML rendering inlines CSS and the JavaScript bundle. The bundle
+runs through `<script type="module">`, follows ECharts initialization in the
+document, and must not contain a literal closing script tag.
 
 Asset refactors must preserve static report mode and serve mode over the same
 report body. Serve-only code may add source management and export controls, but
-static report output must not show serve controls.
+static report output must not show serve controls. Workspace-snapshot output
+must remain a single offline file and issue no application network request.

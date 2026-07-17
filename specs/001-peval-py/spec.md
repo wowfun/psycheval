@@ -22,10 +22,13 @@ same command tree.
   Trial-cell artifacts and a rebuildable SQLite serve catalog, with
   server-paginated active and archived source views, literal full-text search,
   source tags, inline display-metadata editing, cross-page selection, queued
-  batch source actions, and on-demand single-Trial details; selecting a later
+  batch source actions whose target state is derived from the complete retained
+  selection rather than only the current page, and on-demand single-Trial
+  details; selecting a later
   Leaderboard or Trajectory Overview row preserves both panels' internal scroll
   positions across the complete detail-load rerender; Source Manager and
-  workspace report bindings show each session's tags as read-only columns
+  workspace report bindings show each session's tags, while Source Manager and
+  Leaderboard share the same type-driven inline Alias/Tags editing behavior
 - serve-only workspace report attachments that bind one imported Markdown or
   HTML analysis report to one or more exact Leaderboard source rows, expose the
   associations in a Reports column, preview reports in an isolated left-side
@@ -37,7 +40,13 @@ same command tree.
   saved views render in an editable, filterable right-side analysis rail whose
   index and analysis cards share one visible-row projection, may be selected
   together as an OR query, share that rail with the covering Step drawer, and
-  may be exported together as a native-chart Excel workbook
+  may be exported together as a native-chart Excel workbook; the live rail can
+  be closed and reopened without losing its in-page scroll state, and on desktop
+  its fixed index aligns with a fixed Leaderboard above independently scrolling
+  analysis content
+- type-driven application tables whose shared column model owns adaptive maximum
+  widths, truncation, sorting/filtering metadata, and common editable-cell
+  interaction while leaving user-authored Markdown tables untouched
 - serve-only Excel export of the current visible Leaderboard Summary page,
   preserving grouped numeric statistics as worksheet values and embedding six
   native horizontal bar charts for the selected statistic
@@ -53,6 +62,9 @@ same command tree.
 - a bundled `peval-py` agent skill that guides offline session diagnostics,
   report/export workflows, analysis report creation, and Trial-cell import
 - config-selected English and Simplified Chinese HTML report UI localization
+- one explicit ESM browser application shared by static report, live serve, and
+  offline workspace-snapshot modes, bundled deterministically into the Python
+  package without making Node.js a user runtime dependency
 - translated canonical docs under `docs/i18n/<locale>/...`
 - localized tool README files beside their original README files
 - adapter-specific message readers for Psychevo, OpenCode, and Hermes

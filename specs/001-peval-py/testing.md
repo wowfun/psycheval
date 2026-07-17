@@ -14,6 +14,8 @@ Define deterministic validation for the `peval-py` Python CLI.
 - ATIF and peval-compatible report shape
 - session-comparison view behavior and CLI notes
 - saved-workspace `serve` state and local HTTP behavior
+- ESM browser application type checks, module-level behavior, and deterministic
+  generated-bundle freshness
 - minimal peval-py serve state initialization from `peval-py init`
 - analysis report import into Trial-cell artifacts
 
@@ -26,7 +28,8 @@ Out of scope:
 ## Deterministic Coverage
 
 Tests use only temporary directories, local fixtures, Python standard-library
-SQLite, and checked-in JSONL fixture files.
+SQLite, checked-in JSONL fixture files, jsdom documents, and fake browser
+platform adapters. They do not call live providers or persistent host state.
 
 The unittest suite is split by behavior surface instead of keeping all coverage
 in one large module. Shared fixture paths, fake adapter entry points, custom
@@ -39,9 +42,22 @@ Architecture refactors must keep tests at deep module seams. Workspace state
 tests should exercise workspace services and repositories through behavior
 visible to CLI or serve workflows, not private SQL helper details. Serve tests
 should exercise controller payloads and local HTTP behavior rather than handler
-implementation branches. Asset tests must verify ordered bundle loading,
-embedded render options, Leaderboard Summary assets, and JavaScript syntax for
-every split asset file.
+implementation branches. Browser behavior tests use Node's test runner to import
+production ESM interfaces directly and create an isolated jsdom per test. They
+must fake fetch, timers, ECharts, downloads, confirmation, layout, and scroll
+behavior rather than expose production state through `window`. Python tests keep
+HTML rendering, safe embedded JSON, localization, HTTP/backend, and package asset
+contracts. New browser behavior coverage belongs in the Node suite; existing
+Python-launched browser regressions may be migrated incrementally without adding
+new concatenated-script harnesses.
+
+Asset validation type-checks the application/mode seam and build scripts with
+`checkJs`, has esbuild parse and bundle the complete ESM graph, and compares the
+in-memory result byte-for-byte with committed
+`peval_py/assets/report.js`. It must reject external imports, chunks, source maps,
+timestamps, absolute paths, and literal closing script tags. An assembled-bundle
+smoke test dynamically imports the committed artifact with an isolated browser
+platform and covers static, serve catalog/detail, and workspace-snapshot startup.
 
 Serve catalog tests use real temporary Trial-cell filesystems and real SQLite
 through `WorkspaceCatalog`. They cover cold build, warm zero-parse reconcile,
@@ -523,12 +539,21 @@ Coverage must verify:
   step duration, elapsed time, and tool execution time, while missing or zero
   timing values keep the plain chip style. Elapsed fill uses `wall_duration_ms`
   before falling back to first-to-last timestamps or active `duration_ms`.
-- HTML data tables use content-adaptive column widths with a safe maximum column
-  width; long content must not force unbounded columns, and narrow compact-value
-  columns must not reserve fixed oversized space. Shared table renderer tests
-  verify that Leaderboard and Timeline Detail Table use the same table model for
-  rendering, sorting, filtering, metric shading, empty states, headers, cells,
-  and row state while keeping isolated table state by table id.
+- Application table tests exercise the shared type-driven column interface
+  directly. They cover the fixed selection hit target, adaptive maximums for
+  every value type, single-line and two-line truncation, complete title/accessible
+  text, numeric sorting, filtering, metric shading, empty states, and isolated
+  state by table id. Coverage includes Leaderboard, Source Manager, Saved Views,
+  Timeline, summary distributions, structured Analysis, and DB sessions while
+  proving user-authored Markdown tables remain outside the control model.
+- Editable-cell tests cover double-click and keyboard entry, text/list/enum
+  Enter-or-blur saves, Markdown/YAML explicit Save/Cancel and Ctrl/Cmd+Enter,
+  Escape cancellation, focus restoration, pending/error retention, ordered
+  English/Chinese-comma list normalization, suggestion chips, and row-click
+  isolation. Adapter tests prove Leaderboard and Source Manager Alias/Tags share
+  one interaction and Source Manager Tags use the existing source-tags mutation;
+  Saved View text/list/enum/YAML/Markdown edits retain complete-configuration
+  writes and race-safe authoritative refresh.
 - HTML Timeline Waterfall and Timeline Detail Table diagnostics render from
   existing selected-Trial step/tool timing metadata, derive a flat performance
   trace with latency-bearing stages and near-zero user/system markers, keep the
@@ -661,6 +686,9 @@ Coverage must verify:
   newline-separated absolute paths while preserving existing input on
   cancel/error, export scope after search, and source-key mapping after
   filtering.
+- Browser Source Manager tests retain an archived selection while moving to a
+  page that does not contain it, then verify that the button still offers
+  Activate and the batch request submits that off-page key with `active: true`.
 - Catalog tests cover compact `step_outline` projection without message,
   reasoning, tool, observation, or report content, and rebuild the disposable
   catalog when its projection schema changes. Catalog unit and HTTP coverage
@@ -726,7 +754,8 @@ Coverage must verify:
   percentage cells, preserved zeroes and blanks, literal formula-like strings,
   frozen headers, and the no-chart zero-match case.
 - assembled serve UI interaction tests cover the Summary save controls,
-  race-safe save/list refresh, single-view rail visibility, removal of the
+  race-safe save/list refresh, single-view rail visibility, rail Close/reopen
+  focus and scroll restoration, dismissal across refresh/save, removal of the
   header Saved views menu, independent collapsed saved-view table disclosures,
   index columns, draft multi-select filter menus, within-column OR and
   between-column AND, visible select-all/indeterminate state, hidden selection
@@ -738,8 +767,9 @@ Coverage must verify:
   grouping, generated `<tags> - <group>`/`All - <group>` default and 120-character
   truncation, Tags/Models comma editors, Group-by select, Other-conditions YAML,
   preservation of unedited configuration, dialog and overwrite flow,
-  static-mode exclusion, two-column chart
-  layout, shared Step-drawer covering behavior, and narrow-screen fallbacks.
+  static-mode exclusion, fixed desktop Leaderboard/index regions with independent
+  analysis/card scrolling and short-viewport caps, two-column chart layout,
+  shared Step-drawer covering behavior, and 1180px narrow-screen fallback.
   They also cover the Leaderboard Summary visible-row export payload, Saved
   Views multi-selection export order, disabled export actions without eligible
   rows/selections, download filenames, and absence of serve-only Summary Excel
@@ -767,15 +797,29 @@ python /home/kevin/.codex/skills/.system/skill-creator/scripts/quick_validate.py
 python -m compileall skills/peval-py/scripts
 ```
 
-The primary peval-py package validation command is:
+The browser application validation commands are:
+
+```sh
+npm --prefix tools/peval-py ci
+npm --prefix tools/peval-py run build
+npm --prefix tools/peval-py run check
+```
+
+The primary Python package validation command is:
 
 ```sh
 UV_PROJECT_ENVIRONMENT=.venv uv run --project tools/peval-py python -m unittest discover -s tools/peval-py/tests
 ```
 
-Catalog changes validate in order: focused catalog tests, focused HTTP tests,
-Node interaction tests, the opt-in 10K benchmark, `node --check` for changed
-assets, the full unittest discovery command, then `git diff --check`.
+Catalog changes validate in order: focused browser catalog tests, focused Python
+catalog and HTTP tests, the opt-in 10K benchmark when relevant, the complete
+browser check, full unittest discovery, package asset build inspection, then
+`git diff --check`.
+
+Distribution validation builds the sdist and wheel without invoking the browser
+build and verifies that the wheel contains the generated bundle, template, and
+CSS but not ESM sources or `node_modules`; the sdist retains the ESM sources and
+npm manifests.
 
 Smoke validation should also run representative CLI commands against fixtures
 and inspect generated JSON with:

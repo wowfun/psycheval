@@ -2,6 +2,14 @@
 
 ## 2026-07-16
 
+- Replaced ordered browser-script concatenation with a pinned deterministic ESM
+  build, an explicit application/mode lifecycle, native Node/jsdom checks, and a
+  committed Python package bundle that keeps Node out of the runtime path.
+- Improved serve workspace behavior with clearer manager and modal states,
+  cross-page Source Manager bulk actions, editable Saved Views and analysis
+  interactions, shared type-driven tables and persistence adapters, adaptive
+  truncation, fixed desktop analysis/Saved Views scrolling, and restored
+  focus/scroll positions across workspace sessions.
 - Reworked serve Saved Views around an editable index with draft multi-selection,
   batch deletion, OR-composed filtering, shared data-table controls, and a
   two-chart analysis rail.

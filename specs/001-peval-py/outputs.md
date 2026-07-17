@@ -77,9 +77,11 @@ writes either JSON or HTML:
   counted as failed when its matched observation marks the corresponding
   per-tool metadata status as `error`; unmatched tool results remain visible as
   observations with warnings but do not increase this tool-call numerator.
-- HTML is emitted as a single offline file with inline CSS and JavaScript,
-  while the source HTML templates, CSS, and JavaScript live in package asset
-  files instead of large Python strings. It renders the selected Trial trajectory, step rows,
+- HTML is emitted as a single offline file with inline CSS and a deterministic
+  ESM JavaScript bundle. Browser source lives as explicit modules outside the
+  wheel, while templates, CSS, and the generated bundle live in package asset
+  files instead of large Python strings. The bundle is loaded with an inline
+  `type="module"` script and has no external imports. It renders the selected Trial trajectory, step rows,
   reasoning, message, tool-call, observation, metrics cues, and one combined
   Expand all / Collapse all control. Expanded step bodies keep reasoning and
   message content first, then render tool-call and observation blocks in
@@ -119,16 +121,28 @@ writes either JSON or HTML:
   escape cell content, and keep malformed table-like text readable as normal
   paragraphs. The renderer must not add a third-party Markdown dependency or
   change report JSON.
-- HTML data tables use content-adaptive column widths with a safe maximum
-  column width instead of fixed column tracks. Wide tables may still scroll
-  horizontally inside their table shell, but narrow content such as compact
-  labels should not reserve oversized empty columns, and long cell content must
-  not expand a column without bound. The browser renderer uses one shared data
-  table layer for Leaderboard and Timeline Detail Table rendering, sorting,
-  filtering, numeric metric shading, empty states, table headers, cells, and
-  row state. Each table has isolated table state keyed by table id so sort and
-  filter changes in one table do not affect the other table or the report JSON
-  payload.
+- Application-owned HTML tables use one type-driven column model with
+  content-adaptive widths and safe type-specific maximums instead of fixed
+  tracks. Selection columns alone retain a fixed 46px hit target. Number columns
+  cap at 14ch; date/status/enum columns at 20ch; text/list columns at 28ch; and
+  identity/path/Markdown/YAML columns at 40ch. Wide tables may still scroll
+  horizontally inside their shell, while text/list/path cells use single-line
+  ellipsis and Markdown/YAML previews use a two-line clamp. Truncated values
+  retain their complete text through title and accessible labels. User-authored
+  Markdown tables are content rather than application controls and keep their
+  existing complete-cell, horizontally scrollable rendering.
+
+  The same deep table module owns Leaderboard, Source Manager, Saved Views
+  index, Timeline Detail Table, summary distributions, structured Analysis
+  tables, and the DB-session picker. Its column interface owns value type,
+  formatting, sorting/filtering metadata, cell state, and optional editing.
+  Editable text/list/enum cells open on double-click or keyboard Enter and save
+  on Enter or blur; editable Markdown/YAML cells use explicit Save/Cancel and
+  Ctrl/Cmd+Enter. Escape cancels every editor. List values split English or
+  Chinese commas, trim, discard empty values, and de-duplicate in input order.
+  Failed saves keep the draft editor and focus visible, and editing never
+  selects or navigates the containing row. Each table keeps isolated state by
+  table id so changes do not affect another table or report JSON.
 - HTML renders Timeline Waterfall and Timeline Detail Table diagnostics inside
   the selected Trial trajectory, after Notes/Evidence and before the final
   Steps list. These diagnostics are derived in the browser from the existing
@@ -215,7 +229,10 @@ writes either JSON or HTML:
   details drawer, state transitions, and visual tokens, then adds only
   serve-specific controls around that body. A third workspace-snapshot mode
   reuses the same analysis/read-only display modules over embedded data, but is
-  neither static report mode nor live serve mode and starts no API polling.
+  neither static report mode nor live serve mode and starts no API polling or
+  other application network request. All three modes are adapters over one ESM
+  application and one common report surface; they are not separate frontend
+  implementations.
   Serve-mode table export writes the
   current row selection, or all currently visible filtered rows when no rows are
   selected, as a default `.xlsx` workbook rather than CSV. JSON report export
@@ -378,15 +395,15 @@ index and its Clear/Apply affordances while rendering an empty cards region.
 Notes are truncated in the index and expose their complete text on hover and
 keyboard focus. Clicking a non-interactive row cell scrolls the rail to the
 corresponding card. Double-clicking Name, Tags, Models, Group by, Other
-conditions, or Notes opens an in-cell editor with explicit Save and Cancel
-actions. Name uses a text input; Tags and Models use an ordered, de-duplicated
-English/Chinese-comma editor; Group by uses an Overall/Agent/Model select;
-Other conditions uses YAML limited to state, search, agents, and results; and
-Notes uses a Markdown textarea. Configuration-cell saves merge these edited
-fields with the untouched view definition and submit one complete YAML fragment
-through the existing atomic `field: "configuration"` update. Escape cancels;
-Enter saves Name; Ctrl/Cmd+Enter saves textareas. Conflicts and validation
-errors leave the editor open.
+conditions, or Notes opens the shared value-type editor. Name uses the text
+editor; Tags and Models use the ordered list editor; Group by uses the enum
+editor; Other conditions uses a YAML editor limited to state, search, agents,
+and results; and Notes uses a Markdown editor. Text/list/enum edits save on
+Enter or blur. Markdown/YAML editors expose explicit Save and Cancel and save on
+Ctrl/Cmd+Enter. Configuration-cell saves merge edited fields with the untouched
+view definition and submit one complete YAML fragment through the existing
+atomic `field: "configuration"` update. Escape cancels; conflicts and
+validation errors leave the editor open.
 
 The Save view dialog pre-fills its name as `<tag1>,<tag2> - <group>` or
 `All - <group>` when no Tags filter is active. The group suffix uses the stable
@@ -403,15 +420,23 @@ row that matches each saved view, never just the first 100-page response, and
 the server returns compact group statistics rather than matching rows. Saved
 views and the Step drawer occupy one shared right-side region: opening a Step
 covers the rail without changing its scroll position, and closing it reveals
-that same rail state. On narrow viewports the rail becomes a normal full-width
-section, charts reduce to one column where necessary, and the Step drawer keeps
-its bottom-sheet behavior.
+that same rail state. The live rail header includes a Close action. Closing it
+is an in-memory page-session choice: it preserves the analysis, index, and card
+scroll positions and exposes a Saved views reopen action in Leaderboard Summary.
+Saving or refreshing views does not reopen a dismissed rail; a page reload again
+opens the rail when at least one valid view exists. On narrow viewports the rail
+becomes a normal full-width section, charts reduce to one column where necessary,
+and the Step drawer keeps its bottom-sheet behavior.
 
-On desktop, opening either the Saved views rail or Step drawer lets the main
-`.workspace` use the complete viewport width (`width: 100%; max-width: none`)
-while preserving page padding and the clamped right-side width. Ordinary
-single-column serve and static reports retain the 1180px maximum. At 1180px and
-below the layout remains single-column.
+Above 1180px, an open Saved views rail makes `.workspace` use the complete
+viewport width and height while preserving page padding and the clamped
+right-side width. The left column fixes the title/report-notes/Leaderboard block
+and scrolls Summary, Trajectory Overview, and Trace below it; the right column
+fixes the Saved views header/index and scrolls cards below it. The Leaderboard
+body remains capped at ten rows and additionally at 42dvh; the view index is
+capped at `min(260px, 32dvh)`. At 1180px and below both columns return to normal
+single-column page flow. Ordinary single-column serve and static reports retain
+the 1180px maximum.
 
 The Leaderboard page controls replace the row-selection `Clear` action with
 `Clear conditions`; the header checkbox remains the row-selection reset.
@@ -441,7 +466,11 @@ leave unused space below the inventory and binding panels.
 The modal supports Session/ATIF path, DB, and input-table source forms, upload
 of JSONL, ATIF JSON, or peval-py report JSON snapshots, source checkbox
 selection, Reload-adjacent batch Archive/Activate/Delete actions, and
-per-source status display. Its table includes a read-only Tags column sourced
+per-source status display. Checkbox selection retains both the source key and
+its active/archived state across pagination. The dynamic Archive/Activate action
+derives its target from that complete retained selection and submits the same
+complete set of keys, so the visible page cannot change an off-page selection's
+operation. Its table includes a read-only Tags column sourced
 from ordered `source_tags`, using the same chip presentation as Leaderboard and
 displaying `-` when empty. The source list does not render a per-row Refresh
 column; the toolbar `Reload` action is its refresh entry point.
@@ -478,9 +507,9 @@ still inspects exactly one DB path at a time. Adapter choices in the source mana
 	  Source aliases can be edited from the source list and affect only display in
 	  the source list, the Leaderboard Session Alias column, Trajectory Overview,
 	  and selected Trial summary; Evidence/Input Source continues to show the
-	  original path. Source Manager Alias cells and serve Leaderboard Session Alias
-	  and Tags cells share the same double-click editor. Enter or blur saves, Escape cancels,
-	  and editing controls do not select the Trial row. Tags are split on English
+	  original path. Source Manager and serve Leaderboard Alias and Tags cells share
+	  the same type-driven editors. Enter or blur saves, Escape cancels, and editing
+	  controls do not select the Trial row. Tags are split on English
 	  and Chinese commas, stored as ordered unique strings, and empty input clears
 	  the tag list. The Tags editor also shows existing tags from loaded serve
 	  sources/reports as chips that can be clicked to add or remove them while
