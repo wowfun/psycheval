@@ -1,3 +1,9 @@
+import { analysisFor, esc, fmtMs, fmtNum, fmtPct, hasMetricValue, t } from "./runtime.js";
+import { infoGrid } from "./analysis-metrics.js";
+import { renderAnalysisPaths } from "./analysis-selected.js";
+import { tableCellContent, tableValueAttributes } from "./data-tables.js";
+import { renderMarkdown } from "./markdown.js";
+
 function renderSelectedAnalysis(trialKey) {
   const analysis = analysisFor(trialKey);
   if (!analysis) return "";
@@ -122,9 +128,13 @@ function renderAnalysisObject(label, value) {
 function renderMetricTable(value, depth = 0) {
   if (!isPlainObject(value) || !Object.keys(value).length) return "";
   const rows = Object.entries(value)
-    .map(([key, item]) => `<tr><th>${esc(analysisMetricLabel(key))}</th><td>${renderMetricValue(key, item, depth)}</td></tr>`)
+    .map(([key, item]) => {
+      const label = analysisMetricLabel(key);
+      const fullText = analysisValueText(item);
+      return `<tr><th ${tableValueAttributes("identity", label)}>${tableCellContent(esc(label))}</th><td ${tableValueAttributes(analysisTableValueType(key, item), fullText)}>${tableCellContent(renderMetricValue(key, item, depth))}</td></tr>`;
+    })
     .join("");
-  return `<table class="analysis-kv-table"><tbody>${rows}</tbody></table>`;
+  return `<div class="analysis-table-wrap"><table class="data-table analysis-kv-table"><tbody>${rows}</tbody></table></div>`;
 }
 function renderMetricValue(key, value, depth = 0) {
   if (isMetricScalar(value)) return esc(metricValueText(key, value));
@@ -143,9 +153,18 @@ function renderMetricValue(key, value, depth = 0) {
 function renderMetricArrayTable(values, depth = 0) {
   const keys = Array.from(new Set(values.flatMap(item => Object.keys(item))));
   if (!keys.length) return renderMetricDetails(values);
-  const head = keys.map(key => `<th>${esc(analysisMetricLabel(key))}</th>`).join("");
-  const rows = values.map(item => `<tr>${keys.map(key => `<td>${renderMetricValue(key, item[key], depth)}</td>`).join("")}</tr>`).join("");
-  return `<div class="analysis-table-wrap"><table class="analysis-data-table"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  const valueTypes = new Map(keys.map(key => [key, analysisTableValueType(key, values.find(item => item[key] !== null && item[key] !== undefined)?.[key])]));
+  const head = keys.map(key => { const label = analysisMetricLabel(key); return `<th ${tableValueAttributes(valueTypes.get(key), label)}>${tableCellContent(esc(label))}</th>`; }).join("");
+  const rows = values.map(item => `<tr>${keys.map(key => `<td ${tableValueAttributes(valueTypes.get(key), analysisValueText(item[key]))}>${tableCellContent(renderMetricValue(key, item[key], depth))}</td>`).join("")}</tr>`).join("");
+  return `<div class="analysis-table-wrap"><table class="data-table analysis-data-table"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function analysisTableValueType(key, value) {
+  if (typeof value === "number") return "number";
+  if (Array.isArray(value)) return "list";
+  if (/(?:^|_)(?:path|file|uri|url)$/.test(String(key || ""))) return "path";
+  if (/(?:^|_)(?:id|name|model|agent)$/.test(String(key || ""))) return "identity";
+  if (/(?:^|_)(?:status|state|result|severity)$/.test(String(key || ""))) return "status";
+  return "text";
 }
 function renderMetricDetails(value) {
   const summary = Array.isArray(value)
@@ -231,3 +250,32 @@ function analysisValueText(value) {
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
+export {
+  analysisMetricGroupLabel,
+  analysisMetricLabel,
+  analysisTableValueType,
+  analysisValueText,
+  autoMetricScalarRows,
+  autoMetricStructuredKeys,
+  isMetricScalar,
+  isPlainObject,
+  metricValueText,
+  renderAnalysisDetails,
+  renderAnalysisFinding,
+  renderAnalysisFindings,
+  renderAnalysisList,
+  renderAnalysisMetricGroups,
+  renderAnalysisMetrics,
+  renderAnalysisObject,
+  renderAnalysisValue,
+  renderAutoMetricGroup,
+  renderLatencyBoxPlot,
+  renderLatencyComparison,
+  renderLatencyComparisonRow,
+  renderMetricArrayTable,
+  renderMetricDetails,
+  renderMetricTable,
+  renderMetricValue,
+  renderSelectedAnalysis,
+  renderStructuredAnalysis,
+};

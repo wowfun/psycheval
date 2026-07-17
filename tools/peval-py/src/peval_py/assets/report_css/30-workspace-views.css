@@ -104,6 +104,10 @@
   color:var(--muted);
   font:700 12px/1.45 var(--mono);
 }
+.workspace-views-close {
+  min-height:32px;
+  flex:0 0 auto;
+}
 .workspace-view-index {
   border-bottom:1px solid var(--rule);
   background:var(--surface);
@@ -118,15 +122,13 @@
   color:var(--muted);
   font:700 12px/1.2 var(--mono);
 }
-.workspace-view-index-actions,
-.workspace-view-inline-actions {
+.workspace-view-index-actions {
   display:flex;
   align-items:center;
   justify-content:end;
   gap:7px;
 }
-.workspace-view-index-actions .step-toggle-button,
-.workspace-view-inline-actions .step-toggle-button {
+.workspace-view-index-actions .step-toggle-button {
   min-height:30px;
 }
 .workspace-view-delete:not(:disabled) {
@@ -138,36 +140,14 @@
   border:1px solid var(--rule);
 }
 .workspace-view-index-shell .table-wrap {
-  max-height:260px;
-}
-.workspace-view-index-table {
-  min-width:1080px;
+  max-height:min(260px,32dvh);
 }
 .workspace-view-index-table th,
 .workspace-view-index-table td {
   padding:8px;
   vertical-align:top;
 }
-.workspace-view-index-table th:nth-child(2) {
-  width:17%;
-}
-.workspace-view-index-table th:nth-child(3) {
-  width:15%;
-}
-.workspace-view-index-table th:nth-child(4) {
-  width:15%;
-}
-.workspace-view-index-table th:nth-child(5) {
-  width:12%;
-}
-.workspace-view-index-table th:nth-child(6) {
-  width:23%;
-}
-.workspace-view-index-table th:nth-child(7) {
-  width:18%;
-}
 .workspace-view-select-column {
-  width:36px;
   text-align:center;
 }
 .workspace-view-index-table td[data-view-navigate] {
@@ -190,32 +170,6 @@
 }
 .workspace-view-notes-cell>span {
   -webkit-line-clamp:1;
-}
-.workspace-view-inline-editor {
-  display:grid;
-  gap:7px;
-  min-width:230px;
-}
-.workspace-view-inline-editor input,
-.workspace-view-inline-editor select,
-.workspace-view-inline-editor textarea {
-  width:100%;
-  min-width:0;
-  border:1px solid var(--rule);
-  border-radius:5px;
-  background:var(--surface);
-  color:var(--ink);
-  padding:8px;
-  font:13px/1.4 var(--sans);
-}
-.workspace-view-inline-editor textarea {
-  resize:vertical;
-  font-family:var(--mono);
-}
-.workspace-view-inline-status {
-  min-height:0;
-  color:var(--fail);
-  font:700 12px/1.35 var(--mono);
 }
 .workspace-view-list {
   display:grid;
@@ -275,9 +229,6 @@
 }
 .workspace-view-table-shell .table-wrap {
   max-height:400px;
-}
-.workspace-view-table {
-  min-width:880px;
 }
 .workspace-view-charts {
   margin-top:12px;
@@ -425,6 +376,68 @@
 .view-save-actions .step-toggle-button {
   min-height:34px;
 }
+@media (min-width:1181px) {
+  .serve-mode.workspace-views-open,
+  .serve-mode.step-drawer-open {
+    overflow:hidden;
+  }
+  .serve-mode.workspace-views-open .workspace,
+  .serve-mode.step-drawer-open .workspace {
+    height:100vh;
+    height:100dvh;
+    padding:18px;
+    overflow:hidden;
+  }
+  .serve-mode.workspace-views-open .workspace-content,
+  .serve-mode.step-drawer-open .workspace-content {
+    height:100%;
+    min-height:0;
+    align-items:stretch;
+  }
+  .serve-mode.workspace-views-open .workspace-main,
+  .serve-mode.step-drawer-open .workspace-main {
+    display:grid;
+    grid-template-rows:auto auto auto minmax(0,1fr);
+    min-height:0;
+    overflow:hidden;
+  }
+  .serve-mode.workspace-views-open .workspace-main-scroll,
+  .serve-mode.step-drawer-open .workspace-main-scroll {
+    min-height:0;
+    overflow:auto;
+    overscroll-behavior:contain;
+    padding-right:2px;
+  }
+  .serve-mode.workspace-views-open .workspace-leaderboard-region,
+  .serve-mode.step-drawer-open .workspace-leaderboard-region {
+    min-height:0;
+    margin-bottom:14px;
+  }
+  .serve-mode.workspace-views-open .leaderboard .table-wrap,
+  .serve-mode.step-drawer-open .leaderboard .table-wrap {
+    max-height:min(calc(45px + (48px * 10)),42dvh);
+  }
+  .serve-mode.workspace-views-open .workspace-side-region,
+  .serve-mode.step-drawer-open .workspace-side-region {
+    position:relative;
+    top:auto;
+    height:100%;
+    min-height:0;
+  }
+  .workspace-views {
+    display:grid;
+    grid-template-rows:auto auto minmax(0,1fr);
+    overflow:hidden;
+  }
+  .workspace-view-index {
+    min-height:0;
+  }
+  .workspace-view-list {
+    min-height:0;
+    overflow:auto;
+    overscroll-behavior:contain;
+  }
+}
 @media (max-width:1180px) {
   .serve-mode.workspace-views-open .workspace,
   .serve-mode.step-drawer-open .workspace {
@@ -442,6 +455,11 @@
   .workspace-views {
     height:auto;
     max-height:none;
+    overflow:visible;
+  }
+  .workspace-main-scroll,
+  .workspace-view-list {
+    overflow:visible;
   }
   .serve-mode .workspace-side-region .step-drawer {
     position:fixed;

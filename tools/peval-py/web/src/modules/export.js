@@ -1,3 +1,7 @@
+import { listValue, lower, renderComparisonPanels, serveMode, state } from "./runtime.js";
+import { leaderboardColumns, tableText } from "./data-tables.js";
+import { exportCurrentScope, leaderboardRows, selectServeDetail, sourceKeyForTrialKey } from "./serve-catalog.js";
+
 function bindServeSelectionControls(target) {
   if (!serveMode()) return;
   target.querySelectorAll(".select-box").forEach(control => {
@@ -68,24 +72,6 @@ function exportScopeRows() {
   const rows = leaderboardRows();
   const selected = rows.filter(row => state.rowSelection.has(row.trial_key));
   return selected.length ? selected : rows;
-}
-function exportCurrentScope(kind) {
-  const rows = exportScopeRows();
-  if (kind === "json") {
-    downloadText("peval-report-v19.json", "application/json", JSON.stringify(reportSubset(rows), null, 2));
-    return;
-  }
-  if (kind === "html") {
-    downloadText("peval-report.html", "text/html", htmlReportForSubset(reportSubset(rows)));
-    return;
-  }
-  downloadBlob(
-    "peval-leaderboard-visible.xlsx",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    new Blob([xlsxBytesForRows(rows)], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    })
-  );
 }
 function xlsxTableRows(rows) {
   const columns = leaderboardColumns();
@@ -248,7 +234,7 @@ function reportSubset(rows) {
 function htmlReportForSubset(report) {
   const clone = document.documentElement.cloneNode(true);
   clone.querySelectorAll("[data-serve-only]").forEach(node => node.remove());
-  ["report-notes", "comparison", "trace"].forEach(id => {
+  ["report-notes", "leaderboard-region", "comparison", "trace"].forEach(id => {
     const node = clone.querySelector(`#${id}`);
     if (node) node.innerHTML = "";
   });
@@ -280,3 +266,28 @@ function downloadBlob(filename, mime, blob) {
   link.remove();
   URL.revokeObjectURL(url);
 }
+export {
+  CRC32_TABLE,
+  bindServeExportControls,
+  bindServeSelectionControls,
+  bindTrialSelection,
+  concatBytes,
+  crc32,
+  crc32Table,
+  downloadBlob,
+  downloadText,
+  exportScopeRows,
+  firstUserStepSelection,
+  htmlReportForSubset,
+  reportSubset,
+  safeJsonForScript,
+  u16,
+  u32,
+  worksheetXml,
+  xlsxBytesForRows,
+  xlsxColumnName,
+  xlsxTableRows,
+  xmlDeclaration,
+  xmlEsc,
+  zipFiles,
+};

@@ -1,3 +1,7 @@
+import { TOKEN_ESTIMATES, esc, fmtMs, fmtNum, hasMetricValue, listValue, lower, stepMeta } from "./runtime.js";
+import { stepPreviewText } from "./trajectory-trace.js";
+import { metricExtra, timeGradientClass, timeGradientStyle, timeTitle, timingRatio } from "./analysis-metrics.js";
+
 function renderStepsHeader(trajectory) {
   const count = (trajectory?.steps || []).length;
   return `<div class="steps-head"><h3>Steps (${count})</h3><button class="step-toggle-button" type="button" data-step-action="toggle" ${count ? "" : "disabled"}>Expand all</button></div>`;
@@ -159,3 +163,30 @@ function bindStepToggle() {
   });
   refresh();
 }
+export {
+  bindStepToggle,
+  block,
+  blockTimestamp,
+  compareStepActivityBlocks,
+  fmtRailTokens,
+  observationMetaFor,
+  renderBlocks,
+  renderObservationBlock,
+  renderStep,
+  renderStepActivityBlocks,
+  renderStepRail,
+  renderStepsHeader,
+  renderToolCallBlock,
+  renderToolNameChip,
+  renderToolTiming,
+  stepTokenEstimate,
+  stepTokenInfo,
+  stepTokenTotal,
+  stepToolChips,
+  toolCallRatio,
+  toolErrorCount,
+  toolExecutionText,
+  toolFailed,
+  toolMetaFor,
+  valuePreview,
+};

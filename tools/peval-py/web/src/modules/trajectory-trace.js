@@ -1,3 +1,17 @@
+import { $, esc, finalMetricsFor, fmtCost, fmtDate, fmtMs, fmtNum, fmtScore, hasMetricValue, listValue, lower, renderComparisonPanels, selectedKey, serveMode, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, statusLabel, t } from "./runtime.js";
+import { agentNameFor, renderRowSelection } from "./data-tables.js";
+import { bindServeSelectionControls } from "./export.js";
+import { bindServeSourceStateControls, renderServeSourceStateControls } from "./source-state-controls.js";
+import { catalogStepOutline, leaderboardRows, metaFor, selectServeDetail, trajectoryFor } from "./serve-catalog.js";
+import { closeWorkspaceReportReader } from "./workspace-reports.js";
+import { finalMetric, infoGrid, maxPositiveMetric, reasoningExposed, stepTimingStats, systemExposed, timeTitle, timingRatio, tokenTotal, trajectoryDurationHeatClass, trialWallDurationMs } from "./analysis-metrics.js";
+import { renderSelectedNotes } from "./analysis-notes.js";
+import { renderSelectedAnalysis } from "./analysis-rendering.js";
+import { renderSelectedEvidence } from "./analysis-selected.js";
+import { disposeTimelineChart, initTimelineDiagnostics, renderTimelineDiagnostics } from "./timeline-shell.js";
+import { bindTimelineControls } from "./timeline-table.js";
+import { bindStepToggle, renderStep, renderStepsHeader, toolCallRatio, valuePreview } from "./steps.js";
+
 function renderTrajectoryOverview(rows = leaderboardRows()) {
   const target = $("trajectory-overview");
   if (!target) return;
@@ -165,7 +179,7 @@ function renderTrace() {
     <div class="step-list" id="step-list">${(trajectory?.steps || []).map(step => renderStep(step, trial, timingStats)).join("")}</div>
   `;
   initTimelineDiagnostics(trajectory, trial);
-  bindTimelineControls();
+  bindTimelineControls(trajectory, trial);
   bindStepToggle();
 }
 function renderStepDrawer() {
@@ -214,3 +228,19 @@ function setStepDrawerOpen(open) {
   if (open && serveMode()) closeWorkspaceReportReader({ restoreFocus: false });
   document.body.classList.toggle("step-drawer-open", Boolean(open));
 }
+export {
+  bindTrajectoryControls,
+  firstToolName,
+  overviewStepMeta,
+  renderStepDrawer,
+  renderTrace,
+  renderTrajectoryNode,
+  renderTrajectoryOverview,
+  renderTrajectoryOverviewRow,
+  roleLetter,
+  setStepDrawerOpen,
+  shortText,
+  stepPreviewText,
+  stepTitle,
+  trajectoryOverviewTimingModel,
+};

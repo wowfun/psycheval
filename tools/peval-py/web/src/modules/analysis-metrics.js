@@ -1,3 +1,5 @@
+import { esc, fmtMs, hasMetricValue } from "./runtime.js";
+
 function infoGrid(items) {
   return `<div class="info-grid">${items.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("")}</div>`;
 }
@@ -55,3 +57,20 @@ function finalMetric(metrics, key) {
 function metricExtra(metrics) {
   return metrics?.extra && typeof metrics.extra === "object" ? metrics.extra : {};
 }
+export {
+  finalMetric,
+  infoGrid,
+  maxPositiveMetric,
+  metricExtra,
+  positiveMetric,
+  reasoningExposed,
+  stepTimingStats,
+  systemExposed,
+  timeGradientClass,
+  timeGradientStyle,
+  timeTitle,
+  timingRatio,
+  tokenTotal,
+  trajectoryDurationHeatClass,
+  trialWallDurationMs,
+};

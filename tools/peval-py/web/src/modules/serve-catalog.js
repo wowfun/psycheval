@@ -1,3 +1,14 @@
+import { WORKSPACE_SNAPSHOT, analysisArtifactPathsFor, applySessionSearch, esc, hasMetricValue, isAnalysisArtifactPath, listValue, lower, normalizeServeSourceMode, render, renderComparison, renderComparisonPanels, selectedIndex, selectedKey, serveMode, state, synthesizedReportRow, t, workspaceSnapshotMode } from "./runtime.js";
+import { applyDataTableControls, filterValues, leaderboardColumns, renderLeaderboardExportControls, tableControls } from "./data-tables.js";
+import { downloadBlob, firstUserStepSelection } from "./export.js";
+import { renderServeSourceStateControls, serveSourceModeStatusText } from "./source-state-controls.js";
+import { renderServeSources, sourceColumns, syncSourceManagerBulkActions } from "./source-manager.js";
+import { emptyServeReport, hideServeNotice, serveApi, setServeStatus } from "./serve-effects.js";
+import { closeWorkspaceReportManager, closeWorkspaceReportReader, renderAttachWorkspaceReportAction } from "./workspace-reports.js";
+import { clearWorkspaceViewConditions, closeWorkspaceViewSaveDialog, refreshWorkspaceViews, workspaceViewRows, workspaceViews } from "./workspace-views.js";
+import { renderStepDrawer } from "./trajectory-trace.js";
+import { openModalSurface } from "./modal-surfaces.js";
+
 function reportRows() {
   if (serveMode() && (state.catalogRows.length || state.catalogPage.generation)) return listValue(state.catalogRows);
   const trajectories = listValue(state.view?.trajectory);
@@ -122,18 +133,34 @@ function sourceRows() {
   return applyDataTableControls("sources", listValue(state.sourceManagerRows), sourceColumns());
 }
 
-function openServeSourceManager() {
+function openServeSourceManager(opener = document.activeElement) {
   const manager = document.querySelector("[data-source-manager]");
   if (!manager) return;
+  closeWorkspaceViewSaveDialog({ restoreFocus: false });
   closeWorkspaceReportManager({ restoreFocus: false });
   closeWorkspaceReportReader({ restoreFocus: false });
-  manager.hidden = false;
-  document.body.classList.add("source-manager-open");
+  state.selectedStep = null;
+  renderStepDrawer();
+  state.sourceManagerStatus = {
+    phase: "loading",
+    message: t("loading", "Loading"),
+  };
+  openModalSurface(manager, {
+    opener,
+    bodyClass: "source-manager-open",
+    focusTarget: manager.querySelector("[data-source-manager-close]"),
+  });
+  renderServeSources();
   loadSourceManagerPage();
 }
 
 async function loadSourceManagerPage(pageNumber = Number(state.sourceManagerPage?.page || 1)) {
   if (typeof URLSearchParams !== "function" || typeof fetch !== "function") return;
+  state.sourceManagerStatus = {
+    phase: "loading",
+    message: t("loading", "Loading"),
+  };
+  renderServeSources();
   try {
     const params = new URLSearchParams({
       state: "all",
@@ -146,9 +173,14 @@ async function loadSourceManagerPage(pageNumber = Number(state.sourceManagerPage
     const page = await serveApi(`/api/catalog?${params.toString()}`);
     state.sourceManagerPage = page;
     state.sourceManagerRows = listValue(page.items);
+    state.sourceManagerStatus = { phase: "ready", message: "" };
+    hideServeNotice();
     renderServeSources();
   } catch (error) {
-    setServeStatus(error.message || String(error), true);
+    const message = error.message || String(error);
+    state.sourceManagerStatus = { phase: "error", message };
+    renderServeSources();
+    setServeStatus(message, true);
   }
 }
 
@@ -474,6 +506,7 @@ async function switchServeSourceMode(mode) {
 }
 
 function applyServeMutationPayload(payload) {
+  hideServeNotice();
   if (payload?.operation_id) {
     pollCatalogOperation(payload.operation_id);
     return;
@@ -510,10 +543,23 @@ async function pollCatalogOperation(operationId) {
 }
 
 function setWorkspaceWriteControlsDisabled(disabled) {
-  if (!disabled) return;
+  state.workspaceWriteBusy = Boolean(disabled);
   document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-bulk-state],[data-source-bulk-delete],[data-source-add-form] button[type=submit],[data-source-upload-form] button[type=submit],[data-source-state-action]").forEach(control => {
-    control.disabled = true;
+    if (disabled) {
+      if (!Object.prototype.hasOwnProperty.call(control.dataset, "busyPreviousDisabled")) {
+        control.dataset.busyPreviousDisabled = control.disabled ? "true" : "false";
+      }
+      control.disabled = true;
+      control.setAttribute("aria-busy", "true");
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(control.dataset, "busyPreviousDisabled")) {
+      control.disabled = control.dataset.busyPreviousDisabled === "true";
+      delete control.dataset.busyPreviousDisabled;
+    }
+    control.removeAttribute("aria-busy");
   });
+  if (!disabled) syncSourceManagerBulkActions();
 }
 
 async function refreshServeSourcesFromServer() {
@@ -632,3 +678,62 @@ async function serveDownload(kind, body, requestedFilename = "") {
     setServeStatus(error.message || String(error), true);
   }
 }
+export {
+  applyLeaderboardSearchMode,
+  applyServeDetailSelection,
+  applyServeMutationPayload,
+  applyServeSourceStateMutationPayload,
+  bindLeaderboardCatalogControls,
+  bindSourceManagerPagination,
+  catalogPageEnd,
+  catalogPageLabel,
+  catalogQueryString,
+  catalogRowForSourceKey,
+  catalogSortKey,
+  catalogStepOutline,
+  deleteSelectedServeSources,
+  detailStepSelection,
+  ensureCatalogDetail,
+  exportCurrentScope,
+  exportLeaderboardSummary,
+  filterOptions,
+  leaderboardConditionsAreDefault,
+  leaderboardRows,
+  loadCatalogPage,
+  loadServeSourceReport,
+  loadSourceManagerPage,
+  loadedServeDetailIsCurrent,
+  metaFor,
+  normalizeCatalogRow,
+  openServeSourceManager,
+  pollCatalogOperation,
+  pollServeStartupSources,
+  pruneSourceSelection,
+  refreshServeReportFromServer,
+  refreshServeSourcesFromServer,
+  renderLeaderboardPanelControls,
+  renderLeaderboardSearchControls,
+  renderSourceManagerPagination,
+  reportRows,
+  requestCatalogFacets,
+  requestCatalogSort,
+  resolveCatalogSelections,
+  rowAnalysised,
+  scheduleServeStartupPoll,
+  selectServeDetail,
+  selectServeSource,
+  serveDownload,
+  setWorkspaceWriteControlsDisabled,
+  sourceForTrialIndex,
+  sourceForTrialKey,
+  sourceKeyForTrialKey,
+  sourceManagerPageEnd,
+  sourceRows,
+  sourceSelectionKeys,
+  switchServeSourceMode,
+  syncSelectionWithVisibleRows,
+  trajectoryFor,
+  trialIndexFor,
+  trialKeyForServeSource,
+  visibleSelectedSourceKeys,
+};

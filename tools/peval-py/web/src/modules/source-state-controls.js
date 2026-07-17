@@ -1,3 +1,7 @@
+import { currentServeSourceMode, esc, listValue, normalizeServeSourceMode, readableServeSourcesFrom, serveMode, t } from "./runtime.js";
+import { serveApi, setServeStatus } from "./serve-effects.js";
+import { applyServeSourceStateMutationPayload, leaderboardRows, switchServeSourceMode, visibleSelectedSourceKeys } from "./serve-catalog.js";
+
 function renderServeSourceStateControls(rows = leaderboardRows()) {
   if (!serveMode()) return "";
   const mode = currentServeSourceMode();
@@ -34,14 +38,6 @@ function bindServeSourceStateControls(target) {
   });
 }
 
-function visibleSelectedSourceKeys(rows = leaderboardRows()) {
-  const keys = rows
-    .filter(row => row?.trial_key && state.rowSelection.has(row.trial_key))
-    .map(row => sourceKeyForTrialKey(row.trial_key))
-    .filter(Boolean);
-  return Array.from(new Set(keys));
-}
-
 async function mutateVisibleServeSourceState() {
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
@@ -66,27 +62,6 @@ async function mutateVisibleServeSourceState() {
   }
 }
 
-async function applyServeSourceStateMutationPayload(payload, options = {}) {
-  const payloadMode = normalizeServeSourceMode(payload?.report_source_state || currentServeSourceMode());
-  const targetMode = normalizeServeSourceMode(options.targetMode);
-  const movedSourceKey = firstReadableSourceKeyFrom(options.sourceKeys, payload?.sources || state.serveSources, targetMode);
-  const emptiedCurrentMode = payload?.report && listValue(payload.report?.trajectory_meta).length === 0;
-  if (emptiedCurrentMode && targetMode !== payloadMode && movedSourceKey) {
-    const targetReport = await serveApi(`/api/report?source_state=${encodeURIComponent(targetMode)}`);
-    applyServeMutationPayload(
-      {
-        ...payload,
-        report: targetReport,
-        report_source_key: movedSourceKey,
-        report_source_state: targetMode
-      },
-      { selectedSourceKey: movedSourceKey }
-    );
-    return;
-  }
-  applyServeMutationPayload(payload);
-}
-
 function firstReadableSourceKeyFrom(sourceKeys, sources, mode) {
   const requested = new Set(listValue(sourceKeys).map(key => String(key || "")).filter(Boolean));
   return readableServeSourcesFrom(sources, mode).find(source => requested.has(source.source_key))?.source_key || null;
@@ -100,3 +75,10 @@ function serveSourceModeStatusText(mode = currentServeSourceMode()) {
     ? t("serve_archived_snapshots", "Archived snapshots")
     : t("serve_active_snapshots", "Active snapshots");
 }
+export {
+  bindServeSourceStateControls,
+  firstReadableSourceKeyFrom,
+  mutateVisibleServeSourceState,
+  renderServeSourceStateControls,
+  serveSourceModeStatusText,
+};

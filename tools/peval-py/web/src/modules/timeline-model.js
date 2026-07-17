@@ -1,3 +1,9 @@
+import { hasMetricValue, lower, stepMeta, t } from "./runtime.js";
+import { positiveMetric } from "./analysis-metrics.js";
+import { TIMELINE_ESTIMATED_MODEL_CALL_CAP_MS, TIMELINE_INPUT_STAGE_THRESHOLD_MS } from "./timeline-shell.js";
+import { timelineModel } from "./timeline-chart.js";
+import { toolFailed, toolMetaFor } from "./steps.js";
+
 function timelineTrace(trajectory, meta) {
   const steps = trajectory?.steps || [];
   const stepMetas = meta?.steps || [];
@@ -300,3 +306,29 @@ function timelineStageSort(left, right) {
     || Number(right.duration_ms || 0) - Number(left.duration_ms || 0)
     || String(left.stage || "").localeCompare(String(right.stage || ""));
 }
+export {
+  timelineAllowsTimestampEstimates,
+  timelineAssignActiveOffsets,
+  timelineAssignStepNumbers,
+  timelineCategoryMeta,
+  timelineDurationMs,
+  timelineEndMs,
+  timelineEstimatedDurationMs,
+  timelineEstimatedModelCall,
+  timelineMarker,
+  timelineMarkerActiveOffset,
+  timelineModelDurationIsEstimate,
+  timelineModelStageLabel,
+  timelineOriginMs,
+  timelinePushMarker,
+  timelinePushStage,
+  timelineStage,
+  timelineStageHasMeasuredDuration,
+  timelineStageSort,
+  timelineStepRef,
+  timelineStepStartMs,
+  timelineToolCategory,
+  timelineToolLabel,
+  timelineToolRef,
+  timelineTrace,
+};

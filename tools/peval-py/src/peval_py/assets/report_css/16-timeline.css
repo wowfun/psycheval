@@ -174,9 +174,6 @@
 .timeline-table .strong-num {
   font-weight:700;
 }
-.timeline-table .active-share-cell {
-  min-width:118px;
-}
 .timeline-active-share {
   position:relative;
   display:inline-grid;

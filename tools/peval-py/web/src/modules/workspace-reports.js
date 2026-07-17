@@ -1,3 +1,10 @@
+import { $, esc, listValue, lower, readableServeSources, renderComparisonPanels, renderReadOnlySourceTags, serveMode, sourceTagsFor, state, t, workspaceDisplayMode, workspaceSnapshotMode } from "./runtime.js";
+import { renderStepDrawer } from "./trajectory-trace.js";
+import { closeServeSourceManager, sourceDisplayLabel } from "./source-manager.js";
+import { serveApi, setServeStatus } from "./serve-effects.js";
+import { leaderboardRows, visibleSelectedSourceKeys } from "./serve-catalog.js";
+import { closeModalSurface, focusSoon, openModalSurface } from "./modal-surfaces.js";
+
 function reportMessage(key, fallback, values = {}) {
   let message = String(t(key, fallback));
   Object.entries(values).forEach(([name, value]) => {
@@ -68,7 +75,7 @@ function workspaceReportLeaderboardColumn() {
   return {
     key: "workspace_reports",
     label: t("workspace_reports", "Reports"),
-    width: "170px",
+    valueType: "list",
     value: row => reportsForSourceKey(row?.source_key).map(report => report.filename).join(", ") || "-",
     html: row => renderWorkspaceReportCell(row)
   };
@@ -179,20 +186,24 @@ function openWorkspaceReportManager(opener = null) {
   closeWorkspaceReportReader({ restoreFocus: false });
   state.selectedStep = null;
   renderStepDrawer();
-  state.reportManager.opener = opener || document.activeElement || null;
   if (!workspaceReportForId(state.reportManager.selectedId)) {
     state.reportManager.selectedId = workspaceReports()[0]?.report_id || null;
     syncWorkspaceReportDraft();
   }
-  manager.hidden = false;
-  document.body.classList.add("report-manager-open");
+  openModalSurface(manager, {
+    opener,
+    bodyClass: "report-manager-open",
+    focusTarget: manager.querySelector("[data-report-manager-close]"),
+  });
   renderWorkspaceReportManager();
-  focusSoon(manager.querySelector?.("[data-report-manager-close]"));
   loadWorkspaceReportManagerData();
 }
 
 async function loadWorkspaceReportManagerData(changes = {}) {
   if (typeof URLSearchParams !== "function" || typeof fetch !== "function") return;
+  state.reportManager.loading = true;
+  setWorkspaceReportManagerStatus("");
+  renderWorkspaceReportManager();
   state.reportManager.page = Math.max(1, Number(changes.page || state.reportManager.page || 1));
   const params = new URLSearchParams({
     state: "all",
@@ -211,21 +222,19 @@ async function loadWorkspaceReportManagerData(changes = {}) {
     applyWorkspaceReportCatalog(reportsPayload?.reports || []);
     state.reportManager.pageData = page;
     state.reportManager.sourceRows = listValue(page?.items).filter(source => source?.readable !== false);
+    state.reportManager.loading = false;
+    setWorkspaceReportManagerStatus("");
     renderWorkspaceReportManager();
   } catch (error) {
+    state.reportManager.loading = false;
     setWorkspaceReportManagerStatus(error.message || String(error), true);
+    renderWorkspaceReportManager();
   }
 }
 
 function closeWorkspaceReportManager(options = {}) {
   const manager = document.querySelector("[data-report-manager]");
-  if (!manager || manager.hidden) return false;
-  manager.hidden = true;
-  document.body.classList.remove("report-manager-open");
-  const opener = state.reportManager.opener;
-  state.reportManager.opener = null;
-  if (options.restoreFocus !== false) focusSoon(opener);
-  return true;
+  return closeModalSurface(manager, options);
 }
 
 function syncWorkspaceReportDraft() {
@@ -251,15 +260,24 @@ function selectWorkspaceReport(reportId) {
 
 function renderWorkspaceReportManager() {
   const reports = workspaceReports();
+  const manager = document.querySelector("[data-report-manager]");
   const inventory = document.querySelector("[data-report-inventory]");
   const count = document.querySelector("[data-report-count]");
   if (count) count.textContent = reportMessage("reports_count", "{count} reports", { count: reports.length });
   if (inventory) {
-    inventory.innerHTML = reports.length
-      ? reports.map(renderWorkspaceReportInventoryItem).join("")
-      : `<p class="report-manager-empty">${esc(t("report_no_reports", "No reports imported"))}</p>`;
+    inventory.innerHTML = state.reportManager.loading && !reports.length
+      ? `<p class="report-manager-empty loading">${esc(t("loading", "Loading"))}</p>`
+      : reports.length
+        ? reports.map(renderWorkspaceReportInventoryItem).join("")
+        : `<p class="report-manager-empty">${esc(t("report_no_reports", "No reports imported"))}</p>`;
   }
   renderWorkspaceReportBindings();
+  manager?.setAttribute?.("aria-busy", state.reportManager.loading || state.reportManager.busy ? "true" : "false");
+  if (state.reportManager.busy) {
+    manager?.querySelectorAll?.("button:not([data-report-manager-close]),input")?.forEach(control => {
+      control.disabled = true;
+    });
+  }
   bindWorkspaceReportManagerControls();
 }
 
@@ -275,6 +293,11 @@ function renderWorkspaceReportInventoryItem(report) {
 function renderWorkspaceReportBindings() {
   const target = document.querySelector("[data-report-bindings]");
   if (!target) return;
+  target.setAttribute?.("aria-busy", state.reportManager.loading || state.reportManager.busy ? "true" : "false");
+  if (state.reportManager.loading) {
+    target.innerHTML = `<p class="report-manager-empty loading">${esc(t("loading", "Loading"))}</p>`;
+    return;
+  }
   const report = workspaceReportForId(state.reportManager.selectedId);
   if (!report) {
     target.innerHTML = `<p class="report-manager-empty">${esc(t("report_no_selection", "Select a report to manage its session bindings."))}</p>`;
@@ -430,6 +453,9 @@ async function saveWorkspaceReportBindings() {
   const reportId = state.reportManager.selectedId;
   const sourceKeys = Array.from(state.reportManager.draftBindings);
   if (!reportId || !sourceKeys.length || !workspaceReportBindingsChanged()) return;
+  if (state.reportManager.busy) return;
+  state.reportManager.busy = true;
+  renderWorkspaceReportManager();
   try {
     const payload = await serveApi(`/api/reports/${encodeURIComponent(reportId)}/bindings`, {
       method: "POST",
@@ -441,6 +467,9 @@ async function saveWorkspaceReportBindings() {
     setWorkspaceReportManagerStatus(t("report_bindings_saved", "Report bindings saved"));
   } catch (error) {
     setWorkspaceReportManagerStatus(error.message || String(error), true);
+  } finally {
+    state.reportManager.busy = false;
+    renderWorkspaceReportManager();
   }
 }
 
@@ -449,6 +478,9 @@ async function deleteWorkspaceReport(reportId) {
   if (!report) return;
   const prompt = reportMessage("report_delete_confirm", "Permanently delete {filename}?", { filename: report.filename });
   if (typeof window.confirm === "function" && !window.confirm(prompt)) return;
+  if (state.reportManager.busy) return;
+  state.reportManager.busy = true;
+  renderWorkspaceReportManager();
   try {
     const payload = await serveApi(`/api/reports/${encodeURIComponent(report.report_id)}/delete`, {
       method: "POST",
@@ -462,15 +494,19 @@ async function deleteWorkspaceReport(reportId) {
     setWorkspaceReportManagerStatus(t("report_deleted", "Report deleted"));
   } catch (error) {
     setWorkspaceReportManagerStatus(error.message || String(error), true);
+  } finally {
+    state.reportManager.busy = false;
+    renderWorkspaceReportManager();
   }
 }
 
 function setWorkspaceReportManagerStatus(message, error = false) {
   const target = document.querySelector("[data-report-manager-status]");
   if (!target) return;
-  target.textContent = message;
+  target.textContent = message || "";
   target.classList.toggle("danger", Boolean(error));
-  target.hidden = false;
+  target.classList.toggle("loading", Boolean(state.reportManager.loading));
+  target.hidden = !message;
 }
 
 function openWorkspaceReportReader(reportId, options = {}) {
@@ -614,9 +650,55 @@ function closeWorkspaceReportReader(options = {}) {
   return true;
 }
 
-function focusSoon(target) {
-  if (!target || typeof target.focus !== "function") return;
-  const apply = () => target.focus();
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(apply);
-  else apply();
-}
+export {
+  REPORT_READER_KEYBOARD_STEP,
+  REPORT_READER_MIN_WIDTH,
+  REPORT_READER_MIN_WORKSPACE_WIDTH,
+  applyWorkspaceReportCatalog,
+  attachWorkspaceReport,
+  bindWorkspaceReportBindingControls,
+  bindWorkspaceReportGlobalControls,
+  bindWorkspaceReportLeaderboardControls,
+  bindWorkspaceReportManagerControls,
+  bindWorkspaceReportReaderControls,
+  closeWorkspaceReportManager,
+  closeWorkspaceReportReader,
+  currentWorkspaceReportReaderWidth,
+  deleteWorkspaceReport,
+  filteredWorkspaceReportSources,
+  focusSoon,
+  focusWorkspaceReportSearch,
+  loadWorkspaceReportManagerData,
+  normalizedWorkspaceReports,
+  openWorkspaceReportManager,
+  openWorkspaceReportReader,
+  readableWorkspaceReportSources,
+  renderAttachWorkspaceReportAction,
+  renderWorkspaceReportBindingSource,
+  renderWorkspaceReportBindings,
+  renderWorkspaceReportCell,
+  renderWorkspaceReportInventoryItem,
+  renderWorkspaceReportManager,
+  renderWorkspaceReportReader,
+  reportBindingPageEnd,
+  reportBindingPageLabel,
+  reportMessage,
+  reportReaderMaximumWidth,
+  reportReaderViewportWidth,
+  reportsForSourceKey,
+  saveWorkspaceReportBindings,
+  selectWorkspaceReport,
+  setWorkspaceReportManagerStatus,
+  setWorkspaceReportReaderWidth,
+  syncWorkspaceReportDraft,
+  syncWorkspaceReportReaderResizeHandle,
+  workspaceReportBindingsChanged,
+  workspaceReportForId,
+  workspaceReportLeaderboardColumn,
+  workspaceReportManagerOpen,
+  workspaceReportOpenPath,
+  workspaceReportPreviewPath,
+  workspaceReportSourceSearchText,
+  workspaceReports,
+  workspaceSnapshotReportPreviewUrl,
+};

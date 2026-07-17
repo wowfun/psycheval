@@ -1,3 +1,9 @@
+import { cellNoteFor, editableNotesSource, esc, notesFor, selectedKey, serveMode, state, t } from "./runtime.js";
+import { renderTrace } from "./trajectory-trace.js";
+import { serveApi, setServeStatus } from "./serve-effects.js";
+import { applyServeMutationPayload } from "./serve-catalog.js";
+import { renderManualNote } from "./markdown.js";
+
 function renderSelectedNotes(trialKey) {
   const notes = notesFor(trialKey);
   const editor = renderNotesEditor(trialKey);
@@ -63,3 +69,11 @@ async function saveSelectedNotes(button) {
     renderTrace();
   }
 }
+export {
+  beginNotesEdit,
+  cancelNotesEdit,
+  renderNotesAction,
+  renderNotesEditor,
+  renderSelectedNotes,
+  saveSelectedNotes,
+};

@@ -37,9 +37,6 @@
 .source-table-shell {
   margin:0;
 }
-.source-table {
-  min-width:1012px;
-}
 .source-table th,.source-table td {
   vertical-align:middle;
 }

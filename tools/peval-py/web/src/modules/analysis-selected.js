@@ -1,3 +1,6 @@
+import { esc, fmtNum, hasMetricValue, t } from "./runtime.js";
+import { infoGrid, metricExtra } from "./analysis-metrics.js";
+
 function renderAnalysisPaths(analysis) {
   const paths = analysis.relative_paths || {};
   const rows = [];
@@ -36,3 +39,10 @@ function renderSelectedSource(meta) {
   const path = meta.data_ref?.relative_path;
   return path ? `<article class="selected-evidence-card"><h4>${esc(t("input_source", "Input Source"))}</h4><code>${esc(path)}</code></article>` : "";
 }
+export {
+  renderAnalysisPaths,
+  renderSelectedEvidence,
+  renderSelectedSource,
+  renderSelectedUsage,
+  renderSelectedWarnings,
+};

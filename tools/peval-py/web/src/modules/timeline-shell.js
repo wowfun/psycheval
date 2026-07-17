@@ -1,3 +1,8 @@
+import { esc, state, t } from "./runtime.js";
+import { timelineTrace } from "./timeline-model.js";
+import { openTimelineStep, timelineChartOption } from "./timeline-chart.js";
+import { fmtTimelineDuration, renderTimelineDetailTable } from "./timeline-table.js";
+
 const TIMELINE_INPUT_STAGE_THRESHOLD_MS = 50;
 const TIMELINE_ESTIMATED_MODEL_CALL_CAP_MS = 600000;
 function renderTimelineDiagnostics(trajectory, meta) {
@@ -47,3 +52,13 @@ function initTimelineWaterfallChart(trace) {
   state.timelineChart.setOption(timelineChartOption(trace), true);
   state.timelineChart.on("click", params => openTimelineStep(params?.data?.trace_item));
 }
+export {
+  TIMELINE_ESTIMATED_MODEL_CALL_CAP_MS,
+  TIMELINE_INPUT_STAGE_THRESHOLD_MS,
+  disposeTimelineChart,
+  initTimelineDiagnostics,
+  initTimelineWaterfallChart,
+  renderTimelineDiagnostics,
+  renderTimelineSection,
+  renderTimelineWaterfall,
+};

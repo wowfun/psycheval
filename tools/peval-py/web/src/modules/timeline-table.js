@@ -1,7 +1,23 @@
-function bindTimelineControls() {
+import { esc, hasMetricValue, selectedKey, state, t } from "./runtime.js";
+import { applyDataTableControls, bindDataTableControls, renderDataTable } from "./data-tables.js";
+import { renderTrace } from "./trajectory-trace.js";
+import { positiveMetric } from "./analysis-metrics.js";
+import { timelineCategoryMeta, timelineTrace } from "./timeline-model.js";
+import { openTimelineStep } from "./timeline-chart.js";
+
+function bindTimelineControls(trajectory, meta) {
   const target = document.querySelector(".timeline-diagnostics");
   if (!target) return;
-  bindDataTableControls(target, "timeline", () => renderTrace());
+  const trace = timelineTrace(trajectory, meta);
+  const columns = timelineDetailColumns(trace.model);
+  const rows = applyDataTableControls("timeline", trace.stages, columns, trace.stages);
+  bindDataTableControls(target, {
+    tableId: "timeline",
+    columns,
+    rows,
+    rowKey: row => `${row.trial_key || ""}:${row.step_id || ""}`,
+    onChange: () => renderTrace(),
+  });
   target.querySelectorAll("[data-timeline-step-id]").forEach(row => {
     const open = event => {
       event.stopPropagation();
@@ -33,12 +49,12 @@ function renderTimelineActiveShare(row, model) {
 }
 function timelineDetailColumns(model) {
   return [
-    { key: "number", label: t("timeline_col_row", "#"), type: "number", numeric: true, sortable: true, value: row => row.number_sort, format: (_value, row) => row.number || "-" },
-    { key: "stage", label: t("timeline_col_stage", "Stage"), sortable: true, filterable: true, value: row => row.stage || "-", html: row => renderTimelineStageLabel(row), cellTitle: row => row.stage || "-", className: "timeline-label-cell" },
-    { key: "wall_start_ms", label: t("timeline_col_start", "Start"), type: "number", numeric: true, sortable: true, value: row => row.wall_start_ms, format: (value, row) => fmtTimelineMaybeEstimated(fmtClockMs(value), row) },
-    { key: "wall_end_ms", label: t("timeline_col_end", "End"), type: "number", numeric: true, sortable: true, value: row => row.wall_end_ms, format: (value, row) => fmtTimelineMaybeEstimated(fmtClockMs(value), row) },
-    { key: "duration_ms", label: t("timeline_col_duration", "Duration"), type: "number", numeric: true, sortable: true, metric: true, value: row => row.duration_ms, format: (value, row) => fmtTimelineMaybeEstimated(fmtTimelineDuration(value), row), className: "strong-num" },
-    { key: "active_pct", label: t("timeline_col_total_pct", "Active Share"), type: "number", numeric: true, sortable: true, metric: true, value: row => timelineActivePctValue(row, model), format: value => hasMetricValue(value) ? `${Number(value).toFixed(1)}%` : "-", html: row => renderTimelineActiveShare(row, model), className: "active-share-cell" },
+    { key: "number", label: t("timeline_col_row", "#"), valueType: "number", numeric: true, sortable: true, value: row => row.number_sort, format: (_value, row) => row.number || "-" },
+    { key: "stage", label: t("timeline_col_stage", "Stage"), valueType: "text", sortable: true, filterable: true, value: row => row.stage || "-", html: row => renderTimelineStageLabel(row), cellTitle: row => row.stage || "-", className: "timeline-label-cell" },
+    { key: "wall_start_ms", label: t("timeline_col_start", "Start"), valueType: "datetime", numeric: true, sortable: true, value: row => row.wall_start_ms, format: (value, row) => fmtTimelineMaybeEstimated(fmtClockMs(value), row) },
+    { key: "wall_end_ms", label: t("timeline_col_end", "End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.wall_end_ms, format: (value, row) => fmtTimelineMaybeEstimated(fmtClockMs(value), row) },
+    { key: "duration_ms", label: t("timeline_col_duration", "Duration"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.duration_ms, format: (value, row) => fmtTimelineMaybeEstimated(fmtTimelineDuration(value), row), className: "strong-num" },
+    { key: "active_pct", label: t("timeline_col_total_pct", "Active Share"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => timelineActivePctValue(row, model), format: value => hasMetricValue(value) ? `${Number(value).toFixed(1)}%` : "-", html: row => renderTimelineActiveShare(row, model), className: "active-share-cell" },
   ];
 }
 function renderTimelineDetailTable(rows, model) {
@@ -48,6 +64,7 @@ function renderTimelineDetailTable(rows, model) {
     tableId: "timeline",
     columns,
     rows: visibleRows,
+    rowKey: row => `${row.trial_key || ""}:${row.step_id || ""}`,
     tableClass: "timeline-table",
     shellClass: "timeline-table-shell",
     filterOptionsRows: rows,
@@ -94,3 +111,15 @@ function fmtClockMs(value) {
   const pad = (number, size = 2) => String(number).padStart(size, "0");
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
 }
+export {
+  bindTimelineControls,
+  fmtClockMs,
+  fmtTimelineAxis,
+  fmtTimelineDuration,
+  fmtTimelineMaybeEstimated,
+  renderTimelineActiveShare,
+  renderTimelineDetailTable,
+  renderTimelineStageLabel,
+  timelineActivePctValue,
+  timelineDetailColumns,
+};

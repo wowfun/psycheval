@@ -1,3 +1,7 @@
+import { esc, renderComparisonPanels, selectedKey, state, t } from "./runtime.js";
+import { positiveMetric } from "./analysis-metrics.js";
+import { fmtClockMs, fmtTimelineAxis, fmtTimelineDuration, fmtTimelineMaybeEstimated } from "./timeline-table.js";
+
 function timelineModel(stages) {
   const activeTotal = stages.reduce((sum, stage) => sum + Math.max(0, Number(stage.duration_ms || 0)), 0);
   return {
@@ -191,3 +195,15 @@ function openTimelineStep(item) {
   state.selectedStep = { trialKey: state.selectedTrial, stepId: String(item.step_id) };
   renderComparisonPanels();
 }
+export {
+  openTimelineStep,
+  timelineBarRenderItem,
+  timelineChartOption,
+  timelineMarkerRenderItem,
+  timelineModel,
+  timelineNiceIntervalMs,
+  timelineTooltipFormatter,
+  timelineTooltipHtml,
+  timelineXAxisScale,
+  timelineYAxisLabelWidth,
+};

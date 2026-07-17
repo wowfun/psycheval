@@ -1,3 +1,5 @@
+import { esc, t } from "./runtime.js";
+
 function renderManualNote(row) {
   const sourcePath = row?.source_ref?.relative_path;
   const meta = row?.label || sourcePath
@@ -171,3 +173,16 @@ function renderInlineMarkdownText(value) {
     .replace(/(^|[^\w])\*([^*\s][^*]*?)\*/g, "$1<em>$2</em>")
     .replace(/(^|[^\w])_([^_\s][^_]*?)_/g, "$1<em>$2</em>");
 }
+export {
+  inlineMarkdown,
+  isMarkdownTableSeparator,
+  markdownTableAlignment,
+  markdownTableAt,
+  normalizedMarkdownTableRow,
+  parseMarkdownTableRow,
+  renderInlineMarkdownText,
+  renderManualNote,
+  renderMarkdown,
+  renderMarkdownTable,
+  renderMarkdownTableCell,
+};

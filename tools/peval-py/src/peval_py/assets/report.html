@@ -17,8 +17,11 @@ __CSS__
         <h1>__TITLE__</h1>
       </section>
       <section id="report-notes"></section>
-      <section class="panel-stack" id="comparison"></section>
-      <section class="trace-panel" id="trace"></section>
+      <section class="panel-stack workspace-leaderboard-region" id="leaderboard-region"></section>
+      <div class="workspace-main-scroll" data-workspace-main-scroll>
+        <section class="panel-stack" id="comparison"></section>
+        <section class="trace-panel" id="trace"></section>
+      </div>
     </main>
     __SERVE_SIDE_REGION__
   </div>
@@ -31,7 +34,7 @@ __REPORT_STEP_DRAWER__
 __WORKSPACE_SNAPSHOT_DATA__
 <script type="application/json" id="peval-py-render-options">__RENDER_OPTIONS__</script>
 __ECHARTS_SCRIPT__
-<script>
+<script type="module">
 __JS__
 </script>
 </body>

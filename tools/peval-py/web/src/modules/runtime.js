@@ -1,3 +1,13 @@
+import { renderLeaderboard } from "./data-tables.js";
+import { renderLeaderboardSummary } from "./leaderboard-summary.js";
+import { renderStepDrawer, renderTrace, renderTrajectoryOverview } from "./trajectory-trace.js";
+import { bindGlobalControls } from "./serve-controls.js";
+import { renderServeSources } from "./source-manager.js";
+import { leaderboardRows, metaFor, reportRows, scheduleServeStartupPoll, sourceForTrialIndex, sourceForTrialKey, syncSelectionWithVisibleRows, trajectoryFor } from "./serve-catalog.js";
+import { refreshWorkspaceViews } from "./workspace-views.js";
+import { finalMetric, tokenTotal, trialWallDurationMs } from "./analysis-metrics.js";
+import { renderMarkdown } from "./markdown.js";
+
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 const lower = value => String(value || "").toLowerCase();
@@ -31,6 +41,13 @@ function fmtPct(value) { return hasMetricValue(value) ? `${(Number(value) * 100)
 function fmtScore(value) { return hasMetricValue(value) ? Number(value).toLocaleString() : "-"; }
 function hasMetricValue(value) { return value !== null && value !== undefined && value !== "" && !Number.isNaN(Number(value)); }
 function data() { return JSON.parse($("peval-py-data").textContent || "{}"); }
+function bootstrapData() {
+  return {
+    report: data(),
+    renderOptions: RENDER_OPTIONS,
+    workspaceSnapshot: WORKSPACE_SNAPSHOT,
+  };
+}
 function serveMode() { return RENDER_OPTIONS?.mode === "serve"; }
 function workspaceSnapshotMode() { return RENDER_OPTIONS?.mode === "workspace_snapshot"; }
 function workspaceDisplayMode() { return serveMode() || workspaceSnapshotMode(); }
@@ -42,7 +59,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerPage: { page: 1, page_size: 100, total: 0 }, catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: new Set(), dirty: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading), serveStartupPolling: false };
+const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading), serveStartupPolling: false };
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";
@@ -74,16 +91,6 @@ function closeOpenSubmenus(except = null) {
 }
 function listValue(value) {
   return Array.isArray(value) ? value : [];
-}
-function reportRows() {
-  const trajectories = listValue(state.view?.trajectory);
-  const metas = listValue(state.view?.trajectory_meta);
-  if (metas.length >= 1) {
-    return metas
-      .map((meta, index) => synthesizedReportRow(trajectories[index] || {}, meta, index))
-      .filter(row => row.trial_key);
-  }
-  return [];
 }
 function synthesizedReportRow(trajectory, meta, index = -1) {
   const metrics = trajectory?.final_metrics || {};
@@ -121,18 +128,6 @@ function selectedIndex() {
   const index = metas.findIndex(meta => meta.trial_key === key);
   return index >= 0 ? index : 0;
 }
-function trialIndexFor(trialKey) {
-  const metas = state.view?.trajectory_meta || [];
-  return metas.findIndex(meta => meta.trial_key === trialKey);
-}
-function trajectoryFor(trialKey) {
-  const metas = state.view?.trajectory_meta || [];
-  const index = metas.findIndex(meta => meta.trial_key === trialKey);
-  return (state.view?.trajectory || [])[index >= 0 ? index : selectedIndex()] || { steps: [] };
-}
-function metaFor(trialKey) {
-  return (state.view?.trajectory_meta || []).find(meta => meta.trial_key === trialKey) || (state.view?.trajectory_meta || [])[selectedIndex()] || { steps: [] };
-}
 function finalMetricsFor(trialKey) { return trajectoryFor(trialKey)?.final_metrics || {}; }
 function stepMeta(meta, stepId) { return (meta.steps || []).find(item => item.step_id === stepId) || {}; }
 function render(view) {
@@ -164,7 +159,9 @@ function renderReportNotes(notes) {
 function renderComparison() {
   const scrollState = comparisonScrollState();
   const rows = reportRows();
+  const leaderboardRegion = $("leaderboard-region");
   if (!rows.length) {
+    if (leaderboardRegion) leaderboardRegion.innerHTML = "";
     if (serveMode()) {
       $("comparison").innerHTML = `<section class="leaderboard-summary panel" aria-labelledby="leaderboard-summary-title" id="leaderboard-summary"></section>`;
       renderLeaderboardSummary([]);
@@ -173,8 +170,9 @@ function renderComparison() {
     }
     return;
   }
+  if (leaderboardRegion) leaderboardRegion.innerHTML = `<section class="leaderboard panel" aria-labelledby="leaderboard-title" id="leaderboard"></section>`;
   $("comparison").innerHTML = `
-    <section class="leaderboard panel" aria-labelledby="leaderboard-title" id="leaderboard"></section>
+    ${leaderboardRegion ? "" : `<section class="leaderboard panel" aria-labelledby="leaderboard-title" id="leaderboard"></section>`}
     ${rows.length > 1 || workspaceDisplayMode() ? `<section class="leaderboard-summary panel" aria-labelledby="leaderboard-summary-title" id="leaderboard-summary"></section>` : ""}
     <section class="trajectory-overview panel" aria-labelledby="trajectory-overview-title" id="trajectory-overview"></section>
   `;
@@ -205,9 +203,6 @@ function analysisArtifactPathsFor(trialKey) {
 function isAnalysisArtifactPath(path) {
   const normalized = String(path || "").replace(/\\/g, "/");
   return normalized === "analysis.md" || normalized === "analysis.json" || normalized.endsWith("/analysis.md") || normalized.endsWith("/analysis.json");
-}
-function rowAnalysised(row) {
-  return analysisArtifactPathsFor(row?.trial_key).some(isAnalysisArtifactPath) ? "True" : "False";
 }
 function normalizeServeSourceMode(mode) {
   if (mode === "all") return "all";
@@ -240,28 +235,6 @@ function trialIndexForView(trialKey, view = state.view) {
   const metas = listValue(view?.trajectory_meta);
   return metas.findIndex(meta => meta?.trial_key === trialKey);
 }
-function sourceForTrialIndex(index, mode = currentServeSourceMode()) {
-  return index >= 0 ? readableServeSources(mode)[index] || null : null;
-}
-function sourceKeyForTrialKey(trialKey, view = state.view) {
-  return sourceForTrialKey(trialKey, view)?.source_key || null;
-}
-function trialKeyForServeSource(sourceKey, view = state.view, mode = currentServeSourceMode()) {
-  if (!serveMode() || !sourceKey) return null;
-  const index = readableServeSources(mode).findIndex(source => source?.source_key === sourceKey);
-  return index >= 0 ? listValue(view?.trajectory_meta)[index]?.trial_key || null : null;
-}
-function sourceForTrialKey(trialKey, view = state.view, mode = currentServeSourceMode()) {
-  if (!serveMode()) return null;
-  const index = trialIndexForView(trialKey, view);
-  const byIndex = sourceForTrialIndex(index, mode);
-  if (byIndex) return byIndex;
-  if (listValue(view?.trajectory_meta).length <= 1 && state.selectedSourceKey) {
-    const selected = readableServeSources(mode).find(source => source?.source_key === state.selectedSourceKey);
-    if (selected) return selected;
-  }
-  return readableServeSources(mode).find(source => source?.trial_key === trialKey) || null;
-}
 function editableNotesSource(trialKey) {
   const source = sourceForTrialKey(trialKey);
   if (!source || source.refreshable === false || source.snapshot) return null;
@@ -290,10 +263,6 @@ function sourceDisplayFor(row) {
 }
 function sessionAliasValue(row) {
   return sourceAliasFor(row) || "-";
-}
-function renderSessionAliasCell(row) {
-  const alias = sourceAliasFor(row);
-  return renderEditableSourceCell(row, "alias", alias, alias ? esc(alias) : `<span class="muted">-</span>`);
 }
 function sourceTagsForMeta(meta, source = null) {
   const rawTags = listValue(meta?.source_tags).length ? meta.source_tags : source?.source_tags;
@@ -324,14 +293,6 @@ function renderReadOnlySourceTags(row) {
   return tags.length
     ? `<span class="source-tag-list">${tags.map(tag => `<span class="source-tag-chip">${esc(tag)}</span>`).join("")}</span>`
     : `<span class="muted">-</span>`;
-}
-function renderSourceTagsCell(row) {
-  const html = renderReadOnlySourceTags(row);
-  return renderEditableSourceCell(row, "tags", sourceTagsEditValue(row), html);
-}
-function renderEditableSourceCell(row, field, value, html) {
-  if (!serveMode() || !row?.source_key) return html;
-  return `<span class="editable-source-cell" data-source-inline-edit="${esc(field)}" data-source-key="${esc(row.source_key)}" data-trial-key="${esc(row.trial_key || "")}" data-value="${esc(value || "")}" title="${esc(t("double_click_to_edit", "Double-click to edit"))}">${html}</span>`;
 }
 function searchQuery() {
   return String(state.search?.query || "").trim().toLowerCase();
@@ -441,3 +402,85 @@ function scrollProgress(node, range = scrollRange(node)) {
   if (range <= 0) return 0;
   return Math.max(0, Math.min(1, (node.scrollTop || 0) / range));
 }
+export {
+  $,
+  I18N,
+  OPEN_SUBMENU_DETAILS_SELECTOR,
+  RENDER_OPTIONS,
+  SUBMENU_DETAILS_SELECTOR,
+  TOKEN_ESTIMATES,
+  WORKSPACE_SNAPSHOT,
+  activeServeSources,
+  adapterDefaults,
+  allSearchActive,
+  analysisArtifactPathsFor,
+  analysisFor,
+  applySessionSearch,
+  bindComparisonScrollSync,
+  bootstrapData,
+  cellNoteFor,
+  closeOpenSubmenus,
+  comparisonScrollState,
+  currentServeSourceMode,
+  data,
+  editableNotesSource,
+  esc,
+  finalMetricsFor,
+  fmtCost,
+  fmtDate,
+  fmtMs,
+  fmtNum,
+  fmtPct,
+  fmtScore,
+  hasMetricValue,
+  initialAdapterDefaults,
+  isAnalysisArtifactPath,
+  listValue,
+  lower,
+  normalizeServeSourceMode,
+  noteSnippetFor,
+  notesFor,
+  notesPlainText,
+  readableServeSources,
+  readableServeSourcesFrom,
+  render,
+  renderComparison,
+  renderComparisonPanels,
+  renderNotesCell,
+  renderReadOnlySourceTags,
+  renderReportNotes,
+  restoreComparisonScrollState,
+  restoreScrollPosition,
+  scriptJson,
+  scrollPosition,
+  scrollProgress,
+  scrollRange,
+  searchJson,
+  searchQuery,
+  searchScope,
+  selectedIndex,
+  selectedKey,
+  serveMode,
+  serveSourcesForMode,
+  serveSourcesForModeFrom,
+  sessionAliasValue,
+  sessionSearchText,
+  sourceAliasFor,
+  sourceDisplayFor,
+  sourceIdentityFor,
+  sourceTagsEditValue,
+  sourceTagsFor,
+  sourceTagsForMeta,
+  sourceTagsFromValue,
+  sourceTagsValue,
+  state,
+  statusLabel,
+  stepMeta,
+  syncComparisonScroll,
+  syncSelectedSourceFromView,
+  synthesizedReportRow,
+  t,
+  trialIndexForView,
+  workspaceDisplayMode,
+  workspaceSnapshotMode,
+};

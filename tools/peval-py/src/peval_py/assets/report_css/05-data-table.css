@@ -30,7 +30,59 @@ th,td {
   overflow-wrap:anywhere;
 }
 .data-table th,.data-table td {
-  max-width:260px;
+  --table-column-max:28ch;
+  max-width:var(--table-column-max);
+}
+.data-table [data-value-type="selection"] {
+  width:46px;
+  min-width:46px;
+  max-width:46px;
+  box-sizing:border-box;
+}
+.data-table [data-value-type="number"] {
+  --table-column-max:14ch;
+}
+.data-table [data-value-type="datetime"],
+.data-table [data-value-type="status"],
+.data-table [data-value-type="enum"] {
+  --table-column-max:20ch;
+}
+.data-table [data-value-type="text"],
+.data-table [data-value-type="list"] {
+  --table-column-max:28ch;
+}
+.data-table [data-value-type="identity"],
+.data-table [data-value-type="path"],
+.data-table [data-value-type="markdown"],
+.data-table [data-value-type="yaml"] {
+  --table-column-max:40ch;
+}
+.data-table th .table-head-cell,
+.data-table td .table-cell-content {
+  max-width:var(--table-column-max);
+}
+.data-table td .table-cell-content {
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.data-table td[data-value-type="markdown"] .table-cell-content,
+.data-table td[data-value-type="yaml"] .table-cell-content {
+  display:-webkit-box;
+  white-space:normal;
+  -webkit-box-orient:vertical;
+  -webkit-line-clamp:2;
+}
+.data-table .source-tag-list {
+  flex-wrap:nowrap;
+  overflow:hidden;
+}
+.analysis-kv-table td:has(.analysis-table-wrap)>.table-cell-content {
+  display:block;
+  max-width:none;
+  overflow:visible;
+  white-space:normal;
 }
 th {
   color:var(--muted);
@@ -55,7 +107,6 @@ th {
 td.num,th.num {
   text-align:right;
   font-variant-numeric:tabular-nums;
-  max-width:132px;
 }
 .metric-cell {
   --metric-tint:#d7c07a;
@@ -97,19 +148,28 @@ td.num,th.num {
   overflow:hidden;
   text-overflow:ellipsis;
 }
-.editable-source-cell {
-  display:block;
-  min-width:92px;
-  min-height:24px;
-  border-radius:6px;
+.table-cell-editable {
   cursor:text;
 }
-.editable-source-cell:hover {
+.table-cell-editable:hover,
+.table-cell-editable:focus-visible {
   background:color-mix(in oklch,var(--focus),transparent 92%);
 }
-.inline-source-edit {
+.table-cell-editable:focus-visible {
+  outline:2px solid color-mix(in oklch,var(--focus),#fff 20%);
+  outline-offset:-2px;
+}
+.table-cell-editor {
+  display:grid;
+  gap:7px;
+  min-width:min(220px,70vw);
+  max-width:min(40ch,70vw);
+  overflow:visible;
+  white-space:normal;
+}
+.table-cell-editor-control {
   width:100%;
-  min-width:120px;
+  min-width:0;
   min-height:30px;
   border:1px solid color-mix(in oklch,var(--focus),transparent 42%);
   border-radius:6px;
@@ -119,24 +179,53 @@ td.num,th.num {
   font:700 12px/1.2 var(--mono);
   box-shadow:0 0 0 2px color-mix(in oklch,var(--focus),transparent 84%);
 }
-.inline-source-tag-editor {
-  display:grid;
-  gap:6px;
-  min-width:180px;
+.table-cell-editor textarea.table-cell-editor-control {
+  resize:vertical;
+  line-height:1.45;
 }
-.inline-source-tag-options {
+.table-cell-editor-suggestions,
+.table-cell-editor-actions {
   display:flex;
   flex-wrap:wrap;
   gap:4px;
   align-items:center;
 }
-.inline-source-tag-option {
+.table-cell-editor-actions {
+  justify-content:flex-end;
+}
+.table-cell-editor-actions button {
+  min-height:30px;
+  border:1px solid var(--rule);
+  border-radius:999px;
+  background:var(--surface-2);
+  color:var(--ink);
+  padding:0 10px;
+  font:700 12px/1 var(--mono);
   cursor:pointer;
 }
-.inline-source-tag-option.selected {
+.table-cell-editor-actions button.primary {
+  border-color:var(--ink);
+  background:var(--ink);
+  color:var(--surface);
+}
+.table-cell-editor-suggestion {
+  cursor:pointer;
+}
+.table-cell-editor-suggestion.selected {
   border-color:color-mix(in oklch,var(--focus),var(--ink) 18%);
   background:color-mix(in oklch,var(--focus),var(--surface) 72%);
   box-shadow:inset 0 0 0 1px color-mix(in oklch,var(--focus),transparent 34%);
+}
+.table-cell-editor-status {
+  min-height:0;
+  color:var(--muted);
+  font:700 12px/1.35 var(--mono);
+}
+.table-cell-editor-status.danger {
+  color:var(--fail);
+}
+.table-cell-editor.pending {
+  opacity:.72;
 }
 .table-head-cell {
   display:grid;

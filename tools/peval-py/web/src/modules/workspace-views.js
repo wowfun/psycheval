@@ -1,3 +1,11 @@
+import { $, closeOpenSubmenus, esc, fmtNum, listValue, normalizeServeSourceMode, serveMode, state, statusLabel, t, workspaceDisplayMode, workspaceSnapshotMode } from "./runtime.js";
+import { applyDataTableControls, bindDataTableControls, renderDataTable, selectionColumn, setVisibleSelection, tableCellContent, tableControls, tableValueAttributes } from "./data-tables.js";
+import { leaderboardSummaryDefinitions, leaderboardSummaryStatistics, leaderboardSummaryValue, renderLeaderboardSummary, summaryNumber } from "./leaderboard-summary.js";
+import { serveApi, setServeStatus } from "./serve-effects.js";
+import { leaderboardRows, loadCatalogPage, serveDownload } from "./serve-catalog.js";
+import { closeModalSurface, focusSoon, openModalSurface } from "./modal-surfaces.js";
+import { renderMarkdown } from "./markdown.js";
+
 function workspaceViews() {
   return listValue(state.workspaceViews)
     .filter(view => view && typeof view.name === "string" && view.name.trim())
@@ -32,16 +40,19 @@ function workspaceViewSummaryForName(name) {
 }
 
 function workspaceViewColumns() {
-  const editableAttrs = (view, field) => workspaceSnapshotMode()
-    ? `data-view-navigate="${esc(view.name)}" tabindex="0"`
-    : `data-view-navigate="${esc(view.name)}" data-view-edit-field="${esc(field)}" tabindex="0"`;
+  const navigateAttrs = view => `data-view-navigate="${esc(view.name)}"${workspaceSnapshotMode() ? " tabindex=\"0\"" : ""}`;
+  const edit = (field, options = {}) => workspaceSnapshotMode() ? undefined : {
+    value: view => workspaceViewEditValue(view, field),
+    commit: (view, value) => commitWorkspaceViewCellEdit(view, field, value),
+    ...options,
+  };
   const columns = [
-    { key: "name", label: t("view_name", "Name"), value: view => view.name, html: view => `<strong>${esc(view.name)}</strong>`, cellAttrs: view => editableAttrs(view, "name") },
-    { key: "tags", label: t("tags", "Tags"), filterable: true, filterValues: view => view.filters.tags, value: view => view.filters.tags.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.tags), cellAttrs: view => editableAttrs(view, "tags") },
-    { key: "models", label: t("model", "Models"), filterable: true, filterValues: view => view.filters.models, value: view => view.filters.models.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.models), cellAttrs: view => editableAttrs(view, "models") },
-    { key: "group_by", label: t("summary_group_by", "Group by"), filterable: true, value: view => view.group_by, filterLabel: workspaceViewGroupByLabel, html: view => esc(workspaceViewGroupByLabel(view.group_by)), cellAttrs: view => editableAttrs(view, "group_by") },
-    { key: "other_conditions", label: t("view_other_conditions", "Other conditions"), value: view => workspaceViewOtherConditionsLabel(view), html: view => `<span class="workspace-view-config-preview">${esc(workspaceViewOtherConditionsLabel(view))}</span>`, cellAttrs: view => editableAttrs(view, "other_conditions") },
-    { key: "notes", label: t("view_notes", "Notes"), value: view => view.notes || "-", html: view => `<span>${esc(String(view.notes || "").replace(/\s+/g, " ").trim() || "-")}</span>`, className: "workspace-view-notes-cell", cellTitle: view => view.notes || "", cellAttrs: view => `${editableAttrs(view, "notes")} aria-label="${esc(view.notes || t("view_notes_empty", "No notes"))}"` },
+    { key: "name", label: t("view_name", "Name"), valueType: "text", value: view => view.name, html: view => `<strong>${esc(view.name)}</strong>`, cellAttrs: navigateAttrs, edit: edit("name") },
+    { key: "tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: view => view.filters.tags, value: view => view.filters.tags.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.tags), cellAttrs: navigateAttrs, edit: edit("tags", { suggestions: workspaceViewTagSuggestions }) },
+    { key: "models", label: t("model", "Models"), valueType: "list", filterable: true, filterValues: view => view.filters.models, value: view => view.filters.models.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.models), cellAttrs: navigateAttrs, edit: edit("models", { suggestions: workspaceViewModelSuggestions }) },
+    { key: "group_by", label: t("summary_group_by", "Group by"), valueType: "enum", filterable: true, value: view => view.group_by, filterLabel: workspaceViewGroupByLabel, html: view => esc(workspaceViewGroupByLabel(view.group_by)), cellAttrs: navigateAttrs, edit: edit("group_by", { options: () => ["overall", "agent", "model"].map(value => ({ value, label: workspaceViewGroupByLabel(value) })) }) },
+    { key: "other_conditions", label: t("view_other_conditions", "Other conditions"), valueType: "yaml", value: view => workspaceViewOtherConditionsLabel(view), fullText: workspaceViewOtherConditionsYaml, html: view => `<span class="workspace-view-config-preview">${esc(workspaceViewOtherConditionsLabel(view))}</span>`, cellAttrs: navigateAttrs, edit: edit("other_conditions") },
+    { key: "notes", label: t("view_notes", "Notes"), valueType: "markdown", value: view => view.notes || "-", fullText: view => view.notes || "", html: view => `<span>${esc(String(view.notes || "").replace(/\s+/g, " ").trim() || "-")}</span>`, className: "workspace-view-notes-cell", cellAttrs: navigateAttrs, edit: edit("notes") },
   ];
   if (workspaceSnapshotMode()) return columns;
   return [
@@ -68,6 +79,22 @@ function renderWorkspaceViewValueList(values) {
     : `<span class="muted">-</span>`;
 }
 
+function workspaceViewTagSuggestions() {
+  return workspaceViews().flatMap(view => view.filters.tags);
+}
+
+function workspaceViewModelSuggestions() {
+  return workspaceViews().flatMap(view => view.filters.models);
+}
+
+function workspaceViewEditValue(view, field) {
+  if (field === "name") return view.name;
+  if (field === "tags" || field === "models") return view.filters[field];
+  if (field === "group_by") return view.group_by;
+  if (field === "other_conditions") return workspaceViewOtherConditionsYaml(view);
+  return view.notes;
+}
+
 function workspaceViewMessage(key, fallback, values = {}) {
   let message = String(t(key, fallback));
   Object.entries(values).forEach(([name, value]) => {
@@ -77,20 +104,44 @@ function workspaceViewMessage(key, fallback, values = {}) {
 }
 
 function renderWorkspaceViewControls() {
-  if (!serveMode()) return "";
+  if (!workspaceDisplayMode()) return "";
   const compositeApplied = state.workspaceAppliedViewNames.size > 0;
-  return `<div class="workspace-view-controls" data-workspace-view-control>
-    <button type="button" class="step-toggle-button leaderboard-summary-save" data-view-save ${compositeApplied ? `disabled title="${esc(t("clear_conditions_before_saving_view", "Clear applied views before saving a new view."))}"` : ""}>${esc(t("save_view", "Save view"))}</button>
-  </div>`;
+  const reopen = state.workspaceViewsClosed && workspaceViews().length
+    ? `<button type="button" class="step-toggle-button" data-workspace-views-open>${esc(t("saved_views", "Saved views"))}</button>`
+    : "";
+  const save = serveMode()
+    ? `<button type="button" class="step-toggle-button leaderboard-summary-save" data-view-save ${compositeApplied ? `disabled title="${esc(t("clear_conditions_before_saving_view", "Clear applied views before saving a new view."))}"` : ""}>${esc(t("save_view", "Save view"))}</button>`
+    : "";
+  return reopen || save ? `<div class="workspace-view-controls" data-workspace-view-control>${reopen}${save}</div>` : "";
 }
 
 function bindWorkspaceViewControls(target) {
   if (!workspaceDisplayMode() || !target?.querySelectorAll) return;
-  bindDataTableControls(target, "workspace-views", renderWorkspaceViewRail);
+  const columns = workspaceViewColumns();
+  const rows = workspaceViewRows();
+  bindDataTableControls(target, {
+    tableId: "workspace-views",
+    columns,
+    rows,
+    rowKey: view => view.name,
+    onChange: renderWorkspaceViewRail,
+  });
   target.querySelectorAll("[data-view-save]").forEach(button => {
     button.addEventListener("click", event => {
       event.preventDefault();
       openWorkspaceViewSaveDialog(button);
+    });
+  });
+  target.querySelectorAll("[data-workspace-views-close]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      closeWorkspaceViewRail();
+    });
+  });
+  target.querySelectorAll("[data-workspace-views-open]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      openWorkspaceViewRail();
     });
   });
   target.querySelectorAll("[data-view-apply-selected]").forEach(button => {
@@ -144,6 +195,7 @@ function bindWorkspaceViewControls(target) {
     });
     cell.addEventListener("keydown", event => {
       if (event.key !== "Enter") return;
+      if (!workspaceSnapshotMode()) return;
       event.preventDefault();
       navigateToWorkspaceView(cell.dataset.viewNavigate);
     });
@@ -152,7 +204,6 @@ function bindWorkspaceViewControls(target) {
       event.stopPropagation();
       clearTimeout(navigationTimer);
       navigationTimer = null;
-      beginWorkspaceViewInlineEdit(cell);
     });
   });
   target.querySelectorAll("[data-view-table-toggle]").forEach(button => {
@@ -188,13 +239,14 @@ function openWorkspaceViewSaveDialog(opener) {
   const dialog = document.querySelector?.("[data-view-save-dialog]");
   if (!dialog) return;
   bindWorkspaceViewDialog();
-  state.workspaceViewSave.opener = opener || null;
-  dialog.hidden = false;
-  document.body?.classList?.add("view-save-open");
   const nameInput = dialog.querySelector?.("[data-view-name-input]");
+  openModalSurface(dialog, {
+    opener,
+    bodyClass: "view-save-open",
+    focusTarget: nameInput,
+  });
   if (nameInput) {
     nameInput.value = workspaceViewDefaultName();
-    focusSoon(nameInput);
   }
   const notesInput = dialog.querySelector?.("[data-view-notes-input]");
   if (notesInput) notesInput.value = "";
@@ -211,13 +263,7 @@ function workspaceViewDefaultName(filters = currentWorkspaceViewFilters(), group
 
 function closeWorkspaceViewSaveDialog(options = {}) {
   const dialog = document.querySelector?.("[data-view-save-dialog]");
-  if (!dialog || dialog.hidden) return false;
-  dialog.hidden = true;
-  document.body?.classList?.remove("view-save-open");
-  const opener = state.workspaceViewSave.opener;
-  state.workspaceViewSave.opener = null;
-  if (options.restoreFocus !== false) focusSoon(opener);
-  return true;
+  return closeModalSurface(dialog, options);
 }
 
 function currentWorkspaceViewFilters() {
@@ -362,19 +408,66 @@ function pruneWorkspaceViewState() {
 function renderWorkspaceViewRail() {
   const target = $("workspace-views");
   if (!target) return;
+  captureWorkspaceViewScrollState();
   const allViews = workspaceViews();
   const views = workspaceViewRows();
-  const visible = allViews.length >= 1;
+  if (!allViews.length) state.workspaceViewsClosed = false;
+  const visible = allViews.length >= 1 && !state.workspaceViewsClosed;
   target.hidden = !visible;
   document.body?.classList?.toggle("workspace-views-open", visible);
   if (!visible) {
     target.innerHTML = "";
     return;
   }
-  target.innerHTML = `<div class="workspace-views-head"><div><h2>${esc(t("saved_views", "Saved views"))}</h2><p>${esc(t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p></div></div>
+  target.innerHTML = `<div class="workspace-views-head"><div><h2>${esc(t("saved_views", "Saved views"))}</h2><p>${esc(t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p></div><button type="button" class="step-toggle-button workspace-views-close" data-workspace-views-close>${esc(t("close", "Close"))}</button></div>
     ${renderWorkspaceViewIndex(views, allViews)}
-    <div class="workspace-view-list">${views.map(renderWorkspaceViewCard).join("")}</div>`;
+    <div class="workspace-view-list" data-workspace-view-list>${views.map(renderWorkspaceViewCard).join("")}</div>`;
   bindWorkspaceViewControls(target);
+  restoreWorkspaceViewScrollState();
+}
+
+function captureWorkspaceViewScrollState() {
+  const scroll = state.workspaceViewScroll;
+  const analysis = document.querySelector?.("[data-workspace-main-scroll]");
+  const index = document.querySelector?.("#workspace-views .workspace-view-index-shell .table-wrap");
+  const cards = document.querySelector?.("#workspace-views [data-workspace-view-list]");
+  if (analysis && document.body?.classList?.contains("workspace-views-open")) scroll.analysisTop = analysis.scrollTop || 0;
+  if (index) {
+    scroll.indexTop = index.scrollTop || 0;
+    scroll.indexLeft = index.scrollLeft || 0;
+  }
+  if (cards) scroll.cardsTop = cards.scrollTop || 0;
+}
+
+function restoreWorkspaceViewScrollState() {
+  const scroll = state.workspaceViewScroll;
+  const analysis = document.querySelector?.("[data-workspace-main-scroll]");
+  const index = document.querySelector?.("#workspace-views .workspace-view-index-shell .table-wrap");
+  const cards = document.querySelector?.("#workspace-views [data-workspace-view-list]");
+  if (analysis) analysis.scrollTop = scroll.analysisTop || 0;
+  if (index) {
+    index.scrollTop = scroll.indexTop || 0;
+    index.scrollLeft = scroll.indexLeft || 0;
+  }
+  if (cards) cards.scrollTop = scroll.cardsTop || 0;
+}
+
+function closeWorkspaceViewRail() {
+  if (!workspaceViews().length) return;
+  captureWorkspaceViewScrollState();
+  state.workspaceViewsClosed = true;
+  renderWorkspaceViewRail();
+  renderLeaderboardSummary(leaderboardRows());
+  focusSoon(document.querySelector?.("[data-workspace-views-open]"));
+}
+
+function openWorkspaceViewRail() {
+  if (!workspaceViews().length) return;
+  state.workspaceViewsClosed = false;
+  renderWorkspaceViewRail();
+  renderLeaderboardSummary(leaderboardRows());
+  restoreWorkspaceViewScrollState();
+  focusSoon(document.querySelector?.("[data-workspace-views-close]"));
 }
 
 function renderWorkspaceViewIndex(views = workspaceViewRows(), allViews = workspaceViews()) {
@@ -392,6 +485,7 @@ function renderWorkspaceViewIndex(views = workspaceViewRows(), allViews = worksp
       tableId: "workspace-views",
       columns: workspaceViewColumns(),
       rows: views,
+      rowKey: view => view.name,
       filterOptionsRows: allViews,
       tableClass: "workspace-view-index-table",
       shellClass: "workspace-view-index-shell",
@@ -399,20 +493,6 @@ function renderWorkspaceViewIndex(views = workspaceViewRows(), allViews = worksp
       rowAttrs: view => `data-view-index-row="${esc(view.name)}"`,
     })}
   </section>`;
-}
-
-function renderWorkspaceViewIndexRow(view) {
-  const selected = state.workspaceViewSelection.has(view.name);
-  const applied = state.workspaceAppliedViewNames.has(view.name);
-  const notes = String(view.notes || "");
-  const notesPreview = notes.replace(/\s+/g, " ").trim() || "-";
-  const cellAttrs = field => `data-view-navigate="${esc(view.name)}" data-view-edit-field="${field}" tabindex="0"`;
-  return `<tr class="${selected ? "selected " : ""}${applied ? "applied" : ""}" data-view-index-row="${esc(view.name)}">
-    <td class="workspace-view-select-column"><input type="checkbox" data-view-select="${esc(view.name)}" aria-label="${esc(workspaceViewMessage("select_view", "Select {name}", { name: view.name }))}" ${selected ? "checked" : ""}></td>
-    <td ${cellAttrs("name")}><strong>${esc(view.name)}</strong></td>
-    <td ${cellAttrs("configuration")}><span class="workspace-view-config-preview">${esc(workspaceViewConfigurationLabel(view))}</span></td>
-    <td ${cellAttrs("notes")} class="workspace-view-notes-cell" title="${esc(notes)}" aria-label="${esc(notes || t("view_notes_empty", "No notes"))}"><span>${esc(notesPreview)}</span></td>
-  </tr>`;
 }
 
 function syncWorkspaceViewIndexActions(target = $("workspace-views")) {
@@ -532,7 +612,7 @@ function workspaceViewConfigurationEditValue(view, field, value) {
     ...view,
     filters: workspaceViewFilters(view?.filters),
   };
-  if (field === "tags" || field === "models") next.filters[field] = workspaceViewCommaValues(value);
+  if (field === "tags" || field === "models") next.filters[field] = Array.isArray(value) ? value : workspaceViewCommaValues(value);
   if (field === "group_by") next.group_by = ["overall", "agent", "model"].includes(value) ? value : view.group_by;
   return workspaceViewConfigurationYaml(next);
 }
@@ -547,75 +627,15 @@ function navigateToWorkspaceView(name) {
   setTimeout(() => card.classList?.remove("navigated"), 1200);
 }
 
-function beginWorkspaceViewInlineEdit(cell) {
-  const name = String(cell?.dataset?.viewNavigate || "");
-  const field = String(cell?.dataset?.viewEditField || "");
-  const view = workspaceViewForName(name);
-  if (!view || !["name", "tags", "models", "group_by", "other_conditions", "notes"].includes(field) || cell.querySelector?.("[data-view-inline-editor]")) return;
-  const value = field === "name"
-    ? view.name
-    : field === "tags" || field === "models"
-      ? view.filters[field].join(", ")
-    : field === "group_by"
-      ? view.group_by
-    : field === "other_conditions"
-      ? workspaceViewOtherConditionsYaml(view)
-      : view.notes;
-  const control = field === "group_by"
-    ? `<select data-view-edit-control aria-label="${esc(t("summary_group_by", "Group by"))}">${["overall", "agent", "model"].map(option => `<option value="${option}" ${value === option ? "selected" : ""}>${esc(workspaceViewGroupByLabel(option))}</option>`).join("")}</select>`
-    : field === "notes" || field === "other_conditions"
-      ? `<textarea data-view-edit-control rows="${field === "other_conditions" ? 8 : 6}" aria-label="${esc(t(field === "other_conditions" ? "view_other_conditions" : "view_notes", field === "other_conditions" ? "Other conditions" : "Notes"))}">${esc(value)}</textarea>`
-      : `<input data-view-edit-control type="text" value="${esc(value)}" aria-label="${esc(t(field === "name" ? "view_name" : field === "tags" ? "tags" : "model", field === "name" ? "View name" : field === "tags" ? "Tags" : "Models"))}">`;
-  cell.innerHTML = `<div class="workspace-view-inline-editor" data-view-inline-editor>
-    ${control}
-    <div class="workspace-view-inline-status" data-view-edit-status aria-live="polite"></div>
-    <div class="workspace-view-inline-actions">
-      <button type="button" class="step-toggle-button" data-view-edit-save>${esc(t("save", "Save"))}</button>
-      <button type="button" class="step-toggle-button" data-view-edit-cancel>${esc(t("cancel", "Cancel"))}</button>
-    </div>
-  </div>`;
-  const input = cell.querySelector?.("[data-view-edit-control]");
-  const save = () => saveWorkspaceViewInlineEdit(cell, name, field, input?.value || "");
-  cell.querySelector?.("[data-view-edit-save]")?.addEventListener("click", event => {
-    event.preventDefault();
-    event.stopPropagation();
-    save();
-  });
-  cell.querySelector?.("[data-view-edit-cancel]")?.addEventListener("click", event => {
-    event.preventDefault();
-    event.stopPropagation();
-    renderWorkspaceViewRail();
-  });
-  input?.addEventListener?.("click", event => event.stopPropagation());
-  input?.addEventListener?.("dblclick", event => event.stopPropagation());
-  input?.addEventListener?.("keydown", event => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      renderWorkspaceViewRail();
-      return;
-    }
-    const shouldSave = ["name", "tags", "models", "group_by"].includes(field)
-      ? event.key === "Enter"
-      : event.key === "Enter" && (event.ctrlKey || event.metaKey);
-    if (!shouldSave) return;
-    event.preventDefault();
-    save();
-  });
-  input?.focus?.();
-  if (field === "name") input?.select?.();
-}
-
-async function saveWorkspaceViewInlineEdit(cell, name, field, value) {
-  const status = cell?.querySelector?.("[data-view-edit-status]");
-  const buttons = cell?.querySelectorAll?.("[data-view-edit-save],[data-view-edit-cancel]") || [];
-  buttons.forEach(button => { button.disabled = true; });
-  if (status) status.textContent = "";
+async function commitWorkspaceViewCellEdit(view, field, value) {
+  const name = String(view?.name || "");
+  if (!name || !["name", "tags", "models", "group_by", "other_conditions", "notes"].includes(field)) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
   const appliedBefore = state.workspaceAppliedViewNames.has(name);
   try {
-    const view = workspaceViewForName(name);
+    const currentView = workspaceViewForName(name) || view;
     const configurationField = ["tags", "models", "group_by", "other_conditions"].includes(field);
     const wireField = configurationField ? "configuration" : field;
-    const wireValue = configurationField ? workspaceViewConfigurationEditValue(view, field, value) : value;
+    const wireValue = configurationField ? workspaceViewConfigurationEditValue(currentView, field, value) : value;
     const response = await serveApi("/api/views/update", {
       method: "POST",
       body: { name, field: wireField, value: wireValue },
@@ -630,10 +650,10 @@ async function saveWorkspaceViewInlineEdit(cell, name, field, value) {
     await refreshWorkspaceViews();
     if (appliedBefore) await reloadAppliedWorkspaceViews();
     setServeStatus(t("view_updated", "View updated"));
+    return { rowKey: updatedName };
   } catch (error) {
-    buttons.forEach(button => { button.disabled = false; });
-    if (status) status.textContent = error.message || String(error);
     setServeStatus(error.message || String(error), true);
+    throw error;
   }
 }
 
@@ -715,10 +735,11 @@ function renderWorkspaceViewTable(summary, groupBy) {
   const statistics = leaderboardSummaryStatistics();
   const groupHeading = groupBy === "model" ? t("model", "Model") : groupBy === "agent" ? t("agent", "Agent") : t("summary_scope", "Scope");
   return `<div class="table-shell leaderboard-summary-shell workspace-view-table-shell"><div class="table-wrap"><table class="data-table leaderboard-summary-table workspace-view-table">
-    <thead><tr><th>${esc(t("summary_metric", "Metric"))}</th><th>${esc(groupHeading)}</th><th class="num">${esc(t("summary_count", "Count"))}</th>${statistics.map(statistic => `<th class="num">${esc(statistic.label)}</th>`).join("")}</tr></thead>
+    <thead><tr><th ${tableValueAttributes("identity", t("summary_metric", "Metric"))}>${tableCellContent(esc(t("summary_metric", "Metric")))}</th><th ${tableValueAttributes("identity", groupHeading)}>${tableCellContent(esc(groupHeading))}</th><th ${tableValueAttributes("number", t("summary_count", "Count"), "num")}>${tableCellContent(esc(t("summary_count", "Count")))}</th>${statistics.map(statistic => `<th ${tableValueAttributes("number", statistic.label, "num")}>${tableCellContent(esc(statistic.label))}</th>`).join("")}</tr></thead>
     <tbody>${leaderboardSummaryDefinitions().map(definition => groups.map((group, index) => {
       const metric = listValue(group.metrics).find(item => item?.key === definition.key);
-      return `<tr${index === 0 ? " data-summary-group-start" : ""}>${index === 0 ? `<th class="summary-metric-cell" scope="rowgroup" rowspan="${groups.length}">${esc(definition.label)}</th>` : ""}<th class="summary-group-cell" scope="row"><strong>${esc(workspaceViewGroupLabel(group))}</strong><span>n=${fmtNum(group.count)}</span></th><td class="num">${fmtNum(metric?.count)}</td>${statistics.map(statistic => `<td class="num">${esc(leaderboardSummaryValue(metric, statistic.value(metric)))}</td>`).join("")}</tr>`;
+      const groupLabel = workspaceViewGroupLabel(group);
+      return `<tr${index === 0 ? " data-summary-group-start" : ""}>${index === 0 ? `<th ${tableValueAttributes("identity", definition.label, "summary-metric-cell")} scope="rowgroup" rowspan="${groups.length}">${tableCellContent(esc(definition.label))}</th>` : ""}<th ${tableValueAttributes("identity", groupLabel, "summary-group-cell")} scope="row">${tableCellContent(`<strong>${esc(groupLabel)}</strong><span>n=${fmtNum(group.count)}</span>`)}</th><td ${tableValueAttributes("number", fmtNum(metric?.count), "num")}>${tableCellContent(fmtNum(metric?.count))}</td>${statistics.map(statistic => { const value = leaderboardSummaryValue(metric, statistic.value(metric)); return `<td ${tableValueAttributes("number", value, "num")}>${tableCellContent(esc(value))}</td>`; }).join("")}</tr>`;
     }).join("")).join("")}</tbody>
   </table></div></div>`;
 }
@@ -869,3 +890,63 @@ async function applyWorkspaceView(name) {
 async function cancelWorkspaceViewApplication() {
   return clearWorkspaceViewConditions();
 }
+export {
+  appliedWorkspaceViewNames,
+  applySelectedWorkspaceViews,
+  applyWorkspaceView,
+  bindWorkspaceViewControls,
+  bindWorkspaceViewDialog,
+  cancelWorkspaceViewApplication,
+  captureWorkspaceViewScrollState,
+  clearWorkspaceViewConditions,
+  closeWorkspaceViewSaveDialog,
+  closeWorkspaceViewRail,
+  commitWorkspaceViewCellEdit,
+  currentWorkspaceViewFilters,
+  deleteSelectedWorkspaceViews,
+  exportSelectedWorkspaceViews,
+  navigateToWorkspaceView,
+  openWorkspaceViewSaveDialog,
+  openWorkspaceViewRail,
+  pruneWorkspaceViewState,
+  refreshWorkspaceViews,
+  reloadAppliedWorkspaceViews,
+  renderWorkspaceViewCard,
+  renderWorkspaceViewChart,
+  renderWorkspaceViewCharts,
+  renderWorkspaceViewControls,
+  renderWorkspaceViewCurrentConfiguration,
+  renderWorkspaceViewFilters,
+  renderWorkspaceViewIndex,
+  renderWorkspaceViewRail,
+  renderWorkspaceViewTable,
+  renderWorkspaceViewTableDisclosure,
+  renderWorkspaceViewValueList,
+  replaceWorkspaceViewStateName,
+  restoreWorkspaceViewScrollState,
+  saveWorkspaceView,
+  selectedWorkspaceViewNames,
+  syncWorkspaceViewIndexActions,
+  toggleWorkspaceViewTable,
+  workspaceViewColumns,
+  workspaceViewCommaValues,
+  workspaceViewConfigurationEditValue,
+  workspaceViewConfigurationLabel,
+  workspaceViewConfigurationParts,
+  workspaceViewConfigurationYaml,
+  workspaceViewDefaultName,
+  workspaceViewEditValue,
+  workspaceViewFilterConfig,
+  workspaceViewFilters,
+  workspaceViewForName,
+  workspaceViewGroupByLabel,
+  workspaceViewGroupLabel,
+  workspaceViewMessage,
+  workspaceViewOtherConditionsLabel,
+  workspaceViewOtherConditionsParts,
+  workspaceViewOtherConditionsYaml,
+  workspaceViewRows,
+  workspaceViewStateLabel,
+  workspaceViewSummaryForName,
+  workspaceViews,
+};

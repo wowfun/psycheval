@@ -1,0 +1,22 @@
+{
+  "name": "peval-py-web",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "node web/scripts/build-report.mjs",
+    "check:bundle": "node web/scripts/check-report-bundle.mjs",
+    "check:types": "tsc -p jsconfig.json && tsc -p jsconfig.node.json",
+    "test": "node --test web/test/*.test.js",
+    "check": "npm run check:types && npm run check:bundle && npm test"
+  },
+  "devDependencies": {
+    "@types/jsdom": "28.0.3",
+    "@types/node": "26.1.1",
+    "esbuild": "0.28.1",
+    "jsdom": "29.1.1",
+    "typescript": "6.0.3"
+  }
+}

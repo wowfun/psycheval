@@ -1,3 +1,8 @@
+import { $, esc, fmtMs, fmtNum, fmtPct, hasMetricValue, listValue, lower, serveMode, state, t } from "./runtime.js";
+import { agentNameFor, rowToolErrorRate, tableCellContent, tableValueAttributes } from "./data-tables.js";
+import { exportLeaderboardSummary, leaderboardRows } from "./serve-catalog.js";
+import { bindWorkspaceViewControls, renderWorkspaceViewControls } from "./workspace-views.js";
+
 function renderLeaderboardSummary(rows = leaderboardRows()) {
   const target = $("leaderboard-summary");
   if (!target) return;
@@ -153,10 +158,10 @@ function renderLeaderboardSummaryTable(groups) {
   const statistics = leaderboardSummaryStatistics();
   return `<div class="table-shell leaderboard-summary-shell"><div class="table-wrap"><table class="data-table leaderboard-summary-table">
     <thead><tr>
-      <th>${esc(t("summary_metric", "Metric"))}</th>
-      <th>${esc(groupHeading)}</th>
-      <th class="num">${esc(t("summary_count", "Count"))}</th>
-      ${statistics.map(statistic => `<th class="num${state.leaderboardSummaryStatistic === statistic.key ? " summary-selected-stat" : ""}" data-summary-stat-heading="${esc(statistic.key)}">${esc(statistic.label)}</th>`).join("")}
+      <th ${tableValueAttributes("identity", t("summary_metric", "Metric"))}>${tableCellContent(esc(t("summary_metric", "Metric")))}</th>
+      <th ${tableValueAttributes("identity", groupHeading)}>${tableCellContent(esc(groupHeading))}</th>
+      <th ${tableValueAttributes("number", t("summary_count", "Count"), "num")}>${tableCellContent(esc(t("summary_count", "Count")))}</th>
+      ${statistics.map(statistic => `<th ${tableValueAttributes("number", statistic.label, `num${state.leaderboardSummaryStatistic === statistic.key ? " summary-selected-stat" : ""}`)} data-summary-stat-heading="${esc(statistic.key)}">${tableCellContent(esc(statistic.label))}</th>`).join("")}
     </tr></thead>
     <tbody>${leaderboardSummaryDefinitions().map(definition => renderLeaderboardSummaryMetricGroup(definition, groups, statistics)).join("")}</tbody>
   </table></div></div>`;
@@ -166,10 +171,10 @@ function renderLeaderboardSummaryMetricGroup(definition, groups, statistics) {
   return groups.map((group, index) => {
     const row = group.metrics.find(metric => metric.key === definition.key);
     return `<tr data-summary-metric="${esc(definition.key)}"${index === 0 ? " data-summary-group-start" : ""}>
-      ${index === 0 ? `<th class="summary-metric-cell" scope="rowgroup" rowspan="${groups.length}">${esc(definition.label)}</th>` : ""}
-      <th class="summary-group-cell" scope="row"><strong>${esc(group.label)}</strong><span>n=${fmtNum(group.rows.length)}</span></th>
-      <td class="num">${fmtNum(row?.count)}</td>
-      ${statistics.map(statistic => `<td class="num${state.leaderboardSummaryStatistic === statistic.key ? " summary-selected-stat" : ""}" data-summary-stat="${esc(statistic.key)}">${esc(leaderboardSummaryValue(row, statistic.value(row)))}</td>`).join("")}
+      ${index === 0 ? `<th ${tableValueAttributes("identity", definition.label, "summary-metric-cell")} scope="rowgroup" rowspan="${groups.length}">${tableCellContent(esc(definition.label))}</th>` : ""}
+      <th ${tableValueAttributes("identity", group.label, "summary-group-cell")} scope="row">${tableCellContent(`<strong>${esc(group.label)}</strong><span>n=${fmtNum(group.rows.length)}</span>`)}</th>
+      <td ${tableValueAttributes("number", fmtNum(row?.count), "num")}>${tableCellContent(fmtNum(row?.count))}</td>
+      ${statistics.map(statistic => { const value = leaderboardSummaryValue(row, statistic.value(row)); return `<td ${tableValueAttributes("number", value, `num${state.leaderboardSummaryStatistic === statistic.key ? " summary-selected-stat" : ""}`)} data-summary-stat="${esc(statistic.key)}">${tableCellContent(esc(value))}</td>`; }).join("")}
     </tr>`;
   }).join("");
 }
@@ -312,3 +317,29 @@ function summaryNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
+export {
+  bindLeaderboardSummaryControls,
+  leaderboardSummaryDefinitions,
+  leaderboardSummaryDistribution,
+  leaderboardSummaryGroupButton,
+  leaderboardSummaryGroups,
+  leaderboardSummaryPercentile,
+  leaderboardSummaryRows,
+  leaderboardSummaryStatistics,
+  leaderboardSummaryValue,
+  measuredModelDurationForRow,
+  renderLeaderboardSummary,
+  renderLeaderboardSummaryActions,
+  renderLeaderboardSummaryChart,
+  renderLeaderboardSummaryCharts,
+  renderLeaderboardSummaryGroupControl,
+  renderLeaderboardSummaryMetricGroup,
+  renderLeaderboardSummaryStatisticControl,
+  renderLeaderboardSummaryTable,
+  renderLeaderboardSummaryTableDisclosure,
+  selectedLeaderboardSummaryStatistic,
+  setLeaderboardSummaryGroupBy,
+  setLeaderboardSummaryStatistic,
+  summaryNumber,
+  toggleLeaderboardSummaryTable,
+};

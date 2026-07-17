@@ -158,7 +158,6 @@
 }
 .db-session-table {
   width:100%;
-  min-width:520px;
   border-collapse:collapse;
 }
 .db-session-table th,.db-session-table td {
