@@ -1696,6 +1696,7 @@ function reportMessage(key, fallback, values = {}) {
 var REPORT_READER_MIN_WIDTH = 360;
 var REPORT_READER_MIN_WORKSPACE_WIDTH = 360;
 var REPORT_READER_KEYBOARD_STEP = 24;
+var REPORT_READER_PREVIEW_WIDTH = 1180;
 function workspaceReportPreviewPath(report) {
   return `/api/reports/${encodeURIComponent(report.report_id)}/preview`;
 }
@@ -1973,7 +1974,7 @@ function renderWorkspaceReportBindings() {
     </label>
     <div class="report-binding-list" data-report-binding-list>${sourceRows2}</div>
     <div class="report-binding-footer">
-      <span>${esc(reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount }))}</span>
+      <span data-report-binding-selection-count>${esc(reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount }))}</span>
       <span class="catalog-page-controls">
         <button class="step-toggle-button" type="button" data-report-bindings-prev ${Number(state.reportManager.pageData?.page || 1) <= 1 ? "disabled" : ""}>‹</button>
         <span>${esc(reportBindingPageLabel())}</span>
@@ -2059,8 +2060,7 @@ function bindWorkspaceReportBindingControls(manager = document.querySelector("[d
       if (input.checked) state.reportManager.draftBindings.add(sourceKey);
       else state.reportManager.draftBindings.delete(sourceKey);
       state.reportManager.dirty = workspaceReportBindingsChanged();
-      renderWorkspaceReportBindings();
-      bindWorkspaceReportBindingControls(manager);
+      syncWorkspaceReportBindingSelectionControls(manager);
     });
   });
   const search = manager.querySelector?.("[data-report-binding-search]");
@@ -2079,6 +2079,14 @@ function bindWorkspaceReportBindingControls(manager = document.querySelector("[d
     loadWorkspaceReportManagerData({ page: Number(state.reportManager.page || 1) + 1 });
   });
   manager.querySelector?.("[data-report-bindings-save]")?.addEventListener?.("click", saveWorkspaceReportBindings);
+}
+function syncWorkspaceReportBindingSelectionControls(manager = document.querySelector("[data-report-manager]")) {
+  if (!manager) return;
+  const selectedCount = state.reportManager.draftBindings.size;
+  const count = manager.querySelector?.("[data-report-binding-selection-count]");
+  if (count) count.textContent = reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount });
+  const save = manager.querySelector?.("[data-report-bindings-save]");
+  if (save) save.disabled = !selectedCount || !workspaceReportBindingsChanged() || state.reportManager.busy;
 }
 function focusWorkspaceReportSearch() {
   const input = document.querySelector("[data-report-binding-search]");
@@ -2159,8 +2167,10 @@ function renderWorkspaceReportReader() {
   const target = $("workspace-report-reader");
   const report = workspaceReportForId(state.reportReader.openId);
   if (!target || !report) return;
+  disconnectWorkspaceReportPreviewObserver();
   const previewUrl = workspaceSnapshotMode() ? workspaceSnapshotReportPreviewUrl(report) : workspaceReportPreviewPath(report);
   const openTab = workspaceSnapshotMode() ? "" : `<a class="report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>`;
+  const fitAttribute = report.format === "html" ? " data-report-preview-fit" : "";
   target.innerHTML = `<div class="report-reader-panel" role="dialog" aria-modal="false" aria-labelledby="report-reader-title">
     <header class="report-reader-head">
       <div>
@@ -2173,13 +2183,53 @@ function renderWorkspaceReportReader() {
         <button class="report-reader-close" type="button" data-report-reader-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
       </div>
     </header>
-    <iframe class="report-reader-frame" src="${esc(previewUrl)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+    <div class="report-reader-frame-viewport" data-report-reader-viewport${fitAttribute}>
+      <iframe class="report-reader-frame" data-report-reader-frame src="${esc(previewUrl)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+    </div>
   </div>
   <div class="report-reader-resize" data-report-reader-resize role="separator" aria-orientation="vertical" tabindex="0" aria-label="${esc(t("report_resize", "Resize report reader"))}"></div>`;
   target.hidden = false;
   document.body.classList.add("report-reader-open");
   bindWorkspaceReportReaderControls(target);
+  observeWorkspaceReportReaderPreview(target);
   focusSoon(target.querySelector?.("[data-report-reader-close]"));
+}
+function reportReaderPreviewGeometry(viewportWidth, viewportHeight) {
+  const availableWidth = Math.max(1, Number(viewportWidth) || 0);
+  const availableHeight = Math.max(1, Number(viewportHeight) || 0);
+  const scale = Math.min(1, availableWidth / REPORT_READER_PREVIEW_WIDTH);
+  return {
+    scale,
+    width: scale < 1 ? REPORT_READER_PREVIEW_WIDTH : Math.ceil(availableWidth),
+    height: Math.ceil(availableHeight / scale)
+  };
+}
+function fitWorkspaceReportReaderPreview(target = $("workspace-report-reader")) {
+  const viewport = target?.querySelector?.("[data-report-reader-viewport][data-report-preview-fit]");
+  const frame = viewport?.querySelector?.("[data-report-reader-frame]");
+  if (!viewport || !frame) return false;
+  const bounds = viewport.getBoundingClientRect?.() || {};
+  const width = Number(viewport.clientWidth || bounds.width || 0);
+  const height = Number(viewport.clientHeight || bounds.height || 0);
+  if (!(width > 0) || !(height > 0)) return false;
+  const geometry = reportReaderPreviewGeometry(width, height);
+  frame.style.width = `${geometry.width}px`;
+  frame.style.height = `${geometry.height}px`;
+  frame.style.transform = `scale(${geometry.scale})`;
+  return true;
+}
+function disconnectWorkspaceReportPreviewObserver() {
+  state.reportReader.previewObserver?.disconnect?.();
+  state.reportReader.previewObserver = null;
+}
+function observeWorkspaceReportReaderPreview(target = $("workspace-report-reader")) {
+  disconnectWorkspaceReportPreviewObserver();
+  const viewport = target?.querySelector?.("[data-report-reader-viewport][data-report-preview-fit]");
+  if (!viewport) return;
+  fitWorkspaceReportReaderPreview(target);
+  if (typeof ResizeObserver !== "function") return;
+  state.reportReader.previewObserver = new ResizeObserver(() => fitWorkspaceReportReaderPreview(target));
+  state.reportReader.previewObserver.observe(viewport);
 }
 function workspaceSnapshotReportPreviewUrl(report) {
   if (state.reportReader.objectUrl) URL.revokeObjectURL?.(state.reportReader.objectUrl);
@@ -2247,6 +2297,7 @@ function setWorkspaceReportReaderWidth(width, target = $("workspace-report-reade
   state.reportReader.width = next;
   document.documentElement?.style?.setProperty("--report-reader-width", `${next}px`);
   syncWorkspaceReportReaderResizeHandle(target, next);
+  fitWorkspaceReportReaderPreview(target);
   state.timelineChart?.resize?.();
   return next;
 }
@@ -2262,6 +2313,7 @@ function syncWorkspaceReportReaderResizeHandle(target = $("workspace-report-read
 function closeWorkspaceReportReader(options = {}) {
   const target = $("workspace-report-reader");
   if (!state.reportReader.openId && (!target || target.hidden)) return false;
+  disconnectWorkspaceReportPreviewObserver();
   if (target) {
     target.hidden = true;
     target.innerHTML = "";
@@ -5921,7 +5973,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-var state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: /* @__PURE__ */ new Set(), sourceSelection: /* @__PURE__ */ new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: /* @__PURE__ */ new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: /* @__PURE__ */ new Set(), workspaceAppliedViewNames: /* @__PURE__ */ new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading), serveStartupPolling: false };
+var state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: /* @__PURE__ */ new Set(), sourceSelection: /* @__PURE__ */ new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: /* @__PURE__ */ new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: /* @__PURE__ */ new Set(), workspaceAppliedViewNames: /* @__PURE__ */ new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading), serveStartupPolling: false };
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";

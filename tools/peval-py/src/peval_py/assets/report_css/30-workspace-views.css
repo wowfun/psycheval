@@ -173,6 +173,8 @@
 }
 .workspace-view-list {
   display:grid;
+  align-content:start;
+  grid-auto-rows:max-content;
   gap:12px;
   padding:12px;
 }
@@ -397,7 +399,7 @@
   .serve-mode.workspace-views-open .workspace-main,
   .serve-mode.step-drawer-open .workspace-main {
     display:grid;
-    grid-template-rows:auto auto auto minmax(0,1fr);
+    grid-template-rows:auto auto minmax(0,1fr);
     min-height:0;
     overflow:hidden;
   }

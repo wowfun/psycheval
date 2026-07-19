@@ -384,11 +384,22 @@
   white-space:nowrap;
   font:800 20px/1.2 var(--sans);
 }
+.report-reader-frame-viewport {
+  position:relative;
+  min-width:0;
+  min-height:0;
+  width:100%;
+  height:100%;
+  overflow:hidden;
+  background:var(--surface);
+}
 .report-reader-frame {
+  display:block;
   width:100%;
   height:100%;
   border:0;
   background:var(--surface);
+  transform-origin:top left;
 }
 .report-reader-resize {
   position:absolute;

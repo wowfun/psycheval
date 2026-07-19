@@ -16,6 +16,7 @@ function reportMessage(key, fallback, values = {}) {
 const REPORT_READER_MIN_WIDTH = 360;
 const REPORT_READER_MIN_WORKSPACE_WIDTH = 360;
 const REPORT_READER_KEYBOARD_STEP = 24;
+const REPORT_READER_PREVIEW_WIDTH = 1180;
 
 function workspaceReportPreviewPath(report) {
   return `/api/reports/${encodeURIComponent(report.report_id)}/preview`;
@@ -325,7 +326,7 @@ function renderWorkspaceReportBindings() {
     </label>
     <div class="report-binding-list" data-report-binding-list>${sourceRows}</div>
     <div class="report-binding-footer">
-      <span>${esc(reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount }))}</span>
+      <span data-report-binding-selection-count>${esc(reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount }))}</span>
       <span class="catalog-page-controls">
         <button class="step-toggle-button" type="button" data-report-bindings-prev ${Number(state.reportManager.pageData?.page || 1) <= 1 ? "disabled" : ""}>‹</button>
         <span>${esc(reportBindingPageLabel())}</span>
@@ -419,8 +420,7 @@ function bindWorkspaceReportBindingControls(manager = document.querySelector("[d
       if (input.checked) state.reportManager.draftBindings.add(sourceKey);
       else state.reportManager.draftBindings.delete(sourceKey);
       state.reportManager.dirty = workspaceReportBindingsChanged();
-      renderWorkspaceReportBindings();
-      bindWorkspaceReportBindingControls(manager);
+      syncWorkspaceReportBindingSelectionControls(manager);
     });
   });
   const search = manager.querySelector?.("[data-report-binding-search]");
@@ -439,6 +439,15 @@ function bindWorkspaceReportBindingControls(manager = document.querySelector("[d
     loadWorkspaceReportManagerData({ page: Number(state.reportManager.page || 1) + 1 });
   });
   manager.querySelector?.("[data-report-bindings-save]")?.addEventListener?.("click", saveWorkspaceReportBindings);
+}
+
+function syncWorkspaceReportBindingSelectionControls(manager = document.querySelector("[data-report-manager]")) {
+  if (!manager) return;
+  const selectedCount = state.reportManager.draftBindings.size;
+  const count = manager.querySelector?.("[data-report-binding-selection-count]");
+  if (count) count.textContent = reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount });
+  const save = manager.querySelector?.("[data-report-bindings-save]");
+  if (save) save.disabled = !selectedCount || !workspaceReportBindingsChanged() || state.reportManager.busy;
 }
 
 function focusWorkspaceReportSearch() {
@@ -525,8 +534,10 @@ function renderWorkspaceReportReader() {
   const target = $("workspace-report-reader");
   const report = workspaceReportForId(state.reportReader.openId);
   if (!target || !report) return;
+  disconnectWorkspaceReportPreviewObserver();
   const previewUrl = workspaceSnapshotMode() ? workspaceSnapshotReportPreviewUrl(report) : workspaceReportPreviewPath(report);
   const openTab = workspaceSnapshotMode() ? "" : `<a class="report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>`;
+  const fitAttribute = report.format === "html" ? " data-report-preview-fit" : "";
   target.innerHTML = `<div class="report-reader-panel" role="dialog" aria-modal="false" aria-labelledby="report-reader-title">
     <header class="report-reader-head">
       <div>
@@ -539,13 +550,57 @@ function renderWorkspaceReportReader() {
         <button class="report-reader-close" type="button" data-report-reader-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
       </div>
     </header>
-    <iframe class="report-reader-frame" src="${esc(previewUrl)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+    <div class="report-reader-frame-viewport" data-report-reader-viewport${fitAttribute}>
+      <iframe class="report-reader-frame" data-report-reader-frame src="${esc(previewUrl)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+    </div>
   </div>
   <div class="report-reader-resize" data-report-reader-resize role="separator" aria-orientation="vertical" tabindex="0" aria-label="${esc(t("report_resize", "Resize report reader"))}"></div>`;
   target.hidden = false;
   document.body.classList.add("report-reader-open");
   bindWorkspaceReportReaderControls(target);
+  observeWorkspaceReportReaderPreview(target);
   focusSoon(target.querySelector?.("[data-report-reader-close]"));
+}
+
+function reportReaderPreviewGeometry(viewportWidth, viewportHeight) {
+  const availableWidth = Math.max(1, Number(viewportWidth) || 0);
+  const availableHeight = Math.max(1, Number(viewportHeight) || 0);
+  const scale = Math.min(1, availableWidth / REPORT_READER_PREVIEW_WIDTH);
+  return {
+    scale,
+    width: scale < 1 ? REPORT_READER_PREVIEW_WIDTH : Math.ceil(availableWidth),
+    height: Math.ceil(availableHeight / scale),
+  };
+}
+
+function fitWorkspaceReportReaderPreview(target = $("workspace-report-reader")) {
+  const viewport = target?.querySelector?.("[data-report-reader-viewport][data-report-preview-fit]");
+  const frame = viewport?.querySelector?.("[data-report-reader-frame]");
+  if (!viewport || !frame) return false;
+  const bounds = viewport.getBoundingClientRect?.() || {};
+  const width = Number(viewport.clientWidth || bounds.width || 0);
+  const height = Number(viewport.clientHeight || bounds.height || 0);
+  if (!(width > 0) || !(height > 0)) return false;
+  const geometry = reportReaderPreviewGeometry(width, height);
+  frame.style.width = `${geometry.width}px`;
+  frame.style.height = `${geometry.height}px`;
+  frame.style.transform = `scale(${geometry.scale})`;
+  return true;
+}
+
+function disconnectWorkspaceReportPreviewObserver() {
+  state.reportReader.previewObserver?.disconnect?.();
+  state.reportReader.previewObserver = null;
+}
+
+function observeWorkspaceReportReaderPreview(target = $("workspace-report-reader")) {
+  disconnectWorkspaceReportPreviewObserver();
+  const viewport = target?.querySelector?.("[data-report-reader-viewport][data-report-preview-fit]");
+  if (!viewport) return;
+  fitWorkspaceReportReaderPreview(target);
+  if (typeof ResizeObserver !== "function") return;
+  state.reportReader.previewObserver = new ResizeObserver(() => fitWorkspaceReportReaderPreview(target));
+  state.reportReader.previewObserver.observe(viewport);
 }
 
 function workspaceSnapshotReportPreviewUrl(report) {
@@ -619,6 +674,7 @@ function setWorkspaceReportReaderWidth(width, target = $("workspace-report-reade
   state.reportReader.width = next;
   document.documentElement?.style?.setProperty("--report-reader-width", `${next}px`);
   syncWorkspaceReportReaderResizeHandle(target, next);
+  fitWorkspaceReportReaderPreview(target);
   state.timelineChart?.resize?.();
   return next;
 }
@@ -636,6 +692,7 @@ function syncWorkspaceReportReaderResizeHandle(target = $("workspace-report-read
 function closeWorkspaceReportReader(options = {}) {
   const target = $("workspace-report-reader");
   if (!state.reportReader.openId && (!target || target.hidden)) return false;
+  disconnectWorkspaceReportPreviewObserver();
   if (target) {
     target.hidden = true;
     target.innerHTML = "";
@@ -654,6 +711,7 @@ export {
   REPORT_READER_KEYBOARD_STEP,
   REPORT_READER_MIN_WIDTH,
   REPORT_READER_MIN_WORKSPACE_WIDTH,
+  REPORT_READER_PREVIEW_WIDTH,
   applyWorkspaceReportCatalog,
   attachWorkspaceReport,
   bindWorkspaceReportBindingControls,
@@ -666,6 +724,7 @@ export {
   currentWorkspaceReportReaderWidth,
   deleteWorkspaceReport,
   filteredWorkspaceReportSources,
+  fitWorkspaceReportReaderPreview,
   focusSoon,
   focusWorkspaceReportSearch,
   loadWorkspaceReportManagerData,
@@ -684,12 +743,14 @@ export {
   reportBindingPageLabel,
   reportMessage,
   reportReaderMaximumWidth,
+  reportReaderPreviewGeometry,
   reportReaderViewportWidth,
   reportsForSourceKey,
   saveWorkspaceReportBindings,
   selectWorkspaceReport,
   setWorkspaceReportManagerStatus,
   setWorkspaceReportReaderWidth,
+  syncWorkspaceReportBindingSelectionControls,
   syncWorkspaceReportDraft,
   syncWorkspaceReportReaderResizeHandle,
   workspaceReportBindingsChanged,

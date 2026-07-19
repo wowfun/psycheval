@@ -12,6 +12,7 @@ const browser = installBrowserDom(`
   <span data-source-status></span>
   <div data-source-manager hidden><section aria-modal="true"><button data-source-manager-close>Close</button><p data-source-manager-status hidden></p><ul data-source-list></ul></section></div>
   <div data-report-manager hidden><section aria-modal="true"><button data-report-manager-close>Close</button><p data-report-manager-status hidden></p><div data-report-inventory></div><span data-report-count></span><div data-report-bindings></div></section></div>
+  <aside id="workspace-report-reader" hidden></aside>
   <div data-view-save-dialog hidden><section aria-modal="true"><button data-view-save-cancel>Cancel</button></section></div>
   <button data-refresh-all>Refresh</button>
   <button data-source-bulk-state disabled>Archive</button>
@@ -163,4 +164,76 @@ test("Reports Manager distinguishes loading from empty and clears old errors", (
   reports.setWorkspaceReportManagerStatus("Old error", true);
   reports.setWorkspaceReportManagerStatus("");
   assert.equal(document.querySelector("[data-report-manager-status]").hidden, true);
+});
+
+test("Reports Manager keeps the session list stable when a middle binding changes", () => {
+  const manager = document.querySelector("[data-report-manager]");
+  manager.hidden = false;
+  runtime.state.workspaceReports = [{
+    report_id: "20260719-120000-000000",
+    filename: "analysis.html",
+    format: "html",
+    source_keys: [],
+  }];
+  runtime.state.reportManager.selectedId = "20260719-120000-000000";
+  runtime.state.reportManager.sourceRows = Array.from({ length: 30 }, (_, index) => ({
+    source_key: `session-${index + 1}`,
+    label: `Session ${index + 1}`,
+    trial_session_id: `trial-${index + 1}`,
+    active: true,
+    readable: true,
+  }));
+  runtime.state.reportManager.draftBindings = new Set();
+  runtime.state.reportManager.loading = false;
+  runtime.state.reportManager.busy = false;
+  reports.renderWorkspaceReportManager();
+
+  const list = document.querySelector("[data-report-binding-list]");
+  const checkbox = list.querySelector('[data-report-binding-key="session-20"]');
+  list.scrollTop = 240;
+  checkbox.focus();
+  checkbox.checked = true;
+  checkbox.dispatchEvent(new window.Event("change", { bubbles: true }));
+
+  assert.equal(document.querySelector("[data-report-binding-list]"), list);
+  assert.equal(list.scrollTop, 240);
+  assert.equal(document.activeElement, checkbox);
+  assert.equal(document.querySelector("[data-report-bindings-save]").disabled, false);
+
+  manager.hidden = true;
+  runtime.state.reportManager.sourceRows = [];
+});
+
+test("HTML report previews fit an 1180px design viewport into the reader pane", () => {
+  assert.deepEqual(reports.reportReaderPreviewGeometry(590, 700), {
+    scale: 0.5,
+    width: 1180,
+    height: 1400,
+  });
+  assert.deepEqual(reports.reportReaderPreviewGeometry(1280, 700), {
+    scale: 1,
+    width: 1280,
+    height: 700,
+  });
+
+  runtime.state.workspaceReports = [{
+    report_id: "20260719-130000-000000",
+    filename: "wide-report.html",
+    format: "html",
+    source_keys: ["session-1"],
+  }];
+  reports.openWorkspaceReportReader("20260719-130000-000000");
+  const reader = document.querySelector("#workspace-report-reader");
+  const viewport = reader.querySelector("[data-report-reader-viewport]");
+  Object.defineProperties(viewport, {
+    clientWidth: { configurable: true, value: 590 },
+    clientHeight: { configurable: true, value: 700 },
+  });
+  reports.fitWorkspaceReportReaderPreview(reader);
+  const frame = reader.querySelector("[data-report-reader-frame]");
+
+  assert.equal(frame.style.width, "1180px");
+  assert.equal(frame.style.height, "1400px");
+  assert.equal(frame.style.transform, "scale(0.5)");
+  reports.closeWorkspaceReportReader({ restoreFocus: false });
 });

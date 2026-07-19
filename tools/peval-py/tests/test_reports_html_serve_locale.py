@@ -3,6 +3,44 @@ from __future__ import annotations
 from reports_html_support import *
 
 class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
+    def test_leaderboard_scrolls_with_the_main_analysis_content(self) -> None:
+        html = render_serve_html(
+            {
+                "schema_version": 19,
+                "trajectory": [],
+                "trajectory_meta": [],
+            }
+        )
+        workspace_main = re.search(
+            r'<main class="workspace-main">(.*?)</main>',
+            html,
+            re.DOTALL,
+        )
+
+        self.assertIsNotNone(workspace_main)
+        main_scroll = re.search(
+            r'<div class="workspace-main-scroll" data-workspace-main-scroll>'
+            r'(.*)</div>\s*$',
+            workspace_main.group(1),
+            re.DOTALL,
+        )
+        self.assertIsNotNone(main_scroll)
+        self.assertIn('id="leaderboard-region"', main_scroll.group(1))
+
+    def test_saved_view_cards_keep_intrinsic_height_inside_scrolling_rail(self) -> None:
+        css = load_asset_text("report.css")
+        rule = re.search(r"\.workspace-view-list\s*\{([^}]*)\}", css)
+
+        self.assertIsNotNone(rule)
+        declarations = {
+            name.strip(): value.strip()
+            for declaration in rule.group(1).split(";")
+            if ":" in declaration
+            for name, value in [declaration.split(":", 1)]
+        }
+        self.assertEqual(declarations.get("align-content"), "start")
+        self.assertEqual(declarations.get("grid-auto-rows"), "max-content")
+
     def test_workspace_report_chrome_and_catalog_are_serve_only(self) -> None:
         report = {
             "schema_version": 19,
