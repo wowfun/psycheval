@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-07-19
+
+- Fixed Reports Manager binding selection to preserve list scroll and focus while
+  updating controls in place.
+- Improved workspace report and analysis layout with fit-to-pane HTML previews,
+  normally scrolling Leaderboard content, and intrinsic-height Saved View cards.
+
 ## 2026-07-16
 
 - Replaced ordered browser-script concatenation with a pinned deterministic ESM
