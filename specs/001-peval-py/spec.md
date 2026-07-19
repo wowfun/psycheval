@@ -32,18 +32,22 @@ same command tree.
 - serve-only workspace report attachments that bind one imported Markdown or
   HTML analysis report to one or more exact Leaderboard source rows, expose the
   associations in a Reports column, preview reports in an isolated left-side
-  reader whose width can be resized horizontally, allow that same isolated
-  reader to be opened in a new browser tab, and provide report inventory,
-  rebinding, and deletion management
+  reader whose width can be resized horizontally and whose HTML preview fits its
+  available pane by default, allow that same isolated reader to be opened in a
+  new browser tab, and provide report inventory, rebinding, and deletion
+  management without resetting the session-list scroll position when bindings
+  are checked or unchecked
 - serve-only saved Leaderboard views stored as human-editable Markdown files,
   with durable catalog filters, summary grouping, and user notes; one or more
   saved views render in an editable, filterable right-side analysis rail whose
   index and analysis cards share one visible-row projection, may be selected
   together as an OR query, share that rail with the covering Step drawer, and
   may be exported together as a native-chart Excel workbook; the live rail can
-  be closed and reopened without losing its in-page scroll state, and on desktop
-  its fixed index aligns with a fixed Leaderboard above independently scrolling
-  analysis content
+  be closed and reopened without losing its in-page scroll state; on desktop the
+  saved-view index remains fixed above its scrolling card list, while the
+  Leaderboard scrolls normally with the left-side analysis content; every saved
+  view card keeps its intrinsic content height so its complete title and charts
+  remain visible
 - type-driven application tables whose shared column model owns adaptive maximum
   widths, truncation, sorting/filtering metadata, and common editable-cell
   interaction while leaving user-authored Markdown tables untouched

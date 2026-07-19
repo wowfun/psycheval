@@ -723,8 +723,10 @@ Coverage must verify:
   cache/download paths rather than real network.
 - serve UI HTML and interaction tests verify the near-full-screen Source Manager
   workbench structure, adapter default DB configuration controls, mutable
-  adapter default state in `report.js`, and continued DB form autofill from
-  configured adapter defaults.
+  adapter default state in `report.js`, continued DB form autofill from
+  configured adapter defaults, report-binding checkbox updates that preserve the
+  list node, scroll position, and focus, and default fit-to-pane geometry for
+  HTML report previews.
 - workspace report storage tests cover time-ordered ids and collision suffixes,
   byte-preserving atomic imports, UTF-8/format/size validation, exact relative
   Trial-cell bindings, state files containing only `source_keys`, rejection of

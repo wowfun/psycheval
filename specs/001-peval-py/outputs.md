@@ -430,13 +430,13 @@ and the Step drawer keeps its bottom-sheet behavior.
 
 Above 1180px, an open Saved views rail makes `.workspace` use the complete
 viewport width and height while preserving page padding and the clamped
-right-side width. The left column fixes the title/report-notes/Leaderboard block
-and scrolls Summary, Trajectory Overview, and Trace below it; the right column
-fixes the Saved views header/index and scrolls cards below it. The Leaderboard
-body remains capped at ten rows and additionally at 42dvh; the view index is
-capped at `min(260px, 32dvh)`. At 1180px and below both columns return to normal
-single-column page flow. Ordinary single-column serve and static reports retain
-the 1180px maximum.
+right-side width. The left column keeps the title and report notes above one
+scroll region containing Leaderboard, Summary, Trajectory Overview, and Trace;
+the right column fixes the Saved views header/index and scrolls cards below it.
+The Leaderboard body remains capped at ten rows and additionally at 42dvh; the
+view index is capped at `min(260px, 32dvh)`. At 1180px and below both columns
+return to normal single-column page flow. Ordinary single-column serve and
+static reports retain the 1180px maximum.
 
 The Leaderboard page controls replace the row-selection `Clear` action with
 `Clear conditions`; the header checkbox remains the row-selection reset.
@@ -459,7 +459,8 @@ Tags column sourced from the session's ordered `source_tags`; the manager's
 search matches those tags, and an empty tag list displays `-`. Saving replaces
 its complete binding set, Preview closes the manager and opens the shared report
 reader, and Delete requires filename confirmation before permanently removing
-the package.
+the package. Checking or unchecking a binding row updates the draft controls in
+place so the session list keeps both its scroll position and focused checkbox.
 The manager body fills all modal height remaining below the header and optional
 status row. When the status row is hidden, its grid track collapses and must not
 leave unused space below the inventory and binding panels.
@@ -561,7 +562,11 @@ The report reader is a temporary inspector, not a persistent sidebar. On
 desktop it reserves its left-side width; on narrow screens it becomes a bottom
 sheet. It is mutually exclusive with the right-side Step details drawer and
 supports a close button and Escape. Markdown and HTML previews load through a
-sandboxed iframe so report content never enters the canonical report DOM.
+sandboxed iframe so report content never enters the canonical report DOM. HTML
+previews use an 1180px design viewport when the reader is narrower and scale the
+whole iframe to the available pane by default, avoiding a reader-level
+horizontal scrollbar without weakening the sandbox; Markdown previews retain
+their normal responsive rendering.
 
 `serve` does not refresh original path or DB sources on startup unless source
 flags were supplied on that invocation, and imported path/DB sources do not
