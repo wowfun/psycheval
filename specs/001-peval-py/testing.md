@@ -724,8 +724,11 @@ Coverage must verify:
 - serve UI HTML and interaction tests verify the near-full-screen Source Manager
   workbench structure, adapter default DB configuration controls, mutable
   adapter default state in `report.js`, continued DB form autofill from
-  configured adapter defaults, report-binding checkbox updates that preserve the
-  list node, scroll position, and focus, and default fit-to-pane geometry for
+  configured adapter defaults, serve-mode startup of both source and workspace
+  report catalog loads, existing report bindings becoming available to
+  Leaderboard cells, report-binding checkbox updates that preserve the list
+  node, scroll position, and focus, shared action-button shrink/wrap invariants,
+  and default fit-to-pane geometry for
   HTML report previews.
 - workspace report storage tests cover time-ordered ids and collision suffixes,
   byte-preserving atomic imports, UTF-8/format/size validation, exact relative

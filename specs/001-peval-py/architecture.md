@@ -149,7 +149,11 @@ The shared value types are:
 `GET /` returns only the serve shell. `GET /api/catalog` returns a
 `CatalogPage`; repeated saved-view names are resolved by the serve runtime and
 passed to the catalog as one OR predicate plus the ordinary AND refinement.
-`GET /api/report?source_key=...` returns one `DetailEnvelope`.
+`GET /api/report?source_key=...` returns one `DetailEnvelope`, and
+`GET /api/reports` returns the compact workspace-report catalog. The browser
+mode lifecycle renders the shell first, then loads the source and report
+catalogs in parallel; each projection rerenders its owning Leaderboard state so
+response order cannot hide existing report bindings.
 `POST /api/exports` validates the existing table/report export payloads, a
 summary-workbook payload, or the workspace-snapshot payload. Summary export
 resolves every requested source or saved view against one committed catalog

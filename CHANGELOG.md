@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-07-20
+
+- Fixed serve startup to load existing workspace-report bindings into the
+  Leaderboard automatically.
+- Unified ordinary serve actions into responsive button types so toolbar,
+  modal, and Saved Views rail controls stay inside narrow or zoomed layouts.
+
 ## 2026-07-19
 
 - Fixed Reports Manager binding selection to preserve list scroll and focus while

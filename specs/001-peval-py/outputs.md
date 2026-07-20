@@ -550,6 +550,8 @@ Static HTML
 reports do not render these source-state controls.
 
 Serve Leaderboard adds a `Reports` column immediately after `Session Alias`.
+The browser loads the workspace-report catalog during serve startup and
+rerenders this column without requiring Reports Manager or a manual refresh.
 The cell joins by stable source key: no reports renders an em dash, one report
 renders its filename as a button, and multiple reports render an `N reports`
 menu ordered newest-first. Report controls stop row-click propagation and do
@@ -567,6 +569,13 @@ previews use an 1180px design viewport when the reader is narrower and scale the
 whole iframe to the available pane by default, avoiding a reader-level
 horizontal scrollbar without weakening the sandbox; Markdown previews retain
 their normal responsive rendering.
+
+Serve ordinary actions use one shared button system with ordinary, primary,
+destructive, compact, and icon-only variants. Action groups wrap inside their
+own toolbar, modal, or rail; no action type imposes a fixed label-width minimum.
+Table sorting and filtering triggers, segmented selectors, report/menu items,
+and trajectory nodes retain specialized shapes because their interaction role
+is not an ordinary command action.
 
 `serve` does not refresh original path or DB sources on startup unless source
 flags were supplied on that invocation, and imported path/DB sources do not

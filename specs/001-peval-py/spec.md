@@ -31,8 +31,9 @@ same command tree.
   Leaderboard share the same type-driven inline Alias/Tags editing behavior
 - serve-only workspace report attachments that bind one imported Markdown or
   HTML analysis report to one or more exact Leaderboard source rows, expose the
-  associations in a Reports column, preview reports in an isolated left-side
-  reader whose width can be resized horizontally and whose HTML preview fits its
+  associations in a Reports column as soon as the serve workspace finishes its
+  initial browser-side load, preview reports in an isolated left-side reader
+  whose width can be resized horizontally and whose HTML preview fits its
   available pane by default, allow that same isolated reader to be opened in a
   new browser tab, and provide report inventory, rebinding, and deletion
   management without resetting the session-list scroll position when bindings
@@ -51,6 +52,12 @@ same command tree.
 - type-driven application tables whose shared column model owns adaptive maximum
   widths, truncation, sorting/filtering metadata, and common editable-cell
   interaction while leaving user-authored Markdown tables untouched
+- shared action-button types for ordinary, primary, destructive, compact, and
+  icon-only actions across serve surfaces; action groups wrap within their
+  owning panel so localized labels, browser zoom, and narrow viewports do not
+  push controls beyond the visible screen, while table sort/filter controls,
+  segmented selectors, trajectory nodes, and menu items retain their specialized
+  interaction styling
 - serve-only Excel export of the current visible Leaderboard Summary page,
   preserving grouped numeric statistics as worksheet values and embedding six
   native horizontal bar charts for the selected statistic
@@ -127,10 +134,13 @@ before rendering Source Manager so its adapter `default_db_path` values are
 immediately effective. `serve`
 startup must bind the local HTTP server before importing explicit CLI sources
 or reconciling workspace `runs/` Trial cells. `GET /` returns a shell without
-embedded source summaries or report data. With a valid catalog the shell may
-immediately query the last committed generation while the toolbar shows
-`Checking runs`; without one it shows an empty loading shell until the first
-generation commits. Catalog pages may include a compact `step_outline` for
+embedded source summaries or report data. The serve browser startup lifecycle
+loads the source catalog and workspace-report catalog, and rerenders the
+Leaderboard after either arrives so existing report bindings become visible
+without opening Reports Manager or manually refreshing. With a valid catalog
+the shell may immediately query the last committed generation while the toolbar
+shows `Checking runs`; without one it shows an empty loading shell until the
+first generation commits. Catalog pages may include a compact `step_outline` for
 each readable Trial: source step ids, normalized roles, and optional durations
 only. They never include step messages, reasoning, tool data, observations, or
 report blobs. Serve selection uses the catalog `source_key` to load a detail,
