@@ -95,9 +95,8 @@
   grid-template-rows:repeat(2,minmax(0,1fr));
   gap:8px;
 }
-.db-default-actions .step-toggle-button {
+.db-default-actions .action-button {
   width:100%;
-  white-space:nowrap;
 }
 .source-picker-actions {
   display:flex;

@@ -195,33 +195,6 @@
   opacity:.55;
   cursor:not-allowed;
 }
-.source-state-action {
-  min-height:32px;
-  border:1px solid color-mix(in oklch,var(--focus),#111 12%);
-  border-radius:999px;
-  background:var(--focus);
-  color:#fff;
-  padding:0 12px;
-  font:800 12px/1 var(--mono);
-  cursor:pointer;
-  box-shadow:0 4px 10px rgba(49,42,25,.12);
-}
-.source-state-action:hover {
-  filter:brightness(.98);
-}
-.source-state-action:disabled {
-  border-color:var(--rule);
-  background:var(--surface-2);
-  color:var(--muted);
-  cursor:not-allowed;
-  box-shadow:none;
-}
-.source-bulk-delete:disabled {
-  color:var(--muted);
-  background:var(--surface-2);
-  cursor:not-allowed;
-  box-shadow:none;
-}
 .export-menu {
   position:relative;
 }

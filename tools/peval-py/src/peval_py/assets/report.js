@@ -18,7 +18,9 @@ function createModeRuntime(bootstrap2, effects) {
     kind,
     start() {
       effects.renderReport(bootstrap2.report);
+      if (kind === "serve") return effects.loadServeWorkspace?.();
       if (kind === "workspace_snapshot") effects.renderWorkspaceViewRail();
+      return void 0;
     },
     destroy() {
     }
@@ -297,7 +299,7 @@ function renderNotesAction(trialKey) {
   if (!source || state.notesEditor?.trialKey === trialKey) return "";
   const cellNote = cellNoteFor(trialKey);
   const label = cellNote ? t("edit_notes", "Edit notes") : t("add_notes", "Add notes");
-  return `<button class="step-toggle-button notes-edit-button" type="button" data-notes-edit data-trial-key="${esc(trialKey)}">${esc(label)}</button>`;
+  return `<button class="action-button notes-edit-button" type="button" data-notes-edit data-trial-key="${esc(trialKey)}">${esc(label)}</button>`;
 }
 function renderNotesEditor(trialKey) {
   if (!serveMode() || !trialKey || !state.notesEditor || state.notesEditor.trialKey !== trialKey) return "";
@@ -308,8 +310,8 @@ function renderNotesEditor(trialKey) {
     <textarea data-notes-editor data-trial-key="${esc(trialKey)}" rows="8">${esc(markdown)}</textarea>
     ${error}
     <div class="notes-editor-actions">
-      <button class="step-toggle-button primary" type="button" data-notes-save data-trial-key="${esc(trialKey)}"${disabled}>${esc(t("save_notes", "Save notes"))}</button>
-      <button class="step-toggle-button" type="button" data-notes-cancel${disabled}>${esc(t("cancel", "Cancel"))}</button>
+      <button class="action-button primary" type="button" data-notes-save data-trial-key="${esc(trialKey)}"${disabled}>${esc(t("save_notes", "Save notes"))}</button>
+      <button class="action-button" type="button" data-notes-cancel${disabled}>${esc(t("cancel", "Cancel"))}</button>
     </div>
   </article>`;
 }
@@ -923,7 +925,7 @@ function openTimelineStep(item) {
 // web/src/modules/steps.js
 function renderStepsHeader(trajectory) {
   const count = (trajectory?.steps || []).length;
-  return `<div class="steps-head"><h3>Steps (${count})</h3><button class="step-toggle-button" type="button" data-step-action="toggle" ${count ? "" : "disabled"}>Expand all</button></div>`;
+  return `<div class="steps-head"><h3>Steps (${count})</h3><button class="action-button" type="button" data-step-action="toggle" ${count ? "" : "disabled"}>Expand all</button></div>`;
 }
 function valuePreview(value) {
   if (value === null || value === void 0) return "";
@@ -1626,7 +1628,7 @@ function renderStepDrawer() {
     <div class="step-drawer-panel" role="dialog" aria-modal="false" aria-labelledby="step-drawer-title">
       <div class="step-drawer-head">
         <div><p class="eyebrow">${esc(t("step_details", "Step details"))}</p><h2 id="step-drawer-title">#${esc(step.step_id)}</h2><p class="copy">${esc(trial.trial_key || "-")}</p></div>
-        <button class="step-drawer-close" type="button" data-step-drawer-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
+        <button class="action-button compact" type="button" data-step-drawer-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
       </div>
       <div class="step-drawer-body">${renderStep(step, trial, timingStats, { open: true })}</div>
     </div>
@@ -1741,6 +1743,18 @@ function applyWorkspaceReportCatalog(reports) {
   }
   if (workspaceReportManagerOpen()) renderWorkspaceReportManager();
 }
+async function refreshWorkspaceReports(options = {}) {
+  if (!serveMode()) return [];
+  try {
+    const payload = await serveApi("/api/reports");
+    applyWorkspaceReportCatalog(payload?.reports || []);
+    if (options.renderLeaderboard !== false) renderComparisonPanels({ trace: false });
+    return workspaceReports();
+  } catch (error) {
+    setServeStatus(error.message || String(error), true);
+    return [];
+  }
+}
 function workspaceReportLeaderboardColumn() {
   return {
     key: "workspace_reports",
@@ -1768,7 +1782,7 @@ function renderWorkspaceReportCell(row) {
 }
 function renderAttachWorkspaceReportAction(rows = leaderboardRows()) {
   const count = visibleSelectedSourceKeys(rows).length;
-  return `<button class="step-toggle-button report-attach-button" type="button" data-report-attach data-workspace-report-control ${count ? "" : "disabled"}>${esc(reportMessage("attach_report", "Attach report ({count})", { count }))}</button>`;
+  return `<button class="action-button report-attach-button" type="button" data-report-attach data-workspace-report-control ${count ? "" : "disabled"}>${esc(reportMessage("attach_report", "Attach report ({count})", { count }))}</button>`;
 }
 function bindWorkspaceReportLeaderboardControls(target) {
   if (!workspaceDisplayMode() || !target) return;
@@ -1964,8 +1978,8 @@ function renderWorkspaceReportBindings() {
         <span>${esc(report.format.toUpperCase())} &middot; ${esc(report.report_id)}</span>
       </div>
       <div class="report-binding-actions">
-        <button class="step-toggle-button" type="button" data-report-manager-preview="${esc(report.report_id)}">${esc(t("report_preview", "Preview"))}</button>
-        <button class="step-toggle-button report-delete-button" type="button" data-report-delete="${esc(report.report_id)}">${esc(t("report_delete", "Delete report"))}</button>
+        <button class="action-button" type="button" data-report-manager-preview="${esc(report.report_id)}">${esc(t("report_preview", "Preview"))}</button>
+        <button class="action-button danger" type="button" data-report-delete="${esc(report.report_id)}">${esc(t("report_delete", "Delete report"))}</button>
       </div>
     </div>
     <label class="report-binding-search">
@@ -1976,11 +1990,11 @@ function renderWorkspaceReportBindings() {
     <div class="report-binding-footer">
       <span data-report-binding-selection-count>${esc(reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount }))}</span>
       <span class="catalog-page-controls">
-        <button class="step-toggle-button" type="button" data-report-bindings-prev ${Number(state.reportManager.pageData?.page || 1) <= 1 ? "disabled" : ""}>‹</button>
+        <button class="action-button icon-only" type="button" data-report-bindings-prev aria-label="${esc(t("previous", "Previous"))}" ${Number(state.reportManager.pageData?.page || 1) <= 1 ? "disabled" : ""}>‹</button>
         <span>${esc(reportBindingPageLabel())}</span>
-        <button class="step-toggle-button" type="button" data-report-bindings-next ${reportBindingPageEnd() >= Number(state.reportManager.pageData?.total || 0) ? "disabled" : ""}>›</button>
+        <button class="action-button icon-only" type="button" data-report-bindings-next aria-label="${esc(t("next", "Next"))}" ${reportBindingPageEnd() >= Number(state.reportManager.pageData?.total || 0) ? "disabled" : ""}>›</button>
       </span>
-      <button class="step-toggle-button primary" type="button" data-report-bindings-save ${selectedCount && workspaceReportBindingsChanged() ? "" : "disabled"}>${esc(t("report_save_bindings", "Save bindings"))}</button>
+      <button class="action-button primary" type="button" data-report-bindings-save ${selectedCount && workspaceReportBindingsChanged() ? "" : "disabled"}>${esc(t("report_save_bindings", "Save bindings"))}</button>
     </div>`;
 }
 function reportBindingPageEnd() {
@@ -2169,7 +2183,7 @@ function renderWorkspaceReportReader() {
   if (!target || !report) return;
   disconnectWorkspaceReportPreviewObserver();
   const previewUrl = workspaceSnapshotMode() ? workspaceSnapshotReportPreviewUrl(report) : workspaceReportPreviewPath(report);
-  const openTab = workspaceSnapshotMode() ? "" : `<a class="report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>`;
+  const openTab = workspaceSnapshotMode() ? "" : `<a class="action-button compact report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>`;
   const fitAttribute = report.format === "html" ? " data-report-preview-fit" : "";
   target.innerHTML = `<div class="report-reader-panel" role="dialog" aria-modal="false" aria-labelledby="report-reader-title">
     <header class="report-reader-head">
@@ -2180,7 +2194,7 @@ function renderWorkspaceReportReader() {
       </div>
       <div class="report-reader-actions">
         ${openTab}
-        <button class="report-reader-close" type="button" data-report-reader-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
+        <button class="action-button compact" type="button" data-report-reader-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
       </div>
     </header>
     <div class="report-reader-frame-viewport" data-report-reader-viewport${fitAttribute}>
@@ -2360,7 +2374,7 @@ function renderLeaderboardSummary(rows = leaderboardRows()) {
 }
 function renderLeaderboardSummaryActions() {
   const workspaceControls = typeof renderWorkspaceViewControls === "function" ? renderWorkspaceViewControls() : "";
-  const exportControl = serveMode() ? `<button type="button" class="step-toggle-button leaderboard-summary-export" data-summary-export-xlsx ${leaderboardRows().length ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>` : "";
+  const exportControl = serveMode() ? `<button type="button" class="action-button leaderboard-summary-export" data-summary-export-xlsx ${leaderboardRows().length ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>` : "";
   return `<div class="leaderboard-summary-actions">${renderLeaderboardSummaryGroupControl()}${workspaceControls}${exportControl}</div>`;
 }
 function renderLeaderboardSummaryGroupControl() {
@@ -2693,8 +2707,8 @@ function workspaceViewMessage(key, fallback, values = {}) {
 function renderWorkspaceViewControls() {
   if (!workspaceDisplayMode()) return "";
   const compositeApplied = state.workspaceAppliedViewNames.size > 0;
-  const reopen = state.workspaceViewsClosed && workspaceViews().length ? `<button type="button" class="step-toggle-button" data-workspace-views-open>${esc(t("saved_views", "Saved views"))}</button>` : "";
-  const save = serveMode() ? `<button type="button" class="step-toggle-button leaderboard-summary-save" data-view-save ${compositeApplied ? `disabled title="${esc(t("clear_conditions_before_saving_view", "Clear applied views before saving a new view."))}"` : ""}>${esc(t("save_view", "Save view"))}</button>` : "";
+  const reopen = state.workspaceViewsClosed && workspaceViews().length ? `<button type="button" class="action-button" data-workspace-views-open>${esc(t("saved_views", "Saved views"))}</button>` : "";
+  const save = serveMode() ? `<button type="button" class="action-button leaderboard-summary-save" data-view-save ${compositeApplied ? `disabled title="${esc(t("clear_conditions_before_saving_view", "Clear applied views before saving a new view."))}"` : ""}>${esc(t("save_view", "Save view"))}</button>` : "";
   return reopen || save ? `<div class="workspace-view-controls" data-workspace-view-control>${reopen}${save}</div>` : "";
 }
 function bindWorkspaceViewControls(target) {
@@ -2987,7 +3001,7 @@ function renderWorkspaceViewRail() {
     target.innerHTML = "";
     return;
   }
-  target.innerHTML = `<div class="workspace-views-head"><div><h2>${esc(t("saved_views", "Saved views"))}</h2><p>${esc(t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p></div><button type="button" class="step-toggle-button workspace-views-close" data-workspace-views-close>${esc(t("close", "Close"))}</button></div>
+  target.innerHTML = `<div class="workspace-views-head"><div><h2>${esc(t("saved_views", "Saved views"))}</h2><p>${esc(t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p></div><button type="button" class="action-button compact" data-workspace-views-close>${esc(t("close", "Close"))}</button></div>
     ${renderWorkspaceViewIndex(views, allViews)}
     <div class="workspace-view-list" data-workspace-view-list>${views.map(renderWorkspaceViewCard).join("")}</div>`;
   bindWorkspaceViewControls(target);
@@ -3039,9 +3053,9 @@ function renderWorkspaceViewIndex(views = workspaceViewRows(), allViews = worksp
     ${serveMode() ? `<div class="workspace-view-index-toolbar">
       <span data-view-selection-count aria-live="polite">${esc(workspaceViewMessage("views_selected_count", "{count} selected", { count: selectedCount }))}</span>
       <div class="workspace-view-index-actions">
-        <button type="button" class="step-toggle-button" data-view-apply-selected ${selectedCount ? "" : "disabled"}>${esc(t("apply", "Apply"))}</button>
-        <button type="button" class="step-toggle-button" data-view-export-selected ${selectedCount ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>
-        <button type="button" class="step-toggle-button workspace-view-delete" data-view-delete-selected ${selectedCount ? "" : "disabled"}>${esc(t("delete_views", "Delete"))}</button>
+        <button type="button" class="action-button" data-view-apply-selected ${selectedCount ? "" : "disabled"}>${esc(t("apply", "Apply"))}</button>
+        <button type="button" class="action-button" data-view-export-selected ${selectedCount ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>
+        <button type="button" class="action-button danger" data-view-delete-selected ${selectedCount ? "" : "disabled"}>${esc(t("delete_views", "Delete"))}</button>
       </div>
     </div>` : ""}
     ${renderDataTable({
@@ -3984,7 +3998,7 @@ function renderDbSessionPicker(form, payload) {
     </div>
     <div class="db-picker-actions">
       <span data-db-selected-count>0 ${esc(t("serve_selected_count", "selected"))}</span>
-      <button class="step-toggle-button primary" type="button" data-db-add-selected disabled>${esc(t("serve_add_selected", "Add selected"))}</button>
+      <button class="action-button primary" type="button" data-db-add-selected disabled>${esc(t("serve_add_selected", "Add selected"))}</button>
     </div>
   `;
   bindDbSessionSelectionCounters(picker);
@@ -4282,7 +4296,7 @@ function renderServeSourceStateControls(rows = leaderboardRows()) {
       <input type="checkbox" data-source-state-toggle ${archived || allMode ? "checked" : ""} ${toggleDisabled}>
       <span>${esc(t("show_archived", "Show archived"))}</span>
     </label>
-    <button class="source-state-action" type="button" data-source-state-action ${selectedCount && !allMode ? "" : "disabled"}>${esc(allMode ? t("mixed_state_action_disabled", "Mixed view") : actionLabel)}</button>
+    <button class="action-button primary" type="button" data-source-state-action ${selectedCount && !allMode ? "" : "disabled"}>${esc(allMode ? t("mixed_state_action_disabled", "Mixed view") : actionLabel)}</button>
   </div>`;
 }
 function bindServeSourceStateControls(target) {
@@ -4501,11 +4515,11 @@ function renderSourceManagerPagination() {
   const total = Number(state.sourceManagerPage?.total || state.sourceManagerRows.length || 0);
   const start = total ? (page - 1) * size + 1 : 0;
   return `<li class="catalog-page-controls source-manager-page-controls">
-    <button type="button" class="step-toggle-button" data-source-page-prev ${page <= 1 ? "disabled" : ""}>‹</button>
+    <button type="button" class="action-button icon-only" data-source-page-prev aria-label="${esc(t("previous", "Previous"))}" ${page <= 1 ? "disabled" : ""}>‹</button>
     <span>${esc(`${start}-${sourceManagerPageEnd()} / ${total}`)}</span>
-    <button type="button" class="step-toggle-button" data-source-page-next ${sourceManagerPageEnd() >= total ? "disabled" : ""}>›</button>
+    <button type="button" class="action-button icon-only" data-source-page-next aria-label="${esc(t("next", "Next"))}" ${sourceManagerPageEnd() >= total ? "disabled" : ""}>›</button>
     <span>${esc(String(t("selected_count", "{count} selected")).replace("{count}", String(state.sourceSelection.size)))}</span>
-    <button type="button" class="step-toggle-button" data-source-selection-clear ${state.sourceSelection.size ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button>
+    <button type="button" class="action-button" data-source-selection-clear ${state.sourceSelection.size ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button>
   </li>`;
 }
 function bindSourceManagerPagination(root) {
@@ -4537,11 +4551,11 @@ function renderLeaderboardPanelControls(rows) {
   return `<div class="leaderboard-actions">
     <div class="leaderboard-action-row">${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardExportControls()}</div>
     <div class="catalog-page-controls" data-catalog-page-controls>
-      <button type="button" class="step-toggle-button" data-catalog-prev ${state.catalogPage.page <= 1 ? "disabled" : ""}>‹</button>
+      <button type="button" class="action-button icon-only" data-catalog-prev aria-label="${esc(t("previous", "Previous"))}" ${state.catalogPage.page <= 1 ? "disabled" : ""}>‹</button>
       <span>${esc(catalogPageLabel())}</span>
-      <button type="button" class="step-toggle-button" data-catalog-next ${catalogPageEnd() >= state.catalogPage.total ? "disabled" : ""}>›</button>
+      <button type="button" class="action-button icon-only" data-catalog-next aria-label="${esc(t("next", "Next"))}" ${catalogPageEnd() >= state.catalogPage.total ? "disabled" : ""}>›</button>
       <span>${esc(String(t("selected_count", "{count} selected")).replace("{count}", String(selectedCount)))}</span>
-      <button type="button" class="step-toggle-button" data-catalog-clear-conditions ${leaderboardConditionsAreDefault() ? "disabled" : ""}>${esc(t("clear_conditions", "Clear conditions"))}</button>
+      <button type="button" class="action-button" data-catalog-clear-conditions ${leaderboardConditionsAreDefault() ? "disabled" : ""}>${esc(t("clear_conditions", "Clear conditions"))}</button>
     </div>
   </div>`;
 }
@@ -4700,15 +4714,12 @@ async function ensureCatalogDetail(generationChanged = false) {
   if (generationChanged && selectedRow && selectedRow.artifact_revision === state.selectedArtifactRevision) return;
   await loadServeSourceReport(sourceKey);
 }
-function scheduleServeStartupPoll() {
-  if (!serveMode() || state.serveStartupPolling || typeof fetch !== "function") return;
-  state.serveStartupPolling = true;
-  loadCatalogPage().finally(() => {
-    state.serveStartupPolling = false;
-  });
-}
-async function pollServeStartupSources() {
-  return loadCatalogPage();
+async function loadServeWorkspace() {
+  if (!serveMode()) return;
+  await Promise.all([
+    loadCatalogPage(),
+    refreshWorkspaceReports()
+  ]);
 }
 function catalogRowForSourceKey(sourceKey) {
   return listValue(state.catalogRows).find((row) => row?.source_key === sourceKey) || null;
@@ -5477,7 +5488,7 @@ function renderFilterControl(tableId, column, rows) {
   const count = selected.size;
   const countText = count ? `<span class="filter-count">${esc(`${count} ${t("selected_count", "selected")}`)}</span>` : "";
   const optionHtml = options.length ? options.map((value) => `<label class="filter-option"><input type="checkbox" data-filter-key="${esc(column.key)}" value="${esc(value)}" ${selected.has(value) ? "checked" : ""}><span>${esc(filterLabel(column, value))}</span></label>`).join("") : `<p class="filter-empty">${esc(t("no_matching_rows", "No matching rows"))}</p>`;
-  return `<details class="filter-control ${count ? "active" : ""}" data-filter-menu="${esc(column.key)}"><summary class="filter-button" aria-label="${esc(t("filter", "Filter"))} ${esc(column.label)}"><span class="filter-icon">&#9662;</span>${countText}</summary><div class="filter-menu"><div class="filter-menu-head"><strong>${esc(column.label)}</strong><div class="filter-menu-actions"><button class="filter-clear" type="button" data-filter-clear="${esc(column.key)}" ${count ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button><button class="filter-apply" type="button" data-filter-apply="${esc(column.key)}" disabled>${esc(t("apply", "Apply"))}</button></div></div><div class="filter-options">${optionHtml}</div></div></details>`;
+  return `<details class="filter-control ${count ? "active" : ""}" data-filter-menu="${esc(column.key)}"><summary class="filter-button" aria-label="${esc(t("filter", "Filter"))} ${esc(column.label)}"><span class="filter-icon">&#9662;</span>${countText}</summary><div class="filter-menu"><div class="filter-menu-head"><strong>${esc(column.label)}</strong><div class="filter-menu-actions"><button class="action-button compact filter-clear" type="button" data-filter-clear="${esc(column.key)}" ${count ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button><button class="action-button compact primary filter-apply" type="button" data-filter-apply="${esc(column.key)}" disabled>${esc(t("apply", "Apply"))}</button></div></div><div class="filter-options">${optionHtml}</div></div></details>`;
 }
 function selectionSetForColumn(column) {
   const value = typeof column?.selectionSet === "function" ? column.selectionSet() : column?.selectionSet;
@@ -5836,11 +5847,12 @@ function tableEditorActions(save, cancel) {
   actions.className = "table-cell-editor-actions";
   const saveButton = document.createElement("button");
   saveButton.type = "button";
-  saveButton.className = "primary";
+  saveButton.className = "action-button compact primary";
   saveButton.textContent = t("save", "Save");
   saveButton.addEventListener("click", save);
   const cancelButton = document.createElement("button");
   cancelButton.type = "button";
+  cancelButton.className = "action-button compact";
   cancelButton.textContent = t("cancel", "Cancel");
   cancelButton.addEventListener("click", cancel);
   actions.append(saveButton, cancelButton);
@@ -5973,7 +5985,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-var state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: /* @__PURE__ */ new Set(), sourceSelection: /* @__PURE__ */ new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: /* @__PURE__ */ new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: /* @__PURE__ */ new Set(), workspaceAppliedViewNames: /* @__PURE__ */ new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading), serveStartupPolling: false };
+var state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: /* @__PURE__ */ new Set(), sourceSelection: /* @__PURE__ */ new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: /* @__PURE__ */ new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: /* @__PURE__ */ new Set(), workspaceAppliedViewNames: /* @__PURE__ */ new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";
@@ -6058,7 +6070,6 @@ function render(view) {
   if (serveMode()) syncSelectedSourceFromView();
   if (serveMode()) renderServeSources();
   bindGlobalControls();
-  if (serveMode()) scheduleServeStartupPoll();
   renderReportNotes(view.annotations?.report_notes || []);
   renderComparison();
   if (serveMode() && !state.workspaceViewsLoaded) refreshWorkspaceViews();
@@ -6322,6 +6333,7 @@ var bootstrap = bootstrapData();
 var platform = createBrowserPlatform(globalThis);
 var modeRuntime = createModeRuntime(bootstrap, {
   renderReport: render,
-  renderWorkspaceViewRail
+  renderWorkspaceViewRail,
+  loadServeWorkspace
 });
 createReportApp({ platform, bootstrap, modeRuntime }).start();

@@ -265,7 +265,7 @@ function renderFilterControl(tableId, column, rows) {
   const optionHtml = options.length
     ? options.map(value => `<label class="filter-option"><input type="checkbox" data-filter-key="${esc(column.key)}" value="${esc(value)}" ${selected.has(value) ? "checked" : ""}><span>${esc(filterLabel(column, value))}</span></label>`).join("")
     : `<p class="filter-empty">${esc(t("no_matching_rows", "No matching rows"))}</p>`;
-  return `<details class="filter-control ${count ? "active" : ""}" data-filter-menu="${esc(column.key)}"><summary class="filter-button" aria-label="${esc(t("filter", "Filter"))} ${esc(column.label)}"><span class="filter-icon">&#9662;</span>${countText}</summary><div class="filter-menu"><div class="filter-menu-head"><strong>${esc(column.label)}</strong><div class="filter-menu-actions"><button class="filter-clear" type="button" data-filter-clear="${esc(column.key)}" ${count ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button><button class="filter-apply" type="button" data-filter-apply="${esc(column.key)}" disabled>${esc(t("apply", "Apply"))}</button></div></div><div class="filter-options">${optionHtml}</div></div></details>`;
+  return `<details class="filter-control ${count ? "active" : ""}" data-filter-menu="${esc(column.key)}"><summary class="filter-button" aria-label="${esc(t("filter", "Filter"))} ${esc(column.label)}"><span class="filter-icon">&#9662;</span>${countText}</summary><div class="filter-menu"><div class="filter-menu-head"><strong>${esc(column.label)}</strong><div class="filter-menu-actions"><button class="action-button compact filter-clear" type="button" data-filter-clear="${esc(column.key)}" ${count ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button><button class="action-button compact primary filter-apply" type="button" data-filter-apply="${esc(column.key)}" disabled>${esc(t("apply", "Apply"))}</button></div></div><div class="filter-options">${optionHtml}</div></div></details>`;
 }
 function selectionSetForColumn(column) {
   const value = typeof column?.selectionSet === "function" ? column.selectionSet() : column?.selectionSet;
@@ -617,11 +617,12 @@ function tableEditorActions(save, cancel) {
   actions.className = "table-cell-editor-actions";
   const saveButton = document.createElement("button");
   saveButton.type = "button";
-  saveButton.className = "primary";
+  saveButton.className = "action-button compact primary";
   saveButton.textContent = t("save", "Save");
   saveButton.addEventListener("click", save);
   const cancelButton = document.createElement("button");
   cancelButton.type = "button";
+  cancelButton.className = "action-button compact";
   cancelButton.textContent = t("cancel", "Cancel");
   cancelButton.addEventListener("click", cancel);
   actions.append(saveButton, cancelButton);

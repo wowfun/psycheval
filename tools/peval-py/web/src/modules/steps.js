@@ -4,7 +4,7 @@ import { metricExtra, timeGradientClass, timeGradientStyle, timeTitle, timingRat
 
 function renderStepsHeader(trajectory) {
   const count = (trajectory?.steps || []).length;
-  return `<div class="steps-head"><h3>Steps (${count})</h3><button class="step-toggle-button" type="button" data-step-action="toggle" ${count ? "" : "disabled"}>Expand all</button></div>`;
+  return `<div class="steps-head"><h3>Steps (${count})</h3><button class="action-button" type="button" data-step-action="toggle" ${count ? "" : "disabled"}>Expand all</button></div>`;
 }
 function valuePreview(value) {
   if (value === null || value === undefined) return "";

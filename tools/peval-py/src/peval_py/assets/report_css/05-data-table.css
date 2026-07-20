@@ -193,21 +193,6 @@ td.num,th.num {
 .table-cell-editor-actions {
   justify-content:flex-end;
 }
-.table-cell-editor-actions button {
-  min-height:30px;
-  border:1px solid var(--rule);
-  border-radius:999px;
-  background:var(--surface-2);
-  color:var(--ink);
-  padding:0 10px;
-  font:700 12px/1 var(--mono);
-  cursor:pointer;
-}
-.table-cell-editor-actions button.primary {
-  border-color:var(--ink);
-  background:var(--ink);
-  color:var(--surface);
-}
 .table-cell-editor-suggestion {
   cursor:pointer;
 }
@@ -388,20 +373,6 @@ th.num .filter-menu {
   text-overflow:ellipsis;
   white-space:nowrap;
 }
-.filter-clear {
-  border:1px solid var(--rule);
-  border-radius:999px;
-  background:var(--surface-2);
-  color:var(--ink);
-  min-height:26px;
-  padding:0 9px;
-  font:700 12px/1 var(--mono);
-  cursor:pointer;
-}
-.filter-clear:disabled {
-  opacity:.45;
-  cursor:default;
-}
 .filter-options {
   display:grid;
   gap:7px;
@@ -411,20 +382,6 @@ th.num .filter-menu {
   flex:none;
   align-items:center;
   gap:6px;
-}
-.filter-apply {
-  border:1px solid var(--ink);
-  border-radius:999px;
-  background:var(--ink);
-  color:var(--surface);
-  min-height:30px;
-  padding:0 12px;
-  font:700 12px/1 var(--mono);
-  cursor:pointer;
-}
-.filter-apply:disabled {
-  opacity:.45;
-  cursor:default;
 }
 .filter-option {
   display:flex;

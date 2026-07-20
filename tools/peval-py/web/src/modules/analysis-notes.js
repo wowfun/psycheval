@@ -20,7 +20,7 @@ function renderNotesAction(trialKey) {
   if (!source || state.notesEditor?.trialKey === trialKey) return "";
   const cellNote = cellNoteFor(trialKey);
   const label = cellNote ? t("edit_notes", "Edit notes") : t("add_notes", "Add notes");
-  return `<button class="step-toggle-button notes-edit-button" type="button" data-notes-edit data-trial-key="${esc(trialKey)}">${esc(label)}</button>`;
+  return `<button class="action-button notes-edit-button" type="button" data-notes-edit data-trial-key="${esc(trialKey)}">${esc(label)}</button>`;
 }
 function renderNotesEditor(trialKey) {
   if (!serveMode() || !trialKey || !state.notesEditor || state.notesEditor.trialKey !== trialKey) return "";
@@ -31,8 +31,8 @@ function renderNotesEditor(trialKey) {
     <textarea data-notes-editor data-trial-key="${esc(trialKey)}" rows="8">${esc(markdown)}</textarea>
     ${error}
     <div class="notes-editor-actions">
-      <button class="step-toggle-button primary" type="button" data-notes-save data-trial-key="${esc(trialKey)}"${disabled}>${esc(t("save_notes", "Save notes"))}</button>
-      <button class="step-toggle-button" type="button" data-notes-cancel${disabled}>${esc(t("cancel", "Cancel"))}</button>
+      <button class="action-button primary" type="button" data-notes-save data-trial-key="${esc(trialKey)}"${disabled}>${esc(t("save_notes", "Save notes"))}</button>
+      <button class="action-button" type="button" data-notes-cancel${disabled}>${esc(t("cancel", "Cancel"))}</button>
     </div>
   </article>`;
 }

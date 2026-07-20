@@ -39,7 +39,7 @@ function renderLeaderboardSummaryActions() {
     ? renderWorkspaceViewControls()
     : "";
   const exportControl = serveMode()
-    ? `<button type="button" class="step-toggle-button leaderboard-summary-export" data-summary-export-xlsx ${leaderboardRows().length ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>`
+    ? `<button type="button" class="action-button leaderboard-summary-export" data-summary-export-xlsx ${leaderboardRows().length ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>`
     : "";
   return `<div class="leaderboard-summary-actions">${renderLeaderboardSummaryGroupControl()}${workspaceControls}${exportControl}</div>`;
 }

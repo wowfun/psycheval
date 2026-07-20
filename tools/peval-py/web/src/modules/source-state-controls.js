@@ -17,7 +17,7 @@ function renderServeSourceStateControls(rows = leaderboardRows()) {
       <input type="checkbox" data-source-state-toggle ${archived || allMode ? "checked" : ""} ${toggleDisabled}>
       <span>${esc(t("show_archived", "Show archived"))}</span>
     </label>
-    <button class="source-state-action" type="button" data-source-state-action ${selectedCount && !allMode ? "" : "disabled"}>${esc(allMode ? t("mixed_state_action_disabled", "Mixed view") : actionLabel)}</button>
+    <button class="action-button primary" type="button" data-source-state-action ${selectedCount && !allMode ? "" : "disabled"}>${esc(allMode ? t("mixed_state_action_disabled", "Mixed view") : actionLabel)}</button>
   </div>`;
 }
 

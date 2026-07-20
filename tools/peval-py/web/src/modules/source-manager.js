@@ -301,7 +301,7 @@ function renderDbSessionPicker(form, payload) {
     </div>
     <div class="db-picker-actions">
       <span data-db-selected-count>0 ${esc(t("serve_selected_count", "selected"))}</span>
-      <button class="step-toggle-button primary" type="button" data-db-add-selected disabled>${esc(t("serve_add_selected", "Add selected"))}</button>
+      <button class="action-button primary" type="button" data-db-add-selected disabled>${esc(t("serve_add_selected", "Add selected"))}</button>
     </div>
   `;
   bindDbSessionSelectionCounters(picker);

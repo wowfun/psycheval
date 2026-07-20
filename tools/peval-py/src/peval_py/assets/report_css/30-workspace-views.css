@@ -25,13 +25,7 @@
   justify-content:end;
   gap:8px;
   min-width:0;
-}
-.workspace-view-controls {
   flex-wrap:wrap;
-}
-.leaderboard-summary-save {
-  min-height:32px;
-  white-space:nowrap;
 }
 .leaderboard-summary-save:focus-visible,
 .workspace-view-index button:focus-visible,
@@ -104,8 +98,10 @@
   color:var(--muted);
   font:700 12px/1.45 var(--mono);
 }
-.workspace-views-close {
-  min-height:32px;
+.workspace-views-head>div {
+  min-width:0;
+}
+.workspace-views-head>.action-button {
   flex:0 0 auto;
 }
 .workspace-view-index {
@@ -127,13 +123,8 @@
   align-items:center;
   justify-content:end;
   gap:7px;
-}
-.workspace-view-index-actions .step-toggle-button {
-  min-height:30px;
-}
-.workspace-view-delete:not(:disabled) {
-  border-color:color-mix(in oklch,var(--fail),var(--rule) 55%);
-  color:var(--fail);
+  min-width:0;
+  flex-wrap:wrap;
 }
 .workspace-view-index-shell {
   margin:0;
@@ -196,7 +187,7 @@
   overflow-wrap:anywhere;
   font:800 16px/1.25 var(--sans);
 }
-.workspace-view-card-head .step-toggle-button {
+.workspace-view-card-head .action-button {
   min-height:30px;
   flex:0 0 auto;
 }
@@ -296,17 +287,6 @@
 .view-save-head h2 {
   font:800 21px/1.2 var(--sans);
 }
-.view-save-head button,
-.view-save-actions button {
-  min-height:34px;
-  border:1px solid var(--rule);
-  border-radius:999px;
-  background:var(--surface-2);
-  color:var(--ink);
-  padding:0 12px;
-  font:700 12px/1 var(--mono);
-  cursor:pointer;
-}
 .view-save-dialog form {
   display:grid;
   gap:14px;
@@ -374,9 +354,7 @@
   display:flex;
   justify-content:end;
   gap:8px;
-}
-.view-save-actions .step-toggle-button {
-  min-height:34px;
+  flex-wrap:wrap;
 }
 @media (min-width:1181px) {
   .serve-mode.workspace-views-open,

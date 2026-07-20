@@ -38,6 +38,7 @@
   justify-content:flex-end;
   gap:8px;
   flex-wrap:wrap;
+  min-width:0;
 }
 .serve-language-select {
   display:inline-flex;
@@ -54,11 +55,6 @@
   color:var(--ink);
   padding:0 8px;
   font:12px/1.2 var(--mono);
-}
-.step-toggle-button.primary {
-  border-color:color-mix(in oklch,var(--focus),transparent 36%);
-  background:var(--focus);
-  color:#fff;
 }
 .source-manager-backdrop[hidden] {
   display:none;
@@ -112,15 +108,6 @@
   padding:16px;
   border-bottom:1px solid var(--rule);
 }
-.source-manager-close {
+.source-manager-head>.action-button {
   justify-self:end;
-  min-height:32px;
-  border:1px solid var(--rule);
-  border-radius:999px;
-  background:var(--surface-2);
-  color:var(--ink);
-  padding:0 11px;
-  font:700 12px/1 var(--mono);
-  text-transform:uppercase;
-  cursor:pointer;
 }

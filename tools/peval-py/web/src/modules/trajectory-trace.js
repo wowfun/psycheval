@@ -211,7 +211,7 @@ function renderStepDrawer() {
     <div class="step-drawer-panel" role="dialog" aria-modal="false" aria-labelledby="step-drawer-title">
       <div class="step-drawer-head">
         <div><p class="eyebrow">${esc(t("step_details", "Step details"))}</p><h2 id="step-drawer-title">#${esc(step.step_id)}</h2><p class="copy">${esc(trial.trial_key || "-")}</p></div>
-        <button class="step-drawer-close" type="button" data-step-drawer-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
+        <button class="action-button compact" type="button" data-step-drawer-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
       </div>
       <div class="step-drawer-body">${renderStep(step, trial, timingStats, { open: true })}</div>
     </div>

@@ -114,7 +114,7 @@ function renderWorkspaceReportCell(row) {
 
 function renderAttachWorkspaceReportAction(rows = leaderboardRows()) {
   const count = visibleSelectedSourceKeys(rows).length;
-  return `<button class="step-toggle-button report-attach-button" type="button" data-report-attach data-workspace-report-control ${count ? "" : "disabled"}>${esc(reportMessage("attach_report", "Attach report ({count})", { count }))}</button>`;
+  return `<button class="action-button report-attach-button" type="button" data-report-attach data-workspace-report-control ${count ? "" : "disabled"}>${esc(reportMessage("attach_report", "Attach report ({count})", { count }))}</button>`;
 }
 
 function bindWorkspaceReportLeaderboardControls(target) {
@@ -329,8 +329,8 @@ function renderWorkspaceReportBindings() {
         <span>${esc(report.format.toUpperCase())} &middot; ${esc(report.report_id)}</span>
       </div>
       <div class="report-binding-actions">
-        <button class="step-toggle-button" type="button" data-report-manager-preview="${esc(report.report_id)}">${esc(t("report_preview", "Preview"))}</button>
-        <button class="step-toggle-button report-delete-button" type="button" data-report-delete="${esc(report.report_id)}">${esc(t("report_delete", "Delete report"))}</button>
+        <button class="action-button" type="button" data-report-manager-preview="${esc(report.report_id)}">${esc(t("report_preview", "Preview"))}</button>
+        <button class="action-button danger" type="button" data-report-delete="${esc(report.report_id)}">${esc(t("report_delete", "Delete report"))}</button>
       </div>
     </div>
     <label class="report-binding-search">
@@ -341,11 +341,11 @@ function renderWorkspaceReportBindings() {
     <div class="report-binding-footer">
       <span data-report-binding-selection-count>${esc(reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount }))}</span>
       <span class="catalog-page-controls">
-        <button class="step-toggle-button" type="button" data-report-bindings-prev ${Number(state.reportManager.pageData?.page || 1) <= 1 ? "disabled" : ""}>‹</button>
+        <button class="action-button icon-only" type="button" data-report-bindings-prev aria-label="${esc(t("previous", "Previous"))}" ${Number(state.reportManager.pageData?.page || 1) <= 1 ? "disabled" : ""}>‹</button>
         <span>${esc(reportBindingPageLabel())}</span>
-        <button class="step-toggle-button" type="button" data-report-bindings-next ${reportBindingPageEnd() >= Number(state.reportManager.pageData?.total || 0) ? "disabled" : ""}>›</button>
+        <button class="action-button icon-only" type="button" data-report-bindings-next aria-label="${esc(t("next", "Next"))}" ${reportBindingPageEnd() >= Number(state.reportManager.pageData?.total || 0) ? "disabled" : ""}>›</button>
       </span>
-      <button class="step-toggle-button primary" type="button" data-report-bindings-save ${selectedCount && workspaceReportBindingsChanged() ? "" : "disabled"}>${esc(t("report_save_bindings", "Save bindings"))}</button>
+      <button class="action-button primary" type="button" data-report-bindings-save ${selectedCount && workspaceReportBindingsChanged() ? "" : "disabled"}>${esc(t("report_save_bindings", "Save bindings"))}</button>
     </div>`;
 }
 
@@ -549,7 +549,7 @@ function renderWorkspaceReportReader() {
   if (!target || !report) return;
   disconnectWorkspaceReportPreviewObserver();
   const previewUrl = workspaceSnapshotMode() ? workspaceSnapshotReportPreviewUrl(report) : workspaceReportPreviewPath(report);
-  const openTab = workspaceSnapshotMode() ? "" : `<a class="report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>`;
+  const openTab = workspaceSnapshotMode() ? "" : `<a class="action-button compact report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>`;
   const fitAttribute = report.format === "html" ? " data-report-preview-fit" : "";
   target.innerHTML = `<div class="report-reader-panel" role="dialog" aria-modal="false" aria-labelledby="report-reader-title">
     <header class="report-reader-head">
@@ -560,7 +560,7 @@ function renderWorkspaceReportReader() {
       </div>
       <div class="report-reader-actions">
         ${openTab}
-        <button class="report-reader-close" type="button" data-report-reader-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
+        <button class="action-button compact" type="button" data-report-reader-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
       </div>
     </header>
     <div class="report-reader-frame-viewport" data-report-reader-viewport${fitAttribute}>

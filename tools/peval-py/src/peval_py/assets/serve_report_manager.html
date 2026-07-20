@@ -5,7 +5,7 @@
           <h2 id="report-manager-title">__REPORTS__</h2>
           <p class="copy">__REPORTS_COPY__</p>
         </div>
-        <button class="report-manager-close" type="button" data-report-manager-close aria-label="__CLOSE__">__CLOSE__</button>
+        <button class="action-button compact" type="button" data-report-manager-close aria-label="__CLOSE__">__CLOSE__</button>
       </header>
       <p class="report-manager-status" data-report-manager-status aria-live="polite" hidden></p>
       <div class="report-manager-body">
@@ -28,7 +28,7 @@
     <section class="view-save-dialog" role="dialog" aria-modal="true" aria-labelledby="view-save-title">
       <header class="view-save-head">
         <h2 id="view-save-title">__SAVE_VIEW__</h2>
-        <button type="button" data-view-save-cancel aria-label="__CANCEL__">__CANCEL__</button>
+        <button type="button" class="action-button compact" data-view-save-cancel aria-label="__CANCEL__">__CANCEL__</button>
       </header>
       <form data-view-save-form>
         <section class="view-current-configuration" aria-labelledby="view-current-configuration-title">
@@ -42,8 +42,8 @@
           <textarea name="notes" rows="7" data-view-notes-input></textarea>
         </label>
         <div class="view-save-actions">
-          <button type="button" data-view-save-cancel>__CANCEL__</button>
-          <button type="submit" class="step-toggle-button">__SAVE__</button>
+          <button type="button" class="action-button" data-view-save-cancel>__CANCEL__</button>
+          <button type="submit" class="action-button primary">__SAVE__</button>
         </div>
       </form>
     </section>

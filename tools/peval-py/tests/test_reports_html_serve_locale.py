@@ -41,6 +41,33 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertEqual(declarations.get("align-content"), "start")
         self.assertEqual(declarations.get("grid-auto-rows"), "max-content")
 
+    def test_action_buttons_shrink_and_action_groups_wrap_inside_panels(self) -> None:
+        css = load_asset_text("report.css")
+
+        action_rule = re.search(r"\.action-button\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(action_rule)
+        action_declarations = {
+            name.strip(): value.strip()
+            for declaration in action_rule.group(1).split(";")
+            if ":" in declaration
+            for name, value in [declaration.split(":", 1)]
+        }
+        self.assertEqual(action_declarations.get("min-width"), "0")
+        self.assertEqual(action_declarations.get("max-width"), "100%")
+        self.assertEqual(action_declarations.get("display"), "inline-flex")
+        self.assertEqual(action_declarations.get("white-space"), "normal")
+
+        for selector in (".serve-source-actions", ".workspace-view-index-actions"):
+            rule = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+            self.assertIsNotNone(rule)
+            declarations = {
+                name.strip(): value.strip()
+                for declaration in rule.group(1).split(";")
+                if ":" in declaration
+                for name, value in [declaration.split(":", 1)]
+            }
+            self.assertEqual(declarations.get("flex-wrap"), "wrap")
+
     def test_workspace_report_chrome_and_catalog_are_serve_only(self) -> None:
         report = {
             "schema_version": 19,

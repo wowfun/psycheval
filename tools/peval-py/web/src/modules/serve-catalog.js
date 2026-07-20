@@ -196,11 +196,11 @@ function renderSourceManagerPagination() {
   const total = Number(state.sourceManagerPage?.total || state.sourceManagerRows.length || 0);
   const start = total ? (page - 1) * size + 1 : 0;
   return `<li class="catalog-page-controls source-manager-page-controls">
-    <button type="button" class="step-toggle-button" data-source-page-prev ${page <= 1 ? "disabled" : ""}>‹</button>
+    <button type="button" class="action-button icon-only" data-source-page-prev aria-label="${esc(t("previous", "Previous"))}" ${page <= 1 ? "disabled" : ""}>‹</button>
     <span>${esc(`${start}-${sourceManagerPageEnd()} / ${total}`)}</span>
-    <button type="button" class="step-toggle-button" data-source-page-next ${sourceManagerPageEnd() >= total ? "disabled" : ""}>›</button>
+    <button type="button" class="action-button icon-only" data-source-page-next aria-label="${esc(t("next", "Next"))}" ${sourceManagerPageEnd() >= total ? "disabled" : ""}>›</button>
     <span>${esc(String(t("selected_count", "{count} selected")).replace("{count}", String(state.sourceSelection.size)))}</span>
-    <button type="button" class="step-toggle-button" data-source-selection-clear ${state.sourceSelection.size ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button>
+    <button type="button" class="action-button" data-source-selection-clear ${state.sourceSelection.size ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button>
   </li>`;
 }
 
@@ -236,11 +236,11 @@ function renderLeaderboardPanelControls(rows) {
   return `<div class="leaderboard-actions">
     <div class="leaderboard-action-row">${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardExportControls()}</div>
     <div class="catalog-page-controls" data-catalog-page-controls>
-      <button type="button" class="step-toggle-button" data-catalog-prev ${state.catalogPage.page <= 1 ? "disabled" : ""}>‹</button>
+      <button type="button" class="action-button icon-only" data-catalog-prev aria-label="${esc(t("previous", "Previous"))}" ${state.catalogPage.page <= 1 ? "disabled" : ""}>‹</button>
       <span>${esc(catalogPageLabel())}</span>
-      <button type="button" class="step-toggle-button" data-catalog-next ${catalogPageEnd() >= state.catalogPage.total ? "disabled" : ""}>›</button>
+      <button type="button" class="action-button icon-only" data-catalog-next aria-label="${esc(t("next", "Next"))}" ${catalogPageEnd() >= state.catalogPage.total ? "disabled" : ""}>›</button>
       <span>${esc(String(t("selected_count", "{count} selected")).replace("{count}", String(selectedCount)))}</span>
-      <button type="button" class="step-toggle-button" data-catalog-clear-conditions ${leaderboardConditionsAreDefault() ? "disabled" : ""}>${esc(t("clear_conditions", "Clear conditions"))}</button>
+      <button type="button" class="action-button" data-catalog-clear-conditions ${leaderboardConditionsAreDefault() ? "disabled" : ""}>${esc(t("clear_conditions", "Clear conditions"))}</button>
     </div>
   </div>`;
 }

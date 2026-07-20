@@ -119,8 +119,8 @@ def render_source_add_form(
         field_tag = f"""<span class="db-path-control">
                 <textarea name="{escape(name)}" autocomplete="off" required rows="2" aria-describedby="{escape(help_id)}"></textarea>
                 <span class="db-default-actions">
-                  <button class="step-toggle-button" type="button" data-adapter-default-db-save disabled title="{select_adapter_title}">{escape(messages["serve_save_adapter_default_db"])}</button>
-                  <button class="step-toggle-button" type="button" data-adapter-default-db-clear disabled title="{select_adapter_title}">{escape(messages["serve_clear_adapter_default_db"])}</button>
+                  <button class="action-button" type="button" data-adapter-default-db-save disabled title="{select_adapter_title}">{escape(messages["serve_save_adapter_default_db"])}</button>
+                  <button class="action-button" type="button" data-adapter-default-db-clear disabled title="{select_adapter_title}">{escape(messages["serve_clear_adapter_default_db"])}</button>
                 </span>
               </span>"""
     else:
@@ -129,7 +129,7 @@ def render_source_add_form(
     if kind == "path":
         path_picker = f"""
             <div class="source-picker-actions">
-              <button class="step-toggle-button" type="button" data-path-picker>{escape(messages["serve_choose_path_files"])}</button>
+              <button class="action-button" type="button" data-path-picker>{escape(messages["serve_choose_path_files"])}</button>
             </div>"""
     session_field = ""
     if kind == "db":
@@ -141,7 +141,7 @@ def render_source_add_form(
     picker = ""
     if kind == "db":
         inspect_button = f"""
-              <button class="step-toggle-button" type="button" data-db-inspect>{escape(messages["serve_inspect_db"])}</button>"""
+              <button class="action-button" type="button" data-db-inspect>{escape(messages["serve_inspect_db"])}</button>"""
         picker = f"""
             <div class="db-session-picker" data-db-session-picker hidden></div>"""
     return f"""
@@ -156,7 +156,7 @@ def render_source_add_form(
               {inspect_button}
               <span class="source-add-actions">
                 {render_adapter_select(messages, adapter_defaults)}
-                <button class="step-toggle-button" type="submit">{escape(messages["serve_add_source"])}</button>
+                <button class="action-button primary" type="submit">{escape(messages["serve_add_source"])}</button>
               </span>
             </div>
             {picker}
@@ -173,7 +173,7 @@ def render_upload_form(messages: dict[str, str], adapter_defaults: dict[str, str
             <div class="source-form-actions">
               <span class="source-add-actions">
                 {render_adapter_select(messages, adapter_defaults)}
-                <button class="step-toggle-button" type="submit">{escape(messages["serve_upload"])}</button>
+                <button class="action-button primary" type="submit">{escape(messages["serve_upload"])}</button>
               </span>
             </div>
           </form>"""

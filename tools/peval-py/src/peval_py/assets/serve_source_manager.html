@@ -5,9 +5,9 @@
     </div>
     <div class="serve-source-actions">
       __LANGUAGE_CONTROL__
-      <button class="step-toggle-button" type="button" data-refresh-all>__REFRESH__</button>
-      <button class="step-toggle-button" type="button" data-report-manager-open>__REPORTS__</button>
-      <button class="step-toggle-button primary" type="button" data-source-manager-open>__SOURCE_MANAGER__</button>
+      <button class="action-button" type="button" data-refresh-all>__REFRESH__</button>
+      <button class="action-button" type="button" data-report-manager-open>__REPORTS__</button>
+      <button class="action-button primary" type="button" data-source-manager-open>__SOURCE_MANAGER__</button>
     </div>
   </section>
   <div class="source-manager-backdrop" data-source-manager hidden data-serve-only>
@@ -17,7 +17,7 @@
           <h2 id="source-manager-title">__SOURCE_MANAGER__</h2>
           <p class="copy">__DROP_COPY__</p>
         </div>
-        <button class="source-manager-close" type="button" data-source-manager-close aria-label="__CLOSE__">__CLOSE__</button>
+        <button class="action-button compact" type="button" data-source-manager-close aria-label="__CLOSE__">__CLOSE__</button>
       </header>
       <p class="serve-notice" data-source-manager-status aria-live="polite" hidden></p>
       <div class="source-manager-body">
@@ -28,9 +28,9 @@
           <div class="source-manager-list-head">
             <h3>__SOURCES__</h3>
             <div class="source-manager-list-actions">
-              <button class="step-toggle-button" type="button" data-refresh-sources>__RELOAD__</button>
-              <button class="source-state-action" type="button" data-source-bulk-state disabled>__ARCHIVE_SELECTED__</button>
-              <button class="step-toggle-button source-bulk-delete" type="button" data-source-bulk-delete disabled>__DELETE_SELECTED__</button>
+              <button class="action-button" type="button" data-refresh-sources>__RELOAD__</button>
+              <button class="action-button primary" type="button" data-source-bulk-state disabled>__ARCHIVE_SELECTED__</button>
+              <button class="action-button danger" type="button" data-source-bulk-delete disabled>__DELETE_SELECTED__</button>
             </div>
           </div>
           <ul class="source-manager-list" data-source-list>

@@ -107,10 +107,10 @@ function renderWorkspaceViewControls() {
   if (!workspaceDisplayMode()) return "";
   const compositeApplied = state.workspaceAppliedViewNames.size > 0;
   const reopen = state.workspaceViewsClosed && workspaceViews().length
-    ? `<button type="button" class="step-toggle-button" data-workspace-views-open>${esc(t("saved_views", "Saved views"))}</button>`
+    ? `<button type="button" class="action-button" data-workspace-views-open>${esc(t("saved_views", "Saved views"))}</button>`
     : "";
   const save = serveMode()
-    ? `<button type="button" class="step-toggle-button leaderboard-summary-save" data-view-save ${compositeApplied ? `disabled title="${esc(t("clear_conditions_before_saving_view", "Clear applied views before saving a new view."))}"` : ""}>${esc(t("save_view", "Save view"))}</button>`
+    ? `<button type="button" class="action-button leaderboard-summary-save" data-view-save ${compositeApplied ? `disabled title="${esc(t("clear_conditions_before_saving_view", "Clear applied views before saving a new view."))}"` : ""}>${esc(t("save_view", "Save view"))}</button>`
     : "";
   return reopen || save ? `<div class="workspace-view-controls" data-workspace-view-control>${reopen}${save}</div>` : "";
 }
@@ -419,7 +419,7 @@ function renderWorkspaceViewRail() {
     target.innerHTML = "";
     return;
   }
-  target.innerHTML = `<div class="workspace-views-head"><div><h2>${esc(t("saved_views", "Saved views"))}</h2><p>${esc(t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p></div><button type="button" class="step-toggle-button workspace-views-close" data-workspace-views-close>${esc(t("close", "Close"))}</button></div>
+  target.innerHTML = `<div class="workspace-views-head"><div><h2>${esc(t("saved_views", "Saved views"))}</h2><p>${esc(t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p></div><button type="button" class="action-button compact" data-workspace-views-close>${esc(t("close", "Close"))}</button></div>
     ${renderWorkspaceViewIndex(views, allViews)}
     <div class="workspace-view-list" data-workspace-view-list>${views.map(renderWorkspaceViewCard).join("")}</div>`;
   bindWorkspaceViewControls(target);
@@ -476,9 +476,9 @@ function renderWorkspaceViewIndex(views = workspaceViewRows(), allViews = worksp
     ${serveMode() ? `<div class="workspace-view-index-toolbar">
       <span data-view-selection-count aria-live="polite">${esc(workspaceViewMessage("views_selected_count", "{count} selected", { count: selectedCount }))}</span>
       <div class="workspace-view-index-actions">
-        <button type="button" class="step-toggle-button" data-view-apply-selected ${selectedCount ? "" : "disabled"}>${esc(t("apply", "Apply"))}</button>
-        <button type="button" class="step-toggle-button" data-view-export-selected ${selectedCount ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>
-        <button type="button" class="step-toggle-button workspace-view-delete" data-view-delete-selected ${selectedCount ? "" : "disabled"}>${esc(t("delete_views", "Delete"))}</button>
+        <button type="button" class="action-button" data-view-apply-selected ${selectedCount ? "" : "disabled"}>${esc(t("apply", "Apply"))}</button>
+        <button type="button" class="action-button" data-view-export-selected ${selectedCount ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>
+        <button type="button" class="action-button danger" data-view-delete-selected ${selectedCount ? "" : "disabled"}>${esc(t("delete_views", "Delete"))}</button>
       </div>
     </div>` : ""}
     ${renderDataTable({

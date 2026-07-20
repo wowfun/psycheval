@@ -1640,8 +1640,8 @@ console.log(result);
         self.assertRegex(
             result["markup"],
             r'<div class="filter-menu-head"><strong>Result</strong><div class="filter-menu-actions">'
-            r'<button class="filter-clear"[^>]*data-filter-clear="status"[^>]*>Clear</button>'
-            r'<button class="filter-apply"[^>]*data-filter-apply="status"[^>]*>Apply</button>'
+            r'<button class="action-button compact filter-clear"[^>]*data-filter-clear="status"[^>]*>Clear</button>'
+            r'<button class="action-button compact primary filter-apply"[^>]*data-filter-apply="status"[^>]*>Apply</button>'
             r'</div></div><div class="filter-options">',
         )
         self.assertEqual(result["staged"]["committed"], ["passed"])

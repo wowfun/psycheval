@@ -33,21 +33,6 @@
 .step-drawer-head h2 {
   font:700 25px/1 var(--mono);
 }
-.step-drawer-close {
-  min-height:34px;
-  border:1px solid var(--rule);
-  border-radius:999px;
-  background:var(--surface-2);
-  color:var(--ink);
-  padding:0 12px;
-  font:700 12px/1 var(--mono);
-  text-transform:uppercase;
-  cursor:pointer;
-}
-.step-drawer-close:hover {
-  border-color:var(--focus);
-  background:color-mix(in oklch,var(--focus),var(--surface) 90%);
-}
 .step-drawer-body {
   min-height:0;
   padding:16px;
