@@ -72,6 +72,19 @@ function applyWorkspaceReportCatalog(reports) {
   if (workspaceReportManagerOpen()) renderWorkspaceReportManager();
 }
 
+async function refreshWorkspaceReports(options = {}) {
+  if (!serveMode()) return [];
+  try {
+    const payload = await serveApi("/api/reports");
+    applyWorkspaceReportCatalog(payload?.reports || []);
+    if (options.renderLeaderboard !== false) renderComparisonPanels({ trace: false });
+    return workspaceReports();
+  } catch (error) {
+    setServeStatus(error.message || String(error), true);
+    return [];
+  }
+}
+
 function workspaceReportLeaderboardColumn() {
   return {
     key: "workspace_reports",
@@ -732,6 +745,7 @@ export {
   openWorkspaceReportManager,
   openWorkspaceReportReader,
   readableWorkspaceReportSources,
+  refreshWorkspaceReports,
   renderAttachWorkspaceReportAction,
   renderWorkspaceReportBindingSource,
   renderWorkspaceReportBindings,

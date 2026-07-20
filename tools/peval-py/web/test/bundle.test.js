@@ -79,6 +79,9 @@ test("committed ESM bundle starts the serve catalog and detail flow", async () =
       if (url === "/api/views") {
         return new Response(JSON.stringify({ views: [] }));
       }
+      if (url === "/api/reports") {
+        return new Response(JSON.stringify({ reports: [] }));
+      }
       throw new Error(`unexpected request: ${url}`);
     },
   });
@@ -89,6 +92,7 @@ test("committed ESM bundle starts the serve catalog and detail flow", async () =
     assert.ok(requests.some(url => url.startsWith("/api/catalog?")));
     assert.ok(requests.some(url => url.startsWith("/api/report?source_key=source-one")));
     assert.ok(requests.includes("/api/views"));
+    assert.ok(requests.includes("/api/reports"));
   } finally {
     browser.cleanup();
   }

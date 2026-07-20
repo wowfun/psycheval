@@ -166,6 +166,40 @@ test("Reports Manager distinguishes loading from empty and clears old errors", (
   assert.equal(document.querySelector("[data-report-manager-status]").hidden, true);
 });
 
+test("serve startup loads existing report bindings for Leaderboard cells", async () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async path => {
+    calls.push(String(path));
+    return {
+      ok: true,
+      statusText: "OK",
+      text: async () => JSON.stringify({
+        reports: [{
+          report_id: "20260720-120000-000000",
+          filename: "startup-analysis.md",
+          format: "markdown",
+          source_keys: ["session-1"],
+        }],
+      }),
+    };
+  };
+
+  try {
+    runtime.state.workspaceReports = [];
+    await reports.refreshWorkspaceReports({ renderLeaderboard: false });
+
+    assert.deepEqual(calls, ["/api/reports"]);
+    assert.match(
+      reports.renderWorkspaceReportCell({ source_key: "session-1" }),
+      /startup-analysis\.md/,
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    runtime.state.workspaceReports = [];
+  }
+});
+
 test("Reports Manager keeps the session list stable when a middle binding changes", () => {
   const manager = document.querySelector("[data-report-manager]");
   manager.hidden = false;

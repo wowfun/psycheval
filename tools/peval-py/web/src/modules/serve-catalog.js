@@ -4,7 +4,7 @@ import { downloadBlob, firstUserStepSelection } from "./export.js";
 import { renderServeSourceStateControls, serveSourceModeStatusText } from "./source-state-controls.js";
 import { renderServeSources, sourceColumns, syncSourceManagerBulkActions } from "./source-manager.js";
 import { emptyServeReport, hideServeNotice, serveApi, setServeStatus } from "./serve-effects.js";
-import { closeWorkspaceReportManager, closeWorkspaceReportReader, renderAttachWorkspaceReportAction } from "./workspace-reports.js";
+import { closeWorkspaceReportManager, closeWorkspaceReportReader, refreshWorkspaceReports, renderAttachWorkspaceReportAction } from "./workspace-reports.js";
 import { clearWorkspaceViewConditions, closeWorkspaceViewSaveDialog, refreshWorkspaceViews, workspaceViewRows, workspaceViews } from "./workspace-views.js";
 import { renderStepDrawer } from "./trajectory-trace.js";
 import { openModalSurface } from "./modal-surfaces.js";
@@ -424,14 +424,12 @@ async function ensureCatalogDetail(generationChanged = false) {
   await loadServeSourceReport(sourceKey);
 }
 
-function scheduleServeStartupPoll() {
-  if (!serveMode() || state.serveStartupPolling || typeof fetch !== "function") return;
-  state.serveStartupPolling = true;
-  loadCatalogPage().finally(() => { state.serveStartupPolling = false; });
-}
-
-async function pollServeStartupSources() {
-  return loadCatalogPage();
+async function loadServeWorkspace() {
+  if (!serveMode()) return;
+  await Promise.all([
+    loadCatalogPage(),
+    refreshWorkspaceReports(),
+  ]);
 }
 
 function catalogRowForSourceKey(sourceKey) {
@@ -699,6 +697,7 @@ export {
   filterOptions,
   leaderboardConditionsAreDefault,
   leaderboardRows,
+  loadServeWorkspace,
   loadCatalogPage,
   loadServeSourceReport,
   loadSourceManagerPage,
@@ -707,7 +706,6 @@ export {
   normalizeCatalogRow,
   openServeSourceManager,
   pollCatalogOperation,
-  pollServeStartupSources,
   pruneSourceSelection,
   refreshServeReportFromServer,
   refreshServeSourcesFromServer,
@@ -719,7 +717,6 @@ export {
   requestCatalogSort,
   resolveCatalogSelections,
   rowAnalysised,
-  scheduleServeStartupPoll,
   selectServeDetail,
   selectServeSource,
   serveDownload,

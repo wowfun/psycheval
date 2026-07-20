@@ -48,3 +48,20 @@ test("mode runtime selects one explicit browser mode", () => {
   assert.equal(runtime.kind, "workspace_snapshot");
   assert.deepEqual(calls, [["render", { rows: [] }], ["rail"]]);
 });
+
+test("serve mode renders its shell before loading workspace catalogs", async () => {
+  const calls = [];
+  const runtime = createModeRuntime({
+    report: { rows: [] },
+    renderOptions: { mode: "serve" },
+    workspaceSnapshot: null,
+  }, {
+    renderReport: report => calls.push(["render", report]),
+    renderWorkspaceViewRail: () => calls.push(["rail"]),
+    loadServeWorkspace: async () => calls.push(["load-serve-workspace"]),
+  });
+
+  await runtime.start();
+
+  assert.deepEqual(calls, [["render", { rows: [] }], ["load-serve-workspace"]]);
+});
