@@ -525,7 +525,10 @@ Coverage must verify:
   the available screen height.
 - layout tests assert that desktop Saved Views/Step-drawer split selectors make
   `.workspace` full-width with no maximum, ordinary `.workspace` keeps its
-  1180px maximum, and the 1180px breakpoint still collapses to one column.
+  1180px maximum, and the 1180px breakpoint still collapses to one column. The
+  desktop Saved Views rail also keeps its outer grid column bounded when the
+  index contains long intrinsic-width values, so the header and Close action
+  remain inside the allocated rail width.
 - HTML renders the peval-style Run, Result, Evidence, and Usage Breakdown
   sections for single-session reports.
 - HTML report typography keeps the body text baseline at 15px and compact
@@ -774,7 +777,8 @@ Coverage must verify:
   preservation of unedited configuration, dialog and overwrite flow,
   static-mode exclusion, fixed desktop Leaderboard/index regions with independent
   analysis/card scrolling and short-viewport caps, two-column chart layout,
-  shared Step-drawer covering behavior, and 1180px narrow-screen fallback.
+  shared Step-drawer covering behavior, bounded desktop rail/header geometry
+  under long index content, and the 1180px narrow-screen fallback.
   They also cover the Leaderboard Summary visible-row export payload, Saved
   Views multi-selection export order, disabled export actions without eligible
   rows/selections, download filenames, and absence of serve-only Summary Excel

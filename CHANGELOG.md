@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-07-21
+
+- Tightened Serve workspace layout: the localized heading stays beside source
+  status, source tables retain horizontal access, and wide Saved Views content
+  scrolls without pushing rail controls out of view.
+
 ## 2026-07-20
 
 - Fixed serve startup to load existing workspace-report bindings into the

@@ -18,13 +18,16 @@ same command tree.
   Summary for multi-session comparisons
 - minimal `peval-py serve` workspace initialization for local report state
 - a local `serve` web UI named `Eval Workspace` in English and `评测工作台` in
-  Simplified Chinese, over a saved peval-py workspace, backed by canonical
-  Trial-cell artifacts and a rebuildable SQLite serve catalog, with
+  Simplified Chinese, shown at the left of the top toolbar beside source status,
+  over a saved peval-py workspace, backed by canonical Trial-cell artifacts and
+  a rebuildable SQLite serve catalog, with
   server-paginated active and archived source views, literal full-text search,
   source tags, inline display-metadata editing, cross-page selection, queued
   batch source actions whose target state is derived from the complete retained
   selection rather than only the current page, and on-demand single-Trial
-  details; selecting a later
+  details; the Source Manager form column and source-list column scroll
+  independently, and the source list retains horizontal scrolling for access to
+  every table column; selecting a later
   Leaderboard or Trajectory Overview row preserves both panels' internal scroll
   positions across the complete detail-load rerender; Source Manager and
   workspace report bindings show each session's tags, while Source Manager and
@@ -46,9 +49,11 @@ same command tree.
   may be exported together as a native-chart Excel workbook; the live rail can
   be closed and reopened without losing its in-page scroll state; on desktop the
   saved-view index remains fixed above its scrolling card list, while the
-  Leaderboard scrolls normally with the left-side analysis content; every saved
-  view card keeps its intrinsic content height so its complete title and charts
-  remain visible
+  Leaderboard scrolls normally with the left-side analysis content; the rail's
+  outer grid remains bounded to its allocated width even when long index values
+  scroll internally, keeping the header Close action visible; every saved view
+  card keeps its intrinsic content height so its complete title and charts remain
+  visible
 - type-driven application tables whose shared column model owns adaptive maximum
   widths, truncation, sorting/filtering metadata, and common editable-cell
   interaction while leaving user-authored Markdown tables untouched

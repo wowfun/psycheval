@@ -433,6 +433,9 @@ viewport width and height while preserving page padding and the clamped
 right-side width. The left column keeps the title and report notes above one
 scroll region containing Leaderboard, Summary, Trajectory Overview, and Trace;
 the right column fixes the Saved views header/index and scrolls cards below it.
+The outer rail grid uses a zero-bounded column so long index-table values remain
+inside their own horizontal scroller instead of widening the rail header and
+pushing its Close action beyond the viewport.
 The Leaderboard body remains capped at ten rows and additionally at 42dvh; the
 view index is capped at `min(260px, 32dvh)`. At 1180px and below both columns
 return to normal single-column page flow. Ordinary single-column serve and
