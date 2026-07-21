@@ -87,7 +87,14 @@ def _render_html_document(
         render_options["reports"] = list(reports or [])
     title_key = "serve_title" if normalized_mode in {"serve", "workspace_snapshot"} else "title"
     payload = load_asset_text("report.html").replace("__LANG__", escape(normalized_locale))
-    payload = payload.replace("__TITLE__", escape(messages[title_key]))
+    payload = payload.replace(
+        "__TITLE_REGION__",
+        (
+            ""
+            if normalized_mode == "serve"
+            else '<section class="topline"><h1>__TITLE__</h1></section>'
+        ),
+    )
     body_class = (
         "serve-mode workspace-snapshot-mode"
         if normalized_mode == "workspace_snapshot"
@@ -133,6 +140,7 @@ def _render_html_document(
         if normalized_mode == "report"
         else "",
     )
+    payload = payload.replace("__TITLE__", escape(messages[title_key]))
     if normalized_mode == "workspace_snapshot":
         inline_echarts = str(echarts_js or "").replace("</script", "<\\/script")
         echarts_script = f"<script>{inline_echarts}</script>"

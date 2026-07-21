@@ -68,6 +68,54 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
             }
             self.assertEqual(declarations.get("flex-wrap"), "wrap")
 
+    def test_source_manager_list_keeps_horizontal_access_to_all_columns(self) -> None:
+        css = load_asset_text("report.css")
+        list_rule = re.search(r"\.source-manager-list\s*\{([^}]*)\}", css)
+        table_rule = re.search(r"\.source-table\s*\{([^}]*)\}", css)
+
+        self.assertIsNotNone(list_rule)
+        self.assertIsNotNone(table_rule)
+        list_declarations = {
+            name.strip(): value.strip()
+            for declaration in list_rule.group(1).split(";")
+            if ":" in declaration
+            for name, value in [declaration.split(":", 1)]
+        }
+        table_declarations = {
+            name.strip(): value.strip()
+            for declaration in table_rule.group(1).split(";")
+            if ":" in declaration
+            for name, value in [declaration.split(":", 1)]
+        }
+        self.assertEqual(list_declarations.get("overflow"), "auto")
+        self.assertEqual(table_declarations.get("min-width"), "1012px")
+
+    def test_desktop_saved_views_grid_bounds_wide_index_content(self) -> None:
+        css = load_asset_text("report.css")
+        desktop_css = css.split("@media (min-width:1181px)", 1)[1].split(
+            "@media (max-width:1180px)", 1
+        )[0]
+        rail_rule = re.search(
+            r"\.workspace-views\s*\{([^}]*)\}",
+            desktop_css,
+        )
+        self.assertIsNotNone(rail_rule)
+        declarations = {
+            name.strip(): value.strip()
+            for declaration in rail_rule.group(1).split(";")
+            if ":" in declaration
+            for name, value in [declaration.split(":", 1)]
+        }
+        self.assertEqual(
+            declarations,
+            {
+                "display": "grid",
+                "grid-template-columns": "minmax(0,1fr)",
+                "grid-template-rows": "auto auto minmax(0,1fr)",
+                "overflow": "hidden",
+            },
+        )
+
     def test_workspace_report_chrome_and_catalog_are_serve_only(self) -> None:
         report = {
             "schema_version": 19,
@@ -178,6 +226,14 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('<body class="serve-mode">', serve_html)
         self.assertIn("<title>Eval Workspace</title>", serve_html)
         self.assertIn("<h1>Eval Workspace</h1>", serve_html)
+        self.assertIn(
+            '<div class="serve-source-heading">\n      <h1>Eval Workspace</h1>',
+            serve_html,
+        )
+        self.assertNotIn(
+            '<section class="topline"><h1>Eval Workspace</h1></section>',
+            serve_html,
+        )
         self.assertIn("<title>评测工作台</title>", zh_serve_html)
         self.assertIn("<h1>评测工作台</h1>", zh_serve_html)
         self.assertIn("--step-drawer-width:clamp(620px,44vw,760px)", serve_html)

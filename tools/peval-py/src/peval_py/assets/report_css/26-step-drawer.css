@@ -89,6 +89,10 @@
     align-items:flex-start;
     flex-direction:column;
   }
+  .serve-source-heading {
+    align-items:flex-start;
+    flex-wrap:wrap;
+  }
   .serve-source-actions,.source-manager-list-actions {
     justify-content:flex-start;
   }

@@ -7,10 +7,23 @@
   padding:10px 0;
   border-bottom:1px solid var(--rule);
 }
+.serve-source-heading {
+  min-width:0;
+  display:flex;
+  align-items:center;
+  gap:14px;
+}
+.serve-source-heading h1 {
+  flex:none;
+  font-size:20px;
+  line-height:1.1;
+}
 .serve-source-status {
   min-width:0;
   display:grid;
   gap:4px;
+  padding-left:14px;
+  border-left:1px solid var(--rule);
 }
 .serve-source-status strong {
   font:700 14px/1.2 var(--mono);
