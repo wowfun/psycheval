@@ -222,7 +222,7 @@ function filterOptions(column, rows) {
     const values = rows.flatMap(row => filterValues(row, column));
     return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
   }
-  const facetKey = ({ source_tags: "tags", agent: "agents", model: "models", status: "results" })[column.key];
+  const facetKey = ({ source_category: "categories", source_tags: "tags", agent: "agents", model: "models", status: "results" })[column.key];
   if (!facetKey) {
     const values = rows.flatMap(row => filterValues(row, column));
     return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
@@ -287,6 +287,7 @@ function leaderboardConditionsAreDefault() {
     && !listValue(query.views).length
     && normalizeServeSourceMode(query.state) === "active"
     && !String(query.search || "")
+    && !listValue(query.categories).length
     && !listValue(query.tags).length
     && !listValue(query.agents).length
     && !listValue(query.models).length
@@ -319,11 +320,28 @@ function requestCatalogFacets() {
   const filters = tableControls("leaderboard").filters || {};
   return loadCatalogPage({
     page: 1,
+    categories: listValue(filters.source_category),
     tags: listValue(filters.source_tags),
     agents: listValue(filters.agent),
     models: listValue(filters.model),
     results: listValue(filters.status)
   }, { force: true });
+}
+
+async function refreshSourceCategoryOptions() {
+  if (!serveMode()) return [];
+  const query = "state=all&page=1&page_size=1&search=&sort=last_turn_end&direction=desc&surface=leaderboard";
+  try {
+    const page = await serveApi(`/api/catalog?${query}`);
+    if (page?.checking && !page?.generation) return listValue(state.sourceCategoryOptions);
+    const seen = new Set();
+    state.sourceCategoryOptions = listValue(page?.facets?.categories)
+      .map(item => String(item?.value || "").trim())
+      .filter(value => value && !seen.has(value) && seen.add(value));
+  } catch (error) {
+    setServeStatus(error.message || String(error), true);
+  }
+  return listValue(state.sourceCategoryOptions);
 }
 
 function catalogQueryString(surface = "leaderboard") {
@@ -337,6 +355,7 @@ function catalogQueryString(surface = "leaderboard") {
     direction: query.direction || "desc",
     surface
   });
+  listValue(query.categories).forEach(value => params.append("category", value));
   listValue(query.tags).forEach(value => params.append("tag", value));
   listValue(query.agents).forEach(value => params.append("agent", value));
   listValue(query.models).forEach(value => params.append("model", value));
@@ -363,6 +382,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
   state.catalogQuery.state = normalizeServeSourceMode(state.catalogQuery.state);
   state.catalogLoading = true;
   try {
+    const wasChecking = Boolean(state.catalogPage?.checking);
     const previousGeneration = Number(state.catalogPage?.generation || 0);
     const page = await serveApi(`/api/catalog?${catalogQueryString(options.surface || "leaderboard")}`);
     state.catalogPage = page;
@@ -379,6 +399,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
       setTimeout(() => loadCatalogPage({}, { force: true }), 200);
     } else {
       setServeStatus(serveSourceModeStatusText());
+      if (wasChecking) await refreshSourceCategoryOptions();
     }
     await ensureCatalogDetail(previousGeneration !== Number(page.generation || 0));
     if (typeof refreshWorkspaceViews === "function" && (
@@ -429,6 +450,7 @@ async function loadServeWorkspace() {
   await Promise.all([
     loadCatalogPage(),
     refreshWorkspaceReports(),
+    refreshSourceCategoryOptions(),
   ]);
 }
 
@@ -506,12 +528,11 @@ async function switchServeSourceMode(mode) {
 function applyServeMutationPayload(payload) {
   hideServeNotice();
   if (payload?.operation_id) {
-    pollCatalogOperation(payload.operation_id);
-    return;
+    return pollCatalogOperation(payload.operation_id);
   }
-  loadCatalogPage({}, { force: true }).then(() => {
+  return loadCatalogPage({}, { force: true }).then(() => {
     const manager = document.querySelector("[data-source-manager]");
-    if (manager && !manager.hidden) loadSourceManagerPage();
+    if (manager && !manager.hidden) return loadSourceManagerPage();
   });
 }
 
@@ -530,6 +551,7 @@ async function pollCatalogOperation(operationId) {
     }
     setWorkspaceWriteControlsDisabled(false);
     await loadCatalogPage({}, { force: true });
+    await refreshSourceCategoryOptions();
     const manager = document.querySelector("[data-source-manager]");
     if (manager && !manager.hidden) await loadSourceManagerPage();
     const failures = listValue(operation.failures);
@@ -562,7 +584,9 @@ function setWorkspaceWriteControlsDisabled(disabled) {
 
 async function refreshServeSourcesFromServer() {
   try {
-    applyServeMutationPayload(await serveApi("/api/sources/reload", { method: "POST", body: {} }));
+    const payload = await serveApi("/api/sources/reload", { method: "POST", body: {} });
+    await applyServeMutationPayload(payload);
+    if (!payload?.operation_id) await refreshSourceCategoryOptions();
   } catch (error) {
     setServeStatus(error.message || String(error), true);
   }
@@ -606,6 +630,7 @@ function exportCurrentScope(kind) {
         search: state.catalogQuery.search || "",
         sort: state.catalogQuery.sort || "last_turn_end",
         direction: state.catalogQuery.direction || "desc",
+        categories: listValue(state.catalogQuery.categories),
         tags: listValue(state.catalogQuery.tags),
         agents: listValue(state.catalogQuery.agents),
         models: listValue(state.catalogQuery.models),
@@ -621,6 +646,7 @@ function exportCurrentScope(kind) {
         selected_step_id: state.selectedStep?.stepId ?? null,
         visible_view_names: visibleViews.map(view => view.name),
         workspace_view_filters: {
+          categories: listValue(viewControls.filters?.categories),
           tags: listValue(viewControls.filters?.tags),
           models: listValue(viewControls.filters?.models),
           group_by: listValue(viewControls.filters?.group_by),
@@ -715,6 +741,7 @@ export {
   reportRows,
   requestCatalogFacets,
   requestCatalogSort,
+  refreshSourceCategoryOptions,
   resolveCatalogSelections,
   rowAnalysised,
   selectServeDetail,

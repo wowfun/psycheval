@@ -51,6 +51,7 @@ function renderLeaderboardSummaryGroupControl() {
       ${leaderboardSummaryGroupButton("overall", t("summary_overall", "Overall"))}
       ${leaderboardSummaryGroupButton("agent", t("agent", "Agent"))}
       ${leaderboardSummaryGroupButton("model", t("model", "Model"))}
+      ${leaderboardSummaryGroupButton("category", t("category", "Category"))}
     </div>
   </div>`;
 }
@@ -67,17 +68,24 @@ function leaderboardSummaryGroups(rows = leaderboardRows(), groupBy = state.lead
   }
   const grouped = new Map();
   visibleRows.forEach(row => {
-    const rawLabel = groupBy === "model" ? row?.model : agentNameFor(row);
-    const label = String(rawLabel || "-");
-    if (!grouped.has(label)) grouped.set(label, []);
-    grouped.get(label).push(row);
+    const category = groupBy === "category"
+      ? String(row?.source_category || "").trim()
+      : "";
+    const key = groupBy === "category"
+      ? category || null
+      : String(groupBy === "model" ? row?.model || "-" : agentNameFor(row) || "-");
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(row);
   });
-  return Array.from(grouped, ([label, groupRows]) => ({
-    key: label,
-    label,
+  return Array.from(grouped, ([key, groupRows]) => ({
+    key,
+    label: key === null ? "-" : key,
     rows: groupRows,
     metrics: leaderboardSummaryRows(groupRows),
-  })).sort((left, right) => left.label.localeCompare(right.label, undefined, { numeric: true }));
+  })).sort((left, right) => (
+    left.label.localeCompare(right.label, undefined, { numeric: true })
+    || (left.key === null ? -1 : right.key === null ? 1 : 0)
+  ));
 }
 
 function leaderboardSummaryRows(rows = leaderboardRows()) {
@@ -134,11 +142,7 @@ function measuredModelDurationForRow(row) {
 
 function renderLeaderboardSummaryTableDisclosure(groups) {
   const open = Boolean(state.leaderboardSummaryTableOpen);
-  const unit = state.leaderboardSummaryGroupBy === "overall"
-    ? t("summary_scopes", "scope")
-    : state.leaderboardSummaryGroupBy === "model"
-      ? t("summary_models", "models")
-      : t("summary_agents", "agents");
+  const unit = leaderboardSummaryGroupUnit(state.leaderboardSummaryGroupBy);
   const summary = `${leaderboardSummaryDefinitions().length} ${t("summary_metrics", "metrics")} · ${groups.length} ${unit}`;
   return `<div class="leaderboard-summary-table-disclosure">
     <button type="button" class="leaderboard-summary-table-toggle" data-summary-table-toggle aria-expanded="${open}" aria-controls="leaderboard-summary-table-region">
@@ -150,11 +154,7 @@ function renderLeaderboardSummaryTableDisclosure(groups) {
 }
 
 function renderLeaderboardSummaryTable(groups) {
-  const groupHeading = state.leaderboardSummaryGroupBy === "overall"
-    ? t("summary_scope", "Scope")
-    : state.leaderboardSummaryGroupBy === "model"
-      ? t("model", "Model")
-      : t("agent", "Agent");
+  const groupHeading = leaderboardSummaryGroupHeading(state.leaderboardSummaryGroupBy);
   const statistics = leaderboardSummaryStatistics();
   return `<div class="table-shell leaderboard-summary-shell"><div class="table-wrap"><table class="data-table leaderboard-summary-table">
     <thead><tr>
@@ -193,10 +193,11 @@ function leaderboardSummaryStatistics() {
 
 function renderLeaderboardSummaryCharts(groups) {
   const statistic = selectedLeaderboardSummaryStatistic();
+  const groupHeading = leaderboardSummaryGroupHeading(state.leaderboardSummaryGroupBy);
   return `<section class="leaderboard-summary-chart-panel" aria-labelledby="leaderboard-summary-chart-title">
     <div class="leaderboard-summary-chart-head">
       <div>
-        <h3 id="leaderboard-summary-chart-title">${esc(statistic.label)} · ${esc(state.leaderboardSummaryGroupBy === "model" ? t("model", "Model") : t("agent", "Agent"))}</h3>
+        <h3 id="leaderboard-summary-chart-title">${esc(statistic.label)} · ${esc(groupHeading)}</h3>
         <p>${esc(t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p>
       </div>
       ${renderLeaderboardSummaryStatisticControl()}
@@ -267,9 +268,23 @@ function bindLeaderboardSummaryControls(target) {
 }
 
 function setLeaderboardSummaryGroupBy(value) {
-  if (!["overall", "agent", "model"].includes(value)) return;
+  if (!["overall", "agent", "model", "category"].includes(value)) return;
   state.leaderboardSummaryGroupBy = value;
   renderLeaderboardSummary(leaderboardRows());
+}
+
+function leaderboardSummaryGroupHeading(groupBy = state.leaderboardSummaryGroupBy) {
+  if (groupBy === "overall") return t("summary_scope", "Scope");
+  if (groupBy === "model") return t("model", "Model");
+  if (groupBy === "category") return t("category", "Category");
+  return t("agent", "Agent");
+}
+
+function leaderboardSummaryGroupUnit(groupBy = state.leaderboardSummaryGroupBy) {
+  if (groupBy === "overall") return t("summary_scopes", "scope");
+  if (groupBy === "model") return t("summary_models", "models");
+  if (groupBy === "category") return t("summary_categories", "categories");
+  return t("summary_agents", "agents");
 }
 
 function toggleLeaderboardSummaryTable() {
@@ -322,7 +337,9 @@ export {
   leaderboardSummaryDefinitions,
   leaderboardSummaryDistribution,
   leaderboardSummaryGroupButton,
+  leaderboardSummaryGroupHeading,
   leaderboardSummaryGroups,
+  leaderboardSummaryGroupUnit,
   leaderboardSummaryPercentile,
   leaderboardSummaryRows,
   leaderboardSummaryStatistics,

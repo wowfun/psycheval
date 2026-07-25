@@ -1,8 +1,8 @@
-import { $, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, hasMetricValue, listValue, lower, noteSnippetFor, notesFor, notesPlainText, renderComparisonPanels, renderNotesCell, renderReadOnlySourceTags, selectedKey, serveMode, sessionAliasValue, sourceIdentityFor, sourceTagsEditValue, sourceTagsFor, sourceTagsValue, state, statusLabel, t, workspaceDisplayMode } from "./runtime.js";
+import { $, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, hasMetricValue, listValue, lower, noteSnippetFor, notesFor, notesPlainText, renderComparisonPanels, renderNotesCell, renderReadOnlySourceCategory, renderReadOnlySourceTags, selectedKey, serveMode, sessionAliasValue, sourceCategoryEditValue, sourceCategoryFor, sourceCategoryValue, sourceIdentityFor, sourceTagsEditValue, sourceTagsFor, sourceTagsValue, state, statusLabel, t, workspaceDisplayMode } from "./runtime.js";
 import { bindServeExportControls, bindServeSelectionControls, bindTrialSelection } from "./export.js";
 import { bindServeSourceStateControls } from "./source-state-controls.js";
 import { renderSourceSelectionHeader } from "./source-manager.js";
-import { bindLeaderboardSearchControls, commitSourceCellEdit, existingSourceTagOptions } from "./serve-effects.js";
+import { bindLeaderboardSearchControls, commitSourceCellEdit, existingSourceCategoryOptions, existingSourceTagOptions } from "./serve-effects.js";
 import { bindLeaderboardCatalogControls, filterOptions, leaderboardRows, renderLeaderboardPanelControls, renderLeaderboardSearchControls, reportRows, requestCatalogFacets, requestCatalogSort, rowAnalysised, trajectoryFor } from "./serve-catalog.js";
 import { bindWorkspaceReportLeaderboardControls, workspaceReportLeaderboardColumn } from "./workspace-reports.js";
 
@@ -45,6 +45,7 @@ function leaderboardColumns() {
     ? { ...column, filterable: false }
     : column);
   return [
+    { key: "source_category", label: t("category", "Category"), valueType: "text", filterable: true, filterValues: row => [sourceCategoryFor(row)].filter(Boolean), value: row => sourceCategoryValue(row), html: row => renderReadOnlySourceCategory(row), edit: serveMode() ? { value: row => sourceCategoryEditValue(row), suggestions: existingSourceCategoryOptions, commit: (row, value) => commitSourceCellEdit(row, "category", value) } : undefined },
     { key: "source_tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: row => sourceTagsFor(row), value: row => sourceTagsValue(row), html: row => renderReadOnlySourceTags(row), edit: serveMode() ? { value: row => sourceTagsEditValue(row), suggestions: existingSourceTagOptions, commit: (row, value) => commitSourceCellEdit(row, "tags", value) } : undefined },
     ...serveColumns.slice(0, 2),
     workspaceReportLeaderboardColumn(),
@@ -202,7 +203,7 @@ function applyDataTableControls(tableId, rows, columns, filterOptionsRows = rows
   if (sortColumn) out.sort((left, right) => compareTableValues(sortColumn.value(left), sortColumn.value(right), tableSortType(sortColumn), controls.direction));
   return out;
 }
-const TABLE_VALUE_TYPES = new Set(["selection", "number", "datetime", "status", "enum", "text", "list", "identity", "path", "markdown", "yaml"]);
+const TABLE_VALUE_TYPES = new Set(["selection", "number", "datetime", "status", "enum", "text", "list", "scalar-list", "identity", "path", "markdown", "yaml"]);
 function tableValueType(column = {}) {
   const explicit = String(column.valueType || "").toLowerCase();
   if (TABLE_VALUE_TYPES.has(explicit)) return explicit;
@@ -429,8 +430,21 @@ function normalizeTableListValue(value) {
   });
   return out;
 }
+function normalizeTableScalarListValue(value) {
+  const values = Array.isArray(value) ? value : [value];
+  const out = [];
+  const seen = new Set();
+  values.forEach(item => {
+    const normalized = String(item ?? "").trim();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    out.push(normalized);
+  });
+  return out;
+}
 function normalizeTableEditValue(valueType, value) {
   if (valueType === "list") return normalizeTableListValue(value);
+  if (valueType === "scalar-list") return normalizeTableScalarListValue(value);
   if (["text", "enum"].includes(valueType)) return String(value ?? "").trim();
   return String(value ?? "");
 }
@@ -444,7 +458,7 @@ function bindDataTableEditors(root, { tableId, columns, rows, rowKey, onChange }
   const rowByKey = new Map(rows.map(row => [tableRowKey(row, rowKey), row]));
   root.querySelectorAll(`[data-table-id="${tableId}"] [data-table-column-key]`).forEach(cell => {
     const column = columnByKey.get(cell.dataset.tableColumnKey);
-    const row = rowByKey.get(cell.closest("tr")?.dataset?.tableRowKey || "");
+    const row = rowByKey.get(cell.closest("[data-table-row-key]")?.dataset?.tableRowKey || "");
     if (!row || !resolveTableCellEdit(column, row)) return;
     cell.addEventListener("click", event => event.stopPropagation());
     cell.addEventListener("dblclick", event => {
@@ -465,7 +479,7 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
   const edit = resolveTableCellEdit(column, row);
   if (!edit) return null;
   const valueType = tableValueType(column);
-  const renderedRowKey = cell.closest("tr")?.dataset?.tableRowKey || "";
+  const renderedRowKey = cell.closest("[data-table-row-key]")?.dataset?.tableRowKey || "";
   const original = cell.innerHTML;
   const originalTitle = cell.getAttribute("title");
   const originalAriaLabel = cell.getAttribute("aria-label");
@@ -475,6 +489,9 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
   editor.addEventListener("click", event => event.stopPropagation());
   editor.addEventListener("dblclick", event => event.stopPropagation());
   let input = null;
+  const scalarListValues = valueType === "scalar-list"
+    ? normalizeTableScalarListValue(edit.value)
+    : null;
   if (valueType === "enum") input = tableEnumEditor(edit.options, edit.value);
   else if (["markdown", "yaml"].includes(valueType)) {
     input = document.createElement("textarea");
@@ -483,12 +500,23 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
   } else {
     input = document.createElement("input");
     input.type = "text";
-    input.value = Array.isArray(edit.value) ? edit.value.join(", ") : String(edit.value ?? "");
+    input.value = valueType === "scalar-list"
+      ? ""
+      : Array.isArray(edit.value)
+        ? edit.value.join(", ")
+        : String(edit.value ?? "");
+    if (valueType === "scalar-list") input.placeholder = t("add_value", "Add value");
   }
   input.classList.add("table-cell-editor-control");
   input.setAttribute("aria-label", column.label || column.key);
   editor.appendChild(input);
-  if (valueType === "list") editor.appendChild(renderTableListSuggestions(input, edit.suggestions));
+  if (valueType === "list") editor.appendChild(renderTableSuggestions(input, edit.suggestions, { multiple: true }));
+  else if (valueType === "scalar-list") {
+    editor.appendChild(renderTableScalarListSuggestions(input, edit.suggestions, scalarListValues));
+  }
+  else if (valueType === "text" && normalizeTableListValue(edit.suggestions).length) {
+    editor.appendChild(renderTableSuggestions(input, edit.suggestions));
+  }
   const status = document.createElement("div");
   status.className = "table-cell-editor-status";
   status.setAttribute("aria-live", "polite");
@@ -515,7 +543,10 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
     editor.querySelectorAll("button").forEach(button => { button.disabled = true; });
     status.textContent = t("saving", "Saving...");
     try {
-      const result = await edit.commit(row, normalizeTableEditValue(valueType, input.value));
+      const editValue = valueType === "scalar-list"
+        ? normalizeTableScalarListValue([...scalarListValues, input.value])
+        : normalizeTableEditValue(valueType, input.value);
+      const result = await edit.commit(row, editValue);
       finished = true;
       if (typeof onChange === "function") await onChange();
       focusCell(result?.rowKey || renderedRowKey);
@@ -576,12 +607,15 @@ function tableEnumEditor(options, currentValue) {
   });
   return select;
 }
-function renderTableListSuggestions(input, suggestions) {
+function renderTableSuggestions(input, suggestions, options = {}) {
+  const multiple = Boolean(options.multiple);
   const list = document.createElement("div");
   list.className = "table-cell-editor-suggestions";
   list.setAttribute("aria-label", t("suggestions", "Suggestions"));
   const sync = () => {
-    const selected = new Set(normalizeTableListValue(input.value));
+    const selected = multiple
+      ? new Set(normalizeTableListValue(input.value))
+      : new Set([String(input.value || "").trim()].filter(Boolean));
     list.querySelectorAll("button").forEach(button => {
       const active = selected.has(button.dataset.tableSuggestion);
       button.classList.toggle("selected", active);
@@ -598,17 +632,57 @@ function renderTableListSuggestions(input, suggestions) {
     button.addEventListener("click", event => {
       event.preventDefault();
       event.stopPropagation();
-      const values = normalizeTableListValue(input.value);
-      const index = values.indexOf(suggestion);
-      if (index >= 0) values.splice(index, 1);
-      else values.push(suggestion);
-      input.value = values.join(", ");
+      if (multiple) {
+        const values = normalizeTableListValue(input.value);
+        const index = values.indexOf(suggestion);
+        if (index >= 0) values.splice(index, 1);
+        else values.push(suggestion);
+        input.value = values.join(", ");
+      } else {
+        input.value = suggestion;
+      }
       sync();
       input.focus();
     });
     list.appendChild(button);
   });
   input.addEventListener("input", sync);
+  sync();
+  return list;
+}
+function renderTableScalarListSuggestions(input, suggestions, selectedValues) {
+  const list = document.createElement("div");
+  list.className = "table-cell-editor-suggestions";
+  list.setAttribute("aria-label", t("suggestions", "Suggestions"));
+  const candidates = normalizeTableScalarListValue([
+    ...selectedValues,
+    ...normalizeTableScalarListValue(suggestions),
+  ]);
+  const sync = () => {
+    const selected = new Set(selectedValues);
+    list.querySelectorAll("button").forEach(button => {
+      const active = selected.has(button.dataset.tableSuggestion);
+      button.classList.toggle("selected", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  };
+  candidates.forEach(suggestion => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "source-tag-chip table-cell-editor-suggestion";
+    button.dataset.tableSuggestion = suggestion;
+    button.textContent = suggestion;
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const index = selectedValues.indexOf(suggestion);
+      if (index >= 0) selectedValues.splice(index, 1);
+      else selectedValues.push(suggestion);
+      sync();
+      input.focus();
+    });
+    list.appendChild(button);
+  });
   sync();
   return list;
 }
@@ -630,7 +704,7 @@ function tableEditorActions(save, cancel) {
 }
 function focusTableCell(tableId, rowKey, columnKey, fallback = null) {
   const candidates = Array.from(document.querySelectorAll(`[data-table-id="${tableId}"] [data-table-column-key]`));
-  const cell = candidates.find(node => node.dataset.tableColumnKey === String(columnKey) && node.closest("tr")?.dataset?.tableRowKey === String(rowKey)) || fallback;
+  const cell = candidates.find(node => node.dataset.tableColumnKey === String(columnKey) && node.closest("[data-table-row-key]")?.dataset?.tableRowKey === String(rowKey)) || fallback;
   if (cell?.isConnected !== false) cell?.focus?.();
 }
 function dataTableFilterMenu(root, key) {
@@ -705,6 +779,7 @@ export {
   metricCellShade,
   normalizeTableEditValue,
   normalizeTableListValue,
+  normalizeTableScalarListValue,
   renderDataCell,
   renderDataSelection,
   renderDataTable,
@@ -715,6 +790,8 @@ export {
   renderSelectionHeader,
   renderTableHeader,
   renderTableRow,
+  renderTableScalarListSuggestions,
+  renderTableSuggestions,
   resetDataTableFilterDraft,
   resolveTableCellEdit,
   rowToolErrorRate,

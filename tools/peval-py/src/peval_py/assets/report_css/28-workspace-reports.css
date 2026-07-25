@@ -14,7 +14,7 @@
   max-width:100%;
 }
 .report-cell-button,
-.report-cell-menu>summary {
+.report-cell-select {
   max-width:150px;
   min-height:28px;
   display:inline-flex;
@@ -31,49 +31,8 @@
   white-space:nowrap;
 }
 .report-cell-button:hover,
-.report-cell-menu>summary:hover {
+.report-cell-select:hover {
   border-color:var(--focus);
-  background:var(--surface-2);
-}
-.report-cell-menu {
-  position:relative;
-}
-.report-cell-menu>summary {
-  list-style:none;
-}
-.report-cell-menu>summary::-webkit-details-marker {
-  display:none;
-}
-.report-cell-menu-panel {
-  position:absolute;
-  top:calc(100% + 5px);
-  left:0;
-  z-index:30;
-  min-width:220px;
-  max-width:min(360px,70vw);
-  display:grid;
-  gap:5px;
-  border:1px solid var(--rule);
-  border-radius:var(--radius);
-  background:var(--surface);
-  padding:7px;
-  box-shadow:0 14px 30px rgba(49,42,25,.18);
-}
-.report-cell-menu-panel button {
-  min-height:34px;
-  overflow:hidden;
-  border:0;
-  border-radius:6px;
-  background:transparent;
-  color:var(--ink);
-  padding:0 9px;
-  text-align:left;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-  font:700 12px/1.2 var(--mono);
-  cursor:pointer;
-}
-.report-cell-menu-panel button:hover {
   background:var(--surface-2);
 }
 .report-attach-button {
@@ -268,7 +227,7 @@
 .report-binding-row {
   min-width:0;
   display:grid;
-  grid-template-columns:auto minmax(0,1fr) minmax(132px,180px) auto;
+  grid-template-columns:auto minmax(0,1fr) minmax(112px,160px) minmax(132px,180px) auto;
   gap:10px;
   align-items:center;
   border-radius:6px;
@@ -278,7 +237,7 @@
 .report-binding-row:hover {
   background:var(--surface-2);
 }
-.report-binding-row input {
+.report-binding-row>input[type="checkbox"] {
   width:17px;
   height:17px;
   margin:0;
@@ -301,6 +260,23 @@
 }
 .report-binding-tags {
   min-width:0;
+}
+.report-binding-category {
+  min-width:0;
+  min-height:30px;
+  display:flex;
+  align-items:center;
+  border-radius:6px;
+  padding:3px 4px;
+  overflow:visible;
+}
+.report-binding-category .source-category-chip {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.report-binding-category .table-cell-editor {
+  min-width:min(180px,50vw);
 }
 .report-binding-state {
   border:1px solid color-mix(in oklch,var(--pass),var(--rule) 45%);
@@ -405,7 +381,7 @@
   opacity:.8;
 }
 .report-cell button:focus-visible,
-.report-cell summary:focus-visible,
+.report-cell-select:focus-visible,
 .report-manager-backdrop button:focus-visible,
 .report-manager-backdrop input:focus-visible,
 .report-reader button:focus-visible,
@@ -446,8 +422,15 @@
   .report-binding-row {
     grid-template-columns:auto minmax(0,1fr) auto;
   }
+  .report-binding-category {
+    grid-column:2/-1;
+  }
   .report-binding-tags {
     grid-column:2/-1;
+  }
+  .report-binding-state {
+    grid-column:3;
+    grid-row:1;
   }
   .report-reader {
     top:auto;

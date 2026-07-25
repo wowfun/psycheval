@@ -1,6 +1,6 @@
 import { currentServeSourceMode, data, listValue, normalizeServeSourceMode, readableServeSources, selectedKey, serveMode, sourceTagsFromValue, state, t } from "./runtime.js";
 import { sourceBulkStateTarget } from "./source-manager.js";
-import { applyLeaderboardSearchMode, applyServeMutationPayload, applyServeSourceStateMutationPayload, sourceRows, sourceSelectionKeys } from "./serve-catalog.js";
+import { applyLeaderboardSearchMode, applyServeMutationPayload, applyServeSourceStateMutationPayload, refreshSourceCategoryOptions, sourceRows, sourceSelectionKeys } from "./serve-catalog.js";
 
 function formPayload(form) {
   const formData = new FormData(form);
@@ -83,20 +83,33 @@ function existingSourceTagOptions() {
   });
   return tags;
 }
+function existingSourceCategoryOptions() {
+  const seen = new Set();
+  return listValue(state.sourceCategoryOptions)
+    .map(value => String(value || "").trim())
+    .filter(value => value && !seen.has(value) && seen.add(value));
+}
 async function commitSourceCellEdit(row, field, value) {
   const sourceKey = row?.source_key;
-  if (!serveMode() || !sourceKey || !["alias", "tags"].includes(field)) throw new Error(t("source_edit_unavailable", "Source editing is unavailable"));
-  const action = field === "tags" ? "tags" : "alias";
-  const body = {
-    report_source_state: currentServeSourceMode(),
-    [action === "tags" ? "tags" : "alias"]: action === "tags" ? listValue(value) : String(value || "").trim()
-  };
+  if (!serveMode() || !sourceKey || !["alias", "category", "tags"].includes(field)) throw new Error(t("source_edit_unavailable", "Source editing is unavailable"));
+  const action = field;
+  const body = action === "category"
+    ? { category: String(value || "").trim() }
+    : {
+        report_source_state: currentServeSourceMode(),
+        [action]: action === "tags" ? listValue(value) : String(value || "").trim()
+      };
   try {
     const payload = await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}/${action}`, {
       method: "POST",
       body
     });
-    applyServeMutationPayload(payload, { preserveTrial: row?.trial_key || selectedKey(), selectedSourceKey: sourceKey });
+    const updated = listValue(payload?.sources).find(source => source?.source_key === sourceKey);
+    if (updated) Object.assign(row, updated);
+    else if (action === "category") row.source_category = body.category || null;
+    await applyServeMutationPayload(payload, { preserveTrial: row?.trial_key || selectedKey(), selectedSourceKey: sourceKey });
+    if (action === "category") await refreshSourceCategoryOptions();
+    return { rowKey: sourceKey, source: updated || row };
   } catch (error) {
     setServeStatus(error.message || String(error), true);
     throw error;
@@ -196,6 +209,7 @@ export {
   clearServeReportCacheExcept,
   commitSourceCellEdit,
   emptyServeReport,
+  existingSourceCategoryOptions,
   existingSourceTagOptions,
   focusLeaderboardSearchInput,
   formPayload,

@@ -1771,13 +1771,12 @@ function renderWorkspaceReportCell(row) {
     const report = reports[0];
     return `<span class="report-cell" data-workspace-report-control><button class="report-cell-button" type="button" data-report-preview="${esc(report.report_id)}" title="${esc(report.filename)}">${esc(report.filename)}</button></span>`;
   }
+  const label = reportMessage("reports_count", "{count} reports", { count: reports.length });
   return `<span class="report-cell" data-workspace-report-control>
-    <details class="report-cell-menu">
-      <summary>${esc(reportMessage("reports_count", "{count} reports", { count: reports.length }))}</summary>
-      <span class="report-cell-menu-panel">
-        ${reports.map((report) => `<button type="button" data-report-preview="${esc(report.report_id)}" title="${esc(report.filename)}">${esc(report.filename)}</button>`).join("")}
-      </span>
-    </details>
+    <select class="report-cell-select" data-report-preview-select aria-label="${esc(label)}">
+      <option value="">${esc(label)}</option>
+      ${reports.map((report) => `<option value="${esc(report.report_id)}">${esc(report.filename)}</option>`).join("")}
+    </select>
   </span>`;
 }
 function renderAttachWorkspaceReportAction(rows = leaderboardRows()) {
@@ -1793,8 +1792,16 @@ function bindWorkspaceReportLeaderboardControls(target) {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      button.closest?.("details")?.removeAttribute?.("open");
       openWorkspaceReportReader(button.dataset.reportPreview, { opener: button });
+    });
+  });
+  target.querySelectorAll("[data-report-preview-select]").forEach((select) => {
+    select.addEventListener("change", (event) => {
+      event.stopPropagation();
+      const reportId = select.value;
+      if (!reportId) return;
+      select.value = "";
+      openWorkspaceReportReader(reportId, { opener: select });
     });
   });
   target.querySelectorAll("[data-report-attach]").forEach((button) => {
@@ -1986,7 +1993,7 @@ function renderWorkspaceReportBindings() {
       <span>${esc(t("report_search_sessions", "Search active and archived sessions"))}</span>
       <input type="search" data-report-binding-search value="${esc(state.reportManager.search)}" placeholder="${esc(t("report_search_sessions", "Search active and archived sessions"))}">
     </label>
-    <div class="report-binding-list" data-report-binding-list>${sourceRows2}</div>
+    <div class="report-binding-list" data-report-binding-list data-table-id="report-bindings">${sourceRows2}</div>
     <div class="report-binding-footer">
       <span data-report-binding-selection-count>${esc(reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount }))}</span>
       <span class="catalog-page-controls">
@@ -1994,7 +2001,7 @@ function renderWorkspaceReportBindings() {
         <span>${esc(reportBindingPageLabel())}</span>
         <button class="action-button icon-only" type="button" data-report-bindings-next aria-label="${esc(t("next", "Next"))}" ${reportBindingPageEnd() >= Number(state.reportManager.pageData?.total || 0) ? "disabled" : ""}>›</button>
       </span>
-      <button class="action-button primary" type="button" data-report-bindings-save ${selectedCount && workspaceReportBindingsChanged() ? "" : "disabled"}>${esc(t("report_save_bindings", "Save bindings"))}</button>
+      <button class="action-button primary" type="button" data-report-bindings-save ${workspaceReportBindingsChanged() ? "" : "disabled"}>${esc(t("report_save_bindings", "Save bindings"))}</button>
     </div>`;
 }
 function reportBindingPageEnd() {
@@ -2027,6 +2034,7 @@ function workspaceReportSourceSearchText(source) {
     source?.source_key,
     source?.trial_session_id,
     source?.session_id,
+    sourceCategoryFor(source),
     sourceTagsFor(source).join(" "),
     source?.active === false ? t("serve_archived", "archived") : t("serve_active", "active")
   ].filter(Boolean).join(" ").toLowerCase();
@@ -2036,15 +2044,42 @@ function renderWorkspaceReportBindingSource(source) {
   const checked = state.reportManager.draftBindings.has(sourceKey);
   const session = source?.trial_session_id || source?.session_id || sourceKey;
   const stateLabel = source?.active === false ? t("serve_archived", "archived") : t("serve_active", "active");
-  return `<label class="report-binding-row">
-    <input type="checkbox" data-report-binding-key="${esc(sourceKey)}" ${checked ? "checked" : ""}>
+  const category = sourceCategoryValue(source);
+  return `<div class="report-binding-row" data-report-binding-row data-table-row-key="${esc(sourceKey)}">
+    <input type="checkbox" data-report-binding-key="${esc(sourceKey)}" ${checked ? "checked" : ""} aria-label="${esc(t("select_row", "Select row"))}: ${esc(session)}">
     <span class="report-binding-row-main">
       <strong>${esc(sourceDisplayLabel(source))}</strong>
       <code>${esc(session)}</code>
     </span>
+    <span class="report-binding-category table-value-text table-cell-editable" data-report-binding-category data-table-column-key="source_category" data-value-type="text" tabindex="0" aria-keyshortcuts="Enter" title="${esc(category)}" aria-label="${esc(`${t("category", "Category")}: ${category}`)}">${renderReadOnlySourceCategory(source)}</span>
     <span class="report-binding-tags">${renderReadOnlySourceTags(source)}</span>
     <span class="report-binding-state ${source?.active === false ? "archived" : ""}">${esc(stateLabel)}</span>
-  </label>`;
+  </div>`;
+}
+function workspaceReportBindingCategoryColumn() {
+  return {
+    key: "source_category",
+    label: t("category", "Category"),
+    valueType: "text",
+    value: (source) => sourceCategoryValue(source),
+    edit: {
+      value: (source) => sourceCategoryEditValue(source),
+      suggestions: existingSourceCategoryOptions,
+      commit: (source, value) => commitSourceCellEdit(source, "category", value)
+    }
+  };
+}
+function refreshWorkspaceReportBindingCategoryCells(manager = document.querySelector("[data-report-manager]")) {
+  const sourceByKey = new Map(readableWorkspaceReportSources().map((source) => [String(source?.source_key || ""), source]));
+  manager?.querySelectorAll?.('[data-table-id="report-bindings"] [data-table-column-key="source_category"]').forEach((cell) => {
+    const sourceKey = cell.closest("[data-table-row-key]")?.dataset?.tableRowKey || "";
+    const source = sourceByKey.get(sourceKey);
+    if (!source) return;
+    const category = sourceCategoryValue(source);
+    cell.innerHTML = renderReadOnlySourceCategory(source);
+    cell.setAttribute("title", category);
+    cell.setAttribute("aria-label", `${t("category", "Category")}: ${category}`);
+  });
 }
 function bindWorkspaceReportManagerControls() {
   const manager = document.querySelector("[data-report-manager]");
@@ -2069,13 +2104,25 @@ function bindWorkspaceReportManagerControls() {
 function bindWorkspaceReportBindingControls(manager = document.querySelector("[data-report-manager]")) {
   if (!manager || manager.hidden) return;
   manager.querySelectorAll?.("[data-report-binding-key]").forEach((input) => {
-    input.addEventListener("change", () => {
-      const sourceKey = input.dataset.reportBindingKey;
-      if (input.checked) state.reportManager.draftBindings.add(sourceKey);
-      else state.reportManager.draftBindings.delete(sourceKey);
-      state.reportManager.dirty = workspaceReportBindingsChanged();
-      syncWorkspaceReportBindingSelectionControls(manager);
+    input.addEventListener("change", () => updateWorkspaceReportBindingDraft(input, manager));
+  });
+  manager.querySelectorAll?.("[data-report-binding-row]").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if (event.defaultPrevented || event.target.closest?.("input,button,a,select,textarea,[data-report-binding-category]")) return;
+      const input = row.querySelector("[data-report-binding-key]");
+      if (!input || input.disabled) return;
+      input.checked = !input.checked;
+      updateWorkspaceReportBindingDraft(input, manager);
+      input.focus();
     });
+  });
+  const categoryColumn = workspaceReportBindingCategoryColumn();
+  bindDataTableEditors(manager, {
+    tableId: "report-bindings",
+    columns: [categoryColumn],
+    rows: filteredWorkspaceReportSources(),
+    rowKey: (source) => source?.source_key,
+    onChange: () => refreshWorkspaceReportBindingCategoryCells(manager)
   });
   const search = manager.querySelector?.("[data-report-binding-search]");
   search?.addEventListener?.("input", () => {
@@ -2094,13 +2141,21 @@ function bindWorkspaceReportBindingControls(manager = document.querySelector("[d
   });
   manager.querySelector?.("[data-report-bindings-save]")?.addEventListener?.("click", saveWorkspaceReportBindings);
 }
+function updateWorkspaceReportBindingDraft(input, manager = document.querySelector("[data-report-manager]")) {
+  const sourceKey = input?.dataset?.reportBindingKey;
+  if (!sourceKey) return;
+  if (input.checked) state.reportManager.draftBindings.add(sourceKey);
+  else state.reportManager.draftBindings.delete(sourceKey);
+  state.reportManager.dirty = workspaceReportBindingsChanged();
+  syncWorkspaceReportBindingSelectionControls(manager);
+}
 function syncWorkspaceReportBindingSelectionControls(manager = document.querySelector("[data-report-manager]")) {
   if (!manager) return;
   const selectedCount = state.reportManager.draftBindings.size;
   const count = manager.querySelector?.("[data-report-binding-selection-count]");
   if (count) count.textContent = reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount });
   const save = manager.querySelector?.("[data-report-bindings-save]");
-  if (save) save.disabled = !selectedCount || !workspaceReportBindingsChanged() || state.reportManager.busy;
+  if (save) save.disabled = !workspaceReportBindingsChanged() || state.reportManager.busy;
 }
 function focusWorkspaceReportSearch() {
   const input = document.querySelector("[data-report-binding-search]");
@@ -2112,7 +2167,7 @@ function focusWorkspaceReportSearch() {
 async function saveWorkspaceReportBindings() {
   const reportId = state.reportManager.selectedId;
   const sourceKeys = Array.from(state.reportManager.draftBindings);
-  if (!reportId || !sourceKeys.length || !workspaceReportBindingsChanged()) return;
+  if (!reportId || !workspaceReportBindingsChanged()) return;
   if (state.reportManager.busy) return;
   state.reportManager.busy = true;
   renderWorkspaceReportManager();
@@ -2384,6 +2439,7 @@ function renderLeaderboardSummaryGroupControl() {
       ${leaderboardSummaryGroupButton("overall", t("summary_overall", "Overall"))}
       ${leaderboardSummaryGroupButton("agent", t("agent", "Agent"))}
       ${leaderboardSummaryGroupButton("model", t("model", "Model"))}
+      ${leaderboardSummaryGroupButton("category", t("category", "Category"))}
     </div>
   </div>`;
 }
@@ -2398,17 +2454,17 @@ function leaderboardSummaryGroups(rows = leaderboardRows(), groupBy = state.lead
   }
   const grouped = /* @__PURE__ */ new Map();
   visibleRows.forEach((row) => {
-    const rawLabel = groupBy === "model" ? row?.model : agentNameFor(row);
-    const label = String(rawLabel || "-");
-    if (!grouped.has(label)) grouped.set(label, []);
-    grouped.get(label).push(row);
+    const category = groupBy === "category" ? String(row?.source_category || "").trim() : "";
+    const key = groupBy === "category" ? category || null : String(groupBy === "model" ? row?.model || "-" : agentNameFor(row) || "-");
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(row);
   });
-  return Array.from(grouped, ([label, groupRows]) => ({
-    key: label,
-    label,
+  return Array.from(grouped, ([key, groupRows]) => ({
+    key,
+    label: key === null ? "-" : key,
     rows: groupRows,
     metrics: leaderboardSummaryRows(groupRows)
-  })).sort((left, right) => left.label.localeCompare(right.label, void 0, { numeric: true }));
+  })).sort((left, right) => left.label.localeCompare(right.label, void 0, { numeric: true }) || (left.key === null ? -1 : right.key === null ? 1 : 0));
 }
 function leaderboardSummaryRows(rows = leaderboardRows()) {
   const visibleRows = Array.isArray(rows) ? rows : [];
@@ -2459,7 +2515,7 @@ function measuredModelDurationForRow(row) {
 }
 function renderLeaderboardSummaryTableDisclosure(groups) {
   const open = Boolean(state.leaderboardSummaryTableOpen);
-  const unit = state.leaderboardSummaryGroupBy === "overall" ? t("summary_scopes", "scope") : state.leaderboardSummaryGroupBy === "model" ? t("summary_models", "models") : t("summary_agents", "agents");
+  const unit = leaderboardSummaryGroupUnit(state.leaderboardSummaryGroupBy);
   const summary = `${leaderboardSummaryDefinitions().length} ${t("summary_metrics", "metrics")} · ${groups.length} ${unit}`;
   return `<div class="leaderboard-summary-table-disclosure">
     <button type="button" class="leaderboard-summary-table-toggle" data-summary-table-toggle aria-expanded="${open}" aria-controls="leaderboard-summary-table-region">
@@ -2470,7 +2526,7 @@ function renderLeaderboardSummaryTableDisclosure(groups) {
   </div>`;
 }
 function renderLeaderboardSummaryTable(groups) {
-  const groupHeading = state.leaderboardSummaryGroupBy === "overall" ? t("summary_scope", "Scope") : state.leaderboardSummaryGroupBy === "model" ? t("model", "Model") : t("agent", "Agent");
+  const groupHeading = leaderboardSummaryGroupHeading(state.leaderboardSummaryGroupBy);
   const statistics = leaderboardSummaryStatistics();
   return `<div class="table-shell leaderboard-summary-shell"><div class="table-wrap"><table class="data-table leaderboard-summary-table">
     <thead><tr>
@@ -2509,10 +2565,11 @@ function leaderboardSummaryStatistics() {
 }
 function renderLeaderboardSummaryCharts(groups) {
   const statistic = selectedLeaderboardSummaryStatistic();
+  const groupHeading = leaderboardSummaryGroupHeading(state.leaderboardSummaryGroupBy);
   return `<section class="leaderboard-summary-chart-panel" aria-labelledby="leaderboard-summary-chart-title">
     <div class="leaderboard-summary-chart-head">
       <div>
-        <h3 id="leaderboard-summary-chart-title">${esc(statistic.label)} · ${esc(state.leaderboardSummaryGroupBy === "model" ? t("model", "Model") : t("agent", "Agent"))}</h3>
+        <h3 id="leaderboard-summary-chart-title">${esc(statistic.label)} · ${esc(groupHeading)}</h3>
         <p>${esc(t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p>
       </div>
       ${renderLeaderboardSummaryStatisticControl()}
@@ -2577,9 +2634,21 @@ function bindLeaderboardSummaryControls(target) {
   if (typeof bindWorkspaceViewControls === "function") bindWorkspaceViewControls(target);
 }
 function setLeaderboardSummaryGroupBy(value) {
-  if (!["overall", "agent", "model"].includes(value)) return;
+  if (!["overall", "agent", "model", "category"].includes(value)) return;
   state.leaderboardSummaryGroupBy = value;
   renderLeaderboardSummary(leaderboardRows());
+}
+function leaderboardSummaryGroupHeading(groupBy = state.leaderboardSummaryGroupBy) {
+  if (groupBy === "overall") return t("summary_scope", "Scope");
+  if (groupBy === "model") return t("model", "Model");
+  if (groupBy === "category") return t("category", "Category");
+  return t("agent", "Agent");
+}
+function leaderboardSummaryGroupUnit(groupBy = state.leaderboardSummaryGroupBy) {
+  if (groupBy === "overall") return t("summary_scopes", "scope");
+  if (groupBy === "model") return t("summary_models", "models");
+  if (groupBy === "category") return t("summary_categories", "categories");
+  return t("summary_agents", "agents");
 }
 function toggleLeaderboardSummaryTable() {
   state.leaderboardSummaryTableOpen = !state.leaderboardSummaryTableOpen;
@@ -2628,7 +2697,7 @@ function workspaceViews() {
     ...view,
     name: String(view.name),
     filters: workspaceViewFilters(view.filters),
-    group_by: ["overall", "agent", "model"].includes(view.group_by) ? view.group_by : "agent",
+    group_by: ["overall", "agent", "model", "category"].includes(view.group_by) ? view.group_by : "agent",
     notes: typeof view.notes === "string" ? view.notes : ""
   })).sort((left, right) => left.name.localeCompare(right.name, void 0, { numeric: true, sensitivity: "base" }));
 }
@@ -2637,6 +2706,7 @@ function workspaceViewFilters(value) {
   return {
     state: normalizeServeSourceMode(filters.state),
     search: typeof filters.search === "string" ? filters.search : "",
+    categories: listValue(filters.categories).map(String),
     tags: listValue(filters.tags).map(String),
     agents: listValue(filters.agents).map(String),
     models: listValue(filters.models).map(String),
@@ -2658,9 +2728,10 @@ function workspaceViewColumns() {
   };
   const columns = [
     { key: "name", label: t("view_name", "Name"), valueType: "text", value: (view) => view.name, html: (view) => `<strong>${esc(view.name)}</strong>`, cellAttrs: navigateAttrs, edit: edit("name") },
+    { key: "categories", label: t("category", "Category"), valueType: "scalar-list", filterable: true, filterValues: (view) => view.filters.categories, value: (view) => view.filters.categories.join(", ") || "-", html: (view) => renderWorkspaceViewValueList(view.filters.categories), cellAttrs: navigateAttrs, edit: edit("categories", { suggestions: workspaceViewCategorySuggestions }) },
     { key: "tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: (view) => view.filters.tags, value: (view) => view.filters.tags.join(", ") || "-", html: (view) => renderWorkspaceViewValueList(view.filters.tags), cellAttrs: navigateAttrs, edit: edit("tags", { suggestions: workspaceViewTagSuggestions }) },
     { key: "models", label: t("model", "Models"), valueType: "list", filterable: true, filterValues: (view) => view.filters.models, value: (view) => view.filters.models.join(", ") || "-", html: (view) => renderWorkspaceViewValueList(view.filters.models), cellAttrs: navigateAttrs, edit: edit("models", { suggestions: workspaceViewModelSuggestions }) },
-    { key: "group_by", label: t("summary_group_by", "Group by"), valueType: "enum", filterable: true, value: (view) => view.group_by, filterLabel: workspaceViewGroupByLabel, html: (view) => esc(workspaceViewGroupByLabel(view.group_by)), cellAttrs: navigateAttrs, edit: edit("group_by", { options: () => ["overall", "agent", "model"].map((value) => ({ value, label: workspaceViewGroupByLabel(value) })) }) },
+    { key: "group_by", label: t("summary_group_by", "Group by"), valueType: "enum", filterable: true, value: (view) => view.group_by, filterLabel: workspaceViewGroupByLabel, html: (view) => esc(workspaceViewGroupByLabel(view.group_by)), cellAttrs: navigateAttrs, edit: edit("group_by", { options: () => ["overall", "agent", "model", "category"].map((value) => ({ value, label: workspaceViewGroupByLabel(value) })) }) },
     { key: "other_conditions", label: t("view_other_conditions", "Other conditions"), valueType: "yaml", value: (view) => workspaceViewOtherConditionsLabel(view), fullText: workspaceViewOtherConditionsYaml, html: (view) => `<span class="workspace-view-config-preview">${esc(workspaceViewOtherConditionsLabel(view))}</span>`, cellAttrs: navigateAttrs, edit: edit("other_conditions") },
     { key: "notes", label: t("view_notes", "Notes"), valueType: "markdown", value: (view) => view.notes || "-", fullText: (view) => view.notes || "", html: (view) => `<span>${esc(String(view.notes || "").replace(/\s+/g, " ").trim() || "-")}</span>`, className: "workspace-view-notes-cell", cellAttrs: navigateAttrs, edit: edit("notes") }
   ];
@@ -2687,12 +2758,15 @@ function renderWorkspaceViewValueList(values) {
 function workspaceViewTagSuggestions() {
   return workspaceViews().flatMap((view) => view.filters.tags);
 }
+function workspaceViewCategorySuggestions() {
+  return workspaceViews().flatMap((view) => view.filters.categories);
+}
 function workspaceViewModelSuggestions() {
   return workspaceViews().flatMap((view) => view.filters.models);
 }
 function workspaceViewEditValue(view, field) {
   if (field === "name") return view.name;
-  if (field === "tags" || field === "models") return view.filters[field];
+  if (field === "categories" || field === "tags" || field === "models") return view.filters[field];
   if (field === "group_by") return view.group_by;
   if (field === "other_conditions") return workspaceViewOtherConditionsYaml(view);
   return view.notes;
@@ -2847,7 +2921,7 @@ function openWorkspaceViewSaveDialog(opener) {
   renderWorkspaceViewCurrentConfiguration(dialog);
 }
 function workspaceViewDefaultName(filters = currentWorkspaceViewFilters(), groupBy = state.leaderboardSummaryGroupBy) {
-  const suffix = ` - ${["agent", "model", "overall"].includes(groupBy) ? groupBy : "agent"}`;
+  const suffix = ` - ${["agent", "model", "category", "overall"].includes(groupBy) ? groupBy : "agent"}`;
   const prefix = listValue(filters?.tags).length ? listValue(filters.tags).join(",") : "All";
   const maximumPrefixLength = Math.max(0, 120 - suffix.length);
   const truncated = prefix.length > maximumPrefixLength ? prefix.slice(0, maximumPrefixLength).replace(/[,\s]+$/g, "") : prefix;
@@ -2862,6 +2936,7 @@ function currentWorkspaceViewFilters() {
   return workspaceViewFilters({
     state: query.state,
     search: query.search,
+    categories: query.categories,
     tags: query.tags,
     agents: query.agents,
     models: query.models,
@@ -2875,6 +2950,7 @@ function renderWorkspaceViewCurrentConfiguration(dialog) {
   const fields = [];
   if (filters.state !== "active") fields.push([t("source", "Source"), workspaceViewStateLabel(filters.state)]);
   if (filters.search) fields.push([t("search_sessions", "Search sessions"), filters.search]);
+  if (filters.categories.length) fields.push([t("category", "Category"), filters.categories.join(", ")]);
   if (filters.tags.length) fields.push([t("tags", "Tags"), filters.tags.join(", ")]);
   if (filters.agents.length) fields.push([t("agent", "Agent"), filters.agents.join(", ")]);
   if (filters.models.length) fields.push([t("model", "Model"), filters.models.join(", ")]);
@@ -2891,6 +2967,7 @@ function workspaceViewFilterConfig(filters = currentWorkspaceViewFilters()) {
   const compact = {};
   if (filters.state !== "active") compact.state = filters.state;
   if (filters.search) compact.search = filters.search;
+  if (filters.categories.length) compact.categories = [...filters.categories];
   if (filters.tags.length) compact.tags = [...filters.tags];
   if (filters.agents.length) compact.agents = [...filters.agents];
   if (filters.models.length) compact.models = [...filters.models];
@@ -3101,6 +3178,7 @@ function workspaceViewConfigurationParts(view) {
   return [
     filters.state !== "active" ? `${t("source", "Source")}: ${workspaceViewStateLabel(filters.state)}` : "",
     filters.search ? `${t("search", "Search")}: ${filters.search}` : "",
+    filters.categories.length ? `${t("category", "Category")}: ${filters.categories.join(", ")}` : "",
     filters.tags.length ? `${t("tags", "Tags")}: ${filters.tags.join(", ")}` : "",
     filters.agents.length ? `${t("agent", "Agent")}: ${filters.agents.join(", ")}` : "",
     filters.models.length ? `${t("model", "Model")}: ${filters.models.join(", ")}` : "",
@@ -3141,7 +3219,7 @@ function workspaceViewConfigurationYaml(view, options = {}) {
   const filters = workspaceViewFilterConfig(workspaceViewFilters(view?.filters));
   const lines = [];
   const otherConditions = Object.prototype.hasOwnProperty.call(options, "otherConditionsYaml") ? String(options.otherConditionsYaml || "").trimEnd() : null;
-  const hasFilters = otherConditions !== null ? Boolean(otherConditions.trim() || listValue(filters.tags).length || listValue(filters.models).length) : Object.keys(filters).length > 0;
+  const hasFilters = otherConditions !== null ? Boolean(otherConditions.trim() || listValue(filters.categories).length || listValue(filters.tags).length || listValue(filters.models).length) : Object.keys(filters).length > 0;
   if (hasFilters) {
     lines.push("filters:");
     if (otherConditions !== null) {
@@ -3151,7 +3229,7 @@ function workspaceViewConfigurationYaml(view, options = {}) {
         if (filters[key]) lines.push(`  ${key}: ${JSON.stringify(filters[key])}`);
       });
     }
-    const listKeys = otherConditions !== null ? ["tags", "models"] : ["tags", "agents", "models", "results"];
+    const listKeys = otherConditions !== null ? ["categories", "tags", "models"] : ["categories", "tags", "agents", "models", "results"];
     listKeys.forEach((key) => {
       if (!listValue(filters[key]).length) return;
       lines.push(`  ${key}:`);
@@ -3170,14 +3248,24 @@ function workspaceViewCommaValues(value) {
     return true;
   });
 }
+function workspaceViewScalarValues(value) {
+  const seen = /* @__PURE__ */ new Set();
+  const values = Array.isArray(value) ? value : [value];
+  return values.map((item) => String(item || "").trim()).filter((item) => {
+    if (!item || seen.has(item)) return false;
+    seen.add(item);
+    return true;
+  });
+}
 function workspaceViewConfigurationEditValue(view, field, value) {
   if (field === "other_conditions") return workspaceViewConfigurationYaml(view, { otherConditionsYaml: value });
   const next = {
     ...view,
     filters: workspaceViewFilters(view?.filters)
   };
+  if (field === "categories") next.filters.categories = workspaceViewScalarValues(value);
   if (field === "tags" || field === "models") next.filters[field] = Array.isArray(value) ? value : workspaceViewCommaValues(value);
-  if (field === "group_by") next.group_by = ["overall", "agent", "model"].includes(value) ? value : view.group_by;
+  if (field === "group_by") next.group_by = ["overall", "agent", "model", "category"].includes(value) ? value : view.group_by;
   return workspaceViewConfigurationYaml(next);
 }
 function navigateToWorkspaceView(name) {
@@ -3190,11 +3278,11 @@ function navigateToWorkspaceView(name) {
 }
 async function commitWorkspaceViewCellEdit(view, field, value) {
   const name = String(view?.name || "");
-  if (!name || !["name", "tags", "models", "group_by", "other_conditions", "notes"].includes(field)) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
+  if (!name || !["name", "categories", "tags", "models", "group_by", "other_conditions", "notes"].includes(field)) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
   const appliedBefore = state.workspaceAppliedViewNames.has(name);
   try {
     const currentView = workspaceViewForName(name) || view;
-    const configurationField = ["tags", "models", "group_by", "other_conditions"].includes(field);
+    const configurationField = ["categories", "tags", "models", "group_by", "other_conditions"].includes(field);
     const wireField = configurationField ? "configuration" : field;
     const wireValue = configurationField ? workspaceViewConfigurationEditValue(currentView, field, value) : value;
     const response = await serveApi("/api/views/update", {
@@ -3261,16 +3349,17 @@ async function deleteSelectedWorkspaceViews() {
 }
 function workspaceViewGroupByLabel(groupBy) {
   if (groupBy === "model") return t("model", "Model");
+  if (groupBy === "category") return t("category", "Category");
   if (groupBy === "agent") return t("agent", "Agent");
   return t("summary_overall", "Overall");
 }
-function workspaceViewGroupLabel(group) {
-  return group?.key === "overall" ? t("summary_overall", "Overall") : String(group?.label || "-");
+function workspaceViewGroupLabel(group, groupBy) {
+  return groupBy === "overall" && group?.key === "overall" ? t("summary_overall", "Overall") : String(group?.label || "-");
 }
 function renderWorkspaceViewTableDisclosure(view, summary) {
   const open = state.workspaceViewTableOpen.has(view.name);
   const groups = listValue(summary.groups);
-  const unit = view.group_by === "overall" ? t("summary_scopes", "scope") : view.group_by === "model" ? t("summary_models", "models") : t("summary_agents", "agents");
+  const unit = leaderboardSummaryGroupUnit(view.group_by);
   const description = `${leaderboardSummaryDefinitions().length} ${t("summary_metrics", "metrics")} · ${groups.length} ${unit}`;
   const regionId = `workspace-view-table-${encodeURIComponent(view.name)}`;
   return `<div class="leaderboard-summary-table-disclosure workspace-view-table-disclosure">
@@ -3284,12 +3373,12 @@ function renderWorkspaceViewTableDisclosure(view, summary) {
 function renderWorkspaceViewTable(summary, groupBy) {
   const groups = listValue(summary.groups);
   const statistics = leaderboardSummaryStatistics();
-  const groupHeading = groupBy === "model" ? t("model", "Model") : groupBy === "agent" ? t("agent", "Agent") : t("summary_scope", "Scope");
+  const groupHeading = leaderboardSummaryGroupHeading(groupBy);
   return `<div class="table-shell leaderboard-summary-shell workspace-view-table-shell"><div class="table-wrap"><table class="data-table leaderboard-summary-table workspace-view-table">
     <thead><tr><th ${tableValueAttributes("identity", t("summary_metric", "Metric"))}>${tableCellContent(esc(t("summary_metric", "Metric")))}</th><th ${tableValueAttributes("identity", groupHeading)}>${tableCellContent(esc(groupHeading))}</th><th ${tableValueAttributes("number", t("summary_count", "Count"), "num")}>${tableCellContent(esc(t("summary_count", "Count")))}</th>${statistics.map((statistic) => `<th ${tableValueAttributes("number", statistic.label, "num")}>${tableCellContent(esc(statistic.label))}</th>`).join("")}</tr></thead>
     <tbody>${leaderboardSummaryDefinitions().map((definition) => groups.map((group, index) => {
     const metric = listValue(group.metrics).find((item) => item?.key === definition.key);
-    const groupLabel = workspaceViewGroupLabel(group);
+    const groupLabel = workspaceViewGroupLabel(group, groupBy);
     return `<tr${index === 0 ? " data-summary-group-start" : ""}>${index === 0 ? `<th ${tableValueAttributes("identity", definition.label, "summary-metric-cell")} scope="rowgroup" rowspan="${groups.length}">${tableCellContent(esc(definition.label))}</th>` : ""}<th ${tableValueAttributes("identity", groupLabel, "summary-group-cell")} scope="row">${tableCellContent(`<strong>${esc(groupLabel)}</strong><span>n=${fmtNum(group.count)}</span>`)}</th><td ${tableValueAttributes("number", fmtNum(metric?.count), "num")}>${tableCellContent(fmtNum(metric?.count))}</td>${statistics.map((statistic) => {
       const value = leaderboardSummaryValue(metric, statistic.value(metric));
       return `<td ${tableValueAttributes("number", value, "num")}>${tableCellContent(esc(value))}</td>`;
@@ -3307,13 +3396,13 @@ function toggleWorkspaceViewTable(name) {
 function renderWorkspaceViewCharts(summary, groupBy) {
   const groups = listValue(summary.groups);
   const statistic = leaderboardSummaryStatistics()[0];
-  const groupLabel = groupBy === "model" ? t("model", "Model") : groupBy === "agent" ? t("agent", "Agent") : t("summary_scope", "Scope");
+  const groupLabel = leaderboardSummaryGroupHeading(groupBy);
   return `<section class="workspace-view-charts" aria-label="${esc(`${statistic.label} · ${groupLabel}`)}">
     <div class="workspace-view-chart-head"><strong>${esc(`${statistic.label} · ${groupLabel}`)}</strong></div>
-    <div class="workspace-view-chart-grid">${leaderboardSummaryDefinitions().map((definition) => renderWorkspaceViewChart(definition, groups, statistic)).join("")}</div>
+    <div class="workspace-view-chart-grid">${leaderboardSummaryDefinitions().map((definition) => renderWorkspaceViewChart(definition, groups, statistic, groupBy)).join("")}</div>
   </section>`;
 }
-function renderWorkspaceViewChart(definition, groups, statistic) {
+function renderWorkspaceViewChart(definition, groups, statistic, groupBy) {
   const values = groups.map((group) => {
     const metric = listValue(group.metrics).find((item) => item?.key === definition.key);
     return { group, metric, value: statistic.value(metric) };
@@ -3323,7 +3412,8 @@ function renderWorkspaceViewChart(definition, groups, statistic) {
     const numeric = summaryNumber(item.value);
     const formatted = leaderboardSummaryValue(item.metric, numeric);
     const width = maximum > 0 && numeric !== null ? Math.max(2, numeric / maximum * 100) : 0;
-    return `<div class="leaderboard-summary-bar" role="img" aria-label="${esc(`${workspaceViewGroupLabel(item.group)}; ${definition.label}; ${statistic.label} ${formatted}; n=${item.metric?.count || 0}`)}"><span class="leaderboard-summary-bar-label" title="${esc(workspaceViewGroupLabel(item.group))}">${esc(workspaceViewGroupLabel(item.group))}</span><span class="leaderboard-summary-bar-track"><i style="width:${Number(width.toFixed(2))}%"></i></span><span class="leaderboard-summary-bar-value"><strong>${esc(formatted)}</strong><small>n=${fmtNum(item.metric?.count || 0)}</small></span></div>`;
+    const groupLabel = workspaceViewGroupLabel(item.group, groupBy);
+    return `<div class="leaderboard-summary-bar" role="img" aria-label="${esc(`${groupLabel}; ${definition.label}; ${statistic.label} ${formatted}; n=${item.metric?.count || 0}`)}"><span class="leaderboard-summary-bar-label" title="${esc(groupLabel)}">${esc(groupLabel)}</span><span class="leaderboard-summary-bar-track"><i style="width:${Number(width.toFixed(2))}%"></i></span><span class="leaderboard-summary-bar-value"><strong>${esc(formatted)}</strong><small>n=${fmtNum(item.metric?.count || 0)}</small></span></div>`;
   }).join("")}</div></section>`;
 }
 function selectedWorkspaceViewNames() {
@@ -3358,6 +3448,7 @@ async function applySelectedWorkspaceViews() {
   controls.sort = "finished_at_ms";
   controls.direction = "desc";
   controls.filters = {
+    source_category: [],
     source_tags: [],
     agent: [],
     model: [],
@@ -3371,6 +3462,7 @@ async function applySelectedWorkspaceViews() {
     search: "",
     sort: "last_turn_end",
     direction: "desc",
+    categories: [],
     tags: [],
     agents: [],
     models: [],
@@ -3400,6 +3492,7 @@ async function clearWorkspaceViewConditions() {
   controls.sort = "finished_at_ms";
   controls.direction = "desc";
   controls.filters = {
+    source_category: [],
     source_tags: [],
     agent: [],
     model: [],
@@ -3413,6 +3506,7 @@ async function clearWorkspaceViewConditions() {
     search: "",
     sort: "last_turn_end",
     direction: "desc",
+    categories: [],
     tags: [],
     agents: [],
     models: [],
@@ -3793,6 +3887,7 @@ function sourceColumns() {
     { key: "last_turn_finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: (source) => source?.last_turn_finished_at_ms, format: fmtDate },
     { key: "status", label: t("status", "status"), valueType: "status", value: (source) => sourceStatusText(source), html: renderServeSourceStatus },
     { key: "alias", label: t("serve_source_alias", "Alias"), valueType: "text", value: (source) => String(source?.source_alias || "").trim() || "-", edit: { value: (source) => String(source?.source_alias || ""), commit: (source, value) => commitSourceCellEdit(source, "alias", value) } },
+    { key: "source_category", label: t("category", "Category"), valueType: "text", value: (source) => sourceCategoryValue(source), html: renderReadOnlySourceCategory, edit: { value: (source) => sourceCategoryEditValue(source), suggestions: existingSourceCategoryOptions, commit: (source, value) => commitSourceCellEdit(source, "category", value) } },
     { key: "source_tags", label: t("tags", "Tags"), valueType: "list", value: (source) => sourceTagsValue(source), html: renderReadOnlySourceTags, edit: { value: (source) => sourceTagsEditValue(source), suggestions: existingSourceTagOptions, commit: (source, value) => commitSourceCellEdit(source, "tags", value) } }
   ];
 }
@@ -4173,20 +4268,29 @@ function existingSourceTagOptions() {
   });
   return tags;
 }
+function existingSourceCategoryOptions() {
+  const seen = /* @__PURE__ */ new Set();
+  return listValue(state.sourceCategoryOptions).map((value) => String(value || "").trim()).filter((value) => value && !seen.has(value) && seen.add(value));
+}
 async function commitSourceCellEdit(row, field, value) {
   const sourceKey = row?.source_key;
-  if (!serveMode() || !sourceKey || !["alias", "tags"].includes(field)) throw new Error(t("source_edit_unavailable", "Source editing is unavailable"));
-  const action = field === "tags" ? "tags" : "alias";
-  const body = {
+  if (!serveMode() || !sourceKey || !["alias", "category", "tags"].includes(field)) throw new Error(t("source_edit_unavailable", "Source editing is unavailable"));
+  const action = field;
+  const body = action === "category" ? { category: String(value || "").trim() } : {
     report_source_state: currentServeSourceMode(),
-    [action === "tags" ? "tags" : "alias"]: action === "tags" ? listValue(value) : String(value || "").trim()
+    [action]: action === "tags" ? listValue(value) : String(value || "").trim()
   };
   try {
     const payload = await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}/${action}`, {
       method: "POST",
       body
     });
-    applyServeMutationPayload(payload, { preserveTrial: row?.trial_key || selectedKey(), selectedSourceKey: sourceKey });
+    const updated = listValue(payload?.sources).find((source) => source?.source_key === sourceKey);
+    if (updated) Object.assign(row, updated);
+    else if (action === "category") row.source_category = body.category || null;
+    await applyServeMutationPayload(payload, { preserveTrial: row?.trial_key || selectedKey(), selectedSourceKey: sourceKey });
+    if (action === "category") await refreshSourceCategoryOptions();
+    return { rowKey: sourceKey, source: updated || row };
   } catch (error) {
     setServeStatus(error.message || String(error), true);
     throw error;
@@ -4538,7 +4642,7 @@ function filterOptions(column, rows) {
     const values = rows.flatMap((row) => filterValues(row, column));
     return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right, void 0, { numeric: true, sensitivity: "base" }));
   }
-  const facetKey = { source_tags: "tags", agent: "agents", model: "models", status: "results" }[column.key];
+  const facetKey = { source_category: "categories", source_tags: "tags", agent: "agents", model: "models", status: "results" }[column.key];
   if (!facetKey) {
     const values = rows.flatMap((row) => filterValues(row, column));
     return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right, void 0, { numeric: true, sensitivity: "base" }));
@@ -4593,7 +4697,7 @@ function bindLeaderboardCatalogControls(target) {
 function leaderboardConditionsAreDefault() {
   const query = state.catalogQuery || {};
   const filters = tableControls("leaderboard").filters || {};
-  return state.workspaceViewSelection.size < 1 && !listValue(query.views).length && normalizeServeSourceMode(query.state) === "active" && !String(query.search || "") && !listValue(query.tags).length && !listValue(query.agents).length && !listValue(query.models).length && !listValue(query.results).length && catalogSortKey(query.sort) === "last_turn_end" && String(query.direction || "desc") === "desc" && !Object.values(filters).some((value) => listValue(value).length) && state.leaderboardSummaryGroupBy === "agent" && state.leaderboardSummaryStatistic === "mean" && !state.leaderboardSummaryTableOpen;
+  return state.workspaceViewSelection.size < 1 && !listValue(query.views).length && normalizeServeSourceMode(query.state) === "active" && !String(query.search || "") && !listValue(query.categories).length && !listValue(query.tags).length && !listValue(query.agents).length && !listValue(query.models).length && !listValue(query.results).length && catalogSortKey(query.sort) === "last_turn_end" && String(query.direction || "desc") === "desc" && !Object.values(filters).some((value) => listValue(value).length) && state.leaderboardSummaryGroupBy === "agent" && state.leaderboardSummaryStatistic === "mean" && !state.leaderboardSummaryTableOpen;
 }
 function requestCatalogSort(key) {
   const query = state.catalogQuery;
@@ -4614,11 +4718,25 @@ function requestCatalogFacets() {
   const filters = tableControls("leaderboard").filters || {};
   return loadCatalogPage({
     page: 1,
+    categories: listValue(filters.source_category),
     tags: listValue(filters.source_tags),
     agents: listValue(filters.agent),
     models: listValue(filters.model),
     results: listValue(filters.status)
   }, { force: true });
+}
+async function refreshSourceCategoryOptions() {
+  if (!serveMode()) return [];
+  const query = "state=all&page=1&page_size=1&search=&sort=last_turn_end&direction=desc&surface=leaderboard";
+  try {
+    const page = await serveApi(`/api/catalog?${query}`);
+    if (page?.checking && !page?.generation) return listValue(state.sourceCategoryOptions);
+    const seen = /* @__PURE__ */ new Set();
+    state.sourceCategoryOptions = listValue(page?.facets?.categories).map((item) => String(item?.value || "").trim()).filter((value) => value && !seen.has(value) && seen.add(value));
+  } catch (error) {
+    setServeStatus(error.message || String(error), true);
+  }
+  return listValue(state.sourceCategoryOptions);
 }
 function catalogQueryString(surface = "leaderboard") {
   const query = state.catalogQuery;
@@ -4631,6 +4749,7 @@ function catalogQueryString(surface = "leaderboard") {
     direction: query.direction || "desc",
     surface
   });
+  listValue(query.categories).forEach((value) => params.append("category", value));
   listValue(query.tags).forEach((value) => params.append("tag", value));
   listValue(query.agents).forEach((value) => params.append("agent", value));
   listValue(query.models).forEach((value) => params.append("model", value));
@@ -4655,6 +4774,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
   state.catalogQuery.state = normalizeServeSourceMode(state.catalogQuery.state);
   state.catalogLoading = true;
   try {
+    const wasChecking = Boolean(state.catalogPage?.checking);
     const previousGeneration = Number(state.catalogPage?.generation || 0);
     const page = await serveApi(`/api/catalog?${catalogQueryString(options.surface || "leaderboard")}`);
     state.catalogPage = page;
@@ -4671,6 +4791,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
       setTimeout(() => loadCatalogPage({}, { force: true }), 200);
     } else {
       setServeStatus(serveSourceModeStatusText());
+      if (wasChecking) await refreshSourceCategoryOptions();
     }
     await ensureCatalogDetail(previousGeneration !== Number(page.generation || 0));
     if (typeof refreshWorkspaceViews === "function" && (!state.workspaceViewsLoaded || workspaceViews().length >= 1 && Number(state.workspaceViewSummaryGeneration) !== Number(page.generation || 0))) refreshWorkspaceViews();
@@ -4718,7 +4839,8 @@ async function loadServeWorkspace() {
   if (!serveMode()) return;
   await Promise.all([
     loadCatalogPage(),
-    refreshWorkspaceReports()
+    refreshWorkspaceReports(),
+    refreshSourceCategoryOptions()
   ]);
 }
 function catalogRowForSourceKey(sourceKey) {
@@ -4784,12 +4906,11 @@ async function switchServeSourceMode(mode) {
 function applyServeMutationPayload(payload) {
   hideServeNotice();
   if (payload?.operation_id) {
-    pollCatalogOperation(payload.operation_id);
-    return;
+    return pollCatalogOperation(payload.operation_id);
   }
-  loadCatalogPage({}, { force: true }).then(() => {
+  return loadCatalogPage({}, { force: true }).then(() => {
     const manager = document.querySelector("[data-source-manager]");
-    if (manager && !manager.hidden) loadSourceManagerPage();
+    if (manager && !manager.hidden) return loadSourceManagerPage();
   });
 }
 async function applyServeSourceStateMutationPayload(payload) {
@@ -4806,6 +4927,7 @@ async function pollCatalogOperation(operationId) {
     }
     setWorkspaceWriteControlsDisabled(false);
     await loadCatalogPage({}, { force: true });
+    await refreshSourceCategoryOptions();
     const manager = document.querySelector("[data-source-manager]");
     if (manager && !manager.hidden) await loadSourceManagerPage();
     const failures = listValue(operation.failures);
@@ -4836,7 +4958,9 @@ function setWorkspaceWriteControlsDisabled(disabled) {
 }
 async function refreshServeSourcesFromServer() {
   try {
-    applyServeMutationPayload(await serveApi("/api/sources/reload", { method: "POST", body: {} }));
+    const payload = await serveApi("/api/sources/reload", { method: "POST", body: {} });
+    await applyServeMutationPayload(payload);
+    if (!payload?.operation_id) await refreshSourceCategoryOptions();
   } catch (error) {
     setServeStatus(error.message || String(error), true);
   }
@@ -4877,6 +5001,7 @@ function exportCurrentScope(kind) {
         search: state.catalogQuery.search || "",
         sort: state.catalogQuery.sort || "last_turn_end",
         direction: state.catalogQuery.direction || "desc",
+        categories: listValue(state.catalogQuery.categories),
         tags: listValue(state.catalogQuery.tags),
         agents: listValue(state.catalogQuery.agents),
         models: listValue(state.catalogQuery.models),
@@ -4892,6 +5017,7 @@ function exportCurrentScope(kind) {
         selected_step_id: state.selectedStep?.stepId ?? null,
         visible_view_names: visibleViews.map((view) => view.name),
         workspace_view_filters: {
+          categories: listValue(viewControls.filters?.categories),
           tags: listValue(viewControls.filters?.tags),
           models: listValue(viewControls.filters?.models),
           group_by: listValue(viewControls.filters?.group_by)
@@ -5277,6 +5403,7 @@ function leaderboardColumns() {
   if (!workspaceDisplayMode()) return columns;
   const serveColumns = columns.map((column) => ["session_id", "analysised"].includes(column.key) ? { ...column, filterable: false } : column);
   return [
+    { key: "source_category", label: t("category", "Category"), valueType: "text", filterable: true, filterValues: (row) => [sourceCategoryFor(row)].filter(Boolean), value: (row) => sourceCategoryValue(row), html: (row) => renderReadOnlySourceCategory(row), edit: serveMode() ? { value: (row) => sourceCategoryEditValue(row), suggestions: existingSourceCategoryOptions, commit: (row, value) => commitSourceCellEdit(row, "category", value) } : void 0 },
     { key: "source_tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: (row) => sourceTagsFor(row), value: (row) => sourceTagsValue(row), html: (row) => renderReadOnlySourceTags(row), edit: serveMode() ? { value: (row) => sourceTagsEditValue(row), suggestions: existingSourceTagOptions, commit: (row, value) => commitSourceCellEdit(row, "tags", value) } : void 0 },
     ...serveColumns.slice(0, 2),
     workspaceReportLeaderboardColumn(),
@@ -5432,7 +5559,7 @@ function applyDataTableControls(tableId, rows, columns, filterOptionsRows = rows
   if (sortColumn) out.sort((left, right) => compareTableValues(sortColumn.value(left), sortColumn.value(right), tableSortType(sortColumn), controls.direction));
   return out;
 }
-var TABLE_VALUE_TYPES = /* @__PURE__ */ new Set(["selection", "number", "datetime", "status", "enum", "text", "list", "identity", "path", "markdown", "yaml"]);
+var TABLE_VALUE_TYPES = /* @__PURE__ */ new Set(["selection", "number", "datetime", "status", "enum", "text", "list", "scalar-list", "identity", "path", "markdown", "yaml"]);
 function tableValueType(column = {}) {
   const explicit = String(column.valueType || "").toLowerCase();
   if (TABLE_VALUE_TYPES.has(explicit)) return explicit;
@@ -5655,8 +5782,21 @@ function normalizeTableListValue(value) {
   });
   return out;
 }
+function normalizeTableScalarListValue(value) {
+  const values = Array.isArray(value) ? value : [value];
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  values.forEach((item) => {
+    const normalized = String(item ?? "").trim();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    out.push(normalized);
+  });
+  return out;
+}
 function normalizeTableEditValue(valueType, value) {
   if (valueType === "list") return normalizeTableListValue(value);
+  if (valueType === "scalar-list") return normalizeTableScalarListValue(value);
   if (["text", "enum"].includes(valueType)) return String(value ?? "").trim();
   return String(value ?? "");
 }
@@ -5670,7 +5810,7 @@ function bindDataTableEditors(root, { tableId, columns, rows, rowKey, onChange }
   const rowByKey = new Map(rows.map((row) => [tableRowKey(row, rowKey), row]));
   root.querySelectorAll(`[data-table-id="${tableId}"] [data-table-column-key]`).forEach((cell) => {
     const column = columnByKey.get(cell.dataset.tableColumnKey);
-    const row = rowByKey.get(cell.closest("tr")?.dataset?.tableRowKey || "");
+    const row = rowByKey.get(cell.closest("[data-table-row-key]")?.dataset?.tableRowKey || "");
     if (!row || !resolveTableCellEdit(column, row)) return;
     cell.addEventListener("click", (event) => event.stopPropagation());
     cell.addEventListener("dblclick", (event) => {
@@ -5691,7 +5831,7 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
   const edit = resolveTableCellEdit(column, row);
   if (!edit) return null;
   const valueType = tableValueType(column);
-  const renderedRowKey = cell.closest("tr")?.dataset?.tableRowKey || "";
+  const renderedRowKey = cell.closest("[data-table-row-key]")?.dataset?.tableRowKey || "";
   const original = cell.innerHTML;
   const originalTitle = cell.getAttribute("title");
   const originalAriaLabel = cell.getAttribute("aria-label");
@@ -5701,6 +5841,7 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
   editor.addEventListener("click", (event) => event.stopPropagation());
   editor.addEventListener("dblclick", (event) => event.stopPropagation());
   let input = null;
+  const scalarListValues = valueType === "scalar-list" ? normalizeTableScalarListValue(edit.value) : null;
   if (valueType === "enum") input = tableEnumEditor(edit.options, edit.value);
   else if (["markdown", "yaml"].includes(valueType)) {
     input = document.createElement("textarea");
@@ -5709,12 +5850,18 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
   } else {
     input = document.createElement("input");
     input.type = "text";
-    input.value = Array.isArray(edit.value) ? edit.value.join(", ") : String(edit.value ?? "");
+    input.value = valueType === "scalar-list" ? "" : Array.isArray(edit.value) ? edit.value.join(", ") : String(edit.value ?? "");
+    if (valueType === "scalar-list") input.placeholder = t("add_value", "Add value");
   }
   input.classList.add("table-cell-editor-control");
   input.setAttribute("aria-label", column.label || column.key);
   editor.appendChild(input);
-  if (valueType === "list") editor.appendChild(renderTableListSuggestions(input, edit.suggestions));
+  if (valueType === "list") editor.appendChild(renderTableSuggestions(input, edit.suggestions, { multiple: true }));
+  else if (valueType === "scalar-list") {
+    editor.appendChild(renderTableScalarListSuggestions(input, edit.suggestions, scalarListValues));
+  } else if (valueType === "text" && normalizeTableListValue(edit.suggestions).length) {
+    editor.appendChild(renderTableSuggestions(input, edit.suggestions));
+  }
   const status = document.createElement("div");
   status.className = "table-cell-editor-status";
   status.setAttribute("aria-live", "polite");
@@ -5743,7 +5890,8 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
     });
     status.textContent = t("saving", "Saving...");
     try {
-      const result = await edit.commit(row, normalizeTableEditValue(valueType, input.value));
+      const editValue = valueType === "scalar-list" ? normalizeTableScalarListValue([...scalarListValues, input.value]) : normalizeTableEditValue(valueType, input.value);
+      const result = await edit.commit(row, editValue);
       finished = true;
       if (typeof onChange === "function") await onChange();
       focusCell(result?.rowKey || renderedRowKey);
@@ -5806,12 +5954,13 @@ function tableEnumEditor(options, currentValue) {
   });
   return select;
 }
-function renderTableListSuggestions(input, suggestions) {
+function renderTableSuggestions(input, suggestions, options = {}) {
+  const multiple = Boolean(options.multiple);
   const list = document.createElement("div");
   list.className = "table-cell-editor-suggestions";
   list.setAttribute("aria-label", t("suggestions", "Suggestions"));
   const sync = () => {
-    const selected = new Set(normalizeTableListValue(input.value));
+    const selected = multiple ? new Set(normalizeTableListValue(input.value)) : new Set([String(input.value || "").trim()].filter(Boolean));
     list.querySelectorAll("button").forEach((button) => {
       const active = selected.has(button.dataset.tableSuggestion);
       button.classList.toggle("selected", active);
@@ -5828,17 +5977,57 @@ function renderTableListSuggestions(input, suggestions) {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const values = normalizeTableListValue(input.value);
-      const index = values.indexOf(suggestion);
-      if (index >= 0) values.splice(index, 1);
-      else values.push(suggestion);
-      input.value = values.join(", ");
+      if (multiple) {
+        const values = normalizeTableListValue(input.value);
+        const index = values.indexOf(suggestion);
+        if (index >= 0) values.splice(index, 1);
+        else values.push(suggestion);
+        input.value = values.join(", ");
+      } else {
+        input.value = suggestion;
+      }
       sync();
       input.focus();
     });
     list.appendChild(button);
   });
   input.addEventListener("input", sync);
+  sync();
+  return list;
+}
+function renderTableScalarListSuggestions(input, suggestions, selectedValues) {
+  const list = document.createElement("div");
+  list.className = "table-cell-editor-suggestions";
+  list.setAttribute("aria-label", t("suggestions", "Suggestions"));
+  const candidates = normalizeTableScalarListValue([
+    ...selectedValues,
+    ...normalizeTableScalarListValue(suggestions)
+  ]);
+  const sync = () => {
+    const selected = new Set(selectedValues);
+    list.querySelectorAll("button").forEach((button) => {
+      const active = selected.has(button.dataset.tableSuggestion);
+      button.classList.toggle("selected", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  };
+  candidates.forEach((suggestion) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "source-tag-chip table-cell-editor-suggestion";
+    button.dataset.tableSuggestion = suggestion;
+    button.textContent = suggestion;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const index = selectedValues.indexOf(suggestion);
+      if (index >= 0) selectedValues.splice(index, 1);
+      else selectedValues.push(suggestion);
+      sync();
+      input.focus();
+    });
+    list.appendChild(button);
+  });
   sync();
   return list;
 }
@@ -5860,7 +6049,7 @@ function tableEditorActions(save, cancel) {
 }
 function focusTableCell(tableId, rowKey, columnKey, fallback = null) {
   const candidates = Array.from(document.querySelectorAll(`[data-table-id="${tableId}"] [data-table-column-key]`));
-  const cell = candidates.find((node) => node.dataset.tableColumnKey === String(columnKey) && node.closest("tr")?.dataset?.tableRowKey === String(rowKey)) || fallback;
+  const cell = candidates.find((node) => node.dataset.tableColumnKey === String(columnKey) && node.closest("[data-table-row-key]")?.dataset?.tableRowKey === String(rowKey)) || fallback;
   if (cell?.isConnected !== false) cell?.focus?.();
 }
 function dataTableFilterMenu(root, key) {
@@ -5985,7 +6174,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-var state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: /* @__PURE__ */ new Set(), sourceSelection: /* @__PURE__ */ new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: /* @__PURE__ */ new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: /* @__PURE__ */ new Set(), workspaceAppliedViewNames: /* @__PURE__ */ new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
+var state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: /* @__PURE__ */ new Set(), sourceSelection: /* @__PURE__ */ new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: /* @__PURE__ */ new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: /* @__PURE__ */ new Set(), workspaceAppliedViewNames: /* @__PURE__ */ new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";
@@ -5998,6 +6187,7 @@ if (workspaceSnapshotMode()) {
     sort: null,
     direction: "asc",
     filters: {
+      categories: listValue(presentation.workspace_view_filters?.categories),
       tags: listValue(presentation.workspace_view_filters?.tags),
       models: listValue(presentation.workspace_view_filters?.models),
       group_by: listValue(presentation.workspace_view_filters?.group_by)
@@ -6008,8 +6198,8 @@ if (workspaceSnapshotMode()) {
     state.selectedStep = { trialKey: state.selectedTrial, stepId: String(presentation.selected_step_id) };
   }
 }
-var SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.report-cell-menu";
-var OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.report-cell-menu[open]";
+var SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control";
+var OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open]";
 function closeOpenSubmenus(except = null) {
   document.querySelectorAll(OPEN_SUBMENU_DETAILS_SELECTOR).forEach((details) => {
     if (details !== except) details.open = false;
@@ -6028,6 +6218,7 @@ function synthesizedReportRow(trajectory, meta, index = -1) {
     trial_key: meta?.trial_key,
     session_id: trajectory?.session_id || "-",
     source_alias: meta?.source_alias,
+    source_category: sourceCategoryForMeta(meta, source),
     source_tags: sourceTagsForMeta(meta, source),
     source_key: source?.source_key || null,
     source_active: source?.active !== false,
@@ -6192,6 +6383,25 @@ function sourceDisplayFor(row) {
 }
 function sessionAliasValue(row) {
   return sourceAliasFor(row) || "-";
+}
+function sourceCategoryForMeta(meta, source = null) {
+  return sourceCategoryFromValue(meta?.source_category || source?.source_category);
+}
+function sourceCategoryFromValue(value) {
+  return String(value || "").trim();
+}
+function sourceCategoryFor(row) {
+  return sourceCategoryFromValue(row?.source_category);
+}
+function sourceCategoryValue(row) {
+  return sourceCategoryFor(row) || "-";
+}
+function sourceCategoryEditValue(row) {
+  return sourceCategoryFor(row);
+}
+function renderReadOnlySourceCategory(row) {
+  const category = sourceCategoryFor(row);
+  return category ? `<span class="source-category-chip">${esc(category)}</span>` : `<span class="muted">-</span>`;
 }
 function sourceTagsForMeta(meta, source = null) {
   const rawTags = listValue(meta?.source_tags).length ? meta.source_tags : source?.source_tags;

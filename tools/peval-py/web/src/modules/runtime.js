@@ -59,7 +59,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
+const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";
@@ -72,6 +72,7 @@ if (workspaceSnapshotMode()) {
     sort: null,
     direction: "asc",
     filters: {
+      categories: listValue(presentation.workspace_view_filters?.categories),
       tags: listValue(presentation.workspace_view_filters?.tags),
       models: listValue(presentation.workspace_view_filters?.models),
       group_by: listValue(presentation.workspace_view_filters?.group_by),
@@ -82,8 +83,8 @@ if (workspaceSnapshotMode()) {
     state.selectedStep = { trialKey: state.selectedTrial, stepId: String(presentation.selected_step_id) };
   }
 }
-const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.report-cell-menu";
-const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.report-cell-menu[open]";
+const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control";
+const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open]";
 function closeOpenSubmenus(except = null) {
   document.querySelectorAll(OPEN_SUBMENU_DETAILS_SELECTOR).forEach(details => {
     if (details !== except) details.open = false;
@@ -102,6 +103,7 @@ function synthesizedReportRow(trajectory, meta, index = -1) {
     trial_key: meta?.trial_key,
     session_id: trajectory?.session_id || "-",
     source_alias: meta?.source_alias,
+    source_category: sourceCategoryForMeta(meta, source),
     source_tags: sourceTagsForMeta(meta, source),
     source_key: source?.source_key || null,
     source_active: source?.active !== false,
@@ -262,6 +264,27 @@ function sourceDisplayFor(row) {
 }
 function sessionAliasValue(row) {
   return sourceAliasFor(row) || "-";
+}
+function sourceCategoryForMeta(meta, source = null) {
+  return sourceCategoryFromValue(meta?.source_category || source?.source_category);
+}
+function sourceCategoryFromValue(value) {
+  return String(value || "").trim();
+}
+function sourceCategoryFor(row) {
+  return sourceCategoryFromValue(row?.source_category);
+}
+function sourceCategoryValue(row) {
+  return sourceCategoryFor(row) || "-";
+}
+function sourceCategoryEditValue(row) {
+  return sourceCategoryFor(row);
+}
+function renderReadOnlySourceCategory(row) {
+  const category = sourceCategoryFor(row);
+  return category
+    ? `<span class="source-category-chip">${esc(category)}</span>`
+    : `<span class="muted">-</span>`;
 }
 function sourceTagsForMeta(meta, source = null) {
   const rawTags = listValue(meta?.source_tags).length ? meta.source_tags : source?.source_tags;
@@ -446,6 +469,7 @@ export {
   renderComparison,
   renderComparisonPanels,
   renderNotesCell,
+  renderReadOnlySourceCategory,
   renderReadOnlySourceTags,
   renderReportNotes,
   restoreComparisonScrollState,
@@ -465,6 +489,11 @@ export {
   sessionAliasValue,
   sessionSearchText,
   sourceAliasFor,
+  sourceCategoryEditValue,
+  sourceCategoryFor,
+  sourceCategoryForMeta,
+  sourceCategoryFromValue,
+  sourceCategoryValue,
   sourceDisplayFor,
   sourceIdentityFor,
   sourceTagsEditValue,

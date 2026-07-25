@@ -48,7 +48,8 @@ th,td {
   --table-column-max:20ch;
 }
 .data-table [data-value-type="text"],
-.data-table [data-value-type="list"] {
+.data-table [data-value-type="list"],
+.data-table [data-value-type="scalar-list"] {
   --table-column-max:28ch;
 }
 .data-table [data-value-type="identity"],
@@ -137,7 +138,10 @@ td.num,th.num {
   gap:4px;
   align-items:center;
 }
-.source-tag-chip {
+.source-tag-chip,
+.source-category-chip {
+  display:inline-flex;
+  align-items:center;
   max-width:100%;
   border:1px solid color-mix(in oklch,var(--focus),transparent 58%);
   border-radius:999px;

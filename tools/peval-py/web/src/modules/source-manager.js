@@ -1,7 +1,7 @@
-import { esc, fmtDate, renderReadOnlySourceTags, serveMode, sourceTagsEditValue, sourceTagsValue, state, t } from "./runtime.js";
+import { esc, fmtDate, renderReadOnlySourceCategory, renderReadOnlySourceTags, serveMode, sourceCategoryEditValue, sourceCategoryValue, sourceTagsEditValue, sourceTagsValue, state, t } from "./runtime.js";
 import { bindDataTableControls, renderDataTable, tableCellContent, tableValueAttributes } from "./data-tables.js";
 import { applyDefaultDbToForm, syncAdapterDefaultDbControls } from "./serve-controls.js";
-import { commitSourceCellEdit, existingSourceTagOptions, formPayload, normalizeAdapterValue, selectedAdapterValue, serveApi, setAdapterChoice, setServeStatus, showServeNotice } from "./serve-effects.js";
+import { commitSourceCellEdit, existingSourceCategoryOptions, existingSourceTagOptions, formPayload, normalizeAdapterValue, selectedAdapterValue, serveApi, setAdapterChoice, setServeStatus, showServeNotice } from "./serve-effects.js";
 import { applyServeMutationPayload, bindSourceManagerPagination, pruneSourceSelection, renderSourceManagerPagination, sourceRows, sourceSelectionKeys } from "./serve-catalog.js";
 import { closeModalSurface } from "./modal-surfaces.js";
 
@@ -94,6 +94,7 @@ function sourceColumns() {
     { key: "last_turn_finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: source => source?.last_turn_finished_at_ms, format: fmtDate },
     { key: "status", label: t("status", "status"), valueType: "status", value: source => sourceStatusText(source), html: renderServeSourceStatus },
     { key: "alias", label: t("serve_source_alias", "Alias"), valueType: "text", value: source => String(source?.source_alias || "").trim() || "-", edit: { value: source => String(source?.source_alias || ""), commit: (source, value) => commitSourceCellEdit(source, "alias", value) } },
+    { key: "source_category", label: t("category", "Category"), valueType: "text", value: source => sourceCategoryValue(source), html: renderReadOnlySourceCategory, edit: { value: source => sourceCategoryEditValue(source), suggestions: existingSourceCategoryOptions, commit: (source, value) => commitSourceCellEdit(source, "category", value) } },
     { key: "source_tags", label: t("tags", "Tags"), valueType: "list", value: source => sourceTagsValue(source), html: renderReadOnlySourceTags, edit: { value: source => sourceTagsEditValue(source), suggestions: existingSourceTagOptions, commit: (source, value) => commitSourceCellEdit(source, "tags", value) } }
   ];
 }
