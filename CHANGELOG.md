@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-07-25
+
+- Added editable single-value session Categories across serve surfaces,
+  workspace snapshots, and XLSX exports, with catalog filtering and Summary
+  grouping; fixed cold-scan suggestions, comma-bearing filters, missing-value
+  grouping, and literal `overall` labels.
+- Improved report binding workflows with reliable multi-report selection,
+  final-binding clearing, and immediate Leaderboard refresh after saving.
+
 ## 2026-07-21
 
 - Tightened Serve workspace layout: the localized heading stays beside source
