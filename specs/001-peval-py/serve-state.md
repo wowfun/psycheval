@@ -17,8 +17,10 @@ precedence remains workspace `peval-py.toml`, then explicit `-c/--config`, then
 CLI overrides.
 
 Serve may create a derived catalog at
-`<workspace>/.cache/peval-py/serve-catalog.sqlite3`. It uses SQLite WAL, an
-explicit schema version, and committed catalog generations. SQLite FTS5 with a
+`<workspace>/.cache/peval-py/serve-catalog.sqlite3`. It uses SQLite WAL,
+catalog schema version 6, and committed catalog generations. Version 6 adds the
+scalar category column, index, search projection, and facet; an older cache is
+rebuilt automatically. SQLite FTS5 with a
 trigram tokenizer is a serve runtime requirement and is probed at startup; an
 unavailable build fails with a clear startup error. Schema mismatch, corruption,
 or an incomplete generation causes deletion and a cold rebuild rather than a
@@ -57,10 +59,12 @@ all persisted paths but project only their currently resolved runtime source
 keys. Missing sessions are silently omitted without rewriting state, so a
 matching cell that later reappears restores the association. A valid report
 with no current binding remains visible in report inventory. Explicit rebinding
-atomically replaces the full source-key array and requires at least one current
-readable source. Explicit deletion permanently removes the whole report
-package. Incomplete temporary packages and committed but invalid packages do
-not fail serve startup and do not enter the catalog.
+atomically replaces the full source-key array and may persist an empty array to
+clear the final association; each non-empty entry must resolve to a current
+readable source. Initial import still requires at least one current readable
+source. Explicit deletion permanently removes the whole report package.
+Incomplete temporary packages and committed but invalid packages do not fail
+serve startup and do not enter the catalog.
 
 Saved Leaderboard views are durable, human-editable workspace artifacts. Each
 regular UTF-8 file directly under `<workspace>/views/` has the form
@@ -74,12 +78,13 @@ User notes.
 ```
 
 The filename stem is the view name and the Markdown body is its notes. Filters
-use the same state, literal search, Tags, Agent, Model, and Result semantics as
-the serve Leaderboard; `group_by` is exactly `overall`, `agent`, or `model`.
-Only non-default filters are written: omitted filters mean `active` source state
-with an empty Search, Tags, Agent, Model, and Result selection. When any filter
-is non-default, `filters` contains only that setting; `state: active` and any
-empty/All filter are never written. The save dialog likewise shows only the
+use the same state, literal search, Category, Tags, Agent, Model, and Result
+semantics as the serve Leaderboard; `filters.categories` is an ordered list and
+`group_by` is exactly `overall`, `agent`, `model`, or `category`. Only
+non-default filters are written: omitted filters mean `active` source state with
+an empty Search, Category, Tags, Agent, Model, and Result selection. When any
+filter is non-default, `filters` contains only that setting; `state: active` and
+any empty/All filter are never written. The save dialog likewise shows only the
 non-default filters, while always showing the selected grouping.
 View names may be Unicode but are one filename stem: empty names, path
 separators, `.`, `..`, and control characters are invalid. Saves write a
@@ -120,17 +125,19 @@ Runtime source state lives beside each Trial cell in
 `.peval/state.json` is not an error: a complete Trial cell without local source
 state is treated as a readable active, non-refreshable artifact source with
 default metadata. The state file is a minimal overlay with optional
-`source_alias`, optional `source_tags` as an ordered string array, optional
-archived state (`active = false`), optional latest status/error fields,
+`source_alias`, optional trimmed `source_category` as one string, optional
+`source_tags` as an ordered string array, optional archived state
+(`active = false`), optional latest status/error fields,
 and no source provenance object. Derived fields such as source key, artifact
 path, adapter/session/model display fields, refreshability, snapshot state, and
 Trial summary fields are computed from the cell path plus
 `agent/trajectory.json` and `agent/trajectory_meta.json`. Successful imports and
 refreshes do not create or update a cell overlay unless they carry user overlay
-data. When a mutation leaves no overlay fields, `state.json` is removed. Older
-overlay files remain best-effort readable for alias, tags, active state, and
-status/error, but legacy source provenance is ignored and dropped on the next
-source mutation.
+data. Refresh and import reconciliation preserve an existing category. Empty
+category input clears it, and when a mutation leaves no overlay fields,
+`state.json` is removed. Older overlay files remain best-effort readable for
+alias, category, tags, active state, and status/error, but legacy source
+provenance is ignored and dropped on the next source mutation.
 
 Refresh and import attempts append JSONL records to
 `<workspace>/logs/peval-py-serve.jsonl` with time, status, source key, warning
@@ -184,8 +191,8 @@ or missing Source Manager row and does not abort publication.
 
 Rows persist all Leaderboard summary fields, source state, and one normalized
 search document. FTS5 trigram search is case-insensitive literal search over
-messages, reasoning, tool calls, observations, session id, alias, tags, agent,
-model, and status. Queries shorter than three characters use an escaped
+messages, reasoning, tool calls, observations, session id, alias, category,
+tags, agent, model, and status. Queries shorter than three characters use an escaped
 case-insensitive `LIKE` over the cached search document. Search syntax is never
 interpreted as an FTS expression supplied by the user.
 

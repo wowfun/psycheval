@@ -69,8 +69,8 @@ unchanged reconcile parses no artifacts, and detail loading reads only its
 target cell.
 
 SQLite query coverage includes 100-row paging, stable sorting,
-active/archived/all state, Tags/Agent/Model/Result facets, FTS5 Chinese and
-English literal queries, escaped short-query fallback, and cross-page key
+active/archived/all state, Category/Tags/Agent/Model/Result facets, FTS5 Chinese
+and English literal queries, escaped short-query fallback, and cross-page key
 resolution. HTTP and asset tests cover shell-first startup,
 stale-while-revalidate, `Checking runs`, write rejection with `409`, paging
 state, default detail selection, changed/missing detail behavior, cross-page
@@ -300,13 +300,14 @@ Coverage must verify:
   or SQLite trial table. Complete artifact-only Trial cells do not create an
   empty `.peval/state.json` during source discovery. Ordinary path/session/DB
   imports also do not create `.peval/state.json` unless the request carries
-  alias/tags/archive/error overlay data; after import they are artifact-only
+  alias/category/tags/archive/error overlay data; after import they are artifact-only
   non-refreshable sources. Clearing the last overlay field removes the state
   file.
-- serve source display metadata tests cover `source_alias` and `source_tags`
-  persistence in `.peval/state.json`, projection through `source_payload()` and
-  served `trajectory_meta[]`, clearing values, and preserving existing display
-  metadata when a source is re-imported.
+- serve source display metadata tests cover `source_alias`, `source_category`,
+  and `source_tags` persistence in `.peval/state.json`, projection through
+  `source_payload()` and served `trajectory_meta[]`, clearing values, and
+  preserving existing display metadata when a source is refreshed or
+  re-imported.
 - serve active report composition reads current cell-local `analysis.json`,
   `analysis.md`, and `notes.md` from each active source's stored Trial artifact
   cell path for all active sources, including snapshots and imported artifact
@@ -366,11 +367,13 @@ Coverage must verify:
 - serve UI mode adds a workspace Reports toolbar entry, serve-only Reports
   column, selected-visible-row Attach action, isolated left report reader, and
   dedicated report manager without changing static report output or report
-  JSON. Tests cover zero/one/multiple report cells, click isolation, attach
-  success/cancel/error, reader and Step drawer mutual exclusion, inventory
-  including zero-binding reports, active/archived binding search, full binding
-  replacement, confirmed permanent deletion, and explicit report-manager grid
-  placement that keeps the body in the flexible final row when status is hidden.
+  JSON. Tests cover zero/one/multiple report cells, selection of every option in
+  a multiple-report cell, click isolation, attach success/cancel/error, reader
+  and Step drawer mutual exclusion, inventory including zero-binding reports,
+  active/archived binding search, full binding replacement including clearing
+  the final association, confirmed permanent deletion, and explicit
+  report-manager grid placement that keeps the body in the flexible final row
+  when status is hidden.
 - serve UI source manager renders Session/ATIF/runs path, DB, and input-table
   forms, JSONL/ATIF JSON/report JSON upload affordance, a native file picker
   trigger for the Path textarea, concise `auto` adapter inference helper copy
@@ -549,14 +552,19 @@ Coverage must verify:
   state by table id. Coverage includes Leaderboard, Source Manager, Saved Views,
   Timeline, summary distributions, structured Analysis, and DB sessions while
   proving user-authored Markdown tables remain outside the control model.
-- Editable-cell tests cover double-click and keyboard entry, text/list/enum
+- Editable-cell tests cover double-click and keyboard entry, text-with-
+  suggestions/list/enum
   Enter-or-blur saves, Markdown/YAML explicit Save/Cancel and Ctrl/Cmd+Enter,
   Escape cancellation, focus restoration, pending/error retention, ordered
   English/Chinese-comma list normalization, suggestion chips, and row-click
-  isolation. Adapter tests prove Leaderboard and Source Manager Alias/Tags share
-  one interaction and Source Manager Tags use the existing source-tags mutation;
-  Saved View text/list/enum/YAML/Markdown edits retain complete-configuration
-  writes and race-safe authoritative refresh.
+  isolation. They prove scalar Category suggestions replace the value while
+  custom and empty values remain valid, failed saves recover, and Category
+  editing in a report-binding row cannot toggle its checkbox. Adapter tests
+  prove all three serve session surfaces share Category editing while
+  Leaderboard and Source Manager Alias/Tags retain their existing interaction;
+  Saved View scalar-multi-select Category edits preserve commas inside each
+  value, while text/list/enum/YAML/Markdown edits retain
+  complete-configuration writes and race-safe authoritative refresh.
 - HTML Timeline Waterfall and Timeline Detail Table diagnostics render from
   existing selected-Trial step/tool timing metadata, derive a flat performance
   trace with latency-bearing stages and near-zero user/system markers, keep the
@@ -669,17 +677,17 @@ Coverage must verify:
   root override without requiring `peval.toml`, `<workspace>/peval-py.toml` defaults,
   no workspace `state.db` creation, canonical cell-derived stable source keys,
   `.peval/state.json` minimal overlay writes, older flat state files
-  being read best-effort until the next mutation rewrites them, source alias and tag
-  storage without changing stable keys,
+  being read best-effort until the next mutation rewrites them, source alias,
+  scalar category, and tag storage without changing stable keys,
   duplicate imports resolving to the same cell updating one source,
   active/archive lifecycle, JSONL refresh/import logging, latest
   canonical Trial snapshots including refreshed cached analysis JSON/Markdown
   and cell-local notes, refresh-log rows, and no non-peval-py table writes.
 - HTML interaction tests cover Leaderboard visible-scope search, all-session
   search over active and archived sources, disabled mixed-state batch
-  Archive/Activate, the single-select search-scope control, inline alias/tag
-  editing, existing-tag quick selection,
-  flattened Any tag filters,
+  Archive/Activate, the single-select search-scope control, inline
+  alias/category/tag editing, all-workspace current-category and existing-tag
+  quick selection, cross-page Any category filters, flattened Any tag filters,
   startup loading status rendering and ready-state recovery,
   inline edit click isolation from row selection, first-User-step drawer
   selection from both static and source-key-backed Leaderboard rows, selected
@@ -717,7 +725,8 @@ Coverage must verify:
   `/api/config/adapter-default-db` TOML updates and clears, Source Manager HTML
   regeneration with updated adapter defaults, auto-adapter hard failures and
   explicit-adapter retries through `/api/sources`, recursive external `runs/`
-  import through `/api/sources`, `/api/sources/{source_key}/alias`, local native
+  import through `/api/sources`, `/api/sources/{source_key}/alias`,
+  `/api/sources/{source_key}/category`, local native
   path picker results and unavailable-picker errors through `/api/path-picker`,
   workspace report import/rebinding/deletion and isolated Markdown/HTML preview,
   `Origin: null` rejection, preview CSP/referrer/nosniff headers, report catalog
@@ -729,9 +738,12 @@ Coverage must verify:
   adapter default state in `report.js`, continued DB form autofill from
   configured adapter defaults, serve-mode startup of both source and workspace
   report catalog loads, existing report bindings becoming available to
-  Leaderboard cells, report-binding checkbox updates that preserve the list
-  node, scroll position, and focus, shared action-button shrink/wrap invariants,
-  and default fit-to-pane geometry for
+  Leaderboard cells, multiple-report selectors opening the chosen reader,
+  report-binding checkbox and Category updates that preserve the draft binding,
+  current page, search, list node, scroll position, and focus without editor
+  events toggling the checkbox, final-binding removal immediately updating the rendered
+  Leaderboard, shared action-button shrink/wrap invariants, and default
+  fit-to-pane geometry for
   HTML report previews.
 - workspace report storage tests cover time-ordered ids and collision suffixes,
   byte-preserving atomic imports, UTF-8/format/size validation, exact relative
@@ -745,27 +757,34 @@ Coverage must verify:
 - workspace view storage tests cover YAML frontmatter/body round trips,
   Unicode names and notes, duplicate conflict then atomic overwrite, invalid
   names, malformed or symlinked files, valid-view discovery isolation, and
-  omission/defaulting of All filters and active source state. They also cover
+  omission/defaulting of All filters, empty Category filters, and active source
+  state, plus Category Saved View YAML and `group_by: category`. They also cover
   safe rename, rename conflict, Notes and configuration update, strict editable
   YAML fields, and prevalidated multi-view deletion without partial mutation.
 - saved-view HTTP and catalog tests cover same-origin writes, checking-time
   rejection, filter/group validation, all-match summary statistics beyond a
-  100-row page, and Overall/Agent/Model grouping parity with Leaderboard
-  Summary metric and missing-value semantics. Composite-query tests cover OR
+  100-row page, and Overall/Agent/Model/Category grouping parity with
+  Leaderboard Summary metric and missing-category `-` display semantics.
+  Coverage keeps the missing Category identity distinct from a literal `-`
+  Category and preserves literal `overall` Category labels. Composite-query
+  tests cover OR
   across full view predicates, overlapping-row deduplication, later AND
   refinements, paging/sorting/facets, missing names, and XLSX export parity.
 - summary-workbook tests cover strict Leaderboard and Saved Views request
   validation, ordered de-duplication, missing-source/view whole-request
   failure, and exact visible-page versus whole-view summary scope. XLSX ZIP/XML
-  assertions verify legal unique worksheet names, native chart/drawing parts,
+  assertions verify Category-before-Tags ordinary table output, legal unique
+  worksheet names, native chart/drawing parts,
   six chart series linked to the selected statistic, numeric duration and
   percentage cells, preserved zeroes and blanks, literal formula-like strings,
-  frozen headers, and the no-chart zero-match case.
+  frozen headers, literal Category `overall` labels, and the no-chart zero-match
+  case.
 - assembled serve UI interaction tests cover the Summary save controls,
   race-safe save/list refresh, single-view rail visibility, rail Close/reopen
   focus and scroll restoration, dismissal across refresh/save, removal of the
   header Saved views menu, independent collapsed saved-view table disclosures,
-  index columns, draft multi-select filter menus, within-column OR and
+  Category-before-Tags index columns, Category edits and filters, draft
+  multi-select filter menus, within-column OR and
   between-column AND, visible select-all/indeterminate state, hidden selection
   preservation, index/card visible-row parity, zero-result filtering, OR Apply,
   in-cell edit commit/cancel/errors, batch delete,
@@ -773,13 +792,19 @@ Coverage must verify:
   conditions restoration with row selection preserved. They also cover empty
   and single-row states, the save dialog's displayed non-default filters and
   grouping, generated `<tags> - <group>`/`All - <group>` default and 120-character
-  truncation, Tags/Models comma editors, Group-by select, Other-conditions YAML,
+  truncation, comma-preserving Category scalar-multi-select editing,
+  Tags/Models comma editors, Group-by select including Category,
+  Other-conditions YAML,
   preservation of unedited configuration, dialog and overwrite flow,
   static-mode exclusion, fixed desktop Leaderboard/index regions with independent
   analysis/card scrolling and short-viewport caps, two-column chart layout,
   shared Step-drawer covering behavior, bounded desktop rail/header geometry
   under long index content, and the 1180px narrow-screen fallback.
-  They also cover the Leaderboard Summary visible-row export payload, Saved
+  They also cover Category grouping in the live Summary, full Saved View
+  summary, workspace snapshot, and Excel (including missing values, literal
+  dash, and literal `overall` categories), cold-scan Category suggestion
+  refresh, the
+  Leaderboard Summary visible-row export payload, Saved
   Views multi-selection export order, disabled export actions without eligible
   rows/selections, download filenames, and absence of serve-only Summary Excel
   controls from static report output.

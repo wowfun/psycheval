@@ -131,7 +131,7 @@ temporary Trial files and SQLite rather than a test-only storage port.
 The shared value types are:
 
 - `CatalogQuery`: source state, page, page size, literal search, sort and
-  direction, Tags/Agent/Model/Result facets, and optional saved-view OR
+  direction, Category/Tags/Agent/Model/Result facets, and optional saved-view OR
   predicates resolved by the serve runtime.
 - `CatalogPage`: generation, checking/stale flags, total, page, page size,
   summary items, and low-cardinality facets.

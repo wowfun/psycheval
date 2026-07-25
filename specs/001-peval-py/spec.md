@@ -15,14 +15,15 @@ same command tree.
 - ATIF v1.7 trajectory projection
 - single-session and session-comparison JSON/HTML report generation, including
   single-row HTML comparison panels and a grouped, metric-first Leaderboard
-  Summary for multi-session comparisons
+  Summary for multi-session comparisons, including Category grouping
 - minimal `peval-py serve` workspace initialization for local report state
 - a local `serve` web UI named `Eval Workspace` in English and `评测工作台` in
   Simplified Chinese, shown at the left of the top toolbar beside source status,
   over a saved peval-py workspace, backed by canonical Trial-cell artifacts and
   a rebuildable SQLite serve catalog, with
   server-paginated active and archived source views, literal full-text search,
-  source tags, inline display-metadata editing, cross-page selection, queued
+  a single-value source category, source tags, inline display-metadata editing,
+  cross-page selection, queued
   batch source actions whose target state is derived from the complete retained
   selection rather than only the current page, and on-demand single-Trial
   details; the Source Manager form column and source-list column scroll
@@ -30,19 +31,26 @@ same command tree.
   every table column; selecting a later
   Leaderboard or Trajectory Overview row preserves both panels' internal scroll
   positions across the complete detail-load rerender; Source Manager and
-  workspace report bindings show each session's tags, while Source Manager and
-  Leaderboard share the same type-driven inline Alias/Tags editing behavior
+  workspace report bindings show each session's category and tags, while
+  Leaderboard, Source Manager, and report bindings share the same type-driven
+  single-value Category editor immediately to the left of Tags; Source Manager
+  and Leaderboard also share Alias/Tags editing behavior
 - serve-only workspace report attachments that bind one imported Markdown or
-  HTML analysis report to one or more exact Leaderboard source rows, expose the
+  HTML analysis report to zero or more exact Leaderboard source rows, expose the
   associations in a Reports column as soon as the serve workspace finishes its
-  initial browser-side load, preview reports in an isolated left-side reader
-  whose width can be resized horizontally and whose HTML preview fits its
-  available pane by default, allow that same isolated reader to be opened in a
-  new browser tab, and provide report inventory, rebinding, and deletion
-  management without resetting the session-list scroll position when bindings
-  are checked or unchecked
+  initial browser-side load, expose every associated report as an independently
+  selectable reader action when one session has multiple reports, preview
+  reports in an isolated left-side reader whose width can be resized
+  horizontally and whose HTML preview fits its available pane by default, allow
+  that same isolated reader to be opened in a new browser tab, and provide
+  report inventory, rebinding, and deletion management without resetting the
+  session-list scroll position when bindings are checked or unchecked; after a
+  binding save succeeds (including clearing the final association), the
+  currently rendered Leaderboard immediately reflects the returned associations
+  without closing Reports Manager or refreshing the page
 - serve-only saved Leaderboard views stored as human-editable Markdown files,
-  with durable catalog filters, summary grouping, and user notes; one or more
+  with durable catalog filters including Category, Category-aware summary
+  grouping, and user notes; one or more
   saved views render in an editable, filterable right-side analysis rail whose
   index and analysis cards share one visible-row projection, may be selected
   together as an OR query, share that rail with the covering Step drawer, and
@@ -122,7 +130,7 @@ Python-owned files required by `peval-py serve`: `<workspace>/peval-py.toml`
 and the workspace log directory. Serve source state is stored beside each Trial
 cell under `.peval/state.json` only when local source overlay data exists;
 source identity and display summary are derived from the Trial cell path and
-agent artifacts. Display metadata such as aliases and tags belongs to this
+agent artifacts. Display metadata such as aliases, category, and tags belongs to this
 overlay, not to the canonical Trial trajectory artifacts. Workspace report
 attachments are separate durable workspace artifacts under
 `<workspace>/reports/<report-id>/`; they do not become Trial annotations,

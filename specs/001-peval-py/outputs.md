@@ -261,8 +261,9 @@ controls; they do not render explanatory description copy below the title.
 reports.
 `peval-py` treats each input session as one Trial. Multi-session HTML no longer
 renders a separate Visible Heatmap panel. The Leaderboard shows the canonical
-session id, a serve-only Tags column immediately to the left of Session, a
-separate Session Alias column that displays `source_alias` or `-`, agent,
+session id, serve-only Category and Tags columns immediately to the left of
+Session in that order, a separate Session Alias column that displays
+`source_alias` or `-`, agent,
 model, result, Last Turn End, active duration, turns, tools, tokens, cost,
 HTML-only `Analysised`, and notes. Last Turn End is the Trial's
 `trajectory_meta.finished_at_ms`;
@@ -272,8 +273,10 @@ when the trajectory does not provide an agent name. The Session, Agent, Model,
 Result, and `Analysised` columns provide multi-value filters whose values are
 collected from the complete Leaderboard row set. Empty selections are
 equivalent to no filter, values within one column are OR-ed, and multiple
-filtered columns are AND-ed. Serve-mode Tags filters flatten each tag into its
-own option; selecting multiple tags matches rows with any selected tag. Filter
+filtered columns are AND-ed. Serve-mode Category filters expose assigned,
+non-empty scalar categories; selecting multiple categories matches rows with
+any selected category. Tags filters flatten each tag into its own option;
+selecting multiple tags matches rows with any selected tag. Filter
 checkboxes and `Clear` edit a menu-local draft without changing the table. The
 menu header places `Clear` before `Apply`, with `Apply` immediately to its
 right. Only `Apply` atomically replaces that column's committed selection and
@@ -293,11 +296,16 @@ HTML renders a Leaderboard Summary only for two or more rows; serve always
 keeps its Summary shell available, including zero- and one-row filters. The
 summary is a runtime-only projection, is not stored in report JSON, and is not
 affected by serve row selection. Its Group by control defaults to Agent and
-switches among Overall, Agent, and Model without changing Leaderboard filters
-or selection. Agent and Model groups use stable name ordering. In serve, a
+switches among Overall, Agent, Model, and Category without changing Leaderboard
+filters or selection. Agent, Model, and Category groups use stable name
+ordering; an empty Category is represented by the `-` group. A missing
+Category uses an internal group identity distinct from every legal Category
+string, so a real Category named `-` remains a separate group even though both
+groups display `-`; a real Category named `overall` also remains literal and is
+never localized as the Overall scope. In serve, a
 `Save view` action immediately to the right of that grouping control opens a
 name-and-notes dialog. Before naming the view, that dialog directly displays
-only the non-default current Search, Tags, Agent, Model, Result, and
+only the non-default current Search, Category, Tags, Agent, Model, Result, and
 non-active source filters, plus the Group by value that will be saved; an All
 filter and active source state are omitted from both the dialog and persisted
 view configuration. Saved views are selected from the right-side Saved views
@@ -312,14 +320,15 @@ metric statistic, disclosure state, and selection are not persisted in the
 view file. The full summary table is collapsed on
 each page load and expands in place without persisting its disclosure state. It
 is metric-first, with columns `Metric`,
-`Agent`/`Model`/`Scope`, `Count`, `Mean`, `Min`, `Q1`, `P50`, `Q3`, `P95`, and
-`Max`; each of active duration, tokens, turns, measured model-call duration,
-Tool Calls, and tool error rate forms one row group containing one row per
-current Agent or Model, or one Overall row. Missing and Total columns are not
-rendered. A multi-session report whose filters leave no visible rows keeps the
-section in place and renders an explicit empty state.
+`Agent`/`Model`/`Category`/`Scope`, `Count`, `Mean`, `Min`, `Q1`, `P50`, `Q3`,
+`P95`, and `Max`; each of active duration, tokens, turns, measured model-call
+duration, Tool Calls, and tool error rate forms one row group containing one row
+per current Agent, Model, or Category, or one Overall row. Missing and Total
+columns are not rendered. A multi-session report whose filters leave no visible
+rows keeps the section in place and renders an explicit empty state.
 
-Agent and Model grouping render one horizontal comparison chart for each metric.
+Agent, Model, and Category grouping render one horizontal comparison chart for
+each metric.
 An independent Statistic control defaults to Mean and switches all six charts
 among Mean, Min, Q1, P50, Q3, P95, and Max. Each metric uses its own scale, each
 bar exposes its formatted value and contributing session count, and the chart's
@@ -356,13 +365,20 @@ Archive/Activate action, `Attach report (N)`, and `Export` on one action row;
 the search controls render together on the row below it. Leaderboard search is
 a case-insensitive literal query submitted to `GET /api/catalog`. It searches
 cached step messages, reasoning, tool calls, observations, session id, alias,
-tags, agent, model, and status. Search combines with state and the Tags, Agent,
-Model, and Result facets; Session is intentionally not a facet because its high
+category, tags, agent, model, and status. Search combines with state and the
+Category, Tags, Agent, Model, and Result facets; Session is intentionally not a
+facet because its high
 cardinality belongs in global search. Facet options and counts cover the complete
 readable catalog for the current Active, Archived, or All source state rather
-than the current page or filtered result. Search and Tags, Agent, Model, and
-Result selections continue to constrain `items` and `total` but do not constrain
-the returned facet candidates or counts.
+than the current page or filtered result. Search and Category, Tags, Agent,
+Model, and Result selections continue to constrain `items` and `total` but do
+not constrain the returned facet candidates or counts. The unfiltered
+`state=all` Category facet is also the editor's current-workspace suggestion
+source across active and archived sessions. It contains no empty values, sorts
+by usage count then name, and is not a permanent vocabulary: clearing the final
+assignment removes that candidate. If the first suggestion request observes a
+cold catalog scan with no committed generation, the browser refreshes the
+suggestion source when that scan reaches its first non-checking generation.
 
 Serve Leaderboard, Source Manager, and workspace report bindings share the
 same server-side query semantics. The first response contains at most 100
@@ -379,27 +395,32 @@ When one or more valid saved views exist, serve adds a responsive right-side
 workspace rail whose desktop width is `clamp(620px, 44vw, 760px)`. A Saved
 views index immediately below the title reuses the common Leaderboard data-table
 renderer, filter-menu draft, Clear/Apply, and visible-selection behavior. Its
-fixed columns are Select, Name, Tags, Models, Group by, Other conditions, and
-Notes. The header checkbox selects or clears only the currently filter-visible
+fixed columns are Select, Name, Category, Tags, Models, Group by, Other
+conditions, and Notes. The header checkbox selects or clears only the currently
+filter-visible
 view rows and displays checked/indeterminate state; hidden selections are
 preserved, and Apply, Export Excel, and Delete continue to operate on the global
 selected-view set. Apply and Delete actions sit above the table's upper-right
 corner and are disabled without a selection; there is no per-card Apply action
 or Cancel-application action.
 
-Tags, Models, and Group by expose local multi-select filters whose candidate
+Category, Tags, Models, and Group by expose local multi-select filters whose candidate
 values come from every valid saved view. Values within one column are OR-ed and
 columns are AND-ed. The index and cards both render the same ordered
 `workspaceViewRows()` projection. A zero-result filter therefore retains the
 index and its Clear/Apply affordances while rendering an empty cards region.
 Notes are truncated in the index and expose their complete text on hover and
 keyboard focus. Clicking a non-interactive row cell scrolls the rail to the
-corresponding card. Double-clicking Name, Tags, Models, Group by, Other
-conditions, or Notes opens the shared value-type editor. Name uses the text
-editor; Tags and Models use the ordered list editor; Group by uses the enum
-editor; Other conditions uses a YAML editor limited to state, search, agents,
-and results; and Notes uses a Markdown editor. Text/list/enum edits save on
-Enter or blur. Markdown/YAML editors expose explicit Save and Cancel and save on
+corresponding card. Double-clicking Name, Category, Tags, Models, Group by,
+Other conditions, or Notes opens the shared value-type editor. Name uses the
+text editor; Category uses a scalar-value multi-select editor because a view
+may match more than one session category. Selected and suggested Category
+values retain their exact strings, including English or Chinese commas, rather
+than using commas as serialization delimiters. Tags and Models use the ordered
+comma-list editor; Group by uses the enum editor; Other conditions uses a YAML
+editor limited to state, search, agents, and results; and Notes uses a Markdown
+editor. Text/list/scalar-multi-select/enum edits save on Enter or blur.
+Markdown/YAML editors expose explicit Save and Cancel and save on
 Ctrl/Cmd+Enter. Configuration-cell saves merge edited fields with the untouched
 view definition and submit one complete YAML fragment through the existing
 atomic `field: "configuration"` update. Escape cancels; conflicts and
@@ -407,8 +428,8 @@ validation errors leave the editor open.
 
 The Save view dialog pre-fills its name as `<tag1>,<tag2> - <group>` or
 `All - <group>` when no Tags filter is active. The group suffix uses the stable
-`agent`, `model`, or `overall` value. Long tag prefixes are truncated before the
-suffix so the complete name remains within 120 characters.
+`agent`, `model`, `category`, or `overall` value. Long tag prefixes are
+truncated before the suffix so the complete name remains within 120 characters.
 
 Each card directly shows the view name, Markdown-rendered notes, whole-query
 match count, its independently collapsed metric-by-group distribution table,
@@ -457,13 +478,19 @@ The same toolbar exposes `Reports`, which opens a separate near-full-screen
 workspace report manager rather than mixing reports into Source Manager. The
 manager lists every valid report package newest-first, including reports with
 zero current bindings. Selecting a report shows a searchable checklist of all
-readable active and archived source rows. Each binding row includes a read-only
-Tags column sourced from the session's ordered `source_tags`; the manager's
-search matches those tags, and an empty tag list displays `-`. Saving replaces
-its complete binding set, Preview closes the manager and opens the shared report
-reader, and Delete requires filename confirmation before permanently removing
-the package. Checking or unchecking a binding row updates the draft controls in
-place so the session list keeps both its scroll position and focused checkbox.
+readable active and archived source rows. Each binding row includes an editable
+single-chip Category column immediately to the left of the read-only Tags
+column. They are sourced from `source_category` and ordered `source_tags`;
+search matches both, and an empty value displays `-`. The row uses a neutral
+container with an explicit checkbox interaction: non-editing row space may
+toggle the binding, while Category editing never changes it. Saving replaces
+its complete binding set, including an empty set that clears the final
+association. A successful save immediately refreshes the rendered Leaderboard;
+Preview closes the manager and opens the shared report reader, and Delete
+requires filename confirmation before permanently removing the package.
+Checking or unchecking a binding row, or saving Category, updates in place so
+the binding draft, current page, search, list scroll position, and focus are
+retained.
 The manager body fills all modal height remaining below the header and optional
 status row. When the status row is hidden, its grid track collapses and must not
 leave unused space below the inventory and binding panels.
@@ -474,8 +501,9 @@ per-source status display. Checkbox selection retains both the source key and
 its active/archived state across pagination. The dynamic Archive/Activate action
 derives its target from that complete retained selection and submits the same
 complete set of keys, so the visible page cannot change an off-page selection's
-operation. Its table includes a read-only Tags column sourced
-from ordered `source_tags`, using the same chip presentation as Leaderboard and
+operation. Its table includes an editable Category column immediately to the
+left of a read-only Tags column, sourced from scalar `source_category` and
+ordered `source_tags`, using the same chip presentation as Leaderboard and
 displaying `-` when empty. The source list does not render a per-row Refresh
 column; the toolbar `Reload` action is its refresh entry point.
 The SQLite DB form manages adapter defaults in place. `Save as default` saves
@@ -511,9 +539,15 @@ still inspects exactly one DB path at a time. Adapter choices in the source mana
 	  Source aliases can be edited from the source list and affect only display in
 	  the source list, the Leaderboard Session Alias column, Trajectory Overview,
 	  and selected Trial summary; Evidence/Input Source continues to show the
-	  original path. Source Manager and serve Leaderboard Alias and Tags cells share
-	  the same type-driven editors. Enter or blur saves, Escape cancels, and editing
-	  controls do not select the Trial row. Tags are split on English
+	  original path. Serve Leaderboard, Source Manager, and report bindings share
+	  the same type-driven Category editor, while Source Manager and Leaderboard
+	  also share Alias and Tags editors. Double-click or keyboard Enter opens an
+	  editor; Enter or blur saves, Escape cancels, and editing controls do not
+	  select the Trial row or toggle report binding. Category is trimmed and
+	  stored as one optional string; empty input clears it. Its suggestion chips
+	  come from current assignments across all active and archived workspace
+	  sessions, clicking one replaces the current value, and custom text remains
+	  available. Tags are split on English
 	  and Chinese commas, stored as ordered unique strings, and empty input clears
 	  the tag list. The Tags editor also shows existing tags from loaded serve
 	  sources/reports as chips that can be clicked to add or remove them while
@@ -557,7 +591,9 @@ The browser loads the workspace-report catalog during serve startup and
 rerenders this column without requiring Reports Manager or a manual refresh.
 The cell joins by stable source key: no reports renders an em dash, one report
 renders its filename as a button, and multiple reports render an `N reports`
-menu ordered newest-first. Report controls stop row-click propagation and do
+native selector whose report options are ordered newest-first. Choosing an
+option immediately opens that report and resets the selector so the same report
+can be chosen again later. Report controls stop row-click propagation and do
 not select a Trial or open Step details. With visible rows checked,
 `Attach report (N)` invokes the native picker for one file, imports it against
 the checked source keys, clears row selection on success, and opens the new
@@ -622,7 +658,8 @@ calling serve mutations.
 ["cell_..."] }`, requires at least one current readable source, imports one
 supported file, and returns the refreshed report catalog plus the imported
 report id. `POST /api/reports/<report-id>/bindings` accepts `{ "source_keys":
-[...] }` and atomically replaces all bindings. `POST
+[...] }` and atomically replaces all bindings; an explicit empty array clears
+the final binding, while a missing or non-array field is invalid. `POST
 /api/reports/<report-id>/delete` permanently removes the package. These routes
 use the normal same-origin JSON mutation rules.
 
@@ -687,7 +724,8 @@ existing source/artifact unchanged instead of silently changing one source into
 another Trial.
 
 `GET /api/catalog` accepts state, page, page size, literal search, sort,
-direction, Tags/Agent/Model/Result facets, and repeated `view` names, and
+direction, repeated Category/Tags/Agent/Model/Result facets, and repeated
+`view` names, and
 returns generation, checking/stale flags, total, page metadata, summary rows,
 and facets. Valid named views form an OR base query; the ordinary search and
 facet parameters are an AND refinement over that base. Unknown view names fail
@@ -719,7 +757,11 @@ all write routes return `409` and the UI disables their controls. `POST
 `POST /api/sources/{source_key}/alias` accepts JSON `{ "alias": "..." }`,
 updates only the display alias, and does not refresh or mutate the original
 source file or DB.
-An empty alias clears the alias. `POST /api/sources/{source_key}/tags` accepts
+An empty alias clears the alias. `POST /api/sources/{source_key}/category`
+accepts JSON `{ "category": "..." }`, trims and persists one
+`source_category`, and clears it on empty input. The mutation projects the
+authoritative value into source, catalog, and report metadata without refreshing
+the original source. `POST /api/sources/{source_key}/tags` accepts
 JSON `{ "tags": "a,b，c", "report_source_state": "active|archived|all" }`,
 persists normalized source tags, and clears the tag list on empty input. `POST
 /api/sources/{source_key}/delete` deletes only peval-py state for that source
@@ -747,9 +789,10 @@ JSON and workspace-snapshot export explicitly; XLSX export, report binding, and 
 mutations may use the full selection.
 
 Serve UI mode renders one Leaderboard `Export` menu with `Table`, `JSON Report`,
-and `Workspace snapshot (.html)`. `POST /api/exports` handles all three. Table export receives
-the current catalog query, including applied `views`, and exports every
-matching summary as XLSX. JSON keeps the existing explicit-source behavior.
+and `Workspace snapshot (.html)`. `POST /api/exports` handles all three. Table
+export receives the current catalog query, including applied `views`, and
+exports every matching summary as XLSX with Category immediately before Tags.
+JSON keeps the existing explicit-source behavior.
 Workspace snapshot receives the complete catalog query without pagination and
 the browser's global selected source-key set. With a non-empty selection it
 exports selected keys intersected with the full query; otherwise it exports all
@@ -759,9 +802,11 @@ scope fallback.
 
 Workspace snapshot requests use `kind: "workspace_html"` with `query`,
 `selected_source_keys`, and `presentation`. Query contains state, search, sort,
-direction, Tags/Agent/Model/Result facets, and saved-view names. Presentation
+direction, Category/Tags/Agent/Model/Result facets, and saved-view names.
+Presentation
 contains Summary group/statistic/disclosure, selected source/step, visible view
-names, Saved Views Tags/Models/Group-by filters, and open view-table names. The
+names, Saved Views Category/Tags/Models/Group-by filters, and open view-table
+names. The
 final scope is capped at 100 rows and 50 MiB of Trial input plus unique bound
 Workspace Report content. Limits reject the whole export without truncation.
 
@@ -773,6 +818,7 @@ Workspace Report content. Limits reject the whole export without truncation.
     "search": "",
     "sort": "last_turn_end",
     "direction": "desc",
+    "categories": [],
     "tags": [],
     "agents": [],
     "models": [],
@@ -788,6 +834,7 @@ Workspace Report content. Limits reject the whole export without truncation.
     "selected_step_id": null,
     "visible_view_names": [],
     "workspace_view_filters": {
+      "categories": [],
       "tags": [],
       "models": [],
       "group_by": []
@@ -827,7 +874,7 @@ invalidates the whole request rather than silently changing the workbook.
 Summary Excel requests use `POST /api/exports` with `kind: "summary_xlsx"`.
 Leaderboard requests contain
 `summary: {scope: "leaderboard", source_keys: string[], group_by:
-"overall"|"agent"|"model", statistic:
+"overall"|"agent"|"model"|"category", statistic:
 "mean"|"min"|"q1"|"p50"|"q3"|"p95"|"max"}`. Saved-view requests contain
 `summary: {scope: "saved_views", views: string[]}`; names are ordered,
 de-duplicated, non-empty, and resolved from the latest view definitions. A
@@ -844,7 +891,12 @@ suffixes. Each worksheet starts with metadata; saved-view metadata includes
 Name, editable Configuration YAML without `schema_version`, raw Markdown
 Notes, Group, Match count, and Chart statistic. Below it is a real filterable
 table with repeated `Metric`, `Group`, `Count`, `Mean`, `Min`, `Q1`, `P50`,
-`Q3`, `P95`, and `Max` values. The table header is frozen. Numeric cells stay
+`Q3`, `P95`, and `Max` values. Category-grouped sheets use the localized
+Category heading and represent a missing category as `-`. The table header is
+frozen. Missing Category groups remain distinct from a real Category named
+`-`, and a real Category named `overall` stays literal; Overall-scope
+localization applies only when the worksheet itself groups by Overall. Numeric
+cells stay
 numeric: duration values use Excel durations, error rates use percentages,
 missing statistics are blank, and valid zeroes remain present.
 
