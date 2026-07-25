@@ -346,6 +346,20 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
+                    f"/api/sources/{source_key}/category",
+                    {"category": "  Regression  "},
+                    origin=origin,
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(body["sources"][0]["source_category"], "Regression")
+                self.assertEqual(
+                    body["report"]["trajectory_meta"][0]["source_category"],
+                    "Regression",
+                )
+
+                status, _, body = request_json(
+                    port,
+                    "POST",
                     f"/api/sources/{source_key}/tags",
                     {"tags": "alpha，beta, alpha"},
                     origin=origin,
@@ -367,6 +381,7 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(body["sources"][0]["source_key"], source_key)
                 self.assertEqual(body["sources"][0]["source_alias"], "Renamed source")
+                self.assertEqual(body["sources"][0]["source_category"], "Regression")
                 self.assertEqual(body["sources"][0]["source_tags"], ["alpha", "beta"])
 
                 status, _, body = request_json(
@@ -384,6 +399,17 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
+                    f"/api/sources/{source_key}/category",
+                    {"category": "   "},
+                    origin=origin,
+                )
+                self.assertEqual(status, 200)
+                self.assertIsNone(body["sources"][0]["source_category"])
+                self.assertNotIn("source_category", body["report"]["trajectory_meta"][0])
+
+                status, _, body = request_json(
+                    port,
+                    "POST",
                     f"/api/sources/{source_key}/tags",
                     {"tags": ""},
                     origin=origin,
@@ -391,6 +417,26 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(body["sources"][0]["source_tags"], [])
                 self.assertNotIn("source_tags", body["report"]["trajectory_meta"][0])
+
+                status, _, body = request_json(
+                    port,
+                    "POST",
+                    f"/api/sources/{source_key}/category",
+                    {"category": ["not", "scalar"]},
+                    origin=origin,
+                )
+                self.assertEqual(status, 400)
+                self.assertIn("category must be a string", body["error"])
+
+                status, _, body = request_json(
+                    port,
+                    "POST",
+                    f"/api/sources/{source_key}/category",
+                    {},
+                    origin=origin,
+                )
+                self.assertEqual(status, 400)
+                self.assertIn("category must be a string", body["error"])
             finally:
                 server.shutdown()
                 server.server_close()

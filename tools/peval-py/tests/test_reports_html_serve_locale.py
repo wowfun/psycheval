@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 from reports_html_support import *
+from peval_py.i18n import messages_for
+
 
 class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
+    def test_category_labels_are_localized_for_tables_and_summary_counts(self) -> None:
+        self.assertEqual(messages_for("en")["category"], "Category")
+        self.assertEqual(messages_for("en")["summary_categories"], "categories")
+        self.assertEqual(messages_for("zh-CN")["category"], "分类")
+        self.assertEqual(messages_for("zh-CN")["summary_categories"], "个分类")
+
     def test_leaderboard_scrolls_with_the_main_analysis_content(self) -> None:
         html = render_serve_html(
             {
@@ -88,7 +96,23 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
             for name, value in [declaration.split(":", 1)]
         }
         self.assertEqual(list_declarations.get("overflow"), "auto")
-        self.assertEqual(table_declarations.get("min-width"), "1012px")
+        self.assertEqual(table_declarations.get("min-width"), "1136px")
+
+        forms_rules = re.findall(r"\.source-manager-forms\s*\{[^}]*\}", css)
+        list_panel_rules = re.findall(
+            r"\.source-manager-list-panel\s*\{[^}]*\}",
+            css,
+        )
+        self.assertTrue(
+            any(
+                "min-height:auto" in compact_css_text(rule)
+                and "overflow:visible" in compact_css_text(rule)
+                for rule in forms_rules
+            )
+        )
+        self.assertTrue(
+            any("min-height:auto" in compact_css_text(rule) for rule in list_panel_rules)
+        )
 
     def test_desktop_saved_views_grid_bounds_wide_index_content(self) -> None:
         css = load_asset_text("report.css")

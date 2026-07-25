@@ -3,6 +3,9 @@ from __future__ import annotations
 from serve_state_support import *
 from peval_py.cli import main as cli_main
 from peval_py.config import load_config
+from peval_py._inputs.workspace_snapshots import (
+    load_workspace_snapshot_sessions_from_rows,
+)
 
 DERIVED_SOURCE_STATE_FIELDS = {
     "source_key",
@@ -368,9 +371,11 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 self.assertNotIn("relative_paths", deleted_annotations["analysis"][0])
 
                 store.set_source_alias(keys[0], "Readable source")
+                store.set_source_category(keys[0], "  Regression  ")
                 store.set_source_tags(keys[0], ["triage", "fast"])
                 payload = store.source_payload()[0]
                 self.assertEqual(payload["source_alias"], "Readable source")
+                self.assertEqual(payload["source_category"], "Regression")
                 self.assertEqual(payload["source_tags"], ["triage", "fast"])
                 self.assertEqual(payload["trial_key"], "session:t001")
                 self.assertEqual(payload["trial_session_id"], "common_session")
@@ -384,6 +389,23 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     store.active_report(config)["trajectory_meta"][0]["source_tags"],
+                    ["triage", "fast"],
+                )
+                self.assertEqual(
+                    store.active_report(config)["trajectory_meta"][0]["source_category"],
+                    "Regression",
+                )
+                workspace_session = load_workspace_snapshot_sessions_from_rows(
+                    [payload],
+                    str(root / payload["artifact_dir"]),
+                    config,
+                )[0]
+                self.assertEqual(
+                    workspace_session.snapshot_meta["source_category"],
+                    "Regression",
+                )
+                self.assertEqual(
+                    workspace_session.snapshot_meta["source_tags"],
                     ["triage", "fast"],
                 )
 
@@ -450,6 +472,7 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                         "db_path": None,
                         "session_id": "legacy-session",
                         "source_alias": "Legacy alias",
+                        "source_category": "Legacy category",
                         "agent_name": "psychevo",
                         "model": "legacy-model",
                         "artifact_dir": "runs/default/psychevo/legacy-session/session_t001",
@@ -473,6 +496,7 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
             try:
                 source = store.source_payload()[0]
                 self.assertEqual(source["source_alias"], "Legacy alias")
+                self.assertEqual(source["source_category"], "Legacy category")
                 self.assertFalse(source["active"])
                 self.assertEqual(source["last_status"], "error")
                 self.assertEqual(source["last_error"], "legacy error")
@@ -483,6 +507,7 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 self.assertNotIn("created_at_ms", rewritten)
                 self.assertNotIn("updated_at_ms", rewritten)
                 self.assertEqual(rewritten["source_alias"], "Rewritten alias")
+                self.assertEqual(rewritten["source_category"], "Legacy category")
                 self.assertFalse(rewritten["active"])
                 self.assertEqual(rewritten["last_status"], "error")
                 self.assertEqual(rewritten["last_error"], "legacy error")
@@ -707,12 +732,14 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 source = store.source_payload()[0]
                 artifact_dir = root / source["artifact_dir"]
                 store.set_source_alias(source_key, "Tracked cell")
+                store.set_source_category(source_key, "Missing category")
                 backup_dir = Path(tmp) / "backup-cell"
                 shutil.copytree(artifact_dir, backup_dir)
 
                 shutil.rmtree(artifact_dir / "agent")
                 missing_source = store.source_payload()[0]
                 self.assertEqual(missing_source["source_key"], source_key)
+                self.assertEqual(missing_source["source_category"], "Missing category")
                 self.assertEqual(missing_source["last_status"], "missing")
                 self.assertIn("Trial cell artifacts not found", missing_source["last_error"])
                 self.assertEqual(store.active_report(config)["trajectory"], [])
@@ -727,6 +754,7 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 self.assertEqual(len(restored_sources), 1)
                 self.assertEqual(restored_sources[0]["source_key"], source_key)
                 self.assertEqual(restored_sources[0]["source_alias"], "Restored cell")
+                self.assertEqual(restored_sources[0]["source_category"], "Missing category")
                 self.assertNotEqual(restored_sources[0]["last_status"], "missing")
                 self.assertEqual(
                     store.active_report(config)["trajectory"][0]["trajectory_id"],
@@ -782,19 +810,24 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 self.assertFalse(state_path.exists())
 
                 store.set_source_alias(source_key, "Readable source")
+                store.set_source_category(source_key, "Regression")
                 store.set_source_tags(source_key, ["triage"])
                 self.assertTrue(state_path.is_file())
                 state = json.loads(state_path.read_text(encoding="utf-8"))
                 self.assertEqual(state["source_alias"], "Readable source")
+                self.assertEqual(state["source_category"], "Regression")
                 self.assertEqual(state["source_tags"], ["triage"])
 
                 store.set_source_alias(source_key, "")
                 self.assertTrue(state_path.is_file())
                 store.set_source_tags(source_key, [])
+                self.assertTrue(state_path.is_file())
+                store.set_source_category(source_key, "")
                 self.assertFalse(state_path.exists())
                 self.assertFalse((cell_dir / ".peval").exists())
                 source = store.source_payload()[0]
                 self.assertIsNone(source["source_alias"])
+                self.assertIsNone(source["source_category"])
                 self.assertEqual(source["source_tags"], [])
             finally:
                 store.close()

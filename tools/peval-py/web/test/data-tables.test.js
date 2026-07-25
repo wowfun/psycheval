@@ -33,6 +33,7 @@ test("value types drive cell metadata, truncation classes, sorting, and read-onl
     enum: "agent",
     text: "a long text value",
     list: ["alpha", "beta"],
+    scalarList: ["Safety, Eval", "Regression"],
     identity: "session-1",
     path: "/tmp/a/long/path",
     markdown: "first line\nsecond line\nthird line",
@@ -45,6 +46,7 @@ test("value types drive cell metadata, truncation classes, sorting, and read-onl
     { key: "enum", label: "Enum", valueType: "enum", value: item => item.enum },
     { key: "text", label: "Text", valueType: "text", value: item => item.text },
     { key: "list", label: "List", valueType: "list", value: item => item.list.join(", ") },
+    { key: "scalarList", label: "Scalar list", valueType: "scalar-list", value: item => item.scalarList.join(", ") },
     { key: "identity", label: "Identity", valueType: "identity", value: item => item.identity },
     { key: "path", label: "Path", valueType: "path", value: item => item.path },
     { key: "markdown", label: "Markdown", valueType: "markdown", value: item => item.markdown },
@@ -66,6 +68,10 @@ test("value types drive cell metadata, truncation classes, sorting, and read-onl
   assert.equal(tables.tableSortType(columns[4]), "text");
   assert.equal(tables.compareTableValues(2, 11, "number", "asc"), -9);
   assert.deepEqual(tables.normalizeTableListValue(" alpha， beta,alpha, ,gamma "), ["alpha", "beta", "gamma"]);
+  assert.deepEqual(
+    tables.normalizeTableScalarListValue([" Safety, Eval ", "Regression", "Safety, Eval"]),
+    ["Safety, Eval", "Regression"],
+  );
 });
 
 function mountEditor(valueType, { value = "draft", options, suggestions, commit }) {
@@ -157,6 +163,33 @@ test("list suggestions normalize values and editor events do not select the row"
   assert.equal(rowClicks, 0);
 });
 
+test("scalar suggestions replace the value while custom text and blank clears remain valid", async () => {
+  const commits = [];
+  let mounted = mountEditor("text", {
+    value: "Alpha",
+    suggestions: ["Alpha", "Beta"],
+    commit: async (_row, value) => commits.push(value),
+  });
+  mounted.cell.querySelector('[data-table-suggestion="Beta"]').click();
+  assert.equal(mounted.input.value, "Beta");
+  assert.equal(mounted.cell.querySelector('[data-table-suggestion="Alpha"]').getAttribute("aria-pressed"), "false");
+  assert.equal(mounted.cell.querySelector('[data-table-suggestion="Beta"]').getAttribute("aria-pressed"), "true");
+  mounted.input.value = "Custom category";
+  mounted.input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await tick();
+  assert.deepEqual(commits, ["Custom category"]);
+
+  mounted = mountEditor("text", {
+    value: "Alpha",
+    suggestions: ["Alpha", "Beta"],
+    commit: async (_row, value) => commits.push(value),
+  });
+  mounted.input.value = "   ";
+  mounted.input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await tick();
+  assert.deepEqual(commits, ["Custom category", ""]);
+});
+
 test("pending and failed saves preserve the editor value, error, and focus", async () => {
   let rejectCommit;
   const pending = new Promise((_resolve, reject) => { rejectCommit = reject; });
@@ -217,8 +250,9 @@ test("source and saved-view adapters keep persistence behind the shared edit sea
     const path = String(url);
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({ path, method: options.method || "GET", body });
+    if (path.includes("/api/sources/source-1/category")) return response({ generation: 2, change: "category", source_keys: ["source-1"] });
     if (path.includes("/api/sources/source-1/tags")) return response({});
-    if (path.includes("/api/catalog?")) return response({ items: [], page: 1, page_size: 100, total: 0, generation: 0, checking: false });
+    if (path.includes("/api/catalog?")) return response({ items: [], page: 1, page_size: 100, total: 0, generation: 0, checking: false, facets: { categories: [{ value: "Evaluation", count: 1 }] } });
     if (path === "/api/views/update") {
       const updated = { name: "Daily", filters: { tags: ["daily", "nightly"], results: ["passed"] }, group_by: "agent", notes: "Note" };
       return response({ view: updated, views: [updated] });
@@ -229,10 +263,20 @@ test("source and saved-view adapters keep persistence behind the shared edit sea
   };
   window.fetch = globalThis.fetch;
 
-  const leaderboardTags = tables.leaderboardColumns().find(column => column.key === "source_tags");
-  const managerTags = sourceManager.sourceColumns().find(column => column.key === "source_tags");
+  const leaderboardColumns = tables.leaderboardColumns();
+  const managerColumns = sourceManager.sourceColumns();
+  const leaderboardTags = leaderboardColumns.find(column => column.key === "source_tags");
+  const managerTags = managerColumns.find(column => column.key === "source_tags");
+  const leaderboardCategory = leaderboardColumns.find(column => column.key === "source_category");
+  const managerCategory = managerColumns.find(column => column.key === "source_category");
+  assert.deepEqual(leaderboardColumns.slice(0, 2).map(column => column.key), ["source_category", "source_tags"]);
+  assert.equal(managerColumns.indexOf(managerCategory) + 1, managerColumns.indexOf(managerTags));
+  assert.equal(leaderboardCategory.valueType, "text");
+  assert.equal(managerCategory.valueType, "text");
   assert.equal(leaderboardTags.valueType, "list");
   assert.equal(managerTags.valueType, "list");
+  assert.equal(typeof leaderboardCategory.edit.commit, "function");
+  assert.equal(typeof managerCategory.edit.commit, "function");
   assert.equal(typeof leaderboardTags.edit.commit, "function");
   assert.equal(typeof managerTags.edit.commit, "function");
   await managerTags.edit.commit({ source_key: "source-1", trial_key: "trial-1" }, ["green", "blue"]);
@@ -240,6 +284,14 @@ test("source and saved-view adapters keep persistence behind the shared edit sea
     path: "/api/sources/source-1/tags",
     method: "POST",
     body: { report_source_state: "active", tags: ["green", "blue"] },
+  });
+  runtime.state.sourceCategoryOptions = ["Evaluation", "Regression"];
+  assert.deepEqual(managerCategory.edit.suggestions(), ["Evaluation", "Regression"]);
+  await managerCategory.edit.commit({ source_key: "source-1", trial_key: "trial-1" }, "  Evaluation  ");
+  assert.deepEqual(calls.find(call => call.path === "/api/sources/source-1/category"), {
+    path: "/api/sources/source-1/category",
+    method: "POST",
+    body: { category: "Evaluation" },
   });
 
   runtime.state.workspaceViews = [{ name: "Daily", filters: { results: ["passed"] }, group_by: "agent", notes: "Note" }];
@@ -257,6 +309,7 @@ test("source and saved-view adapters keep persistence behind the shared edit sea
   const columns = views.workspaceViewColumns();
   assert.deepEqual(columns.filter(column => column.edit).map(column => [column.key, column.valueType]), [
     ["name", "text"],
+    ["categories", "scalar-list"],
     ["tags", "list"],
     ["models", "list"],
     ["group_by", "enum"],
@@ -266,4 +319,72 @@ test("source and saved-view adapters keep persistence behind the shared edit sea
   await tick();
   globalThis.fetch = originalFetch;
   window.fetch = originalFetch;
+});
+
+test("Saved View Category editing preserves a scalar value containing a comma", async () => {
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  const view = {
+    name: "Comma category",
+    filters: { categories: ["Safety, Eval"] },
+    group_by: "category",
+    notes: "",
+  };
+  const response = payload => ({
+    ok: true,
+    statusText: "OK",
+    async text() { return JSON.stringify(payload); },
+  });
+  globalThis.fetch = async (url, options = {}) => {
+    const path = String(url);
+    const body = options.body ? JSON.parse(options.body) : null;
+    calls.push({ path, body });
+    if (path === "/api/views/update") return response({ view, views: [view] });
+    if (path === "/api/views") return response({ views: [view] });
+    if (path === "/api/views/summary") return response({ views: [], generation: 1 });
+    throw new Error(`unexpected request: ${path}`);
+  };
+  window.fetch = globalThis.fetch;
+
+  try {
+    runtime.state.workspaceViews = [view];
+    runtime.state.workspaceViewsLoaded = true;
+    runtime.state.workspaceViewsRefreshPromise = null;
+    runtime.state.workspaceViewsRefreshQueued = false;
+    const column = views.workspaceViewColumns().find(item => item.key === "categories");
+    const root = document.querySelector("#table-root");
+    root.innerHTML = tables.renderDataTable({
+      tableId: "saved-view-category-comma",
+      columns: [column],
+      rows: [view],
+      rowKey: item => item.name,
+    });
+    tables.bindDataTableEditors(root, {
+      tableId: "saved-view-category-comma",
+      columns: [column],
+      rows: [view],
+      rowKey: item => item.name,
+    });
+    const cell = root.querySelector('[data-table-column-key="categories"]');
+    cell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    const input = cell.querySelector(".table-cell-editor-control");
+    assert.equal(input.value, "");
+    assert.equal(
+      cell.querySelector('[data-table-suggestion="Safety, Eval"]').getAttribute("aria-pressed"),
+      "true",
+    );
+    input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    for (let index = 0; index < 5; index += 1) await tick();
+
+    const update = calls.find(call => call.path === "/api/views/update");
+    assert.match(update.body.value, /categories:\n    - "Safety, Eval"/);
+    assert.doesNotMatch(update.body.value, /categories:\n    - "Safety"\n    - "Eval"/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    window.fetch = originalFetch;
+    runtime.state.workspaceViews = [];
+    runtime.state.workspaceViewsLoaded = false;
+    runtime.state.workspaceViewsRefreshPromise = null;
+    runtime.state.workspaceViewsRefreshQueued = false;
+  }
 });

@@ -16,6 +16,7 @@ def filters(**overrides):
     value = {
         "state": "active",
         "search": "",
+        "categories": [],
         "tags": [],
         "agents": [],
         "models": [],
@@ -88,6 +89,43 @@ class WorkspaceViewLibraryTests(unittest.TestCase):
                 "---\nschema_version: 1\ngroup_by: agent\n---\n",
             )
             self.assertEqual(default_view.filters.state, "active")
+
+    def test_category_filters_and_grouping_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            library = WorkspaceViewLibrary(root)
+
+            saved = library.save(
+                name="Category cohort",
+                filters=filters(categories=["frontend", "未分类"], tags=["daily"]),
+                group_by="category",
+                notes="Compare source categories.",
+                overwrite=False,
+            )
+
+            self.assertEqual(saved.filters.categories, ("frontend", "未分类"))
+            self.assertEqual(saved.group_by, "category")
+            stored = (root / "views" / "Category cohort.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("categories:\n  - frontend\n  - 未分类", stored)
+            self.assertIn("group_by: category", stored)
+            self.assertEqual(library.list(), [saved])
+
+            configured = library.update(
+                name="Category cohort",
+                field="configuration",
+                value=(
+                    "filters:\n"
+                    "  categories: [backend, infra]\n"
+                    "  models: [m1]\n"
+                    "group_by: category\n"
+                ),
+            )
+            self.assertEqual(configured.filters.categories, ("backend", "infra"))
+            self.assertEqual(configured.filters.models, ("m1",))
+            self.assertEqual(configured.group_by, "category")
+            self.assertEqual(configured.notes, "Compare source categories.")
 
     def test_update_rename_configuration_notes_and_prevalidated_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

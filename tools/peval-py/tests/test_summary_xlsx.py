@@ -60,6 +60,15 @@ class SummaryXlsxTests(unittest.TestCase):
         self.assertEqual(request.source_keys, ("b", "a"))
         self.assertEqual(request.group_by, "model")
         self.assertEqual(request.statistic, "p95")
+        category_request = summary_export_payload(
+            {
+                "scope": "leaderboard",
+                "source_keys": ["a"],
+                "group_by": "category",
+                "statistic": "mean",
+            }
+        )
+        self.assertEqual(category_request.group_by, "category")
         views = summary_export_payload(
             {"scope": "saved_views", "views": ["B", "A", "B"]}
         )
@@ -135,6 +144,61 @@ class SummaryXlsxTests(unittest.TestCase):
         self.assertIn("Metric", strings)
         self.assertIn("No matching sessions", strings)
         self.assertIn("<pane", sheet)
+
+    def test_category_group_uses_localized_heading_and_empty_label(self) -> None:
+        groups = summary_groups()
+        groups[0]["key"] = "-"
+        groups[0]["label"] = "-"
+        content = summary_workbook(
+            [
+                SummaryWorksheet(
+                    name="Categories",
+                    group_by="category",
+                    matched_count=1,
+                    groups=groups,
+                )
+            ],
+            locale="zh-CN",
+        )
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            strings = archive.read("xl/sharedStrings.xml").decode("utf-8")
+        self.assertIn("分类", strings)
+        self.assertIn("<t>-</t>", strings)
+
+    def test_category_named_overall_is_not_localized_as_the_overall_scope(self) -> None:
+        groups = summary_groups()
+        groups[0]["key"] = "overall"
+        groups[0]["label"] = "overall"
+        category_content = summary_workbook(
+            [
+                SummaryWorksheet(
+                    name="Categories",
+                    group_by="category",
+                    matched_count=1,
+                    groups=groups,
+                )
+            ],
+            locale="zh-CN",
+        )
+        with zipfile.ZipFile(io.BytesIO(category_content)) as archive:
+            category_strings = archive.read("xl/sharedStrings.xml").decode("utf-8")
+        self.assertIn("<t>overall</t>", category_strings)
+        self.assertNotIn("<t>全部</t>", category_strings)
+
+        overall_content = summary_workbook(
+            [
+                SummaryWorksheet(
+                    name="Overall",
+                    group_by="overall",
+                    matched_count=1,
+                    groups=groups,
+                )
+            ],
+            locale="zh-CN",
+        )
+        with zipfile.ZipFile(io.BytesIO(overall_content)) as archive:
+            overall_strings = archive.read("xl/sharedStrings.xml").decode("utf-8")
+        self.assertIn("<t>全部</t>", overall_strings)
 
 
 if __name__ == "__main__":

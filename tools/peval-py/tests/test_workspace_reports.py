@@ -88,6 +88,8 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
 
             valid = root / "valid.md"
             valid.write_text("ok")
+            with self.assertRaisesRegex(ValueError, "at least one"):
+                library.import_file(valid, [])
             old_cwd = Path.cwd()
             try:
                 os.chdir(root)
@@ -215,9 +217,13 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unreadable source"):
                 library.replace_bindings(report_id, ["cell_missing"])
             self.assertEqual(state_path.read_bytes(), before)
-            with self.assertRaisesRegex(ValueError, "at least one"):
-                library.replace_bindings(report_id, [])
-            self.assertEqual(state_path.read_bytes(), before)
+            library.replace_bindings(report_id, [])
+            self.assertEqual(
+                json.loads(state_path.read_text()),
+                {"source_keys": []},
+            )
+            self.assertEqual(library.catalog()[0]["source_keys"], [])
+            self.assertEqual(library.read(report_id).source_paths, ())
 
             library.delete(report_id)
             self.assertEqual(library.catalog(), [])

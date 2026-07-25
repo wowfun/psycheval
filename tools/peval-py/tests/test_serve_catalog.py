@@ -108,7 +108,12 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 selected_source_key=None,
                 selected_step_id=None,
                 visible_view_names=(),
-                workspace_view_filters={"tags": (), "models": (), "group_by": ()},
+                workspace_view_filters={
+                    "categories": (),
+                    "tags": (),
+                    "models": (),
+                    "group_by": (),
+                },
                 open_view_tables=(),
             )
             import peval_py.serve.exports as export_module
@@ -369,7 +374,13 @@ class WorkspaceCatalogTests(unittest.TestCase):
                     state_path = cell / ".peval" / "state.json"
                     state_path.parent.mkdir(parents=True, exist_ok=True)
                     state_path.write_text(
-                        json.dumps({"source_tags": ["even"]}), encoding="utf-8"
+                        json.dumps(
+                            {
+                                "source_category": "even-category",
+                                "source_tags": ["even"],
+                            }
+                        ),
+                        encoding="utf-8",
                     )
             store, catalog = self.catalog(root)
             catalog.reconcile()
@@ -385,6 +396,10 @@ class WorkspaceCatalogTests(unittest.TestCase):
             self.assertEqual(catalog.query(CatalogQuery(search="42")).total, 1)
             self.assertEqual(catalog.query(CatalogQuery(search="%")).total, 0)
             self.assertEqual(catalog.query(CatalogQuery(search="_")).total, 0)
+            self.assertEqual(
+                catalog.query(CatalogQuery(categories=("even-category",))).total,
+                63,
+            )
             self.assertEqual(catalog.query(CatalogQuery(tags=("even",))).total, 63)
             self.assertEqual(
                 next(item["count"] for item in first.facets["results"] if item["value"] == "failed"),
@@ -398,17 +413,23 @@ class WorkspaceCatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             definitions = [
-                (0, "alpha", "passed", "needle active", True),
-                (1, "beta", "failed", "other active", True),
-                (2, "archived", "passed", "other archived", False),
-                (3, "ghost", "passed", "unreadable", True),
+                (0, "alpha", "shared", "passed", "needle active", True),
+                (1, "beta", "secondary", "failed", "other active", True),
+                (2, "archived", "archive-category", "passed", "other archived", False),
+                (3, "ghost", "ghost-category", "passed", "unreadable", True),
             ]
-            for index, tag, status, text, active in definitions:
+            for index, tag, category, status, text, active in definitions:
                 cell = self.write_cell(root, index, status=status, text=text)
                 state_path = cell / ".peval" / "state.json"
                 state_path.parent.mkdir(parents=True, exist_ok=True)
                 state_path.write_text(
-                    json.dumps({"active": active, "source_tags": [tag]}),
+                    json.dumps(
+                        {
+                            "active": active,
+                            "source_category": category,
+                            "source_tags": [tag],
+                        }
+                    ),
                     encoding="utf-8",
                 )
                 if tag == "ghost":
@@ -420,11 +441,16 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 active = catalog.query(
                     CatalogQuery(
                         search="needle",
+                        categories=("shared",),
                         tags=("alpha",),
                         results=("passed",),
                     )
                 )
                 self.assertEqual(active.total, 1)
+                self.assertEqual(
+                    {item["value"]: item["count"] for item in active.facets["categories"]},
+                    {"secondary": 1, "shared": 1},
+                )
                 self.assertEqual(
                     {item["value"]: item["count"] for item in active.facets["tags"]},
                     {"alpha": 1, "beta": 1},
@@ -435,16 +461,29 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 )
 
                 archived = catalog.query(
-                    CatalogQuery(state="archived", tags=("archived",))
+                    CatalogQuery(
+                        state="archived",
+                        categories=("archive-category",),
+                        tags=("archived",),
+                    )
                 )
                 self.assertEqual(archived.total, 1)
                 self.assertEqual(
                     [item["value"] for item in archived.facets["tags"]],
                     ["archived"],
                 )
+                self.assertEqual(
+                    [item["value"] for item in archived.facets["categories"]],
+                    ["archive-category"],
+                )
 
                 all_states = catalog.query(
-                    CatalogQuery(state="all", search="needle", tags=("alpha",))
+                    CatalogQuery(
+                        state="all",
+                        search="needle",
+                        categories=("shared", "secondary"),
+                        tags=("alpha",),
+                    )
                 )
                 self.assertEqual(all_states.total, 1)
                 self.assertEqual(
@@ -452,6 +491,17 @@ class WorkspaceCatalogTests(unittest.TestCase):
                     {"alpha", "beta", "archived"},
                 )
                 self.assertNotIn("ghost", {item["value"] for item in all_states.facets["tags"]})
+                self.assertEqual(
+                    {item["value"] for item in all_states.facets["categories"]},
+                    {"shared", "secondary", "archive-category"},
+                )
+                self.assertEqual(
+                    catalog.query(
+                        CatalogQuery(categories=("shared", "secondary"))
+                    ).total,
+                    2,
+                )
+                self.assertEqual(catalog.query(CatalogQuery(search="shared")).total, 1)
             finally:
                 store.close()
 
@@ -468,10 +518,20 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 meta["duration_ms"] = index
                 meta_path.write_text(json.dumps(meta), encoding="utf-8")
-                if index % 2 == 0:
+                if index % 2 == 0 or index == 1:
                     state_path = cell / ".peval" / "state.json"
                     state_path.parent.mkdir(parents=True, exist_ok=True)
-                    state_path.write_text(json.dumps({"source_tags": ["even"]}), encoding="utf-8")
+                    state_path.write_text(
+                        json.dumps(
+                            {
+                                "source_category": (
+                                    "even-category" if index % 2 == 0 else "-"
+                                ),
+                                "source_tags": ["even"] if index % 2 == 0 else [],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
 
             store, catalog = self.catalog(root)
             try:
@@ -481,9 +541,10 @@ class WorkspaceCatalogTests(unittest.TestCase):
                     [
                         ("all", CatalogQuery(), "overall"),
                         ("even", CatalogQuery(tags=("even",)), "model"),
+                        ("category", CatalogQuery(), "category"),
                     ]
                 )
-                all_view, even_view = payload["views"]
+                all_view, even_view, category_view = payload["views"]
                 self.assertEqual(all_view["matched_count"], 125)
                 self.assertEqual(all_view["groups"][0]["count"], 125)
                 duration = all_view["groups"][0]["metrics"][0]
@@ -494,6 +555,17 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 self.assertEqual(
                     [(group["label"], group["count"]) for group in even_view["groups"]],
                     [("model-a", 31), ("model-b", 32)],
+                )
+                self.assertEqual(
+                    [
+                        (group["key"], group["label"], group["count"])
+                        for group in category_view["groups"]
+                    ],
+                    [
+                        (None, "-", 61),
+                        ("-", "-", 1),
+                        ("even-category", "even-category", 63),
+                    ],
                 )
             finally:
                 store.close()
@@ -560,6 +632,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
                     worksheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
                 self.assertEqual(worksheet.count("<row "), 4)
+                self.assertLess(worksheet.index("Category"), worksheet.index("Tags"))
             finally:
                 store.close()
 
@@ -570,6 +643,21 @@ class WorkspaceCatalogTests(unittest.TestCase):
             store, catalog = self.catalog(root)
             catalog.reconcile()
             cache_path = catalog.path
+            with catalog._connect(readonly=True) as connection:
+                columns = {
+                    str(row["name"])
+                    for row in connection.execute("PRAGMA table_info(cells)")
+                }
+                indexes = {
+                    str(row["name"])
+                    for row in connection.execute("PRAGMA index_list(cells)")
+                }
+                self.assertEqual(
+                    catalog._meta_int(connection, "schema_version", -1),
+                    6,
+                )
+            self.assertIn("category", columns)
+            self.assertIn("cells_category", indexes)
             cache_path.write_bytes(b"not sqlite")
             rebuilt = WorkspaceCatalog(catalog.store, catalog.config)
             self.assertFalse(rebuilt.has_generation)

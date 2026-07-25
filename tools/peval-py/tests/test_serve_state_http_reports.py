@@ -195,6 +195,69 @@ class PevalPyServeWorkspaceReportHttpTests(unittest.TestCase):
                 thread.join(timeout=5)
                 store.close()
 
+    def test_report_bindings_can_clear_the_final_association(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = peval_py_workspace(Path(tmp))
+            cell = root / "runs" / "default" / "psychevo" / "s1" / "s1_t001"
+            write_trial_cell_artifacts(cell, session_id="s1", trial_key="s1_t001")
+            report_path = root / "analysis.md"
+            report_path.write_text("# Report\n")
+            config = ToolConfig(adapter="psychevo", workspace_root=str(root))
+            store = open_workspace_state(str(root))
+            runtime = ServeRuntime(store, config)
+            source_key = runtime.source_envelope()["sources"][0]["source_key"]
+            report_id = runtime.workspace_reports.import_file(report_path, [source_key])
+            state_path = root / "reports" / report_id / "state.json"
+            server = LocalHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            port = server.server_port
+            origin = f"http://127.0.0.1:{port}"
+            try:
+                initial_state = {
+                    "source_keys": ["runs/default/psychevo/s1/s1_t001"],
+                }
+                for invalid_payload in (
+                    {},
+                    {"source_keys": None},
+                    {"source_key": source_key},
+                    {"source_keys": source_key},
+                    {"source_keys": [""]},
+                ):
+                    status, _, body = request_json(
+                        port,
+                        "POST",
+                        f"/api/reports/{report_id}/bindings",
+                        invalid_payload,
+                        origin=origin,
+                    )
+                    self.assertEqual(status, 400)
+                    self.assertIn("source_keys", body["error"])
+                    self.assertEqual(json.loads(state_path.read_text()), initial_state)
+
+                status, _, body = request_json(
+                    port,
+                    "POST",
+                    f"/api/reports/{report_id}/bindings",
+                    {"source_keys": []},
+                    origin=origin,
+                )
+
+                self.assertEqual(status, 200)
+                self.assertEqual(body["reports"][0]["source_keys"], [])
+                self.assertEqual(
+                    json.loads(state_path.read_text()),
+                    {"source_keys": []},
+                )
+                get_status, catalog = raw_get_json(port, "/api/reports")
+                self.assertEqual(get_status, 200)
+                self.assertEqual(catalog["reports"][0]["source_keys"], [])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                store.close()
+
     def test_report_previews_are_isolated_and_null_or_malformed_origins_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_py_workspace(Path(tmp))

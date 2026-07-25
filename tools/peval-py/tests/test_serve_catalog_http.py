@@ -30,6 +30,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 "search": "",
                 "sort": "last_turn_end",
                 "direction": "desc",
+                "categories": [],
                 "tags": [],
                 "agents": [],
                 "models": [],
@@ -44,7 +45,12 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 "selected_source_key": None,
                 "selected_step_id": None,
                 "visible_view_names": [],
-                "workspace_view_filters": {"tags": [], "models": [], "group_by": []},
+                "workspace_view_filters": {
+                    "categories": [],
+                    "tags": [],
+                    "models": [],
+                    "group_by": [],
+                },
                 "open_view_tables": [],
             },
         }
@@ -156,6 +162,44 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
+                    f"/api/sources/{source_key}/category",
+                    {"category": "  Regression  "},
+                )
+                mutation = json.loads(body)
+                self.assertEqual(status, 200)
+                self.assertEqual(mutation["change"], "category")
+                self.assertEqual(mutation["source_keys"], [source_key])
+                self.assertNotIn("sources", mutation)
+                self.assertNotIn("report", mutation)
+                category_page = runtime.catalog.query(
+                    CatalogQuery(categories=("Regression",))
+                )
+                self.assertEqual(category_page.total, 1)
+                self.assertEqual(
+                    category_page.items[0].payload["source_category"],
+                    "Regression",
+                )
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    f"/api/sources/{source_key}/category",
+                    {"category": "  "},
+                )
+                self.assertEqual(status, 200, body)
+                cleared_page = runtime.catalog.query(CatalogQuery(state="all"))
+                self.assertIsNone(cleared_page.items[0].payload["source_category"])
+                self.assertNotIn(
+                    "Regression",
+                    {
+                        item["value"]
+                        for item in cleared_page.facets["categories"]
+                    },
+                )
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
                     "/api/catalog/resolve",
                     {"source_keys": ["missing", source_key]},
                 )
@@ -185,7 +229,15 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 state_path = cell / ".peval/state.json"
                 state_path.parent.mkdir(parents=True, exist_ok=True)
                 state_path.write_text(
-                    json.dumps({"active": True, "source_tags": ["daily" if index == 1 else "other"]}),
+                    json.dumps(
+                        {
+                            "active": True,
+                            "source_category": (
+                                "daily-category" if index == 1 else "other-category"
+                            ),
+                            "source_tags": ["daily" if index == 1 else "other"],
+                        }
+                    ),
                     encoding="utf-8",
                 )
             store, runtime, server, thread = self.running_server(root)
@@ -217,6 +269,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                         "selected_step_id": "1",
                         "visible_view_names": ["Daily"],
                         "workspace_view_filters": {
+                            "categories": ["daily-category"],
                             "tags": ["daily"],
                             "models": [],
                             "group_by": ["agent"],
@@ -240,9 +293,17 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     [row["trial_session_id"] for row in projection["catalog_rows"]],
                     ["session-1", "session-0"],
                 )
+                self.assertEqual(
+                    [row["source_category"] for row in projection["catalog_rows"]],
+                    ["daily-category", "other-category"],
+                )
                 self.assertEqual(len(set(projection["source_trial_keys"].values())), 2)
                 self.assertEqual([view["name"] for view in projection["views"]], ["Daily"])
                 self.assertEqual(projection["view_summaries"][0]["matched_count"], 1)
+                self.assertEqual(
+                    projection["presentation"]["workspace_view_filters"]["categories"],
+                    ["daily-category"],
+                )
                 self.assertEqual(len(projection["reports"]), 2)
                 previews = {
                     report["format"]: base64.b64decode(report["preview_base64"])
@@ -319,11 +380,11 @@ class ServeCatalogHttpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             definitions = [
-                ("alpha", "passed", "needle active", True),
-                ("beta", "failed", "other active", True),
-                ("archived", "passed", "other archived", False),
+                ("alpha", "shared", "passed", "needle active", True),
+                ("beta", "Safety, Eval", "failed", "other active", True),
+                ("archived", "archive-category", "passed", "other archived", False),
             ]
-            for index, (tag, result, message, active) in enumerate(definitions):
+            for index, (tag, category, result, message, active) in enumerate(definitions):
                 cell = root / f"runs/default/psychevo/s{index}/s{index}_t001"
                 write_trial_cell_artifacts(
                     cell,
@@ -341,7 +402,13 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 state_path = cell / ".peval" / "state.json"
                 state_path.parent.mkdir(parents=True, exist_ok=True)
                 state_path.write_text(
-                    json.dumps({"active": active, "source_tags": [tag]}),
+                    json.dumps(
+                        {
+                            "active": active,
+                            "source_category": category,
+                            "source_tags": [tag],
+                        }
+                    ),
                     encoding="utf-8",
                 )
 
@@ -350,11 +417,18 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "GET",
-                    "/api/catalog?search=needle&tag=alpha&result=passed",
+                    "/api/catalog?search=needle&category=shared&tag=alpha&result=passed",
                 )
                 self.assertEqual(status, 200)
                 active = json.loads(body)
                 self.assertEqual(active["total"], 1)
+                self.assertEqual(
+                    {
+                        item["value"]: item["count"]
+                        for item in active["facets"]["categories"]
+                    },
+                    {"Safety, Eval": 1, "shared": 1},
+                )
                 self.assertEqual(
                     {item["value"]: item["count"] for item in active["facets"]["tags"]},
                     {"alpha": 1, "beta": 1},
@@ -367,7 +441,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "GET",
-                    "/api/catalog?state=archived&tag=archived",
+                    "/api/catalog?state=archived&category=archive-category&tag=archived",
                 )
                 self.assertEqual(status, 200)
                 archived = json.loads(body)
@@ -376,11 +450,24 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     [item["value"] for item in archived["facets"]["tags"]],
                     ["archived"],
                 )
+                self.assertEqual(
+                    [item["value"] for item in archived["facets"]["categories"]],
+                    ["archive-category"],
+                )
 
                 status, _headers, body = self.request(
                     server,
                     "GET",
-                    "/api/catalog?state=all&search=needle&tag=alpha",
+                    "/api/catalog?category=Safety%2C%20Eval",
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body)["total"], 1)
+
+                status, _headers, body = self.request(
+                    server,
+                    "GET",
+                    "/api/catalog?state=all&search=needle"
+                    "&category=shared&category=Safety%2C%20Eval&tag=alpha",
                 )
                 self.assertEqual(status, 200)
                 all_states = json.loads(body)
@@ -389,6 +476,18 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     {item["value"] for item in all_states["facets"]["tags"]},
                     {"alpha", "beta", "archived"},
                 )
+                self.assertEqual(
+                    {item["value"] for item in all_states["facets"]["categories"]},
+                    {"shared", "Safety, Eval", "archive-category"},
+                )
+
+                status, _headers, body = self.request(
+                    server,
+                    "GET",
+                    "/api/catalog?category=shared&categories=Safety%2C%20Eval",
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body)["total"], 2)
             finally:
                 self.stop(store, server, thread)
 
@@ -769,6 +868,13 @@ class ServeCatalogHttpTests(unittest.TestCase):
             store, runtime, server, thread = self.running_server(root)
             items = runtime.catalog.query(CatalogQuery()).items
             try:
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    f"/api/sources/{items[0].source_key}/category",
+                    {"category": "Regression"},
+                )
+                self.assertEqual(status, 200, body)
                 status, headers, body = self.request(
                     server,
                     "POST",
@@ -781,6 +887,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
                 self.assertIn("s0", sheet)
                 self.assertIn("s1", sheet)
+                self.assertLess(sheet.index("Category"), sheet.index("Tags"))
 
                 status, _headers, body = self.request(
                     server,
@@ -794,6 +901,10 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertEqual(
                     report["trajectory"][0]["session_id"],
                     items[0].payload["trial_session_id"],
+                )
+                self.assertEqual(
+                    report["trajectory_meta"][0]["source_category"],
+                    "Regression",
                 )
 
                 status, headers, body = self.request(
@@ -819,6 +930,12 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 )
             store, runtime, server, thread = self.running_server(root)
             items = runtime.catalog.query(CatalogQuery()).items
+            runtime.catalog.mutate(
+                lambda: store.set_source_category_row(
+                    runtime.catalog.row_for_key(items[0].source_key),
+                    "Regression",
+                )
+            )
             runtime.workspace_views.save(
                 name="All: sessions",
                 filters={},
@@ -840,8 +957,11 @@ class ServeCatalogHttpTests(unittest.TestCase):
                         "kind": "summary_xlsx",
                         "summary": {
                             "scope": "leaderboard",
-                            "source_keys": [items[0].source_key],
-                            "group_by": "overall",
+                            "source_keys": [
+                                items[0].source_key,
+                                items[1].source_key,
+                            ],
+                            "group_by": "category",
                             "statistic": "max",
                         },
                     },
@@ -854,7 +974,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertIn("xl/charts/chart6.xml", names)
                 self.assertNotIn("xl/charts/chart7.xml", names)
                 self.assertIn("Current visible Leaderboard page", strings)
-                self.assertNotIn("s1_t001", strings)
+                self.assertIn("Category", strings)
+                self.assertIn("Regression", strings)
+                self.assertIn("<t>-</t>", strings)
 
                 status, headers, body = self.request(
                     server,

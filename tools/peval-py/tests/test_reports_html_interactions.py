@@ -1774,6 +1774,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 {
                     "changes": {
                         "page": 1,
+                        "categories": [],
                         "tags": ["alpha", "beta"],
                         "agents": [],
                         "models": [],
@@ -1855,6 +1856,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 {
                     "trial_key": "trial:alpha",
                     "status": "passed",
+                    "source_category": "frontend",
                     "duration_ms": 2000,
                     "steps": [
                         {"step_id": 1, "duration_ms": 100},
@@ -1867,6 +1869,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 {
                     "trial_key": "trial:beta",
                     "status": "failed",
+                    "source_category": "backend",
                     "duration_ms": 3000,
                     "steps": [
                         {"step_id": 1, "duration_ms": 3000, "duration_source": "measured"},
@@ -1977,6 +1980,9 @@ const result = vm.runInContext(`
   setLeaderboardSummaryGroupBy("model");
   const modelGroups = leaderboardSummaryGroups(leaderboardRows());
   const modelHtml = nodes["leaderboard-summary"].innerHTML;
+  setLeaderboardSummaryGroupBy("category");
+  const categoryGroups = leaderboardSummaryGroups(leaderboardRows());
+  const categoryHtml = nodes["leaderboard-summary"].innerHTML;
   setLeaderboardSummaryGroupBy("overall");
   const overallGroups = leaderboardSummaryGroups(leaderboardRows());
   const overallHtml = nodes["leaderboard-summary"].innerHTML;
@@ -2030,10 +2036,18 @@ const result = vm.runInContext(`
     modelP95Occurrences: countToken(modelHtml, "5.8s"),
     modelMetricRows: countToken(modelHtml, 'data-summary-metric='),
     modelChartCount: countToken(modelHtml, 'data-summary-chart='),
+    categoryGroups: categoryGroups.map(group => ({
+      label: group.label,
+      rows: group.rows.length,
+      duration: metricFor(group, "duration_ms"),
+    })),
+    categoryMetricRows: countToken(categoryHtml, 'data-summary-metric='),
+    categoryChartCount: countToken(categoryHtml, 'data-summary-chart='),
     overallGroups: overallGroups.map(group => ({ label: group.label, rows: group.rows.length })),
     overallMetricRows: countToken(overallHtml, 'data-summary-metric='),
     overallChartCount: countToken(overallHtml, 'data-summary-chart='),
     modelHtml,
+    categoryHtml,
     overallHtml,
     emptyHtml,
     multiHtml,
@@ -2085,6 +2099,7 @@ console.log(result);
         self.assertNotIn('<table class="data-table leaderboard-summary-table"', result["defaultHtml"])
         self.assertEqual(result["defaultChartCount"], 6)
         self.assertIn('data-summary-statistic="mean" aria-pressed="true"', result["defaultHtml"])
+        self.assertIn('data-summary-group-by="category"', result["defaultHtml"])
 
         self.assertIn("Hide summary table", result["openHtml"])
         self.assertIn('aria-expanded="true"', result["openHtml"])
@@ -2115,6 +2130,18 @@ console.log(result);
         self.assertIn('data-value-type="identity" title="Model"', result["modelHtml"])
         self.assertIn("Active Duration; P95 5.8s; n=2", result["modelHtml"])
         self.assertIn('<table class="data-table leaderboard-summary-table"', result["modelHtml"])
+
+        self.assertEqual(
+            [(group["label"], group["rows"]) for group in result["categoryGroups"]],
+            [("-", 1), ("frontend", 1)],
+        )
+        self.assertEqual(result["categoryGroups"][0]["duration"]["mean"], 6000)
+        self.assertEqual(result["categoryGroups"][1]["duration"]["mean"], 2000)
+        self.assertEqual(result["categoryMetricRows"], 12)
+        self.assertEqual(result["categoryChartCount"], 6)
+        self.assertIn('data-value-type="identity" title="Category"', result["categoryHtml"])
+        self.assertIn("2 categories", result["categoryHtml"])
+        self.assertIn('id="leaderboard-summary-chart-title">P95 · Category</h3>', result["categoryHtml"])
 
         self.assertEqual(result["overallGroups"], [{"label": "Overall", "rows": 2}])
         self.assertEqual(result["overallMetricRows"], 6)
@@ -3037,21 +3064,20 @@ console.log(result);
         script = """
 const vm = require("vm");
 const asset = __ASSET__;
-const listeners = { control: [], preview: [] };
-const probe = { opened: null, menuClosed: false };
+const listeners = { control: [], select: [] };
+const probe = { opened: null };
 const control = {
   addEventListener(type, handler) { if (type === "click") listeners.control.push(handler); }
 };
-const details = { removeAttribute(name) { if (name === "open") probe.menuClosed = true; } };
-const preview = {
-  dataset: { reportPreview: "20260710-130000-000000" },
-  addEventListener(type, handler) { if (type === "click") listeners.preview.push(handler); },
-  closest(selector) { return selector === "details" ? details : null; }
+const select = {
+  value: "20260710-130000-000000",
+  addEventListener(type, handler) { if (type === "change") listeners.select.push(handler); },
 };
 const target = {
   querySelectorAll(selector) {
     if (selector === "[data-workspace-report-control]") return [control];
-    if (selector === "[data-report-preview]") return [preview];
+    if (selector === "[data-report-preview]") return [];
+    if (selector === "[data-report-preview-select]") return [select];
     if (selector === "[data-report-attach]") return [];
     return [];
   }
@@ -3072,7 +3098,7 @@ const context = {
   },
   window: { addEventListener() {} },
   console, JSON, Number, String, Object, Math, Date, Set, Array, RegExp,
-  target, listeners, probe
+  target, listeners, probe, select
 };
 vm.createContext(context);
 vm.runInContext(asset, context);
@@ -3089,10 +3115,11 @@ const result = vm.runInContext(`(() => {
   const many = renderWorkspaceReportCell({ source_key: "cell-b" });
   const columnKeys = leaderboardColumns().map(column => column.key);
   bindWorkspaceReportLeaderboardControls(target);
-  const event = { preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
-  listeners.control.forEach(handler => handler(event));
-  listeners.preview.forEach(handler => handler(event));
-  return JSON.stringify({ zero, one, many, columnKeys, event, probe, selectedTrial: state.selectedTrial });
+  const clickEvent = { preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
+  const changeEvent = { stopPropagation() { this.stopped = true; } };
+  listeners.control.forEach(handler => handler(clickEvent));
+  listeners.select.forEach(handler => handler(changeEvent));
+  return JSON.stringify({ zero, one, many, columnKeys, clickEvent, changeEvent, probe, selectValue: select.value, selectedTrial: state.selectedTrial });
 })()`, context);
 console.log(result);
 """.replace("__ASSET__", json.dumps(asset))
@@ -3108,10 +3135,10 @@ console.log(result);
         self.assertLess(result["many"].index("newer.md"), result["many"].index("older.html"))
         alias_index = result["columnKeys"].index("source_alias")
         self.assertEqual(result["columnKeys"][alias_index + 1], "workspace_reports")
-        self.assertTrue(result["event"]["stopped"])
-        self.assertTrue(result["event"]["prevented"])
+        self.assertTrue(result["clickEvent"]["stopped"])
+        self.assertTrue(result["changeEvent"]["stopped"])
         self.assertEqual(result["probe"]["opened"], "20260710-130000-000000")
-        self.assertTrue(result["probe"]["menuClosed"])
+        self.assertEqual(result["selectValue"], "")
         self.assertEqual(result["selectedTrial"], "trial-before")
 
     def test_workspace_report_attach_cancel_preserves_selection_and_success_opens_reader(self) -> None:
@@ -3624,19 +3651,32 @@ const result = vm.runInContext(`(async () => {
   const metric = (key, type, mean) => ({ key, type, count: 2, mean, distribution: { min: mean, q1: mean, p50: mean, q3: mean, p95: mean, max: mean } });
   const metrics = () => [metric("duration_ms", "duration", 1200), metric("tokens", "number", 8), metric("turns", "number", 2), metric("model_duration_ms", "duration", 700), metric("total_tool_calls", "number", 3), metric("tool_error_rate", "percent", 0.25)];
   state.workspaceViews = [
-    { name: "Agent slice", filters: { state: "active", search: "", tags: ["daily"], agents: ["alpha"], models: [], results: ["passed"] }, group_by: "agent", notes: "Context note." },
-    { name: "Focused model", filters: { state: "archived", search: "error", tags: [], agents: [], models: ["m1"], results: [] }, group_by: "model", notes: "" },
+    { name: "Agent slice", filters: { state: "active", search: "", categories: ["frontend"], tags: ["daily"], agents: ["alpha"], models: [], results: ["passed"] }, group_by: "agent", notes: "Context note." },
+    { name: "Focused model", filters: { state: "archived", search: "error", categories: ["backend"], tags: [], agents: [], models: ["m1"], results: [] }, group_by: "category", notes: "" },
   ];
   state.workspaceViewSummaries = [
     { name: "Agent slice", matched_count: 2, groups: [{ key: "alpha", label: "alpha", count: 2, metrics: metrics() }] },
-    { name: "Focused model", matched_count: 2, groups: [{ key: "m1", label: "m1", count: 2, metrics: metrics() }] },
+    { name: "Focused model", matched_count: 2, groups: [{ key: "backend", label: "backend", count: 2, metrics: metrics() }] },
   ];
+  const viewColumns = workspaceViewColumns().map(column => ({
+    key: column.key,
+    valueType: column.valueType,
+    filterable: Boolean(column.filterable),
+    editable: Boolean(column.edit),
+  }));
+  const categoryConfiguration = workspaceViewConfigurationEditValue(state.workspaceViews[0], "categories", ["frontend", "Safety, Eval", "frontend"]);
+  const categoryGroupConfiguration = workspaceViewConfigurationEditValue(state.workspaceViews[0], "group_by", "category");
   const controls = renderWorkspaceViewControls();
   renderWorkspaceViewRail();
   const collapsedRail = rail.innerHTML;
   state.workspaceViewSelection = new Set(["Focused model"]);
   renderWorkspaceViewRail();
   const partialSelectionRail = rail.innerHTML;
+  setFilterValues("workspace-views", "categories", ["frontend"]);
+  renderWorkspaceViewRail();
+  const categoryRail = rail.innerHTML;
+  const categoryRows = workspaceViewRows().map(view => view.name);
+  clearFilter("workspace-views", "categories");
   setFilterValues("workspace-views", "tags", ["daily"]);
   renderWorkspaceViewRail();
   const dailyRail = rail.innerHTML;
@@ -3650,7 +3690,7 @@ const result = vm.runInContext(`(async () => {
   const zeroRail = rail.innerHTML;
   clearFilter("workspace-views", "tags");
   clearFilter("workspace-views", "models");
-  setFilterValues("workspace-views", "group_by", ["agent", "model"]);
+  setFilterValues("workspace-views", "group_by", ["agent", "category"]);
   const groupOrRows = workspaceViewRows().map(view => view.name);
   clearFilter("workspace-views", "group_by");
   state.workspaceViewSelection.clear();
@@ -3674,15 +3714,17 @@ const result = vm.runInContext(`(async () => {
   exportSelectedWorkspaceViews();
   state.catalogQuery = {
     state: "archived", page: 3, page_size: 25, search: "needle",
-    sort: "session", direction: "asc", tags: ["daily"], agents: ["alpha"],
+    sort: "session", direction: "asc", categories: ["frontend"], tags: ["daily"], agents: ["alpha"],
     models: ["m1"], results: ["failed"], views: ["Agent slice"],
   };
   state.rowSelection.add("chosen-source");
   state.selectedSourceKey = "visible-2";
   state.selectedStep = { trialKey: "trial-two", stepId: "7" };
+  setFilterValues("workspace-views", "categories", ["frontend"]);
   setFilterValues("workspace-views", "tags", ["daily"]);
   exportCurrentScope("workspace_html");
   state.rowSelection.clear();
+  clearFilter("workspace-views", "categories");
   clearFilter("workspace-views", "tags");
   state.rowSelection.add("old-row");
   state.sourceSelection.add("old-source");
@@ -3717,12 +3759,17 @@ const result = vm.runInContext(`(async () => {
     railHtml: rail.innerHTML,
     collapsedRail,
     partialSelectionRail,
+    categoryRail,
+    categoryRows,
     dailyRail,
     visibleDaily,
     afterVisibleSelect,
     afterVisibleClear,
     zeroRail,
     groupOrRows,
+    viewColumns,
+    categoryConfiguration,
+    categoryGroupConfiguration,
     firstTableOpenRail,
     bothTablesOpenRail,
     selectedRail,
@@ -3770,9 +3817,12 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertIn("Focused model", result["railHtml"])
         self.assertIn("Context note.", result["railHtml"])
         self.assertIn("Source: archived", result["railHtml"])
+        self.assertIn("Category: backend", result["railHtml"])
+        self.assertIn("Group by: Category", result["railHtml"])
         self.assertIn('data-view-chart="tokens"', result["railHtml"])
         self.assertIn("workspace-view-index-table", result["collapsedRail"])
         self.assertIn("Name", result["collapsedRail"])
+        self.assertIn("Category", result["collapsedRail"])
         self.assertIn("Tags", result["collapsedRail"])
         self.assertIn("Models", result["collapsedRail"])
         self.assertIn("Group by", result["collapsedRail"])
@@ -3782,8 +3832,27 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertIn('title="Context note."', result["collapsedRail"])
         self.assertIn('data-table-column-key="notes" data-value-type="markdown"', result["collapsedRail"])
         self.assertIn("data-workspace-views-close", result["collapsedRail"])
+        view_column_keys = [column["key"] for column in result["viewColumns"]]
+        category_index = view_column_keys.index("categories")
+        self.assertEqual(view_column_keys[category_index + 1], "tags")
+        self.assertEqual(
+            result["viewColumns"][category_index],
+            {
+                "key": "categories",
+                "valueType": "scalar-list",
+                "filterable": True,
+                "editable": True,
+            },
+        )
+        self.assertIn(
+            'categories:\n    - "frontend"\n    - "Safety, Eval"',
+            result["categoryConfiguration"],
+        )
+        self.assertIn('group_by: "category"', result["categoryGroupConfiguration"])
         self.assertEqual(result["collapsedRail"].count("data-view-select="), 2)
         self.assertIn('data-partial="true"', result["partialSelectionRail"])
+        self.assertEqual(result["categoryRows"], ["Agent slice"])
+        self.assertEqual(result["categoryRail"].count('data-workspace-view="'), 1)
         self.assertEqual(result["visibleDaily"], ["Agent slice"])
         self.assertEqual(result["dailyRail"].count('data-workspace-view="'), 1)
         self.assertEqual(result["afterVisibleSelect"], ["Focused model", "Agent slice"])
@@ -3799,6 +3868,13 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertEqual(result["collapsedRail"].count('aria-expanded="false"'), 2)
         self.assertEqual(result["firstTableOpenRail"].count('aria-expanded="true"'), 1)
         self.assertEqual(result["bothTablesOpenRail"].count('aria-expanded="true"'), 2)
+        self.assertIn("6 metrics · 1 categories", result["bothTablesOpenRail"])
+        self.assertIn('data-value-type="identity" title="Category"', result["bothTablesOpenRail"])
+        self.assertIn("Mean · Category", result["bothTablesOpenRail"])
+        self.assertIn(
+            "backend; Active Duration; Mean 1.2s; n=2",
+            result["bothTablesOpenRail"],
+        )
         self.assertNotIn("data-view-apply-selected disabled", result["selectedRail"])
         self.assertNotIn("data-view-export-selected disabled", result["selectedRail"])
         self.assertNotIn("data-view-delete-selected disabled", result["selectedRail"])
@@ -3838,6 +3914,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                             "search": "needle",
                             "sort": "session",
                             "direction": "asc",
+                            "categories": ["frontend"],
                             "tags": ["daily"],
                             "agents": ["alpha"],
                             "models": ["m1"],
@@ -3853,6 +3930,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                             "selected_step_id": "7",
                             "visible_view_names": ["Agent slice"],
                             "workspace_view_filters": {
+                                "categories": ["frontend"],
                                 "tags": ["daily"],
                                 "models": [],
                                 "group_by": [],
@@ -3875,6 +3953,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 "search": "",
                 "sort": "last_turn_end",
                 "direction": "desc",
+                "categories": [],
                 "tags": [],
                 "agents": [],
                 "models": [],
@@ -3896,6 +3975,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 "search": "",
                 "sort": "last_turn_end",
                 "direction": "desc",
+                "categories": [],
                 "tags": [],
                 "agents": [],
                 "models": [],
@@ -3925,6 +4005,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 "sort": "finished_at_ms",
                 "direction": "desc",
                 "filters": {
+                    "source_category": [],
                     "source_tags": [],
                     "agent": [],
                     "model": [],
@@ -3932,6 +4013,154 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 },
             },
         )
+
+    def test_saved_view_snapshot_consumes_category_filters_and_grouping(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("node is required to execute report.js interaction helpers")
+        asset = load_asset_text("report.js")
+        self.assertIn('\n"peval-py-entrypoint";', asset)
+        asset = asset.rsplit('\n"peval-py-entrypoint";', 1)[0]
+        snapshot = {
+            "views": [
+                {
+                    "name": "Frontend",
+                    "filters": {"categories": ["frontend"], "tags": ["daily"]},
+                    "group_by": "category",
+                    "notes": "",
+                },
+                {
+                    "name": "Backend",
+                    "filters": {"categories": ["backend"]},
+                    "group_by": "agent",
+                    "notes": "",
+                },
+            ],
+            "view_summaries": [
+                {
+                    "name": "Frontend",
+                    "matched_count": 1,
+                    "groups": [
+                        {
+                            "key": "frontend",
+                            "label": "frontend",
+                            "count": 1,
+                            "metrics": [],
+                        }
+                    ],
+                }
+            ],
+            "presentation": {
+                "summary_group_by": "category",
+                "summary_statistic": "mean",
+                "summary_table_open": False,
+                "selected_source_key": None,
+                "selected_step_id": None,
+                "workspace_view_filters": {
+                    "categories": ["frontend"],
+                    "tags": [],
+                    "models": [],
+                    "group_by": ["category"],
+                },
+                "open_view_tables": ["Frontend"],
+            },
+            "source_trial_keys": {},
+        }
+        script = """
+const vm = require("vm");
+const asset = __ASSET__;
+const snapshot = __SNAPSHOT__;
+const rail = {
+  hidden: true,
+  innerHTML: "",
+  classList: { toggle() {}, add() {}, remove() {} },
+  querySelector() { return null; },
+  querySelectorAll() { return []; },
+  addEventListener() {},
+};
+const nodes = {
+  "peval-py-data": { textContent: "{}" },
+  "peval-py-i18n": { textContent: "{}" },
+  "peval-py-token-estimates": { textContent: "{}" },
+  "peval-py-render-options": { textContent: JSON.stringify({ mode: "workspace_snapshot" }) },
+  "peval-py-workspace-snapshot": { textContent: JSON.stringify(snapshot) },
+  "workspace-views": rail,
+};
+const context = {
+  document: {
+    body: { classList: { toggle() {}, add() {}, remove() {} } },
+    addEventListener() {},
+    getElementById(id) { return nodes[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+  },
+  window: { addEventListener() {} },
+  console, JSON, Number, String, Object, Math, Date, Set, Array, RegExp,
+  rail,
+};
+vm.createContext(context);
+vm.runInContext(asset, context);
+const result = vm.runInContext(`(() => {
+  const views = workspaceViews();
+  const rows = workspaceViewRows();
+  const columns = workspaceViewColumns();
+  renderWorkspaceViewRail();
+  return JSON.stringify({
+    filters: state.tables["workspace-views"].filters,
+    groups: views.map(view => ({ name: view.name, groupBy: view.group_by, categories: view.filters.categories })),
+    rows: rows.map(view => view.name),
+    columnKeys: columns.map(column => column.key),
+    editable: columns.map(column => Boolean(column.edit)),
+    railHidden: rail.hidden,
+    railHtml: rail.innerHTML,
+  });
+})()`, context);
+console.log(result);
+""".replace("__ASSET__", json.dumps(asset)).replace("__SNAPSHOT__", json.dumps(snapshot))
+        node = subprocess.run(
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(node.returncode, 0, node.stderr)
+        result = json.loads(node.stdout)
+
+        self.assertEqual(
+            result["filters"],
+            {
+                "categories": ["frontend"],
+                "tags": [],
+                "models": [],
+                "group_by": ["category"],
+            },
+        )
+        self.assertEqual(
+            result["groups"],
+            [
+                {
+                    "name": "Backend",
+                    "groupBy": "agent",
+                    "categories": ["backend"],
+                },
+                {
+                    "name": "Frontend",
+                    "groupBy": "category",
+                    "categories": ["frontend"],
+                },
+            ],
+        )
+        self.assertEqual(result["rows"], ["Frontend"])
+        category_index = result["columnKeys"].index("categories")
+        self.assertEqual(result["columnKeys"][category_index + 1], "tags")
+        self.assertFalse(any(result["editable"]))
+        self.assertFalse(result["railHidden"])
+        self.assertIn("Category: frontend", result["railHtml"])
+        self.assertIn("Group by: Category", result["railHtml"])
+        self.assertIn('data-view-table-toggle="Frontend" aria-expanded="true"', result["railHtml"])
+        self.assertNotIn("data-view-select-visible", result["railHtml"])
+        self.assertNotIn("data-view-apply-selected", result["railHtml"])
 
     def test_saved_view_save_coalesces_stale_refresh_and_renders_singleton_rail(self) -> None:
         if not shutil.which("node"):
@@ -4348,24 +4577,25 @@ context.probe = probe;
 vm.createContext(context);
 vm.runInContext(asset, context);
 const result = vm.runInContext(`(async () => {
-  state.catalogQuery = { state: "active", search: "needle", tags: ["daily"], agents: ["alpha"], models: [], results: ["passed"] };
-  state.leaderboardSummaryGroupBy = "agent";
+  state.catalogQuery = { state: "active", search: "needle", categories: ["frontend"], tags: ["daily"], agents: ["alpha"], models: [], results: ["passed"] };
+  state.leaderboardSummaryGroupBy = "category";
   openWorkspaceViewSaveDialog();
   const savedConfiguration = configuration.innerHTML;
   const defaultName = nameInput.value;
   const allDefaultName = workspaceViewDefaultName({ tags: [] }, "overall");
+  const categoryDefaultName = workspaceViewDefaultName({ tags: [] }, "category");
   const longDefaultName = workspaceViewDefaultName({ tags: ["x".repeat(160)] }, "model");
   nameInput.value = "Daily";
   notesInput.value = "Original notes";
   serveApi = async (path, options) => {
     probe.calls.push({ path, body: options.body });
     if (probe.calls.length === 1) throw new Error("saved view already exists: Daily");
-    return { views: [{ name: "Daily", filters: options.body.filters, group_by: "agent", notes: "Original notes" }] };
+    return { views: [{ name: "Daily", filters: options.body.filters, group_by: options.body.group_by, notes: "Original notes" }] };
   };
   refreshWorkspaceViews = async (...args) => { probe.refreshArgs = args; };
   setServeStatus = (message, error) => { probe.status = { message, error: Boolean(error) }; };
   await saveWorkspaceView(dialog);
-  return JSON.stringify({ calls: probe.calls, confirm: probe.confirm, refreshArgs: probe.refreshArgs, status: probe.status, hidden: dialog.hidden, views: state.workspaceViews, savedConfiguration, defaultName, allDefaultName, longDefaultName });
+  return JSON.stringify({ calls: probe.calls, confirm: probe.confirm, refreshArgs: probe.refreshArgs, status: probe.status, hidden: dialog.hidden, views: state.workspaceViews, savedConfiguration, defaultName, allDefaultName, categoryDefaultName, longDefaultName });
 })()`, context);
 result.then(value => console.log(value)).catch(error => { console.error(error); process.exit(1); });
 """.replace("__ASSET__", json.dumps(asset))
@@ -4382,12 +4612,14 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
 
         self.assertEqual(result["confirm"], "Replace Daily?")
         self.assertIn("<dt>Search sessions</dt><dd>needle</dd>", result["savedConfiguration"])
+        self.assertIn("<dt>Category</dt><dd>frontend</dd>", result["savedConfiguration"])
         self.assertIn("<dt>Tags</dt><dd>daily</dd>", result["savedConfiguration"])
         self.assertIn("<dt>Agent</dt><dd>alpha</dd>", result["savedConfiguration"])
         self.assertIn("<dt>Result</dt><dd>passed</dd>", result["savedConfiguration"])
-        self.assertIn("<dt>Group by</dt><dd>Agent</dd>", result["savedConfiguration"])
-        self.assertEqual(result["defaultName"], "daily - agent")
+        self.assertIn("<dt>Group by</dt><dd>Category</dd>", result["savedConfiguration"])
+        self.assertEqual(result["defaultName"], "daily - category")
         self.assertEqual(result["allDefaultName"], "All - overall")
+        self.assertEqual(result["categoryDefaultName"], "All - category")
         self.assertEqual(len(result["longDefaultName"]), 120)
         self.assertTrue(result["longDefaultName"].endswith(" - model"))
         self.assertNotIn("<dt>Source</dt>", result["savedConfiguration"])
@@ -4396,10 +4628,18 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertFalse(result["calls"][0]["body"]["overwrite"])
         self.assertTrue(result["calls"][1]["body"]["overwrite"])
         self.assertEqual(result["calls"][1]["body"]["filters"]["search"], "needle")
+        self.assertEqual(result["calls"][1]["body"]["filters"]["categories"], ["frontend"])
         self.assertEqual(result["calls"][1]["body"]["filters"]["tags"], ["daily"])
+        self.assertEqual(result["calls"][1]["body"]["group_by"], "category")
         self.assertEqual(
             result["calls"][1]["body"]["filters"],
-            {"search": "needle", "tags": ["daily"], "agents": ["alpha"], "results": ["passed"]},
+            {
+                "search": "needle",
+                "categories": ["frontend"],
+                "tags": ["daily"],
+                "agents": ["alpha"],
+                "results": ["passed"],
+            },
         )
         self.assertEqual(result["refreshArgs"], [])
         self.assertEqual(result["status"], {"message": "Saved", "error": False})
@@ -4417,7 +4657,6 @@ const vm = require("vm");
 const asset = __ASSET__;
 const exportMenu = { id: "export", open: true };
 const filterMenu = { id: "filter", open: true };
-const reportMenu = { id: "report", open: true };
 const timelineSection = { id: "timeline", open: true };
 const handlers = [];
 const documentStub = {
@@ -4428,10 +4667,10 @@ const documentStub = {
   getElementById: () => null,
   querySelector: () => null,
   querySelectorAll(selector) {
-    if (selector !== ".export-menu[open],.filter-control[open],.report-cell-menu[open]") {
+    if (selector !== ".export-menu[open],.filter-control[open]") {
       throw new Error(`unexpected selector: ${selector}`);
     }
-    return [exportMenu, filterMenu, reportMenu].filter(details => details.open);
+    return [exportMenu, filterMenu].filter(details => details.open);
   },
 };
 const context = {
@@ -4449,7 +4688,6 @@ const context = {
   RegExp,
   exportMenu,
   filterMenu,
-  reportMenu,
   timelineSection,
   handlers,
 };
@@ -4460,14 +4698,12 @@ const result = vm.runInContext(`
   const clickHandler = handlers.find(item => item.type === "click" && item.capture).handler;
   filterMenu.open = true;
   exportMenu.open = true;
-  reportMenu.open = true;
   clickHandler({ target: { closest: selector => selector === SUBMENU_DETAILS_SELECTOR ? exportMenu : null } });
-  const insideExport = { exportOpen: exportMenu.open, filterOpen: filterMenu.open, reportOpen: reportMenu.open, timelineOpen: timelineSection.open };
+  const insideExport = { exportOpen: exportMenu.open, filterOpen: filterMenu.open, timelineOpen: timelineSection.open };
   filterMenu.open = true;
   exportMenu.open = true;
-  reportMenu.open = true;
   clickHandler({ target: { closest: () => null } });
-  const outside = { exportOpen: exportMenu.open, filterOpen: filterMenu.open, reportOpen: reportMenu.open, timelineOpen: timelineSection.open };
+  const outside = { exportOpen: exportMenu.open, filterOpen: filterMenu.open, timelineOpen: timelineSection.open };
   JSON.stringify({ insideExport, outside, clickHandlerCapture: Boolean(clickHandler) });
 `, context);
 console.log(result);
@@ -4485,10 +4721,10 @@ console.log(result);
 
         self.assertEqual(
             result["insideExport"],
-            {"exportOpen": True, "filterOpen": False, "reportOpen": False, "timelineOpen": True},
+            {"exportOpen": True, "filterOpen": False, "timelineOpen": True},
         )
         self.assertEqual(
             result["outside"],
-            {"exportOpen": False, "filterOpen": False, "reportOpen": False, "timelineOpen": True},
+            {"exportOpen": False, "filterOpen": False, "timelineOpen": True},
         )
         self.assertTrue(result["clickHandlerCapture"])
