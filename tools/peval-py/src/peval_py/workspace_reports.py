@@ -133,7 +133,10 @@ class WorkspaceReportLibrary:
 
     def replace_bindings(self, report_id: str, source_keys: list[str]) -> None:
         report = self._read_package_metadata(report_id)
-        relative_paths = self._relative_paths_for_source_keys(source_keys)
+        relative_paths = self._relative_paths_for_source_keys(
+            source_keys,
+            allow_empty=True,
+        )
         package_dir = self._package_dir(report.report_id)
         temp_path = package_dir / f".{REPORT_STATE_FILENAME}.tmp-{uuid4().hex}"
         try:
@@ -193,8 +196,8 @@ class WorkspaceReportLibrary:
         if not isinstance(payload, dict) or set(payload) != {"source_keys"}:
             raise ValueError(f"{state_path} must contain only source_keys")
         raw_paths = payload["source_keys"]
-        if not isinstance(raw_paths, list) or not raw_paths:
-            raise ValueError(f"{state_path} source_keys must be a non-empty array")
+        if not isinstance(raw_paths, list):
+            raise ValueError(f"{state_path} source_keys must be an array")
         source_paths: list[str] = []
         for raw_path in raw_paths:
             if not isinstance(raw_path, str):
@@ -204,7 +207,12 @@ class WorkspaceReportLibrary:
             raise ValueError(f"{state_path} source_keys must be de-duplicated")
         return source_paths
 
-    def _relative_paths_for_source_keys(self, source_keys: list[str]) -> list[str]:
+    def _relative_paths_for_source_keys(
+        self,
+        source_keys: list[str],
+        *,
+        allow_empty: bool = False,
+    ) -> list[str]:
         if not isinstance(source_keys, list):
             raise ValueError("source_keys must be an array")
         ordered_keys: list[str] = []
@@ -215,6 +223,8 @@ class WorkspaceReportLibrary:
                 seen.add(key)
                 ordered_keys.append(key)
         if not ordered_keys:
+            if allow_empty and not source_keys:
+                return []
             raise ValueError("source_keys must include at least one source")
         key_to_path = self._source_key_to_path()
         paths: list[str] = []

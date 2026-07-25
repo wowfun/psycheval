@@ -17,7 +17,7 @@ from peval_py.session_select import list_adapter_sessions
 from peval_py.state import CatalogQuery, ServeStateStore
 
 
-SUMMARY_GROUP_BY_VALUES = frozenset({"overall", "agent", "model"})
+SUMMARY_GROUP_BY_VALUES = frozenset({"overall", "agent", "model", "category"})
 SUMMARY_STATISTIC_VALUES = frozenset(
     {"mean", "min", "q1", "p50", "q3", "p95", "max"}
 )
@@ -64,8 +64,8 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
     if not isinstance(query_value, dict):
         raise HttpError(400, "query must be an object")
     query_fields = {
-        "state", "search", "sort", "direction", "tags", "agents", "models",
-        "results", "views",
+        "state", "search", "sort", "direction", "categories", "tags",
+        "agents", "models", "results", "views",
     }
     if set(query_value) != query_fields:
         raise HttpError(400, "workspace snapshot query fields are invalid")
@@ -77,6 +77,9 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
             search=_string_value(query_value.get("search"), "query search"),
             sort=_required_text(query_value.get("sort"), "query sort"),
             direction=_required_text(query_value.get("direction"), "query direction"),
+            categories=tuple(
+                _string_array(query_value.get("categories"), "query categories")
+            ),
             tags=tuple(_string_array(query_value.get("tags"), "query tags")),
             agents=tuple(_string_array(query_value.get("agents"), "query agents")),
             models=tuple(_string_array(query_value.get("models"), "query models")),
@@ -102,7 +105,10 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
     group_by = presentation_value.get("summary_group_by")
     statistic = presentation_value.get("summary_statistic")
     if group_by not in SUMMARY_GROUP_BY_VALUES:
-        raise HttpError(400, "summary_group_by must be overall, agent, or model")
+        raise HttpError(
+            400,
+            "summary_group_by must be overall, agent, model, or category",
+        )
     if statistic not in SUMMARY_STATISTIC_VALUES:
         raise HttpError(
             400,
@@ -118,11 +124,19 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
     if raw_step_id is not None and not isinstance(raw_step_id, (str, int)):
         raise HttpError(400, "selected_step_id must be a string, integer, or null")
     filters = presentation_value.get("workspace_view_filters")
-    if not isinstance(filters, dict) or set(filters) != {"tags", "models", "group_by"}:
-        raise HttpError(400, "workspace_view_filters fields must be tags, models, and group_by")
+    if not isinstance(filters, dict) or set(filters) != {
+        "categories",
+        "tags",
+        "models",
+        "group_by",
+    }:
+        raise HttpError(
+            400,
+            "workspace_view_filters fields must be categories, tags, models, and group_by",
+        )
     filter_values = {
         key: tuple(_string_array(filters.get(key), f"workspace_view_filters {key}"))
-        for key in ("tags", "models", "group_by")
+        for key in ("categories", "tags", "models", "group_by")
     }
     invalid_groups = [value for value in filter_values["group_by"] if value not in SUMMARY_GROUP_BY_VALUES]
     if invalid_groups:
@@ -188,7 +202,7 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
         group_by = value.get("group_by")
         statistic = value.get("statistic")
         if group_by not in SUMMARY_GROUP_BY_VALUES:
-            raise HttpError(400, "group_by must be overall, agent, or model")
+            raise HttpError(400, "group_by must be overall, agent, model, or category")
         if statistic not in SUMMARY_STATISTIC_VALUES:
             raise HttpError(
                 400,
@@ -463,6 +477,13 @@ def alias_payload(payload: dict[str, Any]) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def category_payload(payload: dict[str, Any]) -> str | None:
+    value = payload.get("category")
+    if not isinstance(value, str):
+        raise HttpError(400, "category must be a string")
+    return value.strip() or None
 
 
 def tags_payload(payload: dict[str, Any]) -> list[str]:

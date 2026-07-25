@@ -123,9 +123,14 @@ def _write_summary_sheet(
             metadata_row += 1
 
     table_header_row = metadata_row + 1
+    group_heading = (
+        messages.get("category", "Category")
+        if sheet.group_by == "category"
+        else "Group"
+    )
     headers = (
         "Metric",
-        "Group",
+        group_heading,
         "Count",
         "Mean",
         "Min",
@@ -268,7 +273,10 @@ def _summary_rows(
                     _metric_label(metric_key, fallback, message_key, messages),
                     (
                         messages.get("summary_overall", "Overall")
-                        if group.get("key") == "overall"
+                        if (
+                            sheet.group_by == "overall"
+                            and group.get("key") == "overall"
+                        )
                         else str(group.get("label") or group.get("key") or "-")
                     ),
                     int(metric.get("count") or 0),

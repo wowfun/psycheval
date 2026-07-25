@@ -21,6 +21,7 @@ from peval_py.serve.payloads import (
     adapter_default_db_payload,
     adapter_override_payload,
     alias_payload,
+    category_payload,
     markdown_payload,
     required_bool,
     required_string,
@@ -472,9 +473,13 @@ def make_handler(
                     report_id, action = report_action
                     try:
                         if action == "bindings":
+                            if not isinstance(payload.get("source_keys"), list):
+                                raise HttpError(400, "source_keys must be an array")
+                            source_keys = source_keys_payload(payload)
+                            assert source_keys is not None
                             runtime.workspace_reports.replace_bindings(
                                 report_id,
-                                source_keys_payload(payload) or [],
+                                source_keys,
                             )
                         elif action == "delete":
                             runtime.workspace_reports.delete(report_id)
@@ -500,6 +505,11 @@ def make_handler(
                         mutate = lambda: store.delete_source_row(row)
                     elif action == "alias":
                         mutate = lambda: store.set_source_alias_row(row, alias_payload(payload))
+                    elif action == "category":
+                        mutate = lambda: store.set_source_category_row(
+                            row,
+                            category_payload(payload),
+                        )
                     elif action == "tags":
                         mutate = lambda: store.set_source_tags_row(row, tags_payload(payload))
                     elif action == "notes":
@@ -715,6 +725,15 @@ def catalog_query(raw_query: str) -> CatalogQuery:
                 result.extend(part.strip() for part in str(raw).split(",") if part.strip())
         return tuple(dict.fromkeys(result))
 
+    def repeated(*keys: str) -> tuple[str, ...]:
+        result = [
+            str(raw).strip()
+            for key in keys
+            for raw in values.get(key, [])
+            if str(raw).strip()
+        ]
+        return tuple(dict.fromkeys(result))
+
     try:
         return CatalogQuery(
             state=first("state", "active"),
@@ -723,6 +742,7 @@ def catalog_query(raw_query: str) -> CatalogQuery:
             search=first("search", ""),
             sort=first("sort", "last_turn_end"),
             direction=first("direction", "desc"),
+            categories=repeated("category", "categories"),
             tags=many("tag", "tags"),
             agents=many("agent", "agents"),
             models=many("model", "models"),
@@ -765,6 +785,7 @@ def catalog_query_payload(value: Any) -> CatalogQuery:
             search=str(value.get("search") or ""),
             sort=str(value.get("sort") or "last_turn_end"),
             direction=str(value.get("direction") or "desc"),
+            categories=tuple(value.get("categories") or ()),
             tags=tuple(value.get("tags") or ()),
             agents=tuple(value.get("agents") or ()),
             models=tuple(value.get("models") or ()),

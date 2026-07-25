@@ -15,7 +15,7 @@ VIEW_SCHEMA_VERSION = 1
 VIEW_MAX_NOTE_BYTES = 1024 * 1024
 VIEW_SUFFIX = ".md"
 VIEW_NAME_MAX_CHARS = 120
-VIEW_GROUP_BY_VALUES = frozenset({"overall", "agent", "model"})
+VIEW_GROUP_BY_VALUES = frozenset({"overall", "agent", "model", "category"})
 _FRONTMATTER_RE = re.compile(
     r"\A---\r?\n(?P<header>[\s\S]*?)\r?\n---(?:\r?\n|\Z)(?P<notes>[\s\S]*)\Z"
 )
@@ -235,7 +235,7 @@ def view_from_values(
         raise ValueError(f"view notes exceed {VIEW_MAX_NOTE_BYTES} byte limit")
     group = str(group_by or "").strip().lower()
     if group not in VIEW_GROUP_BY_VALUES:
-        raise ValueError("group_by must be overall, agent, or model")
+        raise ValueError("group_by must be overall, agent, model, or category")
     return WorkspaceView(
         name=validate_view_name(name),
         filters=view_filters_from_dict(filters),
@@ -252,6 +252,7 @@ def view_filters_dict(query: CatalogQuery) -> dict[str, Any]:
     if normalized.search:
         filters["search"] = normalized.search
     for key, values in (
+        ("categories", normalized.categories),
         ("tags", normalized.tags),
         ("agents", normalized.agents),
         ("models", normalized.models),
@@ -265,7 +266,15 @@ def view_filters_dict(query: CatalogQuery) -> dict[str, Any]:
 def view_filters_from_dict(value: Any) -> CatalogQuery:
     if value is None:
         value = {}
-    allowed_fields = {"state", "search", "tags", "agents", "models", "results"}
+    allowed_fields = {
+        "state",
+        "search",
+        "categories",
+        "tags",
+        "agents",
+        "models",
+        "results",
+    }
     if not isinstance(value, dict) or not set(value).issubset(allowed_fields):
         raise ValueError("view filters contain unsupported fields")
 
@@ -286,6 +295,7 @@ def view_filters_from_dict(value: Any) -> CatalogQuery:
         search=search,
         sort="last_turn_end",
         direction="desc",
+        categories=values("categories"),
         tags=values("tags"),
         agents=values("agents"),
         models=values("models"),
@@ -311,7 +321,7 @@ def editable_view_configuration(value: Any) -> tuple[dict[str, Any], str]:
     view_filters_from_dict(filters)
     group_by = str(payload["group_by"] or "").strip().lower()
     if group_by not in VIEW_GROUP_BY_VALUES:
-        raise ValueError("group_by must be overall, agent, or model")
+        raise ValueError("group_by must be overall, agent, model, or category")
     return filters or {}, group_by
 
 

@@ -7,7 +7,7 @@ from typing import Any
 
 import peval_py.config as path_config
 from peval_py._state.annotations import (
-    meta_with_source_alias,
+    meta_with_source_metadata,
     source_report_with_current_annotations,
     uniquify_trial_keys,
 )
@@ -303,7 +303,12 @@ def load_workspace_snapshot_sessions_from_rows(
         trajectories = [item["trajectory"] for item in artifacts]
         metas = uniquify_trial_keys(
             [
-                meta_with_source_alias(item["meta"], row.get("source_alias"))
+                meta_with_source_metadata(
+                    item["meta"],
+                    row.get("source_alias"),
+                    row.get("source_category"),
+                    row.get("source_tags"),
+                )
                 for row, item in zip(selected, artifacts, strict=True)
             ]
         )

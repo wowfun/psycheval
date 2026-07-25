@@ -25,7 +25,7 @@ from peval_py.state.constants import SOURCE_STATUS_MISSING, SOURCE_STATUS_OK
 from peval_py.state.store import ServeStateStore
 
 
-CATALOG_SCHEMA_VERSION = 5
+CATALOG_SCHEMA_VERSION = 6
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 CATALOG_RELATIVE_PATH = Path(".cache/peval-py/serve-catalog.sqlite3")
@@ -51,6 +51,7 @@ class CatalogQuery:
     search: str = ""
     sort: str = "last_turn_end"
     direction: str = "desc"
+    categories: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
     agents: tuple[str, ...] = ()
     models: tuple[str, ...] = ()
@@ -73,6 +74,7 @@ class CatalogQuery:
             search=str(self.search or "").strip(),
             sort=str(self.sort or "last_turn_end").strip().lower(),
             direction=direction,
+            categories=_normalized_values(self.categories),
             tags=_normalized_values(self.tags),
             agents=_normalized_values(self.agents),
             models=_normalized_values(self.models),
@@ -623,11 +625,11 @@ class WorkspaceCatalog:
                     """
                     INSERT INTO cells (
                         source_key, artifact_dir, fingerprint, artifact_revision,
-                        readable, active, last_status, search_doc, tags_json,
+                        readable, active, last_status, search_doc, category, tags_json,
                         agent, model, result, session_id, last_turn_end,
                         duration_ms, turns, tool_calls, tool_errors, tokens, cost_usd,
                         created_at_ms, updated_at_ms, row_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         source_key,
@@ -638,6 +640,7 @@ class WorkspaceCatalog:
                         int(bool(row.get("active", True))),
                         str(row.get("last_status") or ""),
                         search_doc,
+                        str(row.get("source_category") or ""),
                         json.dumps(row.get("source_tags") or [], ensure_ascii=False),
                         str(row.get("agent_name") or row.get("adapter") or ""),
                         str(row.get("model") or ""),
@@ -698,6 +701,7 @@ class WorkspaceCatalog:
             state = self.store.read_source_state(cell_dir)
             source = self.store.source_row_for_artifact_cell(cell_dir, trajectory, meta)
             source["source_alias"] = optional_str(state.get("source_alias"))
+            source["source_category"] = self.store.source_category_from_state(state)
             source["source_tags"] = self.store.source_tags_from_state(state)
             source_key = source_key_for_trial(
                 self.config.analysis_eval_slug, source, trajectory, meta
@@ -796,6 +800,7 @@ class WorkspaceCatalog:
             )
             parameters.extend(query.tags)
         for column, values in (
+            ("category", query.categories),
             ("agent", query.agents),
             ("model", query.models),
             ("result", query.results),
@@ -870,7 +875,12 @@ class WorkspaceCatalog:
                 parameters,
             )
         ]
-        for name, column in (("agents", "agent"), ("models", "model"), ("results", "result")):
+        for name, column in (
+            ("categories", "category"),
+            ("agents", "agent"),
+            ("models", "model"),
+            ("results", "result"),
+        ):
             facets[name] = [
                 {"value": str(row[0]), "count": int(row[1])}
                 for row in connection.execute(
@@ -929,6 +939,7 @@ class WorkspaceCatalog:
                 active INTEGER NOT NULL,
                 last_status TEXT NOT NULL,
                 search_doc TEXT NOT NULL,
+                category TEXT NOT NULL,
                 tags_json TEXT NOT NULL,
                 agent TEXT NOT NULL,
                 model TEXT NOT NULL,
@@ -947,6 +958,7 @@ class WorkspaceCatalog:
             );
             CREATE INDEX IF NOT EXISTS cells_state_end_key
                 ON cells(active, readable, last_turn_end DESC, source_key);
+            CREATE INDEX IF NOT EXISTS cells_category ON cells(category);
             CREATE INDEX IF NOT EXISTS cells_agent ON cells(agent);
             CREATE INDEX IF NOT EXISTS cells_model ON cells(model);
             CREATE INDEX IF NOT EXISTS cells_result ON cells(result);
@@ -1132,24 +1144,33 @@ def _saved_view_summary(
     group_by: str,
     rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    grouped: dict[str, list[dict[str, Any]]] = {}
+    grouped: dict[str | None, list[dict[str, Any]]] = {}
     if group_by == "overall":
         grouped["overall"] = rows
     else:
         for row in rows:
             if group_by == "model":
-                label = str(row.get("model") or "-")
+                key: str | None = str(row.get("model") or "-")
+            elif group_by == "category":
+                category = str(row.get("source_category") or "").strip()
+                key = category or None
             else:
-                label = str(row.get("agent_name") or row.get("adapter") or "-")
-            grouped.setdefault(label, []).append(row)
+                key = str(row.get("agent_name") or row.get("adapter") or "-")
+            grouped.setdefault(key, []).append(row)
     groups = [
         {
             "key": key,
-            "label": key,
+            "label": "-" if key is None else key,
             "count": len(group_rows),
             "metrics": _saved_view_metric_rows(group_rows),
         }
-        for key, group_rows in sorted(grouped.items(), key=lambda item: item[0].casefold())
+        for key, group_rows in sorted(
+            grouped.items(),
+            key=lambda item: (
+                ("-" if item[0] is None else item[0]).casefold(),
+                item[0] is not None,
+            ),
+        )
     ]
     return {
         "name": name,
@@ -1325,6 +1346,7 @@ def _search_document(row: dict[str, Any], trajectory: dict[str, Any]) -> str:
         row.get("session_id"),
         row.get("trial_session_id"),
         row.get("source_alias"),
+        row.get("source_category"),
         row.get("source_tags"),
         row.get("agent_name"),
         row.get("adapter"),
@@ -1390,7 +1412,7 @@ def _sort_expression(sort: str) -> str:
 
 
 def _empty_facets() -> dict[str, list[dict[str, Any]]]:
-    return {"tags": [], "agents": [], "models": [], "results": []}
+    return {"categories": [], "tags": [], "agents": [], "models": [], "results": []}
 
 
 def _chunks(values: list[str], size: int) -> Iterator[list[str]]:

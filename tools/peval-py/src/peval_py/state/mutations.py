@@ -29,6 +29,9 @@ class StateMutationMixin:
         source_alias = source.get("source_alias")
         if source_alias is None:
             source_alias = existing.get("source_alias")
+        source_category = source.get("source_category")
+        if source_category is None:
+            source_category = existing.get("source_category")
         source_tags = source.get("source_tags")
         if source_tags is None:
             source_tags = existing.get("source_tags")
@@ -41,6 +44,9 @@ class StateMutationMixin:
             "db_path": source.get("db_path"),
             "session_id": source.get("session_id"),
             "source_alias": source_alias,
+            "source_category": self.source_category_from_state(
+                {"source_category": source_category}
+            ),
             "source_tags": self.source_tags_from_state({"source_tags": source_tags}),
             "agent_name": source.get("agent_name"),
             "agent_version": source.get("agent_version"),
@@ -85,6 +91,22 @@ class StateMutationMixin:
 
     def set_source_tags(self, source_key: str, tags: list[str]) -> None:
         self.set_source_tags_row(self.source_by_key(source_key), tags)
+
+    def set_source_category(self, source_key: str, category: str | None) -> None:
+        self.set_source_category_row(self.source_by_key(source_key), category)
+
+    def set_source_category_row(
+        self,
+        row: dict[str, Any],
+        category: str | None,
+    ) -> None:
+        cell_dir = self.resolve_artifact_dir(str(row["artifact_dir"]))
+        state = {**row, **self.read_source_state(cell_dir)}
+        state["source_category"] = self.source_category_from_state(
+            {"source_category": category}
+        )
+        state["updated_at_ms"] = now_ms()
+        self.write_source_state(cell_dir, state)
 
     def set_source_tags_row(self, row: dict[str, Any], tags: list[str]) -> None:
         cell_dir = self.resolve_artifact_dir(str(row["artifact_dir"]))

@@ -159,9 +159,18 @@ def meta_with_source_alias(meta: dict[str, Any], alias: Any) -> dict[str, Any]:
 def meta_with_source_metadata(
     meta: dict[str, Any],
     alias: Any,
+    category: Any,
     tags: Any,
 ) -> dict[str, Any]:
     copy = meta_with_source_alias(meta, alias)
+    category_value = category.strip() if isinstance(category, str) else ""
+    category_value = category_value or None
+    if category_value:
+        copy = dict(copy)
+        copy["source_category"] = category_value
+    elif "source_category" in copy:
+        copy = dict(copy)
+        copy.pop("source_category", None)
     tag_values: list[str] = []
     if isinstance(tags, list):
         seen: set[str] = set()

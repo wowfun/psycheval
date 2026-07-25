@@ -166,6 +166,7 @@ class StateArtifactMixin:
             "db_path": None,
             "session_id": optional_str(trajectory.get("session_id")),
             "source_alias": None,
+            "source_category": None,
             "source_tags": [],
             "agent_name": optional_str(agent.get("name")),
             "agent_version": None,
@@ -185,6 +186,7 @@ class StateArtifactMixin:
             meta = read_json_object(artifacts.meta_path)
             source = self.source_row_for_artifact_cell(cell_dir, trajectory, meta)
             source["source_alias"] = optional_str(state.get("source_alias"))
+            source["source_category"] = self.source_category_from_state(state)
             source["source_tags"] = self.source_tags_from_state(state)
             eval_slug = self.eval_slug_for_cell_dir(cell_dir)
             source_key = source_key_for_trial(eval_slug, source, trajectory, meta)
@@ -266,11 +268,19 @@ class StateArtifactMixin:
             "db_path": None,
             "session_id": session_id,
             "source_alias": optional_str(state.get("source_alias")),
+            "source_category": self.source_category_from_state(state),
             "source_tags": self.source_tags_from_state(state),
             "agent_name": agent_name,
             "agent_version": None,
             "model": None,
         }
+
+    def source_category_from_state(self, state: dict[str, Any]) -> str | None:
+        value = state.get("source_category")
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        return text or None
 
     def source_tags_from_state(self, state: dict[str, Any]) -> list[str]:
         raw_tags = state.get("source_tags")
@@ -342,6 +352,9 @@ class StateArtifactMixin:
         source_alias = optional_str(state.get("source_alias"))
         if source_alias:
             payload["source_alias"] = source_alias
+        source_category = self.source_category_from_state(state)
+        if source_category:
+            payload["source_category"] = source_category
         source_tags = self.source_tags_from_state(state)
         if source_tags:
             payload["source_tags"] = source_tags

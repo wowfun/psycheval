@@ -80,6 +80,7 @@ class StateQueryMixin:
                 meta_with_source_metadata(
                     item["meta"],
                     row.get("source_alias"),
+                    row.get("source_category"),
                     row.get("source_tags"),
                 )
                 for row, item in zip(readable_rows, stored, strict=True)
