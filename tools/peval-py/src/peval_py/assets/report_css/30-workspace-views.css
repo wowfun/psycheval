@@ -363,6 +363,8 @@
   }
   .serve-mode.workspace-views-open .workspace,
   .serve-mode.step-drawer-open .workspace {
+    display:flex;
+    flex-direction:column;
     height:100vh;
     height:100dvh;
     padding:18px;
@@ -370,7 +372,8 @@
   }
   .serve-mode.workspace-views-open .workspace-content,
   .serve-mode.step-drawer-open .workspace-content {
-    height:100%;
+    height:auto;
+    flex:1 1 auto;
     min-height:0;
     align-items:stretch;
   }
@@ -392,6 +395,17 @@
   .serve-mode.step-drawer-open .workspace-leaderboard-region {
     min-height:0;
     margin-bottom:14px;
+  }
+  .serve-mode.step-drawer-open #trace .step>summary {
+    grid-template-columns:minmax(0,1fr);
+  }
+  .serve-mode.step-drawer-open #trace .rail {
+    justify-items:stretch;
+  }
+  .serve-mode.step-drawer-open #trace .rail-summary,
+  .serve-mode.step-drawer-open #trace .rail-tool-row,
+  .serve-mode.step-drawer-open #trace .rail-time {
+    justify-content:flex-start;
   }
   .serve-mode.workspace-views-open .leaderboard .table-wrap,
   .serve-mode.step-drawer-open .leaderboard .table-wrap {

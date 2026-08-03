@@ -3,6 +3,8 @@
 ## 2026-08-03
 
 - Moved the Source Manager SQLite DB import area to the top of the left column.
+- Fixed the desktop Step drawer layout so complete inline Steps remain reachable
+  and can be expanded without closing the drawer or resetting analysis scroll.
 
 ## 2026-07-25
 

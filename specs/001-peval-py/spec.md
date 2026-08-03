@@ -55,6 +55,10 @@ same command tree.
   saved views render in an editable, filterable right-side analysis rail whose
   index and analysis cards share one visible-row projection, may be selected
   together as an OR query, share that rail with the covering Step drawer, and
+  leave the selected Trial's complete inline Steps list visible and reachable
+  within the remaining viewport, and independently operable while the drawer is
+  open, without dismissing the drawer or resetting the analysis scroll
+  position, and
   may be exported together as a native-chart Excel workbook; the live rail can
   be closed and reopened without losing its in-page scroll state; on desktop the
   saved-view index remains fixed above its scrolling card list, while the

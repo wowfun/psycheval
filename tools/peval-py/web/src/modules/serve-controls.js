@@ -32,7 +32,7 @@ function bindGlobalControls() {
   document.addEventListener("click", event => {
     if (!state.selectedStep) return;
     const target = event.target;
-    if (target?.closest?.("#step-drawer") || target?.closest?.("#workspace-report-reader") || target?.closest?.("[data-report-manager]") || target?.closest?.("[data-workspace-report-control]") || target?.closest?.("[data-source-manager]") || target?.closest?.("[data-step-id]") || target?.closest?.("[data-timeline-step-id]") || target?.closest?.("[data-timeline-chart]")) return;
+    if (target?.closest?.("#step-drawer") || target?.closest?.("#workspace-report-reader") || target?.closest?.("[data-report-manager]") || target?.closest?.("[data-workspace-report-control]") || target?.closest?.("[data-source-manager]") || target?.closest?.("[data-step]") || target?.closest?.("[data-step-action]") || target?.closest?.("[data-step-id]") || target?.closest?.("[data-timeline-step-id]") || target?.closest?.("[data-timeline-chart]")) return;
     state.selectedStep = null;
     renderComparisonPanels();
   });

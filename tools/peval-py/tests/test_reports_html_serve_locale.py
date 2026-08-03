@@ -163,6 +163,77 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
             },
         )
 
+    def test_desktop_step_drawer_keeps_inline_steps_within_the_main_column(self) -> None:
+        css = load_asset_text("report.css")
+        desktop_css = css.split("@media (min-width:1181px)", 1)[1].split(
+            "@media (max-width:1180px)", 1
+        )[0]
+        summary_rule = re.search(
+            r"\.serve-mode\.step-drawer-open #trace \.step>summary\s*\{([^}]*)\}",
+            desktop_css,
+        )
+        rail_rule = re.search(
+            r"\.serve-mode\.step-drawer-open #trace \.rail\s*\{([^}]*)\}",
+            desktop_css,
+        )
+
+        self.assertIsNotNone(summary_rule)
+        self.assertIsNotNone(rail_rule)
+        summary_declarations = {
+            name.strip(): value.strip()
+            for declaration in summary_rule.group(1).split(";")
+            if ":" in declaration
+            for name, value in [declaration.split(":", 1)]
+        }
+        rail_declarations = {
+            name.strip(): value.strip()
+            for declaration in rail_rule.group(1).split(";")
+            if ":" in declaration
+            for name, value in [declaration.split(":", 1)]
+        }
+        self.assertEqual(
+            summary_declarations.get("grid-template-columns"),
+            "minmax(0,1fr)",
+        )
+        self.assertEqual(rail_declarations.get("justify-items"), "stretch")
+
+    def test_desktop_side_rail_assigns_only_remaining_height_to_workspace_content(
+        self,
+    ) -> None:
+        css = load_asset_text("report.css")
+        desktop_css = css.split("@media (min-width:1181px)", 1)[1].split(
+            "@media (max-width:1180px)", 1
+        )[0]
+        workspace_rule = re.search(
+            r"\.serve-mode\.workspace-views-open \.workspace,\s*"
+            r"\.serve-mode\.step-drawer-open \.workspace\s*\{([^}]*)\}",
+            desktop_css,
+        )
+        content_rule = re.search(
+            r"\.serve-mode\.workspace-views-open \.workspace-content,\s*"
+            r"\.serve-mode\.step-drawer-open \.workspace-content\s*\{([^}]*)\}",
+            desktop_css,
+        )
+
+        self.assertIsNotNone(workspace_rule)
+        self.assertIsNotNone(content_rule)
+        workspace_declarations = {
+            name.strip(): value.strip()
+            for declaration in workspace_rule.group(1).split(";")
+            if ":" in declaration
+            for name, value in [declaration.split(":", 1)]
+        }
+        content_declarations = {
+            name.strip(): value.strip()
+            for declaration in content_rule.group(1).split(";")
+            if ":" in declaration
+            for name, value in [declaration.split(":", 1)]
+        }
+        self.assertEqual(workspace_declarations.get("display"), "flex")
+        self.assertEqual(workspace_declarations.get("flex-direction"), "column")
+        self.assertEqual(content_declarations.get("height"), "auto")
+        self.assertEqual(content_declarations.get("flex"), "1 1 auto")
+
     def test_workspace_report_chrome_and_catalog_are_serve_only(self) -> None:
         report = {
             "schema_version": 19,
