@@ -43,8 +43,8 @@ def render_serve_source_manager(
             "ADD_SOURCE": escape(messages["serve_add_source"]),
             "SOURCE_FORMS": "".join(
                 [
-                    render_source_add_form("path", messages, adapter_defaults),
                     render_source_add_form("db", messages, adapter_defaults),
+                    render_source_add_form("path", messages, adapter_defaults),
                     render_source_add_form("input_table", messages, adapter_defaults),
                     render_upload_form(messages, adapter_defaults),
                 ]

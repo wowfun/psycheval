@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-08-03
+
+- Moved the Source Manager SQLite DB import area to the top of the left column.
+
 ## 2026-07-25
 
 - Added editable single-value session Categories across serve surfaces,

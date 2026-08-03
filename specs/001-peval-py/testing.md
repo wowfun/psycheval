@@ -374,8 +374,9 @@ Coverage must verify:
   the final association, confirmed permanent deletion, and explicit
   report-manager grid placement that keeps the body in the flexible final row
   when status is hidden.
-- serve UI source manager renders Session/ATIF/runs path, DB, and input-table
-  forms, JSONL/ATIF JSON/report JSON upload affordance, a native file picker
+- serve UI source manager renders SQLite DB first in its left import column,
+  followed by Session/ATIF/runs path, input-table, and JSONL/ATIF JSON/report
+  JSON upload forms, plus a native file picker
   trigger for the Path textarea, concise `auto` adapter inference helper copy
   beside each source path input, SQLite DB in-place Save/Clear default controls
   arranged vertically to the DB path field's right, disabled default management

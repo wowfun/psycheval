@@ -26,9 +26,10 @@ same command tree.
   cross-page selection, queued
   batch source actions whose target state is derived from the complete retained
   selection rather than only the current page, and on-demand single-Trial
-  details; the Source Manager form column and source-list column scroll
-  independently, and the source list retains horizontal scrolling for access to
-  every table column; selecting a later
+  details; the Source Manager form column starts with the SQLite DB import area
+  before the Path, input-table, and upload areas; the form column and source-list
+  column scroll independently, and the source list retains horizontal scrolling
+  for access to every table column; selecting a later
   Leaderboard or Trajectory Overview row preserves both panels' internal scroll
   positions across the complete detail-load rerender; Source Manager and
   workspace report bindings show each session's category and tags, while

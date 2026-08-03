@@ -114,6 +114,29 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
             any("min-height:auto" in compact_css_text(rule) for rule in list_panel_rules)
         )
 
+    def test_source_manager_puts_sqlite_db_import_first(self) -> None:
+        html = render_serve_html(
+            {
+                "schema_version": 19,
+                "trajectory": [],
+                "trajectory_meta": [],
+            }
+        )
+        forms_panel = re.search(
+            r'<section class="source-manager-forms"[^>]*>(.*?)</section>',
+            html,
+            re.DOTALL,
+        )
+
+        self.assertIsNotNone(forms_panel)
+        form_tags = re.findall(r"<form\b[^>]*>", forms_panel.group(1))
+        self.assertIn('data-source-kind="db"', form_tags[0])
+        self.assertEqual(
+            re.findall(r'data-source-kind="([^"]+)"', forms_panel.group(1)),
+            ["db", "path", "input_table"],
+        )
+        self.assertIn("data-source-upload-form", form_tags[-1])
+
     def test_desktop_saved_views_grid_bounds_wide_index_content(self) -> None:
         css = load_asset_text("report.css")
         desktop_css = css.split("@media (min-width:1181px)", 1)[1].split(

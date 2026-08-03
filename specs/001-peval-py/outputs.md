@@ -494,8 +494,10 @@ retained.
 The manager body fills all modal height remaining below the header and optional
 status row. When the status row is hidden, its grid track collapses and must not
 leave unused space below the inventory and binding panels.
-The modal supports Session/ATIF path, DB, and input-table source forms, upload
-of JSONL, ATIF JSON, or peval-py report JSON snapshots, source checkbox
+The modal's left column presents the SQLite DB form first, followed by the
+Session/ATIF path, input-table, and upload forms. The modal supports these
+source forms and uploads of JSONL, ATIF JSON, or peval-py report JSON snapshots,
+source checkbox
 selection, Reload-adjacent batch Archive/Activate/Delete actions, and
 per-source status display. Checkbox selection retains both the source key and
 its active/archived state across pagination. The dynamic Archive/Activate action
