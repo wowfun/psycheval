@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-08-07
+
+- Added Harbor 0.18.0-compatible Web Agent evaluation support for trusted host
+  execution, external ATIF harnesses, and binary outcome-and-evidence grading.
+- Added deterministic search, fetch, and browser-control Tasks, opt-in live
+  Psychevo web Tasks, typed transcript conversion, diagnostics, tests, and
+  usage documentation.
+
 ## 2026-08-03
 
 - Moved the Source Manager SQLite DB import area to the top of the left column.

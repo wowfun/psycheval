@@ -1,0 +1,11 @@
+{
+  "required_calls": [
+    {
+      "tool": "web_fetch",
+      "argument_url": "https://www.iana.org/help/example-domains",
+      "observation_terms": ["2017-05-13", "example domains"]
+    }
+  ],
+  "forbidden_tools": ["web_search", "exec_command"],
+  "final_terms": ["2017-05-13", "www.iana.org/help/example-domains"]
+}

@@ -1,0 +1,10 @@
+{
+  "required_calls": [
+    {
+      "tool": "replace_me",
+      "argument_terms": [],
+      "observation_terms": []
+    }
+  ],
+  "final_terms": []
+}

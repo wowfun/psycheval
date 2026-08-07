@@ -1,0 +1,1 @@
+Open Selenium's web form at https://www.selenium.dev/selenium/web/web-form.html, enter "Harbor eval" in the text input, submit it, report the final URL and confirmation message, and save a screenshot named web-form-submitted.png.
