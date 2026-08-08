@@ -1,1 +1,0 @@
-Use the web_search tool to find IANA's official Example Domains help page. Answer which two second-level example domains IANA maintains for documentation, and cite the official help-page URL. Do not use web_fetch or shell commands.
