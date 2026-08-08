@@ -4,7 +4,8 @@ import json
 import os
 import re
 import tomllib
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from typing import Any
 
@@ -43,15 +44,18 @@ class ToolConfig:
     agent_version: str = "0.1.0"
     model: str | None = None
     max_content_chars: int = 128 * 1024
-    max_content_chars_explicit: bool = field(default=False, repr=False)
+    max_content_chars_explicit: bool = dataclass_field(default=False, repr=False)
     redact: bool = True
     db: DbMapping = DbMapping()
-    adapter_options: dict[str, Any] = field(default_factory=dict)
-    adapter_options_by_id: dict[str, dict[str, Any]] = field(
+    adapter_options: dict[str, Any] = dataclass_field(default_factory=dict)
+    adapter_options_by_id: dict[str, dict[str, Any]] = dataclass_field(
         default_factory=dict,
         repr=False,
     )
-    adapter_default_db_paths: dict[str, str] = field(default_factory=dict, repr=False)
+    adapter_default_db_paths: dict[str, str] = dataclass_field(
+        default_factory=dict, repr=False
+    )
+    harbor_roots: tuple[str, ...] = ()
 
 
 def default_workspace_config_text() -> str:
@@ -120,6 +124,24 @@ def apply_toml_config(
             config,
             analysis_eval_slug=_safe_path_segment(data["analysis_eval_slug"]),
         )
+    if "harbor" in data:
+        harbor = data.get("harbor")
+        if not isinstance(harbor, dict):
+            raise ValueError("harbor config must be a TOML table")
+        unknown = sorted(set(harbor) - {"roots"})
+        if unknown:
+            raise ValueError(f"unknown harbor config field: {unknown[0]}")
+        raw_roots = harbor.get("roots", [])
+        if not isinstance(raw_roots, list) or any(
+            not isinstance(value, str) or not value.strip() for value in raw_roots
+        ):
+            raise ValueError("harbor.roots must be an array of non-empty paths")
+        roots = tuple(
+            dict.fromkeys(
+                _lexical_config_path(value, base_dir=base_dir) for value in raw_roots
+            )
+        )
+        config = replace(config, harbor_roots=roots)
     defaults = data.get("defaults", {})
     if defaults:
         if not isinstance(defaults, dict):
@@ -233,11 +255,7 @@ def write_workspace_locale(config_path: Path, locale: str) -> None:
     lines = text.splitlines(keepends=True)
     locale_line = f"locale = {json.dumps(normalized)}\n"
     first_table_index = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if line.lstrip().startswith("[")
-        ),
+        (index for index, line in enumerate(lines) if line.lstrip().startswith("[")),
         len(lines),
     )
     for index, line in enumerate(lines[:first_table_index]):
@@ -336,7 +354,10 @@ def _is_adapter_table_header(line: str, adapter_id: str) -> bool:
     if not isinstance(adapters, dict):
         return False
     adapter_config = adapters.get(adapter_id)
-    return isinstance(adapter_config, dict) and adapter_config.get("__peval_marker") is True
+    return (
+        isinstance(adapter_config, dict)
+        and adapter_config.get("__peval_marker") is True
+    )
 
 
 def _adapter_table_key(adapter_id: str) -> str:
@@ -396,6 +417,18 @@ def _resolve_config_path(value: object, *, base_dir: Path | None = None) -> str:
     return str(path.resolve())
 
 
+def _lexical_config_path(value: object, *, base_dir: Path | None = None) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError("harbor root must not be empty")
+    if is_windows_absolute_like_path(text):
+        return lexical_windows_absolute_like_path(text)
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = (base_dir or Path.cwd()) / path
+    return os.path.abspath(path)
+
+
 def display_config_path(value: object, *, base_dir: Path | None = None) -> str:
     text = str(value).strip()
     if not text:
@@ -439,6 +472,27 @@ def resolve_windows_absolute_like_path(
     )
     if mapped is not None and mapped.exists():
         return str(mapped.resolve())
+    return raw_path
+
+
+def lexical_windows_absolute_like_path(
+    raw_path: str,
+    *,
+    windows_mount_root: Path | None = None,
+) -> str:
+    """Map an existing Windows drive path without resolving symbolic links."""
+
+    if os.name == "nt":
+        return os.path.abspath(Path(raw_path).expanduser())
+    mapped = windows_drive_mount_path(
+        raw_path,
+        windows_mount_root or WINDOWS_DRIVE_MOUNT_ROOT,
+    )
+    if mapped is not None and mapped.exists():
+        return os.path.abspath(mapped)
+    original = Path(raw_path).expanduser()
+    if original.exists():
+        return os.path.abspath(original)
     return raw_path
 
 

@@ -19,7 +19,10 @@ from peval_py.state import (
     WorkspaceCatalog,
 )
 from peval_py.workspace_reports import WorkspaceReportLibrary
-from peval_py.workspace_views import WorkspaceViewLibrary, render_editable_view_configuration
+from peval_py.workspace_views import (
+    WorkspaceViewLibrary,
+    render_editable_view_configuration,
+)
 
 
 class ServeRuntime:
@@ -48,6 +51,7 @@ class ServeRuntime:
             self._loading = True
             self._ready.clear()
             try:
+                self.store.sync_harbor_trials(self.config)
                 self.catalog.reconcile()
             finally:
                 self._loading = False
@@ -80,6 +84,7 @@ class ServeRuntime:
         try:
             loaded_inputs = load_serve_inputs(args, adapter_assignments, self.config)
             self.store.import_loaded_sources(loaded_inputs, self.config)
+            self.store.sync_harbor_trials(self.config)
             self.catalog.reconcile()
         except Exception as exc:  # noqa: BLE001 - background startup boundary.
             error = str(exc)
@@ -144,8 +149,7 @@ class ServeRuntime:
         return {
             **payload,
             "views": [
-                {**view.to_dict(), **summaries.get(view.name, {})}
-                for view in views
+                {**view.to_dict(), **summaries.get(view.name, {})} for view in views
             ],
         }
 

@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import os
 
-from peval_py_test_support import *
-
 from peval_py.workspace import init_workspace
+from peval_py_test_support import Path, json, subprocess, sys, tempfile, unittest
 
 
 class PevalPyWorkspaceInitTests(unittest.TestCase):
@@ -25,7 +24,9 @@ class PevalPyWorkspaceInitTests(unittest.TestCase):
             )
             self.assertIn("[adapters.hermes]\n", config_text)
             self.assertIn('default_db_path = "~/.hermes/state.db"\n', config_text)
-            self.assertEqual(result.log_path, root.resolve() / "logs" / "peval-py-serve.jsonl")
+            self.assertEqual(
+                result.log_path, root.resolve() / "logs" / "peval-py-serve.jsonl"
+            )
             self.assertTrue((root / "logs").is_dir())
             self.assertFalse((root / "state.db").exists())
             for unwanted in [
@@ -39,10 +40,14 @@ class PevalPyWorkspaceInitTests(unittest.TestCase):
                 self.assertFalse((root / unwanted).exists(), unwanted)
 
             config = root / "peval-py.toml"
-            config.write_text('[adapters.psychevo]\ndefault_db_path = "custom.db"\n', encoding="utf-8")
+            config.write_text(
+                '[adapters.psychevo]\ndefault_db_path = "custom.db"\n', encoding="utf-8"
+            )
             second = init_workspace(str(root))
 
-            self.assertEqual(second.log_path, root.resolve() / "logs" / "peval-py-serve.jsonl")
+            self.assertEqual(
+                second.log_path, root.resolve() / "logs" / "peval-py-serve.jsonl"
+            )
             self.assertEqual(
                 config.read_text(encoding="utf-8"),
                 '[adapters.psychevo]\ndefault_db_path = "custom.db"\n',
@@ -106,7 +111,9 @@ class PevalPyWorkspaceInitTests(unittest.TestCase):
             self.assertIn("unrecognized arguments: --default", result.stderr)
 
 
-def run_cli(args: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+def run_cli(
+    args: list[str], *, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             sys.executable,

@@ -1,6 +1,18 @@
 from __future__ import annotations
 
-from cli_inputs_support import *
+from cli_inputs_support import (
+    FIXTURES,
+    Path,
+    contextlib,
+    io,
+    json,
+    tempfile,
+    unittest,
+    write_cli_cached_analysis,
+    write_cli_cached_markdown,
+    write_peval_workspace,
+)
+
 
 class PevalPyCliInputAnalysisTests(unittest.TestCase):
     def test_cli_root_option_reads_cached_analysis_from_workspace(self) -> None:
@@ -136,8 +148,8 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-r",
                     str(workspace),
                     "-a",

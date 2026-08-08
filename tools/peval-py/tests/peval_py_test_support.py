@@ -1,35 +1,47 @@
 from __future__ import annotations
 
-import contextlib
-import io
-import json
-import re
-import shutil
-import sqlite3
-import subprocess
-import sys
-import tempfile
-import unittest
+import contextlib as contextlib
+import io as io
+import json as json
+import re as re
+import shutil as shutil
+import sqlite3 as sqlite3
+import subprocess as subprocess
+import sys as sys
+import tempfile as tempfile
+import unittest as unittest
 from datetime import datetime
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
+from pathlib import Path as Path
+from types import SimpleNamespace as SimpleNamespace
+from unittest.mock import patch as patch
 
-from peval_py.atif import convert_db, convert_path, convert_records
-from peval_py.adapters import adapter_for, available_adapter_ids
+from peval_py.adapters import adapter_for as adapter_for
+from peval_py.adapters import available_adapter_ids as available_adapter_ids
 from peval_py.adapters.base import ConversionResult, StepMeta
-from peval_py.config import ToolConfig, apply_overrides, config_for_adapter, load_config
-from peval_py.html import load_asset_text, render_html, render_serve_html
-from peval_py.input_table import read_input_table
-from peval_py.inputs import LoadedInputs, LoadedSession
-from peval_py.pipeline import build_report_from_loaded_inputs
-from peval_py.report import NoteInput, ReportSession, build_multi_report, build_report
-from peval_py.sources import (
-    ACCOUNTING_COLUMNS,
-    MessageRecord,
-    read_jsonl,
-    read_sqlite_messages,
+from peval_py.atif import convert_db as convert_db
+from peval_py.atif import convert_path as convert_path
+from peval_py.atif import convert_records as convert_records
+from peval_py.config import ToolConfig
+from peval_py.config import apply_overrides as apply_overrides
+from peval_py.config import config_for_adapter as config_for_adapter
+from peval_py.config import load_config as load_config
+from peval_py.html import load_asset_text as load_asset_text
+from peval_py.html import render_html as render_html
+from peval_py.html import render_serve_html as render_serve_html
+from peval_py.input_table import read_input_table as read_input_table
+from peval_py.inputs import LoadedInputs as LoadedInputs
+from peval_py.inputs import LoadedSession as LoadedSession
+from peval_py.pipeline import (
+    build_report_from_loaded_inputs as build_report_from_loaded_inputs,
 )
+from peval_py.report import NoteInput as NoteInput
+from peval_py.report import ReportSession as ReportSession
+from peval_py.report import build_multi_report as build_multi_report
+from peval_py.report import build_report as build_report
+from peval_py.sources import ACCOUNTING_COLUMNS
+from peval_py.sources import MessageRecord as MessageRecord
+from peval_py.sources import read_jsonl as read_jsonl
+from peval_py.sources import read_sqlite_messages as read_sqlite_messages
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -337,7 +349,12 @@ def create_opencode_db(path: Path) -> None:
                 {
                     "role": "assistant",
                     "modelID": "oc-message-model",
-                    "tokens": {"input": 2, "output": 3, "total": 5},
+                    "tokens": {
+                        "input": 2,
+                        "output": 3,
+                        "total": 10,
+                        "cache": {"read": 4, "write": 1},
+                    },
                     "cost": 0.000001,
                 }
             ),
@@ -401,7 +418,13 @@ def create_opencode_db(path: Path) -> None:
             2500,
             {
                 "type": "step-finish",
-                "tokens": {"input": 2, "output": 3, "reasoning": 1, "total": 6},
+                "tokens": {
+                    "input": 2,
+                    "output": 3,
+                    "reasoning": 1,
+                    "total": 11,
+                    "cache": {"read": 4, "write": 1},
+                },
                 "cost": 0.000001,
             },
         ),
@@ -870,9 +893,33 @@ def create_hermes_log_timing_home(path: Path) -> Path:
     )
     rewritten_at = hermes_fixture_epoch("2026-06-11 14:28:20.765")
     rows = [
-        ("user", "x daily", None, None, None, hermes_fixture_epoch("2026-06-11 14:26:18.939"), None),
-        ("assistant", "fetch", None, hermes_tool_calls(("call-fetch", "terminal")), None, rewritten_at, "tool_calls"),
-        ("tool", hermes_tool_result("fetch ok"), "call-fetch", None, "terminal", rewritten_at + 0.003, None),
+        (
+            "user",
+            "x daily",
+            None,
+            None,
+            None,
+            hermes_fixture_epoch("2026-06-11 14:26:18.939"),
+            None,
+        ),
+        (
+            "assistant",
+            "fetch",
+            None,
+            hermes_tool_calls(("call-fetch", "terminal")),
+            None,
+            rewritten_at,
+            "tool_calls",
+        ),
+        (
+            "tool",
+            hermes_tool_result("fetch ok"),
+            "call-fetch",
+            None,
+            "terminal",
+            rewritten_at + 0.003,
+            None,
+        ),
         (
             "assistant",
             "query",
@@ -886,7 +933,15 @@ def create_hermes_log_timing_home(path: Path) -> Path:
             rewritten_at + 0.007,
             "tool_calls",
         ),
-        ("tool", hermes_tool_result("query ok"), "call-query", None, "terminal", rewritten_at + 0.011, None),
+        (
+            "tool",
+            hermes_tool_result("query ok"),
+            "call-query",
+            None,
+            "terminal",
+            rewritten_at + 0.011,
+            None,
+        ),
         (
             "tool",
             hermes_tool_result("bad query", exit_code=1, error="no such column"),
@@ -896,18 +951,98 @@ def create_hermes_log_timing_home(path: Path) -> Path:
             rewritten_at + 0.014,
             None,
         ),
-        ("tool", json.dumps({"content": "config"}), "call-read", None, "read_file", rewritten_at + 0.017, None),
-        ("assistant", "count", None, hermes_tool_calls(("call-count", "terminal")), None, rewritten_at + 0.020, "tool_calls"),
-        ("tool", hermes_tool_result("3"), "call-count", None, "terminal", rewritten_at + 0.023, None),
-        ("assistant", "compose", None, hermes_tool_calls(("call-compose", "terminal")), None, rewritten_at + 0.026, "tool_calls"),
-        ("tool", hermes_tool_result(""), "call-compose", None, "terminal", rewritten_at + 0.030, None),
-        ("assistant", "write", None, hermes_tool_calls(("call-write", "write_file")), None, rewritten_at + 0.033, "tool_calls"),
-        ("tool", json.dumps({"bytes_written": 1831}), "call-write", None, "write_file", rewritten_at + 0.037, None),
-        ("assistant", "verify", None, hermes_tool_calls(("call-verify", "terminal")), None, rewritten_at + 0.041, "tool_calls"),
-        ("tool", hermes_tool_result("1831 file.md"), "call-verify", None, "terminal", rewritten_at + 0.045, None),
+        (
+            "tool",
+            json.dumps({"content": "config"}),
+            "call-read",
+            None,
+            "read_file",
+            rewritten_at + 0.017,
+            None,
+        ),
+        (
+            "assistant",
+            "count",
+            None,
+            hermes_tool_calls(("call-count", "terminal")),
+            None,
+            rewritten_at + 0.020,
+            "tool_calls",
+        ),
+        (
+            "tool",
+            hermes_tool_result("3"),
+            "call-count",
+            None,
+            "terminal",
+            rewritten_at + 0.023,
+            None,
+        ),
+        (
+            "assistant",
+            "compose",
+            None,
+            hermes_tool_calls(("call-compose", "terminal")),
+            None,
+            rewritten_at + 0.026,
+            "tool_calls",
+        ),
+        (
+            "tool",
+            hermes_tool_result(""),
+            "call-compose",
+            None,
+            "terminal",
+            rewritten_at + 0.030,
+            None,
+        ),
+        (
+            "assistant",
+            "write",
+            None,
+            hermes_tool_calls(("call-write", "write_file")),
+            None,
+            rewritten_at + 0.033,
+            "tool_calls",
+        ),
+        (
+            "tool",
+            json.dumps({"bytes_written": 1831}),
+            "call-write",
+            None,
+            "write_file",
+            rewritten_at + 0.037,
+            None,
+        ),
+        (
+            "assistant",
+            "verify",
+            None,
+            hermes_tool_calls(("call-verify", "terminal")),
+            None,
+            rewritten_at + 0.041,
+            "tool_calls",
+        ),
+        (
+            "tool",
+            hermes_tool_result("1831 file.md"),
+            "call-verify",
+            None,
+            "terminal",
+            rewritten_at + 0.045,
+            None,
+        ),
         ("assistant", "done", None, None, None, rewritten_at + 0.051, "stop"),
     ]
-    for index, (role, content, call_id, tool_calls, tool_name, timestamp, finish) in enumerate(rows, start=1):
+    for index, (
+        role,
+        content,
+        call_id,
+        tool_calls,
+        tool_name,
+        timestamp,
+        finish,
+    ) in enumerate(rows, start=1):
         conn.execute(
             """
             INSERT INTO messages
@@ -936,7 +1071,9 @@ def create_hermes_log_timing_home(path: Path) -> Path:
     conn.close()
     logs = path / "logs"
     logs.mkdir()
-    (logs / "agent.log").write_text(hermes_agent_log_fixture(session_id), encoding="utf-8")
+    (logs / "agent.log").write_text(
+        hermes_agent_log_fixture(session_id), encoding="utf-8"
+    )
     return db_path
 
 
@@ -952,7 +1089,9 @@ def hermes_tool_calls(*calls: tuple[str, str]) -> str:
     )
 
 
-def hermes_tool_result(output: str, exit_code: int = 0, error: str | None = None) -> str:
+def hermes_tool_result(
+    output: str, exit_code: int = 0, error: str | None = None
+) -> str:
     return json.dumps({"output": output, "exit_code": exit_code, "error": error})
 
 
@@ -968,7 +1107,7 @@ def hermes_agent_log_fixture(session_id: str) -> str:
             f"2026-06-11 14:27:19,542 INFO [{session_id}] agent.tool_executor: tool terminal completed (53.89s, 2070 chars)",
             f"2026-06-11 14:27:28,009 INFO [{session_id}] agent.conversation_loop: API call #2: model=mimo-v2.5-pro provider=xiaomi in=21091 out=274 total=21365 latency=8.5s cache=19712/21091 (93%)",
             f"2026-06-11 14:27:28,072 INFO [{session_id}] agent.tool_executor: tool terminal completed (0.05s, 1953 chars)",
-            f"2026-06-11 14:27:29,164 WARNING [{session_id}] agent.tool_executor: Tool terminal returned error (0.08s): {{\"output\":\"bad\",\"exit_code\":1,\"error\":\"no such column\"}}",
+            f'2026-06-11 14:27:29,164 WARNING [{session_id}] agent.tool_executor: Tool terminal returned error (0.08s): {{"output":"bad","exit_code":1,"error":"no such column"}}',
             f"2026-06-11 14:27:30,253 INFO [{session_id}] agent.tool_executor: tool read_file completed (0.08s, 986 chars)",
             f"2026-06-11 14:27:38,564 INFO [{session_id}] agent.conversation_loop: API call #3: model=mimo-v2.5-pro provider=xiaomi in=22630 out=84 total=22714 latency=8.3s cache=21056/22630 (93%)",
             f"2026-06-11 14:27:38,631 INFO [{session_id}] agent.tool_executor: tool terminal completed (0.05s, 46 chars)",

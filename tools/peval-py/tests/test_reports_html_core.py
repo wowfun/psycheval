@@ -1,6 +1,29 @@
 from __future__ import annotations
 
-from reports_html_support import *
+import json
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+from peval_py.atif import convert_records
+from peval_py.config import ToolConfig
+from peval_py.html import load_asset_text, render_html
+from peval_py.inputs import LoadedInputs, LoadedSession
+from peval_py.models import NoteInput, ReportSession
+from peval_py.pipeline import build_report_from_loaded_inputs
+from peval_py.report import build_multi_report, build_report
+from peval_py.sources import read_jsonl
+from reports_html_support import (
+    FIXTURES,
+    compact_css_text,
+    write_cached_analysis,
+    write_cached_markdown,
+    write_cached_note,
+)
+
 
 class PevalPyReportHtmlCoreTests(unittest.TestCase):
     def test_report_json_subset_and_html_safe_embedding(self) -> None:
@@ -41,12 +64,12 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertEqual(auto["cost"]["cost_per_1k_tokens"], 0.555556)
 
         html = render_html(report)
-        self.assertIn("data-step-action=\"toggle\"", html)
+        self.assertIn('data-step-action="toggle"', html)
         self.assertIn("<h1>Agent Trajectory Report</h1>", html)
-        self.assertNotIn("<p class=\"eyebrow\">agent trajectory</p>", html)
-        self.assertNotIn("id=\"report-copy\"", html)
-        self.assertNotIn("id=\"score-strip\"", html)
-        self.assertNotIn("class=\"metric-card\"", html)
+        self.assertNotIn('<p class="eyebrow">agent trajectory</p>', html)
+        self.assertNotIn('id="report-copy"', html)
+        self.assertNotIn('id="score-strip"', html)
+        self.assertNotIn('class="metric-card"', html)
         self.assertIn('"run": "Run"', html)
         self.assertIn('t("run", "Run")', html)
         self.assertIn('t("result", "Result")', html)
@@ -64,18 +87,20 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
             compact_css_text(html),
         )
         font_sizes = [
-            int(value)
-            for value in re.findall(r"font(?:-size)?:[^;}]*?(\d+)px", html)
+            int(value) for value in re.findall(r"font(?:-size)?:[^;}]*?(\d+)px", html)
         ]
         self.assertGreaterEqual(min(font_sizes), 12)
         self.assertIn("\\u003cscript", html)
         self.assertNotIn("<script>alert(1)</script>", html)
 
-
     def test_multi_session_jsonl_report_comparison_and_notes(self) -> None:
         config = ToolConfig(adapter="opencode")
-        first = convert_records(read_jsonl(str(FIXTURES / "common_session.jsonl")), config)
-        second = convert_records(read_jsonl(str(FIXTURES / "psychevo_session.jsonl")), config)
+        first = convert_records(
+            read_jsonl(str(FIXTURES / "common_session.jsonl")), config
+        )
+        second = convert_records(
+            read_jsonl(str(FIXTURES / "psychevo_session.jsonl")), config
+        )
 
         report = build_multi_report(
             [
@@ -121,7 +146,10 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         }
         for meta in report["trajectory_meta"]:
             self.assertTrue(meta_forbidden.isdisjoint(meta))
-        self.assertEqual(report["annotations"]["report_notes"][0]["markdown"], "Report <script>note</script>")
+        self.assertEqual(
+            report["annotations"]["report_notes"][0]["markdown"],
+            "Report <script>note</script>",
+        )
         self.assertEqual(
             report["annotations"]["notes"][0]["trial_key"],
             report["trajectory_meta"][1]["trial_key"],
@@ -131,7 +159,9 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         html = render_html(report)
         compact_html = compact_css_text(html)
         self.assertEqual(report, before_html_render)
-        self.assertIn("function synthesizedReportRow(trajectory, meta, index = -1)", html)
+        self.assertIn(
+            "function synthesizedReportRow(trajectory, meta, index = -1)", html
+        )
         self.assertIn("function reportRows()", html)
         self.assertNotIn("state.view?.comparison?.leaderboard?.entries", html)
         self.assertNotIn("<h3>Summary</h3>", html)
@@ -146,16 +176,30 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertNotIn("session-axis", html)
         self.assertNotIn("visible-grid", html)
         self.assertIn("grid-template-columns:minmax(150px,220px) minmax(0,1fr)", html)
-        self.assertNotIn("repeat(${Math.max(rows.length, 1)}, minmax(150px, 1fr))", html)
+        self.assertNotIn(
+            "repeat(${Math.max(rows.length, 1)}, minmax(150px, 1fr))", html
+        )
         self.assertNotIn("metric-button", html)
         self.assertIn('label: t("agent", "Agent")', html)
         self.assertIn("agentNameFor(row)", html)
         self.assertIn("metricCellShade(row, column, rows)", html)
         self.assertIn("metric-shade-4", html)
-        self.assertIn('key: "session_id", label: t("session", "Session"), valueType: "identity", filterable: true', html)
-        self.assertIn('key: "agent", label: t("agent", "Agent"), valueType: "identity", filterable: true', html)
-        self.assertIn('key: "model", label: t("model", "Model"), valueType: "identity", filterable: true', html)
-        self.assertIn('key: "status", label: t("result", "Result"), valueType: "status", filterable: true', html)
+        self.assertIn(
+            'key: "session_id", label: t("session", "Session"), valueType: "identity", filterable: true',
+            html,
+        )
+        self.assertIn(
+            'key: "agent", label: t("agent", "Agent"), valueType: "identity", filterable: true',
+            html,
+        )
+        self.assertIn(
+            'key: "model", label: t("model", "Model"), valueType: "identity", filterable: true',
+            html,
+        )
+        self.assertIn(
+            'key: "status", label: t("result", "Result"), valueType: "status", filterable: true',
+            html,
+        )
         self.assertNotIn('width: "180px"', html)
         self.assertIn("function renderDataTable", html)
         self.assertIn("function applyDataTableControls", html)
@@ -165,7 +209,7 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertIn("controls.sort = null", html)
         self.assertIn("state.tables[tableId]", html)
         self.assertIn("controls.filters ||= {}", html)
-        self.assertIn('bindDataTableControls(target, {', html)
+        self.assertIn("bindDataTableControls(target, {", html)
         self.assertIn('tableId: "leaderboard"', html)
         self.assertIn('tableId: "timeline"', html)
         self.assertNotIn("state.filters", html)
@@ -173,7 +217,10 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertIn("function filterValues(row, column)", html)
         self.assertIn("values.some(", html)
         self.assertIn("selected.includes(value)", html)
-        self.assertIn('return applyDataTableControls("leaderboard", applySessionSearch(reportRows()), leaderboardColumns(), reportRows())', html)
+        self.assertIn(
+            'return applyDataTableControls("leaderboard", applySessionSearch(reportRows()), leaderboardColumns(), reportRows())',
+            html,
+        )
         self.assertIn("filter-control", html)
         self.assertIn("filter-option", html)
         self.assertIn("table-head-inline", html)
@@ -190,10 +237,13 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertNotIn('key: "idle_duration_ms"', html)
         self.assertNotIn("Idle Duration", html)
         self.assertIn("function rowToolErrorRate(row)", html)
-        self.assertIn('value: (row) => rowToolErrorRate(row)', html)
+        self.assertIn("value: (row) => rowToolErrorRate(row)", html)
         self.assertIn('key: "cost_usd"', html)
         self.assertNotIn("metric: true, value: (row) => row.cost_usd", html)
-        self.assertIn('key: "analysised", label: t("analysised", "Analysised"), valueType: "status", filterable: true', html)
+        self.assertIn(
+            'key: "analysised", label: t("analysised", "Analysised"), valueType: "status", filterable: true',
+            html,
+        )
         self.assertIn("function rowAnalysised(row)", html)
         self.assertIn("function analysisArtifactPathsFor(trialKey)", html)
         self.assertIn('"analysised": "Analysised"', html)
@@ -205,14 +255,19 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertNotIn("leaderboard_eyebrow", html)
         self.assertNotIn("Each row is one visible session-as-Trial", html)
         self.assertIn("Leaderboard Summary", html)
-        self.assertNotIn("Distribution of metrics across the current visible Leaderboard rows", html)
+        self.assertNotIn(
+            "Distribution of metrics across the current visible Leaderboard rows", html
+        )
         self.assertIn('id="leaderboard-summary"', html)
         self.assertIn("data-table-sort", html)
         self.assertIn("selected-row", html)
         self.assertIn("data-trial-key", html)
         self.assertIn("function comparisonScrollState()", html)
         self.assertIn('scrollPosition("#leaderboard .table-wrap", true)', html)
-        self.assertIn('scrollPosition("#trajectory-overview .trajectory-overview-list", false)', html)
+        self.assertIn(
+            'scrollPosition("#trajectory-overview .trajectory-overview-list", false)',
+            html,
+        )
         self.assertIn("function restoreComparisonScrollState(", html)
         self.assertIn("restoreComparisonScrollState(scrollState)", html)
         self.assertIn("function bindComparisonScrollSync()", html)
@@ -261,7 +316,9 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertIn("function overviewStepMeta", html)
         self.assertIn("trajectoryDurationHeatClass(ratio)", html)
         self.assertIn("function trajectoryDurationHeatClass", html)
-        self.assertIn('timeTitle("step", stepDuration, durationRatio, "slowest step")', html)
+        self.assertIn(
+            'timeTitle("step", stepDuration, durationRatio, "slowest step")', html
+        )
         self.assertIn('if (role === "system") return "S"', html)
         self.assertIn('if (role === "user") return "U"', html)
         self.assertIn('if (role === "agent") return "A"', html)
@@ -281,20 +338,29 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
             html.index("renderLeaderboardSummary(rows);"),
             html.index("renderTrajectoryOverview(rows);"),
         )
-        self.assertIn("function renderLeaderboardSummary(rows = leaderboardRows())", html)
+        self.assertIn(
+            "function renderLeaderboardSummary(rows = leaderboardRows())", html
+        )
         self.assertIn("function leaderboardSummaryRows(rows = leaderboardRows())", html)
-        self.assertIn("function leaderboardSummaryGroups(rows = leaderboardRows()", html)
+        self.assertIn(
+            "function leaderboardSummaryGroups(rows = leaderboardRows()", html
+        )
         self.assertIn("function measuredModelDurationForRow(row)", html)
         self.assertIn("function leaderboardSummaryStatistics()", html)
         self.assertIn("function renderLeaderboardSummaryTableDisclosure(groups)", html)
         self.assertIn("function renderLeaderboardSummaryCharts(groups)", html)
-        self.assertIn("function renderLeaderboardSummaryChart(definition, groups, statistic)", html)
+        self.assertIn(
+            "function renderLeaderboardSummaryChart(definition, groups, statistic)",
+            html,
+        )
         self.assertIn('key: "model_duration_ms"', html)
         self.assertIn('label: t("model_call_duration", "Model call duration")', html)
         self.assertIn("leaderboard-summary-bar", html)
         self.assertNotIn("summary-boxplot", html)
         self.assertNotIn("leaderboard-summary-count", html)
-        self.assertIn("function renderTrajectoryOverview(rows = leaderboardRows())", html)
+        self.assertIn(
+            "function renderTrajectoryOverview(rows = leaderboardRows())", html
+        )
         self.assertIn('id="step-drawer"', html)
         self.assertIn("function renderStepDrawer()", html)
         self.assertIn("data-step-id", html)
@@ -306,7 +372,9 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertIn('target?.closest?.("[data-timeline-step-id]")', html)
         self.assertIn('target?.closest?.("[data-timeline-chart]")', html)
         self.assertIn("function setStepDrawerOpen(open)", html)
-        self.assertIn('document.body.classList.toggle("step-drawer-open", Boolean(open))', html)
+        self.assertIn(
+            'document.body.classList.toggle("step-drawer-open", Boolean(open))', html
+        )
         self.assertIn("renderStep(step, trial, timingStats, { open: true })", html)
         self.assertIn("step-drawer", html)
         self.assertIn("--step-drawer-width:min(760px,44vw)", html)
@@ -334,9 +402,7 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
             compact_html,
         )
         self.assertIn(
-            compact_css_text(
-                ".step-drawer .block{min-height:0;overflow:visible}"
-            ),
+            compact_css_text(".step-drawer .block{min-height:0;overflow:visible}"),
             compact_html,
         )
         self.assertIn(
@@ -364,14 +430,18 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertIn("Report \\u003cscript", html)
         self.assertNotIn("<script>note</script>", html)
 
-    def test_analysis_metrics_render_structured_html_instead_of_json_strings(self) -> None:
+    def test_analysis_metrics_render_structured_html_instead_of_json_strings(
+        self,
+    ) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         report = {
             "schema_version": 19,
             "includes": ["core", "annotations"],
             "trajectory": [{"trajectory_id": "trial:metrics", "steps": []}],
-            "trajectory_meta": [{"trial_key": "trial:metrics", "status": "passed", "steps": []}],
+            "trajectory_meta": [
+                {"trial_key": "trial:metrics", "status": "passed", "steps": []}
+            ],
             "annotations": {
                 "analysis": [
                     {
@@ -384,9 +454,30 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
                                     "distinct_tools": 2,
                                 },
                                 "latency": {
-                                    "step_duration_ms": {"min": 100, "q1": 200, "p50": 300, "q3": 1000, "p95": 1500, "max": 2000},
-                                    "tool_execution_duration_ms": {"min": 20, "q1": 40, "p50": 80, "q3": 400, "p95": 900, "max": 1200},
-                                    "model_duration_ms": {"min": 90, "q1": 180, "p50": 240, "q3": 900, "p95": 1300, "max": 1800},
+                                    "step_duration_ms": {
+                                        "min": 100,
+                                        "q1": 200,
+                                        "p50": 300,
+                                        "q3": 1000,
+                                        "p95": 1500,
+                                        "max": 2000,
+                                    },
+                                    "tool_execution_duration_ms": {
+                                        "min": 20,
+                                        "q1": 40,
+                                        "p50": 80,
+                                        "q3": 400,
+                                        "p95": 900,
+                                        "max": 1200,
+                                    },
+                                    "model_duration_ms": {
+                                        "min": 90,
+                                        "q1": 180,
+                                        "p50": 240,
+                                        "q3": 900,
+                                        "p95": 1300,
+                                        "max": 1800,
+                                    },
                                 },
                             },
                             "imported_scalar": 7,
@@ -543,7 +634,9 @@ console.log(result);
         self.assertIn(">1/3 tools<", node.stdout)
         self.assertNotIn(">2/3 tools<", node.stdout)
 
-    def test_step_blocks_sort_mixed_tool_calls_and_observations_by_timestamp(self) -> None:
+    def test_step_blocks_sort_mixed_tool_calls_and_observations_by_timestamp(
+        self,
+    ) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         asset = load_asset_text("report.js")
@@ -618,9 +711,15 @@ console.log(result);
         self.assertEqual(node.returncode, 0, node.stderr)
         rendered = node.stdout
         self.assertLess(rendered.index("Message"), rendered.index("ID: call-early"))
-        self.assertLess(rendered.index("ID: call-early"), rendered.index("Result for: call-early"))
-        self.assertLess(rendered.index("Result for: call-early"), rendered.index("ID: call-late"))
-        self.assertLess(rendered.index("ID: call-late"), rendered.index("Result for: call-late"))
+        self.assertLess(
+            rendered.index("ID: call-early"), rendered.index("Result for: call-early")
+        )
+        self.assertLess(
+            rendered.index("Result for: call-early"), rendered.index("ID: call-late")
+        )
+        self.assertLess(
+            rendered.index("ID: call-late"), rendered.index("Result for: call-late")
+        )
 
     def test_report_reads_cached_analysis_from_peval_runs_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -679,7 +778,9 @@ console.log(result);
 
             self.assertEqual(report["includes"], ["core", "annotations"])
             analysis = report["annotations"]["analysis"][0]
-            self.assertEqual(analysis["trial_key"], report["trajectory_meta"][0]["trial_key"])
+            self.assertEqual(
+                analysis["trial_key"], report["trajectory_meta"][0]["trial_key"]
+            )
             self.assertEqual(analysis["status"], "cached")
             self.assertEqual(analysis["analysis_status"], "reviewed")
             self.assertEqual(analysis["summary"], "Cached analysis summary.")
@@ -715,7 +816,9 @@ console.log(result);
             html = render_html(report)
             self.assertIn("Analysis", html)
             self.assertIn("Cached analysis summary.", html)
-            self.assertIn("Slow step \\u003cscript\\u003ealert(2)\\u003c/script\\u003e", html)
+            self.assertIn(
+                "Slow step \\u003cscript\\u003ealert(2)\\u003c/script\\u003e", html
+            )
             self.assertIn("Keep the structured analysis.", html)
             self.assertIn("No live provider validation.", html)
             self.assertIn("review_turns", html)
@@ -813,7 +916,9 @@ console.log(result);
             notes = report["annotations"]["notes"]
             self.assertEqual([note["source"] for note in notes], ["cell", "cli"])
             self.assertEqual(notes[0]["label"], "notes.md")
-            self.assertEqual(notes[0]["markdown"], "Cell note with <script>alert(1)</script>.")
+            self.assertEqual(
+                notes[0]["markdown"], "Cell note with <script>alert(1)</script>."
+            )
             self.assertEqual(
                 notes[0]["source_ref"],
                 {
@@ -830,7 +935,9 @@ console.log(result);
 
             html = render_html(report)
             self.assertIn("notes.md", html)
-            self.assertIn("runs/default/agent-a/common_session/session_t001/notes.md", html)
+            self.assertIn(
+                "runs/default/agent-a/common_session/session_t001/notes.md", html
+            )
             self.assertIn("Cell note with \\u003cscript", html)
             self.assertNotIn("<script>alert(1)</script>", html)
 
@@ -839,11 +946,17 @@ console.log(result);
             root = Path(tmp)
             write_cached_note(root, agent_id="opencode", cell_key="one")
             write_cached_note(root, agent_id="opencode", cell_key="two")
-            session_note = root / "runs" / "default" / "opencode" / "common_session" / "notes.md"
+            session_note = (
+                root / "runs" / "default" / "opencode" / "common_session" / "notes.md"
+            )
             session_note.parent.mkdir(parents=True, exist_ok=True)
-            session_note.write_text("Session note is not a Trial note.", encoding="utf-8")
+            session_note.write_text(
+                "Session note is not a Trial note.", encoding="utf-8"
+            )
             config = ToolConfig(adapter="opencode", workspace_root=str(root))
-            conversion = convert_records(read_jsonl(str(FIXTURES / "common_session.jsonl")), config)
+            conversion = convert_records(
+                read_jsonl(str(FIXTURES / "common_session.jsonl")), config
+            )
             report = build_multi_report(
                 [
                     ReportSession(
@@ -858,7 +971,9 @@ console.log(result);
             )
             self.assertEqual(report["annotations"]["notes"], [])
             self.assertEqual(report["annotations"]["analysis"][0]["status"], "computed")
-            self.assertIn("auto", report["annotations"]["analysis"][0]["analysis_metrics"])
+            self.assertIn(
+                "auto", report["annotations"]["analysis"][0]["analysis_metrics"]
+            )
 
     def test_report_reads_markdown_only_cached_analysis(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -869,7 +984,9 @@ console.log(result);
                 markdown="Markdown-only cached report.",
             )
             config = ToolConfig(adapter="opencode", workspace_root=str(root))
-            conversion = convert_records(read_jsonl(str(FIXTURES / "common_session.jsonl")), config)
+            conversion = convert_records(
+                read_jsonl(str(FIXTURES / "common_session.jsonl")), config
+            )
             report = build_multi_report(
                 [
                     ReportSession(
@@ -897,7 +1014,9 @@ console.log(result);
 
     def test_report_omits_missing_or_non_trial_cell_analysis(self) -> None:
         config = ToolConfig(adapter="opencode")
-        conversion = convert_records(read_jsonl(str(FIXTURES / "common_session.jsonl")), config)
+        conversion = convert_records(
+            read_jsonl(str(FIXTURES / "common_session.jsonl")), config
+        )
         missing = build_multi_report(
             [
                 ReportSession(
@@ -919,8 +1038,17 @@ console.log(result);
             root = Path(tmp)
             write_cached_analysis(root, agent_id="opencode", cell_key="one")
             write_cached_analysis(root, agent_id="opencode", cell_key="two")
-            session_analysis = root / "runs" / "default" / "opencode" / "common_session" / "analysis.json"
-            session_analysis.write_text(json.dumps({"summary": "Session analysis"}), encoding="utf-8")
+            session_analysis = (
+                root
+                / "runs"
+                / "default"
+                / "opencode"
+                / "common_session"
+                / "analysis.json"
+            )
+            session_analysis.write_text(
+                json.dumps({"summary": "Session analysis"}), encoding="utf-8"
+            )
             non_trial_cell = build_multi_report(
                 [
                     ReportSession(

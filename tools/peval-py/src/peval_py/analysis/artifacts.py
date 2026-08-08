@@ -12,6 +12,7 @@ from peval_py.analysis.constants import (
     RESERVED_ANALYSIS_METRIC_KEYS,
 )
 
+
 def write_note_file(path: Path, root: Path, markdown: str) -> str:
     if not isinstance(markdown, str):
         raise ValueError("markdown must be a string")
@@ -194,8 +195,7 @@ def safe_segment(value: object) -> str | None:
         return None
     text = str(value).strip()
     safe = "".join(
-        char if char.isalnum() or char in {"-", "_", "."} else "_"
-        for char in text
+        char if char.isalnum() or char in {"-", "_", "."} else "_" for char in text
     ).strip("._")
     if not safe:
         return None

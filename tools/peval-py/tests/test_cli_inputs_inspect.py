@@ -1,8 +1,79 @@
 from __future__ import annotations
 
-from cli_inputs_support import *
+from cli_inputs_support import (
+    FIXTURES,
+    Path,
+    contextlib,
+    io,
+    json,
+    tempfile,
+    unittest,
+    written_report_path,
+)
+
 
 class PevalPyCliInputInspectTests(unittest.TestCase):
+    def test_top_token_ranking_does_not_add_cached_prompt_subset_twice(self) -> None:
+        from peval_py._inspection.frames import InspectFrames
+        from peval_py._inspection.payload import source_payload
+
+        report = {
+            "trajectory": [
+                {
+                    "schema_version": "ATIF-v1.7",
+                    "session_id": "cache-ranking",
+                    "agent": {"name": "agent", "version": "1.0"},
+                    "steps": [
+                        {
+                            "step_id": 1,
+                            "source": "agent",
+                            "message": "cached",
+                            "llm_call_count": 1,
+                            "metrics": {
+                                "prompt_tokens": 100,
+                                "completion_tokens": 0,
+                                "cached_tokens": 100,
+                            },
+                        },
+                        {
+                            "step_id": 2,
+                            "source": "agent",
+                            "message": "larger",
+                            "llm_call_count": 1,
+                            "metrics": {
+                                "prompt_tokens": 150,
+                                "completion_tokens": 0,
+                                "cached_tokens": 0,
+                            },
+                        },
+                    ],
+                    "final_metrics": {
+                        "total_prompt_tokens": 250,
+                        "total_completion_tokens": 0,
+                        "total_cached_tokens": 100,
+                        "total_steps": 2,
+                    },
+                }
+            ],
+            "trajectory_meta": [{"steps": [{"step_id": 1}, {"step_id": 2}]}],
+        }
+        frames = InspectFrames.from_report(report, preview_chars=100)
+
+        payload = source_payload(
+            frames,
+            1,
+            head=0,
+            tail=0,
+            top=2,
+            step_ids=[],
+            tool_call_ids=[],
+        )
+
+        self.assertEqual(
+            [item["step_id"] for item in payload["steps"]["top_tokens"]],
+            [2, 1],
+        )
+
     def test_cli_view_inspect_is_default_fixed_digest(self) -> None:
         from peval_py.cli import main
 
@@ -52,7 +123,9 @@ class PevalPyCliInputInspectTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report_path = Path(tmp) / "report.json"
             config_path = Path(tmp) / "peval-py.toml"
-            config_path.write_text("[defaults]\nmax_content_chars = 10\n", encoding="utf-8")
+            config_path.write_text(
+                "[defaults]\nmax_content_chars = 10\n", encoding="utf-8"
+            )
             report_path.write_text(
                 json.dumps(
                     {
@@ -125,7 +198,9 @@ class PevalPyCliInputInspectTests(unittest.TestCase):
         ][0]["message_preview"]
         self.assertEqual(config_preview, "x" * 10 + "...[truncated]")
 
-    def test_cli_view_inspect_steps_accepts_comma_ranges_and_suppresses_digest(self) -> None:
+    def test_cli_view_inspect_steps_accepts_comma_ranges_and_suppresses_digest(
+        self,
+    ) -> None:
         from peval_py.cli import main
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -235,7 +310,9 @@ class PevalPyCliInputInspectTests(unittest.TestCase):
             self.assertEqual(stdout.getvalue(), f"wrote report: {explicit}\n")
             self.assertTrue(explicit.exists())
 
-    def test_cli_view_inspect_rejects_html_removed_flags_and_raw_only_overrides(self) -> None:
+    def test_cli_view_inspect_rejects_html_removed_flags_and_raw_only_overrides(
+        self,
+    ) -> None:
         from peval_py.cli import main
 
         stderr = io.StringIO()
@@ -529,7 +606,9 @@ class PevalPyCliInputInspectTests(unittest.TestCase):
         self.assertNotIn("steps", first)
         self.assertNotIn("tools", first)
         self.assertEqual(first["selected_steps"][0]["step_id"], 2)
-        self.assertEqual(first["selected_steps"][0]["tool_calls"][0]["tool_call_id"], "call-1")
+        self.assertEqual(
+            first["selected_steps"][0]["tool_calls"][0]["tool_call_id"], "call-1"
+        )
         self.assertEqual(
             first["selected_steps"][0]["tool_results"][0]["content_preview"],
             "command failed",
@@ -548,7 +627,9 @@ class PevalPyCliInputInspectTests(unittest.TestCase):
         tool_only = json.loads(tool_only_stdout.getvalue())["sources"][0]
         self.assertEqual(tool_only["status"], "failed")
         self.assertEqual(tool_only["total_tokens"], 18)
-        self.assertEqual(tool_only["steps"]["top_durations"][0], {"step_id": 2, "duration": 3})
+        self.assertEqual(
+            tool_only["steps"]["top_durations"][0], {"step_id": 2, "duration": 3}
+        )
         self.assertEqual(
             tool_only["tools"]["errors"],
             [{"step_id": 2, "tool_call_id": "call-1", "tool_name": "shell"}],

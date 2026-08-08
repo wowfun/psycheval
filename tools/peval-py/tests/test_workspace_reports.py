@@ -24,7 +24,9 @@ def source_row(source_key: str, artifact_dir: str, *, status: str = "ok") -> dic
 
 
 class WorkspaceReportLibraryTests(unittest.TestCase):
-    def test_import_preserves_bytes_writes_minimal_state_and_orders_collisions(self) -> None:
+    def test_import_preserves_bytes_writes_minimal_state_and_orders_collisions(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             rows = [source_row("cell_a", "runs/default/agent/s1/c1")]
@@ -47,17 +49,23 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
                 json.loads((root / "reports" / first_id / "state.json").read_text()),
                 {"source_keys": ["runs/default/agent/s1/c1"]},
             )
-            self.assertEqual((root / "reports" / first_id / first.name).read_bytes(), first_bytes)
+            self.assertEqual(
+                (root / "reports" / first_id / first.name).read_bytes(), first_bytes
+            )
             self.assertEqual(library.read(first_id).content, first_bytes)
             catalog_ids = [item["report_id"] for item in library.catalog()]
             self.assertEqual(catalog_ids[0], "20260710-143012-123456-10")
             self.assertEqual(catalog_ids[-2:], [second_id, first_id])
             self.assertEqual(later_ids[-1], "20260710-143012-123456-10")
             self.assertEqual(library.catalog()[0]["format"], "html")
-            with patch.object(Path, "read_bytes", side_effect=AssertionError("body read")):
+            with patch.object(
+                Path, "read_bytes", side_effect=AssertionError("body read")
+            ):
                 self.assertEqual(len(library.catalog()), 10)
 
-    def test_import_rejects_unsupported_non_utf8_oversize_relative_and_symlink_files(self) -> None:
+    def test_import_rejects_unsupported_non_utf8_oversize_relative_and_symlink_files(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             rows = [source_row("cell_a", "runs/default/agent/s1/c1")]
@@ -108,7 +116,9 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
                     library.import_file(link, ["cell_a"])
             self.assertEqual(library.catalog(), [])
 
-    def test_catalog_silently_projects_missing_sources_and_recovers_without_rewriting_state(self) -> None:
+    def test_catalog_silently_projects_missing_sources_and_recovers_without_rewriting_state(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             rows = [
@@ -136,7 +146,10 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             self.assertEqual(library.catalog()[0]["source_keys"], ["cell_a", "cell_b"])
 
     def test_invalid_packages_paths_ids_and_symlinks_are_isolated(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside_tmp:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            tempfile.TemporaryDirectory() as outside_tmp,
+        ):
             root = Path(tmp)
             outside = Path(outside_tmp)
             reports = root / "reports"
@@ -183,7 +196,9 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
                     library.read(valid_id)
 
                 (runs / "default").unlink()
-                (runs / "default").symlink_to(runs / "default", target_is_directory=True)
+                (runs / "default").symlink_to(
+                    runs / "default", target_is_directory=True
+                )
                 self.assertEqual(library.catalog(), [])
 
             link_id = "20260710-143012-123457"
@@ -199,7 +214,9 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             rows = [
                 source_row("cell_a", "runs/default/agent/s1/c1"),
                 source_row("cell_b", "runs/default/agent/s2/c2"),
-                source_row("cell_missing", "runs/default/agent/s3/c3", status="missing"),
+                source_row(
+                    "cell_missing", "runs/default/agent/s3/c3", status="missing"
+                ),
             ]
             library = WorkspaceReportLibrary(root, lambda: rows)
             report_path = root / "analysis.htm"
@@ -212,7 +229,9 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
                 json.loads(state_path.read_text()),
                 {"source_keys": ["runs/default/agent/s2/c2"]},
             )
-            self.assertFalse(any("tmp" in path.name for path in state_path.parent.iterdir()))
+            self.assertFalse(
+                any("tmp" in path.name for path in state_path.parent.iterdir())
+            )
             before = state_path.read_bytes()
             with self.assertRaisesRegex(ValueError, "unreadable source"):
                 library.replace_bindings(report_id, ["cell_missing"])
@@ -231,7 +250,9 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown report"):
                 library.read(report_id)
 
-    def test_markdown_preview_is_rich_but_escapes_raw_html_and_html_is_exact(self) -> None:
+    def test_markdown_preview_is_rich_but_escapes_raw_html_and_html_is_exact(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             rows = [source_row("cell_a", "runs/default/agent/s1/c1")]

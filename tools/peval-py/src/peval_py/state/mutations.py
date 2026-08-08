@@ -5,6 +5,7 @@ from typing import Any
 from peval_py._state.artifacts import remove_artifact_dir
 from peval_py.analysis import write_note_file
 from peval_py.config import ToolConfig
+from peval_py.state.harbor import is_harbor_source
 from peval_py.state.summaries import now_ms, trial_summary
 
 
@@ -119,6 +120,10 @@ class StateMutationMixin:
         self.delete_source_row(self.source_by_key(source_key))
 
     def delete_source_row(self, row: dict[str, Any]) -> None:
+        if is_harbor_source(row):
+            raise ValueError(
+                "linked Harbor Trials cannot be deleted; archive the source instead"
+            )
         artifact_dir = row.get("artifact_dir")
         if artifact_dir:
             remove_artifact_dir(

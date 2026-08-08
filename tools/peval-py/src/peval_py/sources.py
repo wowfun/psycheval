@@ -63,7 +63,9 @@ def _records_from_jsonl_line(raw_line: str, line_number: int) -> list[MessageRec
     return [_record_from_json_object(value)]
 
 
-def read_sqlite_messages(path: str, session_id: str, mapping: DbMapping) -> list[MessageRecord]:
+def read_sqlite_messages(
+    path: str, session_id: str, mapping: DbMapping
+) -> list[MessageRecord]:
     selected = [
         mapping.sequence_column,
         mapping.message_column,

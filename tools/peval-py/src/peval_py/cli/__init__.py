@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys as sys
 
-from peval_py.cli.main import main
+from peval_py.cli.main import main as main
 from peval_py.cli.parser import *  # noqa: F401,F403
 from peval_py.cli.sessions import *  # noqa: F401,F403
 from peval_py.cli.tables import *  # noqa: F401,F403

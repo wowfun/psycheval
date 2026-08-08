@@ -120,6 +120,28 @@ test("Source Manager derives a cross-page batch state from every selected source
   }
 });
 
+test("Source Manager disables deletion when the selection includes a linked Harbor Trial", () => {
+  runtime.state.sourceSelection.clear();
+  runtime.state.sourceManagerStatus = { phase: "ready", message: "" };
+  runtime.state.sourceManagerRows = [{
+    source_key: "linked-harbor",
+    kind: "harbor-trial",
+    label: "jobs/job/trial",
+    active: true,
+    readable: true,
+  }];
+  runtime.state.sourceSelection.add("linked-harbor");
+  sourceManager.renderServeSources();
+
+  const deleteButton = document.querySelector("[data-source-bulk-delete]");
+  assert.equal(deleteButton.disabled, true);
+  assert.match(deleteButton.title, /cannot be deleted/);
+
+  runtime.state.sourceSelection.clear();
+  runtime.state.sourceManagerRows = [];
+  sourceManager.renderServeSources();
+});
+
 test("workspace busy state disables and restores controls", () => {
   const refresh = document.querySelector("[data-refresh-all]");
   const bulk = document.querySelector("[data-source-bulk-state]");

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import http.client
 import base64
+import http.client
 import json
 import re
 import tempfile
@@ -191,10 +191,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertIsNone(cleared_page.items[0].payload["source_category"])
                 self.assertNotIn(
                     "Regression",
-                    {
-                        item["value"]
-                        for item in cleared_page.facets["categories"]
-                    },
+                    {item["value"] for item in cleared_page.facets["categories"]},
                 )
 
                 status, _headers, body = self.request(
@@ -212,7 +209,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
             finally:
                 self.stop(store, server, thread)
 
-    def test_workspace_snapshot_export_is_full_query_offline_and_read_only(self) -> None:
+    def test_workspace_snapshot_export_is_full_query_offline_and_read_only(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for index in range(2):
@@ -242,7 +241,10 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 )
             store, runtime, server, thread = self.running_server(root)
             try:
-                rows = [item.to_dict() for item in runtime.catalog.query(CatalogQuery()).items]
+                rows = [
+                    item.to_dict()
+                    for item in runtime.catalog.query(CatalogQuery()).items
+                ]
                 source_keys = [row["source_key"] for row in rows]
                 runtime.workspace_views.save(
                     name="Daily",
@@ -252,10 +254,15 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     overwrite=False,
                 )
                 markdown_path = root / "analysis.md"
-                markdown_path.write_text("# Safe\n\n<script>alert(1)</script>", encoding="utf-8")
+                markdown_path.write_text(
+                    "# Safe\n\n<script>alert(1)</script>", encoding="utf-8"
+                )
                 runtime.workspace_reports.import_file(markdown_path, [source_keys[0]])
                 html_path = root / "analysis.html"
-                html_path.write_text("<!doctype html><script>window.rawReport=true</script>", encoding="utf-8")
+                html_path.write_text(
+                    "<!doctype html><script>window.rawReport=true</script>",
+                    encoding="utf-8",
+                )
                 runtime.workspace_reports.import_file(html_path, [source_keys[0]])
                 echarts = b"window.__PEVAL_ECHARTS_OFFLINE__=true;"
                 echarts_path = root / ".cache/echarts/6.0.0/echarts.min.js"
@@ -277,14 +284,20 @@ class ServeCatalogHttpTests(unittest.TestCase):
                         "open_view_tables": ["Daily"],
                     }
                 )
-                status, headers, body = self.request(server, "POST", "/api/exports", payload)
+                status, headers, body = self.request(
+                    server, "POST", "/api/exports", payload
+                )
                 self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
                 self.assertEqual(headers["content-type"], "text/html; charset=utf-8")
-                self.assertIn("peval-workspace-snapshot.html", headers["content-disposition"])
+                self.assertIn(
+                    "peval-workspace-snapshot.html", headers["content-disposition"]
+                )
                 self.assertIn(echarts, body)
                 self.assertNotIn(b"cdn.jsdelivr.net/npm/echarts", body)
                 self.assertIn(b'class="serve-mode workspace-snapshot-mode"', body)
-                initial_markup = re.sub(rb"<script(?:\s[^>]*)?>.*?</script>", b"", body, flags=re.DOTALL)
+                initial_markup = re.sub(
+                    rb"<script(?:\s[^>]*)?>.*?</script>", b"", body, flags=re.DOTALL
+                )
                 self.assertNotIn(b"data-source-manager-open", initial_markup)
                 self.assertNotIn(b"data-report-manager-open", initial_markup)
                 self.assertNotIn(b"data-view-save-dialog", initial_markup)
@@ -298,7 +311,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     ["daily-category", "other-category"],
                 )
                 self.assertEqual(len(set(projection["source_trial_keys"].values())), 2)
-                self.assertEqual([view["name"] for view in projection["views"]], ["Daily"])
+                self.assertEqual(
+                    [view["name"] for view in projection["views"]], ["Daily"]
+                )
                 self.assertEqual(projection["view_summaries"][0]["matched_count"], 1)
                 self.assertEqual(
                     projection["presentation"]["workspace_view_filters"]["categories"],
@@ -309,7 +324,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     report["format"]: base64.b64decode(report["preview_base64"])
                     for report in projection["reports"]
                 }
-                self.assertIn(b"&lt;script&gt;alert(1)&lt;/script&gt;", previews["markdown"])
+                self.assertIn(
+                    b"&lt;script&gt;alert(1)&lt;/script&gt;", previews["markdown"]
+                )
                 self.assertEqual(
                     previews["html"],
                     b"<!doctype html><script>window.rawReport=true</script>",
@@ -323,7 +340,12 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(
-                    [row["source_key"] for row in self.snapshot_projection(selected_body)["catalog_rows"]],
+                    [
+                        row["source_key"]
+                        for row in self.snapshot_projection(selected_body)[
+                            "catalog_rows"
+                        ]
+                    ],
                     [source_keys[1]],
                 )
 
@@ -376,7 +398,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
             finally:
                 self.stop(store, server, thread)
 
-    def test_catalog_http_facets_ignore_search_and_column_filters_within_state(self) -> None:
+    def test_catalog_http_facets_ignore_search_and_column_filters_within_state(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             definitions = [
@@ -384,7 +408,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 ("beta", "Safety, Eval", "failed", "other active", True),
                 ("archived", "archive-category", "passed", "other archived", False),
             ]
-            for index, (tag, category, result, message, active) in enumerate(definitions):
+            for index, (tag, category, result, message, active) in enumerate(
+                definitions
+            ):
                 cell = root / f"runs/default/psychevo/s{index}/s{index}_t001"
                 write_trial_cell_artifacts(
                     cell,
@@ -434,7 +460,10 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     {"alpha": 1, "beta": 1},
                 )
                 self.assertEqual(
-                    {item["value"]: item["count"] for item in active["facets"]["results"]},
+                    {
+                        item["value"]: item["count"]
+                        for item in active["facets"]["results"]
+                    },
                     {"failed": 1, "passed": 1},
                 )
 
@@ -608,7 +637,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(json.loads(body)["view"]["notes"], "Replacement notes")
                 self.assertEqual(
-                    (root / "views" / "Daily focus.md").read_text(encoding="utf-8").split("---\n", 2)[-1],
+                    (root / "views" / "Daily focus.md")
+                    .read_text(encoding="utf-8")
+                    .split("---\n", 2)[-1],
                     "Replacement notes",
                 )
 
@@ -627,17 +658,29 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     server,
                     "POST",
                     "/api/views/update",
-                    {"name": "Daily focus", "field": "notes", "value": "Edited **Markdown**"},
+                    {
+                        "name": "Daily focus",
+                        "field": "notes",
+                        "value": "Edited **Markdown**",
+                    },
                 )
                 self.assertEqual(status, 200)
-                self.assertEqual(json.loads(body)["view"]["notes"], "Edited **Markdown**")
+                self.assertEqual(
+                    json.loads(body)["view"]["notes"], "Edited **Markdown**"
+                )
 
-                configuration = "filters:\n  results:\n    - passed\ngroup_by: overall\n"
+                configuration = (
+                    "filters:\n  results:\n    - passed\ngroup_by: overall\n"
+                )
                 status, _headers, body = self.request(
                     server,
                     "POST",
                     "/api/views/update",
-                    {"name": "Daily focus", "field": "configuration", "value": configuration},
+                    {
+                        "name": "Daily focus",
+                        "field": "configuration",
+                        "value": configuration,
+                    },
                 )
                 self.assertEqual(status, 200)
                 updated = json.loads(body)["view"]
@@ -648,7 +691,11 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     server,
                     "POST",
                     "/api/views/update",
-                    {"name": "Daily focus", "field": "configuration", "value": "schema_version: 1\ngroup_by: agent\n"},
+                    {
+                        "name": "Daily focus",
+                        "field": "configuration",
+                        "value": "schema_version: 1\ngroup_by: agent\n",
+                    },
                 )
                 self.assertEqual(status, 400)
                 self.assertIn("optional filters", json.loads(body)["error"])
@@ -741,7 +788,10 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     ["s0", "s1"],
                 )
                 self.assertEqual(
-                    {item["value"]: item["count"] for item in first_page["facets"]["results"]},
+                    {
+                        item["value"]: item["count"]
+                        for item in first_page["facets"]["results"]
+                    },
                     {"failed": 1, "passed": 2},
                 )
 
@@ -790,7 +840,10 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(
-                    [row["trial_session_id"] for row in self.snapshot_projection(body)["catalog_rows"]],
+                    [
+                        row["trial_session_id"]
+                        for row in self.snapshot_projection(body)["catalog_rows"]
+                    ],
                     ["s0", "s1", "s2"],
                 )
 
@@ -819,7 +872,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     trial_key=f"s{index}_t001",
                 )
             store, runtime, server, thread = self.running_server(root)
-            keys = [item.source_key for item in runtime.catalog.query(CatalogQuery()).items]
+            keys = [
+                item.source_key for item in runtime.catalog.query(CatalogQuery()).items
+            ]
             original = store.set_source_active_row
 
             def partial(row, active):
@@ -851,12 +906,18 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertEqual(operation["completed"], 2)
                 self.assertEqual(len(operation["successes"]), 1)
                 self.assertEqual(len(operation["failures"]), 1)
-                self.assertIn("intentional item failure", operation["failures"][0]["error"])
-                self.assertEqual(runtime.catalog.query(CatalogQuery(state="archived")).total, 1)
+                self.assertIn(
+                    "intentional item failure", operation["failures"][0]["error"]
+                )
+                self.assertEqual(
+                    runtime.catalog.query(CatalogQuery(state="archived")).total, 1
+                )
             finally:
                 self.stop(store, server, thread)
 
-    def test_server_exports_filtered_xlsx_selected_json_and_rejects_legacy_html(self) -> None:
+    def test_server_exports_filtered_xlsx_selected_json_and_rejects_legacy_html(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for index in range(2):
@@ -967,7 +1028,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(status, 200)
-                self.assertIn("peval-leaderboard-summary.xlsx", headers["content-disposition"])
+                self.assertIn(
+                    "peval-leaderboard-summary.xlsx", headers["content-disposition"]
+                )
                 with zipfile.ZipFile(BytesIO(body)) as archive:
                     names = set(archive.namelist())
                     strings = archive.read("xl/sharedStrings.xml").decode("utf-8")

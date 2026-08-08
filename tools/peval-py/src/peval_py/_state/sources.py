@@ -5,6 +5,7 @@ from typing import Any
 from peval_py._state.artifacts import normalized_optional_path
 from peval_py.models import LoadedSession
 
+
 def loaded_session_from_source(source: dict[str, Any]) -> LoadedSession:
     return LoadedSession(
         records=None,

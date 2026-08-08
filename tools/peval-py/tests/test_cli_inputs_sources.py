@@ -1,6 +1,29 @@
 from __future__ import annotations
 
-from cli_inputs_support import *
+from cli_inputs_support import (
+    FIXTURES,
+    CustomPathAdapter,
+    FakeEntryPoint,
+    FakeEntryPoints,
+    Path,
+    ToolConfig,
+    contextlib,
+    convert_records,
+    create_hermes_db,
+    create_messages_db,
+    create_opencode_db,
+    io,
+    json,
+    patch,
+    read_jsonl,
+    shutil,
+    sqlite3,
+    subprocess,
+    sys,
+    tempfile,
+    unittest,
+)
+
 
 class PevalPyCliInputSourceTests(unittest.TestCase):
     def test_cli_uses_custom_path_adapter_and_rejects_db_when_path_only(self) -> None:
@@ -80,8 +103,8 @@ label_prefix = "configured"
                         [
                             "view",
                             "tr",
-                        "-m",
-                        "raw",
+                            "-m",
+                            "raw",
                             "-c",
                             str(config_path),
                             "-d",
@@ -93,10 +116,9 @@ label_prefix = "configured"
                             "-o",
                             str(tmp_path / "db-report.json"),
                         ]
-                )
+                    )
                 self.assertNotEqual(result, 0)
                 self.assertIn("does not support DB input", stderr.getvalue())
-
 
     def test_cli_adapter_selectors_apply_per_path_input(self) -> None:
         from peval_py.cli import main
@@ -162,8 +184,8 @@ label_prefix = "selected"
                         [
                             "view",
                             "tr",
-                        "-m",
-                        "raw",
+                            "-m",
+                            "raw",
                             "-a",
                             "p1=custom",
                             "-a",
@@ -177,8 +199,8 @@ label_prefix = "selected"
                         [
                             "view",
                             "tr",
-                        "-m",
-                        "raw",
+                            "-m",
+                            "raw",
                             "-a",
                             "p2=custom",
                             "-p",
@@ -190,8 +212,8 @@ label_prefix = "selected"
                         [
                             "view",
                             "tr",
-                        "-m",
-                        "raw",
+                            "-m",
+                            "raw",
                             "-a",
                             "p1=missing",
                             "-p",
@@ -226,8 +248,8 @@ label_prefix = "selected"
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-p",
                     str(hermes_path),
                     "-p",
@@ -250,8 +272,8 @@ label_prefix = "selected"
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-a",
                     "opencode",
                     "-p",
@@ -273,8 +295,8 @@ label_prefix = "selected"
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-d",
                     str(hermes_dir / "state.db"),
                     "-d",
@@ -305,7 +327,6 @@ label_prefix = "selected"
             self.assertNotEqual(result, 0)
             self.assertIn("ambiguous adapter inference", stderr.getvalue())
 
-
     def test_cli_multi_db_keyed_sessions_and_mixed_sources(self) -> None:
         from peval_py.cli import main
 
@@ -321,8 +342,8 @@ label_prefix = "selected"
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-d",
                     str(hermes_db),
                     "-d",
@@ -358,8 +379,8 @@ label_prefix = "selected"
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-a",
                     "opencode",
                     "-p",
@@ -400,7 +421,7 @@ label_prefix = "selected"
                         "-s",
                         "ses-old",
                     ]
-            )
+                )
             self.assertNotEqual(result, 0)
             self.assertIn("bare --session-id", stderr.getvalue())
 
@@ -447,8 +468,8 @@ label_prefix = "selected"
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-d",
                     str(hermes_db),
                     "-s",
@@ -468,8 +489,8 @@ label_prefix = "selected"
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-d",
                     str(hermes_db),
                     "-s",
@@ -493,8 +514,8 @@ label_prefix = "selected"
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-d",
                     str(hermes_db),
                     "-d",
@@ -621,7 +642,6 @@ label_prefix = "selected"
             self.assertNotEqual(result, 0)
             self.assertIn("requires an interactive terminal", stderr.getvalue())
 
-
     def test_cli_view_accepts_exported_atif_json_path(self) -> None:
         from peval_py.cli import main
 
@@ -642,8 +662,8 @@ label_prefix = "selected"
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-p",
                     str(atif_path),
                     "-f",
@@ -659,15 +679,15 @@ label_prefix = "selected"
 
             missing_adapter_config = tmp_path / "missing.toml"
             missing_adapter_config.write_text(
-                "[defaults]\nadapter = \"missing\"\n",
+                '[defaults]\nadapter = "missing"\n',
                 encoding="utf-8",
             )
             result = main(
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-c",
                     str(missing_adapter_config),
                     "-p",
@@ -696,7 +716,6 @@ label_prefix = "selected"
             )
             self.assertEqual(result, 0)
 
-
     def test_cli_db_multi_session_view_and_note_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "state.db"
@@ -710,8 +729,8 @@ label_prefix = "selected"
                     "peval_py.cli",
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-d",
                     str(db_path),
                     "-s",
@@ -733,9 +752,13 @@ label_prefix = "selected"
             )
             self.assertEqual(result.stderr, "")
             payload = json.loads(out_path.read_text(encoding="utf-8"))
-            self.assertEqual([item["session_id"] for item in payload["trajectory"]], ["db-a", "db-b"])
+            self.assertEqual(
+                [item["session_id"] for item in payload["trajectory"]], ["db-a", "db-b"]
+            )
             self.assertNotIn("comparison", payload)
-            self.assertEqual(payload["annotations"]["report_notes"][0]["markdown"], "DB report")
+            self.assertEqual(
+                payload["annotations"]["report_notes"][0]["markdown"], "DB report"
+            )
             self.assertEqual(payload["annotations"]["notes"][0]["markdown"], "DB B")
 
             bad_note = subprocess.run(
@@ -745,8 +768,8 @@ label_prefix = "selected"
                     "peval_py.cli",
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-d",
                     str(db_path),
                     "-s",
@@ -781,8 +804,8 @@ default_db_path = "state.db"
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-c",
                     str(config_path),
                     "-d",

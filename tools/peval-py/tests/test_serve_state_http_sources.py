@@ -1,12 +1,43 @@
 from __future__ import annotations
 
-from serve_state_support import *
 from peval_py.serve.path_picker import PathPickerUnavailable
+from serve_state_support import (
+    ECHARTS_ASSET_PATH,
+    FIXTURES,
+    HttpError,
+    LocalHTTPServer,
+    Path,
+    ServeRuntime,
+    ToolConfig,
+    cached_echarts_asset,
+    echarts_cache_path,
+    http,
+    json,
+    make_handler,
+    open_workspace_state,
+    parse_adapter_assignments,
+    patch,
+    peval_py_workspace,
+    report_js_comparison_state,
+    request_bytes,
+    request_json,
+    request_text,
+    sample_report,
+    script_json,
+    serve_args,
+    shutil,
+    tempfile,
+    threading,
+    unittest,
+    write_trial_cell_artifacts,
+)
 
 
 class PevalPyServeStateHttpSourceTests(unittest.TestCase):
     @unittest.skip("superseded by stale-while-revalidate catalog coverage")
-    def test_http_sources_returns_loading_shell_until_initial_load_finishes(self) -> None:
+    def test_http_sources_returns_loading_shell_until_initial_load_finishes(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_py_workspace(Path(tmp))
             source = root / "common_session.jsonl"
@@ -243,12 +274,20 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 self.assertEqual(cached_echarts_asset(store), b"console.log('cached');")
 
                 cache_path.unlink()
-                with patch("peval_py.serve.assets.download_echarts_asset", return_value=b"console.log('downloaded');"):
-                    self.assertEqual(cached_echarts_asset(store), b"console.log('downloaded');")
+                with patch(
+                    "peval_py.serve.assets.download_echarts_asset",
+                    return_value=b"console.log('downloaded');",
+                ):
+                    self.assertEqual(
+                        cached_echarts_asset(store), b"console.log('downloaded');"
+                    )
                 self.assertEqual(cache_path.read_bytes(), b"console.log('downloaded');")
 
                 cache_path.unlink()
-                with patch("peval_py.serve.assets.download_echarts_asset", side_effect=RuntimeError("network down")):
+                with patch(
+                    "peval_py.serve.assets.download_echarts_asset",
+                    side_effect=RuntimeError("network down"),
+                ):
                     with self.assertRaisesRegex(HttpError, "failed to cache ECharts"):
                         cached_echarts_asset(store)
             finally:
@@ -275,7 +314,10 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 self.assertEqual(body, b"window.echarts={};")
 
                 cache_path.unlink()
-                with patch("peval_py.serve.assets.download_echarts_asset", side_effect=RuntimeError("network down")):
+                with patch(
+                    "peval_py.serve.assets.download_echarts_asset",
+                    side_effect=RuntimeError("network down"),
+                ):
                     status, _, body = request_bytes(port, ECHARTS_ASSET_PATH)
                 self.assertEqual(status, 502)
                 self.assertIn(b"failed to cache ECharts", body)
@@ -405,7 +447,9 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertIsNone(body["sources"][0]["source_category"])
-                self.assertNotIn("source_category", body["report"]["trajectory_meta"][0])
+                self.assertNotIn(
+                    "source_category", body["report"]["trajectory_meta"][0]
+                )
 
                 status, _, body = request_json(
                     port,
@@ -443,7 +487,9 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 thread.join(timeout=5)
                 store.close()
 
-    def test_http_locale_endpoint_writes_workspace_config_and_updates_rendering(self) -> None:
+    def test_http_locale_endpoint_writes_workspace_config_and_updates_rendering(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_py_workspace(Path(tmp))
             config = ToolConfig(adapter="opencode", locale="en")
@@ -504,7 +550,9 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 thread.join(timeout=5)
                 store.close()
 
-    def test_http_adapter_default_db_endpoint_writes_config_and_updates_rendering(self) -> None:
+    def test_http_adapter_default_db_endpoint_writes_config_and_updates_rendering(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_py_workspace(Path(tmp))
             config = ToolConfig(adapter="opencode", locale="en")
@@ -612,7 +660,10 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                     port,
                     "POST",
                     "/api/sources",
-                    {"path": "common one.jsonl\ncommon_two.jsonl", "adapter": "opencode"},
+                    {
+                        "path": "common one.jsonl\ncommon_two.jsonl",
+                        "adapter": "opencode",
+                    },
                     origin=origin,
                 )
                 self.assertEqual(status, 200)
@@ -678,7 +729,9 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(len(body["sources"]), 2)
                 self.assertEqual(len(body["report"]["trajectory"]), 2)
-                log_count = len(store.paths.log_path.read_text(encoding="utf-8").splitlines())
+                log_count = len(
+                    store.paths.log_path.read_text(encoding="utf-8").splitlines()
+                )
 
                 status, _, failed = request_json(
                     port,
@@ -709,7 +762,10 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 self.assertTrue(source_a.exists())
                 self.assertFalse(artifact_dirs[source_keys[0]].exists())
                 self.assertTrue(artifact_dirs[source_keys[1]].is_dir())
-                self.assertNotIn(source_keys[0], [source["source_key"] for source in store.source_payload()])
+                self.assertNotIn(
+                    source_keys[0],
+                    [source["source_key"] for source in store.source_payload()],
+                )
 
                 status, _, rejected = request_json(
                     port,
@@ -812,7 +868,10 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                     port,
                     "POST",
                     "/api/sources",
-                    {"path": ".hermes/opencode/common_session.jsonl", "adapter": "auto"},
+                    {
+                        "path": ".hermes/opencode/common_session.jsonl",
+                        "adapter": "auto",
+                    },
                     origin=origin,
                 )
                 self.assertEqual(status, 400)
@@ -829,8 +888,12 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
             root = peval_py_workspace(Path(tmp) / "workspace")
             inferred_dir = root / ".opencode"
             inferred_dir.mkdir()
-            shutil.copy(FIXTURES / "common_session.jsonl", root / "common_session.jsonl")
-            shutil.copy(FIXTURES / "common_session.jsonl", inferred_dir / "common_session.jsonl")
+            shutil.copy(
+                FIXTURES / "common_session.jsonl", root / "common_session.jsonl"
+            )
+            shutil.copy(
+                FIXTURES / "common_session.jsonl", inferred_dir / "common_session.jsonl"
+            )
             config = ToolConfig(adapter="opencode", workspace_root=str(root))
             store = open_workspace_state(str(root))
             server = LocalHTTPServer(
@@ -857,7 +920,9 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                     [result["status"] for result in body["import_results"]],
                     ["error", "ok"],
                 )
-                self.assertIn("could not infer adapter", body["import_results"][0]["error"])
+                self.assertIn(
+                    "could not infer adapter", body["import_results"][0]["error"]
+                )
                 self.assertEqual(len(body["import_results"][1]["source_keys"]), 1)
                 self.assertEqual(len(body["sources"]), 1)
                 self.assertEqual(body["sources"][0]["adapter"], "opencode")
@@ -873,9 +938,15 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
             root = peval_py_workspace(Path(tmp) / "workspace")
             inferred_dir = root / ".opencode"
             inferred_dir.mkdir()
-            shutil.copy(FIXTURES / "common_session.jsonl", root / "common_session.jsonl")
-            shutil.copy(FIXTURES / "common_session.jsonl", inferred_dir / "common_session.jsonl")
-            (root / "untagged.csv").write_text("path\ncommon_session.jsonl\n", encoding="utf-8")
+            shutil.copy(
+                FIXTURES / "common_session.jsonl", root / "common_session.jsonl"
+            )
+            shutil.copy(
+                FIXTURES / "common_session.jsonl", inferred_dir / "common_session.jsonl"
+            )
+            (root / "untagged.csv").write_text(
+                "path\ncommon_session.jsonl\n", encoding="utf-8"
+            )
             (root / "inferred.csv").write_text(
                 "path\n.opencode/common_session.jsonl\n",
                 encoding="utf-8",
@@ -1001,7 +1072,9 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 status, active_report = get_report("/api/report")
                 self.assertEqual(status, 200)
                 self.assertEqual(len(active_report["trajectory"]), 1)
-                status, archived_report = get_report("/api/report?source_state=archived")
+                status, archived_report = get_report(
+                    "/api/report?source_state=archived"
+                )
                 self.assertEqual(status, 200)
                 self.assertEqual(len(archived_report["trajectory"]), 2)
                 self.assertEqual(
@@ -1068,7 +1141,9 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                     origin=origin,
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("report_source_state must be active or archived", bad_state["error"])
+                self.assertIn(
+                    "report_source_state must be active or archived", bad_state["error"]
+                )
 
                 status, _, body = request_json(
                     port,
@@ -1123,7 +1198,9 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
             config = ToolConfig(adapter="opencode")
             report = sample_report(config)
             store = open_workspace_state(str(root))
-            source_key = store.ingest_upload("saved-report.json", json.dumps(report), config)[0]
+            source_key = store.ingest_upload(
+                "saved-report.json", json.dumps(report), config
+            )[0]
             source = store.source_payload()[0]
             artifact_dir = root / source["artifact_dir"]
             server = LocalHTTPServer(
@@ -1202,8 +1279,12 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 / "session-b"
                 / "session_t002"
             )
-            write_trial_cell_artifacts(first_cell, session_id="session-a", trial_key="session_t001")
-            write_trial_cell_artifacts(second_cell, session_id="session-b", trial_key="session_t002")
+            write_trial_cell_artifacts(
+                first_cell, session_id="session-a", trial_key="session_t001"
+            )
+            write_trial_cell_artifacts(
+                second_cell, session_id="session-b", trial_key="session_t002"
+            )
             (first_cell / "notes.md").write_text("Imported note.", encoding="utf-8")
             config = ToolConfig(adapter="opencode", workspace_root=str(root))
             store = open_workspace_state(str(root))
@@ -1225,7 +1306,9 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(len(body["sources"]), 2)
-                self.assertEqual(body["report_source_key"], body["sources"][0]["source_key"])
+                self.assertEqual(
+                    body["report_source_key"], body["sources"][0]["source_key"]
+                )
                 self.assertEqual(len(body["report"]["trajectory"]), 2)
                 self.assertEqual(
                     [source["trial_session_id"] for source in body["sources"]],
@@ -1234,7 +1317,9 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 self.assertTrue(body["sources"][0]["snapshot"])
                 self.assertFalse(body["sources"][0]["refreshable"])
                 copied_note = root / body["sources"][0]["artifact_dir"] / "notes.md"
-                self.assertEqual(copied_note.read_text(encoding="utf-8"), "Imported note.")
+                self.assertEqual(
+                    copied_note.read_text(encoding="utf-8"), "Imported note."
+                )
                 self.assertTrue((first_cell / "notes.md").is_file())
             finally:
                 server.shutdown()
@@ -1245,7 +1330,9 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
     def test_http_path_batch_import_continues_after_failed_lines(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_py_workspace(Path(tmp) / "workspace")
-            shutil.copy(FIXTURES / "common_session.jsonl", root / "common_session.jsonl")
+            shutil.copy(
+                FIXTURES / "common_session.jsonl", root / "common_session.jsonl"
+            )
             config = ToolConfig(adapter="opencode", workspace_root=str(root))
             store = open_workspace_state(str(root))
             server = LocalHTTPServer(

@@ -27,7 +27,9 @@ def filters(**overrides):
 
 
 class WorkspaceViewLibraryTests(unittest.TestCase):
-    def test_save_round_trips_unicode_notes_and_requires_explicit_overwrite(self) -> None:
+    def test_save_round_trips_unicode_notes_and_requires_explicit_overwrite(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             library = WorkspaceViewLibrary(root)
@@ -73,7 +75,9 @@ class WorkspaceViewLibraryTests(unittest.TestCase):
             self.assertEqual(library.list(), [replacement])
             self.assertEqual(replacement.notes, "replacement")
             self.assertEqual(replacement.filters.state, "archived")
-            self.assertFalse(any(".tmp-" in item.name for item in path.parent.iterdir()))
+            self.assertFalse(
+                any(".tmp-" in item.name for item in path.parent.iterdir())
+            )
 
             default_view = library.save(
                 name="default",
@@ -105,9 +109,7 @@ class WorkspaceViewLibraryTests(unittest.TestCase):
 
             self.assertEqual(saved.filters.categories, ("frontend", "未分类"))
             self.assertEqual(saved.group_by, "category")
-            stored = (root / "views" / "Category cohort.md").read_text(
-                encoding="utf-8"
-            )
+            stored = (root / "views" / "Category cohort.md").read_text(encoding="utf-8")
             self.assertIn("categories:\n  - frontend\n  - 未分类", stored)
             self.assertIn("group_by: category", stored)
             self.assertEqual(library.list(), [saved])
@@ -189,11 +191,16 @@ class WorkspaceViewLibraryTests(unittest.TestCase):
                 library.delete(["Renamed", "Missing"])
             self.assertTrue((root / "views" / "Renamed.md").is_file())
             self.assertTrue((root / "views" / "Existing.md").is_file())
-            self.assertEqual(library.delete(["Renamed", "Existing"]), ["Renamed", "Existing"])
+            self.assertEqual(
+                library.delete(["Renamed", "Existing"]), ["Renamed", "Existing"]
+            )
             self.assertEqual(library.list(), [])
 
     def test_invalid_or_unsafe_files_do_not_enter_catalog(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside_tmp:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            tempfile.TemporaryDirectory() as outside_tmp,
+        ):
             root = Path(tmp)
             outside = Path(outside_tmp)
             library = WorkspaceViewLibrary(root)

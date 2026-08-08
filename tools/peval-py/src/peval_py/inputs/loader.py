@@ -4,31 +4,44 @@ import argparse
 import re
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any as Any
 
-from peval_py.atif import is_atif_json_path
-from peval_py.adapters import available_adapter_ids, normalize_adapter_id
-from peval_py.input_table import InputTableRow, read_input_tables
-from peval_py.session_select import resolve_session_selectors
-from peval_py.sources import MessageRecord
-from peval_py.models import AdapterAssignments, LoadedInputs, LoadedSession
 from peval_py._inputs.workspace_snapshots import (
-    TRIAL_META_RELATIVE_PATH,
-    TRIAL_TRAJECTORY_RELATIVE_PATH,
-    canonical_trial_cell_paths_for_inputs,
-    infer_workspace_root_from_trial_cell_path,
-    infer_workspace_root_from_trial_cell_paths,
-    loaded_trial_cell_artifact_session,
-    optional_text,
-    resolved_local_path,
-    same_local_path,
+    TRIAL_META_RELATIVE_PATH as TRIAL_META_RELATIVE_PATH,
 )
+from peval_py._inputs.workspace_snapshots import (
+    TRIAL_TRAJECTORY_RELATIVE_PATH as TRIAL_TRAJECTORY_RELATIVE_PATH,
+)
+from peval_py._inputs.workspace_snapshots import (
+    canonical_trial_cell_paths_for_inputs as canonical_trial_cell_paths_for_inputs,
+)
+from peval_py._inputs.workspace_snapshots import (
+    infer_workspace_root_from_trial_cell_path as infer_workspace_root_from_trial_cell_path,
+)
+from peval_py._inputs.workspace_snapshots import (
+    infer_workspace_root_from_trial_cell_paths as infer_workspace_root_from_trial_cell_paths,
+)
+from peval_py._inputs.workspace_snapshots import (
+    loaded_trial_cell_artifact_session,
+)
+from peval_py._inputs.workspace_snapshots import optional_text as optional_text
+from peval_py._inputs.workspace_snapshots import (
+    resolved_local_path as resolved_local_path,
+)
+from peval_py._inputs.workspace_snapshots import same_local_path as same_local_path
+from peval_py.adapters import available_adapter_ids, normalize_adapter_id
+from peval_py.atif import is_atif_json_path
+from peval_py.input_table import InputTableRow, read_input_tables
+from peval_py.models import AdapterAssignments, LoadedInputs, LoadedSession
+from peval_py.session_select import resolve_session_selectors
+from peval_py.sources import MessageRecord as MessageRecord
 
 ADAPTER_SELECTOR_RE = re.compile(r"^([pd])([1-9][0-9]*)=(.+)$")
 SESSION_SELECTOR_RE = re.compile(r"^d([1-9][0-9]*)=(.+)$")
 PSEUDO_ADAPTERS = {"atif", "report"}
 PATH_TOKEN_RE = re.compile(r"[^a-z0-9]+")
 DEFAULT_DB_TOKEN_RE = re.compile(r"^@([A-Za-z0-9_.-]+)$")
+
 
 def parse_adapter_assignments(
     raw_adapters: list[str],
@@ -129,7 +142,9 @@ def load_sessions(
     )
     for index, db in enumerate(dbs, start=1):
         raw_session_ids = session_ids_by_db.get(index) or []
-        resolved_db, token_adapter = resolve_db_input(db, index, adapter_assignments, config)
+        resolved_db, token_adapter = resolve_db_input(
+            db, index, adapter_assignments, config
+        )
         db_path = Path(resolved_db)
         adapter_id = token_adapter or adapter_for_input_path(
             str(db_path),
@@ -227,7 +242,9 @@ def loaded_session_from_table_row(
             source_kind="path",
         )
     if row.db is None:
-        raise ValueError(f"{row.table_path}: row {row.row_number}: missing input source")
+        raise ValueError(
+            f"{row.table_path}: row {row.row_number}: missing input source"
+        )
     db_path = Path(row.db)
     adapter_id = (
         normalize_adapter_id(row.adapter)

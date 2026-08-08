@@ -19,11 +19,11 @@ from peval_py._state.artifacts import (
     source_key_for_trial_cell_components,
     trial_artifacts,
 )
+from peval_py.atif import validate_atif_trajectory
 from peval_py.config import ToolConfig
 from peval_py.report.metrics import final_metric, token_total
 from peval_py.state.constants import SOURCE_STATUS_MISSING, SOURCE_STATUS_OK
 from peval_py.state.store import ServeStateStore
-
 
 CATALOG_SCHEMA_VERSION = 6
 DEFAULT_PAGE_SIZE = 100
@@ -33,6 +33,7 @@ FINGERPRINT_FILES = (
     "agent/trajectory.json",
     "agent/trajectory_meta.json",
     ".peval/state.json",
+    ".peval/harbor-link.json",
     "notes.md",
     "analysis.json",
     "analysis.md",
@@ -191,7 +192,9 @@ class WorkspaceCatalog:
 
     def reconcile(self) -> int:
         if not self._writer_lock.acquire(blocking=False):
-            raise CatalogBusyError("serve catalog is busy with another writer operation")
+            raise CatalogBusyError(
+                "serve catalog is busy with another writer operation"
+            )
         with self._state_lock:
             self._checking = True
         try:
@@ -225,7 +228,9 @@ class WorkspaceCatalog:
                     items=(),
                     facets=_empty_facets(),
                 )
-            where, parameters = self._combined_query_where(query, normalized_any_queries)
+            where, parameters = self._combined_query_where(
+                query, normalized_any_queries
+            )
             total = int(
                 connection.execute(
                     f"SELECT count(*) FROM cells WHERE {where}", parameters
@@ -282,12 +287,16 @@ class WorkspaceCatalog:
     ) -> Iterator[tuple[int, list[dict[str, Any]]]]:
         """Hold one catalog generation while a read-only export is assembled."""
         if not self._writer_lock.acquire(blocking=False):
-            raise CatalogBusyError("serve catalog is busy with another writer operation")
+            raise CatalogBusyError(
+                "serve catalog is busy with another writer operation"
+            )
         try:
             if self.checking:
                 raise CatalogBusyError("serve catalog is checking runs")
             normalized = query.normalized()
-            resolved_any_queries = any_queries() if callable(any_queries) else any_queries
+            resolved_any_queries = (
+                any_queries() if callable(any_queries) else any_queries
+            )
             normalized_any = tuple(item.normalized() for item in resolved_any_queries)
             selected = list(
                 dict.fromkeys(str(key) for key in selected_source_keys if str(key))
@@ -310,7 +319,9 @@ class WorkspaceCatalog:
                     missing = next((key for key in selected if key not in found), None)
                     if missing is not None:
                         raise ValueError(f"unknown source: {missing}")
-                where, parameters = self._combined_query_where(normalized, normalized_any)
+                where, parameters = self._combined_query_where(
+                    normalized, normalized_any
+                )
                 sort_expression = _sort_expression(normalized.sort)
                 direction = "ASC" if normalized.direction == "asc" else "DESC"
                 records = connection.execute(
@@ -336,7 +347,9 @@ class WorkspaceCatalog:
     def workspace_write_guard(self) -> Iterator[None]:
         """Serialize file-backed workspace writes with catalog snapshots."""
         if not self._writer_lock.acquire(blocking=False):
-            raise CatalogBusyError("serve catalog is busy with another writer operation")
+            raise CatalogBusyError(
+                "serve catalog is busy with another writer operation"
+            )
         try:
             if self.checking:
                 raise CatalogBusyError("serve catalog is checking runs")
@@ -497,7 +510,9 @@ class WorkspaceCatalog:
                 self._current_operation is not None
                 and self._current_operation.state in {"queued", "running"}
             ):
-                raise CatalogBusyError("serve catalog is busy with another writer operation")
+                raise CatalogBusyError(
+                    "serve catalog is busy with another writer operation"
+                )
             status = OperationStatus(
                 operation_id=uuid.uuid4().hex,
                 operation_type=str(operation_type),
@@ -516,7 +531,9 @@ class WorkspaceCatalog:
 
     def mutate(self, action: Callable[[], Any]) -> tuple[int, Any]:
         if not self._writer_lock.acquire(blocking=False):
-            raise CatalogBusyError("serve catalog is busy with another writer operation")
+            raise CatalogBusyError(
+                "serve catalog is busy with another writer operation"
+            )
         with self._state_lock:
             if self._checking:
                 self._writer_lock.release()
@@ -550,7 +567,9 @@ class WorkspaceCatalog:
     ) -> None:
         try:
             if not self._writer_lock.acquire(blocking=False):
-                raise CatalogBusyError("serve catalog is busy with another writer operation")
+                raise CatalogBusyError(
+                    "serve catalog is busy with another writer operation"
+                )
             try:
                 with self._workspace_writer_lease():
                     with self._state_lock:
@@ -572,7 +591,12 @@ class WorkspaceCatalog:
                                     "status": "error",
                                     "error": str(exc),
                                 }
-                                if isinstance(item, (str, int, float, bool, dict, list)) or item is None:
+                                if (
+                                    isinstance(
+                                        item, (str, int, float, bool, dict, list)
+                                    )
+                                    or item is None
+                                ):
                                     failure["item"] = item
                                 status.failures.append(failure)
                         with self._state_lock:
@@ -585,7 +609,9 @@ class WorkspaceCatalog:
         except Exception as exc:  # noqa: BLE001 - operation thread boundary.
             with self._state_lock:
                 status.state = "failed"
-                status.failures.append({"index": None, "status": "error", "error": str(exc)})
+                status.failures.append(
+                    {"index": None, "status": "error", "error": str(exc)}
+                )
         finally:
             with self._state_lock:
                 self._checking = False
@@ -597,7 +623,10 @@ class WorkspaceCatalog:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = {
-                str(row["artifact_dir"]): (str(row["fingerprint"]), str(row["source_key"]))
+                str(row["artifact_dir"]): (
+                    str(row["fingerprint"]),
+                    str(row["source_key"]),
+                )
                 for row in connection.execute(
                     "SELECT artifact_dir, fingerprint, source_key FROM cells"
                 )
@@ -620,7 +649,9 @@ class WorkspaceCatalog:
                     connection.execute(
                         "DELETE FROM cell_search WHERE source_key = ?", (prior[1],)
                     )
-                connection.execute("DELETE FROM cell_search WHERE source_key = ?", (source_key,))
+                connection.execute(
+                    "DELETE FROM cell_search WHERE source_key = ?", (source_key,)
+                )
                 connection.execute(
                     """
                     INSERT INTO cells (
@@ -668,11 +699,18 @@ class WorkspaceCatalog:
                 if artifact_dir not in seen
             ]
             for artifact_dir, source_key in removed:
-                connection.execute("DELETE FROM cells WHERE artifact_dir = ?", (artifact_dir,))
-                if connection.execute(
-                    "SELECT 1 FROM cells WHERE source_key = ?", (source_key,)
-                ).fetchone() is None:
-                    connection.execute("DELETE FROM cell_search WHERE source_key = ?", (source_key,))
+                connection.execute(
+                    "DELETE FROM cells WHERE artifact_dir = ?", (artifact_dir,)
+                )
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM cells WHERE source_key = ?", (source_key,)
+                    ).fetchone()
+                    is None
+                ):
+                    connection.execute(
+                        "DELETE FROM cell_search WHERE source_key = ?", (source_key,)
+                    )
             generation = self._meta_int(connection, "generation", 0) + 1
             self._set_meta(connection, "generation", str(generation))
             self._set_meta(connection, "valid_generation", "1")
@@ -684,7 +722,15 @@ class WorkspaceCatalog:
     ) -> tuple[dict[str, Any], bool, str]:
         identity = self.store.cell_path_identity(cell_dir)
         artifact_dir = relative_to_root(self.store.paths.root, cell_dir)
-        source_key = self.store.source_key_for_cell_identity(identity)
+        link: dict[str, Any] | None = None
+        link_error: str | None = None
+        try:
+            link = self.store.read_harbor_link(cell_dir)
+        except ValueError as exc:
+            link_error = str(exc)
+        source_key = optional_str(
+            (link or {}).get("source_key")
+        ) or self.store.source_key_for_cell_identity(identity)
         if not source_key:
             source_key = source_key_for_trial_cell_components(
                 eval_slug=self.config.analysis_eval_slug,
@@ -694,21 +740,33 @@ class WorkspaceCatalog:
             )
         artifacts = trial_artifacts(cell_dir)
         try:
+            if link_error is not None:
+                raise ValueError(link_error)
             if not _has_complete_artifacts(cell_dir):
                 raise ValueError(f"Trial cell artifacts not found: {artifact_dir}")
             trajectory = read_json_object(artifacts.trajectory_path)
+            try:
+                validate_atif_trajectory(trajectory, str(artifacts.trajectory_path))
+            except ValueError as exc:
+                raise ValueError(f"Invalid ATIF artifact: {exc}") from exc
             meta = read_json_object(artifacts.meta_path)
             state = self.store.read_source_state(cell_dir)
             source = self.store.source_row_for_artifact_cell(cell_dir, trajectory, meta)
             source["source_alias"] = optional_str(state.get("source_alias"))
             source["source_category"] = self.store.source_category_from_state(state)
             source["source_tags"] = self.store.source_tags_from_state(state)
-            source_key = source_key_for_trial(
+            source_key = optional_str(
+                (link or {}).get("source_key")
+            ) or source_key_for_trial(
                 self.config.analysis_eval_slug, source, trajectory, meta
             )
             summary = _catalog_summary(trajectory, meta, cell_dir)
             timestamp = _artifact_updated_at_ms(cell_dir)
-            status = optional_str(state.get("last_status")) or SOURCE_STATUS_OK
+            status = (
+                optional_str(state.get("last_status"))
+                or optional_str((link or {}).get("last_status"))
+                or SOURCE_STATUS_OK
+            )
             row = {
                 "source_key": source_key,
                 **source,
@@ -716,17 +774,23 @@ class WorkspaceCatalog:
                 "artifact_updated_at_ms": timestamp,
                 **summary,
                 "artifact_revision": fingerprint,
-                "refreshable": False,
+                "refreshable": link is not None,
                 "active": bool(state.get("active", True)),
-                "snapshot": True,
+                "snapshot": link is None,
                 "readable": True,
                 "created_at_ms": int(state.get("created_at_ms") or timestamp),
                 "updated_at_ms": int(state.get("updated_at_ms") or timestamp),
                 "last_status": status,
-                "last_error": optional_str(state.get("last_error")),
-                "last_refreshed_at_ms": None,
+                "last_error": optional_str(state.get("last_error"))
+                or optional_str((link or {}).get("last_error")),
+                "last_refreshed_at_ms": optional_int((link or {}).get("synced_at_ms")),
                 "input_bytes": artifacts.trajectory_path.stat().st_size
-                + artifacts.meta_path.stat().st_size,
+                + artifacts.meta_path.stat().st_size
+                + (
+                    self.store.harbor_link_path(cell_dir).stat().st_size
+                    if link is not None
+                    else 0
+                ),
             }
             return row, True, _search_document(row, trajectory)
         except Exception as exc:  # noqa: BLE001 - one malformed cell must not abort a generation.
@@ -738,24 +802,28 @@ class WorkspaceCatalog:
             timestamp = _artifact_updated_at_ms(cell_dir)
             row = {
                 "source_key": source_key,
-                **self.store.missing_source_row(artifact_dir, identity, state),
+                **self.store.missing_source_row(artifact_dir, identity, state, link),
                 "artifact_dir": artifact_dir,
                 "artifact_updated_at_ms": timestamp,
                 **self.store.missing_trial_summary(identity),
                 "artifact_revision": fingerprint,
-                "refreshable": False,
+                "refreshable": link is not None,
                 "active": bool(state.get("active", True)),
-                "snapshot": True,
+                "snapshot": link is None,
                 "readable": False,
                 "created_at_ms": int(state.get("created_at_ms") or timestamp),
                 "updated_at_ms": int(state.get("updated_at_ms") or timestamp),
-                "last_status": (
+                "last_status": optional_str(state.get("last_status"))
+                or optional_str((link or {}).get("last_status"))
+                or (
                     SOURCE_STATUS_MISSING
                     if not _has_complete_artifacts(cell_dir)
                     else "error"
                 ),
-                "last_error": str(exc),
-                "last_refreshed_at_ms": None,
+                "last_error": optional_str(state.get("last_error"))
+                or optional_str((link or {}).get("last_error"))
+                or str(exc),
+                "last_refreshed_at_ms": optional_int((link or {}).get("synced_at_ms")),
                 "input_bytes": sum(
                     path.stat().st_size
                     for path in (artifacts.trajectory_path, artifacts.meta_path)
@@ -773,10 +841,19 @@ class WorkspaceCatalog:
             for session in _scandir_dirs(agent):
                 for cell in _scandir_dirs(session):
                     state_path = self.store.source_state_path(cell)
-                    if _has_complete_artifacts(cell) or (
-                        state_path.is_file()
-                        and not state_path.is_symlink()
-                        and not state_path.parent.is_symlink()
+                    link_path = self.store.harbor_link_path(cell)
+                    if (
+                        _has_complete_artifacts(cell)
+                        or (
+                            state_path.is_file()
+                            and not state_path.is_symlink()
+                            and not state_path.parent.is_symlink()
+                        )
+                        or (
+                            link_path.is_file()
+                            and not link_path.is_symlink()
+                            and not link_path.parent.is_symlink()
+                        )
                     ):
                         found.add(cell)
         return sorted(found, key=lambda path: path.as_posix())
@@ -921,7 +998,9 @@ class WorkspaceCatalog:
             with self._connect() as connection:
                 self._create_schema(connection)
         except sqlite3.Error as exc:
-            raise RuntimeError(f"SQLite FTS5 with trigram support is required: {exc}") from exc
+            raise RuntimeError(
+                f"SQLite FTS5 with trigram support is required: {exc}"
+            ) from exc
 
     def _create_schema(self, connection: sqlite3.Connection) -> None:
         connection.executescript(
@@ -1064,9 +1143,7 @@ class WorkspaceCatalog:
             return None
         return str(row[0]) if row is not None else None
 
-    def _meta_int(
-        self, connection: sqlite3.Connection, key: str, default: int
-    ) -> int:
+    def _meta_int(self, connection: sqlite3.Connection, key: str, default: int) -> int:
         value = self._meta(connection, key)
         try:
             return int(value) if value is not None else default
@@ -1123,7 +1200,10 @@ def _artifact_updated_at_ms(cell_dir: Path) -> int:
     values: list[int] = []
     for relative in FINGERPRINT_FILES:
         try:
-            values.append((cell_dir / relative).stat(follow_symlinks=False).st_mtime_ns // 1_000_000)
+            values.append(
+                (cell_dir / relative).stat(follow_symlinks=False).st_mtime_ns
+                // 1_000_000
+            )
         except OSError:
             continue
     return max(values) if values else 0
@@ -1245,9 +1325,13 @@ def _catalog_summary(
     if not isinstance(agent, dict):
         agent = {}
     warnings = meta.get("warnings")
-    analysis_present = any((cell_dir / name).is_file() for name in ("analysis.json", "analysis.md"))
+    analysis_present = any(
+        (cell_dir / name).is_file() for name in ("analysis.json", "analysis.md")
+    )
     return {
-        "trial_key": optional_str(meta.get("trial_key") or trajectory.get("trajectory_id")),
+        "trial_key": optional_str(
+            meta.get("trial_key") or trajectory.get("trajectory_id")
+        ),
         "trial_session_id": optional_str(trajectory.get("session_id")),
         "step_outline": _step_outline(trajectory, meta),
         "last_turn_finished_at_ms": optional_int(meta.get("finished_at_ms")),
@@ -1257,7 +1341,9 @@ def _catalog_summary(
         "model_duration_ms": _measured_model_duration_ms(trajectory, meta),
         "turns": _optional_number(final_metric(metrics, "total_turns")),
         "total_tool_calls": _optional_number(final_metric(metrics, "total_tool_calls")),
-        "total_tool_errors": _optional_number(final_metric(metrics, "total_tool_errors")),
+        "total_tool_errors": _optional_number(
+            final_metric(metrics, "total_tool_errors")
+        ),
         "tokens": token_total(metrics),
         "cost_usd": _optional_number(metrics.get("total_cost_usd")),
         "warnings": len(warnings) if isinstance(warnings, list) else 0,
@@ -1266,7 +1352,9 @@ def _catalog_summary(
     }
 
 
-def _step_outline(trajectory: dict[str, Any], meta: dict[str, Any]) -> list[dict[str, Any]]:
+def _step_outline(
+    trajectory: dict[str, Any], meta: dict[str, Any]
+) -> list[dict[str, Any]]:
     metadata_by_step_id = {
         str(step.get("step_id")): step
         for step in meta.get("steps", [])
@@ -1378,11 +1466,15 @@ def _append_search_value(values: list[str], value: Any) -> None:
 
 
 def _normalized_values(values: Iterable[str]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+    return tuple(
+        dict.fromkeys(str(value).strip() for value in values if str(value).strip())
+    )
 
 
 def _escape_like(value: str) -> str:
-    return value.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return (
+        value.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
 
 
 def _fts_literal(value: str) -> str:

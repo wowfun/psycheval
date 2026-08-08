@@ -4,8 +4,13 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
-from peval_py.atif import convert_db, convert_path, convert_records
 from peval_py.adapters.base import ConversionResult
+from peval_py.atif import (
+    _finalize_atif_session_context,
+    convert_db,
+    convert_path,
+    convert_records,
+)
 from peval_py.config import ToolConfig, config_for_adapter
 from peval_py.models import LoadedInputs, LoadedSession
 from peval_py.report import (
@@ -35,12 +40,17 @@ def convert_session(session: LoadedSession, config: ToolConfig) -> ConversionRes
         raise ValueError("workspace snapshot sessions are already converted")
     session_config = config_for_session(session, config)
     if session.db_path is not None:
-        return convert_db(session.db_path, session.session_hint, session_config)
-    if session.records is None:
+        result = convert_db(session.db_path, session.session_hint, session_config)
+    elif session.records is None:
         if not session.input_path:
             raise ValueError("path input is missing a source path")
-        return convert_path(session.input_path, session_config)
-    return convert_records(session.records, session_config)
+        result = convert_path(session.input_path, session_config)
+    else:
+        result = convert_records(session.records, session_config)
+    return _finalize_atif_session_context(
+        result,
+        session.session_hint if session.adapter_id != "atif" else None,
+    )
 
 
 def report_session_for_loaded(
@@ -65,11 +75,12 @@ def build_report_from_loaded_inputs(
 ) -> dict:
     if not loaded_inputs.sessions:
         return empty_report("view")
-    if any(session.snapshot_trajectory is not None for session in loaded_inputs.sessions):
+    if any(
+        session.snapshot_trajectory is not None for session in loaded_inputs.sessions
+    ):
         return build_report_from_loaded_snapshots(loaded_inputs, config, raw_notes)
     report_sessions = [
-        report_session_for_loaded(session, config)
-        for session in loaded_inputs.sessions
+        report_session_for_loaded(session, config) for session in loaded_inputs.sessions
     ]
     notes = parse_notes(
         [*(raw_notes or []), *loaded_inputs.notes],
@@ -87,12 +98,19 @@ def build_report_from_loaded_snapshots(
     metas: list[dict[str, Any]] = []
     source_reports: list[dict[str, Any]] = []
     for session in loaded_inputs.sessions:
-        if session.snapshot_trajectory is not None and session.snapshot_meta is not None:
+        if (
+            session.snapshot_trajectory is not None
+            and session.snapshot_meta is not None
+        ):
             trajectories.append(deepcopy(session.snapshot_trajectory))
-            metas.append(meta_with_loaded_alias(session.snapshot_meta, session.source_alias))
+            metas.append(
+                meta_with_loaded_alias(session.snapshot_meta, session.source_alias)
+            )
             source_reports.append(deepcopy(session.snapshot_source_report or {}))
             continue
-        report = build_multi_report([report_session_for_loaded(session, config)], config, [])
+        report = build_multi_report(
+            [report_session_for_loaded(session, config)], config, []
+        )
         trajectories.append(deepcopy(report["trajectory"][0]))
         metas.append(deepcopy(report["trajectory_meta"][0]))
         source_reports.append(report)
@@ -141,7 +159,9 @@ def merge_annotations(report: dict[str, Any], annotations: dict[str, Any]) -> No
     includes = report.setdefault("includes", ["core"])
     if "annotations" not in includes:
         includes.append("annotations")
-    existing.setdefault("report_notes", []).extend(annotations.get("report_notes") or [])
+    existing.setdefault("report_notes", []).extend(
+        annotations.get("report_notes") or []
+    )
     existing.setdefault("notes", []).extend(annotations.get("notes") or [])
     if annotations.get("analysis"):
         existing.setdefault("analysis", []).extend(annotations["analysis"])

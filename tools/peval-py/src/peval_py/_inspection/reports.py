@@ -8,14 +8,21 @@ from typing import Any
 from peval_py.inputs import AdapterAssignments, load_inputs
 from peval_py.pipeline import build_report_from_loaded_inputs
 
+
 def inspect_report_for_args(
     args: argparse.Namespace,
     adapter_assignments: AdapterAssignments,
     config: object,
 ) -> dict[str, Any]:
-    direct_reports, remaining_paths = direct_inspect_reports(getattr(args, "path", None) or [])
+    direct_reports, remaining_paths = direct_inspect_reports(
+        getattr(args, "path", None) or []
+    )
     reports = direct_reports[:]
-    if remaining_paths or getattr(args, "db", None) or getattr(args, "input_table", None):
+    if (
+        remaining_paths
+        or getattr(args, "db", None)
+        or getattr(args, "input_table", None)
+    ):
         load_args = argparse.Namespace(**{**vars(args), "path": remaining_paths})
         loaded_inputs = load_inputs(load_args, adapter_assignments, config=config)
         if loaded_inputs.sessions:
@@ -92,9 +99,11 @@ def is_report_json(value: Any) -> bool:
 
 
 def is_atif_trajectory(value: Any) -> bool:
-    return isinstance(value, dict) and str(value.get("schema_version") or "").startswith(
-        "ATIF-"
-    ) and isinstance(value.get("agent"), dict)
+    return (
+        isinstance(value, dict)
+        and str(value.get("schema_version") or "").startswith("ATIF-")
+        and isinstance(value.get("agent"), dict)
+    )
 
 
 def meta_list_from_json(value: Any) -> list[dict[str, Any]] | None:
@@ -107,14 +116,23 @@ def meta_list_from_json(value: Any) -> list[dict[str, Any]] | None:
 
 
 def looks_like_meta(value: dict[str, Any]) -> bool:
-    keys = {"trial_key", "adapter", "status", "steps", "duration_ms", "wall_duration_ms"}
+    keys = {
+        "trial_key",
+        "adapter",
+        "status",
+        "steps",
+        "duration_ms",
+        "wall_duration_ms",
+    }
     return bool(keys & set(value))
 
 
 def meta_from_trajectory(trajectory: dict[str, Any], path: Path) -> dict[str, Any]:
     steps = trajectory.get("steps") if isinstance(trajectory.get("steps"), list) else []
     return {
-        "trial_key": str(trajectory.get("trajectory_id") or trajectory.get("session_id") or path.stem),
+        "trial_key": str(
+            trajectory.get("trajectory_id") or trajectory.get("session_id") or path.stem
+        ),
         "adapter": "atif",
         "status": "passed",
         "warnings": [],

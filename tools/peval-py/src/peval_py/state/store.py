@@ -31,7 +31,6 @@ class ServeStateStore(
         return None
 
 
-
 def open_workspace_state(root: str | None = None) -> ServeStateStore:
     resolved = resolve_workspace_root(root)
     return ServeStateStore(workspace_paths(resolved))

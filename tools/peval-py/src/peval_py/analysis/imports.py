@@ -16,6 +16,7 @@ from peval_py.analysis.constants import (
     PEVAL_PY_CONFIG,
 )
 
+
 @dataclass(frozen=True)
 class AnalysisImportResult:
     run_path: str
@@ -179,9 +180,7 @@ def read_analysis_markdown_input(path: Path) -> str:
     except FileNotFoundError as exc:
         raise ValueError(f"analysis Markdown input not found: {path}") from exc
     except UnicodeDecodeError as exc:
-        raise ValueError(
-            f"analysis Markdown input is not valid UTF-8: {path}"
-        ) from exc
+        raise ValueError(f"analysis Markdown input is not valid UTF-8: {path}") from exc
     except OSError as exc:
         raise ValueError(f"cannot read analysis Markdown input {path}: {exc}") from exc
 
@@ -230,7 +229,9 @@ def compile_analysis_json_input(
     cell_key: str,
 ) -> dict[str, Any]:
     allowed = set(ANALYSIS_INPUT_FIELDS)
-    compiled = {key: deepcopy(value) for key, value in payload.items() if key in allowed}
+    compiled = {
+        key: deepcopy(value) for key, value in payload.items() if key in allowed
+    }
     status = compiled.get("status")
     if not isinstance(status, str) or not status.strip():
         compiled["status"] = "analyzed"

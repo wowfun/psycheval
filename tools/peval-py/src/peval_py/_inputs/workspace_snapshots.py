@@ -18,6 +18,7 @@ TRIAL_TRAJECTORY_RELATIVE_PATH = Path("agent") / "trajectory.json"
 TRIAL_META_RELATIVE_PATH = Path("agent") / "trajectory_meta.json"
 TRIAL_CELL_GLOB_SUFFIXES = ("/**/*", "\\**\\*", "/**", "\\**")
 
+
 def loaded_trial_cell_artifact_session(
     raw_path: str,
     config: object | None,
@@ -140,8 +141,7 @@ def looks_like_trial_cell_artifact_path(path: Path) -> bool:
         return False
     parts = path.parts
     return any(
-        part == "runs" and len(parts) - index == 5
-        for index, part in enumerate(parts)
+        part == "runs" and len(parts) - index == 5 for index, part in enumerate(parts)
     )
 
 
@@ -218,8 +218,9 @@ def row_artifact_path(row: dict[str, Any], workspace_root: object) -> Path | Non
     if not raw_artifact_dir:
         return None
     artifact_path = Path(str(raw_artifact_dir)).expanduser()
-    if not artifact_path.is_absolute() and not path_config.is_windows_absolute_like_path(
-        str(raw_artifact_dir)
+    if (
+        not artifact_path.is_absolute()
+        and not path_config.is_windows_absolute_like_path(str(raw_artifact_dir))
     ):
         artifact_path = Path(str(workspace_root)).expanduser() / artifact_path
     return artifact_path
@@ -378,7 +379,9 @@ def load_workspace_snapshot_sessions_from_rows(
 
 
 def workspace_snapshot_session_id(row: dict[str, Any]) -> str | None:
-    return optional_text(row.get("trial_session_id")) or optional_text(row.get("session_id"))
+    return optional_text(row.get("trial_session_id")) or optional_text(
+        row.get("session_id")
+    )
 
 
 def optional_text(value: Any) -> str | None:

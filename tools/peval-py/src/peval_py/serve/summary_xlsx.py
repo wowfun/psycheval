@@ -9,7 +9,6 @@ import xlsxwriter
 
 from peval_py.i18n import messages_for
 
-
 EXCEL_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 SUMMARY_STATISTICS = ("mean", "min", "q1", "p50", "q3", "p95", "max")
 SUMMARY_METRICS = (
@@ -33,7 +32,9 @@ class SummaryWorksheet:
     metadata: Sequence[tuple[str, str | int]] = ()
 
 
-def summary_workbook(sheets: Sequence[SummaryWorksheet], *, locale: str = "en") -> bytes:
+def summary_workbook(
+    sheets: Sequence[SummaryWorksheet], *, locale: str = "en"
+) -> bytes:
     if not sheets:
         raise ValueError("summary workbook must include at least one worksheet")
     output = io.BytesIO()
@@ -142,7 +143,9 @@ def _write_summary_sheet(
     )
     rows, metric_ranges = _summary_rows(sheet, messages)
     for column, header in enumerate(headers):
-        worksheet.write_string(table_header_row, column, header, formats["table_header"])
+        worksheet.write_string(
+            table_header_row, column, header, formats["table_header"]
+        )
 
     for row_offset, row_values in enumerate(rows, start=1):
         row = table_header_row + row_offset
@@ -213,9 +216,7 @@ def _write_summary_sheet(
             {"name": f"{metric_labels[metric_key]} · {sheet.statistic.upper()}"}
         )
         chart.set_legend({"none": True})
-        chart.set_chartarea(
-            {"border": {"none": True}, "fill": {"color": "#FFFDF8"}}
-        )
+        chart.set_chartarea({"border": {"none": True}, "fill": {"color": "#FFFDF8"}})
         chart.set_plotarea(
             {"border": {"color": "#DED8CC"}, "fill": {"color": "#FFFDF8"}}
         )
@@ -243,8 +244,7 @@ def _excel_string_chunks(value: str) -> list[str]:
     # surrogate pair within Excel's 32,767-character cell limit.
     cell_limit = 16_000
     return [
-        value[index : index + cell_limit]
-        for index in range(0, len(value), cell_limit)
+        value[index : index + cell_limit] for index in range(0, len(value), cell_limit)
     ] or [""]
 
 

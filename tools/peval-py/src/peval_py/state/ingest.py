@@ -29,17 +29,23 @@ from peval_py._state.sources import (
     trial_payload_from_report,
 )
 from peval_py.analysis import write_note_file
-from peval_py.atif import convert_atif_trajectory, is_atif_trajectory
+from peval_py.atif import (
+    convert_atif_trajectory,
+    is_atif_trajectory,
+    validate_atif_trajectory,
+)
 from peval_py.config import ToolConfig, config_for_adapter
 from peval_py.models import LoadedInputs, LoadedSession
 from peval_py.pipeline import report_session_for_loaded
-from peval_py.report import ReportSession, build_multi_report
+from peval_py.report import ReportSession, build_multi_report, project_meta_from_atif
 from peval_py.sources import read_jsonl_text
 from peval_py.state.constants import (
     SOURCE_STATUS_MISSING,
     SOURCE_STATUS_OK,
     UPLOAD_LIMIT_BYTES,
 )
+from peval_py.state.harbor import is_harbor_source
+from peval_py.state.harbor import sync_harbor_trials as sync_linked_harbor_trials
 from peval_py.state.summaries import now_ms, trial_summary
 
 
@@ -101,6 +107,8 @@ class StateIngestMixin:
                 report_session = report_session_for_loaded(session, config)
                 report = build_multi_report([report_session], config, [])
                 trajectory, meta = trial_payload_from_report(report)
+            validate_atif_trajectory(trajectory)
+            meta = project_meta_from_atif(trajectory, meta)
             source_key = source_key_for_trial(
                 eval_slug,
                 source,
@@ -152,10 +160,14 @@ class StateIngestMixin:
                 snapshot=snapshot,
                 status=SOURCE_STATUS_OK,
             )
-            self.log_refresh(source_key, SOURCE_STATUS_OK, warning_count, None, timestamp)
+            self.log_refresh(
+                source_key, SOURCE_STATUS_OK, warning_count, None, timestamp
+            )
         return ordered_keys
 
-    def refresh_sources(self, source_keys: list[str] | None, config: ToolConfig) -> None:
+    def refresh_sources(
+        self, source_keys: list[str] | None, config: ToolConfig
+    ) -> None:
         rows = self.source_rows(source_keys=source_keys, active_only=False)
         for row in rows:
             if not row["refreshable"]:
@@ -163,6 +175,14 @@ class StateIngestMixin:
             self.refresh_source(row, config)
 
     def refresh_source(self, source: dict[str, Any], config: ToolConfig) -> None:
+        if is_harbor_source(source):
+            sync_linked_harbor_trials(
+                self,
+                config,
+                source_keys={str(source["source_key"])},
+                force=True,
+            )
+            return
         source_key = source["source_key"]
         timestamp = now_ms()
         try:
@@ -187,10 +207,15 @@ class StateIngestMixin:
                 snapshot=False,
                 status=SOURCE_STATUS_OK,
             )
-            self.log_refresh(source_key, SOURCE_STATUS_OK, warning_count, None, timestamp)
+            self.log_refresh(
+                source_key, SOURCE_STATUS_OK, warning_count, None, timestamp
+            )
         except Exception as exc:  # noqa: BLE001 - state boundary.
             self.update_source_status(source, "error", str(exc), timestamp)
             self.log_refresh(source_key, "error", 0, str(exc), timestamp)
+
+    def sync_harbor_trials(self, config: ToolConfig) -> list[str]:
+        return sync_linked_harbor_trials(self, config)
 
     def store_report_for_source(
         self,
@@ -314,7 +339,9 @@ class StateIngestMixin:
             if config is not None
             else workspace_analysis_eval_slug(self.paths)
         )
-        prepared: dict[str, tuple[dict[str, Any], dict[str, Any], dict[str, Any], int]] = {}
+        prepared: dict[
+            str, tuple[dict[str, Any], dict[str, Any], dict[str, Any], int]
+        ] = {}
         ordered_keys: list[str] = []
         for index, (trajectory, meta) in enumerate(
             zip(trajectories, metas, strict=True),
@@ -322,9 +349,10 @@ class StateIngestMixin:
         ):
             if not isinstance(trajectory, dict) or not isinstance(meta, dict):
                 raise ValueError("report JSON snapshot contains non-object Trial data")
-            source_label = (
-                f"{label}:{trajectory.get('session_id') or meta.get('trial_key') or index}"
-            )
+            trajectory = deepcopy(trajectory)
+            validate_atif_trajectory(trajectory, f"report.trajectory[{index - 1}]")
+            meta = project_meta_from_atif(trajectory, meta)
+            source_label = f"{label}:{trajectory.get('session_id') or meta.get('trial_key') or index}"
             source = {
                 "kind": "snapshot",
                 "adapter": adapter or optional_str(meta.get("adapter")) or "snapshot",
@@ -419,10 +447,13 @@ class StateIngestMixin:
         del eval_slug
         for cell_dir in self.discover_source_cell_dirs():
             artifacts = trial_artifacts(cell_dir)
-            if not (artifacts.trajectory_path.is_file() and artifacts.meta_path.is_file()):
+            if not (
+                artifacts.trajectory_path.is_file() and artifacts.meta_path.is_file()
+            ):
                 continue
             try:
                 trajectory = read_json_object(artifacts.trajectory_path)
+                validate_atif_trajectory(trajectory, str(artifacts.trajectory_path))
                 meta = read_json_object(artifacts.meta_path)
             except Exception:
                 continue
@@ -455,7 +486,10 @@ class StateIngestMixin:
         return seen_keys
 
     def source_exists(self, source_key: str) -> bool:
-        return any(row.get("source_key") == source_key for row in self.source_rows(active_only=False))
+        return any(
+            row.get("source_key") == source_key
+            for row in self.source_rows(active_only=False)
+        )
 
     def update_existing_artifact_source(
         self,

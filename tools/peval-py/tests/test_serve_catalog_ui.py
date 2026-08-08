@@ -9,7 +9,9 @@ from peval_py.html.assets import load_asset_text
 
 
 class ServeCatalogUiTests(unittest.TestCase):
-    def test_archived_toggle_queries_target_catalog_and_can_return_from_empty_state(self) -> None:
+    def test_archived_toggle_queries_target_catalog_and_can_return_from_empty_state(
+        self,
+    ) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required for report.js archived-toggle coverage")
         asset = load_asset_text("report.js").rsplit('\n"peval-py-entrypoint";', 1)[0]
@@ -67,21 +69,42 @@ const result = vm.runInContext(`(async () => {
 Promise.resolve(result).then(value => console.log(value)).catch(error => { console.error(error && error.stack || error); process.exit(1); });
 """.replace("__ASSET__", json.dumps(asset))
         node = subprocess.run(
-            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
         )
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
 
-        active_toggle = result["activeControls"].split("data-source-state-toggle", 1)[1].split(">", 1)[0]
-        archived_toggle = result["archivedControls"].split("data-source-state-toggle", 1)[1].split(">", 1)[0]
-        all_toggle = result["allControls"].split("data-source-state-toggle", 1)[1].split(">", 1)[0]
+        active_toggle = (
+            result["activeControls"]
+            .split("data-source-state-toggle", 1)[1]
+            .split(">", 1)[0]
+        )
+        archived_toggle = (
+            result["archivedControls"]
+            .split("data-source-state-toggle", 1)[1]
+            .split(">", 1)[0]
+        )
+        all_toggle = (
+            result["allControls"]
+            .split("data-source-state-toggle", 1)[1]
+            .split(">", 1)[0]
+        )
         self.assertNotIn("disabled", active_toggle)
         self.assertIn("checked", archived_toggle)
         self.assertNotIn("disabled", archived_toggle)
         self.assertIn("checked", all_toggle)
         self.assertIn("disabled", all_toggle)
-        self.assertEqual(result["emptyArchived"], {"mode": "archived", "total": 0, "rows": 0})
-        catalog_requests = [path for path in result["requests"] if path.startswith("/api/catalog?")]
+        self.assertEqual(
+            result["emptyArchived"], {"mode": "archived", "total": 0, "rows": 0}
+        )
+        catalog_requests = [
+            path for path in result["requests"] if path.startswith("/api/catalog?")
+        ]
         self.assertEqual(len(catalog_requests), 2)
         self.assertIn("state=archived", catalog_requests[0])
         self.assertIn("state=active", catalog_requests[1])
@@ -258,15 +281,26 @@ const result = vm.runInContext(`(async () => {
 Promise.resolve(result).then(value => console.log(value)).catch(error => { console.error(error && error.stack || error); process.exit(1); });
 """.replace("__ASSET__", json.dumps(asset))
         node = subprocess.run(
-            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
         )
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
 
-        self.assertEqual(result["calls"], ["source-user", "source-no-user", "source-node"])
+        self.assertEqual(
+            result["calls"], ["source-user", "source-no-user", "source-node"]
+        )
         self.assertEqual(
             result["afterUser"],
-            {"source": "source-user", "trial": "trial-user", "step": {"trialKey": "trial-user", "stepId": "2"}},
+            {
+                "source": "source-user",
+                "trial": "trial-user",
+                "step": {"trialKey": "trial-user", "stepId": "2"},
+            },
         )
         self.assertEqual(
             result["afterNoUser"],
@@ -274,7 +308,11 @@ Promise.resolve(result).then(value => console.log(value)).catch(error => { conso
         )
         self.assertEqual(
             result["afterNode"],
-            {"source": "source-node", "trial": "trial-node", "step": {"trialKey": "trial-node", "stepId": "4"}},
+            {
+                "source": "source-node",
+                "trial": "trial-node",
+                "step": {"trialKey": "trial-node", "stepId": "4"},
+            },
         )
         self.assertIn('data-source-key="source-user"', result["userOutline"])
         self.assertIn('data-step-id="2"', result["userOutline"])

@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
+from peval_py.adapters.base import ConversionResult
 from peval_py.analysis import (
     ANALYSIS_REPORT_FIELDS,
     RESERVED_ANALYSIS_METRIC_KEYS,
     cached_analysis_report,
     cached_note_report,
 )
-from peval_py.adapters.base import (
-    ConversionResult,
+from peval_py.atif import (
+    _finalize_atif_session_context,
+    atif_timestamp_ms,
+    step_meta_from_atif_step,
+    validate_atif_trajectory,
 )
 from peval_py.config import ToolConfig
 from peval_py.models import NoteInput, ReportSession
@@ -47,7 +52,9 @@ def build_multi_report(
     prepared: list[dict[str, Any]] = []
     seen_trial_keys: dict[str, int] = {}
     for index, session in enumerate(sessions, start=1):
-        prepared.append(prepare_session_report(index, session, config, multi, seen_trial_keys))
+        prepared.append(
+            prepare_session_report(index, session, config, multi, seen_trial_keys)
+        )
 
     trajectories = [item["trajectory"] for item in prepared]
     metas = [item["meta"] for item in prepared]
@@ -81,15 +88,23 @@ def build_report_from_snapshots(
         raise ValueError("trajectory and meta snapshot counts differ")
     if not trajectories:
         return empty_report(input_label)
+    for index, trajectory in enumerate(trajectories):
+        validate_atif_trajectory(trajectory, f"report.trajectory[{index}]")
+    projected_metas = [
+        project_meta_from_atif(trajectory, meta)
+        for trajectory, meta in zip(trajectories, metas, strict=True)
+    ]
     includes = ["core"]
     report: dict[str, Any] = {
         "schema_version": VIEW_SCHEMA_VERSION,
         "includes": includes,
         "trajectory": trajectories,
-        "trajectory_meta": metas,
+        "trajectory_meta": projected_metas,
     }
-    notes = note_reports_from_snapshots(source_reports or [], metas)
-    analyses = analysis_reports_from_snapshots(source_reports or [], trajectories, metas)
+    notes = note_reports_from_snapshots(source_reports or [], projected_metas)
+    analyses = analysis_reports_from_snapshots(
+        source_reports or [], trajectories, projected_metas
+    )
     if notes or analyses:
         includes.append("annotations")
         report["annotations"] = {"report_notes": [], "notes": notes}
@@ -114,22 +129,27 @@ def prepare_session_report(
     multi: bool,
     seen_trial_keys: dict[str, int],
 ) -> dict[str, Any]:
-    conversion = session.conversion
+    conversion = _finalize_atif_session_context(
+        session.conversion,
+        session.session_hint if session.adapter_id != "atif" else None,
+    )
     trajectory = deepcopy(conversion.trajectory)
-    session_id = display_session_id(trajectory, session.session_hint)
-    if session_id:
-        trajectory["session_id"] = session_id
     if config.redact:
         trajectory = redact_value(trajectory)
+    validate_atif_trajectory(trajectory)
     trial_key = trial_key_for(index, trajectory, config, multi, seen_trial_keys)
-    started = conversion.started_at_ms or 0
-    finished = conversion.finished_at_ms or started
+    started, finished = canonical_time_bounds(
+        trajectory,
+        conversion.started_at_ms,
+        conversion.finished_at_ms,
+    )
     wall_duration = max(0, finished - started)
     steps = step_meta_reports(
         conversion.steps_meta,
         started,
         conversion.timestamp_semantics,
     )
+    project_canonical_step_facts(trajectory, steps, started)
     status = "failed" if conversion.warnings or conversion.unmapped_events else "passed"
     data_ref = data_ref_for_input(session.input_label, session.input_path)
     adapter_id = session.adapter_id or config.adapter
@@ -166,12 +186,294 @@ def prepare_session_report(
     }
 
 
-def display_session_id(trajectory: dict[str, Any], session_hint: str | None) -> str | None:
-    if trajectory.get("session_id") is not None:
-        return str(trajectory["session_id"])
-    if session_hint:
-        return str(session_hint)
-    return None
+def canonical_time_bounds(
+    trajectory: dict[str, Any],
+    fallback_started_at_ms: int | None,
+    fallback_finished_at_ms: int | None,
+) -> tuple[int, int]:
+    timestamps: list[int] = []
+    for step in trajectory.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        timestamp = atif_timestamp_ms(step)
+        if timestamp is not None:
+            timestamps.append(timestamp)
+            step_extra = (
+                step.get("extra") if isinstance(step.get("extra"), dict) else {}
+            )
+            duration = step_extra.get("duration_ms")
+            if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+                timestamps.append(timestamp + max(0, int(duration)))
+        for call in step.get("tool_calls") or []:
+            if not isinstance(call, dict) or not isinstance(call.get("extra"), dict):
+                continue
+            call_started = iso_timestamp_ms(call["extra"].get("started_at"))
+            if call_started is not None:
+                timestamps.append(call_started)
+                generation = call["extra"].get("generation_duration_ms")
+                if isinstance(generation, (int, float)) and not isinstance(
+                    generation, bool
+                ):
+                    timestamps.append(call_started + max(0, int(generation)))
+        for result in (step.get("observation") or {}).get("results") or []:
+            if not isinstance(result, dict) or not isinstance(
+                result.get("extra"), dict
+            ):
+                continue
+            finished = iso_timestamp_ms(result["extra"].get("finished_at"))
+            if finished is not None:
+                timestamps.append(finished)
+    started = int(
+        min(timestamps)
+        if timestamps
+        else (fallback_started_at_ms if fallback_started_at_ms is not None else 0)
+    )
+    finished = int(
+        max(timestamps)
+        if timestamps
+        else (
+            fallback_finished_at_ms if fallback_finished_at_ms is not None else started
+        )
+    )
+    return started, max(started, finished)
+
+
+def project_meta_from_atif(
+    trajectory: dict[str, Any], meta: dict[str, Any]
+) -> dict[str, Any]:
+    """Return the sidecar shape with portable facts mirrored from ATIF."""
+
+    projected = deepcopy(meta)
+    started, finished = canonical_time_bounds(
+        trajectory,
+        optional_int_value(projected.get("started_at_ms")),
+        optional_int_value(projected.get("finished_at_ms")),
+    )
+    projected["started_at_ms"] = started
+    projected["finished_at_ms"] = finished
+    projected["wall_duration_ms"] = max(0, finished - started)
+    root_extra = trajectory.get("extra")
+    if (
+        isinstance(root_extra, dict)
+        and root_extra.get("timestamp_semantics") is not None
+    ):
+        projected["timestamp_semantics"] = root_extra["timestamp_semantics"]
+    canonical_steps = trajectory.get("steps") or []
+    prior_steps = projected.get("steps")
+    steps = step_meta_reports(
+        [
+            step_meta_from_atif_step(index, step)
+            for index, step in enumerate(canonical_steps)
+        ],
+        started,
+        projected.get("timestamp_semantics"),
+    )
+    merge_sidecar_owned_step_fields(steps, prior_steps)
+    projected["steps"] = steps
+    project_canonical_step_facts(trajectory, steps, started)
+    projected["duration_ms"] = active_duration_from_sidecar(
+        trajectory,
+        steps,
+        projected.get("duration_ms") if not isinstance(prior_steps, list) else None,
+    )
+    projected["prompt_unavailable"] = not any(
+        isinstance(step, dict) and step.get("source") == "user"
+        for step in trajectory.get("steps") or []
+    )
+    return projected
+
+
+def merge_sidecar_owned_step_fields(
+    canonical_steps: list[dict[str, Any]],
+    prior_steps: Any,
+) -> None:
+    """Merge presentation and estimated timing only across matching identities."""
+
+    if not isinstance(prior_steps, list):
+        return
+    prior_by_step = _unique_reports_by_identity(prior_steps, "step_id")
+    for step in canonical_steps:
+        prior = prior_by_step.get(str(step.get("step_id")))
+        if prior is None:
+            continue
+        for key in ("duration_ms", "duration_source"):
+            if step.get(key) is None and prior.get(key) is not None:
+                step[key] = prior[key]
+
+        prior_tools = _unique_reports_by_identity(
+            prior.get("tool_calls"), "tool_call_id"
+        )
+        for tool in step.get("tool_calls") or []:
+            if not isinstance(tool, dict):
+                continue
+            old_tool = prior_tools.get(str(tool.get("tool_call_id")))
+            if old_tool is None:
+                continue
+            if old_tool.get("title") is not None:
+                tool["title"] = old_tool["title"]
+            for key in (
+                "generation_duration_ms",
+                "execution_duration_ms",
+                "execution_duration_source",
+            ):
+                if tool.get(key) is None and old_tool.get(key) is not None:
+                    tool[key] = old_tool[key]
+
+        prior_observations = _unique_reports_by_identity(
+            prior.get("observations"), "source_call_id"
+        )
+        for observation in step.get("observations") or []:
+            if not isinstance(observation, dict):
+                continue
+            old_observation = prior_observations.get(
+                str(observation.get("source_call_id"))
+            )
+            if old_observation is not None and old_observation.get("title") is not None:
+                observation["title"] = old_observation["title"]
+
+
+def _unique_reports_by_identity(value: Any, key: str) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, list):
+        return {}
+    found: dict[str, dict[str, Any]] = {}
+    duplicates: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or item.get(key) is None:
+            continue
+        identity = str(item[key])
+        if identity in found:
+            duplicates.add(identity)
+        else:
+            found[identity] = item
+    for identity in duplicates:
+        found.pop(identity, None)
+    return found
+
+
+def active_duration_from_sidecar(
+    trajectory: dict[str, Any],
+    steps: list[dict[str, Any]],
+    fallback: Any,
+) -> int | None:
+    total = 0
+    observed = False
+    for trajectory_step, step in zip(trajectory.get("steps") or [], steps, strict=True):
+        if (
+            isinstance(trajectory_step, dict)
+            and trajectory_step.get("source") == "agent"
+        ):
+            duration = optional_int_value(step.get("duration_ms"))
+            if duration is not None:
+                total += duration
+                observed = True
+        for tool in step.get("tool_calls") or []:
+            if not isinstance(tool, dict):
+                continue
+            duration = optional_int_value(tool.get("execution_duration_ms"))
+            if duration is not None:
+                total += duration
+                observed = True
+    return total if observed else optional_int_value(fallback)
+
+
+def optional_int_value(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def project_canonical_step_facts(
+    trajectory: dict[str, Any],
+    step_reports: list[dict[str, Any]],
+    started_at_ms: int,
+) -> None:
+    for step, report in zip(trajectory.get("steps") or [], step_reports, strict=True):
+        if not isinstance(step, dict):
+            continue
+        timestamp = atif_timestamp_ms(step)
+        if timestamp is not None:
+            report["timestamp_ms"] = timestamp
+            report["elapsed_ms"] = timestamp - started_at_ms if started_at_ms else None
+        extra = step.get("extra") if isinstance(step.get("extra"), dict) else {}
+        for key in ("duration_ms", "duration_source", "truncated"):
+            if key in extra:
+                report[key] = extra[key]
+
+        calls = {
+            str(call.get("tool_call_id")): call
+            for call in step.get("tool_calls") or []
+            if isinstance(call, dict) and call.get("tool_call_id") is not None
+        }
+        results = [
+            item
+            for item in (step.get("observation") or {}).get("results") or []
+            if isinstance(item, dict)
+        ]
+        result_by_call = {
+            str(item["source_call_id"]): item
+            for item in results
+            if item.get("source_call_id") is not None
+        }
+        for tool_report in report.get("tool_calls") or []:
+            call_id = str(tool_report.get("tool_call_id") or "")
+            call = calls.get(call_id) or {}
+            call_extra = (
+                call.get("extra") if isinstance(call.get("extra"), dict) else {}
+            )
+            started = iso_timestamp_ms(call_extra.get("started_at"))
+            if started is not None:
+                tool_report["timestamp_ms"] = started
+            for key in ("generation_duration_ms", "truncated"):
+                if key in call_extra:
+                    tool_report[key] = call_extra[key]
+            result = result_by_call.get(call_id) or {}
+            result_extra = (
+                result.get("extra") if isinstance(result.get("extra"), dict) else {}
+            )
+            if "status" in result_extra:
+                tool_report["status"] = result_extra["status"]
+            for key in ("execution_duration_ms", "execution_duration_source"):
+                if key in result_extra:
+                    tool_report[key] = result_extra[key]
+
+        for observation_report, result in zip(
+            report.get("observations") or [], results, strict=False
+        ):
+            result_extra = (
+                result.get("extra") if isinstance(result.get("extra"), dict) else {}
+            )
+            if "status" in result_extra:
+                observation_report["status"] = result_extra["status"]
+            if "is_error" in result_extra:
+                observation_report["tool_error"] = result_extra["is_error"]
+            finished = iso_timestamp_ms(result_extra.get("finished_at"))
+            if finished is not None:
+                observation_report["timestamp_ms"] = finished
+            if "truncated" in result_extra:
+                observation_report["truncated"] = result_extra["truncated"]
+        canonical_errors = [
+            item.get("extra", {}).get("is_error")
+            for item in results
+            if isinstance(item.get("extra"), dict)
+            and "is_error" in item.get("extra", {})
+        ]
+        if canonical_errors:
+            report["tool_error"] = any(canonical_errors)
+
+
+def iso_timestamp_ms(value: Any) -> int | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp() * 1000)
 
 
 def trial_key_for(
@@ -182,7 +484,7 @@ def trial_key_for(
     seen: dict[str, int],
 ) -> str:
     if not multi:
-        base = str(trajectory.get("trajectory_id") or "session:t001")
+        base = "session:t001"
     else:
         base = f"session:{safe_key_part(trajectory.get('session_id') or f's{index}')}"
     count = seen.get(base, 0) + 1
@@ -317,9 +619,7 @@ def analysis_reports_from_snapshots(
     metas: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     reports: list[dict[str, Any]] = []
-    for index, (trajectory, meta) in enumerate(
-        zip(trajectories, metas, strict=True)
-    ):
+    for index, (trajectory, meta) in enumerate(zip(trajectories, metas, strict=True)):
         report = computed_analysis_report(trajectory, meta)
         source_report = source_reports[index] if index < len(source_reports) else None
         if not isinstance(source_report, dict):
@@ -397,7 +697,6 @@ def merge_analysis_metrics(base: Any, overlay: Any) -> dict[str, Any]:
                 continue
             metrics[key_text] = deepcopy(value)
     return metrics
-
 
 
 def optional(key: str, value: Any) -> dict[str, Any]:

@@ -8,7 +8,9 @@ from peval_py.state import ServeStateStore
 
 ECHARTS_VERSION = "6.0.0"
 ECHARTS_ASSET_PATH = f"/assets/echarts/{ECHARTS_VERSION}/echarts.min.js"
-ECHARTS_CDN_URL = f"https://cdn.jsdelivr.net/npm/echarts@{ECHARTS_VERSION}/dist/echarts.min.js"
+ECHARTS_CDN_URL = (
+    f"https://cdn.jsdelivr.net/npm/echarts@{ECHARTS_VERSION}/dist/echarts.min.js"
+)
 
 
 def cached_echarts_asset(store: ServeStateStore) -> bytes:

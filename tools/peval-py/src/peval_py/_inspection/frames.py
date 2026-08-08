@@ -14,6 +14,7 @@ from peval_py._inspection.utils import (
     token_total,
 )
 
+
 class InspectFrames:
     def __init__(
         self,
@@ -29,7 +30,9 @@ class InspectFrames:
         self.observations = observations
 
     @classmethod
-    def from_report(cls, report: dict[str, Any], *, preview_chars: int) -> "InspectFrames":
+    def from_report(
+        cls, report: dict[str, Any], *, preview_chars: int
+    ) -> "InspectFrames":
         source_rows: list[dict[str, Any]] = []
         step_rows: list[dict[str, Any]] = []
         tool_rows: list[dict[str, Any]] = []
@@ -42,8 +45,14 @@ class InspectFrames:
             meta = metas[source_index - 1] if source_index - 1 < len(metas) else {}
             if not isinstance(meta, dict):
                 meta = {}
-            steps = trajectory.get("steps") if isinstance(trajectory.get("steps"), list) else []
-            meta_steps = meta.get("steps") if isinstance(meta.get("steps"), list) else []
+            steps = (
+                trajectory.get("steps")
+                if isinstance(trajectory.get("steps"), list)
+                else []
+            )
+            meta_steps = (
+                meta.get("steps") if isinstance(meta.get("steps"), list) else []
+            )
             final_metrics = trajectory.get("final_metrics")
             final_metrics = final_metrics if isinstance(final_metrics, dict) else {}
             source_rows.append(
@@ -52,17 +61,25 @@ class InspectFrames:
             for step_index, step in enumerate(steps, start=1):
                 if not isinstance(step, dict):
                     continue
-                step_meta = meta_steps[step_index - 1] if step_index - 1 < len(meta_steps) else {}
+                step_meta = (
+                    meta_steps[step_index - 1]
+                    if step_index - 1 < len(meta_steps)
+                    else {}
+                )
                 if not isinstance(step_meta, dict):
                     step_meta = {}
                 step_rows.append(
                     step_row(source_index, step_index, step, step_meta, preview_chars)
                 )
                 tool_rows.extend(
-                    tool_rows_for_step(source_index, step_index, step, step_meta, preview_chars)
+                    tool_rows_for_step(
+                        source_index, step_index, step, step_meta, preview_chars
+                    )
                 )
                 observation_rows.extend(
-                    observation_rows_for_step(source_index, step_index, step, step_meta, preview_chars)
+                    observation_rows_for_step(
+                        source_index, step_index, step, step_meta, preview_chars
+                    )
                 )
         return cls(
             sources=pd.DataFrame(source_rows),
@@ -134,10 +151,22 @@ def step_row(
     step_meta: dict[str, Any],
     preview_chars: int,
 ) -> dict[str, Any]:
-    tool_calls = step.get("tool_calls") if isinstance(step.get("tool_calls"), list) else []
-    observation = step.get("observation") if isinstance(step.get("observation"), dict) else {}
-    observations = observation.get("results") if isinstance(observation.get("results"), list) else []
-    meta_tool_calls = step_meta.get("tool_calls") if isinstance(step_meta.get("tool_calls"), list) else []
+    tool_calls = (
+        step.get("tool_calls") if isinstance(step.get("tool_calls"), list) else []
+    )
+    observation = (
+        step.get("observation") if isinstance(step.get("observation"), dict) else {}
+    )
+    observations = (
+        observation.get("results")
+        if isinstance(observation.get("results"), list)
+        else []
+    )
+    meta_tool_calls = (
+        step_meta.get("tool_calls")
+        if isinstance(step_meta.get("tool_calls"), list)
+        else []
+    )
     has_tool_error = bool(step_meta.get("tool_error")) or any(
         str(item.get("status") or "").lower() == "error"
         for item in meta_tool_calls
@@ -176,7 +205,11 @@ def tool_rows_for_step(
     preview_chars: int,
 ) -> list[dict[str, Any]]:
     calls = step.get("tool_calls") if isinstance(step.get("tool_calls"), list) else []
-    meta_calls = step_meta.get("tool_calls") if isinstance(step_meta.get("tool_calls"), list) else []
+    meta_calls = (
+        step_meta.get("tool_calls")
+        if isinstance(step_meta.get("tool_calls"), list)
+        else []
+    )
     rows = []
     for tool_index, call in enumerate(calls, start=1):
         if not isinstance(call, dict):
@@ -189,7 +222,9 @@ def tool_rows_for_step(
             {
                 "source_index": source_index,
                 "step_index": step_index,
-                "step_id": step.get("step_id") or step_meta.get("step_id") or step_index,
+                "step_id": step.get("step_id")
+                or step_meta.get("step_id")
+                or step_index,
                 "tool_index": tool_index,
                 "tool_call_id": call.get("tool_call_id") or meta.get("tool_call_id"),
                 "name": call.get("function_name") or meta.get("title"),
@@ -213,9 +248,19 @@ def observation_rows_for_step(
     step_meta: dict[str, Any],
     preview_chars: int,
 ) -> list[dict[str, Any]]:
-    observation = step.get("observation") if isinstance(step.get("observation"), dict) else {}
-    results = observation.get("results") if isinstance(observation.get("results"), list) else []
-    meta_observations = step_meta.get("observations") if isinstance(step_meta.get("observations"), list) else []
+    observation = (
+        step.get("observation") if isinstance(step.get("observation"), dict) else {}
+    )
+    results = (
+        observation.get("results")
+        if isinstance(observation.get("results"), list)
+        else []
+    )
+    meta_observations = (
+        step_meta.get("observations")
+        if isinstance(step_meta.get("observations"), list)
+        else []
+    )
     rows = []
     for observation_index, result in enumerate(results, start=1):
         if not isinstance(result, dict):

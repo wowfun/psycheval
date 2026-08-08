@@ -6,6 +6,7 @@ from typing import Any
 
 from peval_py.outputs import DEFAULT_OUTPUT, unique_timestamped_name
 
+
 def resolve_inspect_output(args: argparse.Namespace) -> str | None:
     if args.output is DEFAULT_OUTPUT:
         return unique_timestamped_name("inspect.json")
@@ -15,10 +16,18 @@ def resolve_inspect_output(args: argparse.Namespace) -> str | None:
 def validate_inspect_args(args: argparse.Namespace) -> None:
     validate_inspect_raw_only_args(args)
     if getattr(args, "format", None) == "html":
-        raise ValueError("view tr inspect mode supports only JSON output; use -m raw for HTML reports")
+        raise ValueError(
+            "view tr inspect mode supports only JSON output; use -m raw for HTML reports"
+        )
     output = getattr(args, "output", None)
-    if output and output is not DEFAULT_OUTPUT and Path(str(output)).suffix.lower() == ".html":
-        raise ValueError("view tr inspect mode writes JSON; use -m raw for HTML reports")
+    if (
+        output
+        and output is not DEFAULT_OUTPUT
+        and Path(str(output)).suffix.lower() == ".html"
+    ):
+        raise ValueError(
+            "view tr inspect mode writes JSON; use -m raw for HTML reports"
+        )
     parse_step_selectors(getattr(args, "steps", None) or [])
 
 

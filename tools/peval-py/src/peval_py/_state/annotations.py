@@ -14,6 +14,7 @@ from peval_py.analysis import (
 )
 from peval_py.config import ToolConfig
 
+
 def matching_annotation_items(
     annotations: dict[str, Any],
     key: str,
@@ -252,7 +253,9 @@ def source_report_with_current_annotations(
     return {}
 
 
-def annotation_agent_id(source: dict[str, Any], trajectory: dict[str, Any]) -> str | None:
+def annotation_agent_id(
+    source: dict[str, Any], trajectory: dict[str, Any]
+) -> str | None:
     agent = trajectory.get("agent")
     trajectory_agent = agent.get("name") if isinstance(agent, dict) else None
     return (

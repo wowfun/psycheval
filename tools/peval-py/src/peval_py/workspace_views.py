@@ -10,7 +10,6 @@ import yaml
 
 from peval_py.state.catalog import CatalogQuery
 
-
 VIEW_SCHEMA_VERSION = 1
 VIEW_MAX_NOTE_BYTES = 1024 * 1024
 VIEW_SUFFIX = ".md"
@@ -57,7 +56,11 @@ class WorkspaceViewLibrary:
             return []
         views: list[WorkspaceView] = []
         for path in self.views_root.iterdir():
-            if path.is_symlink() or not path.is_file() or path.suffix.lower() != VIEW_SUFFIX:
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or path.suffix.lower() != VIEW_SUFFIX
+            ):
                 continue
             try:
                 views.append(self._read(path))
@@ -74,7 +77,9 @@ class WorkspaceViewLibrary:
         notes: Any,
         overwrite: bool = False,
     ) -> WorkspaceView:
-        view = view_from_values(name=name, filters=filters, group_by=group_by, notes=notes)
+        view = view_from_values(
+            name=name, filters=filters, group_by=group_by, notes=notes
+        )
         self._ensure_views_root()
         target = self._path_for_name(view.name)
         if target.exists():

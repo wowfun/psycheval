@@ -15,6 +15,7 @@ from peval_py._inspection.utils import (
     rows_for_step,
 )
 
+
 def parse_source_indexes(raw_values: list[int], frames: InspectFrames) -> list[int]:
     if frames.sources.empty:
         return []
@@ -168,7 +169,7 @@ def top_step_token_items(steps: pd.DataFrame, top: int) -> list[dict[str, Any]]:
         cached_tokens = int_or_none(row.get("cached_tokens"))
         if input_tokens is None and output_tokens is None and cached_tokens is None:
             continue
-        total = (input_tokens or 0) + (output_tokens or 0) + (cached_tokens or 0)
+        total = (input_tokens or 0) + (output_tokens or 0)
         rows.append(
             {
                 "_total": total,
@@ -180,7 +181,10 @@ def top_step_token_items(steps: pd.DataFrame, top: int) -> list[dict[str, Any]]:
         )
     rows.sort(key=lambda item: item["_total"], reverse=True)
     return compact_json(
-        [{key: value for key, value in item.items() if key != "_total"} for item in rows[:top]]
+        [
+            {key: value for key, value in item.items() if key != "_total"}
+            for item in rows[:top]
+        ]
     )
 
 
@@ -209,8 +213,10 @@ def selected_step_items(
     selectors = {str(value) for value in step_ids}
     rows = steps[
         steps.apply(
-            lambda row: str(row.get("step_id")) in selectors
-            or str(row.get("step_index")) in selectors,
+            lambda row: (
+                str(row.get("step_id")) in selectors
+                or str(row.get("step_index")) in selectors
+            ),
             axis=1,
         )
     ]
@@ -290,7 +296,9 @@ def tool_result_rows(observations: pd.DataFrame) -> list[dict[str, Any]]:
         return []
     return [
         tool_result_row(row)
-        for _, row in observations.sort_values(["step_index", "observation_index"]).iterrows()
+        for _, row in observations.sort_values(
+            ["step_index", "observation_index"]
+        ).iterrows()
     ]
 
 
@@ -314,9 +322,9 @@ def matching_tool_result(observations: pd.DataFrame, tool: pd.Series) -> dict[st
         candidates = candidates[candidates["step_index"] == step_index]
     if tool_call_id and "source_call_id" in candidates:
         matched = candidates[
-            candidates["source_call_id"].fillna("").apply(
-                lambda value: str(value) == tool_call_id
-            )
+            candidates["source_call_id"]
+            .fillna("")
+            .apply(lambda value: str(value) == tool_call_id)
         ]
         if not matched.empty:
             return tool_result_row(matched.iloc[0])

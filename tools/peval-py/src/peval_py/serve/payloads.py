@@ -13,14 +13,10 @@ from peval_py.adapters import available_adapter_ids, normalize_adapter_id
 from peval_py.inputs import infer_adapter_from_path, validate_selected_adapter
 from peval_py.serve.constants import WINDOWS_DRIVE_MOUNT_ROOT, WINDOWS_DRIVE_PATH_RE
 from peval_py.serve.errors import HttpError
-from peval_py.session_select import list_adapter_sessions
 from peval_py.state import CatalogQuery, ServeStateStore
 
-
 SUMMARY_GROUP_BY_VALUES = frozenset({"overall", "agent", "model", "category"})
-SUMMARY_STATISTIC_VALUES = frozenset(
-    {"mean", "min", "q1", "p50", "q3", "p95", "max"}
-)
+SUMMARY_STATISTIC_VALUES = frozenset({"mean", "min", "q1", "p50", "q3", "p95", "max"})
 
 
 @dataclass(frozen=True)
@@ -64,8 +60,16 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
     if not isinstance(query_value, dict):
         raise HttpError(400, "query must be an object")
     query_fields = {
-        "state", "search", "sort", "direction", "categories", "tags",
-        "agents", "models", "results", "views",
+        "state",
+        "search",
+        "sort",
+        "direction",
+        "categories",
+        "tags",
+        "agents",
+        "models",
+        "results",
+        "views",
     }
     if set(query_value) != query_fields:
         raise HttpError(400, "workspace snapshot query fields are invalid")
@@ -96,9 +100,14 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
     if not isinstance(presentation_value, dict):
         raise HttpError(400, "presentation must be an object")
     presentation_fields = {
-        "summary_group_by", "summary_statistic", "summary_table_open",
-        "selected_source_key", "selected_step_id", "visible_view_names",
-        "workspace_view_filters", "open_view_tables",
+        "summary_group_by",
+        "summary_statistic",
+        "summary_table_open",
+        "selected_source_key",
+        "selected_step_id",
+        "visible_view_names",
+        "workspace_view_filters",
+        "open_view_tables",
     }
     if set(presentation_value) != presentation_fields:
         raise HttpError(400, "workspace snapshot presentation fields are invalid")
@@ -138,7 +147,11 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
         key: tuple(_string_array(filters.get(key), f"workspace_view_filters {key}"))
         for key in ("categories", "tags", "models", "group_by")
     }
-    invalid_groups = [value for value in filter_values["group_by"] if value not in SUMMARY_GROUP_BY_VALUES]
+    invalid_groups = [
+        value
+        for value in filter_values["group_by"]
+        if value not in SUMMARY_GROUP_BY_VALUES
+    ]
     if invalid_groups:
         raise HttpError(400, "workspace_view_filters group_by values are invalid")
     presentation = WorkspaceSnapshotPresentation(
@@ -148,11 +161,15 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
         selected_source_key=selected_source_key,
         selected_step_id=None if raw_step_id is None else str(raw_step_id),
         visible_view_names=tuple(
-            _string_array(presentation_value.get("visible_view_names"), "visible_view_names")
+            _string_array(
+                presentation_value.get("visible_view_names"), "visible_view_names"
+            )
         ),
         workspace_view_filters=filter_values,
         open_view_tables=tuple(
-            _string_array(presentation_value.get("open_view_tables"), "open_view_tables")
+            _string_array(
+                presentation_value.get("open_view_tables"), "open_view_tables"
+            )
         ),
     )
     return WorkspaceSnapshotExportPayload(
@@ -233,6 +250,7 @@ def _ordered_string_values(value: Any, field: str) -> list[str]:
         raise HttpError(400, f"{field} must be a non-empty string array")
     return list(dict.fromkeys(value))
 
+
 def adapter_default_db_payload(payload: dict[str, Any]) -> tuple[str, str | None]:
     adapter_id = validate_selected_adapter(
         normalize_adapter_id(required_string(payload, "adapter")),
@@ -276,14 +294,20 @@ def source_args_from_payload(
     if session_id and session_ids:
         raise HttpError(400, "provide either session_id or session_ids, not both")
     if (session_id or session_ids) and not dbs:
-        raise HttpError(400, "session_id and session_ids are only valid with db sources")
+        raise HttpError(
+            400, "session_id and session_ids are only valid with db sources"
+        )
     if (session_id or session_ids) and len(dbs) != 1:
         raise HttpError(400, "session_id and session_ids require exactly one db source")
     return SimpleNamespace(
         path=paths or None,
         db=dbs or None,
-        input_table=[workspace_relative_path(store, input_table)] if input_table else None,
-        session_id=([session_id] if session_id and dbs else session_ids if dbs else None),
+        input_table=[workspace_relative_path(store, input_table)]
+        if input_table
+        else None,
+        session_id=(
+            [session_id] if session_id and dbs else session_ids if dbs else None
+        ),
         adapter=[],
         note=[],
     )
@@ -297,7 +321,11 @@ def source_path_values(
     raw = optional_string(payload.get(key))
     if raw is None:
         return []
-    parts = split_source_path_lines(raw) if key == "path" else split_source_path_list(raw, key)
+    parts = (
+        split_source_path_lines(raw)
+        if key == "path"
+        else split_source_path_list(raw, key)
+    )
     if not parts:
         raise HttpError(400, f"{key} path list is empty")
     return [workspace_relative_path(store, part) for part in parts]
@@ -316,11 +344,7 @@ def split_source_path_list(raw: str, key: str) -> list[str]:
         raw_parts = shlex.split(raw, posix=False)
     except ValueError as exc:
         raise HttpError(400, f"{key} path list is invalid: {exc}") from exc
-    return [
-        unquote_path_token(part)
-        for part in raw_parts
-        if unquote_path_token(part)
-    ]
+    return [unquote_path_token(part) for part in raw_parts if unquote_path_token(part)]
 
 
 def unquote_path_token(raw: object) -> str:
@@ -373,7 +397,11 @@ def workspace_relative_path(
 
 
 def is_windows_absolute_like_path(path: str) -> bool:
-    return bool(WINDOWS_DRIVE_PATH_RE.match(path)) or path.startswith("\\\\") or path.startswith("//")
+    return (
+        bool(WINDOWS_DRIVE_PATH_RE.match(path))
+        or path.startswith("\\\\")
+        or path.startswith("//")
+    )
 
 
 def resolve_windows_absolute_like_path(

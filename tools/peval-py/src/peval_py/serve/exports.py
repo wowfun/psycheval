@@ -11,11 +11,17 @@ from typing import Any
 from peval_py.config import ToolConfig
 from peval_py.html import render_workspace_snapshot_html
 from peval_py.serve.payloads import WorkspaceSnapshotPresentation
-from peval_py.serve.summary_xlsx import EXCEL_CONTENT_TYPE, SummaryWorksheet, summary_workbook
+from peval_py.serve.summary_xlsx import (
+    EXCEL_CONTENT_TYPE,
+    SummaryWorksheet,
+    summary_workbook,
+)
 from peval_py.state import CatalogQuery, ServeStateStore, WorkspaceCatalog
-from peval_py.workspace_reports import WorkspaceReportLibrary, render_workspace_report_preview
+from peval_py.workspace_reports import (
+    WorkspaceReportLibrary,
+    render_workspace_report_preview,
+)
 from peval_py.workspace_views import WorkspaceViewLibrary
-
 
 MAX_REPORT_EXPORT_CELLS = 100
 MAX_REPORT_EXPORT_INPUT_BYTES = 50 * 1024 * 1024
@@ -88,7 +94,9 @@ def build_serve_export(
     return ServeExport(
         filename="peval-report-v19.json",
         content_type="application/json; charset=utf-8",
-        content=(json.dumps(report, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+        content=(json.dumps(report, ensure_ascii=False, indent=2) + "\n").encode(
+            "utf-8"
+        ),
     )
 
 
@@ -107,10 +115,14 @@ def build_workspace_snapshot_export(
 ) -> ServeExport:
     with catalog.read_snapshot_rows(
         query,
-        any_queries=lambda: [workspace_views.get(name).filters for name in query_view_names],
+        any_queries=lambda: [
+            workspace_views.get(name).filters for name in query_view_names
+        ],
         selected_source_keys=selected_source_keys,
     ) as (generation, rows):
-        visible_views = [workspace_views.get(name) for name in presentation.visible_view_names]
+        visible_views = [
+            workspace_views.get(name) for name in presentation.visible_view_names
+        ]
         if not rows:
             if selected_source_keys:
                 raise ValueError("selected sources do not match the current query")
@@ -168,7 +180,9 @@ def build_workspace_snapshot_export(
         selected_step_id = presentation.selected_step_id
         valid_step_ids = {
             str(step.get("step_id"))
-            for step in list(report.get("trajectory") or [])[selected_index].get("steps", [])
+            for step in list(report.get("trajectory") or [])[selected_index].get(
+                "steps", []
+            )
             if step.get("step_id") is not None
         }
         if selected_step_id not in valid_step_ids:
@@ -190,7 +204,9 @@ def build_workspace_snapshot_export(
                     for key, values in presentation.workspace_view_filters.items()
                 },
                 "open_view_tables": [
-                    name for name in presentation.open_view_tables if name in set(visible_names)
+                    name
+                    for name in presentation.open_view_tables
+                    if name in set(visible_names)
                 ],
             },
             "views": [view.to_dict() for view in visible_views],

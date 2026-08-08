@@ -66,7 +66,9 @@ def is_psychevo_trace_jsonl(path: Path) -> bool:
                 if not line:
                     continue
                 value = json.loads(line)
-                schema_version = value.get("schema_version") if isinstance(value, dict) else None
+                schema_version = (
+                    value.get("schema_version") if isinstance(value, dict) else None
+                )
                 return (
                     isinstance(value, dict)
                     and schema_version in {1, 2}
@@ -134,7 +136,9 @@ def read_psychevo_trace_events(path: Path) -> tuple[list[dict[str, Any]], list[s
             value = json.loads(line)
         except json.JSONDecodeError as exc:
             if index == last_index:
-                warnings.append(f"ignored malformed final Psychevo trace line: {exc.msg}")
+                warnings.append(
+                    f"ignored malformed final Psychevo trace line: {exc.msg}"
+                )
             else:
                 warnings.append(
                     f"ignored malformed Psychevo trace line {index + 1}: {exc.msg}"
@@ -159,7 +163,9 @@ def apply_trace_timing(
     for record in records:
         role = str(record.message.get("role", "")).lower()
         metadata = dict(record.metadata or {})
-        if role in {"assistant", "agent"} and generation_index < len(generation_timings):
+        if role in {"assistant", "agent"} and generation_index < len(
+            generation_timings
+        ):
             apply_timing_metadata(metadata, generation_timings[generation_index])
             generation_index += 1
         if role in {"tool", "tool_result"}:
@@ -232,7 +238,9 @@ def trace_timings(
 
     for timing in tool_timings.values():
         complete_timing_in_place(timing)
-    return generation_timings, {key: value for key, value in tool_timings.items() if value}
+    return generation_timings, {
+        key: value for key, value in tool_timings.items() if value
+    }
 
 
 def apply_timing_metadata(metadata: dict[str, Any], timing: dict[str, int]) -> None:

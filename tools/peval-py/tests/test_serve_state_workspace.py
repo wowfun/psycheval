@@ -1,10 +1,44 @@
 from __future__ import annotations
 
-from serve_state_support import *
-from peval_py.cli import main as cli_main
-from peval_py.config import load_config
 from peval_py._inputs.workspace_snapshots import (
     load_workspace_snapshot_sessions_from_rows,
+)
+from peval_py.cli import main as cli_main
+from peval_py.config import load_config
+from serve_state_support import (
+    DEFAULT_PORT_END,
+    DEFAULT_PORT_START,
+    FIXTURES,
+    REFRESH_LOG_LIMIT,
+    UPLOAD_LIMIT_BYTES,
+    LoadedInputs,
+    LocalHTTPServer,
+    Path,
+    ToolConfig,
+    bind_server,
+    discover_complete_trial_cell_dirs,
+    json,
+    load_serve_inputs,
+    loaded_trial_cell_import_session,
+    make_handler,
+    open_workspace_state,
+    os,
+    parse_adapter_assignments,
+    patch,
+    peval_py_workspace,
+    request_text,
+    resolve_workspace_root,
+    sample_report,
+    script_json,
+    serve_args,
+    shutil,
+    tempfile,
+    threading,
+    unittest,
+    write_cached_analysis,
+    write_cached_markdown,
+    write_cached_note,
+    write_trial_cell_artifacts,
 )
 
 DERIVED_SOURCE_STATE_FIELDS = {
@@ -62,7 +96,9 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
             old_env = os.environ.pop("PEVAL_ROOT", None)
             try:
                 os.chdir(isolated)
-                with self.assertRaisesRegex(ValueError, "peval-py workspace is not initialized"):
+                with self.assertRaisesRegex(
+                    ValueError, "peval-py workspace is not initialized"
+                ):
                     resolve_workspace_root()
             finally:
                 os.chdir(old_cwd)
@@ -124,7 +160,9 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 explicit_blocker.server_close()
 
             try:
-                default_blocker = LocalHTTPServer(("127.0.0.1", DEFAULT_PORT_START), handler)
+                default_blocker = LocalHTTPServer(
+                    ("127.0.0.1", DEFAULT_PORT_START), handler
+                )
             except OSError:
                 store.close()
                 self.skipTest(f"port {DEFAULT_PORT_START} is already in use")
@@ -221,7 +259,9 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                     "Initial cell note.",
                 )
                 self.assertEqual(
-                    active_report["annotations"]["notes"][0]["source_ref"]["relative_path"],
+                    active_report["annotations"]["notes"][0]["source_ref"][
+                        "relative_path"
+                    ],
                     note_path.relative_to(root).as_posix(),
                 )
 
@@ -249,8 +289,12 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 store.refresh_sources(keys, config)
                 refreshed_report = store.active_report()
                 refreshed_analysis = refreshed_report["annotations"]["analysis"][0]
-                self.assertEqual(refreshed_analysis["summary"], "Updated cached analysis.")
-                self.assertEqual(refreshed_analysis["md_report"], "Updated cached markdown.")
+                self.assertEqual(
+                    refreshed_analysis["summary"], "Updated cached analysis."
+                )
+                self.assertEqual(
+                    refreshed_analysis["md_report"], "Updated cached markdown."
+                )
                 self.assertEqual(
                     refreshed_report["annotations"]["notes"][0]["markdown"],
                     "Updated cell note.",
@@ -265,12 +309,16 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
 
                 store.set_source_active(keys[0], True)
                 self.assertEqual(len(store.active_report()["trajectory"]), 1)
-                log_lines = store.paths.log_path.read_text(encoding="utf-8").splitlines()
+                log_lines = store.paths.log_path.read_text(
+                    encoding="utf-8"
+                ).splitlines()
                 self.assertGreaterEqual(len(log_lines), 1)
 
                 for index in range(REFRESH_LOG_LIMIT + 5):
                     store.log_refresh(keys[0], "ok", 0, None, index)
-                appended_lines = store.paths.log_path.read_text(encoding="utf-8").splitlines()
+                appended_lines = store.paths.log_path.read_text(
+                    encoding="utf-8"
+                ).splitlines()
                 self.assertGreaterEqual(len(appended_lines), REFRESH_LOG_LIMIT + 5)
             finally:
                 store.close()
@@ -392,7 +440,9 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                     ["triage", "fast"],
                 )
                 self.assertEqual(
-                    store.active_report(config)["trajectory_meta"][0]["source_category"],
+                    store.active_report(config)["trajectory_meta"][0][
+                        "source_category"
+                    ],
                     "Regression",
                 )
                 workspace_session = load_workspace_snapshot_sessions_from_rows(
@@ -442,11 +492,15 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 )
                 self.assertEqual(snapshot_analysis["status"], "cached")
                 self.assertEqual(snapshot_analysis["summary"], "Snapshot live summary.")
-                self.assertEqual(snapshot_analysis["md_report"], "Snapshot live analysis.")
+                self.assertEqual(
+                    snapshot_analysis["md_report"], "Snapshot live analysis."
+                )
             finally:
                 store.close()
 
-    def test_legacy_flat_source_state_is_read_and_rewritten_as_minimal_overlay(self) -> None:
+    def test_legacy_flat_source_state_is_read_and_rewritten_as_minimal_overlay(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_py_workspace(Path(tmp))
             cell_dir = (
@@ -554,7 +608,10 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                         "summary": "Uploaded summary.",
                         "md_report": "Uploaded markdown.",
                         "analysis_status": "reviewed",
-                        "subject": {"session_id": "common_session", "trial_key": trial_key},
+                        "subject": {
+                            "session_id": "common_session",
+                            "trial_key": trial_key,
+                        },
                         "findings": [
                             {
                                 "severity": "high",
@@ -585,7 +642,7 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                         "status": "cached",
                         "relative_path": "old/other.json",
                         "summary": "Wrong Trial summary.",
-                    }
+                    },
                 ],
             }
             store = open_workspace_state(str(root))
@@ -643,7 +700,9 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                     analysis_json["limitations"],
                     ["Preserve uploaded limitation."],
                 )
-                self.assertEqual(analysis_json["commands"], ["peval-py view tr -f json"])
+                self.assertEqual(
+                    analysis_json["commands"], ["peval-py view tr -f json"]
+                )
                 self.assertEqual(analysis_json["metrics"], {"review_count": 1})
                 self.assertEqual(analysis_json["confidence"], 0.8)
                 analysis_md = (artifact_dir / "analysis.md").read_text(encoding="utf-8")
@@ -678,7 +737,9 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 self.assertEqual(
                     [
                         item["title"]
-                        for item in active_report["annotations"]["analysis"][0]["findings"]
+                        for item in active_report["annotations"]["analysis"][0][
+                            "findings"
+                        ]
                     ],
                     ["Uploaded finding.", "Second finding."],
                 )
@@ -697,19 +758,24 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_duplicate_cell_import_updates_one_source_and_delete_removes_cell(self) -> None:
+    def test_duplicate_cell_import_updates_one_source_and_delete_removes_cell(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_py_workspace(Path(tmp))
             config = ToolConfig(adapter="opencode")
             report = sample_report(config)
             store = open_workspace_state(str(root))
             try:
-                key_a = store.ingest_upload("a-report.json", json.dumps(report), config)[0]
-                key_b = store.ingest_upload("b-report.json", json.dumps(report), config)[0]
+                key_a = store.ingest_upload(
+                    "a-report.json", json.dumps(report), config
+                )[0]
+                key_b = store.ingest_upload(
+                    "b-report.json", json.dumps(report), config
+                )[0]
                 self.assertEqual(key_a, key_b)
                 payload_by_key = {
-                    item["source_key"]: item
-                    for item in store.source_payload()
+                    item["source_key"]: item for item in store.source_payload()
                 }
                 self.assertEqual(len(payload_by_key), 1)
                 artifact_a = root / payload_by_key[key_a]["artifact_dir"]
@@ -728,7 +794,9 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
             report = sample_report(config)
             store = open_workspace_state(str(root))
             try:
-                source_key = store.ingest_upload("saved-report.json", json.dumps(report), config)[0]
+                source_key = store.ingest_upload(
+                    "saved-report.json", json.dumps(report), config
+                )[0]
                 source = store.source_payload()[0]
                 artifact_dir = root / source["artifact_dir"]
                 store.set_source_alias(source_key, "Tracked cell")
@@ -741,7 +809,9 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 self.assertEqual(missing_source["source_key"], source_key)
                 self.assertEqual(missing_source["source_category"], "Missing category")
                 self.assertEqual(missing_source["last_status"], "missing")
-                self.assertIn("Trial cell artifacts not found", missing_source["last_error"])
+                self.assertIn(
+                    "Trial cell artifacts not found", missing_source["last_error"]
+                )
                 self.assertEqual(store.active_report(config)["trajectory"], [])
 
                 shutil.copytree(backup_dir / "agent", artifact_dir / "agent")
@@ -754,11 +824,13 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 self.assertEqual(len(restored_sources), 1)
                 self.assertEqual(restored_sources[0]["source_key"], source_key)
                 self.assertEqual(restored_sources[0]["source_alias"], "Restored cell")
-                self.assertEqual(restored_sources[0]["source_category"], "Missing category")
+                self.assertEqual(
+                    restored_sources[0]["source_category"], "Missing category"
+                )
                 self.assertNotEqual(restored_sources[0]["last_status"], "missing")
                 self.assertEqual(
-                    store.active_report(config)["trajectory"][0]["trajectory_id"],
-                    report["trajectory"][0]["trajectory_id"],
+                    store.active_report(config)["trajectory"][0].get("trajectory_id"),
+                    report["trajectory"][0].get("trajectory_id"),
                 )
             finally:
                 store.close()
@@ -770,7 +842,9 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
             report = sample_report(config)
             store = open_workspace_state(str(root))
             try:
-                source_key = store.ingest_upload("saved-report.json", json.dumps(report), config)[0]
+                source_key = store.ingest_upload(
+                    "saved-report.json", json.dumps(report), config
+                )[0]
                 artifact_dir = root / store.source_payload()[0]["artifact_dir"]
                 self.assertFalse((artifact_dir / ".peval" / "state.json").exists())
                 self.assertEqual(len(store.source_payload()), 1)
@@ -791,7 +865,9 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_artifact_source_overlay_file_is_removed_when_last_field_is_cleared(self) -> None:
+    def test_artifact_source_overlay_file_is_removed_when_last_field_is_cleared(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_py_workspace(Path(tmp))
             cell_dir = (
@@ -881,8 +957,7 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 self.assertEqual(cells, [first_cell.resolve(), second_cell.resolve()])
                 loaded = LoadedInputs(
                     sessions=[
-                        loaded_trial_cell_import_session(cell, config)
-                        for cell in cells
+                        loaded_trial_cell_import_session(cell, config) for cell in cells
                     ],
                     notes=[],
                 )
@@ -899,9 +974,14 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 self.assertEqual(first_source["kind"], "trial-artifact")
                 self.assertTrue(first_source["snapshot"])
                 self.assertFalse(first_source["refreshable"])
-                self.assertIn("runs/external-eval/psychevo/session-a/session_t001", first_source["artifact_dir"])
+                self.assertIn(
+                    "runs/external-eval/psychevo/session-a/session_t001",
+                    first_source["artifact_dir"],
+                )
                 self.assertEqual(
-                    json.loads((first_artifact / "analysis.json").read_text(encoding="utf-8")),
+                    json.loads(
+                        (first_artifact / "analysis.json").read_text(encoding="utf-8")
+                    ),
                     {"summary": "external analysis"},
                 )
                 self.assertEqual(

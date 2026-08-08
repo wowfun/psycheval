@@ -56,7 +56,9 @@ def validate_localhost(host: str) -> str:
     text = str(host).strip()
     normalized = text[1:-1] if text.startswith("[") and text.endswith("]") else text
     if normalized.lower() not in LOCALHOSTS:
-        raise ValueError("serve only binds localhost by default; use 127.0.0.1, localhost, or ::1")
+        raise ValueError(
+            "serve only binds localhost by default; use 127.0.0.1, localhost, or ::1"
+        )
     return normalized
 
 

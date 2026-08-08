@@ -7,7 +7,6 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
-
 COLUMN_ALIASES = {
     "path": "path",
     "p": "path",
@@ -74,8 +73,12 @@ def read_input_table(path: str) -> InputTableData:
     if suffix == ".xlsx":
         return read_xlsx_input_table(source)
     if suffix == ".xls":
-        raise ValueError(f"{source}: .xls input tables are unsupported; use .xlsx or CSV")
-    raise ValueError(f"{source}: unsupported input table format; use CSV, JSON, or .xlsx")
+        raise ValueError(
+            f"{source}: .xls input tables are unsupported; use .xlsx or CSV"
+        )
+    raise ValueError(
+        f"{source}: unsupported input table format; use CSV, JSON, or .xlsx"
+    )
 
 
 def read_csv_input_table(path: Path) -> InputTableData:
@@ -117,7 +120,9 @@ def read_json_input_table(path: Path) -> InputTableData:
     rows: list[InputTableRow] = []
     for index, item in enumerate(raw_rows, start=1):
         if not isinstance(item, dict):
-            raise ValueError(f"{path}: row {index}: JSON input table row must be an object")
+            raise ValueError(
+                f"{path}: row {index}: JSON input table row must be an object"
+            )
         row = row_from_json_mapping(path, index, item)
         if row is not None:
             rows.append(row)
@@ -143,7 +148,9 @@ def read_xlsx_input_table(path: Path) -> InputTableData:
         rows: list[InputTableRow] = []
         for row_index, raw_values in enumerate(rows_iter, start=2):
             values = list(raw_values)
-            if len(values) > len(headers) and any(cell_text(value) for value in values[len(headers) :]):
+            if len(values) > len(headers) and any(
+                cell_text(value) for value in values[len(headers) :]
+            ):
                 raise ValueError(f"{path}: row {row_index}: too many cells for header")
             values = values[: len(headers)] + [""] * max(0, len(headers) - len(values))
             row = row_from_mapping(path, row_index, dict(zip(headers, values)))
@@ -184,7 +191,9 @@ def row_from_json_mapping(
     for raw_key, value in values.items():
         canonical = canonical_header(str(raw_key))
         if canonical is None:
-            raise ValueError(f"{path}: row {row_number}: unknown input table column: {raw_key}")
+            raise ValueError(
+                f"{path}: row {row_number}: unknown input table column: {raw_key}"
+            )
         if canonical in seen:
             raise ValueError(
                 f"{path}: row {row_number}: duplicate input table column: {raw_key} "
@@ -209,7 +218,9 @@ def row_from_mapping(
     if bool(input_path) == bool(db_path):
         raise ValueError(f"{path}: row {row_number}: provide exactly one of path or db")
     if input_path and session_id:
-        raise ValueError(f"{path}: row {row_number}: session_id is only valid for db rows")
+        raise ValueError(
+            f"{path}: row {row_number}: session_id is only valid for db rows"
+        )
     return InputTableRow(
         table_path=str(path),
         row_number=row_number,

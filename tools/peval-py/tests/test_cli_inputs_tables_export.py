@@ -1,12 +1,32 @@
 from __future__ import annotations
 
-from cli_inputs_support import *
+from cli_inputs_support import (
+    FIXTURES,
+    Path,
+    contextlib,
+    create_hermes_db,
+    create_messages_db,
+    create_opencode_db,
+    io,
+    json,
+    patch,
+    read_input_table,
+    shutil,
+    subprocess,
+    sys,
+    tempfile,
+    unittest,
+    written_report_path,
+)
+
 
 class PevalPyCliInputTableExportTests(unittest.TestCase):
     def test_cli_input_table_csv_expands_sessions_and_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            shutil.copy(FIXTURES / "common_session.jsonl", root / "common_session.jsonl")
+            shutil.copy(
+                FIXTURES / "common_session.jsonl", root / "common_session.jsonl"
+            )
             db_path = root / "state.db"
             create_messages_db(db_path)
             table = root / "inputs.csv"
@@ -30,8 +50,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     "peval_py.cli",
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "--agent-name",
                     "global-agent",
                     "--model",
@@ -59,10 +79,16 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
             )
             self.assertEqual(payload["trajectory"][0]["agent"]["name"], "csv-agent")
             self.assertEqual(payload["trajectory"][0]["agent"]["version"], "9.9.9")
-            self.assertEqual(payload["trajectory"][0]["agent"]["model_name"], "csv-model")
+            self.assertEqual(
+                payload["trajectory"][0]["agent"]["model_name"], "csv-model"
+            )
             self.assertEqual(payload["trajectory"][1]["agent"]["name"], "global-agent")
-            self.assertEqual(payload["trajectory"][1]["agent"]["model_name"], "global-model")
-            self.assertEqual(payload["annotations"]["report_notes"][0]["markdown"], "CSV report note")
+            self.assertEqual(
+                payload["trajectory"][1]["agent"]["model_name"], "global-model"
+            )
+            self.assertEqual(
+                payload["annotations"]["report_notes"][0]["markdown"], "CSV report note"
+            )
             self.assertEqual(
                 [item["markdown"] for item in payload["annotations"]["notes"]],
                 ["CSV row note", "DB indexed note"],
@@ -73,7 +99,9 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            shutil.copy(FIXTURES / "common_session.jsonl", root / "common_session.jsonl")
+            shutil.copy(
+                FIXTURES / "common_session.jsonl", root / "common_session.jsonl"
+            )
             db_path = root / "state.db"
             create_messages_db(db_path)
             table = root / "inputs.json"
@@ -100,8 +128,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                 [
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-i",
                     str(table),
                     "--source-alias",
@@ -144,8 +172,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                             [
                                 "view",
                                 "tr",
-                        "-m",
-                        "raw",
+                                "-m",
+                                "raw",
                                 "-i",
                                 str(table),
                                 "--source-alias",
@@ -157,11 +185,12 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     self.assertNotEqual(result, 0)
                     self.assertIn(message, stderr.getvalue())
 
-
     def test_cli_input_table_json_forms_notes_and_export_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            shutil.copy(FIXTURES / "common_session.jsonl", root / "common_session.jsonl")
+            shutil.copy(
+                FIXTURES / "common_session.jsonl", root / "common_session.jsonl"
+            )
             db_path = root / "state.db"
             create_messages_db(db_path)
             table = root / "inputs.json"
@@ -195,8 +224,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     "peval_py.cli",
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-i",
                     str(table),
                     "-f",
@@ -210,8 +239,13 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
             )
             self.assertEqual(result.stderr, "")
             payload = json.loads(out_path.read_text(encoding="utf-8"))
-            self.assertEqual([item["session_id"] for item in payload["trajectory"]], ["common_session", "db-a"])
-            self.assertEqual(payload["trajectory"][1]["agent"]["model_name"], "json-db-model")
+            self.assertEqual(
+                [item["session_id"] for item in payload["trajectory"]],
+                ["common_session", "db-a"],
+            )
+            self.assertEqual(
+                payload["trajectory"][1]["agent"]["model_name"], "json-db-model"
+            )
             self.assertEqual(
                 [item["markdown"] for item in payload["annotations"]["report_notes"]],
                 ["JSON report", "JSON inline report"],
@@ -266,7 +300,9 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
 
             direct_plus_table = root / "direct-plus-table.json"
             direct_plus_table.write_text(
-                json.dumps([{"db": "state.db", "session_id": "db-a", "adapter": "psychevo"}]),
+                json.dumps(
+                    [{"db": "state.db", "session_id": "db-a", "adapter": "psychevo"}]
+                ),
                 encoding="utf-8",
             )
             direct_plus_out = root / "direct-plus-report.json"
@@ -277,8 +313,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     "peval_py.cli",
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-a",
                     "opencode",
                     "-p",
@@ -301,7 +337,6 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                 ["common_session", "db-a"],
             )
 
-
     def test_input_table_validation_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -310,7 +345,10 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                 "duplicate.csv": ("path,p\none,two\n", "duplicate input table column"),
                 "both.csv": ("path,db\none.jsonl,state.db\n", "provide exactly one"),
                 "neither.csv": ("adapter\nopencode\n", "provide exactly one"),
-                "path_session.csv": ("path,session_id\none.jsonl,s1\n", "session_id is only valid"),
+                "path_session.csv": (
+                    "path,session_id\none.jsonl,s1\n",
+                    "session_id is only valid",
+                ),
             }
             for name, (content, message) in cases.items():
                 with self.subTest(name=name):
@@ -321,15 +359,18 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
 
             xls_path = root / "inputs.xls"
             xls_path.write_text("not excel", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, ".xls input tables are unsupported"):
+            with self.assertRaisesRegex(
+                ValueError, ".xls input tables are unsupported"
+            ):
                 read_input_table(str(xls_path))
 
             xlsx_path = root / "inputs.xlsx"
             xlsx_path.write_text("not excel", encoding="utf-8")
             with patch("peval_py.input_table.import_module", side_effect=ImportError):
-                with self.assertRaisesRegex(ValueError, "requires optional dependency openpyxl"):
+                with self.assertRaisesRegex(
+                    ValueError, "requires optional dependency openpyxl"
+                ):
                     read_input_table(str(xlsx_path))
-
 
     def test_cli_multi_path_rules_and_export_single_session_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -341,8 +382,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     "peval_py.cli",
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-a",
                     "opencode",
                     "-p",
@@ -381,8 +422,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     "peval_py.cli",
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-a",
                     "opencode",
                     "-p",
@@ -432,8 +473,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     "peval_py.cli",
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-j",
                     str(FIXTURES / "common_session.jsonl"),
                 ],
@@ -442,7 +483,6 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                 capture_output=True,
             )
             self.assertNotEqual(legacy_jsonl_flag.returncode, 0)
-
 
     def test_cli_view_export_alias_smoke_and_legacy_commands_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -454,8 +494,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     command,
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-a",
                     "opencode",
                     "-p",
@@ -568,8 +608,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     command,
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-a",
                     "opencode",
                     "-p",
@@ -591,7 +631,7 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
 
             zh_config = Path(tmp) / "zh.toml"
             zh_config.write_text(
-                "[defaults]\nlocale = \"zh-CN\"\n",
+                '[defaults]\nlocale = "zh-CN"\n',
                 encoding="utf-8",
             )
             zh_report = Path(tmp) / "zh-report.html"
@@ -600,8 +640,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     command,
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-c",
                     str(zh_config),
                     "-a",
@@ -647,8 +687,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     command,
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-a",
                     "opencode",
                     "-d",
@@ -665,7 +705,9 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
             self.assertEqual(result.stderr, "")
             payload = json.loads(opencode_db_report.read_text(encoding="utf-8"))
             self.assertEqual(payload["trajectory"][0]["session_id"], "ses-latest")
-            self.assertEqual(payload["trajectory"][0]["steps"][0]["message"], "latest prompt")
+            self.assertEqual(
+                payload["trajectory"][0]["steps"][0]["message"], "latest prompt"
+            )
 
             hermes_db = Path(tmp) / "state.db"
             create_hermes_db(hermes_db)
@@ -675,8 +717,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     command,
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-a",
                     "hermes",
                     "-d",
@@ -712,8 +754,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     command,
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-a",
                     "psychevo",
                     "-d",
@@ -737,8 +779,8 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                     command,
                     "view",
                     "tr",
-                        "-m",
-                        "raw",
+                    "-m",
+                    "raw",
                     "-a",
                     "opencode",
                     "-p",
@@ -765,7 +807,7 @@ class PevalPyCliInputTableExportTests(unittest.TestCase):
                 capture_output=True,
             )
 
-            default_export = Path(tmp) / "trajectory-opencode-session.json"
+            default_export = Path(tmp) / "trajectory-opencode-common_session.json"
             result = subprocess.run(
                 [
                     command,

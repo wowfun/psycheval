@@ -14,7 +14,6 @@ from uuid import uuid4
 
 from markdown_it import MarkdownIt
 
-
 REPORT_MAX_BYTES = 20 * 1024 * 1024
 REPORT_STATE_FILENAME = "state.json"
 REPORT_ID_RE = re.compile(
@@ -99,13 +98,19 @@ class WorkspaceReportLibrary:
         path_to_source_key = self._path_to_source_key(source_rows)
         reports: list[WorkspaceReportMetadata] = []
         for child in self.reports_root.iterdir():
-            if child.is_symlink() or not child.is_dir() or not self._is_valid_report_id(child.name):
+            if (
+                child.is_symlink()
+                or not child.is_dir()
+                or not self._is_valid_report_id(child.name)
+            ):
                 continue
             try:
                 reports.append(self._read_package_metadata(child.name))
             except (OSError, UnicodeError, ValueError):
                 continue
-        reports.sort(key=lambda report: self._report_sort_key(report.report_id), reverse=True)
+        reports.sort(
+            key=lambda report: self._report_sort_key(report.report_id), reverse=True
+        )
         return [
             {
                 "report_id": report.report_id,
@@ -179,7 +184,9 @@ class WorkspaceReportLibrary:
 
         source_paths = self._read_state(state_path)
         if report_path.stat().st_size > REPORT_MAX_BYTES:
-            raise ValueError(f"report exceeds {REPORT_MAX_BYTES} byte limit: {report_path}")
+            raise ValueError(
+                f"report exceeds {REPORT_MAX_BYTES} byte limit: {report_path}"
+            )
         return WorkspaceReportMetadata(
             report_id=report_id,
             filename=report_path.name,
@@ -259,29 +266,44 @@ class WorkspaceReportLibrary:
     ) -> dict[str, str]:
         return {
             relative_path: source_key
-            for source_key, relative_path in self._source_key_to_path(source_rows).items()
+            for source_key, relative_path in self._source_key_to_path(
+                source_rows
+            ).items()
         }
 
     @staticmethod
     def _row_is_readable(row: dict[str, Any]) -> bool:
-        return bool(row.get("source_key")) and bool(row.get("artifact_dir")) and row.get(
-            "last_status"
-        ) != "missing"
+        return (
+            bool(row.get("source_key"))
+            and bool(row.get("artifact_dir"))
+            and row.get("last_status") != "missing"
+        )
 
     def _validate_relative_cell_path(self, raw_path: str) -> str:
         if not raw_path or "\\" in raw_path:
-            raise ValueError("report source path must be a workspace-relative Trial cell")
+            raise ValueError(
+                "report source path must be a workspace-relative Trial cell"
+            )
         path = PurePosixPath(raw_path)
         if path.is_absolute() or path.as_posix() != raw_path:
             raise ValueError("report source path must be normalized and relative")
         parts = path.parts
-        if len(parts) != 5 or parts[0] != "runs" or any(part in {"", ".", ".."} for part in parts):
-            raise ValueError("report source path must identify a Trial cell under runs/")
+        if (
+            len(parts) != 5
+            or parts[0] != "runs"
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
+            raise ValueError(
+                "report source path must identify a Trial cell under runs/"
+            )
         try:
             resolved = (self.workspace_root / Path(*parts)).resolve()
         except (OSError, RuntimeError) as exc:
             raise ValueError("report source path cannot be resolved safely") from exc
-        if self.workspace_root != resolved and self.workspace_root not in resolved.parents:
+        if (
+            self.workspace_root != resolved
+            and self.workspace_root not in resolved.parents
+        ):
             raise ValueError("report source path escapes the workspace")
         return path.as_posix()
 
@@ -314,7 +336,9 @@ class WorkspaceReportLibrary:
         base = self._now().strftime("%Y%m%d-%H%M%S-%f")
         candidate = base
         collision = 2
-        while (self.reports_root / candidate).exists() or (self.reports_root / candidate).is_symlink():
+        while (self.reports_root / candidate).exists() or (
+            self.reports_root / candidate
+        ).is_symlink():
             candidate = f"{base}-{collision}"
             collision += 1
         return candidate
@@ -342,7 +366,9 @@ class WorkspaceReportLibrary:
         report_format = REPORT_FORMATS.get(Path(filename).suffix.lower())
         if report_format is None:
             allowed = ", ".join(sorted(REPORT_FORMATS))
-            raise ValueError(f"unsupported report format: {filename}; expected {allowed}")
+            raise ValueError(
+                f"unsupported report format: {filename}; expected {allowed}"
+            )
         return report_format
 
     @staticmethod
@@ -366,7 +392,8 @@ class WorkspaceReportLibrary:
     @staticmethod
     def _write_state(path: Path, source_paths: list[str]) -> None:
         path.write_text(
-            json.dumps({"source_keys": source_paths}, ensure_ascii=False, indent=2) + "\n",
+            json.dumps({"source_keys": source_paths}, ensure_ascii=False, indent=2)
+            + "\n",
             encoding="utf-8",
         )
 

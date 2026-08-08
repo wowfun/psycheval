@@ -32,9 +32,7 @@ def main() -> int:
     try:
         write_workspace(root, args.cells)
         store = open_workspace_state(str(root))
-        config = ToolConfig(
-            workspace_root=str(root), analysis_eval_slug="benchmark"
-        )
+        config = ToolConfig(workspace_root=str(root), analysis_eval_slug="benchmark")
         catalog = WorkspaceCatalog(store, config)
 
         cold_start = time.perf_counter()
@@ -118,8 +116,16 @@ def write_workspace(root: Path, cells: int) -> None:
             / "agent"
         )
         agent_dir.mkdir(parents=True, exist_ok=True)
-        trajectory = {**trajectory_template, "trajectory_id": trial_key, "session_id": session_id}
-        meta = {**meta_template, "trial_key": trial_key, "finished_at_ms": 1_100 + index}
+        trajectory = {
+            **trajectory_template,
+            "trajectory_id": trial_key,
+            "session_id": session_id,
+        }
+        meta = {
+            **meta_template,
+            "trial_key": trial_key,
+            "finished_at_ms": 1_100 + index,
+        }
         (agent_dir / "trajectory.json").write_text(
             json.dumps(trajectory, separators=(",", ":")), encoding="utf-8"
         )

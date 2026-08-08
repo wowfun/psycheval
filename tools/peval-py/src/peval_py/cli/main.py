@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from peval_py.atif import validate_atif_trajectory
 from peval_py.cli.parser import build_parser
 from peval_py.cli.sessions import interactive_session_selection, print_session_lists
 from peval_py.cli.workspace import (
@@ -26,6 +27,7 @@ from peval_py.pipeline import (
     config_for_session,
     convert_session,
 )
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
@@ -96,9 +98,12 @@ def main(argv: list[str] | None = None) -> int:
             session = loaded_inputs.sessions[0]
             session_config = config_for_session(session, config)
             if session.snapshot_trajectory is not None:
+                validate_atif_trajectory(session.snapshot_trajectory)
                 write_json(
                     session.snapshot_trajectory,
-                    resolve_export_output(args, session.snapshot_trajectory, session_config),
+                    resolve_export_output(
+                        args, session.snapshot_trajectory, session_config
+                    ),
                 )
                 return 0
             conversion = convert_session(session, config)

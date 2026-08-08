@@ -3972,6 +3972,7 @@ function sourceBulkStateTarget(rows = sourceRows()) {
 }
 function syncSourceManagerBulkActions(rows = sourceRows()) {
   const selected = sourceSelectionKeys(rows);
+  const includesLinkedHarbor = sourceSelectedRows(rows).some((source) => source?.kind === "harbor-trial");
   const targetMode = sourceBulkStateTarget(rows);
   const stateButton = document.querySelector("[data-source-bulk-state]");
   const deleteButton = document.querySelector("[data-source-bulk-delete]");
@@ -3980,7 +3981,10 @@ function syncSourceManagerBulkActions(rows = sourceRows()) {
     stateButton.dataset.sourceBulkState = targetMode;
     stateButton.textContent = targetMode === "active" ? t("activate_selected", "Activate selected") : t("archive_selected", "Archive selected");
   }
-  if (deleteButton) deleteButton.disabled = selected.length < 1;
+  if (deleteButton) {
+    deleteButton.disabled = selected.length < 1 || includesLinkedHarbor;
+    deleteButton.title = includesLinkedHarbor ? t("serve_linked_harbor_delete_disabled", "Linked Harbor Trials cannot be deleted; archive them instead.") : "";
+  }
 }
 function bindSourceSelectionControls(root) {
   if (!serveMode() || !root) return;

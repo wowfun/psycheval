@@ -14,6 +14,7 @@ from peval_py.session_select import (
     parse_session_selection,
 )
 
+
 def print_session_lists(
     args: argparse.Namespace,
     adapter_assignments,
@@ -52,11 +53,6 @@ def db_inputs_with_adapters(
     adapter_assignments,
     config,
 ) -> list[dict]:
-    from peval_py.inputs import (
-        adapter_for_input_path,
-        resolve_db_input,
-    )
-    from peval_py.adapters import available_adapter_ids
 
     dbs = list(getattr(args, "db", None) or [])
     if not dbs:
@@ -64,7 +60,9 @@ def db_inputs_with_adapters(
     available = set(available_adapter_ids())
     inputs = []
     for index, path in enumerate(dbs, start=1):
-        resolved_path, token_adapter = resolve_db_input(path, index, adapter_assignments, config)
+        resolved_path, token_adapter = resolve_db_input(
+            path, index, adapter_assignments, config
+        )
         adapter = token_adapter or adapter_for_input_path(
             resolved_path,
             index,

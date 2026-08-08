@@ -1,7 +1,23 @@
 from __future__ import annotations
 
-from reports_html_support import *
 from peval_py.i18n import messages_for
+from reports_html_support import (
+    FIXTURES,
+    MessageRecord,
+    ReportSession,
+    ToolConfig,
+    build_multi_report,
+    build_report,
+    compact_css_text,
+    convert_records,
+    load_asset_text,
+    re,
+    read_jsonl,
+    render_html,
+    render_serve_html,
+    script_json,
+    unittest,
+)
 
 
 class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
@@ -28,7 +44,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIsNotNone(workspace_main)
         main_scroll = re.search(
             r'<div class="workspace-main-scroll" data-workspace-main-scroll>'
-            r'(.*)</div>\s*$',
+            r"(.*)</div>\s*$",
             workspace_main.group(1),
             re.DOTALL,
         )
@@ -111,7 +127,9 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
             )
         )
         self.assertTrue(
-            any("min-height:auto" in compact_css_text(rule) for rule in list_panel_rules)
+            any(
+                "min-height:auto" in compact_css_text(rule) for rule in list_panel_rules
+            )
         )
 
     def test_source_manager_puts_sqlite_db_import_first(self) -> None:
@@ -163,7 +181,9 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
             },
         )
 
-    def test_desktop_step_drawer_keeps_inline_steps_within_the_main_column(self) -> None:
+    def test_desktop_step_drawer_keeps_inline_steps_within_the_main_column(
+        self,
+    ) -> None:
         css = load_asset_text("report.css")
         desktop_css = css.split("@media (min-width:1181px)", 1)[1].split(
             "@media (max-width:1180px)", 1
@@ -262,25 +282,36 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertNotIn('<aside class="workspace-views"', static_html)
         serve_options = script_json(serve_html, "peval-py-render-options")
         self.assertEqual(serve_options["reports"], catalog)
-        self.assertIn('data-report-manager-open>Reports</button>', serve_html)
+        self.assertIn("data-report-manager-open>Reports</button>", serve_html)
         self.assertIn('<div class="report-manager-backdrop"', serve_html)
         self.assertIn('<aside class="report-reader"', serve_html)
-        self.assertIn('<div class="workspace-side-region" id="workspace-side-region">', serve_html)
-        self.assertIn('<aside class="workspace-views" id="workspace-views" hidden data-serve-only>', serve_html)
-        self.assertIn('data-report-inventory', serve_html)
-        self.assertIn('data-report-bindings', serve_html)
+        self.assertIn(
+            '<div class="workspace-side-region" id="workspace-side-region">', serve_html
+        )
+        self.assertIn(
+            '<aside class="workspace-views" id="workspace-views" hidden data-serve-only>',
+            serve_html,
+        )
+        self.assertIn("data-report-inventory", serve_html)
+        self.assertIn("data-report-bindings", serve_html)
         self.assertIn('sandbox="allow-scripts"', serve_html)
-        self.assertNotIn('allow-same-origin', serve_html)
-        self.assertIn('data-report-reader-open-tab', serve_html)
+        self.assertNotIn("allow-same-origin", serve_html)
+        self.assertIn("data-report-reader-open-tab", serve_html)
         self.assertIn('target="_blank"', serve_html)
         self.assertIn('rel="noopener"', serve_html)
-        self.assertIn('data-report-reader-resize', serve_html)
+        self.assertIn("data-report-reader-resize", serve_html)
         self.assertIn('aria-orientation="vertical"', serve_html)
 
-    def test_serve_html_mode_reuses_report_body_with_export_selection_controls(self) -> None:
+    def test_serve_html_mode_reuses_report_body_with_export_selection_controls(
+        self,
+    ) -> None:
         config = ToolConfig(adapter="opencode")
-        first = convert_records(read_jsonl(str(FIXTURES / "common_session.jsonl")), config)
-        second = convert_records(read_jsonl(str(FIXTURES / "psychevo_session.jsonl")), config)
+        first = convert_records(
+            read_jsonl(str(FIXTURES / "common_session.jsonl")), config
+        )
+        second = convert_records(
+            read_jsonl(str(FIXTURES / "psychevo_session.jsonl")), config
+        )
         report = build_multi_report(
             [
                 ReportSession(
@@ -302,7 +333,9 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         )
         self.assertNotIn("comparison", report)
         self.assertEqual(report["trajectory"][0]["session_id"], "common_session")
-        self.assertEqual(report["trajectory_meta"][0]["source_alias"], "Readable source")
+        self.assertEqual(
+            report["trajectory_meta"][0]["source_alias"], "Readable source"
+        )
         self.assertEqual(report["trajectory_meta"][0]["finished_at_ms"], 1500)
 
         static_html = render_html(report)
@@ -323,7 +356,9 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("Timeline Waterfall", static_html)
         self.assertIn("Timeline Detail Table", static_html)
         self.assertIn('id="leaderboard-summary"', static_html)
-        self.assertIn("function renderLeaderboardSummary(rows = leaderboardRows())", static_html)
+        self.assertIn(
+            "function renderLeaderboardSummary(rows = leaderboardRows())", static_html
+        )
         self.assertIn(
             '<script src="https://cdn.jsdelivr.net/npm/echarts@6.0.0/dist/echarts.min.js"></script>',
             static_html,
@@ -373,14 +408,14 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertNotIn("data-catalog-clear-selection", serve_html)
         self.assertNotIn("data-view-cancel-application", serve_html)
         self.assertNotIn('data-view-apply="', serve_html)
-        self.assertIn('/assets/echarts/6.0.0/echarts.min.js', serve_html)
+        self.assertIn("/assets/echarts/6.0.0/echarts.min.js", serve_html)
         self.assertIn(
             "this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/echarts@6.0.0/dist/echarts.min.js'",
             serve_html,
         )
         self.assertNotIn('class="serve-import-panel"', serve_html)
         self.assertIn('class="serve-source-toolbar"', serve_html)
-        self.assertIn('data-locale-select', serve_html)
+        self.assertIn("data-locale-select", serve_html)
         self.assertIn('class="source-manager-modal"', serve_html)
         self.assertIn("width:min(1480px,calc(100vw - 28px));", serve_html)
         self.assertNotIn('class="adapter-default-db-panel"', serve_html)
@@ -413,7 +448,9 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("data-db-add-selected", serve_html)
         self.assertIn("data-db-select-all", serve_html)
         self.assertEqual(serve_html.count('class="source-adapter-select"'), 4)
-        self.assertEqual(len(re.findall(r'class="[^"]*\bsource-add-actions\b', serve_html)), 4)
+        self.assertEqual(
+            len(re.findall(r'class="[^"]*\bsource-add-actions\b', serve_html)), 4
+        )
         db_path_control = re.search(
             r'<span class="db-path-control">\s*<textarea name="db".*?</textarea>'
             r'\s*<span class="db-default-actions">(.*?)</span>\s*</span>',
@@ -429,12 +466,18 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertNotIn("db-source-add-actions", serve_html)
         self.assertIn('name="adapter" aria-label="Adapter"', serve_html)
         self.assertIn('<option value="auto" selected>Auto</option>', serve_html)
-        self.assertIn('<option value="opencode"  data-default-db="/tmp/opencode.db">opencode</option>', serve_html)
+        self.assertIn(
+            '<option value="opencode"  data-default-db="/tmp/opencode.db">opencode</option>',
+            serve_html,
+        )
         self.assertNotIn('name="alias"', serve_html)
-        self.assertNotIn('data-source-alias-save', serve_html)
-        self.assertNotIn('data-source-alias-input', serve_html)
+        self.assertNotIn("data-source-alias-save", serve_html)
+        self.assertNotIn("data-source-alias-input", serve_html)
         self.assertIn('data-table-column-key="${esc(column.key)}"', serve_html)
-        self.assertIn('valueType: "text", value: (source) => String(source?.source_alias', serve_html)
+        self.assertIn(
+            'valueType: "text", value: (source) => String(source?.source_alias',
+            serve_html,
+        )
         self.assertIn(
             compact_css_text(
                 ".source-manager-body{min-height:0;display:grid;"
@@ -462,8 +505,10 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertNotIn("adapter-choice-group", serve_html)
         self.assertNotIn('type="radio" name="adapter"', serve_html)
         self.assertNotIn('data-source-action="refresh"', serve_html)
-        self.assertNotIn('{ key: "actions", label: t("serve_refresh", "Refresh")', serve_html)
-        self.assertIn('data-refresh-sources', serve_html)
+        self.assertNotIn(
+            '{ key: "actions", label: t("serve_refresh", "Refresh")', serve_html
+        )
+        self.assertIn("data-refresh-sources", serve_html)
         self.assertNotIn('data-source-action="delete"', serve_html)
         self.assertIn("data-source-bulk-state", serve_html)
         self.assertIn("data-source-bulk-delete", serve_html)
@@ -482,9 +527,15 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("Timeline Detail Table", serve_html)
         self.assertIn('id="leaderboard-summary"', serve_html)
 
-        self.assertIn("function renderLeaderboard(rows = leaderboardRows())", serve_html)
-        self.assertIn("function renderLeaderboardSummary(rows = leaderboardRows())", serve_html)
-        self.assertIn("function renderTrajectoryOverview(rows = leaderboardRows())", serve_html)
+        self.assertIn(
+            "function renderLeaderboard(rows = leaderboardRows())", serve_html
+        )
+        self.assertIn(
+            "function renderLeaderboardSummary(rows = leaderboardRows())", serve_html
+        )
+        self.assertIn(
+            "function renderTrajectoryOverview(rows = leaderboardRows())", serve_html
+        )
         self.assertIn("function renderTrace()", serve_html)
         self.assertIn("function renderStepDrawer()", serve_html)
         self.assertIn("function displayLeaderboardColumns()", serve_html)
@@ -493,20 +544,31 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('key: "finished_at_ms"', serve_html)
         self.assertIn("function sourceColumns()", serve_html)
         self.assertIn("last_turn_finished_at_ms", serve_html)
-        self.assertIn('{ key: "source_tags", label: t("tags", "Tags"), valueType: "list"', serve_html)
-        self.assertIn('commit: (source, value) => commitSourceCellEdit(source, "tags", value)', serve_html)
+        self.assertIn(
+            '{ key: "source_tags", label: t("tags", "Tags"), valueType: "list"',
+            serve_html,
+        )
+        self.assertIn(
+            'commit: (source, value) => commitSourceCellEdit(source, "tags", value)',
+            serve_html,
+        )
         self.assertIn("source-table", serve_html)
         self.assertIn("sourceSelection:", serve_html)
         self.assertIn("new Set()", serve_html)
         self.assertIn('tableId: "sources"', serve_html)
-        self.assertIn('rowKey: (source) => source?.source_key', serve_html)
-        self.assertIn("serveMode() ? [selectionColumn(), ...leaderboardColumns()] : leaderboardColumns()", serve_html)
+        self.assertIn("rowKey: (source) => source?.source_key", serve_html)
+        self.assertIn(
+            "serveMode() ? [selectionColumn(), ...leaderboardColumns()] : leaderboardColumns()",
+            serve_html,
+        )
         self.assertIn("data-select-visible", serve_html)
         self.assertIn("data-row-select", serve_html)
         self.assertIn("leaderboard-export", serve_html)
         self.assertIn("function bindServeSourceControls()", serve_html)
         self.assertIn("function choosePathSourceFiles(button)", serve_html)
-        self.assertIn('const firstError = String(failures[0]?.error || "").trim();', serve_html)
+        self.assertIn(
+            'const firstError = String(failures[0]?.error || "").trim();', serve_html
+        )
         self.assertIn('serveApi("/api/config/locale"', serve_html)
         self.assertIn('serveApi("/api/config/adapter-default-db"', serve_html)
         self.assertIn('serveApi("/api/path-picker"', serve_html)
@@ -516,7 +578,10 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("function bindAdapterDefaultDbControls()", serve_html)
         self.assertIn("function renderServeSourceAliasCell(source)", serve_html)
         self.assertIn("function commitSourceCellEdit(row, field, value)", serve_html)
-        self.assertIn("function beginTableCellEdit(cell, { tableId, column, row, onChange = null })", serve_html)
+        self.assertIn(
+            "function beginTableCellEdit(cell, { tableId, column, row, onChange = null })",
+            serve_html,
+        )
         self.assertNotIn("function saveInlineSourceEdit", serve_html)
         self.assertIn('serveApi("/api/db-sessions"', serve_html)
         self.assertIn("function inspectDbSessions(form)", serve_html)
@@ -568,27 +633,34 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('"peval-report-v19.json"', serve_html)
         self.assertIn('"peval-workspace-snapshot.html"', serve_html)
         self.assertIn("peval-leaderboard.xlsx", serve_html)
-        self.assertIn("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", serve_html)
+        self.assertIn(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            serve_html,
+        )
         self.assertIn("function xlsxBytesForRows(rows)", serve_html)
         self.assertNotIn("peval-leaderboard-visible.csv", serve_html)
-
 
     def test_html_render_mode_rejects_unknown_mode(self) -> None:
         report = {
             "schema_version": 19,
             "includes": ["core"],
             "trajectory": [{"trajectory_id": "trial:mode", "steps": []}],
-            "trajectory_meta": [{"trial_key": "trial:mode", "status": "passed", "steps": []}],
+            "trajectory_meta": [
+                {"trial_key": "trial:mode", "status": "passed", "steps": []}
+            ],
         }
 
         with self.assertRaisesRegex(ValueError, "unsupported HTML render mode"):
             render_html(report, mode="dashboard")
 
-
     def test_html_report_locale_localizes_report_chrome_except_steps(self) -> None:
         config = ToolConfig(adapter="opencode")
-        first = convert_records(read_jsonl(str(FIXTURES / "common_session.jsonl")), config)
-        second = convert_records(read_jsonl(str(FIXTURES / "psychevo_session.jsonl")), config)
+        first = convert_records(
+            read_jsonl(str(FIXTURES / "common_session.jsonl")), config
+        )
+        second = convert_records(
+            read_jsonl(str(FIXTURES / "psychevo_session.jsonl")), config
+        )
         report = build_multi_report(
             [
                 ReportSession(
@@ -633,7 +705,10 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('"archive_selected": "Archive selected"', english_html)
         self.assertIn('"activate_selected": "Activate selected"', english_html)
         self.assertIn('"serve_archived_snapshots": "Archived snapshots"', english_html)
-        self.assertIn('"archived_view_unavailable": "No sessions are available in that view. Use Sources to manage archived sessions."', english_html)
+        self.assertIn(
+            '"archived_view_unavailable": "No sessions are available in that view. Use Sources to manage archived sessions."',
+            english_html,
+        )
         self.assertNotIn("Not enough archived sessions", english_html)
         self.assertIn('"agent": "Agent"', english_html)
         self.assertIn('"filter": "Filter"', english_html)
@@ -666,7 +741,10 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('"archive_selected": "归档所选"', zh_html)
         self.assertIn('"activate_selected": "启用所选"', zh_html)
         self.assertIn('"serve_archived_snapshots": "已归档快照"', zh_html)
-        self.assertIn('"archived_view_unavailable": "该视图没有可显示的会话。请在 Sources 中管理已归档会话。"', zh_html)
+        self.assertIn(
+            '"archived_view_unavailable": "该视图没有可显示的会话。请在 Sources 中管理已归档会话。"',
+            zh_html,
+        )
         self.assertNotIn("不足两条", zh_html)
         self.assertIn('"agent": "Agent"', zh_html)
         self.assertIn('"trajectory_overview": "轨迹概览"', zh_html)
@@ -686,7 +764,9 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('"result": "Result"', zh_html)
         self.assertIn('"notes": "Notes"', zh_html)
         self.assertNotIn('"agent": "代理"', zh_html)
-        self.assertIn('"selected_trial_trajectory": "selected trial trajectory"', zh_html)
+        self.assertIn(
+            '"selected_trial_trajectory": "selected trial trajectory"', zh_html
+        )
         self.assertIn('"run": "Run"', zh_html)
         self.assertIn('"variant": "variant"', zh_html)
         self.assertIn('"evaluator": "evaluator"', zh_html)
@@ -721,7 +801,6 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertNotIn(">排行榜<", zh_html)
         self.assertIn("<h3>Steps (${count})</h3>", zh_html)
         self.assertIn("<h4>Tool Calls</h4>", zh_html)
-
 
     def test_html_renders_tool_names_timing_and_nested_observations(self) -> None:
         records = [
@@ -770,7 +849,9 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("--time-pct", html)
         self.assertIn("slowest step", html)
         self.assertIn("slowest tool", html)
-        self.assertIn('timeTitle("elapsed", meta?.elapsed_ms, elapsedRatio, "trajectory")', html)
+        self.assertIn(
+            'timeTitle("elapsed", meta?.elapsed_ms, elapsedRatio, "trajectory")', html
+        )
         self.assertIn("function fmtRailTokens", html)
         self.assertIn("fmtRailTokens(tokenInfo.tokens)", html)
         self.assertIn("fmtNum(tokenInfo.tokens)", html)

@@ -9,19 +9,24 @@ from peval_py._state.annotations import optional_str
 from peval_py._state.artifacts import (
     read_json_object,
     relative_to_root,
-    source_key_for_trial_cell_components,
     source_key_for_trial,
+    source_key_for_trial_cell_components,
     trial_artifacts,
     trial_cell_dir,
     write_json_file,
+    write_json_files_atomically,
 )
+from peval_py.atif import validate_atif_trajectory
+from peval_py.report import project_meta_from_atif
 from peval_py.state.constants import (
+    HARBOR_LINK_FILENAME,
     SOURCE_STATE_DIR,
     SOURCE_STATE_FILENAME,
     SOURCE_STATUS_MISSING,
     SOURCE_STATUS_OK,
     TRIAL_CELL_SIDECARS,
 )
+from peval_py.state.harbor import harbor_source_from_link, read_harbor_link
 from peval_py.state.summaries import now_ms, trial_summary
 
 
@@ -49,6 +54,8 @@ class StateArtifactMixin:
         meta: dict[str, Any],
         eval_slug: str,
     ) -> str:
+        validate_atif_trajectory(trajectory)
+        meta = project_meta_from_atif(trajectory, meta)
         artifact_dir = trial_cell_dir(
             self.paths.root,
             eval_slug=eval_slug,
@@ -57,8 +64,12 @@ class StateArtifactMixin:
             meta=meta,
         )
         artifacts = trial_artifacts(artifact_dir)
-        write_json_file(artifacts.trajectory_path, trajectory)
-        write_json_file(artifacts.meta_path, meta)
+        write_json_files_atomically(
+            [
+                (artifacts.trajectory_path, trajectory),
+                (artifacts.meta_path, meta),
+            ]
+        )
         return relative_to_root(self.paths.root, artifact_dir)
 
     def copy_trial_sidecars(self, source_cell_dir: Path, artifact_dir: str) -> None:
@@ -77,12 +88,19 @@ class StateArtifactMixin:
     def read_trial_artifacts(self, row: dict[str, Any]) -> dict[str, dict[str, Any]]:
         artifact_dir = row.get("artifact_dir")
         if not artifact_dir:
-            raise ValueError(f"trial has no artifact directory: {row.get('source_key')}")
+            raise ValueError(
+                f"trial has no artifact directory: {row.get('source_key')}"
+            )
         if self.artifact_missing(row):
             raise ValueError(self.missing_artifact_message(row))
         artifacts = trial_artifacts(self.resolve_artifact_dir(str(artifact_dir)))
+        trajectory = read_json_object(artifacts.trajectory_path)
+        try:
+            validate_atif_trajectory(trajectory, str(artifacts.trajectory_path))
+        except ValueError as exc:
+            raise ValueError(f"Invalid ATIF artifact: {exc}") from exc
         return {
-            "trajectory": read_json_object(artifacts.trajectory_path),
+            "trajectory": trajectory,
             "meta": read_json_object(artifacts.meta_path),
         }
 
@@ -97,11 +115,15 @@ class StateArtifactMixin:
         if not artifact_dir:
             return False
         artifacts = trial_artifacts(self.resolve_artifact_dir(str(artifact_dir)))
-        return not (artifacts.trajectory_path.is_file() and artifacts.meta_path.is_file())
+        return not (
+            artifacts.trajectory_path.is_file() and artifacts.meta_path.is_file()
+        )
 
     def missing_artifact_message(self, row: dict[str, Any]) -> str:
         artifact_dir = row.get("artifact_dir")
-        return f"Trial cell artifacts not found: {artifact_dir or row.get('source_key')}"
+        return (
+            f"Trial cell artifacts not found: {artifact_dir or row.get('source_key')}"
+        )
 
     def update_source_summary(
         self,
@@ -111,9 +133,13 @@ class StateArtifactMixin:
     ) -> None:
         del trajectory, meta
         row = self.source_by_key(source_key)
-        state = self.read_source_state(self.resolve_artifact_dir(str(row["artifact_dir"])))
+        state = self.read_source_state(
+            self.resolve_artifact_dir(str(row["artifact_dir"]))
+        )
         state["updated_at_ms"] = now_ms()
-        self.write_source_state(self.resolve_artifact_dir(str(row["artifact_dir"])), state)
+        self.write_source_state(
+            self.resolve_artifact_dir(str(row["artifact_dir"])), state
+        )
 
     def discover_trial_cell_dirs(self, eval_slug: str) -> list[Path]:
         run_root = self.paths.root / "runs" / eval_slug
@@ -130,7 +156,10 @@ class StateArtifactMixin:
                     if not cell_dir.is_dir():
                         continue
                     artifacts = trial_artifacts(cell_dir)
-                    if artifacts.trajectory_path.is_file() and artifacts.meta_path.is_file():
+                    if (
+                        artifacts.trajectory_path.is_file()
+                        and artifacts.meta_path.is_file()
+                    ):
                         cells.append(cell_dir)
         return cells
 
@@ -146,7 +175,9 @@ class StateArtifactMixin:
             artifacts = trial_artifacts(cell_dir)
             if artifacts.trajectory_path.is_file() and artifacts.meta_path.is_file():
                 append_unique_path(cells, cell_dir)
-        for state_path in sorted(run_root.rglob(f"{SOURCE_STATE_DIR}/{SOURCE_STATE_FILENAME}")):
+        for state_path in sorted(
+            run_root.rglob(f"{SOURCE_STATE_DIR}/{SOURCE_STATE_FILENAME}")
+        ):
             append_unique_path(cells, state_path.parent.parent.resolve())
         return cells
 
@@ -156,7 +187,12 @@ class StateArtifactMixin:
         trajectory: dict[str, Any],
         meta: dict[str, Any],
     ) -> dict[str, Any]:
-        agent = trajectory.get("agent") if isinstance(trajectory.get("agent"), dict) else {}
+        link = self.read_harbor_link(cell_dir)
+        if link is not None:
+            return harbor_source_from_link(link)
+        agent = (
+            trajectory.get("agent") if isinstance(trajectory.get("agent"), dict) else {}
+        )
         adapter = optional_str(meta.get("adapter") or agent.get("name")) or "artifact"
         return {
             "kind": "trial-artifact",
@@ -176,38 +212,78 @@ class StateArtifactMixin:
     def source_row_from_cell_dir(self, cell_dir: Path) -> dict[str, Any]:
         cell_dir = cell_dir.expanduser().resolve()
         state = self.read_source_state(cell_dir)
+        link = self.read_harbor_link(cell_dir)
         artifact_dir = relative_to_root(self.paths.root, cell_dir)
         artifacts = trial_artifacts(cell_dir)
-        has_artifacts = artifacts.trajectory_path.is_file() and artifacts.meta_path.is_file()
+        has_artifacts = (
+            artifacts.trajectory_path.is_file() and artifacts.meta_path.is_file()
+        )
         trajectory: dict[str, Any] | None = None
         meta: dict[str, Any] | None = None
         if has_artifacts:
-            trajectory = read_json_object(artifacts.trajectory_path)
-            meta = read_json_object(artifacts.meta_path)
-            source = self.source_row_for_artifact_cell(cell_dir, trajectory, meta)
-            source["source_alias"] = optional_str(state.get("source_alias"))
-            source["source_category"] = self.source_category_from_state(state)
-            source["source_tags"] = self.source_tags_from_state(state)
-            eval_slug = self.eval_slug_for_cell_dir(cell_dir)
-            source_key = source_key_for_trial(eval_slug, source, trajectory, meta)
-            summary = trial_summary(trajectory, meta)
-            status = optional_str(state.get("last_status")) or SOURCE_STATUS_OK
-            error = state.get("last_error")
+            try:
+                try:
+                    trajectory = read_json_object(artifacts.trajectory_path)
+                    validate_atif_trajectory(trajectory, str(artifacts.trajectory_path))
+                except ValueError as exc:
+                    raise ValueError(f"Invalid ATIF artifact: {exc}") from exc
+                meta = read_json_object(artifacts.meta_path)
+                source = self.source_row_for_artifact_cell(cell_dir, trajectory, meta)
+                source["source_alias"] = optional_str(state.get("source_alias"))
+                source["source_category"] = self.source_category_from_state(state)
+                source["source_tags"] = self.source_tags_from_state(state)
+                eval_slug = self.eval_slug_for_cell_dir(cell_dir)
+                source_key = (
+                    str(link["source_key"])
+                    if link is not None
+                    else source_key_for_trial(eval_slug, source, trajectory, meta)
+                )
+                summary = trial_summary(trajectory, meta)
+                status = (
+                    optional_str(state.get("last_status"))
+                    or optional_str((link or {}).get("last_status"))
+                    or SOURCE_STATUS_OK
+                )
+                error = state.get("last_error") or (link or {}).get("last_error")
+            except Exception as exc:  # noqa: BLE001 - preserve invalid evidence as a catalog row.
+                identity = self.cell_path_identity(cell_dir)
+                source = self.missing_source_row(artifact_dir, identity, state, link)
+                source_key = (
+                    optional_str((link or {}).get("source_key"))
+                    or self.source_key_for_cell_identity(identity)
+                    or optional_str(state.get("source_key"))
+                    or ""
+                )
+                summary = self.missing_trial_summary(identity)
+                status = "error"
+                error = str(exc)
         else:
             identity = self.cell_path_identity(cell_dir)
             source = self.missing_source_row(
                 artifact_dir,
                 identity,
                 state,
+                link,
             )
             source_key = (
-                self.source_key_for_cell_identity(identity)
+                optional_str((link or {}).get("source_key"))
+                or self.source_key_for_cell_identity(identity)
                 or optional_str(state.get("source_key"))
                 or ""
             )
             summary = self.missing_trial_summary(identity)
-            status = SOURCE_STATUS_MISSING
-            error = self.missing_artifact_message({"artifact_dir": artifact_dir, **state})
+            status = (
+                optional_str(state.get("last_status"))
+                or optional_str((link or {}).get("last_status"))
+                or SOURCE_STATUS_MISSING
+            )
+            error = (
+                optional_str(state.get("last_error"))
+                or optional_str((link or {}).get("last_error"))
+                or self.missing_artifact_message(
+                    {"artifact_dir": artifact_dir, **state}
+                )
+            )
         timestamp = self.artifact_updated_at_ms(cell_dir)
         row = {
             "source_key": source_key,
@@ -215,9 +291,9 @@ class StateArtifactMixin:
             "artifact_dir": artifact_dir,
             "artifact_updated_at_ms": timestamp,
             **summary,
-            "refreshable": False,
+            "refreshable": link is not None,
             "active": bool(state.get("active", True)),
-            "snapshot": True,
+            "snapshot": link is None,
             "created_at_ms": int(state.get("created_at_ms") or timestamp),
             "updated_at_ms": int(state.get("updated_at_ms") or timestamp),
             "last_status": status,
@@ -256,7 +332,14 @@ class StateArtifactMixin:
         artifact_dir: str,
         identity: dict[str, str],
         state: dict[str, Any],
+        link: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if link is not None:
+            source = harbor_source_from_link(link)
+            source["source_alias"] = optional_str(state.get("source_alias"))
+            source["source_category"] = self.source_category_from_state(state)
+            source["source_tags"] = self.source_tags_from_state(state)
+            return source
         adapter = optional_str(identity.get("agent_id")) or "artifact"
         session_id = optional_str(identity.get("session_id"))
         agent_name = optional_str(identity.get("agent_id"))
@@ -319,6 +402,12 @@ class StateArtifactMixin:
     def source_state_path(self, cell_dir: Path) -> Path:
         return cell_dir / SOURCE_STATE_DIR / SOURCE_STATE_FILENAME
 
+    def harbor_link_path(self, cell_dir: Path) -> Path:
+        return cell_dir / SOURCE_STATE_DIR / HARBOR_LINK_FILENAME
+
+    def read_harbor_link(self, cell_dir: Path) -> dict[str, Any] | None:
+        return read_harbor_link(cell_dir)
+
     def read_source_state(self, cell_dir: Path) -> dict[str, Any]:
         path = self.source_state_path(cell_dir)
         if not path.is_file():
@@ -375,6 +464,9 @@ class StateArtifactMixin:
             for path in [artifacts.trajectory_path, artifacts.meta_path]
             if path.is_file()
         ]
+        link_path = self.harbor_link_path(cell_dir)
+        if link_path.is_file():
+            mtimes.append(link_path.stat().st_mtime_ns // 1_000_000)
         return max(mtimes) if mtimes else 0
 
 

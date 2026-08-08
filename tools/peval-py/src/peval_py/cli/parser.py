@@ -138,10 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-path",
         required=True,
         metavar="PATH",
-        help=(
-            "Trial cell path such as "
-            "runs/default/psychevo/<session-id>/<cell-key>"
-        ),
+        help=("Trial cell path such as runs/default/psychevo/<session-id>/<cell-key>"),
     )
     import_analysis.add_argument(
         "-p",
@@ -267,7 +264,9 @@ def add_conversion_override_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--agent-name", help="override ATIF agent name")
     parser.add_argument("--agent-version", help="override ATIF agent version")
     parser.add_argument("--model", help="override ATIF agent model name")
-    parser.add_argument("--no-redact", action="store_true", help="disable secret redaction")
+    parser.add_argument(
+        "--no-redact", action="store_true", help="disable secret redaction"
+    )
 
 
 def add_raw_report_override_args(parser: argparse._ArgumentGroup) -> None:
@@ -312,9 +311,15 @@ def add_source_alias_arg(parser: argparse.ArgumentParser) -> None:
 
 
 def add_inspect_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--head", type=int, help="inspect first N steps per source; defaults to 2")
-    parser.add_argument("--tail", type=int, help="inspect last N steps per source; defaults to 2")
-    parser.add_argument("--top", type=int, help="inspect top N ranked rows per source; defaults to 5")
+    parser.add_argument(
+        "--head", type=int, help="inspect first N steps per source; defaults to 2"
+    )
+    parser.add_argument(
+        "--tail", type=int, help="inspect last N steps per source; defaults to 2"
+    )
+    parser.add_argument(
+        "--top", type=int, help="inspect top N ranked rows per source; defaults to 5"
+    )
     parser.add_argument(
         "--steps",
         action="append",

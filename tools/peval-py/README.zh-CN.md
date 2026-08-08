@@ -46,7 +46,7 @@ uv run --project tools/peval-py --with pyinstaller pyinstaller \
   --distpath .local/peval-py-build/dist \
   --workpath .local/peval-py-build/work \
   --specpath .local/peval-py-build/spec \
-  tools/peval-py/src/peval_py/cli.py
+  tools/peval-py/src/peval_py/cli/__main__.py
 ```
 
 运行打包后的命令，并用 fixture 生成一份报告做检查：
@@ -202,4 +202,4 @@ JSON 清单可以是顶层 array，也可以是带有 `rows` 和 `report_notes` 
 `export tr -i` 展开后仍只能有一个 session。多行清单请使用 `view tr -i`。
 
 报告生成、session 对比和自定义 adapter 示例见
-[peval-py 轻量轨迹报告](../../docs/i18n/zh-CN/peval-py.md)。
+[peval-py 文档](../../docs/i18n/zh-CN/peval-py/README.md)。

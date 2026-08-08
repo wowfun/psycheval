@@ -6,7 +6,9 @@ from importlib.resources import files
 ASSET_PACKAGE = "peval_py.assets"
 ECHARTS_VERSION = "6.0.0"
 ECHARTS_LOCAL_SRC = f"/assets/echarts/{ECHARTS_VERSION}/echarts.min.js"
-ECHARTS_CDN_SRC = f"https://cdn.jsdelivr.net/npm/echarts@{ECHARTS_VERSION}/dist/echarts.min.js"
+ECHARTS_CDN_SRC = (
+    f"https://cdn.jsdelivr.net/npm/echarts@{ECHARTS_VERSION}/dist/echarts.min.js"
+)
 ASSET_BUNDLES = {
     "report.css": [
         "report_css/00-base.css",
@@ -26,13 +28,14 @@ ASSET_BUNDLES = {
     ],
 }
 
+
 def render_echarts_script(mode: str) -> str:
     cdn = escape(ECHARTS_CDN_SRC)
     if mode == "serve":
         local = escape(ECHARTS_LOCAL_SRC)
         return (
             f'<script src="{local}" '
-            f'onerror="this.onerror=null;this.src=\'{cdn}\'"></script>'
+            f"onerror=\"this.onerror=null;this.src='{cdn}'\"></script>"
         )
     return f'<script src="{cdn}"></script>'
 

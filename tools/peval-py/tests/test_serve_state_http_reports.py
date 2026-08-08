@@ -2,11 +2,34 @@ from __future__ import annotations
 
 import http.client
 
-from serve_state_support import *
+from serve_state_support import (
+    LocalHTTPServer,
+    Path,
+    ServeRuntime,
+    ToolConfig,
+    json,
+    make_handler,
+    open_workspace_state,
+    parse_adapter_assignments,
+    peval_py_workspace,
+    raw_get_json,
+    request_bytes,
+    request_json,
+    request_text,
+    script_json,
+    serve_args,
+    shutil,
+    tempfile,
+    threading,
+    unittest,
+    write_trial_cell_artifacts,
+)
 
 
 class PevalPyServeWorkspaceReportHttpTests(unittest.TestCase):
-    @unittest.skip("superseded by shell-first catalog and paged report binding coverage")
+    @unittest.skip(
+        "superseded by shell-first catalog and paged report binding coverage"
+    )
     def test_loading_and_ready_envelopes_keep_report_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_py_workspace(Path(tmp))
@@ -65,7 +88,9 @@ class PevalPyServeWorkspaceReportHttpTests(unittest.TestCase):
             first_cell = root / "runs" / "default" / "psychevo" / "s1" / "s1_t001"
             second_cell = root / "runs" / "default" / "psychevo" / "s2" / "s2_t001"
             write_trial_cell_artifacts(first_cell, session_id="s1", trial_key="s1_t001")
-            write_trial_cell_artifacts(second_cell, session_id="s2", trial_key="s2_t001")
+            write_trial_cell_artifacts(
+                second_cell, session_id="s2", trial_key="s2_t001"
+            )
             report_path = root / "cross-session-report.md"
             report_path.write_text("# Cross-session report\n")
             config = ToolConfig(adapter="psychevo", workspace_root=str(root))
@@ -93,7 +118,10 @@ class PevalPyServeWorkspaceReportHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 report_id = body["report_id"]
-                self.assertEqual(body["reports"][0]["source_keys"], [source_keys["s1"], source_keys["s2"]])
+                self.assertEqual(
+                    body["reports"][0]["source_keys"],
+                    [source_keys["s1"], source_keys["s2"]],
+                )
                 state_path = root / "reports" / report_id / "state.json"
                 self.assertEqual(
                     json.loads(state_path.read_text()),
@@ -114,7 +142,9 @@ class PevalPyServeWorkspaceReportHttpTests(unittest.TestCase):
                 status, _, html = request_text(port, "/")
                 self.assertEqual(status, 200)
                 self.assertEqual(
-                    script_json(html, "peval-py-render-options")["reports"][0]["report_id"],
+                    script_json(html, "peval-py-render-options")["reports"][0][
+                        "report_id"
+                    ],
                     report_id,
                 )
 
@@ -147,12 +177,16 @@ class PevalPyServeWorkspaceReportHttpTests(unittest.TestCase):
                 shutil.rmtree(second_cell)
                 status, _, sources_body = request_bytes(port, "/api/sources")
                 self.assertEqual(status, 200)
-                self.assertEqual(json.loads(sources_body)["reports"][0]["source_keys"], [])
+                self.assertEqual(
+                    json.loads(sources_body)["reports"][0]["source_keys"], []
+                )
                 self.assertEqual(
                     json.loads(state_path.read_text()),
                     {"source_keys": ["runs/default/psychevo/s2/s2_t001"]},
                 )
-                write_trial_cell_artifacts(second_cell, session_id="s2", trial_key="s2_t001")
+                write_trial_cell_artifacts(
+                    second_cell, session_id="s2", trial_key="s2_t001"
+                )
                 status, _, sources_body = request_bytes(port, "/api/sources")
                 self.assertEqual(status, 200)
                 self.assertEqual(
@@ -258,7 +292,9 @@ class PevalPyServeWorkspaceReportHttpTests(unittest.TestCase):
                 thread.join(timeout=5)
                 store.close()
 
-    def test_report_previews_are_isolated_and_null_or_malformed_origins_are_rejected(self) -> None:
+    def test_report_previews_are_isolated_and_null_or_malformed_origins_are_rejected(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_py_workspace(Path(tmp))
             cell = root / "runs" / "default" / "psychevo" / "s1" / "s1_t001"
@@ -269,7 +305,9 @@ class PevalPyServeWorkspaceReportHttpTests(unittest.TestCase):
                 "~~removed~~ <script>alert('unsafe')</script>\n"
             )
             html_path = root / "analysis.html"
-            html_bytes = b"<!doctype html><script src='https://example.com/a.js'></script>"
+            html_bytes = (
+                b"<!doctype html><script src='https://example.com/a.js'></script>"
+            )
             html_path.write_bytes(html_bytes)
             config = ToolConfig(adapter="psychevo", workspace_root=str(root))
             store = open_workspace_state(str(root))
@@ -280,7 +318,10 @@ class PevalPyServeWorkspaceReportHttpTests(unittest.TestCase):
             thread.start()
             port = server.server_port
             origin = f"http://127.0.0.1:{port}"
-            payload = {"path": str(markdown_path.resolve()), "source_keys": [source_key]}
+            payload = {
+                "path": str(markdown_path.resolve()),
+                "source_keys": [source_key],
+            }
             try:
                 for rejected_origin in ("null", "not-an-origin", f"{origin}/path"):
                     status, _, body = request_json(
@@ -351,7 +392,10 @@ class PevalPyServeWorkspaceReportHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(preview, html_bytes)
-                self.assertIn("script-src 'unsafe-inline' http: https:", headers["content-security-policy"])
+                self.assertIn(
+                    "script-src 'unsafe-inline' http: https:",
+                    headers["content-security-policy"],
+                )
 
                 status, headers, opened = request_bytes(
                     port,

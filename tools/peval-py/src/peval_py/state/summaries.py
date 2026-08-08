@@ -18,7 +18,9 @@ def trial_summary(
     trajectory = trajectory or {}
     meta = meta or {}
     return {
-        "trial_key": optional_str(meta.get("trial_key") or trajectory.get("trajectory_id")),
+        "trial_key": optional_str(
+            meta.get("trial_key") or trajectory.get("trajectory_id")
+        ),
         "trial_session_id": optional_str(trajectory.get("session_id")),
         "last_turn_finished_at_ms": optional_int(meta.get("finished_at_ms")),
     }

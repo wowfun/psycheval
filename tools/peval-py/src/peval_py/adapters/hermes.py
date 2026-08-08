@@ -76,15 +76,11 @@ def read_hermes_db(path: str, session_id: str | None) -> list[MessageRecord]:
                     "timestamp_ms": seconds_to_ms(row_value(session, "started_at")),
                     "model": row_string(session, "model"),
                 },
-                usage=pending_usage or None,
                 metadata=metadata_for(session, source="hermes-db"),
-                accounting=pending_accounting or None,
                 session_seq=seq,
                 source_session_id=str(session["id"]),
             )
         )
-        pending_usage = {}
-        pending_accounting = {}
         seq += 1
 
     for row in messages:
@@ -94,7 +90,10 @@ def read_hermes_db(path: str, session_id: str | None) -> list[MessageRecord]:
             seq,
             include_row_usage=not has_aggregate_metrics,
         )
-        if pending_usage or pending_accounting:
+        if (pending_usage or pending_accounting) and message_role(record) in {
+            "assistant",
+            "agent",
+        }:
             record = with_metrics(record, pending_usage, pending_accounting)
             pending_usage = {}
             pending_accounting = {}
@@ -221,7 +220,9 @@ def hermes_log_timestamp_ms(timestamp: str, milliseconds: str) -> int:
     return int(round(value.timestamp() * 1000))
 
 
-def hermes_tool_event_matches_record(event: HermesLogEvent, record: MessageRecord) -> bool:
+def hermes_tool_event_matches_record(
+    event: HermesLogEvent, record: MessageRecord
+) -> bool:
     event_name = normalized_tool_name(event.name)
     record_name = normalized_tool_name(record.message.get("tool_name"))
     return bool(event_name and record_name and event_name == record_name)
@@ -396,17 +397,23 @@ def tool_calls_from_raw(raw: object) -> list[dict[str, Any]]:
         function = item.get("function")
         if not isinstance(function, dict):
             function = {}
-        call_id = first_non_empty_string(
-            item.get("id"),
-            item.get("call_id"),
-            item.get("tool_call_id"),
-        ) or f"tool-call-{index}"
-        name = first_non_empty_string(
-            item.get("name"),
-            item.get("function_name"),
-            item.get("tool"),
-            function.get("name"),
-        ) or "tool"
+        call_id = (
+            first_non_empty_string(
+                item.get("id"),
+                item.get("call_id"),
+                item.get("tool_call_id"),
+            )
+            or f"tool-call-{index}"
+        )
+        name = (
+            first_non_empty_string(
+                item.get("name"),
+                item.get("function_name"),
+                item.get("tool"),
+                function.get("name"),
+            )
+            or "tool"
+        )
         calls.append(
             {
                 "type": "tool_call",
@@ -458,6 +465,13 @@ def session_usage(session: sqlite3.Row) -> dict[str, Any]:
         value = int_or_none(row_value(session, source))
         if value is not None:
             usage[target] = value
+    prompt_buckets = [
+        int_or_none(row_value(session, "input_tokens")),
+        int_or_none(row_value(session, "cache_read_tokens")),
+        int_or_none(row_value(session, "cache_write_tokens")),
+    ]
+    if any(value is not None for value in prompt_buckets):
+        usage["prompt_tokens"] = sum(value or 0 for value in prompt_buckets)
     cost = float_or_none(row_value(session, "actual_cost_usd"))
     if cost is None:
         cost = float_or_none(row_value(session, "estimated_cost_usd"))

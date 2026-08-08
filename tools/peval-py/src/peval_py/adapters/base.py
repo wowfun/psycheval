@@ -6,7 +6,6 @@ from typing import Any, Protocol
 from peval_py.config import ToolConfig
 from peval_py.sources import MessageRecord
 
-
 ACTIVE_DURATION_FALLBACK_CAP_MS = 600_000
 TIMESTAMP_SEMANTICS_ORDER_ONLY = "order_only"
 
@@ -88,13 +87,13 @@ class Adapter(Protocol):
 
 
 class RecordAdapter(Adapter, Protocol):
-    def convert(self, records: list[MessageRecord], config: ToolConfig) -> ConversionResult:
-        ...
+    def convert(
+        self, records: list[MessageRecord], config: ToolConfig
+    ) -> ConversionResult: ...
 
 
 class PathAdapter(Adapter, Protocol):
-    def convert_path(self, path: str, config: ToolConfig) -> ConversionResult:
-        ...
+    def convert_path(self, path: str, config: ToolConfig) -> ConversionResult: ...
 
 
 class DbAdapter(Adapter, Protocol):
@@ -103,10 +102,8 @@ class DbAdapter(Adapter, Protocol):
         path: str,
         session_id: str | None,
         config: ToolConfig,
-    ) -> ConversionResult:
-        ...
+    ) -> ConversionResult: ...
 
 
 class SessionListAdapter(Adapter, Protocol):
-    def list_sessions(self, path: str) -> list[SessionInfo]:
-        ...
+    def list_sessions(self, path: str) -> list[SessionInfo]: ...

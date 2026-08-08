@@ -1,6 +1,35 @@
 from __future__ import annotations
 
-from serve_state_support import *
+from serve_state_support import (
+    FIXTURES,
+    CustomPathAdapter,
+    FakeEntryPoint,
+    FakeEntryPoints,
+    LocalHTTPServer,
+    Path,
+    ToolConfig,
+    create_hermes_db,
+    create_messages_db,
+    create_opencode_db,
+    json,
+    load_serve_inputs,
+    make_handler,
+    open_workspace_state,
+    parse_adapter_assignments,
+    patch,
+    peval_py_workspace,
+    request_json,
+    sample_report,
+    serve_args,
+    shutil,
+    source_path_values,
+    tempfile,
+    threading,
+    unittest,
+    workspace_relative_path,
+    write_cached_note,
+)
+
 
 class PevalPyServeStateNotesDbTests(unittest.TestCase):
     def test_http_artifact_only_source_notes_save_is_rejected(self) -> None:
@@ -49,7 +78,9 @@ class PevalPyServeStateNotesDbTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 400)
                 self.assertIn("refreshable", body["error"])
-                self.assertEqual(note_path.read_text(encoding="utf-8"), "Initial HTTP note.")
+                self.assertEqual(
+                    note_path.read_text(encoding="utf-8"), "Initial HTTP note."
+                )
 
                 status, _, rejected = request_json(
                     port,
@@ -143,16 +174,34 @@ class PevalPyServeStateNotesDbTests(unittest.TestCase):
                     "exact cell",
                 )
                 self.assertEqual(
-                    store.active_report()["annotations"]["notes"][0]["source_ref"]["relative_path"],
+                    store.active_report()["annotations"]["notes"][0]["source_ref"][
+                        "relative_path"
+                    ],
                     created.relative_to(root).as_posix(),
                 )
                 self.assertEqual(created.read_text(encoding="utf-8"), "exact cell")
                 self.assertEqual(
-                    (root / "runs" / "default" / "opencode" / "common_session" / "one" / "notes.md").read_text(encoding="utf-8"),
+                    (
+                        root
+                        / "runs"
+                        / "default"
+                        / "opencode"
+                        / "common_session"
+                        / "one"
+                        / "notes.md"
+                    ).read_text(encoding="utf-8"),
                     "one",
                 )
                 self.assertEqual(
-                    (root / "runs" / "default" / "opencode" / "common_session" / "two" / "notes.md").read_text(encoding="utf-8"),
+                    (
+                        root
+                        / "runs"
+                        / "default"
+                        / "opencode"
+                        / "common_session"
+                        / "two"
+                        / "notes.md"
+                    ).read_text(encoding="utf-8"),
                     "two",
                 )
             finally:
@@ -167,10 +216,14 @@ class PevalPyServeStateNotesDbTests(unittest.TestCase):
                     store,
                     {
                         "path": (
-                            r"C:\Users\kevin\AppData\Local\state.db" "\n"
-                            r'"D:\Data Dir\session.jsonl"' "\n"
-                            r"C:/Users/kevin/.hermes/state.db" "\n"
-                            r"\\server\share\state.db" "\n"
+                            r"C:\Users\kevin\AppData\Local\state.db"
+                            "\n"
+                            r'"D:\Data Dir\session.jsonl"'
+                            "\n"
+                            r"C:/Users/kevin/.hermes/state.db"
+                            "\n"
+                            r"\\server\share\state.db"
+                            "\n"
                             "relative.jsonl"
                         )
                     },
@@ -210,7 +263,9 @@ class PevalPyServeStateNotesDbTests(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_http_db_session_inspect_infers_adapters_and_batch_adds_sources(self) -> None:
+    def test_http_db_session_inspect_infers_adapters_and_batch_adds_sources(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_py_workspace(Path(tmp))
             hermes_dir = root / ".hermes"
@@ -285,13 +340,12 @@ class PevalPyServeStateNotesDbTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(len(body["sources"]), 2)
-                self.assertTrue(all(not source["refreshable"] for source in body["sources"]))
+                self.assertTrue(
+                    all(not source["refreshable"] for source in body["sources"])
+                )
                 self.assertTrue(all(source["snapshot"] for source in body["sources"]))
                 self.assertEqual(
-                    {
-                        source["session_id"]
-                        for source in body["sources"]
-                    },
+                    {source["session_id"] for source in body["sources"]},
                     {"hermes-latest", "hermes-old"},
                 )
                 self.assertEqual(
@@ -374,8 +428,17 @@ class PevalPyServeStateNotesDbTests(unittest.TestCase):
                         origin=origin,
                     )
                     self.assertEqual(status, 200)
-                    self.assertTrue(any(source["session_id"] == "common" for source in body["sources"]))
-                    path_source = next(source for source in body["sources"] if source["session_id"] == "common")
+                    self.assertTrue(
+                        any(
+                            source["session_id"] == "common"
+                            for source in body["sources"]
+                        )
+                    )
+                    path_source = next(
+                        source
+                        for source in body["sources"]
+                        if source["session_id"] == "common"
+                    )
                     self.assertNotEqual(path_source["input_path"], str(mapped_path))
                     self.assertFalse(path_source["refreshable"])
                     path_artifact = root / path_source["artifact_dir"]

@@ -75,7 +75,9 @@ def _render_html_document(
     )
     render_options: dict[str, Any] = {
         "mode": normalized_mode,
-        "sources": serve_source_payload if normalized_mode in {"serve", "workspace_snapshot"} else [],
+        "sources": serve_source_payload
+        if normalized_mode in {"serve", "workspace_snapshot"}
+        else [],
     }
     if normalized_mode == "serve":
         render_options["reports"] = list(reports or [])
@@ -85,8 +87,12 @@ def _render_html_document(
             render_options["load_error"] = load_error
     elif normalized_mode == "workspace_snapshot":
         render_options["reports"] = list(reports or [])
-    title_key = "serve_title" if normalized_mode in {"serve", "workspace_snapshot"} else "title"
-    payload = load_asset_text("report.html").replace("__LANG__", escape(normalized_locale))
+    title_key = (
+        "serve_title" if normalized_mode in {"serve", "workspace_snapshot"} else "title"
+    )
+    payload = load_asset_text("report.html").replace(
+        "__LANG__", escape(normalized_locale)
+    )
     payload = payload.replace(
         "__TITLE_REGION__",
         (
@@ -175,9 +181,7 @@ def _render_html_document(
     )
     payload = payload.replace(
         "__RENDER_OPTIONS__",
-        safe_json_for_script(
-            json.dumps(render_options, ensure_ascii=False)
-        ),
+        safe_json_for_script(json.dumps(render_options, ensure_ascii=False)),
     )
     return payload
 
@@ -207,7 +211,9 @@ def normalize_render_mode(mode: object) -> str:
     text = str(mode or "report").strip().lower()
     if text in {"report", "serve"}:
         return text
-    raise ValueError(f"unsupported HTML render mode: {mode}; supported modes: report, serve")
+    raise ValueError(
+        f"unsupported HTML render mode: {mode}; supported modes: report, serve"
+    )
 
 
 def serve_sources(report: dict[str, Any]) -> list[dict[str, str]]:
@@ -227,14 +233,20 @@ def serve_sources(report: dict[str, Any]) -> list[dict[str, str]]:
     return sources
 
 
-def step_token_estimates(report: dict[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
+def step_token_estimates(
+    report: dict[str, Any],
+) -> dict[str, dict[str, dict[str, Any]]]:
     estimates: dict[str, dict[str, dict[str, Any]]] = {}
     trajectories = list_value(report.get("trajectory"))
     metas = list_value(report.get("trajectory_meta"))
     for index, trajectory in enumerate(trajectories):
         if not isinstance(trajectory, dict):
             continue
-        meta = metas[index] if index < len(metas) and isinstance(metas[index], dict) else {}
+        meta = (
+            metas[index]
+            if index < len(metas) and isinstance(metas[index], dict)
+            else {}
+        )
         trial_key = str(
             meta.get("trial_key")
             or trajectory.get("trajectory_id")
@@ -326,15 +338,12 @@ def visible_value(value: Any) -> str:
 
 def exact_step_token_total(step: dict[str, Any]) -> int | None:
     metrics = as_dict(step.get("metrics"))
-    usage = as_dict(metrics.get("usage"))
-    values = [
-        numeric_value(metrics.get("prompt_tokens")),
-        numeric_value(metrics.get("completion_tokens")),
-        numeric_value(metrics.get("cached_tokens")),
-        numeric_value(usage.get("total_tokens")),
-    ]
-    present = [value for value in values if value is not None]
-    return int(sum(present)) if present else None
+    prompt = numeric_value(metrics.get("prompt_tokens"))
+    completion = numeric_value(metrics.get("completion_tokens"))
+    if prompt is not None or completion is not None:
+        return int((prompt or 0) + (completion or 0))
+    usage_total = numeric_value(as_dict(metrics.get("usage")).get("total_tokens"))
+    return int(usage_total) if usage_total is not None else None
 
 
 def numeric_value(value: Any) -> float | None:

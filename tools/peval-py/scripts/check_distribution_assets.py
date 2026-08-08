@@ -5,7 +5,6 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-
 WHEEL_REQUIRED = {
     "peval_py/assets/report.html",
     "peval_py/assets/report.js",

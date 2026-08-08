@@ -2,7 +2,69 @@ from __future__ import annotations
 
 import os
 
-from peval_py_test_support import *
+from peval_py_test_support import (
+    FIXTURES,
+    CustomPathAdapter,
+    FakeEntryPoint,
+    FakeEntryPoints,
+    LoadedInputs,
+    LoadedSession,
+    Path,
+    ToolConfig,
+    contextlib,
+    convert_records,
+    create_hermes_db,
+    create_messages_db,
+    create_opencode_db,
+    io,
+    json,
+    load_config,
+    patch,
+    re,
+    read_input_table,
+    read_jsonl,
+    shutil,
+    sqlite3,
+    subprocess,
+    sys,
+    tempfile,
+    unittest,
+)
+
+__all__ = [
+    "FIXTURES",
+    "CustomPathAdapter",
+    "FakeEntryPoint",
+    "FakeEntryPoints",
+    "LoadedInputs",
+    "LoadedSession",
+    "Path",
+    "ToolConfig",
+    "contextlib",
+    "convert_records",
+    "create_hermes_db",
+    "create_messages_db",
+    "create_opencode_db",
+    "io",
+    "json",
+    "load_config",
+    "os",
+    "patch",
+    "re",
+    "read_input_table",
+    "read_jsonl",
+    "shutil",
+    "sqlite3",
+    "subprocess",
+    "sys",
+    "tempfile",
+    "unittest",
+    "write_cli_cached_analysis",
+    "write_cli_cached_markdown",
+    "write_peval_workspace",
+    "write_trial_cell_artifacts",
+    "written_report_path",
+]
 
 
 def write_cli_cached_analysis(
@@ -14,7 +76,9 @@ def write_cli_cached_analysis(
     cell_key: str = "session_t001",
     summary: str = "Root-selected cached analysis.",
 ) -> Path:
-    path = root / "runs" / eval_slug / agent_id / session_id / cell_key / "analysis.json"
+    path = (
+        root / "runs" / eval_slug / agent_id / session_id / cell_key / "analysis.json"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -84,8 +148,9 @@ def write_trial_cell_artifacts(
             },
             {
                 "step_id": 2,
-                "source": "assistant",
+                "source": "agent",
                 "message": "direct artifact response",
+                "llm_call_count": 1,
                 **(
                     {
                         "tool_calls": [
@@ -98,8 +163,12 @@ def write_trial_cell_artifacts(
                         "observation": {
                             "results": [
                                 {
-                                    "tool_call_id": "call_error",
+                                    "source_call_id": "call_error",
                                     "content": "command failed",
+                                    "extra": {
+                                        "status": "error",
+                                        "is_error": True,
+                                    },
                                 }
                             ]
                         },

@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+
 def frame_row(frame: pd.DataFrame, key: str, value: int) -> dict[str, Any]:
     row = frame[frame[key] == value]
     if row.empty:

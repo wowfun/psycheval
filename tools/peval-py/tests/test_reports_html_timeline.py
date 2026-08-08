@@ -1,6 +1,22 @@
 from __future__ import annotations
 
-from reports_html_support import *
+from reports_html_support import (
+    Path,
+    ToolConfig,
+    build_report,
+    convert_db,
+    create_hermes_log_timing_home,
+    create_opencode_event_timing_db,
+    json,
+    load_asset_text,
+    render_html,
+    script_json,
+    shutil,
+    subprocess,
+    tempfile,
+    unittest,
+)
+
 
 class PevalPyReportHtmlTimelineTests(unittest.TestCase):
     def test_timeline_numbers_are_step_scoped(self) -> None:
@@ -24,7 +40,10 @@ class PevalPyReportHtmlTimelineTests(unittest.TestCase):
                             "source": "agent",
                             "message": "run tool",
                             "tool_calls": [
-                                {"tool_call_id": "call-read", "function_name": "read_file"}
+                                {
+                                    "tool_call_id": "call-read",
+                                    "function_name": "read_file",
+                                }
                             ],
                         },
                     ],
@@ -105,7 +124,9 @@ console.log(result);
             [["2.1", "Model: test-model"], ["2.2", "Tool: read_file"]],
         )
 
-    def test_html_renders_wall_time_timeline_diagnostics_without_new_json_fields(self) -> None:
+    def test_html_renders_wall_time_timeline_diagnostics_without_new_json_fields(
+        self,
+    ) -> None:
         report = {
             "schema_version": 19,
             "includes": ["core"],
@@ -315,20 +336,37 @@ console.log(result);
         self.assertIn("model.active_total_ms", detail_pct_source)
         self.assertNotIn("model.wall_total_ms", detail_pct_source)
         self.assertNotIn("model.wall_total_ms", detail_columns_source)
-        self.assertIn('key: "stage", label: t("timeline_col_stage", "Stage"), valueType: "text", sortable: true, filterable: true', detail_columns_source)
-        self.assertIn('key: "duration_ms", label: t("timeline_col_duration", "Duration"), valueType: "number"', detail_columns_source)
-        self.assertIn('key: "active_pct", label: t("timeline_col_total_pct", "Active Share"), valueType: "number", numeric: true, sortable: true, metric: true', detail_columns_source)
-        self.assertIn("html: (row) => renderTimelineActiveShare(row, model)", detail_columns_source)
+        self.assertIn(
+            'key: "stage", label: t("timeline_col_stage", "Stage"), valueType: "text", sortable: true, filterable: true',
+            detail_columns_source,
+        )
+        self.assertIn(
+            'key: "duration_ms", label: t("timeline_col_duration", "Duration"), valueType: "number"',
+            detail_columns_source,
+        )
+        self.assertIn(
+            'key: "active_pct", label: t("timeline_col_total_pct", "Active Share"), valueType: "number", numeric: true, sortable: true, metric: true',
+            detail_columns_source,
+        )
+        self.assertIn(
+            "html: (row) => renderTimelineActiveShare(row, model)",
+            detail_columns_source,
+        )
         self.assertIn('className: "active-share-cell"', detail_columns_source)
         self.assertNotIn('key: "distribution"', detail_columns_source)
         self.assertNotIn("timeline_col_distribution", detail_columns_source)
-        self.assertNotIn('t("timeline_col_category", "Category")', detail_columns_source)
-        self.assertIn('applyDataTableControls("timeline", rows, columns, rows)', detail_table_source)
+        self.assertNotIn(
+            't("timeline_col_category", "Category")', detail_columns_source
+        )
+        self.assertIn(
+            'applyDataTableControls("timeline", rows, columns, rows)',
+            detail_table_source,
+        )
         self.assertIn("renderTimelineStageLabel(row)", detail_columns_source)
         self.assertIn("data-timeline-step-id", detail_table_source)
         self.assertIn("timeline-detail-row", detail_table_source)
         self.assertIn("timeline-detail-selected", detail_table_source)
-        self.assertIn("tabindex=\"0\"", detail_table_source)
+        self.assertIn('tabindex="0"', detail_table_source)
         self.assertNotIn('t("timeline_col_category", "Category")', detail_table_source)
         self.assertNotIn('applyDataTableControls("timeline"', chart_option_source)
         self.assertNotIn('tableControls("timeline"', chart_option_source)
@@ -336,16 +374,21 @@ console.log(result);
         self.assertIn("timeline-fallback", html)
         self.assertIn("ECharts did not load", html)
         self.assertIn("const label = api.value(5)", html)
-        self.assertIn("type: \"text\"", html)
-        self.assertIn("fill: labelInside ? \"#fffdf8\" : color", html)
+        self.assertIn('type: "text"', html)
+        self.assertIn('fill: labelInside ? "#fffdf8" : color', html)
         self.assertIn("const color = api.value(4)", html)
         self.assertIn('cursor: "pointer"', html)
-        self.assertIn('node.addEventListener("click", (event) => event.stopPropagation())', html)
+        self.assertIn(
+            'node.addEventListener("click", (event) => event.stopPropagation())', html
+        )
         self.assertIn('state.timelineChart.on("click"', html)
         self.assertIn("openTimelineStep(params?.data?.trace_item)", html)
-        self.assertIn("state.selectedStep = { trialKey: state.selectedTrial, stepId: String(item.step_id) }", html)
+        self.assertIn(
+            "state.selectedStep = { trialKey: state.selectedTrial, stepId: String(item.step_id) }",
+            html,
+        )
         self.assertIn("renderComparisonPanels();", html)
-        self.assertIn("row.addEventListener(\"click\", open)", html)
+        self.assertIn('row.addEventListener("click", open)', html)
         self.assertIn('event.key !== "Enter" && event.key !== " "', html)
         self.assertIn("fmtTimelineDuration(stage.duration_ms)", html)
         self.assertIn('"timeline_category_agent": "Agent"', html)
@@ -509,7 +552,6 @@ console.log(JSON.stringify(trace.stages.map(stage => ({{
         self.assertEqual(by_call_id["call-zero"]["duration_ms"], 0)
         self.assertEqual(by_call_id["call-zero"]["active_pct"], 0)
 
-
     def test_html_timeline_trace_omits_order_only_timestamp_estimates(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js timeline helpers")
@@ -626,7 +668,6 @@ console.log(JSON.stringify(trace.stages.map(stage => ({{
 
         self.assertEqual(stages, [])
 
-
     def test_html_timeline_trace_uses_hermes_log_fused_timing(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js timeline helpers")
@@ -689,7 +730,6 @@ console.log(JSON.stringify(trace.stages.map(stage => ({{
         self.assertFalse(model_stages[0]["estimated"])
         self.assertEqual(tool_stages["call-fetch"]["duration_ms"], 53_890)
         self.assertEqual(tool_stages["call-error"]["duration_ms"], 80)
-
 
     def test_html_timeline_trace_uses_opencode_event_fused_timing(self) -> None:
         if not shutil.which("node"):

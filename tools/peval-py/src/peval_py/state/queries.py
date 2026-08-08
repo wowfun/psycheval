@@ -156,7 +156,12 @@ class StateQueryMixin:
             rows = [row for row in rows if bool(row.get("active")) is active]
         elif active_only:
             rows = [row for row in rows if bool(row.get("active"))]
-        rows.sort(key=lambda row: (int(row.get("created_at_ms") or 0), str(row.get("source_key") or "")))
+        rows.sort(
+            key=lambda row: (
+                int(row.get("created_at_ms") or 0),
+                str(row.get("source_key") or ""),
+            )
+        )
         return rows
 
     def source_payload(self) -> list[dict[str, Any]]:

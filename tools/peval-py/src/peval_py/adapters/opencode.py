@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import math
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +11,6 @@ from peval_py.adapters.base import SessionInfo
 from peval_py.adapters.common import CommonMessageAdapter
 from peval_py.config import ToolConfig
 from peval_py.sources import MessageRecord, read_jsonl
-
 
 OPENCODE_PART_TIMING_SOURCE = "opencode_part_timestamps"
 OPENCODE_EVENT_TOOL_TIMING_SOURCE = "opencode_event_tool_timestamps"
@@ -464,6 +463,13 @@ def usage_from_tokens(raw: Any) -> dict[str, Any]:
             usage["cache_read_tokens"] = cache["read"]
         if cache.get("write") is not None:
             usage["cache_write_tokens"] = cache["write"]
+    prompt_buckets = [
+        int_or_none(raw.get("input")),
+        int_or_none(cache.get("read")) if isinstance(cache, dict) else None,
+        int_or_none(cache.get("write")) if isinstance(cache, dict) else None,
+    ]
+    if any(value is not None for value in prompt_buckets):
+        usage["prompt_tokens"] = sum(value or 0 for value in prompt_buckets)
     return usage
 
 

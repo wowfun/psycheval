@@ -32,7 +32,9 @@ from peval_py.workspace_views import WorkspaceViewLibrary
 
 
 class WorkspaceCatalogTests(unittest.TestCase):
-    def test_snapshot_rows_hold_one_generation_validate_selection_and_preserve_sort(self) -> None:
+    def test_snapshot_rows_hold_one_generation_validate_selection_and_preserve_sort(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.write_cell(root, 1)
@@ -72,7 +74,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 CatalogQuery(search="session-0001"),
                 selected_source_keys=expected,
             ) as (_generation, rows):
-                self.assertEqual([row["trial_session_id"] for row in rows], ["session-0001"])
+                self.assertEqual(
+                    [row["trial_session_id"] for row in rows], ["session-0001"]
+                )
 
             with self.assertRaisesRegex(ValueError, "unknown source"):
                 with catalog.read_snapshot_rows(
@@ -89,7 +93,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 catalog._writer_lock.release()
             store.close()
 
-    def test_workspace_snapshot_limits_include_unique_bound_report_content(self) -> None:
+    def test_workspace_snapshot_limits_include_unique_bound_report_content(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.write_cell(root, 1)
@@ -157,7 +163,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
             self.assertEqual(MAX_REPORT_EXPORT_INPUT_BYTES, 50 * 1024 * 1024)
             store.close()
 
-    def catalog(self, root: Path, *, slug: str = "default") -> tuple[object, WorkspaceCatalog]:
+    def catalog(
+        self, root: Path, *, slug: str = "default"
+    ) -> tuple[object, WorkspaceCatalog]:
         (root / "peval-py.toml").write_text(
             f'analysis_eval_slug = "{slug}"\n', encoding="utf-8"
         )
@@ -204,7 +212,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 cold_reads.append(path)
                 return original_read(path)
 
-            with patch.object(catalog_module, "read_json_object", side_effect=count_cold):
+            with patch.object(
+                catalog_module, "read_json_object", side_effect=count_cold
+            ):
                 self.assertEqual(catalog.reconcile(), 1)
             self.assertEqual(len(cold_reads), 6)
 
@@ -222,7 +232,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 changed_reads.append(path)
                 return original_read(path)
 
-            with patch.object(catalog_module, "read_json_object", side_effect=count_changed):
+            with patch.object(
+                catalog_module, "read_json_object", side_effect=count_changed
+            ):
                 catalog.reconcile()
             self.assertEqual(len(changed_reads), 2)
 
@@ -240,7 +252,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 detail_reads.append(path)
                 return original_artifact_read(path)
 
-            with patch.object(artifacts_module, "read_json_object", side_effect=count_detail):
+            with patch.object(
+                artifacts_module, "read_json_object", side_effect=count_detail
+            ):
                 detail = catalog.load_detail(target)
             self.assertEqual(detail.source_key, target)
             self.assertEqual(len(detail_reads), 2)
@@ -252,7 +266,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
             good = self.write_cell(root, 1, slug="chosen")
             self.write_cell(root, 2, slug="other")
             broken = root / "runs" / "chosen" / "psychevo" / "broken" / "broken_t001"
-            write_trial_cell_artifacts(broken, session_id="broken", trial_key="broken_t001")
+            write_trial_cell_artifacts(
+                broken, session_id="broken", trial_key="broken_t001"
+            )
             (broken / "agent" / "trajectory.json").write_text("{", encoding="utf-8")
             link = root / "runs" / "chosen" / "linked-agent"
             try:
@@ -266,12 +282,17 @@ class WorkspaceCatalogTests(unittest.TestCase):
             )
             self.assertEqual(source_page.total, 2)
             self.assertEqual(
-                len([item for item in source_page.items if item.payload.get("readable")]),
+                len(
+                    [item for item in source_page.items if item.payload.get("readable")]
+                ),
                 1,
             )
             leaderboard = catalog.query(CatalogQuery(state="all"))
             self.assertEqual(leaderboard.total, 1)
-            self.assertEqual(leaderboard.items[0].payload["artifact_dir"], good.relative_to(root).as_posix())
+            self.assertEqual(
+                leaderboard.items[0].payload["artifact_dir"],
+                good.relative_to(root).as_posix(),
+            )
             if link is not None:
                 self.assertNotIn("linked-agent", json.dumps(source_page.to_dict()))
             store.close()
@@ -286,7 +307,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
             trajectory["steps"].extend(
                 [
                     {"step_id": 3, "source": "agent", "message": "estimated"},
-                    {"step_id": 4, "source": "tool", "message": "tool"},
+                    {"step_id": 4, "source": "user", "message": "tool"},
                 ]
             )
             trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
@@ -323,24 +344,29 @@ class WorkspaceCatalogTests(unittest.TestCase):
             trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
             trajectory["steps"] = [
                 {
-                    "step_id": "user-step",
-                    "source": "User",
+                    "step_id": 1,
+                    "source": "user",
                     "message": "must not enter the catalog",
-                    "reasoning_content": "private reasoning",
                 },
                 {
-                    "step_id": 7,
-                    "source": "assistant",
+                    "step_id": 2,
+                    "source": "agent",
                     "message": "must not enter either",
-                    "tool_calls": [{"arguments": {"token": "secret"}}],
+                    "tool_calls": [
+                        {
+                            "tool_call_id": "call-secret",
+                            "function_name": "secret",
+                            "arguments": {"token": "secret"},
+                        }
+                    ],
                 },
             ]
             trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
             meta_path = cell / "agent" / "trajectory_meta.json"
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             meta["steps"] = [
-                {"step_id": "user-step", "duration_ms": 125},
-                {"step_id": 7, "duration_ms": 250},
+                {"step_id": 1, "duration_ms": 125},
+                {"step_id": 2, "duration_ms": 250},
             ]
             meta_path.write_text(json.dumps(meta), encoding="utf-8")
 
@@ -351,8 +377,8 @@ class WorkspaceCatalogTests(unittest.TestCase):
             self.assertEqual(
                 payload["step_outline"],
                 [
-                    {"step_id": "user-step", "source": "user", "duration_ms": 125},
-                    {"step_id": 7, "source": "agent", "duration_ms": 250},
+                    {"step_id": 1, "source": "user", "duration_ms": 125},
+                    {"step_id": 2, "source": "agent", "duration_ms": 250},
                 ],
             )
             self.assertNotIn("must not enter", json.dumps(payload))
@@ -389,9 +415,11 @@ class WorkspaceCatalogTests(unittest.TestCase):
             self.assertEqual(len(first.items), 100)
             self.assertEqual(len(second.items), 25)
             self.assertEqual(first.total, 125)
-            self.assertTrue(set(item.source_key for item in first.items).isdisjoint(
-                item.source_key for item in second.items
-            ))
+            self.assertTrue(
+                set(item.source_key for item in first.items).isdisjoint(
+                    item.source_key for item in second.items
+                )
+            )
             self.assertEqual(catalog.query(CatalogQuery(search="中文检索")).total, 1)
             self.assertEqual(catalog.query(CatalogQuery(search="42")).total, 1)
             self.assertEqual(catalog.query(CatalogQuery(search="%")).total, 0)
@@ -402,10 +430,18 @@ class WorkspaceCatalogTests(unittest.TestCase):
             )
             self.assertEqual(catalog.query(CatalogQuery(tags=("even",))).total, 63)
             self.assertEqual(
-                next(item["count"] for item in first.facets["results"] if item["value"] == "failed"),
+                next(
+                    item["count"]
+                    for item in first.facets["results"]
+                    if item["value"] == "failed"
+                ),
                 13,
             )
-            selected = [first.items[0].source_key, second.items[-1].source_key, "missing"]
+            selected = [
+                first.items[0].source_key,
+                second.items[-1].source_key,
+                "missing",
+            ]
             self.assertEqual(catalog.resolve_keys(selected), selected[:2])
             store.close()
 
@@ -433,7 +469,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 if tag == "ghost":
-                    (cell / "agent" / "trajectory.json").write_text("{", encoding="utf-8")
+                    (cell / "agent" / "trajectory.json").write_text(
+                        "{", encoding="utf-8"
+                    )
 
             store, catalog = self.catalog(root)
             try:
@@ -448,7 +486,10 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 )
                 self.assertEqual(active.total, 1)
                 self.assertEqual(
-                    {item["value"]: item["count"] for item in active.facets["categories"]},
+                    {
+                        item["value"]: item["count"]
+                        for item in active.facets["categories"]
+                    },
                     {"secondary": 1, "shared": 1},
                 )
                 self.assertEqual(
@@ -490,7 +531,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
                     {item["value"] for item in all_states.facets["tags"]},
                     {"alpha", "beta", "archived"},
                 )
-                self.assertNotIn("ghost", {item["value"] for item in all_states.facets["tags"]})
+                self.assertNotIn(
+                    "ghost", {item["value"] for item in all_states.facets["tags"]}
+                )
                 self.assertEqual(
                     {item["value"] for item in all_states.facets["categories"]},
                     {"shared", "secondary", "archive-category"},
@@ -512,7 +555,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 cell = self.write_cell(root, index)
                 trajectory_path = cell / "agent" / "trajectory.json"
                 trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
-                trajectory["agent"]["model_name"] = "model-a" if index % 4 else "model-b"
+                trajectory["agent"]["model_name"] = (
+                    "model-a" if index % 4 else "model-b"
+                )
                 trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
                 meta_path = cell / "agent" / "trajectory_meta.json"
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -570,7 +615,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_saved_view_queries_or_full_predicates_then_apply_and_refinement(self) -> None:
+    def test_saved_view_queries_or_full_predicates_then_apply_and_refinement(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             definitions = [
@@ -664,7 +711,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
             rebuilt.reconcile()
             self.assertEqual(rebuilt.query(CatalogQuery()).total, 1)
             with rebuilt._connect() as connection:
-                rebuilt._set_meta(connection, "schema_version", str(CATALOG_SCHEMA_VERSION - 1))
+                rebuilt._set_meta(
+                    connection, "schema_version", str(CATALOG_SCHEMA_VERSION - 1)
+                )
                 connection.commit()
             version_rebuilt = WorkspaceCatalog(catalog.store, catalog.config)
             self.assertFalse(version_rebuilt.has_generation)

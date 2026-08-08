@@ -20,7 +20,9 @@ class CommonMessageAdapter:
     agent_id = "common"
     default_agent_name = "agent"
 
-    def convert(self, records: list[MessageRecord], config: ToolConfig) -> ConversionResult:
+    def convert(
+        self, records: list[MessageRecord], config: ToolConfig
+    ) -> ConversionResult:
         steps: list[dict[str, Any]] = []
         meta: list[StepMeta] = []
         pending_tools: dict[str, tuple[dict[str, Any], StepMeta, ToolMeta]] = {}
@@ -66,7 +68,11 @@ class CommonMessageAdapter:
             steps.append(atif_step)
             meta.append(step_meta)
             for tool_meta in step_meta.tool_calls:
-                pending_tools[tool_meta.tool_call_id] = (atif_step, step_meta, tool_meta)
+                pending_tools[tool_meta.tool_call_id] = (
+                    atif_step,
+                    step_meta,
+                    tool_meta,
+                )
             next_step_id += 1
 
         started = first_timestamp(meta)
@@ -74,7 +80,6 @@ class CommonMessageAdapter:
         final_metrics = final_metrics_from_records(records, steps, meta)
         trajectory = {
             "schema_version": "ATIF-v1.7",
-            "trajectory_id": "session:t001",
             "agent": {
                 "name": config.agent_name or self.default_agent_name,
                 "version": config.agent_version,
@@ -82,9 +87,9 @@ class CommonMessageAdapter:
             "steps": steps,
             "final_metrics": final_metrics,
         }
-        session_id = first_metadata_value(records, "session_id") or first_source_session_id(
-            records
-        )
+        session_id = first_metadata_value(
+            records, "session_id"
+        ) or first_source_session_id(records)
         if session_id:
             trajectory["session_id"] = str(session_id)
         model_name = config.model or first_model(records)
@@ -153,12 +158,18 @@ class CommonMessageAdapter:
         duration_source = metadata_elapsed_ms_source(record)
         for call in tool_calls_from_message(message):
             call_id = str(call.get("id") or call.get("tool_call_id") or "tool-call")
-            name = str(call.get("name") or call.get("function_name") or call.get("tool") or "tool")
+            name = str(
+                call.get("name")
+                or call.get("function_name")
+                or call.get("tool")
+                or "tool"
+            )
             args = call.get("arguments")
             if not isinstance(args, dict):
                 args = parse_json_object(call.get("arguments_json")) or {}
             if config.redact:
                 args = redact_value(args)
+            args, arguments_truncated = bounded_arguments(args, config)
             tool_calls.append(
                 {
                     "tool_call_id": call_id,
@@ -171,7 +182,9 @@ class CommonMessageAdapter:
                     tool_call_id=call_id,
                     status="pending",
                     title=name,
-                    timestamp_ms=timestamp,
+                    timestamp_ms=call_timestamp_ms(call) or timestamp,
+                    generation_duration_ms=call_duration_ms(call),
+                    truncated=arguments_truncated,
                 )
             )
         step = {
@@ -347,7 +360,9 @@ def content_text(content: Any) -> str:
                 texts.append(block)
             elif isinstance(block, dict):
                 block_type = str(block.get("type", "text"))
-                if block_type in {"text", "message"} and isinstance(block.get("text"), str):
+                if block_type in {"text", "message"} and isinstance(
+                    block.get("text"), str
+                ):
                     texts.append(block["text"])
                 elif isinstance(block.get("content"), str):
                     texts.append(block["content"])
@@ -411,7 +426,9 @@ def tool_execution_duration(
         return max(0, elapsed), metadata_elapsed_ms_source(record) or "message_metadata"
     if not timestamp_fallback_allowed(record_timestamp_semantics(record)):
         return None, None
-    fallback = timestamp_fallback_duration_ms(assistant_timestamp_ms, observation_timestamp_ms)
+    fallback = timestamp_fallback_duration_ms(
+        assistant_timestamp_ms, observation_timestamp_ms
+    )
     if fallback is not None:
         return fallback, "event_timestamps"
     return None, None
@@ -439,7 +456,9 @@ def metadata_elapsed_ms(record: MessageRecord) -> int | None:
 
 def metadata_elapsed_ms_source(record: MessageRecord) -> str | None:
     for source in [record.metadata, as_dict(record.message.get("metadata"))]:
-        if isinstance(source, dict) and isinstance(source.get("elapsed_ms_source"), str):
+        if isinstance(source, dict) and isinstance(
+            source.get("elapsed_ms_source"), str
+        ):
             return str(source["elapsed_ms_source"])
     return None
 
@@ -465,23 +484,26 @@ def metrics_from_record(record: MessageRecord) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
     usage = record.usage or as_dict(record.message.get("usage")) or {}
     accounting = record.accounting or {}
-    prompt = first_number(usage, ["prompt_tokens", "input_tokens", "total_prompt_tokens"])
+    prompt = first_number(
+        usage, ["prompt_tokens", "total_prompt_tokens", "input_tokens"]
+    )
     completion = first_number(
         usage, ["completion_tokens", "output_tokens", "total_completion_tokens"]
     )
-    cached = first_number(
-        usage, ["cached_tokens", "cache_read_tokens", "cache_write_tokens"]
-    )
+    cached = first_number(usage, ["cached_tokens", "cache_read_tokens"])
     cost = first_number(usage, ["cost_usd", "total_cost_usd"])
     if prompt is None:
-        prompt = first_number(accounting, ["context_input_tokens", "billable_input_tokens"])
+        prompt = first_number(accounting, ["context_input_tokens"])
+        if prompt is None:
+            prompt = sum_present(
+                first_number(accounting, ["billable_input_tokens"]),
+                first_number(accounting, ["cache_read_tokens"]),
+                first_number(accounting, ["cache_write_tokens"]),
+            )
     if completion is None:
         completion = first_number(accounting, ["billable_output_tokens"])
     if cached is None:
-        cached = sum_present(
-            first_number(accounting, ["cache_read_tokens"]),
-            first_number(accounting, ["cache_write_tokens"]),
-        )
+        cached = first_number(accounting, ["cache_read_tokens"])
     if cost is None and accounting.get("estimated_cost_nanodollars") is not None:
         cost = float(accounting["estimated_cost_nanodollars"]) / 1_000_000_000
     if prompt is not None:
@@ -589,7 +611,9 @@ def aggregate_usage(totals: dict[str, float], usage: Any) -> None:
     add_total(
         totals,
         "output_tokens",
-        first_number(usage, ["output_tokens", "completion_tokens", "total_completion_tokens"]),
+        first_number(
+            usage, ["output_tokens", "completion_tokens", "total_completion_tokens"]
+        ),
     )
     add_total(
         totals,
@@ -642,6 +666,28 @@ def bounded_value(value: Any, config: ToolConfig) -> tuple[Any, bool]:
     if len(raw) <= config.max_content_chars:
         return value, False
     return raw[: config.max_content_chars], True
+
+
+def bounded_arguments(
+    value: dict[str, Any], config: ToolConfig
+) -> tuple[dict[str, Any], bool]:
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if len(raw) <= config.max_content_chars:
+        return value, False
+    return {"_peval_truncated_json": raw[: config.max_content_chars]}, True
+
+
+def call_timestamp_ms(call: dict[str, Any]) -> int | None:
+    for key in ("started_at_ms", "timestamp_ms"):
+        value = numeric_value(call.get(key))
+        if value is not None:
+            return int(value)
+    return None
+
+
+def call_duration_ms(call: dict[str, Any]) -> int | None:
+    value = first_number(call, ["generation_duration_ms", "elapsed_ms"])
+    return max(0, int(value)) if value is not None else None
 
 
 def first_timestamp(meta: list[StepMeta]) -> int | None:

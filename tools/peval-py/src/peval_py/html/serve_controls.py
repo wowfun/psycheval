@@ -6,6 +6,7 @@ from typing import Any
 from peval_py.adapters import available_adapter_ids
 from peval_py.html.assets import load_asset_text, replace_template_tokens
 
+
 def render_serve_source_manager(
     sources: list[dict[str, Any]],
     messages: dict[str, str],
@@ -19,9 +20,7 @@ def render_serve_source_manager(
     if count != 1:
         source_word = messages["serve_sources_count"]
     source_summary = (
-        messages["serve_loading_sources"]
-        if loading
-        else f"{count} {source_word}"
+        messages["serve_loading_sources"] if loading else f"{count} {source_word}"
     )
     source_status = (
         messages["serve_scanning_runs"]
@@ -53,7 +52,9 @@ def render_serve_source_manager(
             "RELOAD": escape(messages["serve_reload"]),
             "ARCHIVE_SELECTED": escape(messages["archive_selected"]),
             "DELETE_SELECTED": escape(messages["delete_selected"]),
-            "SOURCE_LIST_ITEMS": render_source_list_items(sources, messages, loading=loading),
+            "SOURCE_LIST_ITEMS": render_source_list_items(
+                sources, messages, loading=loading
+            ),
         },
     )
 
@@ -68,7 +69,9 @@ def render_serve_report_ui(messages: dict[str, str]) -> str:
             "REPORT_INVENTORY": escape(messages["report_inventory"]),
             "REPORT_BINDINGS": escape(messages["report_bindings"]),
             "SAVE_VIEW": escape(messages["save_view"]),
-            "VIEW_CURRENT_CONFIGURATION": escape(messages["view_current_configuration"]),
+            "VIEW_CURRENT_CONFIGURATION": escape(
+                messages["view_current_configuration"]
+            ),
             "SAVED_VIEWS": escape(messages["saved_views"]),
             "VIEW_NAME": escape(messages["view_name"]),
             "VIEW_NOTES": escape(messages["view_notes"]),
@@ -110,7 +113,7 @@ def render_source_add_form(
     help_id = f"source-{kind}-auto-help"
     help_copy = (
         f'<span class="copy" id="{escape(help_id)}">'
-        f'{escape(messages["serve_auto_adapter_help"])}</span>'
+        f"{escape(messages['serve_auto_adapter_help'])}</span>"
     )
     if kind == "path":
         field_tag = f'<textarea name="{escape(name)}" autocomplete="off" required rows="4" data-path-picker-target aria-describedby="{escape(help_id)}"></textarea>'
@@ -142,7 +145,7 @@ def render_source_add_form(
     if kind == "db":
         inspect_button = f"""
               <button class="action-button" type="button" data-db-inspect>{escape(messages["serve_inspect_db"])}</button>"""
-        picker = f"""
+        picker = """
             <div class="db-session-picker" data-db-session-picker hidden></div>"""
     return f"""
           <form class="source-form" data-source-add-form data-source-kind="{escape(kind)}">
@@ -163,7 +166,9 @@ def render_source_add_form(
           </form>"""
 
 
-def render_upload_form(messages: dict[str, str], adapter_defaults: dict[str, str]) -> str:
+def render_upload_form(
+    messages: dict[str, str], adapter_defaults: dict[str, str]
+) -> str:
     return f"""
           <form class="source-form upload-form" data-source-upload-form>
             <strong>{escape(messages["serve_upload_snapshot"])}</strong>
@@ -179,7 +184,9 @@ def render_upload_form(messages: dict[str, str], adapter_defaults: dict[str, str
           </form>"""
 
 
-def render_adapter_select(messages: dict[str, str], adapter_defaults: dict[str, str]) -> str:
+def render_adapter_select(
+    messages: dict[str, str], adapter_defaults: dict[str, str]
+) -> str:
     options = [
         ("auto", messages["serve_adapter_auto"]),
         *[(adapter_id, adapter_id) for adapter_id in available_adapter_ids()],
@@ -217,7 +224,9 @@ def render_source_list_items(
     if loading:
         return f'<li class="source-row empty loading">{escape(messages["serve_scanning_runs"])}</li>'
     if not sources:
-        return f'<li class="source-row empty">{escape(messages["serve_no_sources"])}</li>'
+        return (
+            f'<li class="source-row empty">{escape(messages["serve_no_sources"])}</li>'
+        )
     return "".join(render_source_list_item(source, messages) for source in sources)
 
 
@@ -246,10 +255,10 @@ def render_source_list_item(
         f'<span class="editable-source-cell" data-source-inline-edit="alias" '
         f'data-source-key="{escape(source_key)}" data-trial-key="{escape(trial_key)}" '
         f'data-value="{escape(alias)}" title="{escape(messages["double_click_to_edit"])}">'
-        f'{alias_html}</span>'
+        f"{alias_html}</span>"
     )
     return f"""
-            <li class="source-row {'archived' if not active else ''}" data-source-row data-source-key="{escape(source_key)}">
+            <li class="source-row {"archived" if not active else ""}" data-source-row data-source-key="{escape(source_key)}">
               <div class="source-row-select">{source_checkbox}</div>
               <div class="source-row-main">
                 <strong>{escape(display_label)}</strong>

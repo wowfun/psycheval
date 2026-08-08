@@ -18,8 +18,7 @@ def resolve_session_selectors(
     selectors: list[str],
 ) -> list[str]:
     return [
-        resolve_session_selector(adapter_id, path, selector)
-        for selector in selectors
+        resolve_session_selector(adapter_id, path, selector) for selector in selectors
     ]
 
 
@@ -48,7 +47,9 @@ def session_by_index(
     index = int(raw_index)
     if index < 1:
         raise ValueError(f"session index out of range: #{index}")
-    available = sessions if sessions is not None else list_adapter_sessions(adapter_id, path)
+    available = (
+        sessions if sessions is not None else list_adapter_sessions(adapter_id, path)
+    )
     if index > len(available):
         raise ValueError(
             f"session index out of range: #{index} "
@@ -110,7 +111,6 @@ def parse_selection_index(text: str, session_count: int) -> int:
     index = int(text)
     if index < 1 or index > session_count:
         raise ValueError(
-            f"session index out of range: {index} "
-            f"(available sessions: {session_count})"
+            f"session index out of range: {index} (available sessions: {session_count})"
         )
     return index

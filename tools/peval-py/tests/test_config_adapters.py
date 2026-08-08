@@ -2,8 +2,25 @@ from __future__ import annotations
 
 import os
 
-from peval_py_test_support import *
 from peval_py.config import write_workspace_adapter_default_db
+from peval_py_test_support import (
+    BrokenEntryPoint,
+    CustomPathAdapter,
+    FakeEntryPoint,
+    FakeEntryPoints,
+    MessageRecord,
+    Path,
+    SimpleNamespace,
+    adapter_for,
+    apply_overrides,
+    available_adapter_ids,
+    config_for_adapter,
+    convert_records,
+    load_config,
+    patch,
+    tempfile,
+    unittest,
+)
 
 
 class PevalPyConfigAdapterTests(unittest.TestCase):
@@ -11,18 +28,17 @@ class PevalPyConfigAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             adapter_config = Path(tmp) / "adapter.toml"
             adapter_config.write_text(
-                "[defaults]\nadapter = \"opencode\"\n",
+                '[defaults]\nadapter = "opencode"\n',
                 encoding="utf-8",
             )
             self.assertEqual(load_config(str(adapter_config)).adapter, "opencode")
 
             legacy_config = Path(tmp) / "legacy.toml"
             legacy_config.write_text(
-                "[defaults]\nagent = \"hermes\"\n",
+                '[defaults]\nagent = "hermes"\n',
                 encoding="utf-8",
             )
             self.assertEqual(load_config(str(legacy_config)).adapter, "hermes")
-
 
     def test_config_ignores_removed_trajectory_id_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -45,8 +61,7 @@ class PevalPyConfigAdapterTests(unittest.TestCase):
                 ],
                 config,
             )
-            self.assertEqual(result.trajectory["trajectory_id"], "session:t001")
-
+            self.assertNotIn("trajectory_id", result.trajectory)
 
     def test_config_locale_defaults_aliases_and_invalid_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -67,14 +82,14 @@ class PevalPyConfigAdapterTests(unittest.TestCase):
                 with self.subTest(value=value):
                     config_path = Path(tmp) / f"{value}.toml"
                     config_path.write_text(
-                        f"[defaults]\nlocale = \"{value}\"\n",
+                        f'[defaults]\nlocale = "{value}"\n',
                         encoding="utf-8",
                     )
                     self.assertEqual(load_config(str(config_path)).locale, expected)
 
             invalid_config = Path(tmp) / "invalid.toml"
             invalid_config.write_text(
-                "[defaults]\nlocale = \"fr-FR\"\n",
+                '[defaults]\nlocale = "fr-FR"\n',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(
@@ -93,11 +108,13 @@ class PevalPyConfigAdapterTests(unittest.TestCase):
                 encoding="utf-8",
             )
             explicit = root / "explicit.toml"
-            explicit.write_text("[defaults]\nadapter = \"opencode\"\n", encoding="utf-8")
+            explicit.write_text('[defaults]\nadapter = "opencode"\n', encoding="utf-8")
             explicit_locale = root / "explicit-locale.toml"
-            explicit_locale.write_text("[defaults]\nlocale = \"en\"\n", encoding="utf-8")
+            explicit_locale.write_text('[defaults]\nlocale = "en"\n', encoding="utf-8")
             explicit_analysis = root / "explicit-analysis.toml"
-            explicit_analysis.write_text('analysis_eval_slug = "override-eval"\n', encoding="utf-8")
+            explicit_analysis.write_text(
+                'analysis_eval_slug = "override-eval"\n', encoding="utf-8"
+            )
             old_cwd = Path.cwd()
             try:
                 os.chdir(child)
@@ -127,7 +144,6 @@ class PevalPyConfigAdapterTests(unittest.TestCase):
                     load_config(None)
             finally:
                 os.chdir(old_cwd)
-
 
     def test_config_passes_selected_adapter_options(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -204,7 +220,6 @@ default_db_path = "../hermes/state.db"
             )
             self.assertEqual(config.adapter_options_by_id["hermes"], {})
 
-
     def test_adapter_default_db_path_expands_home_and_absolute_like_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -237,7 +252,6 @@ default_db_path = '{unc_path}'
             self.assertEqual(config.adapter_default_db_paths["opencode"], windows_path)
             self.assertEqual(config.adapter_default_db_paths["hermes"], unc_path)
 
-
     def test_write_workspace_adapter_default_db_uses_tilde_for_home_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -264,7 +278,6 @@ default_db_path = '{unc_path}'
                 'default_db_path = "~/.psychevo/state.db"\n',
                 config_path.read_text(encoding="utf-8"),
             )
-
 
     def test_write_workspace_adapter_default_db_preserves_adapter_options(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -307,7 +320,7 @@ default_db_path = "hermes.db"
             text = config_path.read_text(encoding="utf-8")
             self.assertIn('default_db_path = "db/new.db"\n', text)
             self.assertIn('label_prefix = "configured"\n', text)
-            self.assertIn('enabled = true\n', text)
+            self.assertIn("enabled = true\n", text)
 
             cleared = write_workspace_adapter_default_db(
                 config_path,
@@ -334,7 +347,6 @@ default_db_path = "hermes.db"
             self.assertNotIn("default_db_path", opencode_section)
             self.assertIn('default_db_path = "hermes.db"\n', text)
 
-
     def test_adapter_registry_discovers_builtins_and_entry_points_lazily(self) -> None:
         custom_entry = FakeEntryPoint("custom", CustomPathAdapter)
         unused_entry = BrokenEntryPoint("unused", object())
@@ -352,8 +364,9 @@ default_db_path = "hermes.db"
             self.assertEqual(custom_entry.load_count, 1)
             self.assertEqual(unused_entry.load_count, 0)
 
-
-    def test_adapter_registry_accepts_class_factory_and_instance_entry_points(self) -> None:
+    def test_adapter_registry_accepts_class_factory_and_instance_entry_points(
+        self,
+    ) -> None:
         values = [CustomPathAdapter, lambda: CustomPathAdapter(), CustomPathAdapter()]
         for value in values:
             with self.subTest(value=type(value).__name__):
@@ -363,7 +376,6 @@ default_db_path = "hermes.db"
                 ):
                     adapter = adapter_for("custom")
                     self.assertTrue(callable(getattr(adapter, "convert_path", None)))
-
 
     def test_adapter_registry_reports_duplicate_and_unknown_ids(self) -> None:
         duplicate = FakeEntryPoint("opencode", CustomPathAdapter)

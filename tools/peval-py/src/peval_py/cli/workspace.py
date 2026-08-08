@@ -11,6 +11,7 @@ from peval_py.inputs import (
     same_local_path,
 )
 
+
 def rewrite_trial_cell_path_args(args: argparse.Namespace) -> argparse.Namespace:
     if getattr(args, "command", None) not in {"view", "export"}:
         return args

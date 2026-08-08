@@ -47,7 +47,7 @@ uv run --project tools/peval-py --with pyinstaller pyinstaller \
   --distpath .local/peval-py-build/dist \
   --workpath .local/peval-py-build/work \
   --specpath .local/peval-py-build/spec \
-  tools/peval-py/src/peval_py/cli.py
+  tools/peval-py/src/peval_py/cli/__main__.py
 ```
 
 Run the packaged command and check a fixture-backed report:
@@ -228,4 +228,4 @@ JSON manifests may be a top-level array or an object with `rows` and
 for a manifest with multiple rows.
 
 For reporting, comparison, and custom adapter examples, read
-[peval-py Lightweight Trajectory Reports](../../docs/peval-py.md).
+[peval-py Documentation](../../docs/peval-py/README.md).

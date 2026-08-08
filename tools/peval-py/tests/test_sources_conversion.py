@@ -1,62 +1,35 @@
 from __future__ import annotations
 
-from peval_py_test_support import *
+import json
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
 
-
-ATIF_TRAJECTORY_KEYS = {
-    "schema_version",
-    "session_id",
-    "trajectory_id",
-    "agent",
-    "steps",
-    "notes",
-    "final_metrics",
-    "continued_trajectory_ref",
-    "extra",
-    "subagent_trajectories",
-}
-ATIF_AGENT_KEYS = {"name", "version", "model_name", "tool_definitions", "extra"}
-ATIF_STEP_KEYS = {
-    "step_id",
-    "timestamp",
-    "source",
-    "model_name",
-    "reasoning_effort",
-    "message",
-    "reasoning_content",
-    "tool_calls",
-    "observation",
-    "metrics",
-    "is_copied_context",
-    "llm_call_count",
-    "extra",
-}
-ATIF_TOOL_CALL_KEYS = {"tool_call_id", "function_name", "arguments", "extra"}
-ATIF_OBSERVATION_KEYS = {"results"}
-ATIF_OBSERVATION_RESULT_KEYS = {
-    "source_call_id",
-    "content",
-    "subagent_trajectory_ref",
-    "extra",
-}
-ATIF_METRICS_KEYS = {
-    "prompt_tokens",
-    "completion_tokens",
-    "cached_tokens",
-    "cost_usd",
-    "prompt_token_ids",
-    "completion_token_ids",
-    "logprobs",
-    "extra",
-}
-ATIF_FINAL_METRICS_KEYS = {
-    "total_prompt_tokens",
-    "total_completion_tokens",
-    "total_cached_tokens",
-    "total_cost_usd",
-    "total_steps",
-    "extra",
-}
+from peval_py.atif import (
+    convert_db,
+    convert_path,
+    convert_records,
+    validate_atif_trajectory,
+)
+from peval_py.config import ToolConfig
+from peval_py.html import render_html
+from peval_py.report import build_report
+from peval_py.sources import (
+    ACCOUNTING_COLUMNS,
+    MessageRecord,
+    read_jsonl,
+    read_sqlite_messages,
+)
+from peval_py_test_support import (
+    FIXTURES,
+    create_hermes_db,
+    create_hermes_log_timing_home,
+    create_messages_db,
+    create_opencode_db,
+    create_opencode_event_timing_db,
+    hermes_agent_log_fixture,
+)
 
 
 def final_extra(trajectory):
@@ -68,25 +41,7 @@ def final_extra(trajectory):
 
 class PevalPySourceConversionTests(unittest.TestCase):
     def assertAtifCompatibleTrajectory(self, trajectory) -> None:
-        self.assertTrue(set(trajectory).issubset(ATIF_TRAJECTORY_KEYS), trajectory)
-        self.assertTrue(set(trajectory.get("agent", {})).issubset(ATIF_AGENT_KEYS))
-        final_metrics = trajectory.get("final_metrics", {})
-        self.assertTrue(set(final_metrics).issubset(ATIF_FINAL_METRICS_KEYS))
-        for key in ("total_turns", "total_tool_calls", "total_tool_errors", "usage", "accounting"):
-            self.assertNotIn(key, final_metrics)
-        for step in trajectory.get("steps", []):
-            self.assertTrue(set(step).issubset(ATIF_STEP_KEYS), step)
-            metrics = step.get("metrics", {})
-            self.assertTrue(set(metrics).issubset(ATIF_METRICS_KEYS), metrics)
-            self.assertNotIn("usage", metrics)
-            self.assertNotIn("accounting", metrics)
-            for call in step.get("tool_calls", []) or []:
-                self.assertTrue(set(call).issubset(ATIF_TOOL_CALL_KEYS), call)
-            observation = step.get("observation")
-            if observation is not None:
-                self.assertTrue(set(observation).issubset(ATIF_OBSERVATION_KEYS), observation)
-                for result in observation.get("results", []) or []:
-                    self.assertTrue(set(result).issubset(ATIF_OBSERVATION_RESULT_KEYS), result)
+        validate_atif_trajectory(trajectory)
 
     def test_psychevo_sqlite_messages_are_ordered_by_session_seq(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -127,13 +82,14 @@ class PevalPySourceConversionTests(unittest.TestCase):
 
             records = read_sqlite_messages(str(db_path), "s1", ToolConfig().db)
             self.assertEqual([record.session_seq for record in records], [1, 2])
-            self.assertEqual([record.source_session_id for record in records], ["s1", "s1"])
+            self.assertEqual(
+                [record.source_session_id for record in records], ["s1", "s1"]
+            )
             result = convert_records(records, ToolConfig(adapter="psychevo"))
             self.assertEqual(result.trajectory["session_id"], "s1")
             self.assertEqual(result.trajectory["steps"][0]["message"], "first")
             self.assertEqual(result.trajectory["steps"][1]["message"], "second")
             self.assertEqual(result.trajectory["agent"]["model_name"], "db-model")
-
 
     def test_psychevo_db_adapter_reads_latest_and_explicit_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -148,12 +104,13 @@ class PevalPySourceConversionTests(unittest.TestCase):
             self.assertEqual(latest.trajectory["steps"][0]["message"], "hello b")
             self.assertEqual(latest.trajectory["steps"][1]["message"], "done b")
             self.assertEqual(final_extra(latest.trajectory)["usage"]["input_tokens"], 5)
-            self.assertEqual(final_extra(latest.trajectory)["usage"]["output_tokens"], 7)
+            self.assertEqual(
+                final_extra(latest.trajectory)["usage"]["output_tokens"], 7
+            )
 
             explicit = convert_db(str(db_path), "db-a", config)
             self.assertEqual(explicit.trajectory["session_id"], "db-a")
             self.assertEqual(explicit.trajectory["steps"][0]["message"], "hello a")
-
 
     def test_psychevo_db_adapter_prefers_trace_generation_timing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -184,8 +141,9 @@ class PevalPySourceConversionTests(unittest.TestCase):
             self.assertEqual(result.steps_meta[1].duration_ms, 42)
             self.assertEqual(result.warnings, [])
 
-
-    def test_psychevo_db_adapter_prefers_trace_wall_timing_for_model_and_tools(self) -> None:
+    def test_psychevo_db_adapter_prefers_trace_wall_timing_for_model_and_tools(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "state.db"
             create_messages_db(db_path)
@@ -302,7 +260,6 @@ class PevalPySourceConversionTests(unittest.TestCase):
             self.assertEqual(auto_latency["tool_execution_duration_ms"]["max"], 200)
             self.assertEqual(result.warnings, [])
 
-
     def test_psychevo_trace_jsonl_conversion_uses_runtime_tool_timing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             trace_path = Path(tmp) / "events.jsonl"
@@ -402,7 +359,6 @@ class PevalPySourceConversionTests(unittest.TestCase):
             self.assertEqual(tool_meta.execution_duration_source, "runtime_trace")
             self.assertEqual(result.total_events, 6)
 
-
     def test_psychevo_compact_v2_trace_direct_conversion_warns(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             trace_path = Path(tmp) / "events.jsonl"
@@ -440,14 +396,8 @@ class PevalPySourceConversionTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = convert_path(str(trace_path), ToolConfig(adapter="psychevo"))
-
-            self.assertEqual(result.trajectory["steps"], [])
-            self.assertEqual(result.total_events, 3)
-            self.assertTrue(
-                any("compact trace v2" in warning for warning in result.warnings)
-            )
-
+            with self.assertRaisesRegex(ValueError, r"trajectory\.steps.*at least one"):
+                convert_path(str(trace_path), ToolConfig(adapter="psychevo"))
 
     def test_psychevo_jsonl_conversion_shape(self) -> None:
         records = read_jsonl(str(FIXTURES / "psychevo_session.jsonl"))
@@ -457,11 +407,13 @@ class PevalPySourceConversionTests(unittest.TestCase):
         )
         trajectory = result.trajectory
         self.assertEqual(trajectory["schema_version"], "ATIF-v1.7")
-        self.assertEqual(trajectory["trajectory_id"], "session:t001")
+        self.assertEqual(trajectory["trajectory_id"], "psychevo:sess-psychevo")
         self.assertEqual(trajectory["session_id"], "sess-psychevo")
         self.assertEqual([step["step_id"] for step in trajectory["steps"]], [1, 2, 3])
         self.assertEqual(trajectory["steps"][0]["source"], "user")
-        self.assertEqual(trajectory["steps"][1]["reasoning_content"], "Inspect the file first.")
+        self.assertEqual(
+            trajectory["steps"][1]["reasoning_content"], "Inspect the file first."
+        )
         self.assertEqual(
             trajectory["steps"][1]["tool_calls"][0]["tool_call_id"],
             "call-1",
@@ -475,6 +427,12 @@ class PevalPySourceConversionTests(unittest.TestCase):
             "call-1",
         )
         self.assertEqual(trajectory["steps"][2]["message"], "Done.")
+        self.assertEqual(trajectory["steps"][1]["llm_call_count"], 1)
+        self.assertTrue(trajectory["steps"][1]["timestamp"].endswith("Z"))
+        self.assertEqual(
+            trajectory["extra"]["timestamp_semantics"],
+            "utc_epoch_milliseconds",
+        )
         self.assertEqual(trajectory["final_metrics"]["total_prompt_tokens"], 8)
         self.assertEqual(trajectory["final_metrics"]["total_completion_tokens"], 10)
         self.assertEqual(final_extra(trajectory)["total_tool_calls"], 1)
@@ -489,7 +447,6 @@ class PevalPySourceConversionTests(unittest.TestCase):
         self.assertEqual(tool_meta.status, "completed")
         self.assertEqual(tool_meta.execution_duration_ms, 321)
         self.assertEqual(tool_meta.execution_duration_source, "message_metadata")
-
 
     def test_opencode_and_hermes_use_common_jsonl_adapter(self) -> None:
         records = read_jsonl(str(FIXTURES / "common_session.jsonl"))
@@ -510,7 +467,6 @@ class PevalPySourceConversionTests(unittest.TestCase):
                     "tool-1",
                 )
 
-
     def test_path_input_reads_exported_atif_json_directly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = convert_records(
@@ -528,7 +484,6 @@ class PevalPySourceConversionTests(unittest.TestCase):
             self.assertEqual(len(loaded.steps_meta), len(source.trajectory["steps"]))
             self.assertEqual(loaded.total_events, len(source.trajectory["steps"]))
 
-
     def test_path_input_rejects_non_atif_metric_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = convert_records(
@@ -544,7 +499,6 @@ class PevalPySourceConversionTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "final_metrics.*usage"):
                 convert_path(str(atif_path), ToolConfig(adapter="opencode"))
-
 
     def test_opencode_db_adapter_reads_latest_and_explicit_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -588,11 +542,16 @@ class PevalPySourceConversionTests(unittest.TestCase):
             self.assertEqual(report["trajectory_meta"][0]["duration_ms"], 100)
             self.assertEqual(final_extra(latest.trajectory)["total_tool_calls"], 1)
             self.assertEqual(final_extra(latest.trajectory)["usage"]["input_tokens"], 2)
+            self.assertEqual(
+                latest.trajectory["final_metrics"]["total_prompt_tokens"], 7
+            )
+            self.assertEqual(
+                latest.trajectory["final_metrics"]["total_cached_tokens"], 4
+            )
 
             old = convert_db(str(db_path), "ses-old", config)
             self.assertEqual(old.trajectory["session_id"], "ses-old")
             self.assertEqual(old.trajectory["steps"][0]["message"], "old prompt")
-
 
     def test_opencode_db_adapter_prefers_event_fused_timing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -608,6 +567,10 @@ class PevalPySourceConversionTests(unittest.TestCase):
             self.assertEqual(
                 agent_meta.duration_source,
                 "opencode_model_boundary_estimate",
+            )
+            self.assertNotIn(
+                "duration_ms",
+                latest.trajectory["steps"][1].get("extra", {}),
             )
             tool_meta = agent_meta.tool_calls[0]
             self.assertEqual(tool_meta.timestamp_ms, 2_500)
@@ -637,7 +600,6 @@ class PevalPySourceConversionTests(unittest.TestCase):
             ]["latency"]
             self.assertNotIn("model_duration_ms", auto_latency)
 
-
     def test_hermes_db_adapter_reads_latest_and_explicit_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "state.db"
@@ -652,12 +614,16 @@ class PevalPySourceConversionTests(unittest.TestCase):
                 "hermes-session-model",
             )
             self.assertEqual(latest.trajectory["steps"][0]["source"], "system")
+            self.assertNotIn("metrics", latest.trajectory["steps"][0])
             self.assertEqual(
                 latest.trajectory["steps"][0]["message"],
                 "Hermes system prompt",
             )
             self.assertEqual(latest.trajectory["steps"][1]["message"], "latest prompt")
             self.assertEqual(latest.trajectory["steps"][2]["message"], "latest answer")
+            self.assertEqual(
+                latest.trajectory["steps"][2]["metrics"]["prompt_tokens"], 16
+            )
             self.assertEqual(
                 latest.trajectory["steps"][2]["reasoning_content"],
                 "latest reasoning",
@@ -687,8 +653,18 @@ class PevalPySourceConversionTests(unittest.TestCase):
             self.assertEqual(step_meta["tool_calls"][0]["timestamp_ms"], 220_000)
             self.assertNotIn("execution_duration_ms", step_meta["tool_calls"][0])
             self.assertEqual(final_extra(latest.trajectory)["total_tool_calls"], 1)
-            self.assertEqual(final_extra(latest.trajectory)["usage"]["input_tokens"], 11)
-            self.assertEqual(final_extra(latest.trajectory)["usage"]["output_tokens"], 13)
+            self.assertEqual(
+                final_extra(latest.trajectory)["usage"]["input_tokens"], 11
+            )
+            self.assertEqual(
+                final_extra(latest.trajectory)["usage"]["output_tokens"], 13
+            )
+            self.assertEqual(
+                latest.trajectory["final_metrics"]["total_prompt_tokens"], 16
+            )
+            self.assertEqual(
+                latest.trajectory["final_metrics"]["total_cached_tokens"], 2
+            )
             self.assertEqual(
                 final_extra(latest.trajectory)["accounting"]["pricing_source"],
                 "test-prices",
@@ -699,8 +675,7 @@ class PevalPySourceConversionTests(unittest.TestCase):
             self.assertEqual(old.trajectory["session_id"], "hermes-old")
             self.assertEqual(old.trajectory["steps"][0]["message"], "old prompt")
             self.assertEqual(len(old.trajectory["steps"]), 1)
-            self.assertEqual(final_extra(old.trajectory)["usage"]["input_tokens"], 1)
-
+            self.assertNotIn("usage", final_extra(old.trajectory))
 
     def test_hermes_db_adapter_fuses_current_agent_log_timing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -739,7 +714,6 @@ class PevalPySourceConversionTests(unittest.TestCase):
             )
             self.assertEqual(result.warnings, [])
 
-
     def test_hermes_db_agent_log_mismatch_keeps_timing_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             hermes_home = Path(tmp) / ".hermes"
@@ -761,7 +735,6 @@ class PevalPySourceConversionTests(unittest.TestCase):
             self.assertIsNone(result.steps_meta[1].tool_calls[0].execution_duration_ms)
             self.assertIsNone(meta["duration_ms"])
             self.assertEqual(result.warnings, [])
-
 
     def test_tool_timing_fallback_and_unmatched_warning(self) -> None:
         records = [
@@ -862,14 +835,16 @@ class PevalPySourceConversionTests(unittest.TestCase):
                         "role": "tool_result",
                         "tool_call_id": "call-long",
                         "tool_name": "exec_command",
-                                    "content": "failed",
+                        "content": "failed",
                         "timestamp_ms": 602_000,
                     }
                 ),
             ],
             ToolConfig(adapter="psychevo"),
         )
-        self.assertIsNone(long_fallback.steps_meta[0].tool_calls[0].execution_duration_ms)
+        self.assertIsNone(
+            long_fallback.steps_meta[0].tool_calls[0].execution_duration_ms
+        )
 
         unmatched = convert_records(
             [
@@ -887,38 +862,54 @@ class PevalPySourceConversionTests(unittest.TestCase):
             ToolConfig(adapter="psychevo"),
         )
         self.assertEqual(len(unmatched.trajectory["steps"]), 1)
-        self.assertEqual(
-            unmatched.trajectory["steps"][0]["observation"]["results"][0][
-                "source_call_id"
-            ],
-            "missing-call",
-        )
+        orphan = unmatched.trajectory["steps"][0]
+        result = orphan["observation"]["results"][0]
+        self.assertNotIn("source_call_id", result)
+        self.assertEqual(result["extra"]["unmatched_source_call_id"], "missing-call")
+        self.assertEqual(orphan["llm_call_count"], 0)
         self.assertEqual(final_extra(unmatched.trajectory)["total_tool_calls"], 0)
         self.assertEqual(final_extra(unmatched.trajectory)["total_tool_errors"], 0)
         self.assertIn("unmatched tool result: missing-call", unmatched.warnings)
 
-
-    def test_active_duration_excludes_long_idle_and_preserves_wall_duration(self) -> None:
+    def test_active_duration_excludes_long_idle_and_preserves_wall_duration(
+        self,
+    ) -> None:
         records = [
             MessageRecord(
                 message={"role": "user", "content": "first", "timestamp_ms": 1_000}
             ),
             MessageRecord(
-                message={"role": "assistant", "content": "first done", "timestamp_ms": 2_000},
+                message={
+                    "role": "assistant",
+                    "content": "first done",
+                    "timestamp_ms": 2_000,
+                },
                 metadata={"elapsed_ms": 30_000},
             ),
             MessageRecord(
                 message={"role": "user", "content": "second", "timestamp_ms": 65_000}
             ),
             MessageRecord(
-                message={"role": "assistant", "content": "second done", "timestamp_ms": 66_000},
+                message={
+                    "role": "assistant",
+                    "content": "second done",
+                    "timestamp_ms": 66_000,
+                },
                 metadata={"elapsed_ms": 5_000},
             ),
             MessageRecord(
-                message={"role": "user", "content": "after idle", "timestamp_ms": 10_866_000}
+                message={
+                    "role": "user",
+                    "content": "after idle",
+                    "timestamp_ms": 10_866_000,
+                }
             ),
             MessageRecord(
-                message={"role": "assistant", "content": "idle done", "timestamp_ms": 10_867_000},
+                message={
+                    "role": "assistant",
+                    "content": "idle done",
+                    "timestamp_ms": 10_867_000,
+                },
                 metadata={"elapsed_ms": 7_000},
             ),
         ]
@@ -936,20 +927,31 @@ class PevalPySourceConversionTests(unittest.TestCase):
             [None, 30_000, None, 5_000, None, 7_000],
         )
 
-
     def test_active_duration_uses_bounded_timestamp_fallback(self) -> None:
         records = [
             MessageRecord(
                 message={"role": "user", "content": "start", "timestamp_ms": 1}
             ),
             MessageRecord(
-                message={"role": "assistant", "content": "short fallback", "timestamp_ms": 1_000}
+                message={
+                    "role": "assistant",
+                    "content": "short fallback",
+                    "timestamp_ms": 1_000,
+                }
             ),
             MessageRecord(
-                message={"role": "user", "content": "within cap", "timestamp_ms": 101_000}
+                message={
+                    "role": "user",
+                    "content": "within cap",
+                    "timestamp_ms": 101_000,
+                }
             ),
             MessageRecord(
-                message={"role": "assistant", "content": "long fallback", "timestamp_ms": 200_000}
+                message={
+                    "role": "assistant",
+                    "content": "long fallback",
+                    "timestamp_ms": 200_000,
+                }
             ),
             MessageRecord(
                 message={"role": "user", "content": "past cap", "timestamp_ms": 901_000}
@@ -967,10 +969,11 @@ class PevalPySourceConversionTests(unittest.TestCase):
             [None, 100_000, None, None, None],
         )
 
-
     def test_mid_session_tool_failure_is_nested_and_flow_continues(self) -> None:
         records = [
-            MessageRecord(message={"role": "user", "content": "fix add.py", "timestamp_ms": 900}),
+            MessageRecord(
+                message={"role": "user", "content": "fix add.py", "timestamp_ms": 900}
+            ),
             MessageRecord(
                 message={
                     "role": "assistant",
@@ -985,7 +988,7 @@ class PevalPySourceConversionTests(unittest.TestCase):
                             "tool_call_id": "call-lint-1",
                             "function_name": "exec_command",
                             "arguments": {"cmd": "ruff check ."},
-                        }
+                        },
                     ],
                     "timestamp_ms": 1000,
                 }
@@ -1047,7 +1050,9 @@ class PevalPySourceConversionTests(unittest.TestCase):
         result = convert_records(records, ToolConfig(adapter="psychevo"))
         trajectory = result.trajectory
 
-        self.assertEqual([step["step_id"] for step in trajectory["steps"]], [1, 2, 3, 4])
+        self.assertEqual(
+            [step["step_id"] for step in trajectory["steps"]], [1, 2, 3, 4]
+        )
         self.assertEqual(
             trajectory["steps"][1]["observation"]["results"][0]["source_call_id"],
             "call-test-1",
@@ -1080,14 +1085,12 @@ class PevalPySourceConversionTests(unittest.TestCase):
         self.assertIn("exec_command", html)
         self.assertIn("tool success / total", html)
 
-
     def test_malformed_jsonl_reports_line_number(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "bad.jsonl"
             path.write_text('{"role":"user","content":"ok"}\n{bad}\n', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "line 2"):
                 read_jsonl(str(path))
-
 
     def test_redaction_preserves_numeric_usage_metrics_and_masks_secrets(self) -> None:
         records = [

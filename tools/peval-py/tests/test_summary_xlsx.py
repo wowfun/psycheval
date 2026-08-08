@@ -74,8 +74,18 @@ class SummaryXlsxTests(unittest.TestCase):
         )
         self.assertEqual(views.views, ("B", "A"))
         for invalid in (
-            {"scope": "leaderboard", "source_keys": [], "group_by": "agent", "statistic": "mean"},
-            {"scope": "leaderboard", "source_keys": ["a"], "group_by": "agent", "statistic": "median"},
+            {
+                "scope": "leaderboard",
+                "source_keys": [],
+                "group_by": "agent",
+                "statistic": "mean",
+            },
+            {
+                "scope": "leaderboard",
+                "source_keys": ["a"],
+                "group_by": "agent",
+                "statistic": "median",
+            },
             {"scope": "saved_views", "views": ["a"], "extra": True},
         ):
             with self.subTest(invalid=invalid), self.assertRaises(HttpError):

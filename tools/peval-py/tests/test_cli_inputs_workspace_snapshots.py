@@ -1,9 +1,28 @@
 from __future__ import annotations
 
-from cli_inputs_support import *
+from cli_inputs_support import (
+    LoadedInputs,
+    LoadedSession,
+    Path,
+    contextlib,
+    create_messages_db,
+    io,
+    json,
+    load_config,
+    os,
+    patch,
+    tempfile,
+    unittest,
+    write_cli_cached_analysis,
+    write_peval_workspace,
+    write_trial_cell_artifacts,
+)
+
 
 class PevalPyCliInputWorkspaceSnapshotTests(unittest.TestCase):
-    def test_cli_root_option_loads_workspace_config_for_view_export_and_list(self) -> None:
+    def test_cli_root_option_loads_workspace_config_for_view_export_and_list(
+        self,
+    ) -> None:
         from peval_py.cli import main
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -67,8 +86,8 @@ default_db_path = "state.db"
                         [
                             "view",
                             "tr",
-                        "-m",
-                        "raw",
+                            "-m",
+                            "raw",
                             "-r",
                             str(workspace),
                             "-d",
@@ -212,7 +231,9 @@ default_db_path = "state.db"
             self.assertNotIn("artifact_ref", export_payload)
             self.assertNotIn("trajectory_meta", export_payload)
 
-    def test_cli_trial_cell_path_input_reads_unregistered_artifact_snapshot(self) -> None:
+    def test_cli_trial_cell_path_input_reads_unregistered_artifact_snapshot(
+        self,
+    ) -> None:
         from peval_py.cli import main
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -304,7 +325,9 @@ default_db_path = "state.db"
                 1,
             )
             raw_payload = json.loads(raw_out.read_text(encoding="utf-8"))
-            self.assertEqual(raw_payload["trajectory"][0]["session_id"], "artifact-session")
+            self.assertEqual(
+                raw_payload["trajectory"][0]["session_id"], "artifact-session"
+            )
             self.assertEqual(
                 raw_payload["trajectory_meta"][0]["artifact_ref"],
                 expected_ref,
@@ -383,7 +406,9 @@ default_db_path = "state.db"
 
             glob_payload = json.loads(glob_out.read_text(encoding="utf-8"))
             self.assertEqual(len(glob_payload["sources"]), 1)
-            self.assertEqual(glob_payload["sources"][0]["session_id"], "artifact-session")
+            self.assertEqual(
+                glob_payload["sources"][0]["session_id"], "artifact-session"
+            )
             descendant_payload = json.loads(descendant_out.read_text(encoding="utf-8"))
             self.assertEqual(len(descendant_payload["sources"]), 1)
             self.assertEqual(
@@ -445,7 +470,9 @@ default_db_path = "state.db"
             self.assertEqual(len(payload["sources"]), 1)
             self.assertEqual(payload["sources"][0]["session_id"], "artifact-session")
 
-    def test_cli_trial_cell_path_accepts_windows_drive_path_with_wsl_mapping(self) -> None:
+    def test_cli_trial_cell_path_accepts_windows_drive_path_with_wsl_mapping(
+        self,
+    ) -> None:
         from peval_py.cli import main
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -493,7 +520,9 @@ default_db_path = "state.db"
             payload = json.loads(raw_out.read_text(encoding="utf-8"))
             self.assertEqual(payload["trajectory"][0]["session_id"], "windows-artifact")
             self.assertEqual(
-                payload["trajectory_meta"][0]["artifact_ref"]["workspace_relative_path"],
+                payload["trajectory_meta"][0]["artifact_ref"][
+                    "workspace_relative_path"
+                ],
                 "runs/default/psychevo/windows-artifact/session_t001",
             )
 

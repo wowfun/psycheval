@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 def format_workspace_source_table(sources: list[dict]) -> str:
     headers = [
         "#",

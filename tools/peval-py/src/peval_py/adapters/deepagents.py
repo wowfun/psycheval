@@ -108,7 +108,11 @@ def read_deepagents_json(path: str) -> list[MessageRecord]:
             content.append({"type": "text", "text": output_text})
 
         for tc_index, tc in enumerate(tool_calls_raw):
-            call_id = round_call_ids[tc_index] if tc_index < len(round_call_ids) else f"da-r{round_num}-{tc_index}"
+            call_id = (
+                round_call_ids[tc_index]
+                if tc_index < len(round_call_ids)
+                else f"da-r{round_num}-{tc_index}"
+            )
             name = str(tc.get("name") or "tool")
             args = tc.get("args")
             if not isinstance(args, dict):
@@ -159,15 +163,23 @@ def read_deepagents_json(path: str) -> list[MessageRecord]:
 
         round_tool_results = tool_results_by_round.get(round_num, [])
         for tc_index, tc in enumerate(tool_calls_raw):
-            call_id = round_call_ids[tc_index] if tc_index < len(round_call_ids) else f"da-r{round_num}-{tc_index}"
+            call_id = (
+                round_call_ids[tc_index]
+                if tc_index < len(round_call_ids)
+                else f"da-r{round_num}-{tc_index}"
+            )
             tool_name = str(tc.get("name") or "tool")
             tool_result = _find_tool_result(round_tool_results, tc_index, tool_name)
             result_text = tool_result.get("result_text", "") if tool_result else ""
             parsed = _parse_result_text(result_text)
             tool_content = parsed.content if parsed.content is not None else result_text
             tool_error_text = tool_result.get("error", "") if tool_result else ""
-            tool_elapsed_ms = _int_or_none(tool_result.get("elapsed_ms")) if tool_result else None
-            tool_timestamp_ms = iso_to_ms(tool_result.get("timestamp")) if tool_result else None
+            tool_elapsed_ms = (
+                _int_or_none(tool_result.get("elapsed_ms")) if tool_result else None
+            )
+            tool_timestamp_ms = (
+                iso_to_ms(tool_result.get("timestamp")) if tool_result else None
+            )
             tool_started_ms = (
                 tool_timestamp_ms - tool_elapsed_ms
                 if tool_timestamp_ms and tool_elapsed_ms
@@ -234,7 +246,9 @@ def _find_next_section(text: str, from_pos: int) -> int:
     return m.start() if m else len(text)
 
 
-def _index_tool_results(tool_steps: list[dict[str, Any]]) -> dict[int, list[dict[str, Any]]]:
+def _index_tool_results(
+    tool_steps: list[dict[str, Any]],
+) -> dict[int, list[dict[str, Any]]]:
     by_round: dict[int, list[dict[str, Any]]] = {}
     for ts in tool_steps:
         r = ts.get("round", 0)
@@ -266,7 +280,9 @@ def _parse_result_text(result_text: str) -> _ParsedResultText:
     if not result_text:
         return _ParsedResultText()
     content_match = _RESULT_CONTENT_PATTERN.match(result_text)
-    content = _decode_escape_sequences(content_match.group(1)) if content_match else None
+    content = (
+        _decode_escape_sequences(content_match.group(1)) if content_match else None
+    )
     id_match = _RESULT_TOOL_CALL_ID_PATTERN.search(result_text)
     tool_call_id = id_match.group(1) if id_match else None
     return _ParsedResultText(content=content, tool_call_id=tool_call_id)
@@ -302,7 +318,7 @@ def _find_tool_result(
 def _usage_from_step(step: dict[str, Any]) -> dict[str, Any]:
     usage: dict[str, Any] = {}
     for key, target in [
-        ("prompt_tokens", "input_tokens"),
+        ("prompt_tokens", "prompt_tokens"),
         ("completion_tokens", "output_tokens"),
         ("total_tokens", "total_tokens"),
         ("reasoning_tokens", "reasoning_tokens"),

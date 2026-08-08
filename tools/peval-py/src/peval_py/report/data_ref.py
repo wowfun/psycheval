@@ -14,7 +14,9 @@ def data_ref_for_input(label: str, input_path: str | None) -> dict[str, Any]:
     if input_path:
         path = Path(input_path)
         if path.exists():
-            session_db_ref = path.suffix in {".db", ".sqlite", ".sqlite3"} and ":" in label
+            session_db_ref = (
+                path.suffix in {".db", ".sqlite", ".sqlite3"} and ":" in label
+            )
             if not session_db_ref:
                 stat = path.stat()
                 size = stat.st_size
@@ -22,14 +24,20 @@ def data_ref_for_input(label: str, input_path: str | None) -> dict[str, Any]:
                 digest = file_hash(path)
             try:
                 relative_path = Path(os.path.relpath(path, Path.cwd()))
-                relative = str(relative_path) if not str(relative_path).startswith("..") else path.name
+                relative = (
+                    str(relative_path)
+                    if not str(relative_path).startswith("..")
+                    else path.name
+                )
             except ValueError:
                 relative = path.name
     ref = {
         "kind": "input",
         "label": label,
         "relative_path": relative,
-        "mime": "application/jsonl" if label.endswith(".jsonl") else "application/octet-stream",
+        "mime": "application/jsonl"
+        if label.endswith(".jsonl")
+        else "application/octet-stream",
     }
     if size is not None:
         ref["size_bytes"] = size

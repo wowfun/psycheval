@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from reports_html_support import *
+from reports_html_support import (
+    json,
+    load_asset_text,
+    re,
+    shutil,
+    subprocess,
+    unittest,
+)
+
 
 class PevalPyReportHtmlInteractionTests(unittest.TestCase):
     @unittest.skip("superseded by shell-first catalog startup coverage")
@@ -147,7 +155,9 @@ console.log(result);
         self.assertFalse(result["ready"]["statusDanger"])
         self.assertIn("source one", result["ready"]["list"])
 
-    def _legacy_inline_source_edit_click_does_not_trigger_trial_selection_rerender(self) -> None:
+    def _legacy_inline_source_edit_click_does_not_trigger_trial_selection_rerender(
+        self,
+    ) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         asset = load_asset_text("report.js")
@@ -454,14 +464,21 @@ const result = vm.runInContext(`(() => {
 console.log(result);
 """.replace("__ASSET__", json.dumps(asset))
         node = subprocess.run(
-            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
         )
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
         self.assertTrue(result["searchInsideTitleStack"])
         self.assertEqual(result["searchCount"], 1)
 
-    def test_path_picker_fills_path_textarea_and_preserves_input_on_cancel_or_error(self) -> None:
+    def test_path_picker_fills_path_textarea_and_preserves_input_on_cancel_or_error(
+        self,
+    ) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         asset = load_asset_text("report.js")
@@ -556,14 +573,23 @@ promise.then(result => console.log(result)).catch(error => {{ console.error(erro
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
 
-        self.assertEqual(result["afterSuccess"]["value"], "/tmp/one.jsonl\n/tmp/two.json")
+        self.assertEqual(
+            result["afterSuccess"]["value"], "/tmp/one.jsonl\n/tmp/two.json"
+        )
         self.assertEqual(result["afterSuccess"]["status"], "Path selection updated")
         self.assertEqual(result["afterCancel"]["value"], "keep cancel")
         self.assertEqual(result["afterError"]["value"], "keep error")
-        self.assertEqual(result["afterError"]["status"], "native file picker unavailable")
-        self.assertEqual([call["path"] for call in result["fetchCalls"]], ["/api/path-picker"] * 3)
+        self.assertEqual(
+            result["afterError"]["status"], "native file picker unavailable"
+        )
+        self.assertEqual(
+            [call["path"] for call in result["fetchCalls"]], ["/api/path-picker"] * 3
+        )
         self.assertTrue(
-            all(json.loads(call["body"]) == {"multiple": True} for call in result["fetchCalls"])
+            all(
+                json.loads(call["body"]) == {"multiple": True}
+                for call in result["fetchCalls"]
+            )
         )
 
     def _legacy_inline_source_tags_editor_can_toggle_existing_tags(self) -> None:
@@ -752,14 +778,18 @@ console.log(result);
         result = json.loads(node.stdout)
 
         self.assertEqual(result["before"]["value"], "green, custom")
-        self.assertEqual(result["before"]["labels"], ["green", "blue", "red", "yellow", "purple"])
+        self.assertEqual(
+            result["before"]["labels"], ["green", "blue", "red", "yellow", "purple"]
+        )
         self.assertTrue(result["before"]["greenSelected"])
         self.assertFalse(result["before"]["blueSelected"])
         self.assertEqual(result["afterBlue"]["value"], "green, custom, blue")
         self.assertTrue(result["afterBlue"]["blueSelected"])
         self.assertTrue(result["afterBlue"]["stopped"])
         self.assertTrue(result["afterBlue"]["defaultPrevented"])
-        self.assertEqual(result["afterGreenAndRed"]["value"], "custom, blue, manual, red")
+        self.assertEqual(
+            result["afterGreenAndRed"]["value"], "custom, blue, manual, red"
+        )
         self.assertFalse(result["afterGreenAndRed"]["greenSelected"])
         self.assertTrue(result["afterGreenAndRed"]["redSelected"])
         self.assertTrue(result["afterGreenAndRed"]["greenStopped"])
@@ -800,7 +830,9 @@ console.log(result);
                 {
                     "trajectory_id": "trial:active",
                     "session_id": "active",
-                    "steps": [{"step_id": 1, "source": "user", "message": "needle in message"}],
+                    "steps": [
+                        {"step_id": 1, "source": "user", "message": "needle in message"}
+                    ],
                     "final_metrics": {},
                 },
                 {
@@ -811,7 +843,9 @@ console.log(result);
                             "step_id": 1,
                             "source": "agent",
                             "reasoning_content": "hidden thought",
-                            "tool_calls": [{"function_name": "lookup", "arguments": {"q": "blue"}}],
+                            "tool_calls": [
+                                {"function_name": "lookup", "arguments": {"q": "blue"}}
+                            ],
                             "observation": {"content": "observed target"},
                         }
                     ],
@@ -819,8 +853,18 @@ console.log(result);
                 },
             ],
             "trajectory_meta": [
-                {"trial_key": "trial:active", "status": "passed", "steps": [], "source_tags": ["green"]},
-                {"trial_key": "trial:archived", "status": "passed", "steps": [], "source_tags": ["red", "blue"]},
+                {
+                    "trial_key": "trial:active",
+                    "status": "passed",
+                    "steps": [],
+                    "source_tags": ["green"],
+                },
+                {
+                    "trial_key": "trial:archived",
+                    "status": "passed",
+                    "steps": [],
+                    "source_tags": ["red", "blue"],
+                },
             ],
         }
         script = f"""
@@ -924,7 +968,9 @@ console.log(result);
         self.assertTrue(result["hasAllOption"])
         self.assertFalse(result["hasScopeRadios"])
 
-    def test_markdown_renderer_renders_analysis_md_headings_tables_and_escapes(self) -> None:
+    def test_markdown_renderer_renders_analysis_md_headings_tables_and_escapes(
+        self,
+    ) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         asset = load_asset_text("report.js")
@@ -994,12 +1040,19 @@ console.log(result);
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
         rendered = result["analysis"]
-        self.assertIn('<h4 class="markdown-heading markdown-heading-1">Cached Review</h4>', rendered)
-        self.assertIn('<h5 class="markdown-heading markdown-heading-2">Slow step</h5>', rendered)
+        self.assertIn(
+            '<h4 class="markdown-heading markdown-heading-1">Cached Review</h4>',
+            rendered,
+        )
+        self.assertIn(
+            '<h5 class="markdown-heading markdown-heading-2">Slow step</h5>', rendered
+        )
         self.assertIn("<strong>strong</strong>", rendered)
         self.assertIn("<em>emphasis</em>", rendered)
         self.assertIn("<code>inline_code</code>", rendered)
-        self.assertIn('<div class="markdown-table-wrap"><table class="markdown-table">', rendered)
+        self.assertIn(
+            '<div class="markdown-table-wrap"><table class="markdown-table">', rendered
+        )
         self.assertIn('<th class="align-left">Check</th>', rendered)
         self.assertIn('<th class="align-center">Result</th>', rendered)
         self.assertIn('<th class="align-right">Count</th>', rendered)
@@ -1142,7 +1195,6 @@ console.log(result);
         )
         self.assertIn("drawer-open", result["rendered"])
 
-
     def test_html_trajectory_overview_nodes_render_duration_heat(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -1169,7 +1221,7 @@ console.log(result);
                         {"step_id": 1, "source": "user", "message": "start"},
                     ],
                     "final_metrics": {},
-                }
+                },
             ],
             "trajectory_meta": [
                 {
@@ -1189,7 +1241,7 @@ console.log(result);
                         {"step_id": 1, "duration_ms": 0},
                     ],
                     "warnings": [],
-                }
+                },
             ],
         }
         asset = load_asset_text("report.js")
@@ -1261,7 +1313,9 @@ console.log(result);
         self.assertIn("step 0.2s; 100% of slowest step", buttons["3"])
 
     @unittest.skip("superseded by server-side catalog export coverage")
-    def test_html_runtime_rows_and_export_subset_avoid_persisted_comparison(self) -> None:
+    def test_html_runtime_rows_and_export_subset_avoid_persisted_comparison(
+        self,
+    ) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         report = {
@@ -1464,7 +1518,9 @@ console.log(result);
         self.assertTrue(result["xlsxHasHeader"])
         self.assertTrue(result["xlsxHasTrue"])
         self.assertTrue(result["xlsxHasFalse"])
-        self.assertEqual(result["downloaded"]["filename"], "peval-leaderboard-visible.xlsx")
+        self.assertEqual(
+            result["downloaded"]["filename"], "peval-leaderboard-visible.xlsx"
+        )
         self.assertEqual(
             result["downloaded"]["mime"],
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1860,8 +1916,16 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                     "duration_ms": 2000,
                     "steps": [
                         {"step_id": 1, "duration_ms": 100},
-                        {"step_id": 2, "duration_ms": 1000, "duration_source": "measured"},
-                        {"step_id": 3, "duration_ms": 2000, "duration_source": "boundary_estimate"},
+                        {
+                            "step_id": 2,
+                            "duration_ms": 1000,
+                            "duration_source": "measured",
+                        },
+                        {
+                            "step_id": 3,
+                            "duration_ms": 2000,
+                            "duration_source": "boundary_estimate",
+                        },
                         {"step_id": 4, "duration_ms": 500},
                     ],
                     "warnings": [],
@@ -1872,7 +1936,11 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                     "source_category": "backend",
                     "duration_ms": 3000,
                     "steps": [
-                        {"step_id": 1, "duration_ms": 3000, "duration_source": "measured"},
+                        {
+                            "step_id": 1,
+                            "duration_ms": 3000,
+                            "duration_source": "measured",
+                        },
                     ],
                     "warnings": [],
                 },
@@ -1881,8 +1949,16 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                     "status": "passed",
                     "duration_ms": 6000,
                     "steps": [
-                        {"step_id": 1, "duration_ms": 500, "duration_source": "measured"},
-                        {"step_id": 2, "duration_ms": None, "duration_source": "measured"},
+                        {
+                            "step_id": 1,
+                            "duration_ms": 500,
+                            "duration_source": "measured",
+                        },
+                        {
+                            "step_id": 2,
+                            "duration_ms": None,
+                            "duration_source": "measured",
+                        },
                     ],
                     "warnings": [],
                 },
@@ -1891,13 +1967,18 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         single_report = {
             "schema_version": 19,
             "includes": ["core"],
-            "trajectory": [{"trajectory_id": "trial:single", "session_id": "single", "steps": []}],
-            "trajectory_meta": [{"trial_key": "trial:single", "status": "passed", "steps": []}],
+            "trajectory": [
+                {"trajectory_id": "trial:single", "session_id": "single", "steps": []}
+            ],
+            "trajectory_meta": [
+                {"trial_key": "trial:single", "status": "passed", "steps": []}
+            ],
         }
         asset = load_asset_text("report.js")
         self.assertIn('\n"peval-py-entrypoint";', asset)
         asset = asset.rsplit('\n"peval-py-entrypoint";', 1)[0]
-        script = """
+        script = (
+            """
 const vm = require("vm");
 const asset = __ASSET__;
 const report = __REPORT__;
@@ -2058,7 +2139,10 @@ const result = vm.runInContext(`
   });
 `, context);
 console.log(result);
-""".replace("__ASSET__", json.dumps(asset)).replace("__REPORT__", json.dumps(report)).replace("__SINGLE_REPORT__", json.dumps(single_report))
+""".replace("__ASSET__", json.dumps(asset))
+            .replace("__REPORT__", json.dumps(report))
+            .replace("__SINGLE_REPORT__", json.dumps(single_report))
+        )
         node = subprocess.run(
             ["node"],
             input=script,
@@ -2096,9 +2180,13 @@ console.log(result);
         self.assertIn("Leaderboard Summary", result["defaultHtml"])
         self.assertIn("Show summary table", result["defaultHtml"])
         self.assertIn('aria-expanded="false"', result["defaultHtml"])
-        self.assertNotIn('<table class="data-table leaderboard-summary-table"', result["defaultHtml"])
+        self.assertNotIn(
+            '<table class="data-table leaderboard-summary-table"', result["defaultHtml"]
+        )
         self.assertEqual(result["defaultChartCount"], 6)
-        self.assertIn('data-summary-statistic="mean" aria-pressed="true"', result["defaultHtml"])
+        self.assertIn(
+            'data-summary-statistic="mean" aria-pressed="true"', result["defaultHtml"]
+        )
         self.assertIn('data-summary-group-by="category"', result["defaultHtml"])
 
         self.assertIn("Hide summary table", result["openHtml"])
@@ -2113,7 +2201,9 @@ console.log(result);
             [item["key"] for item in result["statisticStates"]],
             ["mean", "min", "q1", "p50", "q3", "p95", "max"],
         )
-        self.assertTrue(all(item["state"] == item["key"] for item in result["statisticStates"]))
+        self.assertTrue(
+            all(item["state"] == item["key"] for item in result["statisticStates"])
+        )
         self.assertTrue(all(item["pressed"] for item in result["statisticStates"]))
         self.assertTrue(all(item["highlighted"] for item in result["statisticStates"]))
         self.assertTrue(all(item["tableOpen"] for item in result["statisticStates"]))
@@ -2123,13 +2213,17 @@ console.log(result);
         self.assertEqual(result["modelGroups"][0]["label"], "model-a")
         self.assertEqual(result["modelGroups"][0]["rows"], 2)
         self.assertEqual(result["modelGroups"][0]["duration"]["mean"], 4000)
-        self.assertEqual(result["modelGroups"][0]["duration"]["distribution"]["p95"], 5800)
+        self.assertEqual(
+            result["modelGroups"][0]["duration"]["distribution"]["p95"], 5800
+        )
         self.assertGreaterEqual(result["modelP95Occurrences"], 2)
         self.assertEqual(result["modelMetricRows"], 6)
         self.assertEqual(result["modelChartCount"], 6)
         self.assertIn('data-value-type="identity" title="Model"', result["modelHtml"])
         self.assertIn("Active Duration; P95 5.8s; n=2", result["modelHtml"])
-        self.assertIn('<table class="data-table leaderboard-summary-table"', result["modelHtml"])
+        self.assertIn(
+            '<table class="data-table leaderboard-summary-table"', result["modelHtml"]
+        )
 
         self.assertEqual(
             [(group["label"], group["rows"]) for group in result["categoryGroups"]],
@@ -2139,15 +2233,22 @@ console.log(result);
         self.assertEqual(result["categoryGroups"][1]["duration"]["mean"], 2000)
         self.assertEqual(result["categoryMetricRows"], 12)
         self.assertEqual(result["categoryChartCount"], 6)
-        self.assertIn('data-value-type="identity" title="Category"', result["categoryHtml"])
+        self.assertIn(
+            'data-value-type="identity" title="Category"', result["categoryHtml"]
+        )
         self.assertIn("2 categories", result["categoryHtml"])
-        self.assertIn('id="leaderboard-summary-chart-title">P95 · Category</h3>', result["categoryHtml"])
+        self.assertIn(
+            'id="leaderboard-summary-chart-title">P95 · Category</h3>',
+            result["categoryHtml"],
+        )
 
         self.assertEqual(result["overallGroups"], [{"label": "Overall", "rows": 2}])
         self.assertEqual(result["overallMetricRows"], 6)
         self.assertEqual(result["overallChartCount"], 0)
         self.assertIn('data-value-type="identity" title="Scope"', result["overallHtml"])
-        self.assertIn('<table class="data-table leaderboard-summary-table"', result["overallHtml"])
+        self.assertIn(
+            '<table class="data-table leaderboard-summary-table"', result["overallHtml"]
+        )
         self.assertNotIn("leaderboard-summary-chart-panel", result["overallHtml"])
         self.assertIn("No visible rows to summarize.", result["emptyHtml"])
         self.assertIn('id="leaderboard-summary"', result["multiHtml"])
@@ -2156,9 +2257,13 @@ console.log(result);
         self.assertNotIn('id="leaderboard-summary"', result["singleHtml"])
         self.assertEqual(result["singleRows"], ["trial:single"])
         self.assertEqual(result["singleFilteredRows"], [])
-        self.assertEqual(result["comparisonCalls"], [{"trace": False}, {"trace": False}])
+        self.assertEqual(
+            result["comparisonCalls"], [{"trace": False}, {"trace": False}]
+        )
 
-    @unittest.skip("full embedded serve reports were replaced by catalog detail loading")
+    @unittest.skip(
+        "full embedded serve reports were replaced by catalog detail loading"
+    )
     def test_serve_source_selection_uses_full_report_uniquified_trials(self) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
@@ -2193,31 +2298,56 @@ console.log(result);
                     "trajectory_id": "trial:a",
                     "session_id": "a",
                     "steps": [],
-                    "final_metrics": {"extra": {"total_turns": 1, "total_tool_calls": 0}},
+                    "final_metrics": {
+                        "extra": {"total_turns": 1, "total_tool_calls": 0}
+                    },
                 },
                 {
                     "trajectory_id": "trial:b",
                     "session_id": "b",
                     "steps": [],
-                    "final_metrics": {"extra": {"total_turns": 1, "total_tool_calls": 0}},
+                    "final_metrics": {
+                        "extra": {"total_turns": 1, "total_tool_calls": 0}
+                    },
                 },
                 {
                     "trajectory_id": "trial:c",
                     "session_id": "c",
                     "steps": [],
-                    "final_metrics": {"extra": {"total_turns": 1, "total_tool_calls": 0}},
+                    "final_metrics": {
+                        "extra": {"total_turns": 1, "total_tool_calls": 0}
+                    },
                 },
             ],
             "trajectory_meta": [
-                {"trial_key": "session:t001", "status": "passed", "duration_ms": 100, "steps": [], "warnings": []},
-                {"trial_key": "session:t001:2", "status": "passed", "duration_ms": 200, "steps": [], "warnings": []},
-                {"trial_key": "session:t001:3", "status": "failed", "duration_ms": 300, "steps": [], "warnings": []},
+                {
+                    "trial_key": "session:t001",
+                    "status": "passed",
+                    "duration_ms": 100,
+                    "steps": [],
+                    "warnings": [],
+                },
+                {
+                    "trial_key": "session:t001:2",
+                    "status": "passed",
+                    "duration_ms": 200,
+                    "steps": [],
+                    "warnings": [],
+                },
+                {
+                    "trial_key": "session:t001:3",
+                    "status": "failed",
+                    "duration_ms": 300,
+                    "steps": [],
+                    "warnings": [],
+                },
             ],
         }
         asset = load_asset_text("report.js")
         self.assertIn('\n"peval-py-entrypoint";', asset)
         asset = asset.rsplit('\n"peval-py-entrypoint";', 1)[0]
-        script = """
+        script = (
+            """
 const vm = require("vm");
 const asset = __ASSET__;
 const report = __REPORT__;
@@ -2320,7 +2450,10 @@ const result = vm.runInContext(`
   JSON.stringify({ afterMutation, afterSourceSelect, afterLegacyLoadName });
 `, context);
 console.log(result);
-""".replace("__ASSET__", json.dumps(asset)).replace("__REPORT__", json.dumps(report)).replace("__SOURCES__", json.dumps(sources))
+""".replace("__ASSET__", json.dumps(asset))
+            .replace("__REPORT__", json.dumps(report))
+            .replace("__SOURCES__", json.dumps(sources))
+        )
         node = subprocess.run(
             ["node"],
             input=script,
@@ -2470,7 +2603,12 @@ vm.runInContext(`(async () => {
 })().catch(error => { console.error(error && error.stack || error); process.exitCode = 1; });`, context);
 """.replace("__ASSET__", json.dumps(asset))
         node = subprocess.run(
-            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
         )
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
@@ -2496,7 +2634,9 @@ vm.runInContext(`(async () => {
             },
         )
         self.assertEqual(result["afterSave"]["path"], "/resolved/new.db")
-        self.assertEqual(result["afterSave"]["defaults"], {"hermes": "/resolved/new.db"})
+        self.assertEqual(
+            result["afterSave"]["defaults"], {"hermes": "/resolved/new.db"}
+        )
         self.assertEqual(
             result["afterClear"]["clearCall"],
             {
@@ -2518,7 +2658,12 @@ vm.runInContext(`(async () => {
         )
         self.assertEqual(
             result["afterReset"],
-            {"adapter": "auto", "path": "", "saveDisabled": True, "clearDisabled": True},
+            {
+                "adapter": "auto",
+                "path": "",
+                "saveDisabled": True,
+                "clearDisabled": True,
+            },
         )
 
     @unittest.skip("superseded by cross-page catalog selection and operation coverage")
@@ -2526,8 +2671,24 @@ vm.runInContext(`(async () => {
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         sources = [
-            {"source_key": "source-a", "active": True, "artifact_dir": "runs/a", "last_status": "ok", "trial_key": "trial:active-a", "refreshable": True, "source_tags": ["priority", "release"]},
-            {"source_key": "source-b", "active": False, "artifact_dir": "runs/b", "last_status": "ok", "trial_key": "trial:archived-b", "refreshable": False, "snapshot": True},
+            {
+                "source_key": "source-a",
+                "active": True,
+                "artifact_dir": "runs/a",
+                "last_status": "ok",
+                "trial_key": "trial:active-a",
+                "refreshable": True,
+                "source_tags": ["priority", "release"],
+            },
+            {
+                "source_key": "source-b",
+                "active": False,
+                "artifact_dir": "runs/b",
+                "last_status": "ok",
+                "trial_key": "trial:archived-b",
+                "refreshable": False,
+                "snapshot": True,
+            },
         ]
         sources_after_archive = [
             {**sources[0], "active": False},
@@ -2539,7 +2700,8 @@ vm.runInContext(`(async () => {
         asset = load_asset_text("report.js")
         self.assertIn('\n"peval-py-entrypoint";', asset)
         asset = asset.rsplit('\n"peval-py-entrypoint";', 1)[0]
-        script = """
+        script = (
+            """
 const vm = require("vm");
 const asset = __ASSET__;
 const sources = __SOURCES__;
@@ -2680,7 +2842,11 @@ const promise = vm.runInContext(`(async () => {
   return JSON.stringify({ initial, selectedActive, afterState, selectedArchived, afterDelete });
 })()`, context);
 promise.then(result => console.log(result)).catch(error => { console.error(error && error.stack || error); process.exit(1); });
-""".replace("__ASSET__", json.dumps(asset)).replace("__SOURCES__", json.dumps(sources)).replace("__SOURCES_AFTER_ARCHIVE__", json.dumps(sources_after_archive)).replace("__SOURCES_AFTER_DELETE__", json.dumps(sources_after_delete))
+""".replace("__ASSET__", json.dumps(asset))
+            .replace("__SOURCES__", json.dumps(sources))
+            .replace("__SOURCES_AFTER_ARCHIVE__", json.dumps(sources_after_archive))
+            .replace("__SOURCES_AFTER_DELETE__", json.dumps(sources_after_delete))
+        )
         node = subprocess.run(
             ["node"],
             input=script,
@@ -2707,7 +2873,9 @@ promise.then(result => console.log(result)).catch(error => { console.error(error
         self.assertFalse(result["selectedActive"]["disabled"])
         self.assertEqual(result["afterState"]["payload"]["source_keys"], ["source-a"])
         self.assertFalse(result["afterState"]["payload"]["active"])
-        self.assertEqual(result["afterState"]["payload"]["report_source_state"], "active")
+        self.assertEqual(
+            result["afterState"]["payload"]["report_source_state"], "active"
+        )
         self.assertEqual(result["afterState"]["selectionSize"], 0)
         self.assertFalse(result["afterState"]["sourceAActive"])
         self.assertEqual(result["selectedArchived"]["label"], "Activate selected")
@@ -2716,7 +2884,9 @@ promise.then(result => console.log(result)).catch(error => { console.error(error
             result["afterDelete"]["confirmMessages"],
             ["Delete selected sources from peval-py state?"],
         )
-        self.assertEqual(result["afterDelete"]["deletePath"], "/api/sources/source-b/delete")
+        self.assertEqual(
+            result["afterDelete"]["deletePath"], "/api/sources/source-b/delete"
+        )
         self.assertEqual(result["afterDelete"]["remainingKeys"], ["source-a"])
         self.assertEqual(result["afterDelete"]["selectionSize"], 0)
 
@@ -3055,8 +3225,9 @@ console.log(result);
         self.assertTrue(result["afterOverviewScroll"]["syncingReleased"])
         self.assertGreaterEqual(result["rafCalls"], 4)
 
-
-    def test_workspace_report_cells_render_zero_one_many_and_isolate_clicks(self) -> None:
+    def test_workspace_report_cells_render_zero_one_many_and_isolate_clicks(
+        self,
+    ) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         asset = load_asset_text("report.js")
@@ -3124,7 +3295,12 @@ const result = vm.runInContext(`(() => {
 console.log(result);
 """.replace("__ASSET__", json.dumps(asset))
         node = subprocess.run(
-            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
         )
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
@@ -3132,7 +3308,9 @@ console.log(result);
         self.assertIn("&mdash;", result["zero"])
         self.assertIn("one.md", result["one"])
         self.assertIn("2 reports", result["many"])
-        self.assertLess(result["many"].index("newer.md"), result["many"].index("older.html"))
+        self.assertLess(
+            result["many"].index("newer.md"), result["many"].index("older.html")
+        )
         alias_index = result["columnKeys"].index("source_alias")
         self.assertEqual(result["columnKeys"][alias_index + 1], "workspace_reports")
         self.assertTrue(result["clickEvent"]["stopped"])
@@ -3141,7 +3319,9 @@ console.log(result);
         self.assertEqual(result["selectValue"], "")
         self.assertEqual(result["selectedTrial"], "trial-before")
 
-    def test_workspace_report_attach_cancel_preserves_selection_and_success_opens_reader(self) -> None:
+    def test_workspace_report_attach_cancel_preserves_selection_and_success_opens_reader(
+        self,
+    ) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         asset = load_asset_text("report.js")
@@ -3210,7 +3390,12 @@ vm.runInContext(`(async () => {
 })().catch(error => { console.error(error); process.exitCode = 1; });`, context);
 """.replace("__ASSET__", json.dumps(asset))
         node = subprocess.run(
-            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
         )
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
@@ -3236,11 +3421,15 @@ vm.runInContext(`(async () => {
                 },
             ],
         )
-        self.assertEqual(result["afterSuccess"]["reportIds"], ["20260710-140000-000000"])
+        self.assertEqual(
+            result["afterSuccess"]["reportIds"], ["20260710-140000-000000"]
+        )
         self.assertFalse(result["afterSuccess"]["disabled"])
 
     @unittest.skip("superseded by shell-first workspace report catalog loading")
-    def test_workspace_report_empty_catalog_payload_and_reader_step_mutual_exclusion(self) -> None:
+    def test_workspace_report_empty_catalog_payload_and_reader_step_mutual_exclusion(
+        self,
+    ) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         asset = load_asset_text("report.js")
@@ -3343,7 +3532,12 @@ const result = vm.runInContext(`(() => {
 console.log(result);
 """.replace("__ASSET__", json.dumps(asset))
         node = subprocess.run(
-            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
         )
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
@@ -3470,7 +3664,12 @@ const result = vm.runInContext(`(() => {
 console.log(result);
 """.replace("__ASSET__", json.dumps(asset))
         node = subprocess.run(
-            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
         )
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
@@ -3567,19 +3766,29 @@ vm.runInContext(`(async () => {
 })().catch(error => { console.error(error); process.exitCode = 1; });`, context);
 """.replace("__ASSET__", json.dumps(asset))
         node = subprocess.run(
-            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
         )
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
 
-        self.assertEqual(result["initial"]["readable"], ["cell-active", "cell-archived", "cell-empty"])
+        self.assertEqual(
+            result["initial"]["readable"],
+            ["cell-active", "cell-archived", "cell-empty"],
+        )
         self.assertTrue(result["initial"]["saveDisabled"])
         self.assertEqual(result["initial"]["tagChips"], 3)
         self.assertTrue(result["initial"]["emptyTags"])
         self.assertEqual(result["searchMatches"], ["cell-archived"])
         self.assertTrue(result["changed"]["dirty"])
         self.assertFalse(result["changed"]["saveDisabled"])
-        self.assertEqual(result["afterSave"]["sourceKeys"], ["cell-active", "cell-archived"])
+        self.assertEqual(
+            result["afterSave"]["sourceKeys"], ["cell-active", "cell-archived"]
+        )
         self.assertFalse(result["afterSave"]["dirty"])
         self.assertEqual(
             result["calls"],
@@ -3596,7 +3805,9 @@ vm.runInContext(`(async () => {
         )
         self.assertEqual(result["remaining"], 0)
 
-    def test_saved_views_render_index_and_apply_selected_views_as_snapshot(self) -> None:
+    def test_saved_views_render_index_and_apply_selected_views_as_snapshot(
+        self,
+    ) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         asset = load_asset_text("report.js")
@@ -3809,7 +4020,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
 
-        self.assertIn('data-view-save', result["controls"])
+        self.assertIn("data-view-save", result["controls"])
         self.assertNotIn("workspace-view-menu", result["controls"])
         self.assertNotIn("data-view-apply-selected", result["controls"])
         self.assertFalse(result["railHidden"])
@@ -3830,7 +4041,10 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertIn("Notes", result["collapsedRail"])
         self.assertIn("data-view-select-visible", result["collapsedRail"])
         self.assertIn('title="Context note."', result["collapsedRail"])
-        self.assertIn('data-table-column-key="notes" data-value-type="markdown"', result["collapsedRail"])
+        self.assertIn(
+            'data-table-column-key="notes" data-value-type="markdown"',
+            result["collapsedRail"],
+        )
         self.assertIn("data-workspace-views-close", result["collapsedRail"])
         view_column_keys = [column["key"] for column in result["viewColumns"]]
         category_index = view_column_keys.index("categories")
@@ -3869,7 +4083,9 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertEqual(result["firstTableOpenRail"].count('aria-expanded="true"'), 1)
         self.assertEqual(result["bothTablesOpenRail"].count('aria-expanded="true"'), 2)
         self.assertIn("6 metrics · 1 categories", result["bothTablesOpenRail"])
-        self.assertIn('data-value-type="identity" title="Category"', result["bothTablesOpenRail"])
+        self.assertIn(
+            'data-value-type="identity" title="Category"', result["bothTablesOpenRail"]
+        )
         self.assertIn("Mean · Category", result["bothTablesOpenRail"])
         self.assertIn(
             "backend; Active Duration; Mean 1.2s; n=2",
@@ -3942,8 +4158,18 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 },
             ],
         )
-        self.assertEqual(result["appliedRail"].count("workspace-view-card leaderboard-summary applied"), 2)
-        self.assertEqual(result["draftChangedRail"].count("workspace-view-card leaderboard-summary applied"), 2)
+        self.assertEqual(
+            result["appliedRail"].count(
+                "workspace-view-card leaderboard-summary applied"
+            ),
+            2,
+        )
+        self.assertEqual(
+            result["draftChangedRail"].count(
+                "workspace-view-card leaderboard-summary applied"
+            ),
+            2,
+        )
         self.assertEqual(
             result["applyQuery"],
             {
@@ -3961,7 +4187,9 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 "views": ["Agent slice", "Focused model"],
             },
         )
-        self.assertEqual(result["afterApply"]["applied"], ["Agent slice", "Focused model"])
+        self.assertEqual(
+            result["afterApply"]["applied"], ["Agent slice", "Focused model"]
+        )
         self.assertEqual(result["afterApply"]["groupBy"], "model")
         self.assertTrue(result["afterApply"]["summaryTableOpen"])
         self.assertEqual(result["afterApply"]["statistic"], "p95")
@@ -3998,7 +4226,9 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertEqual(result["sourceSelection"], 1)
         self.assertEqual(result["selectedSourceKey"], "kept-source")
         self.assertEqual(result["selectedTrial"], "kept-trial")
-        self.assertEqual(result["selectedStep"], {"trialKey": "kept-trial", "stepId": "2"})
+        self.assertEqual(
+            result["selectedStep"], {"trialKey": "kept-trial", "stepId": "2"}
+        )
         self.assertEqual(
             result["table"],
             {
@@ -4115,7 +4345,9 @@ const result = vm.runInContext(`(() => {
   });
 })()`, context);
 console.log(result);
-""".replace("__ASSET__", json.dumps(asset)).replace("__SNAPSHOT__", json.dumps(snapshot))
+""".replace("__ASSET__", json.dumps(asset)).replace(
+            "__SNAPSHOT__", json.dumps(snapshot)
+        )
         node = subprocess.run(
             ["node"],
             input=script,
@@ -4158,11 +4390,15 @@ console.log(result);
         self.assertFalse(result["railHidden"])
         self.assertIn("Category: frontend", result["railHtml"])
         self.assertIn("Group by: Category", result["railHtml"])
-        self.assertIn('data-view-table-toggle="Frontend" aria-expanded="true"', result["railHtml"])
+        self.assertIn(
+            'data-view-table-toggle="Frontend" aria-expanded="true"', result["railHtml"]
+        )
         self.assertNotIn("data-view-select-visible", result["railHtml"])
         self.assertNotIn("data-view-apply-selected", result["railHtml"])
 
-    def test_saved_view_save_coalesces_stale_refresh_and_renders_singleton_rail(self) -> None:
+    def test_saved_view_save_coalesces_stale_refresh_and_renders_singleton_rail(
+        self,
+    ) -> None:
         if not shutil.which("node"):
             self.skipTest("node is required to execute report.js interaction helpers")
         asset = load_asset_text("report.js")
@@ -4270,11 +4506,15 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
 
         self.assertEqual(result["listCalls"], 2)
         self.assertEqual(result["names"], ["Daily"])
-        self.assertEqual(result["summaries"], [{"name": "Daily", "matched_count": 1, "groups": []}])
+        self.assertEqual(
+            result["summaries"], [{"name": "Daily", "matched_count": 1, "groups": []}]
+        )
         self.assertFalse(result["railHidden"])
         self.assertIn("Daily", result["railHtml"])
         self.assertIn("1 matching sessions", result["railHtml"])
-        self.assertIn('data-view-table-toggle="Daily" aria-expanded="false"', result["railHtml"])
+        self.assertIn(
+            'data-view-table-toggle="Daily" aria-expanded="false"', result["railHtml"]
+        )
         self.assertNotIn("workspace-view-menu", result["railHtml"])
         self.assertEqual(result["status"], {"message": "View saved", "error": False})
 
@@ -4456,7 +4696,12 @@ const result = vm.runInContext(`(async () => {
 Promise.resolve(result).then(value => console.log(value)).catch(error => { console.error(error); process.exit(1); });
 """.replace("__ASSET__", json.dumps(asset))
         node = subprocess.run(
-            ["node"], input=script, text=True, capture_output=True, timeout=10, check=False
+            ["node"],
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
         )
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
@@ -4467,8 +4712,13 @@ Promise.resolve(result).then(value => console.log(value)).catch(error => { conso
         self.assertEqual(result["renamed"]["reloads"], 1)
         self.assertEqual(result["tagUpdateCall"]["path"], "/api/views/update")
         self.assertEqual(result["tagUpdateCall"]["body"]["field"], "configuration")
-        self.assertIn('tags:\n    - "daily"\n    - "nightly"', result["tagUpdateCall"]["body"]["value"])
-        self.assertIn('results:\n    - "passed"', result["tagUpdateCall"]["body"]["value"])
+        self.assertIn(
+            'tags:\n    - "daily"\n    - "nightly"',
+            result["tagUpdateCall"]["body"]["value"],
+        )
+        self.assertIn(
+            'results:\n    - "passed"', result["tagUpdateCall"]["body"]["value"]
+        )
         self.assertIn("already exists", result["conflict"]["status"])
         self.assertEqual(result["conflict"]["buttonsDisabled"], [False, False])
         self.assertEqual(result["conflict"]["html"], "editor remains mounted")
@@ -4483,13 +4733,15 @@ Promise.resolve(result).then(value => console.log(value)).catch(error => { conso
                 "value": "state: archived\nagents:\n  - beta\nresults:\n  - failed\n",
             },
         )
-        self.assertIn('tags:\n    - "daily"\n    - "nightly"', result["tagConfiguration"])
+        self.assertIn(
+            'tags:\n    - "daily"\n    - "nightly"', result["tagConfiguration"]
+        )
         self.assertIn('results:\n    - "passed"', result["tagConfiguration"])
         self.assertIn('models:\n    - "m1"\n    - "m2"', result["modelConfiguration"])
         self.assertIn('group_by: "overall"', result["groupConfiguration"])
-        self.assertIn('state: archived', result["otherConfiguration"])
-        self.assertIn('agents:\n    - beta', result["otherConfiguration"])
-        self.assertIn('results:\n    - failed', result["otherConfiguration"])
+        self.assertIn("state: archived", result["otherConfiguration"])
+        self.assertIn("agents:\n    - beta", result["otherConfiguration"])
+        self.assertIn("results:\n    - failed", result["otherConfiguration"])
         self.assertEqual(result["afterDoubleClick"], {"navigations": 0, "edits": 1})
         self.assertEqual(result["afterSingleClick"], {"navigations": 1, "edits": 1})
         self.assertEqual(len(result["confirms"]), 1)
@@ -4611,12 +4863,18 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         result = json.loads(node.stdout)
 
         self.assertEqual(result["confirm"], "Replace Daily?")
-        self.assertIn("<dt>Search sessions</dt><dd>needle</dd>", result["savedConfiguration"])
-        self.assertIn("<dt>Category</dt><dd>frontend</dd>", result["savedConfiguration"])
+        self.assertIn(
+            "<dt>Search sessions</dt><dd>needle</dd>", result["savedConfiguration"]
+        )
+        self.assertIn(
+            "<dt>Category</dt><dd>frontend</dd>", result["savedConfiguration"]
+        )
         self.assertIn("<dt>Tags</dt><dd>daily</dd>", result["savedConfiguration"])
         self.assertIn("<dt>Agent</dt><dd>alpha</dd>", result["savedConfiguration"])
         self.assertIn("<dt>Result</dt><dd>passed</dd>", result["savedConfiguration"])
-        self.assertIn("<dt>Group by</dt><dd>Category</dd>", result["savedConfiguration"])
+        self.assertIn(
+            "<dt>Group by</dt><dd>Category</dd>", result["savedConfiguration"]
+        )
         self.assertEqual(result["defaultName"], "daily - category")
         self.assertEqual(result["allDefaultName"], "All - overall")
         self.assertEqual(result["categoryDefaultName"], "All - category")
@@ -4624,11 +4882,15 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertTrue(result["longDefaultName"].endswith(" - model"))
         self.assertNotIn("<dt>Source</dt>", result["savedConfiguration"])
         self.assertNotIn("<dt>Model</dt>", result["savedConfiguration"])
-        self.assertEqual([call["path"] for call in result["calls"]], ["/api/views", "/api/views"])
+        self.assertEqual(
+            [call["path"] for call in result["calls"]], ["/api/views", "/api/views"]
+        )
         self.assertFalse(result["calls"][0]["body"]["overwrite"])
         self.assertTrue(result["calls"][1]["body"]["overwrite"])
         self.assertEqual(result["calls"][1]["body"]["filters"]["search"], "needle")
-        self.assertEqual(result["calls"][1]["body"]["filters"]["categories"], ["frontend"])
+        self.assertEqual(
+            result["calls"][1]["body"]["filters"]["categories"], ["frontend"]
+        )
         self.assertEqual(result["calls"][1]["body"]["filters"]["tags"], ["daily"])
         self.assertEqual(result["calls"][1]["body"]["group_by"], "category")
         self.assertEqual(

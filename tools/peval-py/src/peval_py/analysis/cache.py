@@ -18,6 +18,7 @@ from peval_py.analysis.constants import (
     MAX_NOTE_BYTES,
 )
 
+
 def cached_analysis_report(
     *,
     workspace_root: str | None,
