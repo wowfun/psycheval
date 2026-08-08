@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-08-08
+
+- Reorganized the repository around a root `psycheval` distribution with the
+  `psycheval.harbor` interface, Harbor 0.20.0, an independent root lockfile, and
+  package-local tests while preserving Harbor's direct CLI workflow.
+- Added the versioned `pbench-v1.0` Dataset with maintained Search, Fetch, and
+  Browser Tasks, plus an example Task scaffold.
+- Rebuilt the specifications and product documentation, including mirrored
+  peval-py guides, corrected PyInstaller entrypoint, and inspect/raw report
+  guidance.
+- Hardened peval-py trajectory exports and Harbor Trial integration with strict
+  ATIF-v1.7 artifacts, complete portable facts, read-only projections, status
+  reporting, workspace overlays, and actionable diagnostics.
+- Fixed token accounting, sidecar and linked-cell metadata, symlink and archive
+  safety, bulk deletion, PBench HostEnvironment execution, and root Ruff/test
+  boundaries.
+
 ## 2026-08-07
 
 - Added Harbor 0.18.0-compatible Web Agent evaluation support for trusted host
