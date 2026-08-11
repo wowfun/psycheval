@@ -1,8 +1,8 @@
 # Host Execution
 
-HostEnvironment runs a trusted Harbor Task as ordinary Linux host subprocesses.
-It is not a sandbox: the Task, harness, and verifier can access the caller's
-filesystem, environment, credentials, and network.
+HostEnvironment runs a trusted Harbor Task as ordinary native Linux or Windows
+host subprocesses. It is not a sandbox: the Task, harness, and verifier can
+access the caller's filesystem, environment, credentials, and network.
 
 Every run must opt in explicitly:
 
@@ -11,8 +11,14 @@ Every run must opt in explicitly:
 ```
 
 HostEnvironment rejects Docker Compose Tasks, extra mounts, resource requests,
-non-Linux Tasks, and forced image builds. Those restrictions keep the supported
-Harbor subset explicit; they do not provide isolation.
+Windows-targeted Tasks on Linux, and forced image builds. Those restrictions
+keep the supported Harbor subset explicit; they do not provide isolation.
+
+Linux execution uses Bash, POSIX aliases, and process groups. Native Windows
+execution uses `cmd.exe`, `C:/app`, `C:/tests`, and `C:/logs/...` aliases, and
+terminates process trees with `taskkill /T /F`. Explicit user switching is not
+available on Windows. Host paths containing spaces are supported; characters
+that cannot be safely embedded in a `cmd.exe` command are rejected.
 
 Task scripts receive portable paths through:
 
@@ -26,6 +32,20 @@ Task scripts receive portable paths through:
 Use HostEnvironment only with code you trust. Use Harbor's isolated environment
 providers when the Task or harness is untrusted.
 
-Harbor 0.20.0 enables anonymous telemetry by default. Set
+`ExternalHarnessAgent` supports both native operating systems and derives its
+paths from `environment.os`. Other Agents are eligible on native Windows only
+when they declare `SUPPORTS_WINDOWS = True` and do not depend on Bash, apt, or
+tmux.
+
+This is native host execution, not
+[Harbor Windows container support](https://www.harborframework.com/docs/tasks/windows-container-support).
+PBench Task manifests remain Linux-targeted; when HostEnvironment runs on native
+Windows it reports Windows at runtime so Harbor selects `tests/test.bat` instead
+of `tests/test.sh`. WSL continues to use the Linux path.
+
+Harbor 0.21.0 enables anonymous telemetry by default. Set
 `HARBOR_TELEMETRY=0` when you want to disable it; Psycheval tests always do so
 and isolate `XDG_CONFIG_HOME` from the user profile.
+
+The native Windows root suite is the acceptance environment. WSL, Wine, and Git
+Bash do not substitute for that run.

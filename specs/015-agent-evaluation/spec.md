@@ -27,15 +27,27 @@ owning Dataset specification.
 
 ## Scoring
 
-A verifier evaluates ordered `required_calls`. Each rule may constrain the tool
-name, argument values or terms, normalized URL, successful observation terms,
-and ordering relative to earlier rules. It may also define forbidden tools,
-required final-answer terms, and required artifacts.
+A verifier evaluates ordered `required_calls`. Each rule contains one or more
+explicit alternative branches. A branch declares exact accepted tool names and
+may constrain argument values or terms, normalized URL, and successful
+observation terms. A branch passes only when one call satisfies that branch's
+tool and argument constraints and a successful observation with the same
+`tool_call_id` satisfies its observation constraints. Evidence from separate
+branches or calls may not be combined. Later rules match calls after the prior
+fully matched rule. If one rule has several fully matched calls, its earliest
+match is the witness for the ordered sequence; a later duplicate or alternative
+match does not invalidate a sequence already established by earlier evidence.
 
-The verifier emits structured checks and a binary reward. Every failed check
-states the violated observable contract. A final answer cannot compensate for a
-missing required call, failed observation, wrong parameter, forbidden tool, or
-missing artifact.
+Forbidden tools are exact names rather than fuzzy name families. Dataset-owned
+configuration enumerates every accepted or forbidden alias.
+
+The verifier emits structured checks plus binary `required_tool`,
+`required_arguments`, `required_observation`, `forbidden_tools`, `final_answer`,
+and `required_artifacts` reward dimensions. A dimension with no applicable
+checks scores `1`. The total `reward` is `1` only when every applicable check
+passes. Every failed check states the violated observable contract. A final
+answer cannot compensate for a missing required call, failed observation, wrong
+parameter, forbidden tool, or missing artifact.
 
 ## Artifacts
 

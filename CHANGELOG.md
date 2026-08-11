@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-08-12
+
+- Preserved quoted Windows harness paths and added native Trial coverage for
+  entrypoints whose paths contain spaces.
+- Kept HostEnvironment path handling host-specific and added independent CI
+  coverage for peval-py's frozen Python and Web test suites.
+
+## 2026-08-11
+
+- Migrated Psycheval and PBench to Harbor 0.21.0 and Task schema 1.4, with
+  stable `-01` Task names across the base and Plus Datasets.
+- Added native Linux/Windows HostEnvironment and verifier paths, with Windows
+  CI coverage that keeps PBench as a regular Dataset.
+- Made PBench tool alternatives explicit and exposed reward dimensions for
+  calls, observations, forbidden tools, final answers, artifacts, and totals.
+- Rebuilt the peval-py CLI on Typer with plain-text help and explicit shell
+  completion setup while preserving its command and short-alias workflows.
+
 ## 2026-08-10
 
 - Added explicit Harbor source mounts and stable `harbor/...` references with

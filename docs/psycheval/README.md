@@ -6,7 +6,7 @@ deterministic canned harness, and evidence-based verification.
 
 ## Install
 
-Psycheval requires Python 3.12 and pins the stable Harbor 0.20.0 release:
+Psycheval requires Python 3.12 and pins the stable Harbor 0.21.0 release:
 
 ```bash
 uv sync
@@ -27,7 +27,7 @@ Run the PBench Web Search Task with the canned harness:
 
 ```bash
 HARBOR_TELEMETRY=0 uv run harbor run \
-  --path datasets/pbench-v1.0/web-search \
+  --path datasets/pbench-v1.0/web-search-01 \
   --agent psycheval.harbor.agent:ExternalHarnessAgent \
   --agent-kwarg "command=$PWD/.venv/bin/python -m psycheval.harbor.canned_harness --scenario web-search" \
   --env psycheval.harbor.environment:HostEnvironment \
@@ -37,8 +37,9 @@ HARBOR_TELEMETRY=0 uv run harbor run \
   --yes
 ```
 
-Use the matching `web-fetch` or `browser-control` Task and canned scenario for
-the other deterministic cases.
+Use the `web-fetch-01` or `browser-control-01` Task with its matching
+`web-fetch` or `browser-control` canned scenario for the other deterministic
+cases.
 
 ## Next Steps
 

@@ -44,7 +44,7 @@ A reward of zero means the completed trajectory missed a scoring condition. A
 missing trajectory/reward, provider error, network failure, target-site block,
 or conversion exception is a harness or infrastructure failure instead.
 
-Harbor 0.20.0's default trace exporter still rejects truthful custom import-path
+Harbor 0.21.0's default trace exporter still rejects truthful custom import-path
 Agent identities in its built-in Agent-name conversion. Use the Trial result,
 ATIF trajectory, checks, reward, artifacts, and Harbor viewer; do not masquerade
 as a built-in Agent to work around the exporter.

@@ -10,6 +10,9 @@ Agent Skill.
 
 - Python behavior tests cover input discovery, adapter selection, conversion,
   inspection, reports, serve integration, exports, redaction, and error modes.
+- CLI framework tests cover the Typer command tree, trajectory aliases,
+  repeatable and optional-value options, plain non-Rich help/errors, stable exit
+  codes, and completion script exposure without installing shell configuration.
 - The repository Ruff lint and formatting gates include both peval-py's source
   and tests; test helpers use ordinary explicit imports so undefined names
   remain statically detectable. A helper facade declares intentional re-exports
@@ -30,7 +33,7 @@ Agent Skill.
   identities, and inclusive prompt totals drive token rankings without adding
   cached subsets twice.
 - Representative exports from every adapter are cross-validated with the
-  public `harbor==0.20.0` validator. Harbor remains a development validation
+  public `harbor==0.21.0` validator. Harbor remains a development validation
   tool and is not a peval-py runtime dependency.
 - Node tests cover browser-state behavior and interaction modules. Type checks
   and the committed bundle check run before the Node test suite.
@@ -43,6 +46,10 @@ Agent Skill.
 - The documented PyInstaller entry builds from
   `src/peval_py/cli/__main__.py`; the binary passes `--help` and a fixture-backed
   report smoke test.
+- Repository CI installs peval-py from its own frozen `uv.lock` and runs its
+  Python behavior suite independently from the root pytest project. It also uses
+  a supported Node version, installs the frozen npm dependency tree, and runs the
+  type, committed-bundle, and Node test checks.
 
 Deepagents currently has no committed dedicated fixture or behavior test. Until
 the frozen tool source is intentionally reopened, validation includes a
