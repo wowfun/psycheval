@@ -139,7 +139,7 @@ function timelineAllowsTimestampEstimates(meta) {
   return meta?.timestamp_semantics !== "order_only";
 }
 function timelineModelDurationIsEstimate(stepMeta) {
-  return lower(stepMeta?.duration_source) === "opencode_model_boundary_estimate";
+  return lower(stepMeta?.duration_source).includes("estimate");
 }
 function timelineAssignActiveOffsets(stages, model) {
   let cursor = 0;

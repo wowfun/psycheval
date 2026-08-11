@@ -116,8 +116,6 @@ def latency_metrics(trajectory: dict[str, Any], meta: dict[str, Any]) -> dict[st
             continue
         if trajectory_step_sources[index] not in {"agent", "assistant"}:
             continue
-        if is_estimated_model_duration(step):
-            continue
         duration = int_metric(step.get("duration_ms"))
         if duration is not None:
             model_durations.append(duration)
@@ -138,10 +136,6 @@ def latency_metrics(trajectory: dict[str, Any], meta: dict[str, Any]) -> dict[st
             "model_duration_ms": distribution_metrics(model_durations),
         }
     )
-
-
-def is_estimated_model_duration(step: dict[str, Any]) -> bool:
-    return "estimate" in lower_string(step.get("duration_source"))
 
 
 def lower_string(value: Any) -> str:

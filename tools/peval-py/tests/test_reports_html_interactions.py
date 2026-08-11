@@ -2159,7 +2159,7 @@ console.log(result);
         self.assertEqual(result["duration"]["mean"], 4000)
         self.assertEqual(result["tokens"]["mean"], 200)
         self.assertEqual(result["model"]["count"], 2)
-        self.assertEqual(result["model"]["mean"], 750)
+        self.assertEqual(result["model"]["mean"], 1750)
         self.assertEqual(result["toolCalls"]["mean"], 1)
         self.assertEqual(result["toolRate"]["count"], 1)
         self.assertEqual(result["toolRate"]["mean"], 0)
@@ -2169,7 +2169,7 @@ console.log(result);
             [("agent-a", 1), ("agent-c", 1)],
         )
         self.assertEqual(result["agentGroups"][0]["duration"]["mean"], 2000)
-        self.assertEqual(result["agentGroups"][0]["model"]["mean"], 1000)
+        self.assertEqual(result["agentGroups"][0]["model"]["mean"], 3000)
         self.assertEqual(result["agentGroups"][1]["model"]["mean"], 500)
         self.assertEqual(result["agentGroups"][1]["toolRate"]["count"], 0)
 

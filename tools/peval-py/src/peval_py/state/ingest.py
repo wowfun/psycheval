@@ -44,9 +44,8 @@ from peval_py.state.constants import (
     SOURCE_STATUS_OK,
     UPLOAD_LIMIT_BYTES,
 )
-from peval_py.state.harbor import is_harbor_source
-from peval_py.state.harbor import sync_harbor_trials as sync_linked_harbor_trials
 from peval_py.state.summaries import now_ms, trial_summary
+from peval_py.state.workspace_sources import WorkspaceSources, is_harbor_source
 
 
 class StateIngestMixin:
@@ -176,12 +175,7 @@ class StateIngestMixin:
 
     def refresh_source(self, source: dict[str, Any], config: ToolConfig) -> None:
         if is_harbor_source(source):
-            sync_linked_harbor_trials(
-                self,
-                config,
-                source_keys={str(source["source_key"])},
-                force=True,
-            )
+            WorkspaceSources(self, config).load_ref(str(source["source_ref"]))
             return
         source_key = source["source_key"]
         timestamp = now_ms()
@@ -214,8 +208,8 @@ class StateIngestMixin:
             self.update_source_status(source, "error", str(exc), timestamp)
             self.log_refresh(source_key, "error", 0, str(exc), timestamp)
 
-    def sync_harbor_trials(self, config: ToolConfig) -> list[str]:
-        return sync_linked_harbor_trials(self, config)
+    def harbor_source_keys(self, config: ToolConfig) -> list[str]:
+        return WorkspaceSources(self, config).source_keys()
 
     def store_report_for_source(
         self,

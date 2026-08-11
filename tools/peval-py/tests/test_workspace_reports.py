@@ -47,7 +47,7 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             self.assertEqual(second_id, "20260710-143012-123456-2")
             self.assertEqual(
                 json.loads((root / "reports" / first_id / "state.json").read_text()),
-                {"source_keys": ["runs/default/agent/s1/c1"]},
+                {"source_refs": ["runs/default/agent/s1/c1"]},
             )
             self.assertEqual(
                 (root / "reports" / first_id / first.name).read_bytes(), first_bytes
@@ -159,11 +159,11 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             package.mkdir()
             (package / "report.md").write_text("ok")
             (package / "state.json").write_text(
-                json.dumps({"source_keys": ["../outside"]})
+                json.dumps({"source_refs": ["../outside"]})
             )
             library = WorkspaceReportLibrary(root, lambda: [])
             self.assertEqual(library.catalog(), [])
-            with self.assertRaisesRegex(ValueError, "Trial cell"):
+            with self.assertRaisesRegex(ValueError, "source_ref"):
                 library.read(valid_id)
             with self.assertRaisesRegex(ValueError, "unknown report"):
                 library.read("../reports")
@@ -173,7 +173,7 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             (package / "state.json").write_text(
                 json.dumps(
                     {
-                        "source_keys": ["runs/default/agent/s1/c1"],
+                        "source_refs": ["runs/default/agent/s1/c1"],
                         "schema_version": 1,
                     }
                 )
@@ -190,7 +190,7 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
                 pass
             else:
                 (package / "state.json").write_text(
-                    json.dumps({"source_keys": ["runs/default/agent/s1/c1"]})
+                    json.dumps({"source_refs": ["runs/default/agent/s1/c1"]})
                 )
                 with self.assertRaisesRegex(ValueError, "escapes"):
                     library.read(valid_id)
@@ -227,7 +227,7 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             state_path = root / "reports" / report_id / "state.json"
             self.assertEqual(
                 json.loads(state_path.read_text()),
-                {"source_keys": ["runs/default/agent/s2/c2"]},
+                {"source_refs": ["runs/default/agent/s2/c2"]},
             )
             self.assertFalse(
                 any("tmp" in path.name for path in state_path.parent.iterdir())
@@ -239,10 +239,10 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             library.replace_bindings(report_id, [])
             self.assertEqual(
                 json.loads(state_path.read_text()),
-                {"source_keys": []},
+                {"source_refs": []},
             )
             self.assertEqual(library.catalog()[0]["source_keys"], [])
-            self.assertEqual(library.read(report_id).source_paths, ())
+            self.assertEqual(library.read(report_id).source_refs, ())
 
             library.delete(report_id)
             self.assertEqual(library.catalog(), [])

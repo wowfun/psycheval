@@ -40,7 +40,7 @@ from peval_py.serve.payloads import (
 from peval_py.serve.runtime import ServeRuntime
 from peval_py.serve.sources import add_source_payload, db_sessions_payload
 from peval_py.state import CatalogBusyError, CatalogQuery, ServeStateStore
-from peval_py.state.harbor import is_harbor_source
+from peval_py.state.workspace_sources import is_harbor_source
 from peval_py.workspace_reports import (
     WorkspaceReportNotFound,
     render_workspace_report_preview,
@@ -455,7 +455,7 @@ def make_handler(
                         "reload",
                         [None],
                         lambda _item: {
-                            "source_keys": store.sync_harbor_trials(runtime.config)
+                            "source_keys": store.harbor_source_keys(runtime.config)
                         },
                     )
                     self.write_json(operation.to_dict(), status=202)

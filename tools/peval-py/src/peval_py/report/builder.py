@@ -276,6 +276,17 @@ def project_meta_from_atif(
         steps,
         projected.get("duration_ms") if not isinstance(prior_steps, list) else None,
     )
+    import_context = projected.get("import_context")
+    source_timing = (
+        import_context.get("source_timing")
+        if isinstance(import_context, dict)
+        and isinstance(import_context.get("source_timing"), dict)
+        else {}
+    )
+    for key in ("duration_ms", "wall_duration_ms"):
+        value = optional_int_value(source_timing.get(key))
+        if value is not None:
+            projected[key] = max(0, value)
     projected["prompt_unavailable"] = not any(
         isinstance(step, dict) and step.get("source") == "user"
         for step in trajectory.get("steps") or []

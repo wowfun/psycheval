@@ -598,7 +598,66 @@ class PevalPySourceConversionTests(unittest.TestCase):
             auto_latency = report["annotations"]["analysis"][0]["analysis_metrics"][
                 "auto"
             ]["latency"]
-            self.assertNotIn("model_duration_ms", auto_latency)
+            self.assertEqual(auto_latency["model_duration_ms"]["max"], 100)
+
+    def test_hermes_session_export_preserves_usage_and_boundary_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            export_path = Path(tmp) / "hermes-session.jsonl"
+            export_path.write_text(
+                json.dumps(
+                    {
+                        "id": "hermes-export",
+                        "model": "hermes-export-model",
+                        "started_at": 100.0,
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "cache_read_tokens": 30,
+                        "cache_write_tokens": 5,
+                        "reasoning_tokens": 2,
+                        "estimated_cost_usd": 0.25,
+                        "messages": [
+                            {
+                                "id": 1,
+                                "session_id": "hermes-export",
+                                "role": "user",
+                                "content": "hello",
+                                "timestamp": 100.0,
+                            },
+                            {
+                                "id": 2,
+                                "session_id": "hermes-export",
+                                "role": "assistant",
+                                "content": "answer",
+                                "timestamp": 102.5,
+                            },
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = convert_path(str(export_path), ToolConfig(adapter="hermes"))
+
+            self.assertEqual(result.trajectory["session_id"], "hermes-export")
+            self.assertEqual(
+                result.trajectory["agent"]["model_name"], "hermes-export-model"
+            )
+            self.assertEqual(
+                result.trajectory["final_metrics"]["total_prompt_tokens"], 135
+            )
+            self.assertEqual(
+                result.trajectory["final_metrics"]["total_completion_tokens"], 20
+            )
+            self.assertEqual(
+                result.trajectory["final_metrics"]["total_cached_tokens"], 30
+            )
+            self.assertEqual(result.steps_meta[1].duration_ms, 2_500)
+            self.assertEqual(
+                result.steps_meta[1].duration_source,
+                "hermes_message_boundary_estimate",
+            )
+            self.assertEqual(result.timestamp_semantics, "order_only")
 
     def test_hermes_db_adapter_reads_latest_and_explicit_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

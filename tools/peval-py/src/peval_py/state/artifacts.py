@@ -17,17 +17,17 @@ from peval_py._state.artifacts import (
     write_json_files_atomically,
 )
 from peval_py.atif import validate_atif_trajectory
+from peval_py.config import ToolConfig
 from peval_py.report import project_meta_from_atif
 from peval_py.state.constants import (
-    HARBOR_LINK_FILENAME,
     SOURCE_STATE_DIR,
     SOURCE_STATE_FILENAME,
     SOURCE_STATUS_MISSING,
     SOURCE_STATUS_OK,
     TRIAL_CELL_SIDECARS,
 )
-from peval_py.state.harbor import harbor_source_from_link, read_harbor_link
 from peval_py.state.summaries import now_ms, trial_summary
+from peval_py.state.workspace_sources import WorkspaceSources, is_harbor_source
 
 
 class StateArtifactMixin:
@@ -103,6 +103,23 @@ class StateArtifactMixin:
             "trajectory": trajectory,
             "meta": read_json_object(artifacts.meta_path),
         }
+
+    def read_source_document(
+        self, row: dict[str, Any], config: ToolConfig
+    ) -> dict[str, dict[str, Any]]:
+        if not is_harbor_source(row):
+            return self.read_trial_artifacts(row)
+        document = WorkspaceSources(self, config).load_ref(str(row["source_ref"]))
+        if (
+            not document.readable
+            or document.trajectory is None
+            or document.meta is None
+        ):
+            raise ValueError(
+                document.last_error
+                or f"Harbor Trial is not readable: {document.source_ref}"
+            )
+        return {"trajectory": document.trajectory, "meta": document.meta}
 
     def resolve_artifact_dir(self, artifact_dir: str) -> Path:
         path = Path(artifact_dir)
@@ -187,9 +204,6 @@ class StateArtifactMixin:
         trajectory: dict[str, Any],
         meta: dict[str, Any],
     ) -> dict[str, Any]:
-        link = self.read_harbor_link(cell_dir)
-        if link is not None:
-            return harbor_source_from_link(link)
         agent = (
             trajectory.get("agent") if isinstance(trajectory.get("agent"), dict) else {}
         )
@@ -212,7 +226,6 @@ class StateArtifactMixin:
     def source_row_from_cell_dir(self, cell_dir: Path) -> dict[str, Any]:
         cell_dir = cell_dir.expanduser().resolve()
         state = self.read_source_state(cell_dir)
-        link = self.read_harbor_link(cell_dir)
         artifact_dir = relative_to_root(self.paths.root, cell_dir)
         artifacts = trial_artifacts(cell_dir)
         has_artifacts = (
@@ -233,24 +246,15 @@ class StateArtifactMixin:
                 source["source_category"] = self.source_category_from_state(state)
                 source["source_tags"] = self.source_tags_from_state(state)
                 eval_slug = self.eval_slug_for_cell_dir(cell_dir)
-                source_key = (
-                    str(link["source_key"])
-                    if link is not None
-                    else source_key_for_trial(eval_slug, source, trajectory, meta)
-                )
+                source_key = source_key_for_trial(eval_slug, source, trajectory, meta)
                 summary = trial_summary(trajectory, meta)
-                status = (
-                    optional_str(state.get("last_status"))
-                    or optional_str((link or {}).get("last_status"))
-                    or SOURCE_STATUS_OK
-                )
-                error = state.get("last_error") or (link or {}).get("last_error")
+                status = optional_str(state.get("last_status")) or SOURCE_STATUS_OK
+                error = state.get("last_error")
             except Exception as exc:  # noqa: BLE001 - preserve invalid evidence as a catalog row.
                 identity = self.cell_path_identity(cell_dir)
-                source = self.missing_source_row(artifact_dir, identity, state, link)
+                source = self.missing_source_row(artifact_dir, identity, state)
                 source_key = (
-                    optional_str((link or {}).get("source_key"))
-                    or self.source_key_for_cell_identity(identity)
+                    self.source_key_for_cell_identity(identity)
                     or optional_str(state.get("source_key"))
                     or ""
                 )
@@ -263,37 +267,28 @@ class StateArtifactMixin:
                 artifact_dir,
                 identity,
                 state,
-                link,
             )
             source_key = (
-                optional_str((link or {}).get("source_key"))
-                or self.source_key_for_cell_identity(identity)
+                self.source_key_for_cell_identity(identity)
                 or optional_str(state.get("source_key"))
                 or ""
             )
             summary = self.missing_trial_summary(identity)
-            status = (
-                optional_str(state.get("last_status"))
-                or optional_str((link or {}).get("last_status"))
-                or SOURCE_STATUS_MISSING
-            )
-            error = (
-                optional_str(state.get("last_error"))
-                or optional_str((link or {}).get("last_error"))
-                or self.missing_artifact_message(
-                    {"artifact_dir": artifact_dir, **state}
-                )
-            )
+            status = optional_str(state.get("last_status")) or SOURCE_STATUS_MISSING
+            error = optional_str(
+                state.get("last_error")
+            ) or self.missing_artifact_message({"artifact_dir": artifact_dir, **state})
         timestamp = self.artifact_updated_at_ms(cell_dir)
         row = {
             "source_key": source_key,
             **source,
+            "source_ref": artifact_dir,
             "artifact_dir": artifact_dir,
             "artifact_updated_at_ms": timestamp,
             **summary,
-            "refreshable": link is not None,
+            "refreshable": False,
             "active": bool(state.get("active", True)),
-            "snapshot": link is None,
+            "snapshot": True,
             "created_at_ms": int(state.get("created_at_ms") or timestamp),
             "updated_at_ms": int(state.get("updated_at_ms") or timestamp),
             "last_status": status,
@@ -332,14 +327,7 @@ class StateArtifactMixin:
         artifact_dir: str,
         identity: dict[str, str],
         state: dict[str, Any],
-        link: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if link is not None:
-            source = harbor_source_from_link(link)
-            source["source_alias"] = optional_str(state.get("source_alias"))
-            source["source_category"] = self.source_category_from_state(state)
-            source["source_tags"] = self.source_tags_from_state(state)
-            return source
         adapter = optional_str(identity.get("agent_id")) or "artifact"
         session_id = optional_str(identity.get("session_id"))
         agent_name = optional_str(identity.get("agent_id"))
@@ -402,12 +390,6 @@ class StateArtifactMixin:
     def source_state_path(self, cell_dir: Path) -> Path:
         return cell_dir / SOURCE_STATE_DIR / SOURCE_STATE_FILENAME
 
-    def harbor_link_path(self, cell_dir: Path) -> Path:
-        return cell_dir / SOURCE_STATE_DIR / HARBOR_LINK_FILENAME
-
-    def read_harbor_link(self, cell_dir: Path) -> dict[str, Any] | None:
-        return read_harbor_link(cell_dir)
-
     def read_source_state(self, cell_dir: Path) -> dict[str, Any]:
         path = self.source_state_path(cell_dir)
         if not path.is_file():
@@ -464,9 +446,6 @@ class StateArtifactMixin:
             for path in [artifacts.trajectory_path, artifacts.meta_path]
             if path.is_file()
         ]
-        link_path = self.harbor_link_path(cell_dir)
-        if link_path.is_file():
-            mtimes.append(link_path.stat().st_mtime_ns // 1_000_000)
         return max(mtimes) if mtimes else 0
 
 

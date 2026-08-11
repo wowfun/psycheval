@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import sqlite3
 import threading
 import uuid
@@ -12,32 +10,19 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from peval_py._state.annotations import optional_int, optional_str
-from peval_py._state.artifacts import (
-    read_json_object,
-    relative_to_root,
-    source_key_for_trial,
-    source_key_for_trial_cell_components,
-    trial_artifacts,
-)
-from peval_py.atif import validate_atif_trajectory
 from peval_py.config import ToolConfig
 from peval_py.report.metrics import final_metric, token_total
-from peval_py.state.constants import SOURCE_STATUS_MISSING, SOURCE_STATUS_OK
 from peval_py.state.store import ServeStateStore
+from peval_py.state.workspace_sources import (
+    HARBOR_SOURCE_KIND,
+    SourceDocument,
+    WorkspaceSources,
+)
 
-CATALOG_SCHEMA_VERSION = 6
+CATALOG_SCHEMA_VERSION = 10
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 CATALOG_RELATIVE_PATH = Path(".cache/peval-py/serve-catalog.sqlite3")
-FINGERPRINT_FILES = (
-    "agent/trajectory.json",
-    "agent/trajectory_meta.json",
-    ".peval/state.json",
-    ".peval/harbor-link.json",
-    "notes.md",
-    "analysis.json",
-    "analysis.md",
-)
 
 
 class CatalogBusyError(RuntimeError):
@@ -166,6 +151,7 @@ class WorkspaceCatalog:
     def __init__(self, store: ServeStateStore, config: ToolConfig) -> None:
         self.store = store
         self.config = config
+        self.sources = WorkspaceSources(store, config)
         self.path = store.paths.root / CATALOG_RELATIVE_PATH
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._state_lock = threading.RLock()
@@ -495,7 +481,7 @@ class WorkspaceCatalog:
             return [
                 json.loads(str(record[0]))
                 for record in connection.execute(
-                    "SELECT row_json FROM cells WHERE readable = 1 ORDER BY source_key"
+                    "SELECT row_json FROM cells ORDER BY source_key"
                 )
             ]
 
@@ -619,31 +605,31 @@ class WorkspaceCatalog:
                 self._current_operation = status
 
     def _reconcile_locked(self) -> int:
-        candidates = self._discover_cell_dirs()
+        candidates = self.sources.discover()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = {
-                str(row["artifact_dir"]): (
+                str(row["source_ref"]): (
                     str(row["fingerprint"]),
                     str(row["source_key"]),
                 )
                 for row in connection.execute(
-                    "SELECT artifact_dir, fingerprint, source_key FROM cells"
+                    "SELECT source_ref, fingerprint, source_key FROM cells"
                 )
             }
             seen: set[str] = set()
-            for cell_dir in candidates:
-                artifact_dir = relative_to_root(self.store.paths.root, cell_dir)
-                seen.add(artifact_dir)
-                fingerprint = _artifact_fingerprint(cell_dir)
-                prior = existing.get(artifact_dir)
-                if prior is not None and prior[0] == fingerprint:
+            for candidate in candidates:
+                source_ref = candidate.source_ref
+                seen.add(source_ref)
+                prior = existing.get(source_ref)
+                if prior is not None and prior[0] == candidate.fingerprint:
                     continue
-                row, readable, search_doc = self._parse_cell(cell_dir, fingerprint)
+                document = self.sources.load(candidate)
+                row, readable, search_doc = self._row_for_document(document)
                 source_key = str(row["source_key"])
                 connection.execute(
-                    "DELETE FROM cells WHERE artifact_dir = ? OR source_key = ?",
-                    (artifact_dir, source_key),
+                    "DELETE FROM cells WHERE source_ref = ? OR source_key = ?",
+                    (source_ref, source_key),
                 )
                 if prior is not None and prior[1] != source_key:
                     connection.execute(
@@ -655,7 +641,7 @@ class WorkspaceCatalog:
                 connection.execute(
                     """
                     INSERT INTO cells (
-                        source_key, artifact_dir, fingerprint, artifact_revision,
+                        source_key, source_ref, fingerprint, artifact_revision,
                         readable, active, last_status, search_doc, category, tags_json,
                         agent, model, result, session_id, last_turn_end,
                         duration_ms, turns, tool_calls, tool_errors, tokens, cost_usd,
@@ -664,9 +650,9 @@ class WorkspaceCatalog:
                     """,
                     (
                         source_key,
-                        artifact_dir,
-                        fingerprint,
-                        fingerprint,
+                        source_ref,
+                        document.fingerprint,
+                        document.fingerprint,
                         int(readable),
                         int(bool(row.get("active", True))),
                         str(row.get("last_status") or ""),
@@ -694,13 +680,13 @@ class WorkspaceCatalog:
                     (source_key, search_doc),
                 )
             removed = [
-                (artifact_dir, source_key)
-                for artifact_dir, (_, source_key) in existing.items()
-                if artifact_dir not in seen
+                (source_ref, source_key)
+                for source_ref, (_, source_key) in existing.items()
+                if source_ref not in seen
             ]
-            for artifact_dir, source_key in removed:
+            for source_ref, source_key in removed:
                 connection.execute(
-                    "DELETE FROM cells WHERE artifact_dir = ?", (artifact_dir,)
+                    "DELETE FROM cells WHERE source_ref = ?", (source_ref,)
                 )
                 if (
                     connection.execute(
@@ -717,146 +703,61 @@ class WorkspaceCatalog:
             connection.commit()
             return generation
 
-    def _parse_cell(
-        self, cell_dir: Path, fingerprint: str
+    def _row_for_document(
+        self, document: SourceDocument
     ) -> tuple[dict[str, Any], bool, str]:
-        identity = self.store.cell_path_identity(cell_dir)
-        artifact_dir = relative_to_root(self.store.paths.root, cell_dir)
-        link: dict[str, Any] | None = None
-        link_error: str | None = None
-        try:
-            link = self.store.read_harbor_link(cell_dir)
-        except ValueError as exc:
-            link_error = str(exc)
-        source_key = optional_str(
-            (link or {}).get("source_key")
-        ) or self.store.source_key_for_cell_identity(identity)
-        if not source_key:
-            source_key = source_key_for_trial_cell_components(
-                eval_slug=self.config.analysis_eval_slug,
-                agent_id=cell_dir.parent.parent.name,
-                session_id=cell_dir.parent.name,
-                cell_key=cell_dir.name,
+        trajectory = document.trajectory or {}
+        meta = document.meta or {}
+        if document.readable or document.meta is not None:
+            summary = _catalog_summary(
+                trajectory,
+                meta,
+                self._analysis_present(document.source_ref, document.source),
             )
-        artifacts = trial_artifacts(cell_dir)
-        try:
-            if link_error is not None:
-                raise ValueError(link_error)
-            if not _has_complete_artifacts(cell_dir):
-                raise ValueError(f"Trial cell artifacts not found: {artifact_dir}")
-            trajectory = read_json_object(artifacts.trajectory_path)
-            try:
-                validate_atif_trajectory(trajectory, str(artifacts.trajectory_path))
-            except ValueError as exc:
-                raise ValueError(f"Invalid ATIF artifact: {exc}") from exc
-            meta = read_json_object(artifacts.meta_path)
-            state = self.store.read_source_state(cell_dir)
-            source = self.store.source_row_for_artifact_cell(cell_dir, trajectory, meta)
-            source["source_alias"] = optional_str(state.get("source_alias"))
-            source["source_category"] = self.store.source_category_from_state(state)
-            source["source_tags"] = self.store.source_tags_from_state(state)
-            source_key = optional_str(
-                (link or {}).get("source_key")
-            ) or source_key_for_trial(
-                self.config.analysis_eval_slug, source, trajectory, meta
-            )
-            summary = _catalog_summary(trajectory, meta, cell_dir)
-            timestamp = _artifact_updated_at_ms(cell_dir)
-            status = (
-                optional_str(state.get("last_status"))
-                or optional_str((link or {}).get("last_status"))
-                or SOURCE_STATUS_OK
-            )
-            row = {
-                "source_key": source_key,
-                **source,
-                "artifact_dir": artifact_dir,
-                "artifact_updated_at_ms": timestamp,
-                **summary,
-                "artifact_revision": fingerprint,
-                "refreshable": link is not None,
-                "active": bool(state.get("active", True)),
-                "snapshot": link is None,
-                "readable": True,
-                "created_at_ms": int(state.get("created_at_ms") or timestamp),
-                "updated_at_ms": int(state.get("updated_at_ms") or timestamp),
-                "last_status": status,
-                "last_error": optional_str(state.get("last_error"))
-                or optional_str((link or {}).get("last_error")),
-                "last_refreshed_at_ms": optional_int((link or {}).get("synced_at_ms")),
-                "input_bytes": artifacts.trajectory_path.stat().st_size
-                + artifacts.meta_path.stat().st_size
-                + (
-                    self.store.harbor_link_path(cell_dir).stat().st_size
-                    if link is not None
-                    else 0
-                ),
+            if not document.readable:
+                summary.pop("step_outline", None)
+                summary["last_turn_finished_at_ms"] = None
+            if summary.get("model") is None:
+                summary["model"] = document.source.get("model")
+        else:
+            summary = {
+                "trial_key": document.source.get("trial_key"),
+                "trial_session_id": document.source.get("session_id"),
+                "last_turn_finished_at_ms": None,
             }
-            return row, True, _search_document(row, trajectory)
-        except Exception as exc:  # noqa: BLE001 - one malformed cell must not abort a generation.
-            state: dict[str, Any] = {}
-            try:
-                state = self.store.read_source_state(cell_dir)
-            except Exception:  # noqa: BLE001 - retain path identity even with invalid overlay.
-                pass
-            timestamp = _artifact_updated_at_ms(cell_dir)
-            row = {
-                "source_key": source_key,
-                **self.store.missing_source_row(artifact_dir, identity, state, link),
-                "artifact_dir": artifact_dir,
-                "artifact_updated_at_ms": timestamp,
-                **self.store.missing_trial_summary(identity),
-                "artifact_revision": fingerprint,
-                "refreshable": link is not None,
-                "active": bool(state.get("active", True)),
-                "snapshot": link is None,
-                "readable": False,
-                "created_at_ms": int(state.get("created_at_ms") or timestamp),
-                "updated_at_ms": int(state.get("updated_at_ms") or timestamp),
-                "last_status": optional_str(state.get("last_status"))
-                or optional_str((link or {}).get("last_status"))
-                or (
-                    SOURCE_STATUS_MISSING
-                    if not _has_complete_artifacts(cell_dir)
-                    else "error"
-                ),
-                "last_error": optional_str(state.get("last_error"))
-                or optional_str((link or {}).get("last_error"))
-                or str(exc),
-                "last_refreshed_at_ms": optional_int((link or {}).get("synced_at_ms")),
-                "input_bytes": sum(
-                    path.stat().st_size
-                    for path in (artifacts.trajectory_path, artifacts.meta_path)
-                    if path.is_file()
-                ),
-            }
-            return row, False, _search_document(row, {})
+        row = {
+            "source_key": document.source_key,
+            "source_ref": document.source_ref,
+            **document.source,
+            "artifact_updated_at_ms": document.updated_at_ms,
+            **summary,
+            "artifact_revision": document.fingerprint,
+            "refreshable": document.refreshable,
+            "active": document.active,
+            "snapshot": document.snapshot,
+            "readable": document.readable,
+            "created_at_ms": document.updated_at_ms,
+            "updated_at_ms": document.updated_at_ms,
+            "last_status": document.last_status,
+            "last_error": document.last_error,
+            "last_refreshed_at_ms": None,
+            "input_bytes": document.input_bytes,
+        }
+        if document.source_ref.startswith("runs/"):
+            row["artifact_dir"] = document.source_ref
+        return row, document.readable, _search_document(row, trajectory)
 
-    def _discover_cell_dirs(self) -> list[Path]:
-        run_root = self.store.paths.root / "runs" / self.config.analysis_eval_slug
-        if not run_root.is_dir():
-            return []
-        found: set[Path] = set()
-        for agent in _scandir_dirs(run_root):
-            for session in _scandir_dirs(agent):
-                for cell in _scandir_dirs(session):
-                    state_path = self.store.source_state_path(cell)
-                    link_path = self.store.harbor_link_path(cell)
-                    if (
-                        _has_complete_artifacts(cell)
-                        or (
-                            state_path.is_file()
-                            and not state_path.is_symlink()
-                            and not state_path.parent.is_symlink()
-                        )
-                        or (
-                            link_path.is_file()
-                            and not link_path.is_symlink()
-                            and not link_path.parent.is_symlink()
-                        )
-                    ):
-                        found.add(cell)
-        return sorted(found, key=lambda path: path.as_posix())
+    def _analysis_present(self, source_ref: str, source: dict[str, Any]) -> bool:
+        if source.get("kind") == HARBOR_SOURCE_KIND:
+            return any(
+                self.sources.annotation_path(source_ref, filename).is_file()
+                for filename in ("analysis.json", "analysis.md")
+            )
+        cell_dir = self.store.resolve_artifact_dir(source_ref)
+        return any(
+            (cell_dir / filename).is_file()
+            for filename in ("analysis.json", "analysis.md")
+        )
 
     def _query_where(self, query: CatalogQuery) -> tuple[str, list[Any]]:
         scope_where, parameters = self._facet_scope_where(query)
@@ -1011,7 +912,7 @@ class WorkspaceCatalog:
             );
             CREATE TABLE IF NOT EXISTS cells (
                 source_key TEXT PRIMARY KEY,
-                artifact_dir TEXT NOT NULL UNIQUE,
+                source_ref TEXT NOT NULL UNIQUE,
                 fingerprint TEXT NOT NULL,
                 artifact_revision TEXT NOT NULL,
                 readable INTEGER NOT NULL,
@@ -1158,57 +1059,6 @@ class WorkspaceCatalog:
         )
 
 
-def _scandir_dirs(root: Path) -> Iterator[Path]:
-    try:
-        with os.scandir(root) as entries:
-            ordered = sorted(entries, key=lambda entry: entry.name)
-    except OSError:
-        return
-    for entry in ordered:
-        try:
-            if entry.is_dir(follow_symlinks=False):
-                yield Path(entry.path)
-        except OSError:
-            continue
-
-
-def _artifact_fingerprint(cell_dir: Path) -> str:
-    parts: list[str] = []
-    for relative in FINGERPRINT_FILES:
-        path = cell_dir / relative
-        try:
-            stat = path.stat(follow_symlinks=False)
-            parts.append(f"{relative}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_mode}")
-        except FileNotFoundError:
-            parts.append(f"{relative}:-")
-        except OSError as exc:
-            parts.append(f"{relative}:error:{exc.errno}")
-    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
-
-
-def _has_complete_artifacts(cell_dir: Path) -> bool:
-    artifacts = trial_artifacts(cell_dir)
-    if artifacts.trajectory_path.parent.is_symlink():
-        return False
-    return all(
-        path.is_file() and not path.is_symlink()
-        for path in (artifacts.trajectory_path, artifacts.meta_path)
-    )
-
-
-def _artifact_updated_at_ms(cell_dir: Path) -> int:
-    values: list[int] = []
-    for relative in FINGERPRINT_FILES:
-        try:
-            values.append(
-                (cell_dir / relative).stat(follow_symlinks=False).st_mtime_ns
-                // 1_000_000
-            )
-        except OSError:
-            continue
-    return max(values) if values else 0
-
-
 _SAVED_VIEW_SUMMARY_METRICS = (
     ("duration_ms", "duration"),
     ("tokens", "number"),
@@ -1316,18 +1166,13 @@ def _saved_view_percentile(ordered: list[float], percentile: int) -> float:
 
 
 def _catalog_summary(
-    trajectory: dict[str, Any], meta: dict[str, Any], cell_dir: Path
+    trajectory: dict[str, Any], meta: dict[str, Any], analysis_present: bool
 ) -> dict[str, Any]:
-    metrics = trajectory.get("final_metrics")
-    if not isinstance(metrics, dict):
-        metrics = {}
+    metrics = _summary_metrics(trajectory, meta)
     agent = trajectory.get("agent")
     if not isinstance(agent, dict):
         agent = {}
     warnings = meta.get("warnings")
-    analysis_present = any(
-        (cell_dir / name).is_file() for name in ("analysis.json", "analysis.md")
-    )
     return {
         "trial_key": optional_str(
             meta.get("trial_key") or trajectory.get("trajectory_id")
@@ -1336,9 +1181,11 @@ def _catalog_summary(
         "step_outline": _step_outline(trajectory, meta),
         "last_turn_finished_at_ms": optional_int(meta.get("finished_at_ms")),
         "status": optional_str(meta.get("status")) or "unknown",
+        "score": _optional_number(meta.get("score")),
+        "score_message": optional_str(meta.get("score_message")),
         "duration_ms": optional_int(meta.get("duration_ms")),
         "wall_duration_ms": _wall_duration_ms(meta),
-        "model_duration_ms": _measured_model_duration_ms(trajectory, meta),
+        "model_duration_ms": _model_duration_ms(trajectory, meta),
         "turns": _optional_number(final_metric(metrics, "total_turns")),
         "total_tool_calls": _optional_number(final_metric(metrics, "total_tool_calls")),
         "total_tool_errors": _optional_number(
@@ -1350,6 +1197,25 @@ def _catalog_summary(
         "analysised": analysis_present,
         "model": optional_str(agent.get("model_name")),
     }
+
+
+def _summary_metrics(
+    trajectory: dict[str, Any], meta: dict[str, Any]
+) -> dict[str, Any]:
+    source = meta.get("source_metrics")
+    fallback = source if isinstance(source, dict) else {}
+    trajectory_metrics = trajectory.get("final_metrics")
+    explicit = trajectory_metrics if isinstance(trajectory_metrics, dict) else {}
+    metrics = {**fallback, **explicit}
+    fallback_extra = (
+        fallback.get("extra") if isinstance(fallback.get("extra"), dict) else {}
+    )
+    explicit_extra = (
+        explicit.get("extra") if isinstance(explicit.get("extra"), dict) else {}
+    )
+    if fallback_extra or explicit_extra:
+        metrics["extra"] = {**fallback_extra, **explicit_extra}
+    return metrics
 
 
 def _step_outline(
@@ -1379,7 +1245,7 @@ def _step_outline(
     return outline
 
 
-def _measured_model_duration_ms(
+def _model_duration_ms(
     trajectory: dict[str, Any], meta: dict[str, Any]
 ) -> int | float | None:
     trajectory_steps = trajectory.get("steps")
@@ -1395,8 +1261,6 @@ def _measured_model_duration_ms(
         if not isinstance(step, dict):
             continue
         if str(step.get("source") or "").lower() not in {"agent", "assistant"}:
-            continue
-        if "estimate" in str(step_meta.get("duration_source") or "").lower():
             continue
         duration = _optional_number(step_meta.get("duration_ms"))
         if duration is None:

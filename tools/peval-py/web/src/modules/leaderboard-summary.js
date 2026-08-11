@@ -111,13 +111,13 @@ function leaderboardSummaryDefinitions() {
     { key: "duration_ms", label: t("duration", "Active Duration"), type: "duration", value: row => row?.duration_ms },
     { key: "tokens", label: t("tokens", "Tokens"), type: "number", value: row => row?.tokens },
     { key: "turns", label: t("turns", "Turns"), type: "number", value: row => row?.turns },
-    { key: "model_duration_ms", label: t("model_call_duration", "Model call duration"), type: "duration", value: row => measuredModelDurationForRow(row) },
+    { key: "model_duration_ms", label: t("model_call_duration", "Model call duration"), type: "duration", value: row => modelDurationForRow(row) },
     { key: "total_tool_calls", label: t("tool_calls", "Tool Calls"), type: "number", value: row => row?.total_tool_calls },
     { key: "tool_error_rate", label: t("tool_error_rate", "Tool Error Rate"), type: "percent", value: row => rowToolErrorRate(row) },
   ];
 }
 
-function measuredModelDurationForRow(row) {
+function modelDurationForRow(row) {
   if (hasMetricValue(row?.model_duration_ms)) return Number(row.model_duration_ms);
   const metas = listValue(state.view?.trajectory_meta);
   const index = metas.findIndex(meta => meta?.trial_key === row?.trial_key);
@@ -131,7 +131,6 @@ function measuredModelDurationForRow(row) {
     if (!step || typeof step !== "object") return;
     const source = lower(trajectorySteps[stepIndex]?.source);
     if (source !== "agent" && source !== "assistant") return;
-    if (lower(step.duration_source).includes("estimate")) return;
     const duration = summaryNumber(step.duration_ms);
     if (duration === null) return;
     total += duration;
@@ -344,7 +343,7 @@ export {
   leaderboardSummaryRows,
   leaderboardSummaryStatistics,
   leaderboardSummaryValue,
-  measuredModelDurationForRow,
+  modelDurationForRow,
   renderLeaderboardSummary,
   renderLeaderboardSummaryActions,
   renderLeaderboardSummaryChart,

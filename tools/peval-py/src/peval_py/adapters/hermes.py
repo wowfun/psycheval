@@ -8,12 +8,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from peval_py.adapters.base import TIMESTAMP_SEMANTICS_ORDER_ONLY, SessionInfo
+from peval_py.adapters.base import (
+    TIMESTAMP_SEMANTICS_ORDER_ONLY,
+    SessionInfo,
+    timestamp_fallback_duration_ms,
+)
 from peval_py.adapters.common import CommonMessageAdapter
 from peval_py.config import ToolConfig
 from peval_py.sources import MessageRecord, read_jsonl
 
 HERMES_AGENT_LOG_TIMING_SOURCE = "hermes_agent_log"
+HERMES_MESSAGE_BOUNDARY_ESTIMATE_SOURCE = "hermes_message_boundary_estimate"
 
 
 class HermesAdapter(CommonMessageAdapter):
@@ -24,6 +29,9 @@ class HermesAdapter(CommonMessageAdapter):
         source = Path(path).expanduser()
         if source.is_dir() or source.suffix in {".db", ".sqlite", ".sqlite3"}:
             return self.convert_db(str(source), None, config)
+        exported = read_hermes_session_export(source)
+        if exported is not None:
+            return self.convert(exported, config)
         return self.convert(read_jsonl(path), config)
 
     def convert_db(
@@ -100,6 +108,67 @@ def read_hermes_db(path: str, session_id: str | None) -> list[MessageRecord]:
         records.append(record)
         seq += 1
     return records_with_hermes_log_timing(records, db_path, str(session["id"]))
+
+
+def read_hermes_session_export(path: Path) -> list[MessageRecord] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict) or "messages" not in value:
+        return None
+    messages = value.get("messages")
+    if not isinstance(messages, list) or not all(
+        isinstance(message, dict) for message in messages
+    ):
+        raise ValueError("Hermes session export messages must be an array of objects")
+    session_id = first_non_empty_string(value.get("id"), value.get("session_id"))
+    if session_id is None:
+        raise ValueError("Hermes session export has no session identity")
+    session = {**value, "id": session_id}
+    aggregate_usage = session_usage(session)
+    aggregate_accounting = session_accounting(session)
+    pending_usage = aggregate_usage
+    pending_accounting = aggregate_accounting
+    records: list[MessageRecord] = []
+    previous_timestamp_ms: int | None = None
+    for seq, message in enumerate(messages, start=1):
+        record = record_from_message_row(
+            message,
+            session,
+            seq,
+            include_row_usage=False,
+            source="hermes-session-export",
+        )
+        role = message_role(record)
+        timestamp_ms = optional_seconds_to_ms(row_value(message, "timestamp"))
+        if role in {"assistant", "agent"}:
+            if pending_usage or pending_accounting:
+                record = with_metrics(record, pending_usage, pending_accounting)
+                pending_usage = {}
+                pending_accounting = {}
+            elapsed_ms = timestamp_fallback_duration_ms(
+                previous_timestamp_ms, timestamp_ms
+            )
+            if (
+                elapsed_ms is not None
+                and previous_timestamp_ms is not None
+                and timestamp_ms is not None
+            ):
+                record = record_with_hermes_timing(
+                    record,
+                    HermesLogEvent(
+                        name=None,
+                        started_at_ms=previous_timestamp_ms,
+                        finished_at_ms=timestamp_ms,
+                        elapsed_ms=elapsed_ms,
+                    ),
+                    source=HERMES_MESSAGE_BOUNDARY_ESTIMATE_SOURCE,
+                )
+        records.append(record)
+        if timestamp_ms is not None:
+            previous_timestamp_ms = timestamp_ms
+    return records
 
 
 @dataclass(frozen=True)
@@ -235,6 +304,8 @@ def normalized_tool_name(value: object) -> str | None:
 def record_with_hermes_timing(
     record: MessageRecord,
     event: HermesLogEvent,
+    *,
+    source: str = HERMES_AGENT_LOG_TIMING_SOURCE,
 ) -> MessageRecord:
     metadata = dict(record.metadata or {})
     metadata.update(
@@ -242,7 +313,7 @@ def record_with_hermes_timing(
             "started_at_ms": event.started_at_ms,
             "finished_at_ms": event.finished_at_ms,
             "elapsed_ms": event.elapsed_ms,
-            "elapsed_ms_source": HERMES_AGENT_LOG_TIMING_SOURCE,
+            "elapsed_ms_source": source,
         }
     )
     message = dict(record.message)
@@ -334,10 +405,11 @@ def list_hermes_sessions(path: Path) -> list[SessionInfo]:
 
 
 def record_from_message_row(
-    row: sqlite3.Row,
-    session: sqlite3.Row,
+    row: Any,
+    session: Any,
     seq: int,
     include_row_usage: bool,
+    source: str = "hermes-db",
 ) -> MessageRecord:
     role = row_string(row, "role") or "assistant"
     content = row_value(row, "content")
@@ -375,7 +447,7 @@ def record_from_message_row(
             session,
             message_id=row_value(row, "id"),
             platform_message_id=row_value(row, "platform_message_id"),
-            source="hermes-db",
+            source=source,
         ),
         session_seq=seq,
         source_session_id=str(session["id"]),
@@ -385,7 +457,9 @@ def record_from_message_row(
 def tool_calls_from_raw(raw: object) -> list[dict[str, Any]]:
     if raw is None or raw == "":
         return []
-    value = parse_json_value(raw, "tool_calls")
+    value = (
+        raw if isinstance(raw, (dict, list)) else parse_json_value(raw, "tool_calls")
+    )
     if isinstance(value, dict):
         value = [value]
     if not isinstance(value, list):
@@ -453,7 +527,7 @@ def parse_json_value(raw: object, label: str) -> Any:
         raise ValueError(f"failed to parse Hermes {label}: {exc.msg}") from exc
 
 
-def session_usage(session: sqlite3.Row) -> dict[str, Any]:
+def session_usage(session: Any) -> dict[str, Any]:
     usage: dict[str, Any] = {}
     for source, target in [
         ("input_tokens", "input_tokens"),
@@ -480,7 +554,7 @@ def session_usage(session: sqlite3.Row) -> dict[str, Any]:
     return usage
 
 
-def session_accounting(session: sqlite3.Row) -> dict[str, Any]:
+def session_accounting(session: Any) -> dict[str, Any]:
     accounting: dict[str, Any] = {}
     for source, target in [
         ("input_tokens", "billable_input_tokens"),
@@ -507,7 +581,7 @@ def session_accounting(session: sqlite3.Row) -> dict[str, Any]:
     return accounting
 
 
-def row_usage(row: sqlite3.Row) -> dict[str, Any]:
+def row_usage(row: Any) -> dict[str, Any]:
     value = int_or_none(row_value(row, "token_count"))
     if value is None:
         return {}
@@ -530,7 +604,7 @@ def with_metrics(
 
 
 def metadata_for(
-    session: sqlite3.Row,
+    session: Any,
     message_id: object | None = None,
     platform_message_id: object | None = None,
     source: str = "hermes-db",
@@ -557,17 +631,19 @@ def metadata_for(
 
 
 def seconds_to_ms(value: object) -> int:
+    return optional_seconds_to_ms(value) or 0
+
+
+def optional_seconds_to_ms(value: object) -> int | None:
     number = float_or_none(value)
-    if number is None:
-        return 0
-    return int(number * 1000)
+    return int(number * 1000) if number is not None else None
 
 
-def row_value(row: sqlite3.Row, key: str) -> Any:
+def row_value(row: Any, key: str) -> Any:
     return row[key] if key in row.keys() else None
 
 
-def row_string(row: sqlite3.Row, key: str) -> str | None:
+def row_string(row: Any, key: str) -> str | None:
     value = row_value(row, key)
     return value if isinstance(value, str) and value else None
 

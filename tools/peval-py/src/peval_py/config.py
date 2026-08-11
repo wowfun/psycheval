@@ -12,6 +12,7 @@ from typing import Any
 from peval_py.i18n import normalize_locale
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+HARBOR_MOUNT_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 DEFAULT_DB_PATH_RE = re.compile(r"^\s*default_db_path\s*=")
 TABLE_HEADER_RE = re.compile(r"^\s*\[([^\]\n]+)\]\s*(?:#.*)?$")
 PEVAL_PY_CONFIG = "peval-py.toml"
@@ -35,6 +36,12 @@ class DbMapping:
 
 
 @dataclass(frozen=True)
+class HarborMount:
+    id: str
+    path: str
+
+
+@dataclass(frozen=True)
 class ToolConfig:
     adapter: str = "psychevo"
     locale: str = "en"
@@ -55,7 +62,7 @@ class ToolConfig:
     adapter_default_db_paths: dict[str, str] = dataclass_field(
         default_factory=dict, repr=False
     )
-    harbor_roots: tuple[str, ...] = ()
+    harbor_mounts: tuple[HarborMount, ...] = ()
 
 
 def default_workspace_config_text() -> str:
@@ -128,20 +135,44 @@ def apply_toml_config(
         harbor = data.get("harbor")
         if not isinstance(harbor, dict):
             raise ValueError("harbor config must be a TOML table")
-        unknown = sorted(set(harbor) - {"roots"})
+        if "roots" in harbor:
+            raise ValueError(
+                "legacy [harbor].roots is unsupported; initialize a new workspace "
+                "and configure [[harbor.mounts]] with id and path"
+            )
+        unknown = sorted(set(harbor) - {"mounts"})
         if unknown:
             raise ValueError(f"unknown harbor config field: {unknown[0]}")
-        raw_roots = harbor.get("roots", [])
-        if not isinstance(raw_roots, list) or any(
-            not isinstance(value, str) or not value.strip() for value in raw_roots
-        ):
-            raise ValueError("harbor.roots must be an array of non-empty paths")
-        roots = tuple(
-            dict.fromkeys(
-                _lexical_config_path(value, base_dir=base_dir) for value in raw_roots
-            )
-        )
-        config = replace(config, harbor_roots=roots)
+        raw_mounts = harbor.get("mounts", [])
+        if not isinstance(raw_mounts, list):
+            raise ValueError("harbor.mounts must be an array of tables")
+        mounts: list[HarborMount] = []
+        seen_ids: set[str] = set()
+        seen_paths: set[str] = set()
+        for index, raw_mount in enumerate(raw_mounts):
+            if not isinstance(raw_mount, dict):
+                raise ValueError(f"harbor.mounts[{index}] must be a TOML table")
+            mount_unknown = sorted(set(raw_mount) - {"id", "path"})
+            if mount_unknown:
+                raise ValueError(f"unknown harbor mount field: {mount_unknown[0]}")
+            mount_id = str(raw_mount.get("id") or "").strip()
+            if HARBOR_MOUNT_ID_RE.fullmatch(mount_id) is None:
+                raise ValueError(
+                    "harbor mount id must be a lowercase path-safe identifier"
+                )
+            raw_path = raw_mount.get("path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ValueError("harbor mount path must be a non-empty string")
+            mount_path = _lexical_config_path(raw_path, base_dir=base_dir)
+            path_identity = os.path.normcase(os.path.normpath(mount_path))
+            if mount_id in seen_ids:
+                raise ValueError(f"duplicate harbor mount id: {mount_id}")
+            if path_identity in seen_paths:
+                raise ValueError(f"duplicate harbor mount path: {mount_path}")
+            seen_ids.add(mount_id)
+            seen_paths.add(path_identity)
+            mounts.append(HarborMount(id=mount_id, path=mount_path))
+        config = replace(config, harbor_mounts=tuple(mounts))
     defaults = data.get("defaults", {})
     if defaults:
         if not isinstance(defaults, dict):

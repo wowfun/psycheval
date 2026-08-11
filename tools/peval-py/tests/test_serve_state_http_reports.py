@@ -249,7 +249,7 @@ class PevalPyServeWorkspaceReportHttpTests(unittest.TestCase):
             origin = f"http://127.0.0.1:{port}"
             try:
                 initial_state = {
-                    "source_keys": ["runs/default/psychevo/s1/s1_t001"],
+                    "source_refs": ["runs/default/psychevo/s1/s1_t001"],
                 }
                 for invalid_payload in (
                     {},
@@ -281,7 +281,7 @@ class PevalPyServeWorkspaceReportHttpTests(unittest.TestCase):
                 self.assertEqual(body["reports"][0]["source_keys"], [])
                 self.assertEqual(
                     json.loads(state_path.read_text()),
-                    {"source_keys": []},
+                    {"source_refs": []},
                 )
                 get_status, catalog = raw_get_json(port, "/api/reports")
                 self.assertEqual(get_status, 200)

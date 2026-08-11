@@ -108,7 +108,7 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
                         "analysis",
                         "-r",
                         str(workspace),
-                        "--run-path",
+                        "--source-ref",
                         run_path,
                         "-p",
                         str(analysis_report),
@@ -209,8 +209,8 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
                         "analysis",
                         "-r",
                         str(workspace),
-                        "--run-path",
-                        str(run_cell),
+                        "--source-ref",
+                        "runs/default/agent-a/common_session/session_t001",
                         "-p",
                         str(analysis_report),
                         "--json",
@@ -219,7 +219,7 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
             self.assertEqual(result, 0)
             payload = json.loads(stdout.getvalue())
             self.assertEqual(
-                payload["run_path"],
+                payload["source_ref"],
                 "runs/default/agent-a/common_session/session_t001",
             )
             self.assertEqual(
@@ -279,7 +279,7 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
                         "analysis",
                         "-r",
                         str(workspace),
-                        "--run-path",
+                        "--source-ref",
                         run_path,
                         "-p",
                         str(analysis_report),
@@ -426,7 +426,7 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
                         "analysis",
                         "-r",
                         str(workspace),
-                        "--run-path",
+                        "--source-ref",
                         run_path,
                         "-p",
                         str(json_report),
@@ -480,7 +480,7 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
             cases = [
                 (
                     [
-                        "--run-path",
+                        "--source-ref",
                         "runs/default/agent-a/common_session/session_t001",
                         "-p",
                         str(unsupported),
@@ -489,7 +489,7 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
                 ),
                 (
                     [
-                        "--run-path",
+                        "--source-ref",
                         "runs/default/agent-a/common_session/session_t002",
                         "-p",
                         str(valid_json),
@@ -500,7 +500,7 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
                 ),
                 (
                     [
-                        "--run-path",
+                        "--source-ref",
                         "runs/default/agent-a/common_session/session_t003",
                         "-p",
                         str(valid_md),
@@ -511,7 +511,7 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
                 ),
                 (
                     [
-                        "--run-path",
+                        "--source-ref",
                         "runs/default/agent-a/common_session/session_t004",
                         "-p",
                         str(invalid_json),
@@ -520,7 +520,7 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
                 ),
                 (
                     [
-                        "--run-path",
+                        "--source-ref",
                         "runs/default/agent-a/common_session/session_t005",
                         "-p",
                         str(bad_extra_json),
@@ -528,26 +528,26 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
                     "field 'extra' must be an object",
                 ),
                 (
-                    ["--run-path", "runs/default/agent-a", "-p", str(valid_json)],
+                    ["--source-ref", "runs/default/agent-a", "-p", str(valid_json)],
                     "must have form",
                 ),
                 (
                     [
-                        "--run-path",
+                        "--source-ref",
                         str(outside / "runs/default/agent-a/common/session"),
                         "-p",
                         str(valid_json),
                     ],
-                    "inside the workspace root",
+                    "must have form",
                 ),
                 (
                     [
-                        "--run-path",
+                        "--source-ref",
                         "not-runs/default/agent-a/common/session",
                         "-p",
                         str(valid_json),
                     ],
-                    "under the workspace runs/",
+                    "must have form",
                 ),
             ]
             for index, (extra_args, expected) in enumerate(cases, start=1):
@@ -612,7 +612,7 @@ class PevalPyCliInputAnalysisTests(unittest.TestCase):
                         "analysis",
                         "-r",
                         str(missing),
-                        "--run-path",
+                        "--source-ref",
                         "runs/default/agent-a/common_session/session_t001",
                         "-p",
                         str(analysis_report),

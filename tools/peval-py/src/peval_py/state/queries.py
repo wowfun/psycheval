@@ -43,7 +43,7 @@ class StateQueryMixin:
             source_keys=source_keys,
             active=active_filter,
         )
-        rows = [row for row in rows if row.get("artifact_dir")]
+        rows = [row for row in rows if row.get("source_ref") or row.get("artifact_dir")]
         if source_keys:
             found = {str(row.get("source_key")) for row in rows}
             missing = [key for key in source_keys if key not in found]
@@ -66,7 +66,7 @@ class StateQueryMixin:
         errors: list[str] = []
         for row in rows:
             try:
-                stored.append(self.read_trial_artifacts(row))
+                stored.append(self.read_source_document(row, annotation_config))
                 readable_rows.append(row)
             except Exception as exc:  # noqa: BLE001 - tolerate missing artifacts in full serve reports.
                 errors.append(f"{row.get('source_key')}: {exc}")
@@ -135,6 +135,7 @@ class StateQueryMixin:
             adapter_options=config.adapter_options,
             adapter_options_by_id=config.adapter_options_by_id,
             adapter_default_db_paths=config.adapter_default_db_paths,
+            harbor_mounts=config.harbor_mounts,
         )
 
     def source_rows(

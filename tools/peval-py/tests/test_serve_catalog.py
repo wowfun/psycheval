@@ -203,9 +203,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
             root = Path(tmp)
             cells = [self.write_cell(root, index) for index in range(3)]
             store, catalog = self.catalog(root)
-            import peval_py.state.catalog as catalog_module
+            import peval_py.state.workspace_sources as sources_module
 
-            original_read = catalog_module.read_json_object
+            original_read = sources_module.read_json_object
             cold_reads: list[Path] = []
 
             def count_cold(path: Path):
@@ -213,12 +213,12 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 return original_read(path)
 
             with patch.object(
-                catalog_module, "read_json_object", side_effect=count_cold
+                sources_module, "read_json_object", side_effect=count_cold
             ):
                 self.assertEqual(catalog.reconcile(), 1)
             self.assertEqual(len(cold_reads), 6)
 
-            with patch.object(catalog_module, "read_json_object") as warm_read:
+            with patch.object(sources_module, "read_json_object") as warm_read:
                 self.assertEqual(catalog.reconcile(), 2)
                 warm_read.assert_not_called()
 
@@ -233,7 +233,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 return original_read(path)
 
             with patch.object(
-                catalog_module, "read_json_object", side_effect=count_changed
+                sources_module, "read_json_object", side_effect=count_changed
             ):
                 catalog.reconcile()
             self.assertEqual(len(changed_reads), 2)
@@ -333,7 +333,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
             payload = catalog.query(CatalogQuery()).items[0].payload
 
             self.assertEqual(payload["model"], "shared-model")
-            self.assertEqual(payload["model_duration_ms"], 250)
+            self.assertEqual(payload["model_duration_ms"], 1_050)
             store.close()
 
     def test_catalog_projects_compact_step_outline_without_step_bodies(self) -> None:
@@ -701,7 +701,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 }
                 self.assertEqual(
                     catalog._meta_int(connection, "schema_version", -1),
-                    6,
+                    CATALOG_SCHEMA_VERSION,
                 )
             self.assertIn("category", columns)
             self.assertIn("cells_category", indexes)
@@ -730,15 +730,15 @@ class WorkspaceCatalogTests(unittest.TestCase):
             self.write_cell(root, 2)
             entered = threading.Event()
             release = threading.Event()
-            original_parse = catalog._parse_cell
+            original_parse = catalog._row_for_document
 
-            def blocked_parse(cell_dir: Path, fingerprint: str):
-                if cell_dir.name == "trial-0002":
+            def blocked_parse(document):
+                if document.source_ref.endswith("/trial-0002"):
                     entered.set()
                     release.wait(timeout=5)
-                return original_parse(cell_dir, fingerprint)
+                return original_parse(document)
 
-            with patch.object(catalog, "_parse_cell", side_effect=blocked_parse):
+            with patch.object(catalog, "_row_for_document", side_effect=blocked_parse):
                 thread = threading.Thread(target=catalog.reconcile)
                 thread.start()
                 self.assertTrue(entered.wait(timeout=5))

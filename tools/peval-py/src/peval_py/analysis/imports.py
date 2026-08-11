@@ -19,15 +19,13 @@ from peval_py.analysis.constants import (
 
 @dataclass(frozen=True)
 class AnalysisImportResult:
-    run_path: str
-    absolute_run_path: Path
+    source_ref: str
     written: dict[str, str]
     warnings: list[dict[str, str]]
 
     def to_jsonable(self) -> dict[str, Any]:
         return {
-            "run_path": self.run_path,
-            "absolute_run_path": str(self.absolute_run_path),
+            "source_ref": self.source_ref,
             "written": self.written,
             "warnings": self.warnings,
         }
@@ -36,27 +34,27 @@ class AnalysisImportResult:
 def import_analysis_artifacts(
     *,
     workspace_root: str | Path,
-    run_path: str,
+    source_ref: str,
     input_paths: list[str],
 ) -> AnalysisImportResult:
     root = ensure_import_workspace_root(workspace_root)
-    cell = resolve_import_run_path(root, run_path)
     inputs = read_analysis_import_inputs(input_paths)
+    cell = resolve_import_source_ref(root, source_ref)
     written_payloads: dict[str, str] = {}
     warnings: list[dict[str, str]] = []
 
     if inputs.get("json") is not None:
         warnings.extend(analysis_input_warnings(inputs["json"]))
-        write_json_artifact(
-            cell.absolute / ANALYSIS_JSON_FILENAME,
-            compile_analysis_json_input(
-                inputs["json"],
-                eval_slug=cell.eval_slug,
-                agent_id=cell.agent_id,
-                session_id=cell.session_id,
-                cell_key=cell.cell_key,
-            ),
+        compiled = compile_analysis_json_input(
+            inputs["json"],
+            eval_slug=cell.eval_slug,
+            agent_id=cell.agent_id,
+            session_id=cell.session_id,
+            cell_key=cell.cell_key,
         )
+        if cell.harbor:
+            compiled["subject"] = {"source_ref": cell.relative_path.as_posix()}
+        write_json_artifact(cell.absolute / ANALYSIS_JSON_FILENAME, compiled)
         written_payloads["analysis_json"] = (
             cell.relative_path / ANALYSIS_JSON_FILENAME
         ).as_posix()
@@ -67,21 +65,21 @@ def import_analysis_artifacts(
         ).as_posix()
 
     return AnalysisImportResult(
-        run_path=cell.relative_path.as_posix(),
-        absolute_run_path=cell.absolute,
+        source_ref=cell.relative_path.as_posix(),
         written=written_payloads,
         warnings=warnings,
     )
 
 
 @dataclass(frozen=True)
-class ImportRunCell:
+class AnalysisImportTarget:
     absolute: Path
     relative_path: Path
     eval_slug: str
     agent_id: str
     session_id: str
     cell_key: str
+    harbor: bool = False
 
 
 def ensure_import_workspace_root(value: str | Path) -> Path:
@@ -95,38 +93,34 @@ def ensure_import_workspace_root(value: str | Path) -> Path:
     return root
 
 
-def resolve_import_run_path(root: Path, run_path: str) -> ImportRunCell:
-    raw = Path(run_path).expanduser()
-    target = raw if raw.is_absolute() else root / raw
-    absolute = target.resolve()
-    try:
-        relative = absolute.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("--run-path must resolve inside the workspace root") from exc
-    parts = relative.parts
-    if not parts or parts[0] != "runs":
-        raise ValueError("--run-path must resolve under the workspace runs/ directory")
-    if len(parts) != 5:
-        raise ValueError(
-            "--run-path must have form "
-            "runs/<analysis_eval_slug>/<agent-id>/<session-id>/<cell-key>"
+def resolve_import_source_ref(root: Path, source_ref: str) -> AnalysisImportTarget:
+    from peval_py.config import load_config
+    from peval_py.state.paths import workspace_paths
+    from peval_py.state.store import ServeStateStore
+    from peval_py.state.workspace_sources import WorkspaceSources
+
+    store = ServeStateStore(workspace_paths(root), initialize=False)
+    sources = WorkspaceSources(store, load_config(None, workspace_root=str(root)))
+    absolute = sources.annotation_dir(source_ref)
+    parts = Path(source_ref).parts
+    harbor = source_ref.startswith("harbor/")
+    if harbor:
+        eval_slug, agent_id, session_id, cell_key = (
+            "harbor",
+            parts[1],
+            parts[2],
+            parts[3],
         )
-    _, eval_slug, agent_id, session_id, cell_key = parts
-    for label, value in (
-        ("analysis_eval_slug", eval_slug),
-        ("agent_id", agent_id),
-        ("session_id", session_id),
-        ("cell_key", cell_key),
-    ):
-        if value in {"", ".", ".."} or "/" in value or "\\" in value:
-            raise ValueError(f"--run-path contains an invalid {label} segment")
-    return ImportRunCell(
+    else:
+        _, eval_slug, agent_id, session_id, cell_key = parts
+    return AnalysisImportTarget(
         absolute=absolute,
         relative_path=Path(*parts),
         eval_slug=eval_slug,
         agent_id=agent_id,
         session_id=session_id,
         cell_key=cell_key,
+        harbor=harbor,
     )
 
 
@@ -334,12 +328,12 @@ def write_text_artifact(path: Path, value: str) -> None:
 def run_import_analysis_command(args: Any, workspace_root: str | Path) -> None:
     result = import_analysis_artifacts(
         workspace_root=workspace_root,
-        run_path=args.run_path,
+        source_ref=args.source_ref,
         input_paths=args.path or [],
     )
     if getattr(args, "json", False):
         print(json.dumps(result.to_jsonable(), ensure_ascii=False, indent=2))
         return
-    print(f"imported analysis artifacts for {result.run_path}")
+    print(f"imported analysis artifacts for {result.source_ref}")
     for label, path in result.written.items():
         print(f"{label}: {path}")

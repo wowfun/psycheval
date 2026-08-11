@@ -32,7 +32,7 @@ class WorkspaceReport:
     report_id: str
     filename: str
     format: str
-    source_paths: tuple[str, ...]
+    source_refs: tuple[str, ...]
     content: bytes
 
 
@@ -41,7 +41,7 @@ class WorkspaceReportMetadata:
     report_id: str
     filename: str
     format: str
-    source_paths: tuple[str, ...]
+    source_refs: tuple[str, ...]
     report_path: Path
 
 
@@ -50,7 +50,7 @@ class WorkspaceReportNotFound(ValueError):
 
 
 class WorkspaceReportLibrary:
-    """Own workspace report packages and their current source projection."""
+    """Own workspace report packages and their logical source bindings."""
 
     def __init__(
         self,
@@ -65,7 +65,7 @@ class WorkspaceReportLibrary:
         self._now = now or datetime.now
 
     def import_file(self, source_path: str | Path, source_keys: list[str]) -> str:
-        relative_paths = self._relative_paths_for_source_keys(source_keys)
+        source_refs = self._source_refs_for_source_keys(source_keys)
         source = Path(source_path).expanduser()
         if not source.is_absolute():
             raise ValueError("report path must be absolute")
@@ -81,7 +81,7 @@ class WorkspaceReportLibrary:
         try:
             temp_dir.mkdir()
             (temp_dir / source.name).write_bytes(content)
-            self._write_state(temp_dir / REPORT_STATE_FILENAME, relative_paths)
+            self._write_state(temp_dir / REPORT_STATE_FILENAME, source_refs)
             temp_dir.replace(final_dir)
         except Exception:
             if temp_dir.exists() and not temp_dir.is_symlink():
@@ -95,7 +95,7 @@ class WorkspaceReportLibrary:
     ) -> list[dict[str, Any]]:
         if not self._reports_root_is_safe():
             return []
-        path_to_source_key = self._path_to_source_key(source_rows)
+        ref_to_source_key = self._ref_to_source_key(source_rows)
         reports: list[WorkspaceReportMetadata] = []
         for child in self.reports_root.iterdir():
             if (
@@ -117,9 +117,9 @@ class WorkspaceReportLibrary:
                 "filename": report.filename,
                 "format": report.format,
                 "source_keys": [
-                    path_to_source_key[path]
-                    for path in report.source_paths
-                    if path in path_to_source_key
+                    ref_to_source_key[source_ref]
+                    for source_ref in report.source_refs
+                    if source_ref in ref_to_source_key
                 ],
             }
             for report in reports
@@ -132,20 +132,20 @@ class WorkspaceReportLibrary:
             report_id=metadata.report_id,
             filename=metadata.filename,
             format=metadata.format,
-            source_paths=metadata.source_paths,
+            source_refs=metadata.source_refs,
             content=content,
         )
 
     def replace_bindings(self, report_id: str, source_keys: list[str]) -> None:
         report = self._read_package_metadata(report_id)
-        relative_paths = self._relative_paths_for_source_keys(
+        source_refs = self._source_refs_for_source_keys(
             source_keys,
             allow_empty=True,
         )
         package_dir = self._package_dir(report.report_id)
         temp_path = package_dir / f".{REPORT_STATE_FILENAME}.tmp-{uuid4().hex}"
         try:
-            self._write_state(temp_path, relative_paths)
+            self._write_state(temp_path, source_refs)
             temp_path.replace(package_dir / REPORT_STATE_FILENAME)
         finally:
             if temp_path.exists() and not temp_path.is_symlink():
@@ -182,7 +182,7 @@ class WorkspaceReportLibrary:
         if report_path.resolve().parent != package_dir.resolve():
             raise ValueError(f"invalid report package: {report_id}")
 
-        source_paths = self._read_state(state_path)
+        source_refs = self._read_state(state_path)
         if report_path.stat().st_size > REPORT_MAX_BYTES:
             raise ValueError(
                 f"report exceeds {REPORT_MAX_BYTES} byte limit: {report_path}"
@@ -191,7 +191,7 @@ class WorkspaceReportLibrary:
             report_id=report_id,
             filename=report_path.name,
             format=self._format_for_filename(report_path.name),
-            source_paths=tuple(source_paths),
+            source_refs=tuple(source_refs),
             report_path=report_path,
         )
 
@@ -200,21 +200,21 @@ class WorkspaceReportLibrary:
             payload = json.loads(state_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise ValueError(f"failed to parse {state_path}: {exc}") from exc
-        if not isinstance(payload, dict) or set(payload) != {"source_keys"}:
-            raise ValueError(f"{state_path} must contain only source_keys")
-        raw_paths = payload["source_keys"]
-        if not isinstance(raw_paths, list):
-            raise ValueError(f"{state_path} source_keys must be an array")
-        source_paths: list[str] = []
-        for raw_path in raw_paths:
-            if not isinstance(raw_path, str):
-                raise ValueError(f"{state_path} source_keys must contain strings")
-            source_paths.append(self._validate_relative_cell_path(raw_path))
-        if len(set(source_paths)) != len(source_paths):
-            raise ValueError(f"{state_path} source_keys must be de-duplicated")
-        return source_paths
+        if not isinstance(payload, dict) or set(payload) != {"source_refs"}:
+            raise ValueError(f"{state_path} must contain only source_refs")
+        raw_refs = payload["source_refs"]
+        if not isinstance(raw_refs, list):
+            raise ValueError(f"{state_path} source_refs must be an array")
+        source_refs: list[str] = []
+        for raw_ref in raw_refs:
+            if not isinstance(raw_ref, str):
+                raise ValueError(f"{state_path} source_refs must contain strings")
+            source_refs.append(self._validate_source_ref(raw_ref))
+        if len(set(source_refs)) != len(source_refs):
+            raise ValueError(f"{state_path} source_refs must be de-duplicated")
+        return source_refs
 
-    def _relative_paths_for_source_keys(
+    def _source_refs_for_source_keys(
         self,
         source_keys: list[str],
         *,
@@ -233,16 +233,16 @@ class WorkspaceReportLibrary:
             if allow_empty and not source_keys:
                 return []
             raise ValueError("source_keys must include at least one source")
-        key_to_path = self._source_key_to_path()
-        paths: list[str] = []
+        key_to_ref = self._source_key_to_ref()
+        source_refs: list[str] = []
         for source_key in ordered_keys:
-            relative_path = key_to_path.get(source_key)
-            if relative_path is None:
+            source_ref = key_to_ref.get(source_key)
+            if source_ref is None:
                 raise ValueError(f"unknown or unreadable source: {source_key}")
-            paths.append(relative_path)
-        return paths
+            source_refs.append(source_ref)
+        return source_refs
 
-    def _source_key_to_path(
+    def _source_key_to_ref(
         self,
         source_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, str]:
@@ -252,59 +252,63 @@ class WorkspaceReportLibrary:
                 continue
             source_key = str(row.get("source_key") or "").strip()
             try:
-                relative_path = self._validate_relative_cell_path(
-                    str(row.get("artifact_dir") or "")
+                source_ref = self._validate_source_ref(
+                    str(row.get("source_ref") or row.get("artifact_dir") or "")
                 )
             except ValueError:
                 continue
-            mapping.setdefault(source_key, relative_path)
+            mapping.setdefault(source_key, source_ref)
         return mapping
 
-    def _path_to_source_key(
+    def _ref_to_source_key(
         self,
         source_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, str]:
-        return {
-            relative_path: source_key
-            for source_key, relative_path in self._source_key_to_path(
-                source_rows
-            ).items()
-        }
+        mapping: dict[str, str] = {}
+        for row in self._source_rows() if source_rows is None else source_rows:
+            source_key = str(row.get("source_key") or "").strip()
+            if not source_key:
+                continue
+            try:
+                source_ref = self._validate_source_ref(
+                    str(row.get("source_ref") or row.get("artifact_dir") or "")
+                )
+            except ValueError:
+                continue
+            mapping.setdefault(source_ref, source_key)
+        return mapping
 
     @staticmethod
     def _row_is_readable(row: dict[str, Any]) -> bool:
         return (
             bool(row.get("source_key"))
-            and bool(row.get("artifact_dir"))
-            and row.get("last_status") != "missing"
+            and bool(row.get("source_ref") or row.get("artifact_dir"))
+            and bool(row.get("readable", row.get("last_status") != "missing"))
         )
 
-    def _validate_relative_cell_path(self, raw_path: str) -> str:
-        if not raw_path or "\\" in raw_path:
-            raise ValueError(
-                "report source path must be a workspace-relative Trial cell"
-            )
-        path = PurePosixPath(raw_path)
-        if path.is_absolute() or path.as_posix() != raw_path:
-            raise ValueError("report source path must be normalized and relative")
+    def _validate_source_ref(self, raw_ref: str) -> str:
+        if not raw_ref or "\\" in raw_ref:
+            raise ValueError("report source_ref must be normalized and relative")
+        path = PurePosixPath(raw_ref)
+        if path.is_absolute() or path.as_posix() != raw_ref:
+            raise ValueError("report source_ref must be normalized and relative")
         parts = path.parts
-        if (
-            len(parts) != 5
-            or parts[0] != "runs"
-            or any(part in {"", ".", ".."} for part in parts)
-        ):
-            raise ValueError(
-                "report source path must identify a Trial cell under runs/"
-            )
+        valid_shape = (len(parts) == 5 and parts[0] == "runs") or (
+            len(parts) == 4 and parts[0] == "harbor"
+        )
+        if not valid_shape or any(part in {"", ".", ".."} for part in parts):
+            raise ValueError("report source_ref must identify a workspace source")
+        if parts[0] == "harbor":
+            return path.as_posix()
         try:
             resolved = (self.workspace_root / Path(*parts)).resolve()
         except (OSError, RuntimeError) as exc:
-            raise ValueError("report source path cannot be resolved safely") from exc
+            raise ValueError("report source_ref cannot be resolved safely") from exc
         if (
             self.workspace_root != resolved
             and self.workspace_root not in resolved.parents
         ):
-            raise ValueError("report source path escapes the workspace")
+            raise ValueError("report source_ref escapes the workspace")
         return path.as_posix()
 
     def _package_dir(self, report_id: str) -> Path:
@@ -390,9 +394,9 @@ class WorkspaceReportLibrary:
         return content
 
     @staticmethod
-    def _write_state(path: Path, source_paths: list[str]) -> None:
+    def _write_state(path: Path, source_refs: list[str]) -> None:
         path.write_text(
-            json.dumps({"source_keys": source_paths}, ensure_ascii=False, indent=2)
+            json.dumps({"source_refs": source_refs}, ensure_ascii=False, indent=2)
             + "\n",
             encoding="utf-8",
         )

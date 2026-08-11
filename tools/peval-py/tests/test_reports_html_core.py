@@ -345,7 +345,7 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertIn(
             "function leaderboardSummaryGroups(rows = leaderboardRows()", html
         )
-        self.assertIn("function measuredModelDurationForRow(row)", html)
+        self.assertIn("function modelDurationForRow(row)", html)
         self.assertIn("function leaderboardSummaryStatistics()", html)
         self.assertIn("function renderLeaderboardSummaryTableDisclosure(groups)", html)
         self.assertIn("function renderLeaderboardSummaryCharts(groups)", html)

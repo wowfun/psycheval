@@ -206,16 +206,19 @@ def source_report_with_current_annotations(
         or optional_str(meta.get("trial_key"))
     )
     agent_id = annotation_agent_id(source, trajectory)
-    artifact_dir = optional_str(source.get("artifact_dir"))
-    if artifact_dir:
+    annotation_ref = optional_str(source.get("artifact_dir"))
+    source_ref = optional_str(source.get("source_ref"))
+    if annotation_ref is None and source_ref and source_ref.startswith("harbor/"):
+        annotation_ref = source_ref
+    if annotation_ref:
         current_note = cached_note_report_for_cell(
             workspace_root=config.workspace_root,
-            cell_dir=artifact_dir,
+            cell_dir=annotation_ref,
             trial_key=trial_key,
         )
         current_analysis = cached_analysis_report_for_cell(
             workspace_root=config.workspace_root,
-            cell_dir=artifact_dir,
+            cell_dir=annotation_ref,
             trial_key=trial_key,
         )
     else:

@@ -135,10 +135,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="existing peval-py workspace root",
     )
     import_analysis.add_argument(
-        "--run-path",
+        "--source-ref",
         required=True,
-        metavar="PATH",
-        help=("Trial cell path such as runs/default/psychevo/<session-id>/<cell-key>"),
+        metavar="REF",
+        help=(
+            "workspace source reference, such as runs/default/psychevo/<session-id>/"
+            "<cell-key> or harbor/<mount-id>/<job>/<trial>"
+        ),
     )
     import_analysis.add_argument(
         "-p",

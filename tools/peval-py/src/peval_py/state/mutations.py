@@ -5,8 +5,8 @@ from typing import Any
 from peval_py._state.artifacts import remove_artifact_dir
 from peval_py.analysis import write_note_file
 from peval_py.config import ToolConfig
-from peval_py.state.harbor import is_harbor_source
 from peval_py.state.summaries import now_ms, trial_summary
+from peval_py.state.workspace_sources import WorkspaceSources, is_harbor_source
 
 
 class StateMutationMixin:
@@ -74,6 +74,11 @@ class StateMutationMixin:
         self.set_source_active_row(self.source_by_key(source_key), active)
 
     def set_source_active_row(self, row: dict[str, Any], active: bool) -> None:
+        if is_harbor_source(row):
+            state = self._harbor_overlay(row)
+            state["active"] = bool(active)
+            self._write_harbor_overlay(row, state)
+            return
         cell_dir = self.resolve_artifact_dir(str(row["artifact_dir"]))
         state = {**row, **self.read_source_state(cell_dir)}
         state["active"] = bool(active)
@@ -84,6 +89,11 @@ class StateMutationMixin:
         self.set_source_alias_row(self.source_by_key(source_key), alias)
 
     def set_source_alias_row(self, row: dict[str, Any], alias: str | None) -> None:
+        if is_harbor_source(row):
+            state = self._harbor_overlay(row)
+            state["source_alias"] = alias or None
+            self._write_harbor_overlay(row, state)
+            return
         cell_dir = self.resolve_artifact_dir(str(row["artifact_dir"]))
         state = {**row, **self.read_source_state(cell_dir)}
         state["source_alias"] = alias or None
@@ -101,6 +111,13 @@ class StateMutationMixin:
         row: dict[str, Any],
         category: str | None,
     ) -> None:
+        if is_harbor_source(row):
+            state = self._harbor_overlay(row)
+            state["source_category"] = self.source_category_from_state(
+                {"source_category": category}
+            )
+            self._write_harbor_overlay(row, state)
+            return
         cell_dir = self.resolve_artifact_dir(str(row["artifact_dir"]))
         state = {**row, **self.read_source_state(cell_dir)}
         state["source_category"] = self.source_category_from_state(
@@ -110,6 +127,11 @@ class StateMutationMixin:
         self.write_source_state(cell_dir, state)
 
     def set_source_tags_row(self, row: dict[str, Any], tags: list[str]) -> None:
+        if is_harbor_source(row):
+            state = self._harbor_overlay(row)
+            state["source_tags"] = self.source_tags_from_state({"source_tags": tags})
+            self._write_harbor_overlay(row, state)
+            return
         cell_dir = self.resolve_artifact_dir(str(row["artifact_dir"]))
         state = {**row, **self.read_source_state(cell_dir)}
         state["source_tags"] = self.source_tags_from_state({"source_tags": tags})
@@ -147,11 +169,30 @@ class StateMutationMixin:
     ) -> None:
         if not source.get("refreshable") or source.get("snapshot"):
             raise ValueError("notes.md can only be saved for refreshable sources")
-        if not source.get("artifact_dir"):
-            raise ValueError("notes.md requires a persisted Trial cell")
+        if is_harbor_source(source):
+            sources = WorkspaceSources(self, config)
+            note_path = sources.annotation_path(str(source["source_ref"]), "notes.md")
+            if not markdown:
+                sources.remove_annotation(str(source["source_ref"]), "notes.md")
+                self.refresh_source(source, config)
+                return
+        elif source.get("artifact_dir"):
+            note_path = (
+                self.resolve_artifact_dir(str(source["artifact_dir"])) / "notes.md"
+            )
+        else:
+            raise ValueError("notes.md requires a persisted source")
         write_note_file(
-            self.resolve_artifact_dir(str(source["artifact_dir"])) / "notes.md",
+            note_path,
             self.paths.root,
             markdown,
         )
         self.refresh_source(source, config)
+
+    def _harbor_overlay(self, row: dict[str, Any]) -> dict[str, Any]:
+        return WorkspaceSources(self, ToolConfig()).read_overlay(str(row["source_ref"]))
+
+    def _write_harbor_overlay(self, row: dict[str, Any], state: dict[str, Any]) -> None:
+        WorkspaceSources(self, ToolConfig()).write_overlay(
+            str(row["source_ref"]), state
+        )
