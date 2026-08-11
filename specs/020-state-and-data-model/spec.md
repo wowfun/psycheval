@@ -27,12 +27,19 @@ presentation behavior stays in the owning product topic.
   rebuildable caches unless a more specific specification says otherwise.
 
 A Harbor Trial may be mounted as a linked workspace source. Harbor-owned files
-remain read-only and authoritative. The workspace materializes a rebuildable
-local projection containing the validated ATIF document, its peval-py sidecar,
-and source-link state; aliases, tags, archive state, and notes remain workspace
-overlays on that projection. A linked source identity is derived from its
-configured mount and Trial-relative path so it does not change when an
-in-progress Trial later gains a result identifier or evaluation metadata.
+remain read-only and are the sole authority for trajectory, configuration,
+resolved inputs, result, reward, and lifecycle facts. peval-py reads those files
+directly and derives report metadata in memory; it does not materialize a local
+trajectory, metadata, or link-manifest projection. A linked source identity is
+derived from its configured mount ID and Job/Trial-relative path so it does not
+change when an in-progress Trial later gains a result identifier or evaluation
+metadata.
+
+Workspace-authored state for a linked Trial is separate from Harbor evidence and
+contains only non-default source presentation state, notes, analysis, and report
+bindings. A Trial with no such state has no durable per-source workspace record.
+The query catalog may cache derived summaries and source fingerprints, but it is
+rebuildable and never becomes an authority for trajectory or evaluation facts.
 
 ### ATIF and peval-py Sidecar Ownership
 
@@ -66,14 +73,45 @@ An invalid existing artifact remains unchanged and is represented in the
 catalog by an explicit ATIF diagnostic. Refreshing a source may produce the
 current format; an immutable snapshot is replaced only by an explicit import.
 
-For a linked Harbor Trial, `trajectory.json` is copied without normalization or
-repair after strict validation. Harbor configuration, lock, result, reward,
-exception, and lifecycle values may be projected into `trajectory_meta.json`
-as import and evaluation context, but must not overwrite portable trajectory
-facts. Absence of `result.json` means the evaluation is still running rather
-than invalid. A Trial result with an exception is errored; any other completed
-result is completed regardless of reward value. Arbitrary reward dimensions
-are preserved and are not averaged into a synthetic score.
+For a linked Harbor Trial, `agent/trajectory.json` remains the trajectory
+authority. peval-py accepts canonical ATIF-v1.7 directly. It may also expose an
+older ATIF-v1.x Harbor document through an ephemeral v1.7 compatibility view
+only when changing the schema label alone makes the complete document pass the
+current strict validator; newer-minor documents and any document that requires
+field repair remain invalid. The compatibility view is never written back or
+persisted as a workspace copy.
+
+Missing aggregate counts may be derived deterministically from canonical steps,
+tool calls, and observations. Missing token, cost, active-agent timing, model
+timing, and wall timing may be filled from the matching Harbor result or
+structurally aligned agent telemetry collected inside the same Trial, including
+agent-native databases, session exports, and runtime traces. Supplemental files
+are read with the same no-follow containment and bounded consistency guarantees
+as the canonical Trial files. Native session identity must align when Harbor and
+the adapter preserve the same identifier namespace. When Harbor assigns a
+different wrapper session identity, as it does for a Hermes session export,
+same-Trial containment plus step source, message, and tool-call alignment is the
+identity proof. Late-arriving telemetry is part of the rebuildable source
+fingerprint so a subsequent refresh cannot preserve an earlier incomplete
+catalog summary.
+
+An exact agent runtime trace wins over a bounded model-boundary estimate. A
+boundary estimate is still included in model-duration summaries when no exact
+duration exists, but retains its `duration_source` provenance and is never
+rewritten as an exact portable trajectory fact. An explicit trajectory value
+always wins, supplemental telemetry failure does not invalidate an otherwise
+valid trajectory, and derived values remain ephemeral or rebuildable catalog
+data. Configuration, lock, result, reward, exception, and lifecycle values must
+not overwrite portable trajectory facts.
+
+Absence of `result.json` means the evaluation is still running rather than
+invalid. A Trial result with an exception is errored; any other completed result
+is completed regardless of reward value. Arbitrary reward dimensions are
+preserved and are not averaged into a synthetic score. A Trial without
+`agent/trajectory.json` may still expose its authoritative lifecycle diagnostic,
+agent identity, model, and result-derived summary in the catalog, but remains
+trajectory-unreadable and cannot be opened or exported as a report. peval-py
+must not synthesize missing conversation events.
 
 For a stable source session, the trajectory identity is
 `{agent.name}:{session_id}`. A conversion without a stable session omits the
@@ -112,7 +150,11 @@ deleted as a side effect of rebuilding a report or catalog.
 
 Deleting a linked Harbor source is not a supported workspace mutation because
 the source would be rediscovered and the operation cannot delete Harbor-owned
-evidence. Archiving is the reversible way to hide it.
+evidence. Archiving is the reversible way to hide it. If a Harbor Trial becomes
+invalid, peval-py reports the current diagnostic and does not serve a retained
+last-good trajectory. A missing Trial with no user-authored state disappears;
+one retained by source state or a report binding remains as a diagnostic until
+the same source identity reappears.
 
 ## Related Topics
 

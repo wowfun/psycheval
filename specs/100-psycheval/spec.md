@@ -54,7 +54,10 @@ select the interpreter available inside the Harbor task environment.
 The Psychevo harness runs `pevo`, projects its typed transcript into ATIF, and
 preserves repeated events, tool call arguments, matching observations, source
 blocks, and final output. It does not manufacture calls from prose. Harness
-failures are distinguished from Agent-scoring failures.
+failures are distinguished from Agent-scoring failures. Each invocation uses a
+Trial-owned Psychevo database below the Agent logs directory so evaluation never
+opens or mutates the user's persistent Psychevo state. The retained database and
+its runtime trace are same-Trial telemetry available to downstream readers.
 
 ## Verifier
 

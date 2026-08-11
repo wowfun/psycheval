@@ -18,7 +18,10 @@ python -m psycheval.harbor.canned_harness --scenario web-search
 
 The Psychevo harness runs `pevo run --format json`, retains its NDJSON and
 stderr logs, and converts typed transcript events to ATIF without inventing
-missing tool evidence.
+missing tool evidence. Every invocation forces `PSYCHEVO_DB` to
+`agent/psychevo-state.db` inside the current Harbor Trial. The harness therefore
+does not open or mutate the user's persistent Psychevo database, while peval-py
+can reuse the retained database and runtime trace as same-Trial telemetry.
 
 ```text
 python -m psycheval.harbor.psychevo_harness --pevo /path/to/pevo

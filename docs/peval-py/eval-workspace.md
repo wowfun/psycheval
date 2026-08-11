@@ -22,19 +22,46 @@ JSONL, ATIF JSON, and normalized report JSON. Path and DB forms accept multiple
 quoted paths and preserve Windows/UNC paths; compatible WSL mount paths are
 resolved on POSIX.
 
-Serve also mounts single-step Harbor Trials found at the workspace root or
-under its conventional `jobs/` directory. A Trial appears as soon as
-`agent/trajectory.json` is readable; Reload projects later trajectory and
-`result.json` changes without modifying Harbor files. Add external Trial, Job,
-or jobs roots relative to `peval-py.toml` when needed:
+Serve reads single-step Harbor Trials directly from explicitly mounted jobs
+roots. There is no implicit workspace or `workspace/jobs` discovery. Give each
+mount a stable lowercase ID; relative paths resolve from `peval-py.toml`:
 
 ```toml
-[harbor]
-roots = ["../harbor/jobs"]
+[[harbor.mounts]]
+id = "jobs-2026-08-08"
+path = "../harbor/jobs"
 ```
 
-Multi-step Trials are shown with an unsupported diagnostic. Invalid or missing
-linked sources retain their last valid projection and workspace annotations.
+The source reference is
+`harbor/<mount-id>/<job-name>/<trial-name>`. Reload reads the current
+trajectory, config, lock, result, reward, and status from Harbor without
+copying them into the workspace. Multi-step Trials show an unsupported
+diagnostic, and invalid Trials show their current error without a last-good
+trajectory. A deleted Trial disappears unless a user overlay or report binding
+still refers to it; retained missing rows reconnect when the same source
+reference returns.
+
+Older Harbor ATIF-v1.x trajectories are accepted only when a schema-label-only
+compatibility view passes the complete current validator. Serve derives missing
+aggregate counts from canonical steps and may use the matching Harbor result or
+structurally aligned Trial telemetry for missing timing and accounting fields.
+This includes OpenCode's Trial database, Psychevo's Trial-owned database and
+runtime trace, and a Hermes session export. Session, step, message, and tool-call
+identities must align where they share a namespace. Harbor's Hermes wrapper and
+the native Hermes export use different session IDs, so their proof is same-Trial
+containment plus exact step/message/tool-call alignment. Explicit trajectory
+values always win. Exact runtime timing takes precedence over a bounded
+model-boundary estimate. Estimates remain visible in model-duration summaries
+with their `duration_source` provenance.
+A failed Trial without a trajectory remains visible with the current Harbor
+exception as a Source Manager diagnostic, but cannot be opened or exported as a
+trajectory report.
+
+Archive, alias, category, tags, notes, and analysis are lazy workspace overlays
+under `harbor/<mount-id>/<job-name>/<trial-name>/`. Merely browsing or reloading
+does not create that directory. `[harbor].roots` and `harbor-link.json` belong
+to the incompatible legacy projection layout; initialize a new workspace
+instead of migrating it in place.
 
 Path, DB, and input-table `auto` selection requires a unique inferred adapter.
 JSONL upload falls back to workspace config; ATIF/report upload is adapter-free.
@@ -43,8 +70,9 @@ interfaces, and saved-row inline editing support aliases.
 
 Archive and delete change workspace state only; they do not delete original
 files or databases. Linked Harbor Trials cannot be deleted and use Archive to
-hide them. Refreshable sources can update cell-local `notes.md`; uploaded
-snapshots remain read-only.
+hide them. Refreshable Harbor sources update overlay `notes.md`; uploaded
+snapshots remain read-only. `peval-py import analysis --source-ref ...` targets
+either a local Trial artifact or a Harbor overlay by its source reference.
 
 ## Selection and Summary
 

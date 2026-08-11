@@ -146,11 +146,12 @@ for a path segment.
 The same task tree can also provide manual Trial notes at
 `runs/<analysis_eval_slug>/<agent-id>/<session-id>/<cell_key>/notes.md`.
 These appear in JSON `annotations.notes[]` before CLI/table notes. In
-`peval-py serve`, refreshable sources can edit or add that cell-local
-`notes.md`; snapshot uploads remain read-only. Session-root `analysis.json`,
+`peval-py serve`, local Trial artifacts use that cell-local `notes.md`, while
+Harbor sources use `harbor/<mount-id>/<job>/<trial>/notes.md` in the workspace;
+snapshot uploads remain read-only. Session-root `analysis.json`,
 `analysis.md`, and `notes.md` are reserved for session-level artifacts and are
 not read into Trial reports in this version.
-When serving saved snapshots, current workspace-side `analysis.json`,
+When serving snapshots or mounted Harbor Trials, current workspace-side `analysis.json`,
 `analysis.md`, and `notes.md` are overlaid when the active report is composed,
 so reload or Refresh can show note/analysis changes even if the original source
 DB or file no longer refreshes successfully.
@@ -176,19 +177,20 @@ them. This workflow is serve-only and does not change exported report JSON or
 static HTML reports.
 
 Each imported report is copied to `<workspace>/reports/<id>/` with a
-`state.json` that contains only workspace-relative Trial cell paths:
+`state.json` that contains only logical source references:
 
 ```json
 {
-  "source_keys": [
+  "source_refs": [
     "runs/default/agent-a/c2/c2_t001"
   ]
 }
 ```
 
-You can edit these bindings by hand. A cell that cannot be found is ignored
-without rewriting `state.json`, and its association returns if the same cell
-path becomes readable again. Imports accept one UTF-8 file up to 20 MiB and
+References may also use `harbor/<mount-id>/<job>/<trial>`. You can edit these
+bindings by hand. A source that cannot be found is retained without rewriting
+`state.json`, and its association returns if the same source reference becomes
+readable again. Imports accept one UTF-8 file up to 20 MiB and
 copy only that file. Relative sibling images, styles, scripts, and other assets
 are not imported; embed them in the report or use external URLs when needed.
 

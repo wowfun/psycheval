@@ -9,7 +9,8 @@ Harbor compatibility, harnesses, HostEnvironment, conversion, and verifier.
 
 - Unit tests cover command validation, timeout and exit failures, ATIF loading,
   safe mount resolution, opt-in host execution, Psychevo event projection,
-  ordered call matching, and artifact validation.
+  Trial-owned Psychevo database isolation, ordered call matching, and artifact
+  validation.
 - Tests assert observable results through public Psycheval interfaces rather
   than Harbor or module internals.
 - A wheel is built, installed into a clean temporary environment, and checked

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-08-10
+
+- Added explicit Harbor source mounts and stable `harbor/...` references with
+  direct reads, lazy overlays, and missing-source reconnection.
+- Made workspace catalog, reports, and analysis source-ref based and rebuildable
+  without copying Harbor Trial projections into the workspace.
+- Hardened Trial ingestion and telemetry recovery across compatible ATIF,
+  OpenCode, Psychevo, and Hermes data, while isolating Psychevo state per Trial
+  and retaining trajectory-less failures with diagnostics.
+
 ## 2026-08-08
 
 - Reorganized the repository around a root `psycheval` distribution with the

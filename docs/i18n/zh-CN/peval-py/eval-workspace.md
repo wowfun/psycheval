@@ -19,26 +19,46 @@ Source Manager 可导入 Session/ATIF path、受支持的 SQLite DB、input tabl
 JSONL、ATIF JSON 和规范化 report JSON。Path 与 DB 表单支持多个带引号 path，
 保留 Windows/UNC path，并在 POSIX 上解析可用的 WSL mount path。
 
-Serve 还会关联 workspace root 本身或惯例 `jobs/` 目录下的单步 Harbor Trial。
-只要 `agent/trajectory.json` 可读，Trial 就会显示；Reload 会投影后续 trajectory
-和 `result.json` 变化，但不会修改 Harbor 文件。如需关联外部 Trial、Job 或 jobs
-root，可在 `peval-py.toml` 中配置相对路径：
+Serve 只会从显式挂载的 jobs root 直接读取单步 Harbor Trial，不再隐式扫描
+workspace 或 `workspace/jobs`。每个 mount 都需要稳定的小写 ID；相对路径以
+`peval-py.toml` 所在目录为基准：
 
 ```toml
-[harbor]
-roots = ["../harbor/jobs"]
+[[harbor.mounts]]
+id = "jobs-2026-08-08"
+path = "../harbor/jobs"
 ```
 
-多步 Trial 会显示 unsupported 诊断。关联来源无效或消失时，工作台保留最后一个
-有效投影和 workspace annotation。
+来源引用固定为 `harbor/<mount-id>/<job-name>/<trial-name>`。Reload 直接从
+Harbor 当前文件读取 trajectory、config、lock、result、reward 和运行状态，不会在
+workspace 中复制这些内容。多步 Trial 显示 unsupported；无效 Trial 只显示当前错误，
+不会回退到 last-good trajectory。已删除且没有用户 overlay 或 report binding 的 Trial
+会直接消失；有引用的 Trial 保留 missing 行，并在相同 source reference 恢复后自动重连。
+
+旧版 Harbor ATIF-v1.x 只有在“仅替换 schema 标识”后能通过当前完整校验时，才会以
+内存兼容视图读取。Serve 从 canonical steps 派生缺失的聚合计数，并可从匹配的 Harbor
+result 或结构一致的 Trial telemetry 补充缺失的耗时与计费字段，包括 OpenCode Trial
+database、Psychevo Trial 独占 database 与 runtime trace，以及 Hermes session export。
+共享同一命名空间时，session、step、message 和 tool-call identity 必须一致。Harbor 的
+Hermes wrapper 与原生 Hermes export 使用不同 session ID，因此用“同一 Trial 内文件”加
+step/message/tool-call 精确对齐作为证明。trajectory 中已有的值始终优先。精确 runtime
+timing 优先于有界的模型调用边界估算；估算值会参与模型耗时汇总，同时保留
+`duration_source` 来源标识。失败且没有 trajectory 的 Trial 会在 Source Manager 中显示
+当前 Harbor 异常，但不能作为 trajectory report 打开或导出。
+
+Archive、alias、category、tags、notes 和 analysis 会按需写入
+`harbor/<mount-id>/<job-name>/<trial-name>/` overlay。仅浏览或 Reload 不会创建该目录。
+`[harbor].roots` 与 `harbor-link.json` 属于不兼容的旧 projection layout；请初始化新
+workspace，不要原地迁移。
 
 Path、DB 和 input-table 的 `auto` 要求唯一推断。JSONL upload 回退到 workspace
 配置；ATIF/report upload 不需要 adapter。浏览器新增表单有意不展示 alias；CLI、
 manifest、JSON interface 和已保存行的内联编辑支持 alias。
 
 Archive/delete 只修改 workspace state，不删除原始文件或数据库。关联的 Harbor
-Trial 不能删除，应使用 Archive 隐藏。可刷新 source 能够更新 cell-local
-`notes.md`；上传的 snapshot 保持只读。
+Trial 不能删除，应使用 Archive 隐藏。可刷新 Harbor source 更新 overlay
+`notes.md`；上传的 snapshot 保持只读。`peval-py import analysis --source-ref ...`
+通过 source reference 定位本地 Trial artifact 或 Harbor overlay。
 
 ## 选择与 Summary
 

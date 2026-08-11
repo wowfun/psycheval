@@ -13,16 +13,23 @@ state, report rendering, selection, mutation, and export behavior.
   operations, validation errors, and the absence of full report payloads.
 - Source tests cover each surface-specific adapter rule and every supported
   alias interface.
-- Linked-source tests cover Harbor Trial, Job, and jobs-root discovery; custom
-  roots; lexical and Windows-mapped symlink rejection; configured-root catalog
-  diagnostics; running and completed results; stable identity; reward
-  projection; canonical-to-sidecar nested identity; multi-step rejection;
-  source disappearance and recovery; restoration of missing or invalid cached
-  projections; and preservation of last-good artifacts and user overlays after
-  invalid refreshes.
-- Storage tests prove Harbor-owned files are unchanged, projection writes are
-  atomic, linked cells cannot escape the run root, linked-source deletion is
-  rejected, and archive remains available.
+- Linked-source tests cover explicit jobs-root mounts; mount ID and path
+  validation; relative and Windows-mapped paths; duplicate and symlink
+  rejection; absence of implicit discovery; running, completed, errored, and
+  reward states; schema-only compatible older Harbor ATIF; deterministic
+  aggregate/result metric derivation; structurally aligned Psychevo database and
+  runtime-trace telemetry, OpenCode database telemetry, and Hermes session-export
+  telemetry; exact and source-attributed estimated model duration; supplemental
+  telemetry fallback; result-only diagnostics without synthetic steps; stable
+  structured identity; multi-step diagnostics; bounded read consistency; and
+  current-error behavior without a last-good fallback.
+- Storage tests prove Harbor-owned files are unchanged, browsing creates no
+  overlay, the first edit creates only minimal overlay state, clearing the last
+  value reclaims empty directories, deleting the catalog is recoverable, and
+  a missing Trial is retained only by an overlay or report `source_refs`
+  binding before reconnecting to the same source reference.
+- HTTP, report, export, and analysis-import tests resolve Harbor content through
+  source keys and source references without a Harbor `artifact_dir`.
 - UI-state tests prove both selections survive pagination, header toggles affect
   only the current page, and each action uses and clears the correct selection.
 - Rendering tests cover the complete static/live/snapshot Summary row-count

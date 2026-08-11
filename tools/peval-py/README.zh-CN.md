@@ -132,8 +132,9 @@ workspace 时，报告还会尝试读取 peval cell cached analysis：
 同一个 task 目录树也可以提供 manual Trial notes：
 `runs/<analysis_eval_slug>/<agent-id>/<session-id>/<cell_key>/notes.md`。这些内容会写入
 JSON `annotations.notes[]`，并排在 CLI/table notes 前面。在 `peval-py serve` 中，
-可刷新的 source 可以编辑或添加这个 cell-local `notes.md`；snapshot 上传来源保持只读。
-Serve 展示已保存 snapshot 时，会在 active report 组合阶段叠加当前 workspace 里的
+本地 Trial artifact 使用这个 cell-local `notes.md`；Harbor source 则使用 workspace
+中的 `harbor/<mount-id>/<job>/<trial>/notes.md`；snapshot 上传来源保持只读。
+Serve 展示 snapshot 或已挂载 Harbor Trial 时，会在 active report 组合阶段叠加当前 workspace 里的
 `analysis.json`、`analysis.md` 和 `notes.md`；因此 reload 或 Refresh 即使遇到原始
 source DB/file 无法成功刷新，也能显示 notes/analysis 的更新。
 
@@ -153,18 +154,19 @@ active 或 archived 可读 session 的绑定，或永久删除报告。这个工
 页面中提供，不会修改导出的 report JSON 或静态 HTML 报告。
 
 每个导入的报告都会复制到 `<workspace>/reports/<id>/`。其中的 `state.json` 只包含
-相对于 workspace 的 Trial cell 路径：
+逻辑 source reference：
 
 ```json
 {
-  "source_keys": [
+  "source_refs": [
     "runs/default/agent-a/c2/c2_t001"
   ]
 }
 ```
 
-你可以直接编辑这些绑定。找不到某个 cell 时，serve 会忽略它，但不会改写
-`state.json`；相同的 cell 路径恢复可读后，关联也会恢复。每次只能导入一个不超过
+reference 也可以是 `harbor/<mount-id>/<job>/<trial>`。你可以直接编辑这些绑定。
+找不到某个 source 时，serve 会保留关联且不会改写 `state.json`；相同的 source
+reference 恢复可读后，关联也会恢复。每次只能导入一个不超过
 20 MiB 的 UTF-8 文件，并且只复制所选文件。报告引用的相对 sibling 图片、样式、
 脚本或其他资源不会随报告导入；需要时请把资源嵌入报告，或使用外部 URL。
 
