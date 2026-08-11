@@ -52,9 +52,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.model:
         command.extend(["--model", args.model])
     command.extend(["--", instruction])
+    process_env = dict(os.environ)
+    process_env["PSYCHEVO_DB"] = str(logs_dir / "psychevo-state.db")
     completed = subprocess.run(
         command,
         cwd=workdir,
+        env=process_env,
         text=True,
         capture_output=True,
         check=False,
