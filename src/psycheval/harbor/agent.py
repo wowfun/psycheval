@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import shlex
-
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
+from harbor.models.trial.paths import EnvironmentPaths
+from harbor.utils.scripts import quote_shell_arg
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
 from psycheval import __version__
@@ -14,6 +14,7 @@ class ExternalHarnessAgent(BaseAgent):
     """Run a caller-provided harness that writes canonical ATIF output."""
 
     SUPPORTS_ATIF = True
+    SUPPORTS_WINDOWS = True
 
     def __init__(self, *args, command: str | None = None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -42,10 +43,12 @@ class ExternalHarnessAgent(BaseAgent):
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         instruction_path = self.logs_dir / "instruction.txt"
         instruction_path.write_text(instruction, encoding="utf-8")
-        virtual_instruction = "/logs/agent/instruction.txt"
+        environment_paths = EnvironmentPaths.for_os(environment.os)
+        workdir = environment_paths.logs_dir.parent / "app"
+        virtual_instruction = environment_paths.agent_dir / "instruction.txt"
         result = await environment.exec(
-            f"{self.command} < {shlex.quote(virtual_instruction)}",
-            cwd="/app",
+            f"{self.command} < {quote_shell_arg(virtual_instruction, environment.os)}",
+            cwd=workdir.as_posix(),
         )
         (self.logs_dir / "external-harness.stdout.log").write_text(
             result.stdout or "", encoding="utf-8"
@@ -61,7 +64,8 @@ class ExternalHarnessAgent(BaseAgent):
         trajectory_path = self.logs_dir / "trajectory.json"
         if not trajectory_path.is_file():
             raise RuntimeError(
-                "external harness did not write /logs/agent/trajectory.json"
+                "external harness did not write "
+                f"{environment_paths.agent_dir.as_posix()}/trajectory.json"
             )
         validator = TrajectoryValidator()
         if not validator.validate(trajectory_path):

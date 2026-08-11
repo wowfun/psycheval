@@ -9,6 +9,15 @@ from urllib.parse import urlsplit, urlunsplit
 
 from harbor.models.trajectories import Trajectory
 
+_REWARD_DIMENSIONS = (
+    "required_tool",
+    "required_arguments",
+    "required_observation",
+    "forbidden_tools",
+    "final_answer",
+    "required_artifacts",
+)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Grade a Psycheval web trajectory")
@@ -27,14 +36,14 @@ def main(argv: list[str] | None = None) -> int:
     trajectory_data = _load_object(agent_logs / "trajectory.json")
     trajectory = Trajectory(**trajectory_data)
     checks = grade(trajectory, config, artifacts_dir)
-    reward = int(all(check["passed"] for check in checks))
+    rewards = reward_dimensions(checks)
     verifier_logs.mkdir(parents=True, exist_ok=True)
     (verifier_logs / "checks.json").write_text(
         json.dumps({"checks": checks}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     (verifier_logs / "reward.json").write_text(
-        json.dumps({"reward": reward}, separators=(",", ":")) + "\n",
+        json.dumps(rewards, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
     return 0
@@ -43,6 +52,18 @@ def main(argv: list[str] | None = None) -> int:
 def grade(
     trajectory: Trajectory, config: dict[str, Any], artifacts_dir: Path
 ) -> list[dict[str, Any]]:
+    allowed_config_fields = {
+        "required_calls",
+        "forbidden_tool_names",
+        "final_terms",
+        "required_artifacts",
+    }
+    unknown_config_fields = sorted(set(config) - allowed_config_fields)
+    if unknown_config_fields:
+        raise ValueError(
+            "verifier config contains unsupported fields: "
+            + ", ".join(unknown_config_fields)
+        )
     required_calls = config.get("required_calls")
     if not isinstance(required_calls, list) or not required_calls:
         raise ValueError("verifier config requires non-empty 'required_calls'")
@@ -64,47 +85,62 @@ def grade(
     checks: list[dict[str, Any]] = []
     cursor = -1
     for rule_number, rule in enumerate(required_calls, start=1):
-        tool_name = _required_string(rule, "tool")
-        tool_candidates = [
-            candidate
+        branches = _required_branches(rule, rule_number)
+        branch_tool_candidates = [
+            (branch, candidate)
+            for branch in branches
             for candidate in calls
-            if candidate[0] > cursor and candidate[1].function_name == tool_name
+            if candidate[0] > cursor
+            and candidate[1].function_name in branch["tool_names"]
         ]
+        accepted_names = sorted(
+            {name for branch in branches for name in branch["tool_names"]}
+        )
         checks.append(
             _check(
                 f"required_call_{rule_number}_tool",
-                bool(tool_candidates),
-                f"found {len(tool_candidates)} ordered {tool_name} call(s)",
+                "required_tool",
+                bool(branch_tool_candidates),
+                f"found {len(branch_tool_candidates)} ordered call branch match(es) "
+                f"for exact names: {', '.join(accepted_names)}",
             )
         )
-        argument_candidates = [
-            candidate
-            for candidate in tool_candidates
-            if _arguments_match(candidate[1].arguments, rule)
+        branch_argument_candidates = [
+            (branch, candidate)
+            for branch, candidate in branch_tool_candidates
+            if _arguments_match(candidate[1].arguments, branch)
         ]
         checks.append(
             _check(
                 f"required_call_{rule_number}_arguments",
-                bool(argument_candidates),
-                "a call has the required argument values, terms, and URL",
+                "required_arguments",
+                bool(branch_argument_candidates),
+                "one exact tool branch has the required argument values, terms, "
+                "and URL",
             )
         )
-        paired_candidates = [
-            candidate
-            for candidate in argument_candidates
-            if _has_successful_observation(candidate[2], rule)
+        branch_paired_candidates = [
+            (branch, candidate)
+            for branch, candidate in branch_argument_candidates
+            if _has_successful_observation(candidate[2], branch)
         ]
         checks.append(
             _check(
                 f"required_call_{rule_number}_observation",
-                bool(paired_candidates),
-                "the same call has a matching non-error observation",
+                "required_observation",
+                bool(branch_paired_candidates),
+                "the same call in one complete branch has a matching non-error "
+                "observation",
             )
         )
-        if paired_candidates:
-            cursor = paired_candidates[0][0]
+        if branch_paired_candidates:
+            cursor = min(
+                candidate[0] for _branch, candidate in branch_paired_candidates
+            )
 
-    forbidden_tools = set(_string_list(config.get("forbidden_tools")))
+    forbidden_tools = set(
+        _string_list(config.get("forbidden_tool_names"), field="forbidden_tool_names")
+    )
     if forbidden_tools:
         observed_forbidden = sorted(
             {
@@ -116,6 +152,7 @@ def grade(
         )
         checks.append(
             _check(
+                "forbidden_tools",
                 "forbidden_tools",
                 not observed_forbidden,
                 "no forbidden tools were called"
@@ -135,6 +172,7 @@ def grade(
     checks.append(
         _check(
             "final_answer",
+            "final_answer",
             bool(final_answer)
             and all(term.lower() in final_answer.lower() for term in final_terms),
             "final answer contains the required fact and citation evidence",
@@ -151,6 +189,7 @@ def grade(
         checks.append(
             _check(
                 "required_artifacts",
+                "required_artifacts",
                 not invalid,
                 "all required artifacts are rooted, regular, non-empty, and valid"
                 if not invalid
@@ -158,6 +197,70 @@ def grade(
             )
         )
     return checks
+
+
+def reward_dimensions(checks: list[dict[str, Any]]) -> dict[str, int]:
+    """Aggregate binary check results without hiding per-dimension evidence."""
+    grouped: dict[str, list[bool]] = {dimension: [] for dimension in _REWARD_DIMENSIONS}
+    for check in checks:
+        dimension = check.get("dimension")
+        if dimension not in grouped:
+            raise ValueError(f"unknown verifier check dimension: {dimension!r}")
+        grouped[dimension].append(bool(check.get("passed")))
+    return {
+        "reward": int(all(bool(check.get("passed")) for check in checks)),
+        **{dimension: int(all(results)) for dimension, results in grouped.items()},
+    }
+
+
+def _required_branches(rule: dict[str, Any], rule_number: int) -> list[dict[str, Any]]:
+    if set(rule) != {"any"}:
+        raise ValueError(
+            f"verifier required_calls[{rule_number - 1}] must contain only 'any'"
+        )
+    branches = rule.get("any")
+    if not isinstance(branches, list) or not branches:
+        raise ValueError(
+            f"verifier required_calls[{rule_number - 1}].any must be a non-empty list"
+        )
+    allowed_fields = {
+        "tool_names",
+        "argument_values",
+        "argument_terms",
+        "argument_url",
+        "observation_terms",
+    }
+    for branch_number, branch in enumerate(branches):
+        if not isinstance(branch, dict):
+            raise ValueError(
+                f"verifier required_calls[{rule_number - 1}].any[{branch_number}] "
+                "must be an object"
+            )
+        unknown = sorted(set(branch) - allowed_fields)
+        if unknown:
+            raise ValueError(
+                f"verifier branch contains unsupported fields: {', '.join(unknown)}"
+            )
+        tool_names = _string_list(
+            branch.get("tool_names"), field="tool_names", require_non_empty=True
+        )
+        if any(not name for name in tool_names):
+            raise ValueError("verifier 'tool_names' entries must be non-empty")
+        if len(set(tool_names)) != len(tool_names):
+            raise ValueError("verifier 'tool_names' entries must be unique")
+        argument_values = branch.get("argument_values", {})
+        if not isinstance(argument_values, dict) or not all(
+            isinstance(key, str) for key in argument_values
+        ):
+            raise ValueError("verifier 'argument_values' must be an object")
+        _string_list(branch.get("argument_terms"), field="argument_terms")
+        _string_list(branch.get("observation_terms"), field="observation_terms")
+        argument_url = branch.get("argument_url")
+        if argument_url is not None and (
+            not isinstance(argument_url, str) or not argument_url
+        ):
+            raise ValueError("verifier 'argument_url' must be a non-empty string")
+    return branches
 
 
 def _arguments_match(arguments: dict[str, Any], rule: dict[str, Any]) -> bool:
@@ -168,7 +271,7 @@ def _arguments_match(arguments: dict[str, Any], rule: dict[str, Any]) -> bool:
         raise ValueError("verifier 'argument_values' must be an object")
     if any(arguments.get(key) != value for key, value in argument_values.items()):
         return False
-    argument_terms = _string_list(rule.get("argument_terms"))
+    argument_terms = _string_list(rule.get("argument_terms"), field="argument_terms")
     text = json.dumps(arguments, ensure_ascii=False, sort_keys=True).lower()
     if not all(term.lower() in text for term in argument_terms):
         return False
@@ -184,12 +287,14 @@ def _arguments_match(arguments: dict[str, Any], rule: dict[str, Any]) -> bool:
 
 
 def _has_successful_observation(observations: list[Any], rule: dict[str, Any]) -> bool:
-    terms = _string_list(rule.get("observation_terms"))
+    terms = _string_list(rule.get("observation_terms"), field="observation_terms")
     for observation in observations:
         extra = observation.extra or {}
         status = str(extra.get("status") or "").lower()
         if bool(extra.get("is_error")) or status in {
+            "error",
             "failed",
+            "failure",
             "incomplete",
             "cancelled",
         }:
@@ -243,18 +348,17 @@ def _load_object(path: Path) -> dict[str, Any]:
     return value
 
 
-def _required_string(config: dict[str, Any], key: str) -> str:
-    value = config.get(key)
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"verifier config requires non-empty {key!r}")
-    return value
-
-
-def _string_list(value: Any) -> list[str]:
+def _string_list(
+    value: Any, *, field: str = "term/artifact fields", require_non_empty: bool = False
+) -> list[str]:
     if value is None:
+        if require_non_empty:
+            raise ValueError(f"verifier {field!r} must be a non-empty array of strings")
         return []
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError("verifier term/artifact fields must be arrays of strings")
+        raise ValueError(f"verifier {field!r} must be an array of strings")
+    if require_non_empty and not value:
+        raise ValueError(f"verifier {field!r} must be a non-empty array of strings")
     return value
 
 
@@ -295,8 +399,15 @@ def _content_text(value: Any) -> str:
     return ""
 
 
-def _check(check_id: str, passed: bool, evidence: str) -> dict[str, Any]:
-    return {"id": check_id, "passed": bool(passed), "evidence": evidence}
+def _check(
+    check_id: str, dimension: str, passed: bool, evidence: str
+) -> dict[str, Any]:
+    return {
+        "id": check_id,
+        "dimension": dimension,
+        "passed": bool(passed),
+        "evidence": evidence,
+    }
 
 
 if __name__ == "__main__":

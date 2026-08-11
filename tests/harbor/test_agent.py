@@ -1,20 +1,29 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import platform
 import sys
 from pathlib import Path
 
 import pytest
+from harbor.environments.base import ExecResult
 from harbor.models.agent.context import AgentContext
-from harbor.models.task.config import EnvironmentConfig
-from harbor.models.trial.paths import TrialPaths
+from harbor.models.task.config import EnvironmentConfig, TaskOS
+from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
 from psycheval.harbor.agent import ExternalHarnessAgent
+from psycheval.harbor.canned_harness import _trajectory
 from psycheval.harbor.environment import HostEnvironment
 
+_LINUX_ONLY = pytest.mark.skipif(
+    platform.system() != "Linux", reason="test exercises Bash harness commands"
+)
 
+
+@_LINUX_ONLY
 def test_external_agent_runs_harness_and_validates_atif(tmp_path: Path) -> None:
     async def scenario() -> None:
         environment_dir = tmp_path / "environment"
@@ -76,3 +85,47 @@ def test_external_agent_runs_harness_and_validates_atif(tmp_path: Path) -> None:
             await environment.stop(delete=True)
 
     asyncio.run(scenario())
+
+
+def test_external_agent_declares_and_uses_windows_paths(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        logs_dir = tmp_path / "agent logs"
+        artifacts_dir = tmp_path / "artifacts"
+        environment = _RecordingWindowsEnvironment(logs_dir, artifacts_dir)
+        agent = ExternalHarnessAgent(logs_dir=logs_dir, command="fixture-harness")
+
+        await agent.run("Find the example domains", environment, AgentContext())
+
+        paths = EnvironmentPaths.for_os(TaskOS.WINDOWS)
+        assert ExternalHarnessAgent.SUPPORTS_WINDOWS is True
+        assert environment.cwd == (paths.logs_dir.parent / "app").as_posix()
+        assert environment.command == (
+            r"fixture-harness < C:\logs\agent\instruction.txt"
+        )
+
+    asyncio.run(scenario())
+
+
+class _RecordingWindowsEnvironment:
+    os = TaskOS.WINDOWS
+
+    def __init__(self, logs_dir: Path, artifacts_dir: Path) -> None:
+        self.logs_dir = logs_dir
+        self.artifacts_dir = artifacts_dir
+        self.command: str | None = None
+        self.cwd: str | None = None
+
+    async def exec(self, command: str, cwd: str | None = None, **_kwargs) -> ExecResult:
+        self.command = command
+        self.cwd = cwd
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (self.logs_dir / "trajectory.json").write_text(
+            json.dumps(
+                _trajectory(
+                    "web-search", "Find the example domains", self.artifacts_dir
+                )
+            ),
+            encoding="utf-8",
+        )
+        return ExecResult(stdout="", stderr="", return_code=0)

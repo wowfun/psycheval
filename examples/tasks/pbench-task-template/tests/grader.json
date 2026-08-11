@@ -1,9 +1,13 @@
 {
   "required_calls": [
     {
-      "tool": "replace_me",
-      "argument_terms": [],
-      "observation_terms": []
+      "any": [
+        {
+          "tool_names": ["replace_me"],
+          "argument_terms": [],
+          "observation_terms": []
+        }
+      ]
     }
   ],
   "final_terms": []

@@ -1,0 +1,27 @@
+{
+  "required_calls": [
+    {
+      "any": [
+        {
+          "tool_names": ["web_fetch", "webfetch"],
+          "argument_url": "https://www.iana.org/help/example-domains",
+          "observation_terms": [
+            "www.iana.org/help/example-domains",
+            "2017-05-13",
+            "example domains"
+          ]
+        }
+      ]
+    }
+  ],
+  "forbidden_tool_names": [
+    "web_search",
+    "websearch",
+    "exec_command",
+    "bash",
+    "terminal",
+    "execute_code",
+    "shell"
+  ],
+  "final_terms": ["2017-05-13", "www.iana.org/help/example-domains"]
+}

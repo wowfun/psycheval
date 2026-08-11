@@ -1,0 +1,34 @@
+{
+  "required_calls": [
+    {
+      "any": [
+        {
+          "tool_names": ["browser_type"],
+          "argument_values": {"text": "Harbor eval"},
+          "observation_terms": ["Harbor eval"]
+        },
+        {
+          "tool_names": ["computer_action"],
+          "argument_values": {"type": "type_text_at", "text": "Harbor eval"},
+          "observation_terms": ["Harbor eval"]
+        }
+      ]
+    },
+    {
+      "any": [
+        {
+          "tool_names": ["browser_click"],
+          "argument_terms": ["button"],
+          "observation_terms": ["submitted-form.html", "received!"]
+        },
+        {
+          "tool_names": ["computer_action"],
+          "argument_values": {"type": "click"},
+          "observation_terms": ["submitted-form.html", "received!"]
+        }
+      ]
+    }
+  ],
+  "final_terms": ["submitted-form.html", "received!"],
+  "required_artifacts": ["web-form-submitted.png"]
+}
