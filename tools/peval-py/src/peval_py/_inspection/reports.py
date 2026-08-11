@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from peval_py.cli.arguments import CliArgs
 from peval_py.inputs import AdapterAssignments, load_inputs
 from peval_py.pipeline import build_report_from_loaded_inputs
 
 
 def inspect_report_for_args(
-    args: argparse.Namespace,
+    args: CliArgs,
     adapter_assignments: AdapterAssignments,
     config: object,
 ) -> dict[str, Any]:
@@ -23,7 +24,7 @@ def inspect_report_for_args(
         or getattr(args, "db", None)
         or getattr(args, "input_table", None)
     ):
-        load_args = argparse.Namespace(**{**vars(args), "path": remaining_paths})
+        load_args = replace(args, path=tuple(remaining_paths))
         loaded_inputs = load_inputs(load_args, adapter_assignments, config=config)
         if loaded_inputs.sessions:
             reports.append(

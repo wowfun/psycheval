@@ -21,6 +21,15 @@ peval-py --help
 peval-py view tr --help
 ```
 
+The CLI uses plain-text help and exposes Typer's shell completion setup at the
+root command. Inspect the script or install it explicitly; ordinary commands do
+not change shell configuration:
+
+```bash
+peval-py --show-completion
+peval-py --install-completion
+```
+
 Run it from the source tree without installing:
 
 ```bash

@@ -333,8 +333,8 @@ class PevalPyCliInputInspectTests(unittest.TestCase):
         self.assertIn("supports only JSON", stderr.getvalue())
 
         stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as cm:
-            main(
+        with contextlib.redirect_stderr(stderr):
+            removed_on_result = main(
                 [
                     "view",
                     "tr",
@@ -346,12 +346,12 @@ class PevalPyCliInputInspectTests(unittest.TestCase):
                     "all",
                 ]
             )
-        self.assertNotEqual(cm.exception.code, 0)
-        self.assertIn("unrecognized arguments: --on all", stderr.getvalue())
+        self.assertNotEqual(removed_on_result, 0)
+        self.assertIn("No such option: --on", stderr.getvalue())
 
         stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as cm:
-            main(
+        with contextlib.redirect_stderr(stderr):
+            removed_errors_result = main(
                 [
                     "view",
                     "tr",
@@ -362,8 +362,8 @@ class PevalPyCliInputInspectTests(unittest.TestCase):
                     "--errors-only",
                 ]
             )
-        self.assertNotEqual(cm.exception.code, 0)
-        self.assertIn("unrecognized arguments: --errors-only", stderr.getvalue())
+        self.assertNotEqual(removed_errors_result, 0)
+        self.assertIn("No such option: --errors-only", stderr.getvalue())
 
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):

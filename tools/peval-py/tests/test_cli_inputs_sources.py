@@ -551,7 +551,7 @@ label_prefix = "selected"
             stdout = io.StringIO()
             with (
                 contextlib.redirect_stdout(stdout),
-                patch("peval_py.cli.sys.stdin.isatty", return_value=True),
+                patch("peval_py.cli.sessions.sys.stdin.isatty", return_value=True),
                 patch("builtins.input", return_value="1-2"),
             ):
                 result = main(
@@ -580,7 +580,7 @@ label_prefix = "selected"
             all_report = tmp_path / "interactive-all.json"
             with (
                 contextlib.redirect_stdout(io.StringIO()),
-                patch("peval_py.cli.sys.stdin.isatty", return_value=True),
+                patch("peval_py.cli.sessions.sys.stdin.isatty", return_value=True),
                 patch("builtins.input", return_value="all"),
             ):
                 result = main(
@@ -605,7 +605,7 @@ label_prefix = "selected"
             blank_report = tmp_path / "blank.json"
             with (
                 contextlib.redirect_stdout(io.StringIO()),
-                patch("peval_py.cli.sys.stdin.isatty", return_value=True),
+                patch("peval_py.cli.sessions.sys.stdin.isatty", return_value=True),
                 patch("builtins.input", return_value=""),
             ):
                 result = main(

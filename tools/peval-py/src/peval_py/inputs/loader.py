@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -82,7 +81,7 @@ def validate_selected_adapter(adapter: object, available: set[str], source: str)
 
 
 def load_sessions(
-    args: argparse.Namespace,
+    args: Any,
     adapter_assignments: AdapterAssignments,
     *,
     require_sources: bool = True,
@@ -177,7 +176,7 @@ def load_sessions(
 
 
 def load_inputs(
-    args: argparse.Namespace,
+    args: Any,
     adapter_assignments: AdapterAssignments,
     *,
     require_sources: bool = True,

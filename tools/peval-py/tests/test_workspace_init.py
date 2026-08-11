@@ -108,7 +108,7 @@ class PevalPyWorkspaceInitTests(unittest.TestCase):
             root = Path(tmp) / "workspace"
             result = run_cli(["init", "--root", str(root), "--default"])
             self.assertEqual(result.returncode, 2)
-            self.assertIn("unrecognized arguments: --default", result.stderr)
+            self.assertIn("No such option: --default", result.stderr)
 
 
 def run_cli(

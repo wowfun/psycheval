@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from argparse import Namespace
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
+from peval_py.cli.arguments import CliArgs
 from peval_py.config import apply_overrides, config_for_adapter, load_config
 from peval_py.inputs import parse_adapter_assignments
 from peval_py.serve.constants import DEFAULT_PORT_END, DEFAULT_PORT_START, LOCALHOSTS
@@ -17,7 +17,7 @@ class LocalHTTPServer(ThreadingHTTPServer):
 
 
 def run_serve_command(
-    args: Namespace,
+    args: CliArgs,
 ) -> None:
     host = validate_localhost(getattr(args, "host", None) or "127.0.0.1")
     store = open_workspace_state(getattr(args, "root", None))

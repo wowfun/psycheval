@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import sys
@@ -8,13 +7,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from peval_py.cli.arguments import CliArgs
 from peval_py.config import ToolConfig
 
 DEFAULT_OUTPUT = object()
 FILENAME_PART_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def resolve_report_format(args: argparse.Namespace) -> str:
+def resolve_report_format(args: CliArgs) -> str:
     if getattr(args, "format", None):
         return args.format
     if args.output is DEFAULT_OUTPUT:
@@ -29,7 +29,7 @@ def resolve_report_format(args: argparse.Namespace) -> str:
 
 
 def resolve_export_output(
-    args: argparse.Namespace,
+    args: CliArgs,
     trajectory: dict[str, Any],
     config: ToolConfig,
 ) -> str | None:
@@ -39,7 +39,7 @@ def resolve_export_output(
 
 
 def resolve_report_output(
-    args: argparse.Namespace,
+    args: CliArgs,
     fmt: str,
     report: dict[str, Any],
     config: ToolConfig,

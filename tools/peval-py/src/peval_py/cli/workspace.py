@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import argparse
+from dataclasses import replace
 from pathlib import Path
 
+from peval_py.cli.arguments import CliArgs
 from peval_py.config import is_windows_absolute_like_path
 from peval_py.inputs import (
     canonical_trial_cell_paths_for_inputs,
@@ -12,7 +13,7 @@ from peval_py.inputs import (
 )
 
 
-def rewrite_trial_cell_path_args(args: argparse.Namespace) -> argparse.Namespace:
+def rewrite_trial_cell_path_args(args: CliArgs) -> CliArgs:
     if getattr(args, "command", None) not in {"view", "export"}:
         return args
     cell_paths = canonical_trial_cell_paths_for_inputs(
@@ -20,24 +21,25 @@ def rewrite_trial_cell_path_args(args: argparse.Namespace) -> argparse.Namespace
     )
     if not cell_paths:
         return args
-    values = vars(args).copy()
-    values.update(
-        {
-            "path": [str(path) for path in cell_paths],
-            "root": None,
-            "adapter": None,
-            "db": None,
-            "session_id": None,
-            "input_table": None,
-        }
+    rewritten = replace(
+        args,
+        path=tuple(str(path) for path in cell_paths),
+        root=None,
+        adapter=None,
+        db=None,
+        session_id=None,
+        input_table=None,
     )
     if getattr(args, "command", None) == "view":
-        values["list_sessions"] = False
-        values["list_interactive"] = False
-    return argparse.Namespace(**values)
+        rewritten = replace(
+            rewritten,
+            list_sessions=False,
+            list_interactive=False,
+        )
+    return rewritten
 
 
-def validated_workspace_root(args: argparse.Namespace) -> str | None:
+def validated_workspace_root(args: CliArgs) -> str | None:
     root = getattr(args, "root", None)
     if root and getattr(args, "command", None) in {"view", "export", "import"}:
         from peval_py.state import ensure_workspace_root
@@ -52,7 +54,7 @@ def validated_workspace_root(args: argparse.Namespace) -> str | None:
     return root
 
 
-def workspace_root_for_args(args: argparse.Namespace) -> tuple[str | None, bool]:
+def workspace_root_for_args(args: CliArgs) -> tuple[str | None, bool]:
     root = validated_workspace_root(args)
     if getattr(args, "command", None) not in {"view", "export"}:
         return root, False

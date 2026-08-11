@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 from typing import Any
 
 from peval_py._inspection.frames import InspectFrames
@@ -20,6 +19,7 @@ from peval_py._inspection.validation import (
     validate_inspect_raw_only_args as validate_inspect_raw_only_args,
 )
 from peval_py._inspection.validation import validate_raw_args as validate_raw_args
+from peval_py.cli.arguments import CliArgs
 from peval_py.inputs import AdapterAssignments
 
 INSPECT_SCHEMA_VERSION = 2
@@ -27,7 +27,7 @@ DEFAULT_INSPECT_PREVIEW_CHARS = 3000
 
 
 def build_inspect_payload(
-    args: argparse.Namespace,
+    args: CliArgs,
     adapter_assignments: AdapterAssignments,
     config: object,
 ) -> dict[str, Any]:

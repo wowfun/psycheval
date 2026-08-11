@@ -21,6 +21,14 @@ peval-py --help
 peval-py view tr --help
 ```
 
+CLI 使用纯文本帮助，并在根命令提供 Typer 的 shell 补全配置入口。可以先查看
+补全脚本，再显式安装；普通命令不会修改 shell 配置：
+
+```bash
+peval-py --show-completion
+peval-py --install-completion
+```
+
 也可以不安装，直接从源码树运行：
 
 ```bash

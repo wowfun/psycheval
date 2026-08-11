@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import argparse
 import sys
+from dataclasses import replace
 
 from peval_py.atif import validate_atif_trajectory
-from peval_py.cli.parser import build_parser
+from peval_py.cli.arguments import CliArgs
 from peval_py.cli.sessions import interactive_session_selection, print_session_lists
 from peval_py.cli.workspace import (
     rewrite_trial_cell_path_args,
@@ -30,8 +30,19 @@ from peval_py.pipeline import (
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    from peval_py.cli.app import app, normalize_argv
+
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    try:
+        app(args=normalize_argv(raw_args), prog_name="peval-py")
+    except SystemExit as exc:
+        if exc.code is None:
+            return 0
+        return exc.code if isinstance(exc.code, int) else 1
+    return 0
+
+
+def run_cli_args(args: CliArgs) -> int:
     try:
         args = rewrite_trial_cell_path_args(args)
         if args.command == "init":
@@ -50,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
 
             run_serve_command(args)
             return 0
-        workspace_root, inferred_workspace_root = workspace_root_for_args(args)
+        workspace_root, _inferred_workspace_root = workspace_root_for_args(args)
         config = apply_overrides(
             load_config(args.config, workspace_root=workspace_root),
             args,
@@ -71,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
             selected = interactive_session_selection(args, adapter_assignments, config)
             if not selected:
                 return 0
-            args = argparse.Namespace(**{**vars(args), "session_id": selected})
+            args = replace(args, session_id=tuple(selected))
         if args.command == "view" and getattr(args, "mode", "inspect") == "inspect":
             from peval_py.inspection import (
                 build_inspect_payload,

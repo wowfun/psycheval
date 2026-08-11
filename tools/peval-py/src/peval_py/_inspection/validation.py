@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 from typing import Any
 
+from peval_py.cli.arguments import CliArgs
 from peval_py.outputs import DEFAULT_OUTPUT, unique_timestamped_name
 
 
-def resolve_inspect_output(args: argparse.Namespace) -> str | None:
+def resolve_inspect_output(args: CliArgs) -> str | None:
     if args.output is DEFAULT_OUTPUT:
         return unique_timestamped_name("inspect.json")
     return args.output
 
 
-def validate_inspect_args(args: argparse.Namespace) -> None:
+def validate_inspect_args(args: CliArgs) -> None:
     validate_inspect_raw_only_args(args)
     if getattr(args, "format", None) == "html":
         raise ValueError(
@@ -31,7 +31,7 @@ def validate_inspect_args(args: argparse.Namespace) -> None:
     parse_step_selectors(getattr(args, "steps", None) or [])
 
 
-def validate_inspect_raw_only_args(args: argparse.Namespace) -> None:
+def validate_inspect_raw_only_args(args: CliArgs) -> None:
     raw_flags = [
         ("agent_name", getattr(args, "agent_name", None) is not None),
         ("agent_version", getattr(args, "agent_version", None) is not None),
@@ -46,7 +46,7 @@ def validate_inspect_raw_only_args(args: argparse.Namespace) -> None:
         )
 
 
-def validate_raw_args(args: argparse.Namespace) -> None:
+def validate_raw_args(args: CliArgs) -> None:
     inspect_flags = [
         ("head", getattr(args, "head", None) is not None),
         ("tail", getattr(args, "tail", None) is not None),

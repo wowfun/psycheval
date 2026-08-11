@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import argparse
 import sys
 
 from peval_py.adapters import available_adapter_ids
+from peval_py.cli.arguments import CliArgs
 from peval_py.inputs import (
     adapter_for_input_path,
     resolve_db_input,
@@ -16,7 +16,7 @@ from peval_py.session_select import (
 
 
 def print_session_lists(
-    args: argparse.Namespace,
+    args: CliArgs,
     adapter_assignments,
     config,
 ) -> None:
@@ -27,7 +27,7 @@ def print_session_lists(
 
 
 def interactive_session_selection(
-    args: argparse.Namespace,
+    args: CliArgs,
     adapter_assignments,
     config,
 ) -> list[str]:
@@ -49,7 +49,7 @@ def interactive_session_selection(
 
 
 def db_inputs_with_adapters(
-    args: argparse.Namespace,
+    args: CliArgs,
     adapter_assignments,
     config,
 ) -> list[dict]:

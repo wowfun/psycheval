@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from argparse import Namespace
 from threading import Event, Lock, Thread
 from typing import Any, Callable, Sequence
 
@@ -59,7 +58,7 @@ class ServeRuntime:
 
     def start_initial_load(
         self,
-        args: Namespace,
+        args: Any,
         adapter_assignments: AdapterAssignments,
     ) -> None:
         with self._lock:
@@ -77,7 +76,7 @@ class ServeRuntime:
 
     def _run_initial_load(
         self,
-        args: Namespace,
+        args: Any,
         adapter_assignments: AdapterAssignments,
     ) -> None:
         error: str | None = None
