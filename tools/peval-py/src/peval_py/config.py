@@ -15,6 +15,7 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 HARBOR_MOUNT_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 DEFAULT_DB_PATH_RE = re.compile(r"^\s*default_db_path\s*=")
 TABLE_HEADER_RE = re.compile(r"^\s*\[([^\]\n]+)\]\s*(?:#.*)?$")
+HARBOR_MOUNT_HEADER_RE = re.compile(r"^\s*\[\[\s*harbor\.mounts\s*\]\]\s*(?:#.*)?$")
 PEVAL_PY_CONFIG = "peval-py.toml"
 WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 WINDOWS_DRIVE_MOUNT_ROOT = Path("/mnt")
@@ -39,6 +40,7 @@ class DbMapping:
 class HarborMount:
     id: str
     path: str
+    task_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -149,10 +151,11 @@ def apply_toml_config(
         mounts: list[HarborMount] = []
         seen_ids: set[str] = set()
         seen_paths: set[str] = set()
+        seen_task_paths: set[str] = set()
         for index, raw_mount in enumerate(raw_mounts):
             if not isinstance(raw_mount, dict):
                 raise ValueError(f"harbor.mounts[{index}] must be a TOML table")
-            mount_unknown = sorted(set(raw_mount) - {"id", "path"})
+            mount_unknown = sorted(set(raw_mount) - {"id", "path", "task_paths"})
             if mount_unknown:
                 raise ValueError(f"unknown harbor mount field: {mount_unknown[0]}")
             mount_id = str(raw_mount.get("id") or "").strip()
@@ -165,13 +168,34 @@ def apply_toml_config(
                 raise ValueError("harbor mount path must be a non-empty string")
             mount_path = _lexical_config_path(raw_path, base_dir=base_dir)
             path_identity = os.path.normcase(os.path.normpath(mount_path))
+            raw_task_paths = raw_mount.get("task_paths", [])
+            if not isinstance(raw_task_paths, list):
+                raise ValueError(
+                    f"harbor.mounts[{index}].task_paths must be an array of strings"
+                )
+            task_paths: list[str] = []
+            for raw_task_path in raw_task_paths:
+                if not isinstance(raw_task_path, str) or not raw_task_path.strip():
+                    raise ValueError("harbor task path must be a non-empty string")
+                task_path = _lexical_config_path(raw_task_path, base_dir=base_dir)
+                task_identity = os.path.normcase(os.path.normpath(task_path))
+                if task_identity in seen_task_paths:
+                    raise ValueError(f"duplicate harbor task path: {task_path}")
+                seen_task_paths.add(task_identity)
+                task_paths.append(task_path)
             if mount_id in seen_ids:
                 raise ValueError(f"duplicate harbor mount id: {mount_id}")
             if path_identity in seen_paths:
                 raise ValueError(f"duplicate harbor mount path: {mount_path}")
             seen_ids.add(mount_id)
             seen_paths.add(path_identity)
-            mounts.append(HarborMount(id=mount_id, path=mount_path))
+            mounts.append(
+                HarborMount(
+                    id=mount_id,
+                    path=mount_path,
+                    task_paths=tuple(task_paths),
+                )
+            )
         config = replace(config, harbor_mounts=tuple(mounts))
     defaults = data.get("defaults", {})
     if defaults:
@@ -296,6 +320,132 @@ def write_workspace_locale(config_path: Path, locale: str) -> None:
             return
     lines.insert(first_table_index, locale_line)
     path.write_text("".join(lines), encoding="utf-8")
+
+
+def write_workspace_harbor_mounts(
+    config_path: Path,
+    mounts: tuple[HarborMount, ...],
+) -> tuple[HarborMount, ...]:
+    path = config_path.expanduser()
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    lines = text.splitlines(keepends=True)
+    for start, end in reversed(_harbor_mount_table_ranges(lines)):
+        del lines[start:end]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines and not lines[-1].endswith(("\n", "\r")):
+        lines[-1] += "\n"
+    if mounts:
+        if lines:
+            lines.append("\n")
+        for index, mount in enumerate(mounts):
+            if index:
+                lines.append("\n")
+            lines.extend(
+                [
+                    "[[harbor.mounts]]\n",
+                    f"id = {json.dumps(mount.id)}\n",
+                    f"path = {json.dumps(_stored_harbor_path(mount.path, path.parent))}\n",
+                ]
+            )
+            if mount.task_paths:
+                stored_tasks = [
+                    _stored_harbor_path(task_path, path.parent)
+                    for task_path in mount.task_paths
+                ]
+                lines.append(
+                    f"task_paths = {json.dumps(stored_tasks, ensure_ascii=False)}\n"
+                )
+    rendered = "".join(lines)
+    data = tomllib.loads(rendered) if rendered.strip() else {}
+    validated = apply_toml_config(
+        ToolConfig(workspace_root=str(path.parent)),
+        data,
+        top_level_locale=True,
+        base_dir=path.parent,
+    ).harbor_mounts
+    validate_harbor_mount_paths(validated)
+    path.write_text(rendered, encoding="utf-8")
+    return validated
+
+
+def validate_harbor_mount_paths(mounts: tuple[HarborMount, ...]) -> None:
+    for mount in mounts:
+        _validate_existing_unlinked_directory(
+            mount.path,
+            label=f"Harbor Jobs path for {mount.id}",
+        )
+        for task_path in mount.task_paths:
+            root = _validate_existing_unlinked_directory(
+                task_path,
+                label=f"Harbor Task path for {mount.id}",
+            )
+            if _regular_task_file(root / "task.toml"):
+                continue
+            try:
+                children = sorted(root.iterdir(), key=lambda item: item.name)
+            except OSError as exc:
+                raise ValueError(
+                    f"cannot scan Harbor Dataset path {root}: {exc}"
+                ) from exc
+            task_children = [
+                child
+                for child in children
+                if child.is_dir()
+                and not child.is_symlink()
+                and _regular_task_file(child / "task.toml")
+            ]
+            if not task_children:
+                raise ValueError(
+                    "Harbor Task path must identify a Task or Dataset directory: "
+                    f"{root}"
+                )
+
+
+def _validate_existing_unlinked_directory(value: str, *, label: str) -> Path:
+    path = Path(value).expanduser()
+    current = path
+    while True:
+        try:
+            if current.is_symlink():
+                raise ValueError(f"{label} traverses a symlink: {current}")
+        except OSError as exc:
+            raise ValueError(f"cannot inspect {label} {current}: {exc}") from exc
+        if current.parent == current:
+            break
+        current = current.parent
+    if not path.is_dir():
+        raise ValueError(f"{label} not found: {path}")
+    return path
+
+
+def _regular_task_file(path: Path) -> bool:
+    return path.is_file() and not path.is_symlink() and not path.parent.is_symlink()
+
+
+def _harbor_mount_table_ranges(lines: list[str]) -> list[tuple[int, int]]:
+    starts = [
+        index for index, line in enumerate(lines) if HARBOR_MOUNT_HEADER_RE.match(line)
+    ]
+    ranges: list[tuple[int, int]] = []
+    for start in starts:
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            if lines[index].lstrip().startswith("["):
+                end = index
+                break
+        ranges.append((start, end))
+    return ranges
+
+
+def _stored_harbor_path(value: str, base_dir: Path) -> str:
+    text = str(value).strip()
+    if is_windows_absolute_like_path(text):
+        return text
+    try:
+        return os.path.relpath(Path(text), base_dir)
+    except ValueError:
+        return text
 
 
 def write_workspace_adapter_default_db(

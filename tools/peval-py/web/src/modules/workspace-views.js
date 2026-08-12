@@ -13,7 +13,7 @@ function workspaceViews() {
       ...view,
       name: String(view.name),
       filters: workspaceViewFilters(view.filters),
-      group_by: ["overall", "agent", "model", "category"].includes(view.group_by) ? view.group_by : "agent",
+      group_by: ["overall", "agent", "model", "category", "task", "job", "provider"].includes(view.group_by) ? view.group_by : "agent",
       notes: typeof view.notes === "string" ? view.notes : "",
     }))
     .sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" }));
@@ -28,6 +28,9 @@ function workspaceViewFilters(value) {
     tags: listValue(filters.tags).map(String),
     agents: listValue(filters.agents).map(String),
     models: listValue(filters.models).map(String),
+    tasks: listValue(filters.tasks).map(String),
+    jobs: listValue(filters.jobs).map(String),
+    providers: listValue(filters.providers).map(String),
     results: listValue(filters.results).map(String),
   };
 }
@@ -52,7 +55,10 @@ function workspaceViewColumns() {
     { key: "categories", label: t("category", "Category"), valueType: "scalar-list", filterable: true, filterValues: view => view.filters.categories, value: view => view.filters.categories.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.categories), cellAttrs: navigateAttrs, edit: edit("categories", { suggestions: workspaceViewCategorySuggestions }) },
     { key: "tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: view => view.filters.tags, value: view => view.filters.tags.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.tags), cellAttrs: navigateAttrs, edit: edit("tags", { suggestions: workspaceViewTagSuggestions }) },
     { key: "models", label: t("model", "Models"), valueType: "list", filterable: true, filterValues: view => view.filters.models, value: view => view.filters.models.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.models), cellAttrs: navigateAttrs, edit: edit("models", { suggestions: workspaceViewModelSuggestions }) },
-    { key: "group_by", label: t("summary_group_by", "Group by"), valueType: "enum", filterable: true, value: view => view.group_by, filterLabel: workspaceViewGroupByLabel, html: view => esc(workspaceViewGroupByLabel(view.group_by)), cellAttrs: navigateAttrs, edit: edit("group_by", { options: () => ["overall", "agent", "model", "category"].map(value => ({ value, label: workspaceViewGroupByLabel(value) })) }) },
+    { key: "tasks", label: t("task", "Task"), valueType: "list", filterable: true, filterValues: view => view.filters.tasks, value: view => view.filters.tasks.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.tasks), cellAttrs: navigateAttrs, edit: edit("tasks", { suggestions: workspaceViewTaskSuggestions }) },
+    { key: "jobs", label: t("job", "Job"), valueType: "list", filterable: true, filterValues: view => view.filters.jobs, value: view => view.filters.jobs.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.jobs), cellAttrs: navigateAttrs, edit: edit("jobs", { suggestions: workspaceViewJobSuggestions }) },
+    { key: "providers", label: t("provider", "Provider"), valueType: "list", filterable: true, filterValues: view => view.filters.providers, value: view => view.filters.providers.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.providers), cellAttrs: navigateAttrs, edit: edit("providers", { suggestions: workspaceViewProviderSuggestions }) },
+    { key: "group_by", label: t("summary_group_by", "Group by"), valueType: "enum", filterable: true, value: view => view.group_by, filterLabel: workspaceViewGroupByLabel, html: view => esc(workspaceViewGroupByLabel(view.group_by)), cellAttrs: navigateAttrs, edit: edit("group_by", { options: () => ["overall", "agent", "model", "category", "task", "job", "provider"].map(value => ({ value, label: workspaceViewGroupByLabel(value) })) }) },
     { key: "other_conditions", label: t("view_other_conditions", "Other conditions"), valueType: "yaml", value: view => workspaceViewOtherConditionsLabel(view), fullText: workspaceViewOtherConditionsYaml, html: view => `<span class="workspace-view-config-preview">${esc(workspaceViewOtherConditionsLabel(view))}</span>`, cellAttrs: navigateAttrs, edit: edit("other_conditions") },
     { key: "notes", label: t("view_notes", "Notes"), valueType: "markdown", value: view => view.notes || "-", fullText: view => view.notes || "", html: view => `<span>${esc(String(view.notes || "").replace(/\s+/g, " ").trim() || "-")}</span>`, className: "workspace-view-notes-cell", cellAttrs: navigateAttrs, edit: edit("notes") },
   ];
@@ -92,10 +98,19 @@ function workspaceViewCategorySuggestions() {
 function workspaceViewModelSuggestions() {
   return workspaceViews().flatMap(view => view.filters.models);
 }
+function workspaceViewTaskSuggestions() {
+  return workspaceViews().flatMap(view => view.filters.tasks);
+}
+function workspaceViewJobSuggestions() {
+  return workspaceViews().flatMap(view => view.filters.jobs);
+}
+function workspaceViewProviderSuggestions() {
+  return workspaceViews().flatMap(view => view.filters.providers);
+}
 
 function workspaceViewEditValue(view, field) {
   if (field === "name") return view.name;
-  if (field === "categories" || field === "tags" || field === "models") return view.filters[field];
+  if (["categories", "tags", "models", "tasks", "jobs", "providers"].includes(field)) return view.filters[field];
   if (field === "group_by") return view.group_by;
   if (field === "other_conditions") return workspaceViewOtherConditionsYaml(view);
   return view.notes;
@@ -260,7 +275,7 @@ function openWorkspaceViewSaveDialog(opener) {
 }
 
 function workspaceViewDefaultName(filters = currentWorkspaceViewFilters(), groupBy = state.leaderboardSummaryGroupBy) {
-  const suffix = ` - ${["agent", "model", "category", "overall"].includes(groupBy) ? groupBy : "agent"}`;
+  const suffix = ` - ${["agent", "model", "category", "task", "job", "provider", "overall"].includes(groupBy) ? groupBy : "agent"}`;
   const prefix = listValue(filters?.tags).length ? listValue(filters.tags).join(",") : "All";
   const maximumPrefixLength = Math.max(0, 120 - suffix.length);
   const truncated = prefix.length > maximumPrefixLength ? prefix.slice(0, maximumPrefixLength).replace(/[,\s]+$/g, "") : prefix;
@@ -281,6 +296,9 @@ function currentWorkspaceViewFilters() {
     tags: query.tags,
     agents: query.agents,
     models: query.models,
+    tasks: query.tasks,
+    jobs: query.jobs,
+    providers: query.providers,
     results: query.results,
   });
 }
@@ -296,6 +314,9 @@ function renderWorkspaceViewCurrentConfiguration(dialog) {
   if (filters.tags.length) fields.push([t("tags", "Tags"), filters.tags.join(", ")]);
   if (filters.agents.length) fields.push([t("agent", "Agent"), filters.agents.join(", ")]);
   if (filters.models.length) fields.push([t("model", "Model"), filters.models.join(", ")]);
+  if (filters.tasks.length) fields.push([t("task", "Task"), filters.tasks.join(", ")]);
+  if (filters.jobs.length) fields.push([t("job", "Job"), filters.jobs.join(", ")]);
+  if (filters.providers.length) fields.push([t("provider", "Provider"), filters.providers.join(", ")]);
   if (filters.results.length) fields.push([t("result", "Result"), filters.results.map(statusLabel).join(", ")]);
   fields.push([t("summary_group_by", "Group by"), workspaceViewGroupByLabel(state.leaderboardSummaryGroupBy)]);
   target.innerHTML = fields.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join("");
@@ -315,6 +336,9 @@ function workspaceViewFilterConfig(filters = currentWorkspaceViewFilters()) {
   if (filters.tags.length) compact.tags = [...filters.tags];
   if (filters.agents.length) compact.agents = [...filters.agents];
   if (filters.models.length) compact.models = [...filters.models];
+  if (filters.tasks.length) compact.tasks = [...filters.tasks];
+  if (filters.jobs.length) compact.jobs = [...filters.jobs];
+  if (filters.providers.length) compact.providers = [...filters.providers];
   if (filters.results.length) compact.results = [...filters.results];
   return compact;
 }
@@ -541,6 +565,9 @@ function workspaceViewConfigurationParts(view) {
     filters.tags.length ? `${t("tags", "Tags")}: ${filters.tags.join(", ")}` : "",
     filters.agents.length ? `${t("agent", "Agent")}: ${filters.agents.join(", ")}` : "",
     filters.models.length ? `${t("model", "Model")}: ${filters.models.join(", ")}` : "",
+    filters.tasks.length ? `${t("task", "Task")}: ${filters.tasks.join(", ")}` : "",
+    filters.jobs.length ? `${t("job", "Job")}: ${filters.jobs.join(", ")}` : "",
+    filters.providers.length ? `${t("provider", "Provider")}: ${filters.providers.join(", ")}` : "",
     filters.results.length ? `${t("result", "Result")}: ${filters.results.join(", ")}` : "",
     `${t("summary_group_by", "Group by")}: ${workspaceViewGroupByLabel(view?.group_by)}`,
   ].filter(Boolean);
@@ -585,7 +612,7 @@ function workspaceViewConfigurationYaml(view, options = {}) {
     ? String(options.otherConditionsYaml || "").trimEnd()
     : null;
   const hasFilters = otherConditions !== null
-    ? Boolean(otherConditions.trim() || listValue(filters.categories).length || listValue(filters.tags).length || listValue(filters.models).length)
+    ? Boolean(otherConditions.trim() || listValue(filters.categories).length || listValue(filters.tags).length || listValue(filters.models).length || listValue(filters.tasks).length || listValue(filters.jobs).length || listValue(filters.providers).length)
     : Object.keys(filters).length > 0;
   if (hasFilters) {
     lines.push("filters:");
@@ -597,8 +624,8 @@ function workspaceViewConfigurationYaml(view, options = {}) {
       });
     }
     const listKeys = otherConditions !== null
-      ? ["categories", "tags", "models"]
-      : ["categories", "tags", "agents", "models", "results"];
+      ? ["categories", "tags", "models", "tasks", "jobs", "providers"]
+      : ["categories", "tags", "agents", "models", "results", "tasks", "jobs", "providers"];
     listKeys.forEach(key => {
       if (!listValue(filters[key]).length) return;
       lines.push(`  ${key}:`);
@@ -635,8 +662,8 @@ function workspaceViewConfigurationEditValue(view, field, value) {
     filters: workspaceViewFilters(view?.filters),
   };
   if (field === "categories") next.filters.categories = workspaceViewScalarValues(value);
-  if (field === "tags" || field === "models") next.filters[field] = Array.isArray(value) ? value : workspaceViewCommaValues(value);
-  if (field === "group_by") next.group_by = ["overall", "agent", "model", "category"].includes(value) ? value : view.group_by;
+  if (["tags", "models", "tasks", "jobs", "providers"].includes(field)) next.filters[field] = Array.isArray(value) ? value : workspaceViewCommaValues(value);
+  if (field === "group_by") next.group_by = ["overall", "agent", "model", "category", "task", "job", "provider"].includes(value) ? value : view.group_by;
   return workspaceViewConfigurationYaml(next);
 }
 
@@ -652,11 +679,11 @@ function navigateToWorkspaceView(name) {
 
 async function commitWorkspaceViewCellEdit(view, field, value) {
   const name = String(view?.name || "");
-  if (!name || !["name", "categories", "tags", "models", "group_by", "other_conditions", "notes"].includes(field)) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
+  if (!name || !["name", "categories", "tags", "models", "tasks", "jobs", "providers", "group_by", "other_conditions", "notes"].includes(field)) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
   const appliedBefore = state.workspaceAppliedViewNames.has(name);
   try {
     const currentView = workspaceViewForName(name) || view;
-    const configurationField = ["categories", "tags", "models", "group_by", "other_conditions"].includes(field);
+    const configurationField = ["categories", "tags", "models", "tasks", "jobs", "providers", "group_by", "other_conditions"].includes(field);
     const wireField = configurationField ? "configuration" : field;
     const wireValue = configurationField ? workspaceViewConfigurationEditValue(currentView, field, value) : value;
     const response = await serveApi("/api/views/update", {
@@ -727,6 +754,9 @@ async function deleteSelectedWorkspaceViews() {
 function workspaceViewGroupByLabel(groupBy) {
   if (groupBy === "model") return t("model", "Model");
   if (groupBy === "category") return t("category", "Category");
+  if (groupBy === "task") return t("task", "Task");
+  if (groupBy === "job") return t("job", "Job");
+  if (groupBy === "provider") return t("provider", "Provider");
   if (groupBy === "agent") return t("agent", "Agent");
   return t("summary_overall", "Overall");
 }
@@ -842,6 +872,9 @@ async function applySelectedWorkspaceViews() {
     source_tags: [],
     agent: [],
     model: [],
+    task_name: [],
+    job_name: [],
+    model_provider: [],
     status: [],
   };
   renderWorkspaceViewRail();
@@ -856,6 +889,9 @@ async function applySelectedWorkspaceViews() {
     tags: [],
     agents: [],
     models: [],
+    tasks: [],
+    jobs: [],
+    providers: [],
     results: [],
     views: names,
   }, { force: true });
@@ -888,6 +924,9 @@ async function clearWorkspaceViewConditions() {
     source_tags: [],
     agent: [],
     model: [],
+    task_name: [],
+    job_name: [],
+    model_provider: [],
     status: [],
   };
   renderWorkspaceViewRail();
@@ -902,6 +941,9 @@ async function clearWorkspaceViewConditions() {
     tags: [],
     agents: [],
     models: [],
+    tasks: [],
+    jobs: [],
+    providers: [],
     results: [],
     views: [],
   }, { force: true });

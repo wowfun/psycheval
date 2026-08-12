@@ -152,6 +152,27 @@ td.num,th.num {
   overflow:hidden;
   text-overflow:ellipsis;
 }
+.source-tag-chip.derived {
+  border-style:dashed;
+  background:color-mix(in oklch,var(--surface-2),var(--surface) 54%);
+  color:var(--muted);
+}
+.source-tag-chip.custom {
+  border-style:solid;
+}
+.task-alias {
+  display:grid;
+  gap:3px;
+  min-width:150px;
+}
+.task-alias strong,
+.task-alias small {
+  overflow-wrap:anywhere;
+}
+.task-alias small {
+  color:var(--muted);
+  font:12px/1.25 var(--mono);
+}
 .table-cell-editable {
   cursor:text;
 }

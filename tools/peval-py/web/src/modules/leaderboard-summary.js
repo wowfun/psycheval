@@ -52,6 +52,9 @@ function renderLeaderboardSummaryGroupControl() {
       ${leaderboardSummaryGroupButton("agent", t("agent", "Agent"))}
       ${leaderboardSummaryGroupButton("model", t("model", "Model"))}
       ${leaderboardSummaryGroupButton("category", t("category", "Category"))}
+      ${leaderboardSummaryGroupButton("task", t("task", "Task"))}
+      ${leaderboardSummaryGroupButton("job", t("job", "Job"))}
+      ${leaderboardSummaryGroupButton("provider", t("provider", "Provider"))}
     </div>
   </div>`;
 }
@@ -68,12 +71,9 @@ function leaderboardSummaryGroups(rows = leaderboardRows(), groupBy = state.lead
   }
   const grouped = new Map();
   visibleRows.forEach(row => {
-    const category = groupBy === "category"
-      ? String(row?.source_category || "").trim()
-      : "";
-    const key = groupBy === "category"
-      ? category || null
-      : String(groupBy === "model" ? row?.model || "-" : agentNameFor(row) || "-");
+    const field = ({ category: "source_category", model: "model", task: "task_name", job: "job_name", provider: "model_provider" })[groupBy];
+    const raw = field ? String(row?.[field] || "").trim() : String(agentNameFor(row) || "").trim();
+    const key = raw || null;
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push(row);
   });
@@ -108,6 +108,7 @@ function leaderboardSummaryRows(rows = leaderboardRows()) {
 
 function leaderboardSummaryDefinitions() {
   return [
+    { key: "score", label: t("reward", "Reward"), type: "number", value: row => row?.score },
     { key: "duration_ms", label: t("duration", "Active Duration"), type: "duration", value: row => row?.duration_ms },
     { key: "tokens", label: t("tokens", "Tokens"), type: "number", value: row => row?.tokens },
     { key: "turns", label: t("turns", "Turns"), type: "number", value: row => row?.turns },
@@ -267,7 +268,7 @@ function bindLeaderboardSummaryControls(target) {
 }
 
 function setLeaderboardSummaryGroupBy(value) {
-  if (!["overall", "agent", "model", "category"].includes(value)) return;
+  if (!["overall", "agent", "model", "category", "task", "job", "provider"].includes(value)) return;
   state.leaderboardSummaryGroupBy = value;
   renderLeaderboardSummary(leaderboardRows());
 }
@@ -276,6 +277,9 @@ function leaderboardSummaryGroupHeading(groupBy = state.leaderboardSummaryGroupB
   if (groupBy === "overall") return t("summary_scope", "Scope");
   if (groupBy === "model") return t("model", "Model");
   if (groupBy === "category") return t("category", "Category");
+  if (groupBy === "task") return t("task", "Task");
+  if (groupBy === "job") return t("job", "Job");
+  if (groupBy === "provider") return t("provider", "Provider");
   return t("agent", "Agent");
 }
 
@@ -283,6 +287,9 @@ function leaderboardSummaryGroupUnit(groupBy = state.leaderboardSummaryGroupBy) 
   if (groupBy === "overall") return t("summary_scopes", "scope");
   if (groupBy === "model") return t("summary_models", "models");
   if (groupBy === "category") return t("summary_categories", "categories");
+  if (groupBy === "task") return t("summary_tasks", "tasks");
+  if (groupBy === "job") return t("summary_jobs", "jobs");
+  if (groupBy === "provider") return t("summary_providers", "providers");
   return t("summary_agents", "agents");
 }
 

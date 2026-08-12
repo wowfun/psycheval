@@ -1,7 +1,7 @@
 import { esc, fmtDate, renderReadOnlySourceCategory, renderReadOnlySourceTags, serveMode, sourceCategoryEditValue, sourceCategoryValue, sourceTagsEditValue, sourceTagsValue, state, t } from "./runtime.js";
 import { bindDataTableControls, renderDataTable, tableCellContent, tableValueAttributes } from "./data-tables.js";
 import { applyDefaultDbToForm, syncAdapterDefaultDbControls } from "./serve-controls.js";
-import { commitSourceCellEdit, existingSourceCategoryOptions, existingSourceTagOptions, formPayload, normalizeAdapterValue, selectedAdapterValue, serveApi, setAdapterChoice, setServeStatus, showServeNotice } from "./serve-effects.js";
+import { commitSourceCellEdit, existingSourceCategoryOptions, existingSourceTagOptions, formPayload, selectedAdapterValue, serveApi, setAdapterChoice, setServeStatus, showServeNotice } from "./serve-effects.js";
 import { applyServeMutationPayload, bindSourceManagerPagination, pruneSourceSelection, renderSourceManagerPagination, sourceRows, sourceSelectionKeys } from "./serve-catalog.js";
 import { closeModalSurface } from "./modal-surfaces.js";
 
@@ -382,23 +382,42 @@ async function addSelectedDbSessions(form) {
     setServeStatus(error.message || String(error), true);
   }
 }
-async function submitServeUploadForm(form) {
+function harborMountPayload(form) {
   const formData = new FormData(form);
-  const file = formData.get("file");
-  if (!file || !file.name || typeof file.text !== "function") return;
+  return {
+    action: "upsert",
+    original_id: String(formData.get("original_id") || "").trim(),
+    mount_id: String(formData.get("mount_id") || "").trim(),
+    jobs_path: String(formData.get("jobs_path") || "").trim(),
+    task_paths: String(formData.get("task_paths") || "")
+      .split(/\r?\n/)
+      .map(value => value.trim())
+      .filter(Boolean)
+  };
+}
+async function submitHarborMountForm(form) {
   try {
-    setServeStatus(t("serve_upload", "Upload"));
-    const payload = await serveApi("/api/upload", {
+    setServeStatus(t("serve_save_harbor_mount", "Save mount"));
+    await serveApi("/api/config/harbor-mount", {
       method: "POST",
-      body: {
-        filename: file.name,
-        content: await file.text(),
-        adapter: normalizeAdapterValue(formData.get("adapter")),
-        alias: String(formData.get("alias") || "").trim()
-      }
+      body: harborMountPayload(form)
     });
-    form.reset();
-    applyServeMutationPayload(payload);
+    window.location.reload();
+  } catch (error) {
+    showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
+    setServeStatus(error.message || String(error), true);
+  }
+}
+async function removeHarborMount(form) {
+  const originalId = String(new FormData(form).get("original_id") || "").trim();
+  if (!originalId || !window.confirm(t("serve_remove_harbor_mount_confirm", "Remove this Harbor mount from peval-py configuration?"))) return;
+  try {
+    setServeStatus(t("serve_remove_harbor_mount", "Remove mount"));
+    await serveApi("/api/config/harbor-mount", {
+      method: "POST",
+      body: { action: "delete", original_id: originalId }
+    });
+    window.location.reload();
   } catch (error) {
     showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
     setServeStatus(error.message || String(error), true);
@@ -417,6 +436,7 @@ export {
   renderServeSourceLabel,
   renderServeSourceStatus,
   renderServeSources,
+  removeHarborMount,
   renderSourceManagerStatus,
   renderSourceSelection,
   renderSourceSelectionHeader,
@@ -429,8 +449,8 @@ export {
   sourceSelectedRows,
   sourceStatusText,
   sourceVisibleKeys,
+  submitHarborMountForm,
   submitServeSourceForm,
-  submitServeUploadForm,
   syncServeLoadingStatus,
   syncSourceManagerBulkActions,
   updateDbSelectedCount,

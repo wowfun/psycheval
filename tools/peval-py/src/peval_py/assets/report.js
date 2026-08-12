@@ -362,6 +362,53 @@ function renderSelectedEvidence(trajectory, meta) {
   const blocks = [renderSelectedUsage(trajectory), renderSelectedWarnings(meta), renderSelectedSource(meta)].filter(Boolean);
   return blocks.length ? `<section class="selected-extra selected-evidence"><h3>${esc(t("evidence", "Evidence"))}</h3><div class="selected-evidence-list">${blocks.join("")}</div></section>` : "";
 }
+function renderHarborEvidence(meta) {
+  const provenance = meta?.harbor_provenance;
+  if (!provenance || typeof provenance !== "object") return "";
+  const taskMetadata = meta?.task_metadata && typeof meta.task_metadata === "object" ? meta.task_metadata : {};
+  const rewards = meta?.rewards && typeof meta.rewards === "object" ? meta.rewards : {};
+  const phases = meta?.evaluation?.phase_timing && typeof meta.evaluation.phase_timing === "object" ? meta.evaluation.phase_timing : {};
+  const identity = [
+    [t("task", "Task"), meta?.task_name || "-"],
+    [t("job", "Job"), meta?.job_name || "-"],
+    [t("trial", "Trial"), meta?.trial_name || "-"],
+    [t("provider", "Provider"), meta?.model_provider || "-"]
+  ];
+  const history = [
+    [t("job_id", "Job ID"), provenance.job_id || "-"],
+    [t("result_id", "Result ID"), provenance.result_id || "-"],
+    [t("harbor_version", "Harbor version"), provenance.harbor_version || "-"],
+    [t("recorded_task_version", "Recorded Task version"), provenance.task_version || "-"],
+    [t("recorded_task_digest", "Recorded Task digest"), provenance.task_digest || "-"],
+    [t("recorded_task_digest_source", "Recorded digest source"), provenance.task_digest_source || "-"],
+    [t("task_source", "Task source"), provenance.task_source || "-"],
+    [t("regrade_source", "Regrade source"), provenance.regrade ? JSON.stringify(provenance.regrade) : "-"]
+  ];
+  const live = [
+    [t("metadata_status", "Metadata status"), taskMetadata.status || "-"],
+    [t("live_task_path", "Live Task path"), taskMetadata.path || "-"],
+    [t("live_task_name", "Live Task name"), taskMetadata.name || "-"],
+    [t("live_task_version", "Live Task version"), taskMetadata.version || "-"],
+    [t("task_description", "Description"), taskMetadata.description || "-"],
+    [t("live_task_digest", "Live Task digest"), taskMetadata.live_digest || "-"],
+    [t("digest_matches", "Digest matches"), taskMetadata.digest_comparison === "not_comparable" ? t("not_comparable", "not comparable") : taskMetadata.digest_matches === null || taskMetadata.digest_matches === void 0 ? "-" : taskMetadata.digest_matches ? t("yes", "yes") : t("no", "no")],
+    [t("task_keywords", "Task keywords"), listValue(taskMetadata.keywords).join(", ") || "-"],
+    [t("diagnostic", "Diagnostic"), taskMetadata.diagnostic || "-"]
+  ];
+  const rewardRows = Object.entries(rewards).map(([name, value]) => [name, value === null || value === void 0 ? "-" : String(value)]);
+  const phaseRows = Object.entries(phases).map(([name, value]) => {
+    const timing = value && typeof value === "object" ? value : {};
+    const duration = hasMetricValue(timing.duration_ms) ? fmtMs(timing.duration_ms) : "-";
+    return [t(`phase.${name}`, name.replaceAll("_", " ")), `${duration} · ${timing.started_at || "-"} → ${timing.finished_at || "-"}`];
+  });
+  return `<section class="selected-extra harbor-evidence"><h3>${esc(t("harbor_evidence", "Harbor Evidence"))}</h3><p class="muted">${esc(t("live_task_metadata_notice", "Task metadata is read live from the configured allowlist; it is not historical Job evidence."))}</p><div class="selected-evidence-list">
+    <article class="selected-evidence-card"><h4>${esc(t("identity", "Identity"))}</h4>${infoGrid(identity)}</article>
+    <article class="selected-evidence-card"><h4>${esc(t("reward_dimensions", "Reward dimensions"))}</h4>${rewardRows.length ? infoGrid(rewardRows) : `<p class="muted">-</p>`}</article>
+    <article class="selected-evidence-card"><h4>${esc(t("phase_timing", "Phase timing"))}</h4>${phaseRows.length ? infoGrid(phaseRows) : `<p class="muted">-</p>`}</article>
+    <article class="selected-evidence-card"><h4>${esc(t("recorded_provenance", "Recorded provenance"))}</h4>${infoGrid(history)}</article>
+    <article class="selected-evidence-card"><h4>${esc(t("live_task_metadata", "Live Task metadata"))}</h4>${infoGrid(live)}</article>
+  </div></section>`;
+}
 function renderSelectedUsage(trajectory) {
   const metrics = trajectory?.final_metrics || {};
   const extra = metricExtra(metrics);
@@ -1588,6 +1635,7 @@ function renderTrace() {
     [t("tool_success_total", "Tool success / total"), toolCallRatio(finalMetric(metrics, "total_tool_calls") ?? 0, finalMetric(metrics, "total_tool_errors") ?? 0)],
     [t("cost", "Cost"), fmtCost(metrics.total_cost_usd)]
   ])}
+    ${renderHarborEvidence(trial)}
     ${renderSelectedNotes(trial.trial_key)}
     ${renderSelectedAnalysis(trial.trial_key)}
     ${renderSelectedEvidence(trajectory, trial)}
@@ -2440,6 +2488,9 @@ function renderLeaderboardSummaryGroupControl() {
       ${leaderboardSummaryGroupButton("agent", t("agent", "Agent"))}
       ${leaderboardSummaryGroupButton("model", t("model", "Model"))}
       ${leaderboardSummaryGroupButton("category", t("category", "Category"))}
+      ${leaderboardSummaryGroupButton("task", t("task", "Task"))}
+      ${leaderboardSummaryGroupButton("job", t("job", "Job"))}
+      ${leaderboardSummaryGroupButton("provider", t("provider", "Provider"))}
     </div>
   </div>`;
 }
@@ -2454,8 +2505,9 @@ function leaderboardSummaryGroups(rows = leaderboardRows(), groupBy = state.lead
   }
   const grouped = /* @__PURE__ */ new Map();
   visibleRows.forEach((row) => {
-    const category = groupBy === "category" ? String(row?.source_category || "").trim() : "";
-    const key = groupBy === "category" ? category || null : String(groupBy === "model" ? row?.model || "-" : agentNameFor(row) || "-");
+    const field = { category: "source_category", model: "model", task: "task_name", job: "job_name", provider: "model_provider" }[groupBy];
+    const raw = field ? String(row?.[field] || "").trim() : String(agentNameFor(row) || "").trim();
+    const key = raw || null;
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push(row);
   });
@@ -2483,6 +2535,7 @@ function leaderboardSummaryRows(rows = leaderboardRows()) {
 }
 function leaderboardSummaryDefinitions() {
   return [
+    { key: "score", label: t("reward", "Reward"), type: "number", value: (row) => row?.score },
     { key: "duration_ms", label: t("duration", "Active Duration"), type: "duration", value: (row) => row?.duration_ms },
     { key: "tokens", label: t("tokens", "Tokens"), type: "number", value: (row) => row?.tokens },
     { key: "turns", label: t("turns", "Turns"), type: "number", value: (row) => row?.turns },
@@ -2633,7 +2686,7 @@ function bindLeaderboardSummaryControls(target) {
   if (typeof bindWorkspaceViewControls === "function") bindWorkspaceViewControls(target);
 }
 function setLeaderboardSummaryGroupBy(value) {
-  if (!["overall", "agent", "model", "category"].includes(value)) return;
+  if (!["overall", "agent", "model", "category", "task", "job", "provider"].includes(value)) return;
   state.leaderboardSummaryGroupBy = value;
   renderLeaderboardSummary(leaderboardRows());
 }
@@ -2641,12 +2694,18 @@ function leaderboardSummaryGroupHeading(groupBy = state.leaderboardSummaryGroupB
   if (groupBy === "overall") return t("summary_scope", "Scope");
   if (groupBy === "model") return t("model", "Model");
   if (groupBy === "category") return t("category", "Category");
+  if (groupBy === "task") return t("task", "Task");
+  if (groupBy === "job") return t("job", "Job");
+  if (groupBy === "provider") return t("provider", "Provider");
   return t("agent", "Agent");
 }
 function leaderboardSummaryGroupUnit(groupBy = state.leaderboardSummaryGroupBy) {
   if (groupBy === "overall") return t("summary_scopes", "scope");
   if (groupBy === "model") return t("summary_models", "models");
   if (groupBy === "category") return t("summary_categories", "categories");
+  if (groupBy === "task") return t("summary_tasks", "tasks");
+  if (groupBy === "job") return t("summary_jobs", "jobs");
+  if (groupBy === "provider") return t("summary_providers", "providers");
   return t("summary_agents", "agents");
 }
 function toggleLeaderboardSummaryTable() {
@@ -2696,7 +2755,7 @@ function workspaceViews() {
     ...view,
     name: String(view.name),
     filters: workspaceViewFilters(view.filters),
-    group_by: ["overall", "agent", "model", "category"].includes(view.group_by) ? view.group_by : "agent",
+    group_by: ["overall", "agent", "model", "category", "task", "job", "provider"].includes(view.group_by) ? view.group_by : "agent",
     notes: typeof view.notes === "string" ? view.notes : ""
   })).sort((left, right) => left.name.localeCompare(right.name, void 0, { numeric: true, sensitivity: "base" }));
 }
@@ -2709,6 +2768,9 @@ function workspaceViewFilters(value) {
     tags: listValue(filters.tags).map(String),
     agents: listValue(filters.agents).map(String),
     models: listValue(filters.models).map(String),
+    tasks: listValue(filters.tasks).map(String),
+    jobs: listValue(filters.jobs).map(String),
+    providers: listValue(filters.providers).map(String),
     results: listValue(filters.results).map(String)
   };
 }
@@ -2730,7 +2792,10 @@ function workspaceViewColumns() {
     { key: "categories", label: t("category", "Category"), valueType: "scalar-list", filterable: true, filterValues: (view) => view.filters.categories, value: (view) => view.filters.categories.join(", ") || "-", html: (view) => renderWorkspaceViewValueList(view.filters.categories), cellAttrs: navigateAttrs, edit: edit("categories", { suggestions: workspaceViewCategorySuggestions }) },
     { key: "tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: (view) => view.filters.tags, value: (view) => view.filters.tags.join(", ") || "-", html: (view) => renderWorkspaceViewValueList(view.filters.tags), cellAttrs: navigateAttrs, edit: edit("tags", { suggestions: workspaceViewTagSuggestions }) },
     { key: "models", label: t("model", "Models"), valueType: "list", filterable: true, filterValues: (view) => view.filters.models, value: (view) => view.filters.models.join(", ") || "-", html: (view) => renderWorkspaceViewValueList(view.filters.models), cellAttrs: navigateAttrs, edit: edit("models", { suggestions: workspaceViewModelSuggestions }) },
-    { key: "group_by", label: t("summary_group_by", "Group by"), valueType: "enum", filterable: true, value: (view) => view.group_by, filterLabel: workspaceViewGroupByLabel, html: (view) => esc(workspaceViewGroupByLabel(view.group_by)), cellAttrs: navigateAttrs, edit: edit("group_by", { options: () => ["overall", "agent", "model", "category"].map((value) => ({ value, label: workspaceViewGroupByLabel(value) })) }) },
+    { key: "tasks", label: t("task", "Task"), valueType: "list", filterable: true, filterValues: (view) => view.filters.tasks, value: (view) => view.filters.tasks.join(", ") || "-", html: (view) => renderWorkspaceViewValueList(view.filters.tasks), cellAttrs: navigateAttrs, edit: edit("tasks", { suggestions: workspaceViewTaskSuggestions }) },
+    { key: "jobs", label: t("job", "Job"), valueType: "list", filterable: true, filterValues: (view) => view.filters.jobs, value: (view) => view.filters.jobs.join(", ") || "-", html: (view) => renderWorkspaceViewValueList(view.filters.jobs), cellAttrs: navigateAttrs, edit: edit("jobs", { suggestions: workspaceViewJobSuggestions }) },
+    { key: "providers", label: t("provider", "Provider"), valueType: "list", filterable: true, filterValues: (view) => view.filters.providers, value: (view) => view.filters.providers.join(", ") || "-", html: (view) => renderWorkspaceViewValueList(view.filters.providers), cellAttrs: navigateAttrs, edit: edit("providers", { suggestions: workspaceViewProviderSuggestions }) },
+    { key: "group_by", label: t("summary_group_by", "Group by"), valueType: "enum", filterable: true, value: (view) => view.group_by, filterLabel: workspaceViewGroupByLabel, html: (view) => esc(workspaceViewGroupByLabel(view.group_by)), cellAttrs: navigateAttrs, edit: edit("group_by", { options: () => ["overall", "agent", "model", "category", "task", "job", "provider"].map((value) => ({ value, label: workspaceViewGroupByLabel(value) })) }) },
     { key: "other_conditions", label: t("view_other_conditions", "Other conditions"), valueType: "yaml", value: (view) => workspaceViewOtherConditionsLabel(view), fullText: workspaceViewOtherConditionsYaml, html: (view) => `<span class="workspace-view-config-preview">${esc(workspaceViewOtherConditionsLabel(view))}</span>`, cellAttrs: navigateAttrs, edit: edit("other_conditions") },
     { key: "notes", label: t("view_notes", "Notes"), valueType: "markdown", value: (view) => view.notes || "-", fullText: (view) => view.notes || "", html: (view) => `<span>${esc(String(view.notes || "").replace(/\s+/g, " ").trim() || "-")}</span>`, className: "workspace-view-notes-cell", cellAttrs: navigateAttrs, edit: edit("notes") }
   ];
@@ -2763,9 +2828,18 @@ function workspaceViewCategorySuggestions() {
 function workspaceViewModelSuggestions() {
   return workspaceViews().flatMap((view) => view.filters.models);
 }
+function workspaceViewTaskSuggestions() {
+  return workspaceViews().flatMap((view) => view.filters.tasks);
+}
+function workspaceViewJobSuggestions() {
+  return workspaceViews().flatMap((view) => view.filters.jobs);
+}
+function workspaceViewProviderSuggestions() {
+  return workspaceViews().flatMap((view) => view.filters.providers);
+}
 function workspaceViewEditValue(view, field) {
   if (field === "name") return view.name;
-  if (field === "categories" || field === "tags" || field === "models") return view.filters[field];
+  if (["categories", "tags", "models", "tasks", "jobs", "providers"].includes(field)) return view.filters[field];
   if (field === "group_by") return view.group_by;
   if (field === "other_conditions") return workspaceViewOtherConditionsYaml(view);
   return view.notes;
@@ -2920,7 +2994,7 @@ function openWorkspaceViewSaveDialog(opener) {
   renderWorkspaceViewCurrentConfiguration(dialog);
 }
 function workspaceViewDefaultName(filters = currentWorkspaceViewFilters(), groupBy = state.leaderboardSummaryGroupBy) {
-  const suffix = ` - ${["agent", "model", "category", "overall"].includes(groupBy) ? groupBy : "agent"}`;
+  const suffix = ` - ${["agent", "model", "category", "task", "job", "provider", "overall"].includes(groupBy) ? groupBy : "agent"}`;
   const prefix = listValue(filters?.tags).length ? listValue(filters.tags).join(",") : "All";
   const maximumPrefixLength = Math.max(0, 120 - suffix.length);
   const truncated = prefix.length > maximumPrefixLength ? prefix.slice(0, maximumPrefixLength).replace(/[,\s]+$/g, "") : prefix;
@@ -2939,6 +3013,9 @@ function currentWorkspaceViewFilters() {
     tags: query.tags,
     agents: query.agents,
     models: query.models,
+    tasks: query.tasks,
+    jobs: query.jobs,
+    providers: query.providers,
     results: query.results
   });
 }
@@ -2953,6 +3030,9 @@ function renderWorkspaceViewCurrentConfiguration(dialog) {
   if (filters.tags.length) fields.push([t("tags", "Tags"), filters.tags.join(", ")]);
   if (filters.agents.length) fields.push([t("agent", "Agent"), filters.agents.join(", ")]);
   if (filters.models.length) fields.push([t("model", "Model"), filters.models.join(", ")]);
+  if (filters.tasks.length) fields.push([t("task", "Task"), filters.tasks.join(", ")]);
+  if (filters.jobs.length) fields.push([t("job", "Job"), filters.jobs.join(", ")]);
+  if (filters.providers.length) fields.push([t("provider", "Provider"), filters.providers.join(", ")]);
   if (filters.results.length) fields.push([t("result", "Result"), filters.results.map(statusLabel).join(", ")]);
   fields.push([t("summary_group_by", "Group by"), workspaceViewGroupByLabel(state.leaderboardSummaryGroupBy)]);
   target.innerHTML = fields.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join("");
@@ -2970,6 +3050,9 @@ function workspaceViewFilterConfig(filters = currentWorkspaceViewFilters()) {
   if (filters.tags.length) compact.tags = [...filters.tags];
   if (filters.agents.length) compact.agents = [...filters.agents];
   if (filters.models.length) compact.models = [...filters.models];
+  if (filters.tasks.length) compact.tasks = [...filters.tasks];
+  if (filters.jobs.length) compact.jobs = [...filters.jobs];
+  if (filters.providers.length) compact.providers = [...filters.providers];
   if (filters.results.length) compact.results = [...filters.results];
   return compact;
 }
@@ -3181,6 +3264,9 @@ function workspaceViewConfigurationParts(view) {
     filters.tags.length ? `${t("tags", "Tags")}: ${filters.tags.join(", ")}` : "",
     filters.agents.length ? `${t("agent", "Agent")}: ${filters.agents.join(", ")}` : "",
     filters.models.length ? `${t("model", "Model")}: ${filters.models.join(", ")}` : "",
+    filters.tasks.length ? `${t("task", "Task")}: ${filters.tasks.join(", ")}` : "",
+    filters.jobs.length ? `${t("job", "Job")}: ${filters.jobs.join(", ")}` : "",
+    filters.providers.length ? `${t("provider", "Provider")}: ${filters.providers.join(", ")}` : "",
     filters.results.length ? `${t("result", "Result")}: ${filters.results.join(", ")}` : "",
     `${t("summary_group_by", "Group by")}: ${workspaceViewGroupByLabel(view?.group_by)}`
   ].filter(Boolean);
@@ -3218,7 +3304,7 @@ function workspaceViewConfigurationYaml(view, options = {}) {
   const filters = workspaceViewFilterConfig(workspaceViewFilters(view?.filters));
   const lines = [];
   const otherConditions = Object.prototype.hasOwnProperty.call(options, "otherConditionsYaml") ? String(options.otherConditionsYaml || "").trimEnd() : null;
-  const hasFilters = otherConditions !== null ? Boolean(otherConditions.trim() || listValue(filters.categories).length || listValue(filters.tags).length || listValue(filters.models).length) : Object.keys(filters).length > 0;
+  const hasFilters = otherConditions !== null ? Boolean(otherConditions.trim() || listValue(filters.categories).length || listValue(filters.tags).length || listValue(filters.models).length || listValue(filters.tasks).length || listValue(filters.jobs).length || listValue(filters.providers).length) : Object.keys(filters).length > 0;
   if (hasFilters) {
     lines.push("filters:");
     if (otherConditions !== null) {
@@ -3228,7 +3314,7 @@ function workspaceViewConfigurationYaml(view, options = {}) {
         if (filters[key]) lines.push(`  ${key}: ${JSON.stringify(filters[key])}`);
       });
     }
-    const listKeys = otherConditions !== null ? ["categories", "tags", "models"] : ["categories", "tags", "agents", "models", "results"];
+    const listKeys = otherConditions !== null ? ["categories", "tags", "models", "tasks", "jobs", "providers"] : ["categories", "tags", "agents", "models", "results", "tasks", "jobs", "providers"];
     listKeys.forEach((key) => {
       if (!listValue(filters[key]).length) return;
       lines.push(`  ${key}:`);
@@ -3263,8 +3349,8 @@ function workspaceViewConfigurationEditValue(view, field, value) {
     filters: workspaceViewFilters(view?.filters)
   };
   if (field === "categories") next.filters.categories = workspaceViewScalarValues(value);
-  if (field === "tags" || field === "models") next.filters[field] = Array.isArray(value) ? value : workspaceViewCommaValues(value);
-  if (field === "group_by") next.group_by = ["overall", "agent", "model", "category"].includes(value) ? value : view.group_by;
+  if (["tags", "models", "tasks", "jobs", "providers"].includes(field)) next.filters[field] = Array.isArray(value) ? value : workspaceViewCommaValues(value);
+  if (field === "group_by") next.group_by = ["overall", "agent", "model", "category", "task", "job", "provider"].includes(value) ? value : view.group_by;
   return workspaceViewConfigurationYaml(next);
 }
 function navigateToWorkspaceView(name) {
@@ -3277,11 +3363,11 @@ function navigateToWorkspaceView(name) {
 }
 async function commitWorkspaceViewCellEdit(view, field, value) {
   const name = String(view?.name || "");
-  if (!name || !["name", "categories", "tags", "models", "group_by", "other_conditions", "notes"].includes(field)) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
+  if (!name || !["name", "categories", "tags", "models", "tasks", "jobs", "providers", "group_by", "other_conditions", "notes"].includes(field)) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
   const appliedBefore = state.workspaceAppliedViewNames.has(name);
   try {
     const currentView = workspaceViewForName(name) || view;
-    const configurationField = ["categories", "tags", "models", "group_by", "other_conditions"].includes(field);
+    const configurationField = ["categories", "tags", "models", "tasks", "jobs", "providers", "group_by", "other_conditions"].includes(field);
     const wireField = configurationField ? "configuration" : field;
     const wireValue = configurationField ? workspaceViewConfigurationEditValue(currentView, field, value) : value;
     const response = await serveApi("/api/views/update", {
@@ -3349,6 +3435,9 @@ async function deleteSelectedWorkspaceViews() {
 function workspaceViewGroupByLabel(groupBy) {
   if (groupBy === "model") return t("model", "Model");
   if (groupBy === "category") return t("category", "Category");
+  if (groupBy === "task") return t("task", "Task");
+  if (groupBy === "job") return t("job", "Job");
+  if (groupBy === "provider") return t("provider", "Provider");
   if (groupBy === "agent") return t("agent", "Agent");
   return t("summary_overall", "Overall");
 }
@@ -3451,6 +3540,9 @@ async function applySelectedWorkspaceViews() {
     source_tags: [],
     agent: [],
     model: [],
+    task_name: [],
+    job_name: [],
+    model_provider: [],
     status: []
   };
   renderWorkspaceViewRail();
@@ -3465,6 +3557,9 @@ async function applySelectedWorkspaceViews() {
     tags: [],
     agents: [],
     models: [],
+    tasks: [],
+    jobs: [],
+    providers: [],
     results: [],
     views: names
   }, { force: true });
@@ -3495,6 +3590,9 @@ async function clearWorkspaceViewConditions() {
     source_tags: [],
     agent: [],
     model: [],
+    task_name: [],
+    job_name: [],
+    model_provider: [],
     status: []
   };
   renderWorkspaceViewRail();
@@ -3509,6 +3607,9 @@ async function clearWorkspaceViewConditions() {
     tags: [],
     agents: [],
     models: [],
+    tasks: [],
+    jobs: [],
+    providers: [],
     results: [],
     views: []
   }, { force: true });
@@ -3657,10 +3758,14 @@ function bindServeSourceControls() {
       addSelectedDbSessions(button.closest("[data-source-add-form]"));
     });
   });
-  document.querySelectorAll("[data-source-upload-form]").forEach((form) => {
+  document.querySelectorAll("[data-harbor-mount-form]").forEach((form) => {
     form.addEventListener("submit", (event) => {
       event.preventDefault();
-      submitServeUploadForm(form);
+      submitHarborMountForm(form);
+    });
+    form.querySelector("[data-harbor-mount-remove]")?.addEventListener("click", (event) => {
+      event.preventDefault();
+      removeHarborMount(form);
     });
   });
   bindAdapterDefaultDbControls();
@@ -4168,23 +4273,39 @@ async function addSelectedDbSessions(form) {
     setServeStatus(error.message || String(error), true);
   }
 }
-async function submitServeUploadForm(form) {
+function harborMountPayload(form) {
   const formData = new FormData(form);
-  const file = formData.get("file");
-  if (!file || !file.name || typeof file.text !== "function") return;
+  return {
+    action: "upsert",
+    original_id: String(formData.get("original_id") || "").trim(),
+    mount_id: String(formData.get("mount_id") || "").trim(),
+    jobs_path: String(formData.get("jobs_path") || "").trim(),
+    task_paths: String(formData.get("task_paths") || "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean)
+  };
+}
+async function submitHarborMountForm(form) {
   try {
-    setServeStatus(t("serve_upload", "Upload"));
-    const payload = await serveApi("/api/upload", {
+    setServeStatus(t("serve_save_harbor_mount", "Save mount"));
+    await serveApi("/api/config/harbor-mount", {
       method: "POST",
-      body: {
-        filename: file.name,
-        content: await file.text(),
-        adapter: normalizeAdapterValue(formData.get("adapter")),
-        alias: String(formData.get("alias") || "").trim()
-      }
+      body: harborMountPayload(form)
     });
-    form.reset();
-    applyServeMutationPayload(payload);
+    window.location.reload();
+  } catch (error) {
+    showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
+    setServeStatus(error.message || String(error), true);
+  }
+}
+async function removeHarborMount(form) {
+  const originalId = String(new FormData(form).get("original_id") || "").trim();
+  if (!originalId || !window.confirm(t("serve_remove_harbor_mount_confirm", "Remove this Harbor mount from peval-py configuration?"))) return;
+  try {
+    setServeStatus(t("serve_remove_harbor_mount", "Remove mount"));
+    await serveApi("/api/config/harbor-mount", {
+      method: "POST",
+      body: { action: "delete", original_id: originalId }
+    });
+    window.location.reload();
   } catch (error) {
     showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
     setServeStatus(error.message || String(error), true);
@@ -4645,7 +4766,7 @@ function filterOptions(column, rows) {
     const values = rows.flatMap((row) => filterValues(row, column));
     return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right, void 0, { numeric: true, sensitivity: "base" }));
   }
-  const facetKey = { source_category: "categories", source_tags: "tags", agent: "agents", model: "models", status: "results" }[column.key];
+  const facetKey = { source_category: "categories", source_tags: "tags", agent: "agents", model: "models", task_name: "tasks", job_name: "jobs", model_provider: "providers", status: "results" }[column.key];
   if (!facetKey) {
     const values = rows.flatMap((row) => filterValues(row, column));
     return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right, void 0, { numeric: true, sensitivity: "base" }));
@@ -4700,7 +4821,7 @@ function bindLeaderboardCatalogControls(target) {
 function leaderboardConditionsAreDefault() {
   const query = state.catalogQuery || {};
   const filters = tableControls("leaderboard").filters || {};
-  return state.workspaceViewSelection.size < 1 && !listValue(query.views).length && normalizeServeSourceMode(query.state) === "active" && !String(query.search || "") && !listValue(query.categories).length && !listValue(query.tags).length && !listValue(query.agents).length && !listValue(query.models).length && !listValue(query.results).length && catalogSortKey(query.sort) === "last_turn_end" && String(query.direction || "desc") === "desc" && !Object.values(filters).some((value) => listValue(value).length) && state.leaderboardSummaryGroupBy === "agent" && state.leaderboardSummaryStatistic === "mean" && !state.leaderboardSummaryTableOpen;
+  return state.workspaceViewSelection.size < 1 && !listValue(query.views).length && normalizeServeSourceMode(query.state) === "active" && !String(query.search || "") && !listValue(query.categories).length && !listValue(query.tags).length && !listValue(query.agents).length && !listValue(query.models).length && !listValue(query.tasks).length && !listValue(query.jobs).length && !listValue(query.providers).length && !listValue(query.results).length && catalogSortKey(query.sort) === "last_turn_end" && String(query.direction || "desc") === "desc" && !Object.values(filters).some((value) => listValue(value).length) && state.leaderboardSummaryGroupBy === "agent" && state.leaderboardSummaryStatistic === "mean" && !state.leaderboardSummaryTableOpen;
 }
 function requestCatalogSort(key) {
   const query = state.catalogQuery;
@@ -4725,6 +4846,9 @@ function requestCatalogFacets() {
     tags: listValue(filters.source_tags),
     agents: listValue(filters.agent),
     models: listValue(filters.model),
+    tasks: listValue(filters.task_name),
+    jobs: listValue(filters.job_name),
+    providers: listValue(filters.model_provider),
     results: listValue(filters.status)
   }, { force: true });
 }
@@ -4756,12 +4880,22 @@ function catalogQueryString(surface = "leaderboard") {
   listValue(query.tags).forEach((value) => params.append("tag", value));
   listValue(query.agents).forEach((value) => params.append("agent", value));
   listValue(query.models).forEach((value) => params.append("model", value));
+  listValue(query.tasks).forEach((value) => params.append("task", value));
+  listValue(query.jobs).forEach((value) => params.append("job", value));
+  listValue(query.providers).forEach((value) => params.append("provider", value));
   listValue(query.results).forEach((value) => params.append("result", value));
   listValue(query.views).forEach((value) => params.append("view", value));
   return params.toString();
 }
 function catalogSortKey(key) {
-  return { finished_at_ms: "last_turn_end", session_id: "session", status: "result" }[key] || key || "last_turn_end";
+  return {
+    finished_at_ms: "last_turn_end",
+    session_id: "session",
+    status: "result",
+    task_name: "task",
+    job_name: "job",
+    model_provider: "provider"
+  }[key] || key || "last_turn_end";
 }
 async function loadCatalogPage(changes = {}, options = {}) {
   if (!serveMode()) return;
@@ -4942,7 +5076,7 @@ async function pollCatalogOperation(operationId) {
 }
 function setWorkspaceWriteControlsDisabled(disabled) {
   state.workspaceWriteBusy = Boolean(disabled);
-  document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-bulk-state],[data-source-bulk-delete],[data-source-add-form] button[type=submit],[data-source-upload-form] button[type=submit],[data-source-state-action]").forEach((control) => {
+  document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-bulk-state],[data-source-bulk-delete],[data-source-add-form] button[type=submit],[data-harbor-mount-form] button,[data-source-state-action]").forEach((control) => {
     if (disabled) {
       if (!Object.prototype.hasOwnProperty.call(control.dataset, "busyPreviousDisabled")) {
         control.dataset.busyPreviousDisabled = control.disabled ? "true" : "false";
@@ -5008,6 +5142,9 @@ function exportCurrentScope(kind) {
         tags: listValue(state.catalogQuery.tags),
         agents: listValue(state.catalogQuery.agents),
         models: listValue(state.catalogQuery.models),
+        tasks: listValue(state.catalogQuery.tasks),
+        jobs: listValue(state.catalogQuery.jobs),
+        providers: listValue(state.catalogQuery.providers),
         results: listValue(state.catalogQuery.results),
         views: listValue(state.catalogQuery.views)
       },
@@ -5023,6 +5160,9 @@ function exportCurrentScope(kind) {
           categories: listValue(viewControls.filters?.categories),
           tags: listValue(viewControls.filters?.tags),
           models: listValue(viewControls.filters?.models),
+          tasks: listValue(viewControls.filters?.tasks),
+          jobs: listValue(viewControls.filters?.jobs),
+          providers: listValue(viewControls.filters?.providers),
           group_by: listValue(viewControls.filters?.group_by)
         },
         open_view_tables: visibleViews.map((view) => view.name).filter((name) => state.workspaceViewTableOpen.has(name))
@@ -5386,9 +5526,12 @@ function selectionColumn(options = {}) {
 function leaderboardColumns() {
   const columns = [
     { key: "session_id", label: t("session", "Session"), valueType: "identity", filterable: true, value: (row) => sourceIdentityFor(row), cellTitle: (row) => row.trial_key && row.trial_key !== sourceIdentityFor(row) ? row.trial_key : "" },
-    { key: "source_alias", label: t("session_alias", "Session Alias"), valueType: "text", value: (row) => sessionAliasValue(row), edit: serveMode() ? { value: (row) => String(row?.source_alias || ""), commit: (row, value) => commitSourceCellEdit(row, "alias", value) } : void 0 },
+    { key: "task_name", label: t("task_alias", "Task / Alias"), valueType: "text", filterable: true, filterValues: (row) => [row?.task_name].filter(Boolean), sortable: true, value: (row) => sessionAliasValue(row), html: (row) => renderTaskAlias(row), edit: serveMode() ? { value: (row) => String(row?.source_alias || ""), commit: (row, value) => commitSourceCellEdit(row, "alias", value) } : void 0 },
     { key: "agent", label: t("agent", "Agent"), valueType: "identity", filterable: true, value: (row) => agentNameFor(row) },
     { key: "model", label: t("model", "Model"), valueType: "identity", filterable: true, value: (row) => row.model || "-" },
+    { key: "job_name", label: t("job", "Job"), valueType: "identity", filterable: true, sortable: true, value: (row) => row?.job_name || "-" },
+    { key: "model_provider", label: t("provider", "Provider"), valueType: "identity", filterable: true, sortable: true, value: (row) => row?.model_provider || "-" },
+    { key: "reward", label: t("reward", "Reward"), valueType: "number", numeric: true, sortable: true, metric: true, value: (row) => row?.score, format: (_value, row) => rewardValue(row) },
     { key: "status", label: t("result", "Result"), valueType: "status", filterable: true, value: (row) => row.status || "-", filterLabel: (value) => statusLabel(value), html: (row) => `<span class="stamp ${lower(row.status || "passed")}">${esc(statusLabel(row.status))}</span>` },
     { key: "finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: (row) => row.finished_at_ms, format: fmtDate },
     { key: "duration_ms", label: t("duration", "Active Duration"), valueType: "number", numeric: true, sortable: true, metric: true, value: (row) => row.duration_ms, format: fmtMs },
@@ -5412,6 +5555,11 @@ function leaderboardColumns() {
     workspaceReportLeaderboardColumn(),
     ...serveColumns.slice(2)
   ];
+}
+function rewardValue(row) {
+  if (hasMetricValue(row?.score)) return fmtNum(row.score);
+  const count = row?.rewards && typeof row.rewards === "object" ? Object.keys(row.rewards).length : 0;
+  return count ? `${count} ${t("reward_dimensions_short", "dims")}` : "-";
 }
 function displayLeaderboardColumns() {
   return serveMode() ? [selectionColumn(), ...leaderboardColumns()] : leaderboardColumns();
@@ -6177,7 +6325,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-var state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: /* @__PURE__ */ new Set(), sourceSelection: /* @__PURE__ */ new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: /* @__PURE__ */ new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: /* @__PURE__ */ new Set(), workspaceAppliedViewNames: /* @__PURE__ */ new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
+var state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: /* @__PURE__ */ new Set(), sourceSelection: /* @__PURE__ */ new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: /* @__PURE__ */ new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: /* @__PURE__ */ new Set(), workspaceAppliedViewNames: /* @__PURE__ */ new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";
@@ -6193,6 +6341,9 @@ if (workspaceSnapshotMode()) {
       categories: listValue(presentation.workspace_view_filters?.categories),
       tags: listValue(presentation.workspace_view_filters?.tags),
       models: listValue(presentation.workspace_view_filters?.models),
+      tasks: listValue(presentation.workspace_view_filters?.tasks),
+      jobs: listValue(presentation.workspace_view_filters?.jobs),
+      providers: listValue(presentation.workspace_view_filters?.providers),
       group_by: listValue(presentation.workspace_view_filters?.group_by)
     }
   };
@@ -6221,8 +6372,18 @@ function synthesizedReportRow(trajectory, meta, index = -1) {
     trial_key: meta?.trial_key,
     session_id: trajectory?.session_id || "-",
     source_alias: meta?.source_alias,
+    display_alias: meta?.display_alias,
     source_category: sourceCategoryForMeta(meta, source),
-    source_tags: sourceTagsForMeta(meta, source),
+    source_tags: sourceTagsFromValue(meta?.source_tags || source?.source_tags),
+    task_keywords: sourceTagsFromValue(meta?.task_keywords || source?.task_keywords),
+    display_tags: sourceTagsForMeta(meta, source),
+    task_name: meta?.task_name || source?.task_name,
+    job_name: meta?.job_name || source?.job_name,
+    trial_name: meta?.trial_name || source?.trial_name,
+    model_provider: meta?.model_provider || source?.model_provider,
+    rewards: meta?.rewards || source?.rewards || {},
+    harbor_provenance: meta?.harbor_provenance || source?.harbor_provenance || {},
+    task_metadata: meta?.task_metadata || source?.task_metadata || {},
     source_key: source?.source_key || null,
     source_active: source?.active !== false,
     adapter: meta?.adapter,
@@ -6382,10 +6543,17 @@ function sourceIdentityFor(row) {
   return row?.session_id || row?.trial_key || "-";
 }
 function sourceDisplayFor(row) {
-  return sourceAliasFor(row) || sourceIdentityFor(row);
+  return sourceAliasFor(row) || String(row?.task_name || "").trim() || sourceIdentityFor(row);
 }
 function sessionAliasValue(row) {
-  return sourceAliasFor(row) || "-";
+  return sourceAliasFor(row) || String(row?.task_name || "").trim() || "-";
+}
+function renderTaskAlias(row) {
+  const alias = sourceAliasFor(row);
+  const task = String(row?.task_name || "").trim();
+  if (alias && task) return `<span class="task-alias"><strong>${esc(alias)}</strong><small>${esc(task)}</small></span>`;
+  const value = alias || task;
+  return value ? `<span class="task-alias"><strong>${esc(value)}</strong></span>` : `<span class="muted">-</span>`;
 }
 function sourceCategoryForMeta(meta, source = null) {
   return sourceCategoryFromValue(meta?.source_category || source?.source_category);
@@ -6407,32 +6575,42 @@ function renderReadOnlySourceCategory(row) {
   return category ? `<span class="source-category-chip">${esc(category)}</span>` : `<span class="muted">-</span>`;
 }
 function sourceTagsForMeta(meta, source = null) {
-  const rawTags = listValue(meta?.source_tags).length ? meta.source_tags : source?.source_tags;
-  return sourceTagsFromValue(rawTags);
+  const display = listValue(meta?.display_tags).length ? meta.display_tags : source?.display_tags;
+  if (listValue(display).length) return sourceTagsFromValue(display);
+  return mergeSourceTags(
+    meta?.task_keywords || source?.task_keywords,
+    meta?.source_tags || source?.source_tags
+  );
 }
 function sourceTagsFromValue(value) {
   const tags = [];
   const seen = /* @__PURE__ */ new Set();
   listValue(value).forEach((rawTag) => {
     const tag = String(rawTag || "").trim();
-    if (!tag || seen.has(tag)) return;
-    seen.add(tag);
+    const identity = tag.toLowerCase();
+    if (!tag || seen.has(identity)) return;
+    seen.add(identity);
     tags.push(tag);
   });
   return tags;
 }
 function sourceTagsFor(row) {
-  return sourceTagsFromValue(row?.source_tags);
+  return listValue(row?.display_tags).length ? sourceTagsFromValue(row.display_tags) : mergeSourceTags(row?.task_keywords, row?.source_tags);
+}
+function mergeSourceTags(...groups) {
+  return sourceTagsFromValue(groups.flatMap((group) => listValue(group)));
 }
 function sourceTagsValue(row) {
   return sourceTagsFor(row).join(", ") || "-";
 }
 function sourceTagsEditValue(row) {
-  return sourceTagsFor(row).join(", ");
+  return sourceTagsFromValue(row?.source_tags).join(", ");
 }
 function renderReadOnlySourceTags(row) {
-  const tags = sourceTagsFor(row);
-  return tags.length ? `<span class="source-tag-list">${tags.map((tag) => `<span class="source-tag-chip">${esc(tag)}</span>`).join("")}</span>` : `<span class="muted">-</span>`;
+  const keywords = sourceTagsFromValue(row?.task_keywords);
+  const custom = sourceTagsFromValue(row?.source_tags).filter((tag) => !keywords.some((keyword) => keyword.toLowerCase() === tag.toLowerCase()));
+  const tags = [...keywords, ...custom];
+  return tags.length ? `<span class="source-tag-list">${keywords.map((tag) => `<span class="source-tag-chip derived" title="${esc(t("task_keyword_read_only", "Task keyword (read-only)"))}">${esc(tag)}</span>`).join("")}${custom.map((tag) => `<span class="source-tag-chip custom" title="${esc(t("custom_tag", "Custom tag"))}">${esc(tag)}</span>`).join("")}</span>` : `<span class="muted">-</span>`;
 }
 function searchQuery() {
   return String(state.search?.query || "").trim().toLowerCase();
@@ -6451,7 +6629,20 @@ function applySessionSearch(rows) {
 function sessionSearchText(row) {
   const trajectory = trajectoryFor(row?.trial_key);
   const meta = metaFor(row?.trial_key);
-  const parts = [];
+  const parts = [
+    row?.task_name,
+    row?.job_name,
+    row?.trial_name,
+    row?.model_provider,
+    row?.source_alias,
+    row?.display_alias,
+    row?.source_category,
+    searchJson(row?.task_keywords),
+    searchJson(row?.source_tags),
+    searchJson(row?.harbor_provenance),
+    searchJson(row?.rewards),
+    searchJson(row?.task_metadata)
+  ];
   listValue(trajectory?.steps).forEach((step) => {
     parts.push(step?.message, step?.reasoning_content);
     parts.push(searchJson(step?.tool_calls), searchJson(step?.observation), searchJson(step?.observations));

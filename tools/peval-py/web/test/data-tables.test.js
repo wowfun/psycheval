@@ -19,10 +19,67 @@ const tables = await import("../src/modules/data-tables.js");
 const runtime = await import("../src/modules/runtime.js");
 const sourceManager = await import("../src/modules/source-manager.js");
 const views = await import("../src/modules/workspace-views.js");
+const summaries = await import("../src/modules/leaderboard-summary.js");
+const selected = await import("../src/modules/analysis-selected.js");
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());
+
+test("Harbor Task display merges derived evidence without changing editable overlay values", () => {
+  const row = {
+    trial_key: "trial-1",
+    session_id: "session-1",
+    task_name: "pbench-v1.0/web-search-01",
+    job_name: "job-1",
+    model_provider: "xiaomi",
+    source_alias: "Custom alias",
+    task_keywords: ["web-agent", "web-search"],
+    source_tags: ["WEB-AGENT", "custom"],
+    display_tags: ["web-agent", "web-search", "custom"],
+    score: 0,
+    rewards: { reward: 0 },
+  };
+  assert.match(runtime.renderTaskAlias(row), /Custom alias/);
+  assert.match(runtime.renderTaskAlias(row), /pbench-v1\.0\/web-search-01/);
+  assert.deepEqual(runtime.sourceTagsFor(row), ["web-agent", "web-search", "custom"]);
+  assert.equal(runtime.sourceTagsEditValue(row), "WEB-AGENT, custom");
+  const tagsHtml = runtime.renderReadOnlySourceTags(row);
+  assert.match(tagsHtml, /source-tag-chip derived/);
+  assert.match(tagsHtml, /source-tag-chip custom/);
+
+  const columns = tables.leaderboardColumns();
+  assert.deepEqual(
+    ["task_name", "job_name", "model_provider", "reward"].map(key => columns.find(column => column.key === key)?.key),
+    ["task_name", "job_name", "model_provider", "reward"],
+  );
+  assert.equal(tables.tableText(row, columns.find(column => column.key === "reward")), "0");
+  assert.equal(
+    tables.tableText({ ...row, score: null, rewards: { accuracy: 1, safety: 0 } }, columns.find(column => column.key === "reward")),
+    "2 dims",
+  );
+  assert.equal(summaries.leaderboardSummaryGroups([row], "task")[0].label, row.task_name);
+
+  const evidence = selected.renderHarborEvidence({
+    ...row,
+    trial_name: "trial-name",
+    harbor_provenance: { result_id: "result-1", task_digest: "sha256:old" },
+    task_metadata: { status: "digest_mismatch", live: true, name: row.task_name, description: "Live description", live_digest: "sha256:new", keywords: row.task_keywords },
+    evaluation: { phase_timing: { verifier: { duration_ms: 1000 } } },
+  });
+  assert.match(evidence, /Harbor Evidence/);
+  assert.match(evidence, /digest_mismatch/);
+  assert.match(evidence, /result-1/);
+  assert.match(evidence, /web-search/);
+  assert.match(evidence, /Live description/);
+
+  const refEvidence = selected.renderHarborEvidence({
+    ...row,
+    harbor_provenance: { task_digest: "sha256:package-ref", task_digest_source: "config.ref" },
+    task_metadata: { status: "resolved", live_digest: "sha256:local", digest_matches: null, digest_comparison: "not_comparable" },
+  });
+  assert.match(refEvidence, /not comparable/);
+});
 
 test("value types drive cell metadata, truncation classes, sorting, and read-only behavior", () => {
   const row = {
@@ -312,6 +369,9 @@ test("source and saved-view adapters keep persistence behind the shared edit sea
     ["categories", "scalar-list"],
     ["tags", "list"],
     ["models", "list"],
+    ["tasks", "list"],
+    ["jobs", "list"],
+    ["providers", "list"],
     ["group_by", "enum"],
     ["other_conditions", "yaml"],
     ["notes", "markdown"],

@@ -1,4 +1,4 @@
-import { $, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, hasMetricValue, listValue, lower, noteSnippetFor, notesFor, notesPlainText, renderComparisonPanels, renderNotesCell, renderReadOnlySourceCategory, renderReadOnlySourceTags, selectedKey, serveMode, sessionAliasValue, sourceCategoryEditValue, sourceCategoryFor, sourceCategoryValue, sourceIdentityFor, sourceTagsEditValue, sourceTagsFor, sourceTagsValue, state, statusLabel, t, workspaceDisplayMode } from "./runtime.js";
+import { $, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, hasMetricValue, listValue, lower, noteSnippetFor, notesFor, notesPlainText, renderComparisonPanels, renderNotesCell, renderReadOnlySourceCategory, renderReadOnlySourceTags, renderTaskAlias, selectedKey, serveMode, sessionAliasValue, sourceCategoryEditValue, sourceCategoryFor, sourceCategoryValue, sourceIdentityFor, sourceTagsEditValue, sourceTagsFor, sourceTagsValue, state, statusLabel, t, workspaceDisplayMode } from "./runtime.js";
 import { bindServeExportControls, bindServeSelectionControls, bindTrialSelection } from "./export.js";
 import { bindServeSourceStateControls } from "./source-state-controls.js";
 import { renderSourceSelectionHeader } from "./source-manager.js";
@@ -23,9 +23,12 @@ function selectionColumn(options = {}) {
 function leaderboardColumns() {
   const columns = [
     { key: "session_id", label: t("session", "Session"), valueType: "identity", filterable: true, value: row => sourceIdentityFor(row), cellTitle: row => row.trial_key && row.trial_key !== sourceIdentityFor(row) ? row.trial_key : "" },
-    { key: "source_alias", label: t("session_alias", "Session Alias"), valueType: "text", value: row => sessionAliasValue(row), edit: serveMode() ? { value: row => String(row?.source_alias || ""), commit: (row, value) => commitSourceCellEdit(row, "alias", value) } : undefined },
+    { key: "task_name", label: t("task_alias", "Task / Alias"), valueType: "text", filterable: true, filterValues: row => [row?.task_name].filter(Boolean), sortable: true, value: row => sessionAliasValue(row), html: row => renderTaskAlias(row), edit: serveMode() ? { value: row => String(row?.source_alias || ""), commit: (row, value) => commitSourceCellEdit(row, "alias", value) } : undefined },
     { key: "agent", label: t("agent", "Agent"), valueType: "identity", filterable: true, value: row => agentNameFor(row) },
     { key: "model", label: t("model", "Model"), valueType: "identity", filterable: true, value: row => row.model || "-" },
+    { key: "job_name", label: t("job", "Job"), valueType: "identity", filterable: true, sortable: true, value: row => row?.job_name || "-" },
+    { key: "model_provider", label: t("provider", "Provider"), valueType: "identity", filterable: true, sortable: true, value: row => row?.model_provider || "-" },
+    { key: "reward", label: t("reward", "Reward"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row?.score, format: (_value, row) => rewardValue(row) },
     { key: "status", label: t("result", "Result"), valueType: "status", filterable: true, value: row => row.status || "-", filterLabel: value => statusLabel(value), html: row => `<span class="stamp ${lower(row.status || "passed")}">${esc(statusLabel(row.status))}</span>` },
     { key: "finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.finished_at_ms, format: fmtDate },
     { key: "duration_ms", label: t("duration", "Active Duration"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.duration_ms, format: fmtMs },
@@ -51,6 +54,11 @@ function leaderboardColumns() {
     workspaceReportLeaderboardColumn(),
     ...serveColumns.slice(2)
   ];
+}
+function rewardValue(row) {
+  if (hasMetricValue(row?.score)) return fmtNum(row.score);
+  const count = row?.rewards && typeof row.rewards === "object" ? Object.keys(row.rewards).length : 0;
+  return count ? `${count} ${t("reward_dimensions_short", "dims")}` : "-";
 }
 function displayLeaderboardColumns() {
   return serveMode() ? [selectionColumn(), ...leaderboardColumns()] : leaderboardColumns();

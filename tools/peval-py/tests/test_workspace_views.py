@@ -129,6 +129,48 @@ class WorkspaceViewLibraryTests(unittest.TestCase):
             self.assertEqual(configured.group_by, "category")
             self.assertEqual(configured.notes, "Compare source categories.")
 
+    def test_harbor_filters_and_grouping_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            library = WorkspaceViewLibrary(root)
+
+            saved = library.save(
+                name="Harbor cohort",
+                filters=filters(
+                    tasks=["pbench-v1.0/web-search-01"],
+                    jobs=["opencode-real"],
+                    providers=["xiaomi-token-plan-cn"],
+                ),
+                group_by="task",
+                notes="",
+                overwrite=False,
+            )
+
+            self.assertEqual(saved.filters.tasks, ("pbench-v1.0/web-search-01",))
+            self.assertEqual(saved.filters.jobs, ("opencode-real",))
+            self.assertEqual(saved.filters.providers, ("xiaomi-token-plan-cn",))
+            self.assertEqual(saved.group_by, "task")
+            stored = (root / "views" / "Harbor cohort.md").read_text(encoding="utf-8")
+            self.assertIn("tasks:\n  - pbench-v1.0/web-search-01", stored)
+            self.assertIn("jobs:\n  - opencode-real", stored)
+            self.assertIn("providers:\n  - xiaomi-token-plan-cn", stored)
+
+            configured = library.update(
+                name="Harbor cohort",
+                field="configuration",
+                value=(
+                    "filters:\n"
+                    "  tasks: [pbench-v1.0/web-fetch-01]\n"
+                    "  jobs: [hermes-real]\n"
+                    "  providers: [xiaomi]\n"
+                    "group_by: provider\n"
+                ),
+            )
+            self.assertEqual(configured.filters.tasks, ("pbench-v1.0/web-fetch-01",))
+            self.assertEqual(configured.filters.jobs, ("hermes-real",))
+            self.assertEqual(configured.filters.providers, ("xiaomi",))
+            self.assertEqual(configured.group_by, "provider")
+
     def test_update_rename_configuration_notes_and_prevalidated_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

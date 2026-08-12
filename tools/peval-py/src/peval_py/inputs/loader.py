@@ -30,7 +30,6 @@ from peval_py._inputs.workspace_snapshots import (
 from peval_py._inputs.workspace_snapshots import same_local_path as same_local_path
 from peval_py.adapters import available_adapter_ids, normalize_adapter_id
 from peval_py.atif import is_atif_json_path
-from peval_py.input_table import InputTableRow, read_input_tables
 from peval_py.models import AdapterAssignments, LoadedInputs, LoadedSession
 from peval_py.session_select import resolve_session_selectors
 from peval_py.sources import MessageRecord as MessageRecord
@@ -89,13 +88,8 @@ def load_sessions(
 ) -> list[LoadedSession]:
     paths = list(getattr(args, "path", None) or [])
     dbs = list(getattr(args, "db", None) or [])
-    if (
-        require_sources
-        and not paths
-        and not dbs
-        and not getattr(args, "input_table", None)
-    ):
-        raise ValueError("missing input source; pass --path, --db, or --input-table")
+    if require_sources and not paths and not dbs:
+        raise ValueError("missing input source; pass --path or --db")
     validate_adapter_selector_range(
         adapter_assignments,
         path_count=len(paths),
@@ -188,93 +182,12 @@ def load_inputs(
         require_sources=require_sources,
         config=config,
     )
-    notes: list[str] = []
-    available = set(available_adapter_ids())
-    table_data = read_input_tables(getattr(args, "input_table", None) or [])
-    notes.extend(f"0={note}" for note in table_data.report_notes)
-    for row in table_data.rows:
-        session_index = len(sessions) + 1
-        sessions.append(
-            loaded_session_from_table_row(row, adapter_assignments, available)
-        )
-        notes.extend(table_note_for_session(note, session_index) for note in row.notes)
-        notes.extend(f"0={note}" for note in row.report_notes)
     sessions = apply_source_aliases(
         sessions,
         getattr(args, "source_alias", None) or [],
     )
     validate_required_adapters(sessions)
-    return LoadedInputs(sessions=sessions, notes=notes)
-
-
-def loaded_session_from_table_row(
-    row: InputTableRow,
-    adapter_assignments: AdapterAssignments,
-    available: set[str],
-) -> LoadedSession:
-    if row.path is not None:
-        source_path = Path(row.path)
-        is_atif = is_atif_json_path(str(source_path))
-        adapter_id = (
-            "atif"
-            if is_atif
-            else normalize_adapter_id(row.adapter)
-            if row.adapter
-            else adapter_for_input_path(
-                str(source_path),
-                None,
-                adapter_assignments,
-                "path",
-                available,
-            )
-        )
-        return LoadedSession(
-            records=None,
-            input_label=source_path.name,
-            adapter_id=adapter_id,
-            input_path=str(source_path),
-            session_hint=None if is_atif else source_path.stem or "session",
-            agent_name=row.agent_name,
-            agent_version=row.agent_version,
-            model=row.model,
-            source_alias=row.source_alias,
-            source_kind="path",
-        )
-    if row.db is None:
-        raise ValueError(
-            f"{row.table_path}: row {row.row_number}: missing input source"
-        )
-    db_path = Path(row.db)
-    adapter_id = (
-        normalize_adapter_id(row.adapter)
-        if row.adapter
-        else adapter_for_input_path(
-            str(db_path),
-            None,
-            adapter_assignments,
-            "db",
-            available,
-        )
-    )
-    session_ids = (
-        resolve_session_selectors(adapter_id, str(db_path), [row.session_id])
-        if row.session_id
-        else [None]
-    )
-    session_id = session_ids[0]
-    return LoadedSession(
-        records=None,
-        input_label=f"{db_path.name}:{session_id}" if session_id else db_path.name,
-        adapter_id=adapter_id,
-        input_path=str(db_path),
-        db_path=str(db_path),
-        session_hint=session_id,
-        agent_name=row.agent_name,
-        agent_version=row.agent_version,
-        model=row.model,
-        source_alias=row.source_alias,
-        source_kind="db",
-    )
+    return LoadedInputs(sessions=sessions, notes=[])
 
 
 def resolve_db_input(
@@ -334,14 +247,6 @@ def parse_source_aliases(raw_aliases: list[str], session_count: int) -> dict[int
             raise ValueError("--source-alias text must not be empty")
         aliases[index] = alias
     return aliases
-
-
-def table_note_for_session(note: str, session_index: int) -> str:
-    if "=" in note:
-        raw_index, _ = note.split("=", 1)
-        if raw_index.isdigit():
-            return note
-    return f"{session_index}={note}"
 
 
 def validate_adapter_selector_range(

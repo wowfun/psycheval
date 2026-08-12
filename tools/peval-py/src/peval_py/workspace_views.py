@@ -14,7 +14,9 @@ VIEW_SCHEMA_VERSION = 1
 VIEW_MAX_NOTE_BYTES = 1024 * 1024
 VIEW_SUFFIX = ".md"
 VIEW_NAME_MAX_CHARS = 120
-VIEW_GROUP_BY_VALUES = frozenset({"overall", "agent", "model", "category"})
+VIEW_GROUP_BY_VALUES = frozenset(
+    {"overall", "agent", "model", "category", "task", "job", "provider"}
+)
 _FRONTMATTER_RE = re.compile(
     r"\A---\r?\n(?P<header>[\s\S]*?)\r?\n---(?:\r?\n|\Z)(?P<notes>[\s\S]*)\Z"
 )
@@ -240,7 +242,9 @@ def view_from_values(
         raise ValueError(f"view notes exceed {VIEW_MAX_NOTE_BYTES} byte limit")
     group = str(group_by or "").strip().lower()
     if group not in VIEW_GROUP_BY_VALUES:
-        raise ValueError("group_by must be overall, agent, model, or category")
+        raise ValueError(
+            "group_by must be overall, agent, model, category, task, job, or provider"
+        )
     return WorkspaceView(
         name=validate_view_name(name),
         filters=view_filters_from_dict(filters),
@@ -262,6 +266,9 @@ def view_filters_dict(query: CatalogQuery) -> dict[str, Any]:
         ("agents", normalized.agents),
         ("models", normalized.models),
         ("results", normalized.results),
+        ("tasks", normalized.tasks),
+        ("jobs", normalized.jobs),
+        ("providers", normalized.providers),
     ):
         if values:
             filters[key] = list(values)
@@ -279,6 +286,9 @@ def view_filters_from_dict(value: Any) -> CatalogQuery:
         "agents",
         "models",
         "results",
+        "tasks",
+        "jobs",
+        "providers",
     }
     if not isinstance(value, dict) or not set(value).issubset(allowed_fields):
         raise ValueError("view filters contain unsupported fields")
@@ -305,6 +315,9 @@ def view_filters_from_dict(value: Any) -> CatalogQuery:
         agents=values("agents"),
         models=values("models"),
         results=values("results"),
+        tasks=values("tasks"),
+        jobs=values("jobs"),
+        providers=values("providers"),
     ).normalized()
 
 
@@ -326,7 +339,9 @@ def editable_view_configuration(value: Any) -> tuple[dict[str, Any], str]:
     view_filters_from_dict(filters)
     group_by = str(payload["group_by"] or "").strip().lower()
     if group_by not in VIEW_GROUP_BY_VALUES:
-        raise ValueError("group_by must be overall, agent, model, or category")
+        raise ValueError(
+            "group_by must be overall, agent, model, category, task, job, or provider"
+        )
     return filters or {}, group_by
 
 

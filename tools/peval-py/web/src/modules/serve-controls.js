@@ -1,5 +1,5 @@
 import { SUBMENU_DETAILS_SELECTOR, adapterDefaults, closeOpenSubmenus, renderComparisonPanels, selectedKey, serveMode, state, t } from "./runtime.js";
-import { addSelectedDbSessions, choosePathSourceFiles, closeServeSourceManager, inspectDbSessions, setDbSessionSelection, submitServeSourceForm, submitServeUploadForm } from "./source-manager.js";
+import { addSelectedDbSessions, choosePathSourceFiles, closeServeSourceManager, inspectDbSessions, removeHarborMount, setDbSessionSelection, submitHarborMountForm, submitServeSourceForm } from "./source-manager.js";
 import { mutateSelectedServeSourceState, selectedAdapterValue, serveApi, setServeStatus, showServeNotice } from "./serve-effects.js";
 import { deleteSelectedServeSources, openServeSourceManager, refreshServeReportFromServer, refreshServeSourcesFromServer, selectServeSource } from "./serve-catalog.js";
 import { bindWorkspaceReportGlobalControls, closeWorkspaceReportManager, closeWorkspaceReportReader } from "./workspace-reports.js";
@@ -139,10 +139,14 @@ function bindServeSourceControls() {
       addSelectedDbSessions(button.closest("[data-source-add-form]"));
     });
   });
-  document.querySelectorAll("[data-source-upload-form]").forEach(form => {
+  document.querySelectorAll("[data-harbor-mount-form]").forEach(form => {
     form.addEventListener("submit", event => {
       event.preventDefault();
-      submitServeUploadForm(form);
+      submitHarborMountForm(form);
+    });
+    form.querySelector("[data-harbor-mount-remove]")?.addEventListener("click", event => {
+      event.preventDefault();
+      removeHarborMount(form);
     });
   });
   bindAdapterDefaultDbControls();

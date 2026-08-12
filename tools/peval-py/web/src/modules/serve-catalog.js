@@ -222,7 +222,7 @@ function filterOptions(column, rows) {
     const values = rows.flatMap(row => filterValues(row, column));
     return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
   }
-  const facetKey = ({ source_category: "categories", source_tags: "tags", agent: "agents", model: "models", status: "results" })[column.key];
+  const facetKey = ({ source_category: "categories", source_tags: "tags", agent: "agents", model: "models", task_name: "tasks", job_name: "jobs", model_provider: "providers", status: "results" })[column.key];
   if (!facetKey) {
     const values = rows.flatMap(row => filterValues(row, column));
     return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
@@ -291,6 +291,9 @@ function leaderboardConditionsAreDefault() {
     && !listValue(query.tags).length
     && !listValue(query.agents).length
     && !listValue(query.models).length
+    && !listValue(query.tasks).length
+    && !listValue(query.jobs).length
+    && !listValue(query.providers).length
     && !listValue(query.results).length
     && catalogSortKey(query.sort) === "last_turn_end"
     && String(query.direction || "desc") === "desc"
@@ -324,6 +327,9 @@ function requestCatalogFacets() {
     tags: listValue(filters.source_tags),
     agents: listValue(filters.agent),
     models: listValue(filters.model),
+    tasks: listValue(filters.task_name),
+    jobs: listValue(filters.job_name),
+    providers: listValue(filters.model_provider),
     results: listValue(filters.status)
   }, { force: true });
 }
@@ -359,13 +365,23 @@ function catalogQueryString(surface = "leaderboard") {
   listValue(query.tags).forEach(value => params.append("tag", value));
   listValue(query.agents).forEach(value => params.append("agent", value));
   listValue(query.models).forEach(value => params.append("model", value));
+  listValue(query.tasks).forEach(value => params.append("task", value));
+  listValue(query.jobs).forEach(value => params.append("job", value));
+  listValue(query.providers).forEach(value => params.append("provider", value));
   listValue(query.results).forEach(value => params.append("result", value));
   listValue(query.views).forEach(value => params.append("view", value));
   return params.toString();
 }
 
 function catalogSortKey(key) {
-  return ({ finished_at_ms: "last_turn_end", session_id: "session", status: "result" })[key] || key || "last_turn_end";
+  return ({
+    finished_at_ms: "last_turn_end",
+    session_id: "session",
+    status: "result",
+    task_name: "task",
+    job_name: "job",
+    model_provider: "provider",
+  })[key] || key || "last_turn_end";
 }
 
 async function loadCatalogPage(changes = {}, options = {}) {
@@ -564,7 +580,7 @@ async function pollCatalogOperation(operationId) {
 
 function setWorkspaceWriteControlsDisabled(disabled) {
   state.workspaceWriteBusy = Boolean(disabled);
-  document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-bulk-state],[data-source-bulk-delete],[data-source-add-form] button[type=submit],[data-source-upload-form] button[type=submit],[data-source-state-action]").forEach(control => {
+  document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-bulk-state],[data-source-bulk-delete],[data-source-add-form] button[type=submit],[data-harbor-mount-form] button,[data-source-state-action]").forEach(control => {
     if (disabled) {
       if (!Object.prototype.hasOwnProperty.call(control.dataset, "busyPreviousDisabled")) {
         control.dataset.busyPreviousDisabled = control.disabled ? "true" : "false";
@@ -634,6 +650,9 @@ function exportCurrentScope(kind) {
         tags: listValue(state.catalogQuery.tags),
         agents: listValue(state.catalogQuery.agents),
         models: listValue(state.catalogQuery.models),
+        tasks: listValue(state.catalogQuery.tasks),
+        jobs: listValue(state.catalogQuery.jobs),
+        providers: listValue(state.catalogQuery.providers),
         results: listValue(state.catalogQuery.results),
         views: listValue(state.catalogQuery.views),
       },
@@ -649,6 +668,9 @@ function exportCurrentScope(kind) {
           categories: listValue(viewControls.filters?.categories),
           tags: listValue(viewControls.filters?.tags),
           models: listValue(viewControls.filters?.models),
+          tasks: listValue(viewControls.filters?.tasks),
+          jobs: listValue(viewControls.filters?.jobs),
+          providers: listValue(viewControls.filters?.providers),
           group_by: listValue(viewControls.filters?.group_by),
         },
         open_view_tables: visibleViews

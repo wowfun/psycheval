@@ -6,6 +6,7 @@ from html import escape
 from importlib import import_module
 from typing import Any
 
+from peval_py.config import HarborMount
 from peval_py.html.assets import load_asset_text, render_echarts_script
 from peval_py.html.serve_controls import (
     render_serve_report_ui,
@@ -21,6 +22,7 @@ def render_html(
     sources: list[dict[str, Any]] | None = None,
     reports: list[dict[str, Any]] | None = None,
     adapter_defaults: dict[str, str] | None = None,
+    harbor_mounts: tuple[HarborMount, ...] | None = None,
     loading: bool = False,
     load_error: str | None = None,
 ) -> str:
@@ -32,6 +34,7 @@ def render_html(
         sources=sources,
         reports=reports,
         adapter_defaults=adapter_defaults,
+        harbor_mounts=harbor_mounts,
         loading=loading,
         load_error=load_error,
     )
@@ -62,6 +65,7 @@ def _render_html_document(
     sources: list[dict[str, Any]] | None = None,
     reports: list[dict[str, Any]] | None = None,
     adapter_defaults: dict[str, str] | None = None,
+    harbor_mounts: tuple[HarborMount, ...] | None = None,
     loading: bool = False,
     load_error: str | None = None,
     snapshot: dict[str, Any] | None = None,
@@ -114,6 +118,7 @@ def _render_html_document(
             messages,
             normalized_locale,
             adapter_defaults or {},
+            harbor_mounts or (),
             loading=bool(loading),
         )
         if normalized_mode == "serve"
@@ -192,6 +197,7 @@ def render_serve_html(
     sources: list[dict[str, Any]] | None = None,
     reports: list[dict[str, Any]] | None = None,
     adapter_defaults: dict[str, str] | None = None,
+    harbor_mounts: tuple[HarborMount, ...] | None = None,
     loading: bool = False,
     load_error: str | None = None,
 ) -> str:
@@ -202,6 +208,7 @@ def render_serve_html(
         sources=sources,
         reports=reports,
         adapter_defaults=adapter_defaults,
+        harbor_mounts=harbor_mounts,
         loading=loading,
         load_error=load_error,
     )

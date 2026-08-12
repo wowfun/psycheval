@@ -19,7 +19,7 @@ from peval_py.state.workspace_sources import (
     WorkspaceSources,
 )
 
-CATALOG_SCHEMA_VERSION = 10
+CATALOG_SCHEMA_VERSION = 12
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 CATALOG_RELATIVE_PATH = Path(".cache/peval-py/serve-catalog.sqlite3")
@@ -42,6 +42,9 @@ class CatalogQuery:
     agents: tuple[str, ...] = ()
     models: tuple[str, ...] = ()
     results: tuple[str, ...] = ()
+    tasks: tuple[str, ...] = ()
+    jobs: tuple[str, ...] = ()
+    providers: tuple[str, ...] = ()
     include_unreadable: bool = False
 
     def normalized(self) -> CatalogQuery:
@@ -65,6 +68,9 @@ class CatalogQuery:
             agents=_normalized_values(self.agents),
             models=_normalized_values(self.models),
             results=_normalized_values(self.results),
+            tasks=_normalized_values(self.tasks),
+            jobs=_normalized_values(self.jobs),
+            providers=_normalized_values(self.providers),
             include_unreadable=bool(self.include_unreadable),
         )
 
@@ -643,10 +649,11 @@ class WorkspaceCatalog:
                     INSERT INTO cells (
                         source_key, source_ref, fingerprint, artifact_revision,
                         readable, active, last_status, search_doc, category, tags_json,
-                        agent, model, result, session_id, last_turn_end,
-                        duration_ms, turns, tool_calls, tool_errors, tokens, cost_usd,
+                        agent, model, result, task, job, provider, reward,
+                        session_id, last_turn_end, duration_ms, turns, tool_calls,
+                        tool_errors, tokens, cost_usd,
                         created_at_ms, updated_at_ms, row_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         source_key,
@@ -658,10 +665,17 @@ class WorkspaceCatalog:
                         str(row.get("last_status") or ""),
                         search_doc,
                         str(row.get("source_category") or ""),
-                        json.dumps(row.get("source_tags") or [], ensure_ascii=False),
+                        json.dumps(
+                            row.get("display_tags") or row.get("source_tags") or [],
+                            ensure_ascii=False,
+                        ),
                         str(row.get("agent_name") or row.get("adapter") or ""),
                         str(row.get("model") or ""),
                         str(row.get("status") or row.get("last_status") or ""),
+                        str(row.get("task_name") or ""),
+                        str(row.get("job_name") or ""),
+                        str(row.get("model_provider") or ""),
+                        row.get("score"),
                         str(row.get("session_id") or row.get("trial_session_id") or ""),
                         optional_int(row.get("last_turn_finished_at_ms")),
                         row.get("duration_ms"),
@@ -782,6 +796,9 @@ class WorkspaceCatalog:
             ("agent", query.agents),
             ("model", query.models),
             ("result", query.results),
+            ("task", query.tasks),
+            ("job", query.jobs),
+            ("provider", query.providers),
         ):
             if not values:
                 continue
@@ -858,6 +875,9 @@ class WorkspaceCatalog:
             ("agents", "agent"),
             ("models", "model"),
             ("results", "result"),
+            ("tasks", "task"),
+            ("jobs", "job"),
+            ("providers", "provider"),
         ):
             facets[name] = [
                 {"value": str(row[0]), "count": int(row[1])}
@@ -924,6 +944,10 @@ class WorkspaceCatalog:
                 agent TEXT NOT NULL,
                 model TEXT NOT NULL,
                 result TEXT NOT NULL,
+                task TEXT NOT NULL,
+                job TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                reward REAL,
                 session_id TEXT NOT NULL,
                 last_turn_end INTEGER,
                 duration_ms REAL,
@@ -942,6 +966,9 @@ class WorkspaceCatalog:
             CREATE INDEX IF NOT EXISTS cells_agent ON cells(agent);
             CREATE INDEX IF NOT EXISTS cells_model ON cells(model);
             CREATE INDEX IF NOT EXISTS cells_result ON cells(result);
+            CREATE INDEX IF NOT EXISTS cells_task ON cells(task);
+            CREATE INDEX IF NOT EXISTS cells_job ON cells(job);
+            CREATE INDEX IF NOT EXISTS cells_provider ON cells(provider);
             """
         )
         connection.execute(
@@ -1066,6 +1093,7 @@ _SAVED_VIEW_SUMMARY_METRICS = (
     ("model_duration_ms", "duration"),
     ("total_tool_calls", "number"),
     ("tool_error_rate", "percent"),
+    ("score", "number"),
 )
 
 
@@ -1084,6 +1112,12 @@ def _saved_view_summary(
             elif group_by == "category":
                 category = str(row.get("source_category") or "").strip()
                 key = category or None
+            elif group_by == "task":
+                key = str(row.get("task_name") or "-")
+            elif group_by == "job":
+                key = str(row.get("job_name") or "-")
+            elif group_by == "provider":
+                key = str(row.get("model_provider") or "-")
             else:
                 key = str(row.get("agent_name") or row.get("adapter") or "-")
             grouped.setdefault(key, []).append(row)
@@ -1196,6 +1230,14 @@ def _catalog_summary(
         "warnings": len(warnings) if isinstance(warnings, list) else 0,
         "analysised": analysis_present,
         "model": optional_str(agent.get("model_name")),
+        "task_name": optional_str(meta.get("task_name")),
+        "job_name": optional_str(meta.get("job_name")),
+        "trial_name": optional_str(meta.get("trial_name")),
+        "model_provider": optional_str(meta.get("model_provider")),
+        "task_keywords": meta.get("task_keywords") or [],
+        "rewards": meta.get("rewards") or {},
+        "harbor_provenance": meta.get("harbor_provenance") or {},
+        "task_metadata": meta.get("task_metadata") or {},
     }
 
 
@@ -1298,8 +1340,18 @@ def _search_document(row: dict[str, Any], trajectory: dict[str, Any]) -> str:
         row.get("session_id"),
         row.get("trial_session_id"),
         row.get("source_alias"),
+        row.get("display_alias"),
         row.get("source_category"),
         row.get("source_tags"),
+        row.get("display_tags"),
+        row.get("task_name"),
+        row.get("job_name"),
+        row.get("trial_name"),
+        row.get("task_keywords"),
+        row.get("model_provider"),
+        row.get("harbor_provenance"),
+        row.get("task_metadata"),
+        row.get("rewards"),
         row.get("agent_name"),
         row.get("adapter"),
         row.get("model"),
@@ -1352,6 +1404,10 @@ def _sort_expression(sort: str) -> str:
         "agent": "agent COLLATE NOCASE",
         "model": "model COLLATE NOCASE",
         "result": "result COLLATE NOCASE",
+        "task": "task COLLATE NOCASE",
+        "job": "job COLLATE NOCASE",
+        "provider": "provider COLLATE NOCASE",
+        "reward": "reward",
         "duration_ms": "duration_ms",
         "turns": "turns",
         "total_tool_calls": "tool_calls",
@@ -1368,7 +1424,16 @@ def _sort_expression(sort: str) -> str:
 
 
 def _empty_facets() -> dict[str, list[dict[str, Any]]]:
-    return {"categories": [], "tags": [], "agents": [], "models": [], "results": []}
+    return {
+        "categories": [],
+        "tags": [],
+        "agents": [],
+        "models": [],
+        "results": [],
+        "tasks": [],
+        "jobs": [],
+        "providers": [],
+    }
 
 
 def _chunks(values: list[str], size: int) -> Iterator[list[str]]:

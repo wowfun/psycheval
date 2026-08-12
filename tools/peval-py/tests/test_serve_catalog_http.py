@@ -17,10 +17,29 @@ from cli_inputs_support import write_trial_cell_artifacts
 from peval_py.config import ToolConfig
 from peval_py.serve import LocalHTTPServer, ServeRuntime, make_handler
 from peval_py.serve.errors import HttpError
+from peval_py.serve.handler import catalog_query
 from peval_py.state import CatalogQuery, open_workspace_state
 
 
 class ServeCatalogHttpTests(unittest.TestCase):
+    def test_catalog_query_accepts_repeated_harbor_semantic_filters(self) -> None:
+        query = catalog_query(
+            "task=pbench-v1.0%2Fweb-search-01"
+            "&task=pbench-v1.0%2Fweb-fetch-01"
+            "&task=pbench-v1.0%2Fweb-search-01"
+            "&job=opencode-real&provider=xiaomi-token-plan-cn"
+        )
+
+        self.assertEqual(
+            query.tasks,
+            (
+                "pbench-v1.0/web-search-01",
+                "pbench-v1.0/web-fetch-01",
+            ),
+        )
+        self.assertEqual(query.jobs, ("opencode-real",))
+        self.assertEqual(query.providers, ("xiaomi-token-plan-cn",))
+
     @staticmethod
     def workspace_snapshot_payload(**overrides):
         payload = {
@@ -1035,7 +1054,8 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     names = set(archive.namelist())
                     strings = archive.read("xl/sharedStrings.xml").decode("utf-8")
                 self.assertIn("xl/charts/chart6.xml", names)
-                self.assertNotIn("xl/charts/chart7.xml", names)
+                self.assertIn("xl/charts/chart7.xml", names)
+                self.assertNotIn("xl/charts/chart8.xml", names)
                 self.assertIn("Current visible Leaderboard page", strings)
                 self.assertIn("Category", strings)
                 self.assertIn("Regression", strings)
@@ -1063,7 +1083,8 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertIn('name="Failed only"', workbook)
                 self.assertIn("=literal note", strings)
                 self.assertIn("xl/charts/chart6.xml", names)
-                self.assertNotIn("xl/charts/chart7.xml", names)
+                self.assertIn("xl/charts/chart7.xml", names)
+                self.assertNotIn("xl/charts/chart8.xml", names)
 
                 status, _headers, body = self.request(
                     server,

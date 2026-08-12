@@ -1834,6 +1834,9 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                         "tags": ["alpha", "beta"],
                         "agents": [],
                         "models": [],
+                        "tasks": [],
+                        "jobs": [],
+                        "providers": [],
                         "results": [],
                     },
                     "options": {"force": True},
@@ -2183,7 +2186,7 @@ console.log(result);
         self.assertNotIn(
             '<table class="data-table leaderboard-summary-table"', result["defaultHtml"]
         )
-        self.assertEqual(result["defaultChartCount"], 6)
+        self.assertEqual(result["defaultChartCount"], 7)
         self.assertIn(
             'data-summary-statistic="mean" aria-pressed="true"', result["defaultHtml"]
         )
@@ -2191,7 +2194,7 @@ console.log(result);
 
         self.assertIn("Hide summary table", result["openHtml"])
         self.assertIn('aria-expanded="true"', result["openHtml"])
-        self.assertEqual(result["openMetricRows"], 12)
+        self.assertEqual(result["openMetricRows"], 14)
         self.assertIn('data-value-type="identity" title="Metric"', result["openHtml"])
         self.assertIn('data-value-type="identity" title="Agent"', result["openHtml"])
         self.assertIn('data-value-type="number" title="Count"', result["openHtml"])
@@ -2217,8 +2220,8 @@ console.log(result);
             result["modelGroups"][0]["duration"]["distribution"]["p95"], 5800
         )
         self.assertGreaterEqual(result["modelP95Occurrences"], 2)
-        self.assertEqual(result["modelMetricRows"], 6)
-        self.assertEqual(result["modelChartCount"], 6)
+        self.assertEqual(result["modelMetricRows"], 7)
+        self.assertEqual(result["modelChartCount"], 7)
         self.assertIn('data-value-type="identity" title="Model"', result["modelHtml"])
         self.assertIn("Active Duration; P95 5.8s; n=2", result["modelHtml"])
         self.assertIn(
@@ -2231,8 +2234,8 @@ console.log(result);
         )
         self.assertEqual(result["categoryGroups"][0]["duration"]["mean"], 6000)
         self.assertEqual(result["categoryGroups"][1]["duration"]["mean"], 2000)
-        self.assertEqual(result["categoryMetricRows"], 12)
-        self.assertEqual(result["categoryChartCount"], 6)
+        self.assertEqual(result["categoryMetricRows"], 14)
+        self.assertEqual(result["categoryChartCount"], 7)
         self.assertIn(
             'data-value-type="identity" title="Category"', result["categoryHtml"]
         )
@@ -2243,7 +2246,7 @@ console.log(result);
         )
 
         self.assertEqual(result["overallGroups"], [{"label": "Overall", "rows": 2}])
-        self.assertEqual(result["overallMetricRows"], 6)
+        self.assertEqual(result["overallMetricRows"], 7)
         self.assertEqual(result["overallChartCount"], 0)
         self.assertIn('data-value-type="identity" title="Scope"', result["overallHtml"])
         self.assertIn(
@@ -3311,7 +3314,7 @@ console.log(result);
         self.assertLess(
             result["many"].index("newer.md"), result["many"].index("older.html")
         )
-        alias_index = result["columnKeys"].index("source_alias")
+        alias_index = result["columnKeys"].index("task_name")
         self.assertEqual(result["columnKeys"][alias_index + 1], "workspace_reports")
         self.assertTrue(result["clickEvent"]["stopped"])
         self.assertTrue(result["changeEvent"]["stopped"])
@@ -4082,7 +4085,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertEqual(result["collapsedRail"].count('aria-expanded="false"'), 2)
         self.assertEqual(result["firstTableOpenRail"].count('aria-expanded="true"'), 1)
         self.assertEqual(result["bothTablesOpenRail"].count('aria-expanded="true"'), 2)
-        self.assertIn("6 metrics · 1 categories", result["bothTablesOpenRail"])
+        self.assertIn("7 metrics · 1 categories", result["bothTablesOpenRail"])
         self.assertIn(
             'data-value-type="identity" title="Category"', result["bothTablesOpenRail"]
         )
@@ -4134,6 +4137,9 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                             "tags": ["daily"],
                             "agents": ["alpha"],
                             "models": ["m1"],
+                            "tasks": [],
+                            "jobs": [],
+                            "providers": [],
                             "results": ["failed"],
                             "views": ["Agent slice"],
                         },
@@ -4149,6 +4155,9 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                                 "categories": ["frontend"],
                                 "tags": ["daily"],
                                 "models": [],
+                                "tasks": [],
+                                "jobs": [],
+                                "providers": [],
                                 "group_by": [],
                             },
                             "open_view_tables": ["Agent slice"],
@@ -4183,6 +4192,9 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 "tags": [],
                 "agents": [],
                 "models": [],
+                "tasks": [],
+                "jobs": [],
+                "providers": [],
                 "results": [],
                 "views": ["Agent slice", "Focused model"],
             },
@@ -4207,6 +4219,9 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 "tags": [],
                 "agents": [],
                 "models": [],
+                "tasks": [],
+                "jobs": [],
+                "providers": [],
                 "results": [],
                 "views": [],
             },
@@ -4239,6 +4254,9 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                     "source_tags": [],
                     "agent": [],
                     "model": [],
+                    "task_name": [],
+                    "job_name": [],
+                    "model_provider": [],
                     "status": [],
                 },
             },
@@ -4365,6 +4383,9 @@ console.log(result);
                 "categories": ["frontend"],
                 "tags": [],
                 "models": [],
+                "tasks": [],
+                "jobs": [],
+                "providers": [],
                 "group_by": ["category"],
             },
         )

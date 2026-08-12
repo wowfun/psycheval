@@ -15,7 +15,9 @@ from peval_py.serve.constants import WINDOWS_DRIVE_MOUNT_ROOT, WINDOWS_DRIVE_PAT
 from peval_py.serve.errors import HttpError
 from peval_py.state import CatalogQuery, ServeStateStore
 
-SUMMARY_GROUP_BY_VALUES = frozenset({"overall", "agent", "model", "category"})
+SUMMARY_GROUP_BY_VALUES = frozenset(
+    {"overall", "agent", "model", "category", "task", "job", "provider"}
+)
 SUMMARY_STATISTIC_VALUES = frozenset({"mean", "min", "q1", "p50", "q3", "p95", "max"})
 
 
@@ -59,7 +61,7 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
     query_value = payload.get("query")
     if not isinstance(query_value, dict):
         raise HttpError(400, "query must be an object")
-    query_fields = {
+    required_query_fields = {
         "state",
         "search",
         "sort",
@@ -71,7 +73,10 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
         "results",
         "views",
     }
-    if set(query_value) != query_fields:
+    optional_query_fields = {"tasks", "jobs", "providers"}
+    if not required_query_fields.issubset(query_value) or not set(query_value).issubset(
+        required_query_fields | optional_query_fields
+    ):
         raise HttpError(400, "workspace snapshot query fields are invalid")
     try:
         query = CatalogQuery(
@@ -88,6 +93,11 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
             agents=tuple(_string_array(query_value.get("agents"), "query agents")),
             models=tuple(_string_array(query_value.get("models"), "query models")),
             results=tuple(_string_array(query_value.get("results"), "query results")),
+            tasks=tuple(_string_array(query_value.get("tasks", []), "query tasks")),
+            jobs=tuple(_string_array(query_value.get("jobs", []), "query jobs")),
+            providers=tuple(
+                _string_array(query_value.get("providers", []), "query providers")
+            ),
         ).normalized()
     except ValueError as exc:
         raise HttpError(400, str(exc)) from exc
@@ -116,7 +126,7 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
     if group_by not in SUMMARY_GROUP_BY_VALUES:
         raise HttpError(
             400,
-            "summary_group_by must be overall, agent, model, or category",
+            "summary_group_by must be overall, agent, model, category, task, job, or provider",
         )
     if statistic not in SUMMARY_STATISTIC_VALUES:
         raise HttpError(
@@ -133,19 +143,33 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
     if raw_step_id is not None and not isinstance(raw_step_id, (str, int)):
         raise HttpError(400, "selected_step_id must be a string, integer, or null")
     filters = presentation_value.get("workspace_view_filters")
-    if not isinstance(filters, dict) or set(filters) != {
+    required_filter_fields = {
         "categories",
         "tags",
         "models",
         "group_by",
-    }:
+    }
+    optional_filter_fields = {"tasks", "jobs", "providers"}
+    if (
+        not isinstance(filters, dict)
+        or not required_filter_fields.issubset(filters)
+        or not set(filters).issubset(required_filter_fields | optional_filter_fields)
+    ):
         raise HttpError(
             400,
-            "workspace_view_filters fields must be categories, tags, models, and group_by",
+            "workspace_view_filters fields are invalid",
         )
     filter_values = {
-        key: tuple(_string_array(filters.get(key), f"workspace_view_filters {key}"))
-        for key in ("categories", "tags", "models", "group_by")
+        key: tuple(_string_array(filters.get(key, []), f"workspace_view_filters {key}"))
+        for key in (
+            "categories",
+            "tags",
+            "models",
+            "tasks",
+            "jobs",
+            "providers",
+            "group_by",
+        )
     }
     invalid_groups = [
         value
@@ -219,7 +243,10 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
         group_by = value.get("group_by")
         statistic = value.get("statistic")
         if group_by not in SUMMARY_GROUP_BY_VALUES:
-            raise HttpError(400, "group_by must be overall, agent, model, or category")
+            raise HttpError(
+                400,
+                "group_by must be overall, agent, model, category, task, job, or provider",
+            )
         if statistic not in SUMMARY_STATISTIC_VALUES:
             raise HttpError(
                 400,
@@ -285,10 +312,9 @@ def source_args_from_payload(
 ) -> SimpleNamespace:
     paths = source_path_values(store, payload, "path")
     dbs = source_path_values(store, payload, "db")
-    input_table = optional_string(payload.get("input_table"))
-    present = [value for value in [paths, dbs, input_table] if value]
+    present = [value for value in [paths, dbs] if value]
     if len(present) != 1:
-        raise HttpError(400, "provide exactly one source: path, db, or input_table")
+        raise HttpError(400, "provide exactly one source: path or db")
     session_id = optional_string(payload.get("session_id"))
     session_ids = session_ids_payload(payload)
     if session_id and session_ids:
@@ -302,9 +328,6 @@ def source_args_from_payload(
     return SimpleNamespace(
         path=paths or None,
         db=dbs or None,
-        input_table=[workspace_relative_path(store, input_table)]
-        if input_table
-        else None,
         session_id=(
             [session_id] if session_id and dbs else session_ids if dbs else None
         ),

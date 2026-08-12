@@ -21,7 +21,6 @@ from peval_py.serve import make_handler as make_handler
 from peval_py.serve import source_path_values as source_path_values
 from peval_py.serve import workspace_relative_path as workspace_relative_path
 from peval_py.state import REFRESH_LOG_LIMIT as REFRESH_LOG_LIMIT
-from peval_py.state import UPLOAD_LIMIT_BYTES as UPLOAD_LIMIT_BYTES
 from peval_py.state import (
     discover_complete_trial_cell_dirs as discover_complete_trial_cell_dirs,
 )
@@ -114,7 +113,6 @@ def serve_args(**overrides):
     values = {
         "path": None,
         "db": None,
-        "input_table": None,
         "session_id": None,
         "adapter": None,
         "note": [],

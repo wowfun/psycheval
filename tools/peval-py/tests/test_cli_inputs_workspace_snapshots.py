@@ -457,8 +457,6 @@ default_db_path = "state.db"
                         str(root / "missing.db"),
                         "-s",
                         "missing-session",
-                        "-i",
-                        str(root / "missing.csv"),
                         "--list",
                         "-o",
                         str(inspect_out),

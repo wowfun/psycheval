@@ -19,11 +19,7 @@ def inspect_report_for_args(
         getattr(args, "path", None) or []
     )
     reports = direct_reports[:]
-    if (
-        remaining_paths
-        or getattr(args, "db", None)
-        or getattr(args, "input_table", None)
-    ):
+    if remaining_paths or getattr(args, "db", None):
         load_args = replace(args, path=tuple(remaining_paths))
         loaded_inputs = load_inputs(load_args, adapter_assignments, config=config)
         if loaded_inputs.sessions:
@@ -35,7 +31,7 @@ def inspect_report_for_args(
                 )
             )
     if not reports:
-        raise ValueError("missing input source; pass --path, --db, or --input-table")
+        raise ValueError("missing input source; pass --path or --db")
     return merge_reports(reports)
 
 

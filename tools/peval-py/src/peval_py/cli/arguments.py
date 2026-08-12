@@ -13,7 +13,6 @@ class CliArgs:
     path: tuple[str, ...] | None = None
     db: tuple[str, ...] | None = None
     session_id: tuple[str, ...] | None = None
-    input_table: tuple[str, ...] | None = None
     max_content_chars: int | None = None
     output: object | None = None
     agent_name: str | None = None

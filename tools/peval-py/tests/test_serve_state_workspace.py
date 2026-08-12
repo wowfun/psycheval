@@ -10,7 +10,6 @@ from serve_state_support import (
     DEFAULT_PORT_START,
     FIXTURES,
     REFRESH_LOG_LIMIT,
-    UPLOAD_LIMIT_BYTES,
     LoadedInputs,
     LocalHTTPServer,
     Path,
@@ -464,10 +463,11 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 snapshot_report["trajectory"][0]["session_id"] = "snapshot-session"
                 snapshot_report["trajectory_meta"][0]["trial_key"] = "snapshot:t001"
                 snapshot_report.pop("annotations", None)
-                snapshot_keys = store.ingest_upload(
+                snapshot_keys = store.ingest_report_snapshot(
+                    snapshot_report,
                     "snapshot-report.json",
-                    json.dumps(snapshot_report),
                     config,
+                    materialize_annotations=True,
                 )
                 snapshot_payload = next(
                     item
@@ -647,10 +647,11 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
             }
             store = open_workspace_state(str(root))
             try:
-                keys = store.ingest_upload(
+                keys = store.ingest_report_snapshot(
+                    report,
                     "saved-report.json",
-                    json.dumps(report),
                     config,
+                    materialize_annotations=True,
                 )
                 self.assertEqual(len(keys), 1)
                 sources = store.source_payload()
@@ -749,12 +750,6 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
                 )
                 self.assertEqual(active_report["annotations"]["report_notes"], [])
 
-                with self.assertRaisesRegex(ValueError, "20 MiB"):
-                    store.ingest_upload(
-                        "large-report.json",
-                        "x" * (UPLOAD_LIMIT_BYTES + 1),
-                        config,
-                    )
             finally:
                 store.close()
 
@@ -767,11 +762,11 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
             report = sample_report(config)
             store = open_workspace_state(str(root))
             try:
-                key_a = store.ingest_upload(
-                    "a-report.json", json.dumps(report), config
+                key_a = store.ingest_report_snapshot(
+                    report, "a-report.json", config, materialize_annotations=True
                 )[0]
-                key_b = store.ingest_upload(
-                    "b-report.json", json.dumps(report), config
+                key_b = store.ingest_report_snapshot(
+                    report, "b-report.json", config, materialize_annotations=True
                 )[0]
                 self.assertEqual(key_a, key_b)
                 payload_by_key = {
@@ -794,8 +789,11 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
             report = sample_report(config)
             store = open_workspace_state(str(root))
             try:
-                source_key = store.ingest_upload(
-                    "saved-report.json", json.dumps(report), config
+                source_key = store.ingest_report_snapshot(
+                    report,
+                    "saved-report.json",
+                    config,
+                    materialize_annotations=True,
                 )[0]
                 source = store.source_payload()[0]
                 artifact_dir = root / source["artifact_dir"]
@@ -842,8 +840,11 @@ class PevalPyServeStateWorkspaceTests(unittest.TestCase):
             report = sample_report(config)
             store = open_workspace_state(str(root))
             try:
-                source_key = store.ingest_upload(
-                    "saved-report.json", json.dumps(report), config
+                source_key = store.ingest_report_snapshot(
+                    report,
+                    "saved-report.json",
+                    config,
+                    materialize_annotations=True,
                 )[0]
                 artifact_dir = root / store.source_payload()[0]["artifact_dir"]
                 self.assertFalse((artifact_dir / ".peval" / "state.json").exists())

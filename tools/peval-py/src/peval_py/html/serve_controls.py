@@ -4,6 +4,7 @@ from html import escape
 from typing import Any
 
 from peval_py.adapters import available_adapter_ids
+from peval_py.config import HarborMount
 from peval_py.html.assets import load_asset_text, replace_template_tokens
 
 
@@ -12,6 +13,7 @@ def render_serve_source_manager(
     messages: dict[str, str],
     locale: str,
     adapter_defaults: dict[str, str],
+    harbor_mounts: tuple[HarborMount, ...],
     *,
     loading: bool = False,
 ) -> str:
@@ -37,17 +39,16 @@ def render_serve_source_manager(
             "SOURCE_MANAGER": escape(messages["serve_source_manager"]),
             "REPORTS": escape(messages["workspace_reports"]),
             "LANGUAGE_CONTROL": render_language_control(messages, locale),
-            "DROP_COPY": escape(messages["serve_drop_copy"]),
+            "MANAGER_COPY": escape(messages["serve_source_manager_copy"]),
             "CLOSE": escape(messages["close"]),
             "ADD_SOURCE": escape(messages["serve_add_source"]),
             "SOURCE_FORMS": "".join(
                 [
                     render_source_add_form("db", messages, adapter_defaults),
                     render_source_add_form("path", messages, adapter_defaults),
-                    render_source_add_form("input_table", messages, adapter_defaults),
-                    render_upload_form(messages, adapter_defaults),
                 ]
             ),
+            "HARBOR_CONFIG": render_harbor_config(harbor_mounts, messages),
             "SOURCES": escape(messages["serve_sources"]),
             "RELOAD": escape(messages["serve_reload"]),
             "ARCHIVE_SELECTED": escape(messages["archive_selected"]),
@@ -107,9 +108,8 @@ def render_source_add_form(
     label_key = {
         "path": "serve_path_source",
         "db": "serve_db_source",
-        "input_table": "serve_input_table_source",
     }[kind]
-    name = "input_table" if kind == "input_table" else kind
+    name = kind
     help_id = f"source-{kind}-auto-help"
     help_copy = (
         f'<span class="copy" id="{escape(help_id)}">'
@@ -126,8 +126,6 @@ def render_source_add_form(
                   <button class="action-button" type="button" data-adapter-default-db-clear disabled title="{select_adapter_title}">{escape(messages["serve_clear_adapter_default_db"])}</button>
                 </span>
               </span>"""
-    else:
-        field_tag = f'<input name="{escape(name)}" autocomplete="off" required aria-describedby="{escape(help_id)}">'
     path_picker = ""
     if kind == "path":
         path_picker = f"""
@@ -166,22 +164,63 @@ def render_source_add_form(
           </form>"""
 
 
-def render_upload_form(
-    messages: dict[str, str], adapter_defaults: dict[str, str]
+def render_harbor_config(
+    mounts: tuple[HarborMount, ...],
+    messages: dict[str, str],
 ) -> str:
+    existing = "".join(render_harbor_mount_form(mount, messages) for mount in mounts)
     return f"""
-          <form class="source-form upload-form" data-source-upload-form>
-            <strong>{escape(messages["serve_upload_snapshot"])}</strong>
-            <label>{escape(messages["serve_upload_file"])}
-              <input name="file" type="file" accept=".json,.jsonl,application/json,application/x-ndjson" required>
-            </label>
-            <div class="source-form-actions">
-              <span class="source-add-actions">
-                {render_adapter_select(messages, adapter_defaults)}
-                <button class="action-button primary" type="submit">{escape(messages["serve_upload"])}</button>
-              </span>
-            </div>
-          </form>"""
+          <section class="harbor-config" aria-label="{escape(messages["serve_harbor_config"])}">
+            <header class="harbor-config-head">
+              <strong>{escape(messages["serve_harbor_config"])}</strong>
+              <span>{escape(messages["serve_harbor_config_copy"])}</span>
+            </header>
+            <div class="harbor-mount-list">{existing}</div>
+            {render_harbor_mount_form(None, messages)}
+          </section>"""
+
+
+def render_harbor_mount_form(
+    mount: HarborMount | None,
+    messages: dict[str, str],
+) -> str:
+    mount_id = mount.id if mount is not None else ""
+    jobs_path = mount.path if mount is not None else ""
+    task_paths = "\n".join(mount.task_paths) if mount is not None else ""
+    title = mount_id or messages["serve_add_harbor_mount"]
+    original = (
+        f'<input name="original_id" type="hidden" value="{escape(mount_id)}">'
+        if mount is not None
+        else ""
+    )
+    remove = (
+        f'<button class="action-button danger" type="button" data-harbor-mount-remove>{escape(messages["serve_remove_harbor_mount"])}</button>'
+        if mount is not None
+        else ""
+    )
+    submit = (
+        messages["serve_save_harbor_mount"]
+        if mount is not None
+        else messages["serve_add_harbor_mount"]
+    )
+    return f"""
+            <form class="source-form harbor-mount-form" data-harbor-mount-form>
+              <strong>{escape(title)}</strong>
+              {original}
+              <label>{escape(messages["serve_harbor_mount_id"])}
+                <input name="mount_id" autocomplete="off" required value="{escape(mount_id)}">
+              </label>
+              <label>{escape(messages["serve_harbor_jobs_path"])}
+                <textarea name="jobs_path" autocomplete="off" required rows="2">{escape(jobs_path)}</textarea>
+              </label>
+              <label>{escape(messages["serve_harbor_task_paths"])}
+                <textarea name="task_paths" autocomplete="off" rows="3" placeholder="{escape(messages["serve_one_path_per_line"])}">{escape(task_paths)}</textarea>
+              </label>
+              <div class="source-form-actions">
+                {remove}
+                <button class="action-button primary" type="submit">{escape(submit)}</button>
+              </div>
+            </form>"""
 
 
 def render_adapter_select(

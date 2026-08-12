@@ -114,7 +114,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertEqual(list_declarations.get("overflow"), "auto")
         self.assertEqual(table_declarations.get("min-width"), "1136px")
 
-        forms_rules = re.findall(r"\.source-manager-forms\s*\{[^}]*\}", css)
+        forms_rules = re.findall(r"\.source-manager-controls\s*\{[^}]*\}", css)
         list_panel_rules = re.findall(
             r"\.source-manager-list-panel\s*\{[^}]*\}",
             css,
@@ -151,9 +151,9 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('data-source-kind="db"', form_tags[0])
         self.assertEqual(
             re.findall(r'data-source-kind="([^"]+)"', forms_panel.group(1)),
-            ["db", "path", "input_table"],
+            ["db", "path"],
         )
-        self.assertIn("data-source-upload-form", form_tags[-1])
+        self.assertEqual(len(form_tags), 2)
 
     def test_desktop_saved_views_grid_bounds_wide_index_content(self) -> None:
         css = load_asset_text("report.css")
@@ -425,14 +425,17 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("data-adapter-default-db-clear", serve_html)
         self.assertIn("Save as default", serve_html)
         self.assertIn("保存为默认", zh_serve_html)
-        self.assertIn("Upload snapshot", serve_html)
-        self.assertIn("report JSON uploads", serve_html)
+        self.assertNotIn("Upload snapshot", serve_html)
+        self.assertNotIn("report JSON uploads", serve_html)
         self.assertIn("Session / ATIF / runs Path", serve_html)
         self.assertNotIn("<strong>Session / ATIF / runs Path</strong>", serve_html)
         self.assertIn('<textarea name="path"', serve_html)
         self.assertIn('aria-describedby="source-path-auto-help"', serve_html)
         self.assertIn('aria-describedby="source-db-auto-help"', serve_html)
-        self.assertIn('aria-describedby="source-input_table-auto-help"', serve_html)
+        self.assertNotIn('data-source-kind="input_table"', serve_html)
+        self.assertIn("data-harbor-mount-form", serve_html)
+        self.assertIn("Task / Dataset paths", serve_html)
+        self.assertIn("Jobs 路径", zh_serve_html)
         self.assertIn(
             "Auto infers the adapter only when the source path contains an adapter name.",
             serve_html,
@@ -447,9 +450,9 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("data-db-session-picker", serve_html)
         self.assertIn("data-db-add-selected", serve_html)
         self.assertIn("data-db-select-all", serve_html)
-        self.assertEqual(serve_html.count('class="source-adapter-select"'), 4)
+        self.assertEqual(serve_html.count('class="source-adapter-select"'), 2)
         self.assertEqual(
-            len(re.findall(r'class="[^"]*\bsource-add-actions\b', serve_html)), 4
+            len(re.findall(r'class="[^"]*\bsource-add-actions\b', serve_html)), 2
         )
         db_path_control = re.search(
             r'<span class="db-path-control">\s*<textarea name="db".*?</textarea>'
@@ -539,7 +542,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("function renderTrace()", serve_html)
         self.assertIn("function renderStepDrawer()", serve_html)
         self.assertIn("function displayLeaderboardColumns()", serve_html)
-        self.assertIn('t("session_alias", "Session Alias")', serve_html)
+        self.assertIn('t("task_alias", "Task / Alias")', serve_html)
         self.assertIn('t("last_turn_end", "Last Turn End")', serve_html)
         self.assertIn('key: "finished_at_ms"', serve_html)
         self.assertIn("function sourceColumns()", serve_html)
@@ -587,12 +590,13 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("function inspectDbSessions(form)", serve_html)
         self.assertIn("function addSelectedDbSessions(form)", serve_html)
         self.assertIn("session_ids: sessionIds", serve_html)
-        self.assertIn('serveApi("/api/upload"', serve_html)
+        self.assertNotIn('serveApi("/api/upload"', serve_html)
+        self.assertIn('serveApi("/api/config/harbor-mount"', serve_html)
         self.assertIn('serveApi("/api/sources"', serve_html)
         self.assertIn('serveApi("/api/sources/reload"', serve_html)
         self.assertIn("data-source-manager-open", serve_html)
         self.assertIn("data-source-list", serve_html)
-        self.assertIn("data-source-upload-form", serve_html)
+        self.assertNotIn("data-source-upload-form", serve_html)
         self.assertIn('t("export", "Export")', serve_html)
         self.assertIn('t("export_excel", "Export Excel")', serve_html)
         self.assertIn("data-summary-export-xlsx", serve_html)

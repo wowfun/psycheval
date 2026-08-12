@@ -59,7 +59,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
+const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";
@@ -75,6 +75,9 @@ if (workspaceSnapshotMode()) {
       categories: listValue(presentation.workspace_view_filters?.categories),
       tags: listValue(presentation.workspace_view_filters?.tags),
       models: listValue(presentation.workspace_view_filters?.models),
+      tasks: listValue(presentation.workspace_view_filters?.tasks),
+      jobs: listValue(presentation.workspace_view_filters?.jobs),
+      providers: listValue(presentation.workspace_view_filters?.providers),
       group_by: listValue(presentation.workspace_view_filters?.group_by),
     },
   };
@@ -103,8 +106,18 @@ function synthesizedReportRow(trajectory, meta, index = -1) {
     trial_key: meta?.trial_key,
     session_id: trajectory?.session_id || "-",
     source_alias: meta?.source_alias,
+    display_alias: meta?.display_alias,
     source_category: sourceCategoryForMeta(meta, source),
-    source_tags: sourceTagsForMeta(meta, source),
+    source_tags: sourceTagsFromValue(meta?.source_tags || source?.source_tags),
+    task_keywords: sourceTagsFromValue(meta?.task_keywords || source?.task_keywords),
+    display_tags: sourceTagsForMeta(meta, source),
+    task_name: meta?.task_name || source?.task_name,
+    job_name: meta?.job_name || source?.job_name,
+    trial_name: meta?.trial_name || source?.trial_name,
+    model_provider: meta?.model_provider || source?.model_provider,
+    rewards: meta?.rewards || source?.rewards || {},
+    harbor_provenance: meta?.harbor_provenance || source?.harbor_provenance || {},
+    task_metadata: meta?.task_metadata || source?.task_metadata || {},
     source_key: source?.source_key || null,
     source_active: source?.active !== false,
     adapter: meta?.adapter,
@@ -260,10 +273,17 @@ function sourceIdentityFor(row) {
   return row?.session_id || row?.trial_key || "-";
 }
 function sourceDisplayFor(row) {
-  return sourceAliasFor(row) || sourceIdentityFor(row);
+  return sourceAliasFor(row) || String(row?.task_name || "").trim() || sourceIdentityFor(row);
 }
 function sessionAliasValue(row) {
-  return sourceAliasFor(row) || "-";
+  return sourceAliasFor(row) || String(row?.task_name || "").trim() || "-";
+}
+function renderTaskAlias(row) {
+  const alias = sourceAliasFor(row);
+  const task = String(row?.task_name || "").trim();
+  if (alias && task) return `<span class="task-alias"><strong>${esc(alias)}</strong><small>${esc(task)}</small></span>`;
+  const value = alias || task;
+  return value ? `<span class="task-alias"><strong>${esc(value)}</strong></span>` : `<span class="muted">-</span>`;
 }
 function sourceCategoryForMeta(meta, source = null) {
   return sourceCategoryFromValue(meta?.source_category || source?.source_category);
@@ -287,33 +307,45 @@ function renderReadOnlySourceCategory(row) {
     : `<span class="muted">-</span>`;
 }
 function sourceTagsForMeta(meta, source = null) {
-  const rawTags = listValue(meta?.source_tags).length ? meta.source_tags : source?.source_tags;
-  return sourceTagsFromValue(rawTags);
+  const display = listValue(meta?.display_tags).length ? meta.display_tags : source?.display_tags;
+  if (listValue(display).length) return sourceTagsFromValue(display);
+  return mergeSourceTags(
+    meta?.task_keywords || source?.task_keywords,
+    meta?.source_tags || source?.source_tags,
+  );
 }
 function sourceTagsFromValue(value) {
   const tags = [];
   const seen = new Set();
   listValue(value).forEach(rawTag => {
     const tag = String(rawTag || "").trim();
-    if (!tag || seen.has(tag)) return;
-    seen.add(tag);
+    const identity = tag.toLowerCase();
+    if (!tag || seen.has(identity)) return;
+    seen.add(identity);
     tags.push(tag);
   });
   return tags;
 }
 function sourceTagsFor(row) {
-  return sourceTagsFromValue(row?.source_tags);
+  return listValue(row?.display_tags).length
+    ? sourceTagsFromValue(row.display_tags)
+    : mergeSourceTags(row?.task_keywords, row?.source_tags);
+}
+function mergeSourceTags(...groups) {
+  return sourceTagsFromValue(groups.flatMap(group => listValue(group)));
 }
 function sourceTagsValue(row) {
   return sourceTagsFor(row).join(", ") || "-";
 }
 function sourceTagsEditValue(row) {
-  return sourceTagsFor(row).join(", ");
+  return sourceTagsFromValue(row?.source_tags).join(", ");
 }
 function renderReadOnlySourceTags(row) {
-  const tags = sourceTagsFor(row);
+  const keywords = sourceTagsFromValue(row?.task_keywords);
+  const custom = sourceTagsFromValue(row?.source_tags).filter(tag => !keywords.some(keyword => keyword.toLowerCase() === tag.toLowerCase()));
+  const tags = [...keywords, ...custom];
   return tags.length
-    ? `<span class="source-tag-list">${tags.map(tag => `<span class="source-tag-chip">${esc(tag)}</span>`).join("")}</span>`
+    ? `<span class="source-tag-list">${keywords.map(tag => `<span class="source-tag-chip derived" title="${esc(t("task_keyword_read_only", "Task keyword (read-only)"))}">${esc(tag)}</span>`).join("")}${custom.map(tag => `<span class="source-tag-chip custom" title="${esc(t("custom_tag", "Custom tag"))}">${esc(tag)}</span>`).join("")}</span>`
     : `<span class="muted">-</span>`;
 }
 function searchQuery() {
@@ -333,7 +365,13 @@ function applySessionSearch(rows) {
 function sessionSearchText(row) {
   const trajectory = trajectoryFor(row?.trial_key);
   const meta = metaFor(row?.trial_key);
-  const parts = [];
+  const parts = [
+    row?.task_name, row?.job_name, row?.trial_name, row?.model_provider,
+    row?.source_alias, row?.display_alias, row?.source_category,
+    searchJson(row?.task_keywords), searchJson(row?.source_tags),
+    searchJson(row?.harbor_provenance), searchJson(row?.rewards),
+    searchJson(row?.task_metadata),
+  ];
   listValue(trajectory?.steps).forEach(step => {
     parts.push(step?.message, step?.reasoning_content);
     parts.push(searchJson(step?.tool_calls), searchJson(step?.observation), searchJson(step?.observations));
@@ -471,6 +509,7 @@ export {
   renderNotesCell,
   renderReadOnlySourceCategory,
   renderReadOnlySourceTags,
+  renderTaskAlias,
   renderReportNotes,
   restoreComparisonScrollState,
   restoreScrollPosition,
@@ -496,6 +535,7 @@ export {
   sourceCategoryValue,
   sourceDisplayFor,
   sourceIdentityFor,
+  mergeSourceTags,
   sourceTagsEditValue,
   sourceTagsFor,
   sourceTagsForMeta,

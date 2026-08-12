@@ -38,8 +38,7 @@ uv run --project tools/peval-py peval-py --help
 ## 构建本地二进制
 
 `peval-py` 使用 `pandas` 为 inspect 模式提供表格化分析；`uv` 会根据
-`tools/peval-py/pyproject.toml` 安装该运行时依赖。读取 `.xlsx` 输入清单是可选能力，
-运行时需要 `openpyxl`。请在目标操作系统和 CPU 架构上构建。生成物建议放在
+`tools/peval-py/pyproject.toml` 安装该运行时依赖。请在目标操作系统和 CPU 架构上构建。生成物建议放在
 `.local/` 下，仓库会忽略这个目录。
 
 PyInstaller 是最简单的单文件打包方式：
@@ -115,16 +114,10 @@ peval-py view tr -r .local/peval-py -d @opencode --list
 peval-py export tr -r .local/peval-py -d @opencode -s <session-id> -o
 ```
 
-当输入更适合放在 CSV、JSON 或 `.xlsx` 清单中维护时，使用
-`-i, --input-table PATH`。表格每一行都会展开成同一份报告中的一个 session。
-直接传入的 `-p/--path` 和 `-d/--db` 会先加载，然后按文件顺序追加表格行。
-相对 `path` 和 `db` 会按清单文件所在目录解析。`.xlsx` 只在本机已安装
-`openpyxl` 时可用。
-
-使用 `--source-alias N=TEXT`，或 input table 的 `alias`/`label`/`source_alias`
-列，可以给来源添加仅用于显示的名称。Alias 只提升报告可读性，不改变 session id、
-trial key、source identity 或 Evidence/Input Source 路径。在 Leaderboard 中，
-canonical Session 列保持不变，别名显示在独立的 Session Alias 列。
+使用 `--source-alias N=TEXT` 可以给来源添加仅用于显示的名称。Alias 只提升报告
+可读性，不改变 session id、trial key、source identity 或 Evidence/Input Source 路径。
+在 Leaderboard 中，canonical Session 列保持不变。Harbor 行使用独立的 Task / 别名列；
+没有自定义 alias 时回退到 Task name，存在 alias 时仍在次级信息中保留 Task。
 
 在对比报告中，Leaderboard 的 Duration 列和 JSON `duration_ms` 字段表示 active
 agent/tool work time。已保留 session 中较长的空闲间隔会单独保存在
@@ -139,9 +132,9 @@ workspace 时，报告还会尝试读取 peval cell cached analysis：
 
 同一个 task 目录树也可以提供 manual Trial notes：
 `runs/<analysis_eval_slug>/<agent-id>/<session-id>/<cell_key>/notes.md`。这些内容会写入
-JSON `annotations.notes[]`，并排在 CLI/table notes 前面。在 `peval-py serve` 中，
+JSON `annotations.notes[]`，并排在 CLI notes 前面。在 `peval-py serve` 中，
 本地 Trial artifact 使用这个 cell-local `notes.md`；Harbor source 则使用 workspace
-中的 `harbor/<mount-id>/<job>/<trial>/notes.md`；snapshot 上传来源保持只读。
+中的 `harbor/<mount-id>/<job>/<trial>/notes.md`；不可变的本地 snapshot artifact 保持只读。
 Serve 展示 snapshot 或已挂载 Harbor Trial 时，会在 active report 组合阶段叠加当前 workspace 里的
 `analysis.json`、`analysis.md` 和 `notes.md`；因此 reload 或 Refresh 即使遇到原始
 source DB/file 无法成功刷新，也能显示 notes/analysis 的更新。
@@ -150,9 +143,17 @@ source DB/file 无法成功刷新，也能显示 notes/analysis 的更新。
 `<workspace>/.cache/echarts/6.0.0/echarts.min.js` 提供 ECharts，本地脚本失败时
 回退到固定 CDN URL。Source Manager 会在 SQLite DB 表单内提供默认 DB 的保存/清除
 操作，并提供 source alias 编辑、Last Turn End 排序和 English/简体中文选择器；语言选择
-会把顶层 `locale` 持久化到 `peval-py.toml`。Path 来源字段也可以输入另一个 workspace root、
+会把顶层 `locale` 持久化到 `peval-py.toml`。Harbor 区域可以按稳定 ID 添加、编辑和移除
+只读挂载，并配置一个 Jobs root 与可选的 Task/Dataset 路径。Path 来源字段也可以输入
+另一个 workspace root、
 `runs/`、`runs/<analysis_eval_slug>`，或 Trial cell 上层目录；serve 会递归导入完整
 cell 到当前 workspace 作为 snapshot，并保持外部 workspace 不变。
+
+白名单 Harbor Task 的 live keywords 会进入 display tags。Leaderboard、Saved Views、
+Summary、Selected Trial evidence、JSON/snapshot report、inspect 与 XLSX 也会同步展示或
+导出 Task、Job、Trial、provider、reward dimensions、timing 与 provenance。Live Task
+metadata 与历史 Trial lock 的 digest 不一致时仍可使用，并会明确标记。Package 或 Git
+artifact ref 仍保留在 provenance 中，但不会与本地 live Task digest 比较。
 
 `peval-py serve` 也可以把已有的 Markdown 或 HTML 分析报告绑定到一个或多个
 session。先勾选 Leaderboard 中当前可见的行，再点击 `Attach report (N)`，并选择一个
@@ -177,39 +178,6 @@ reference 也可以是 `harbor/<mount-id>/<job>/<trial>`。你可以直接编辑
 reference 恢复可读后，关联也会恢复。每次只能导入一个不超过
 20 MiB 的 UTF-8 文件，并且只复制所选文件。报告引用的相对 sibling 图片、样式、
 脚本或其他资源不会随报告导入；需要时请把资源嵌入报告，或使用外部 URL。
-
-CSV 示例：
-
-```csv
-path,db,session_id,adapter,alias,n,report_note,agent_name,agent_version,model
-runs/hermes.jsonl,,,,Hermes source,Hermes row note,跨 agent 对比,Hermes,,deepseek-v4-flash
-,state.db,ses_123,opencode,OpenCode source,OpenCode row note,,,,
-```
-
-生成一份多 session HTML 报告：
-
-```bash
-peval-py view tr \
-  -m raw \
-  -a psychevo \
-  -i inputs.csv \
-  -f html \
-  -o report.html
-```
-
-JSON 清单可以是顶层 array，也可以是带有 `rows` 和 `report_notes` 的对象：
-
-```json
-{
-  "report_notes": ["本地跨 agent 对比。"],
-  "rows": [
-    {"path": "runs/hermes.jsonl", "adapter": "hermes", "alias": "Hermes source", "note": "Hermes row"},
-    {"db": "opencode.db", "session_id": "ses_123", "adapter": "opencode", "source_alias": "OpenCode source"}
-  ]
-}
-```
-
-`export tr -i` 展开后仍只能有一个 session。多行清单请使用 `view tr -i`。
 
 报告生成、session 对比和自定义 adapter 示例见
 [peval-py 文档](../../docs/i18n/zh-CN/peval-py/README.md)。

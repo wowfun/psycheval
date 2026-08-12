@@ -12,6 +12,7 @@ from peval_py.i18n import messages_for
 EXCEL_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 SUMMARY_STATISTICS = ("mean", "min", "q1", "p50", "q3", "p95", "max")
 SUMMARY_METRICS = (
+    ("score", "number", "Reward", "reward"),
     ("duration_ms", "duration", "Active Duration", "duration"),
     ("tokens", "number", "Tokens", "tokens"),
     ("turns", "number", "Turns", "turns"),
@@ -124,11 +125,14 @@ def _write_summary_sheet(
             metadata_row += 1
 
     table_header_row = metadata_row + 1
-    group_heading = (
-        messages.get("category", "Category")
-        if sheet.group_by == "category"
-        else "Group"
-    )
+    group_heading = {
+        "agent": messages.get("agent", "Agent"),
+        "model": messages.get("model", "Model"),
+        "category": messages.get("category", "Category"),
+        "task": messages.get("task", "Task"),
+        "job": messages.get("job", "Job"),
+        "provider": messages.get("provider", "Provider"),
+    }.get(sheet.group_by, "Group")
     headers = (
         "Metric",
         group_heading,
@@ -183,7 +187,15 @@ def _write_summary_sheet(
     if not rows:
         return
     statistic_column = 3 + SUMMARY_STATISTICS.index(sheet.statistic)
-    chart_positions = ((1, 11), (1, 20), (17, 11), (17, 20), (33, 11), (33, 20))
+    chart_positions = (
+        (1, 11),
+        (1, 20),
+        (17, 11),
+        (17, 20),
+        (33, 11),
+        (33, 20),
+        (49, 11),
+    )
     metric_labels = {
         key: _metric_label(key, fallback, message_key, messages)
         for key, _kind, fallback, message_key in SUMMARY_METRICS

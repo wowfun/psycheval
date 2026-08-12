@@ -254,11 +254,41 @@ def query_all_catalog_rows(
 def xlsx_summary(rows: list[dict[str, Any]]) -> bytes:
     columns = [
         ("Category", lambda row: row.get("source_category")),
-        ("Tags", lambda row: ", ".join(row.get("source_tags") or [])),
+        ("Tags", lambda row: ", ".join(row.get("display_tags") or [])),
+        ("Custom Tags", lambda row: ", ".join(row.get("source_tags") or [])),
+        ("Task Keywords", lambda row: ", ".join(row.get("task_keywords") or [])),
+        ("Task", lambda row: row.get("task_name")),
+        ("Job", lambda row: row.get("job_name")),
+        ("Trial", lambda row: row.get("trial_name")),
         ("Session", lambda row: row.get("trial_session_id") or row.get("session_id")),
-        ("Session Alias", lambda row: row.get("source_alias")),
+        ("Task / Alias", lambda row: row.get("display_alias")),
+        ("Custom Alias", lambda row: row.get("source_alias")),
         ("Agent", lambda row: row.get("agent_name") or row.get("adapter")),
         ("Model", lambda row: row.get("model")),
+        ("Provider", lambda row: row.get("model_provider")),
+        ("Reward", lambda row: row.get("score")),
+        (
+            "Reward Dimensions",
+            lambda row: json.dumps(
+                row.get("rewards") or {}, ensure_ascii=False, sort_keys=True
+            ),
+        ),
+        (
+            "Harbor Provenance",
+            lambda row: json.dumps(
+                row.get("harbor_provenance") or {},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        ),
+        (
+            "Live Task Metadata",
+            lambda row: json.dumps(
+                row.get("task_metadata") or {},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        ),
         ("Result", lambda row: row.get("status")),
         ("Last Turn End", lambda row: row.get("last_turn_finished_at_ms")),
         ("Active Duration", lambda row: row.get("duration_ms")),

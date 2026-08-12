@@ -13,10 +13,7 @@ from peval_py.analysis import import_analysis_artifacts
 from peval_py.atif import convert_db
 from peval_py.config import HarborMount, ToolConfig, load_config
 from peval_py.state import CatalogQuery, WorkspaceCatalog, open_workspace_state
-from peval_py.state.workspace_sources import (
-    _read_consistent_source_objects,
-    _telemetry_aligns,
-)
+from peval_py.state.workspace_sources import _telemetry_aligns
 from peval_py.workspace_reports import WorkspaceReportLibrary
 from peval_py_test_support import create_messages_db, create_opencode_event_timing_db
 
@@ -133,15 +130,25 @@ class HarborTrialTests(unittest.TestCase):
             base = Path(tmp)
             workspace = base / "workspace"
             jobs = base / "jobs"
+            dataset = base / "dataset"
+            (dataset / "task-a").mkdir(parents=True)
+            (dataset / "task-a" / "task.toml").write_text(
+                '[task]\nname = "task-a"\n', encoding="utf-8"
+            )
             write_trial(jobs / "job-a" / "trial-a")
             workspace.mkdir()
             (workspace / "peval-py.toml").write_text(
-                '[[harbor.mounts]]\nid = "jobs-2026-08-08"\npath = "../jobs"\n',
+                '[[harbor.mounts]]\nid = "jobs-2026-08-08"\n'
+                'path = "../jobs"\ntask_paths = ["../dataset"]\n',
                 encoding="utf-8",
             )
             config = load_config(None, workspace_root=str(workspace))
             self.assertEqual(config.harbor_mounts[0].id, "jobs-2026-08-08")
             self.assertEqual(config.harbor_mounts[0].path, str(jobs.absolute()))
+            self.assertEqual(
+                config.harbor_mounts[0].task_paths,
+                (str(dataset.absolute()),),
+            )
 
             duplicate_id = {
                 "harbor": {
@@ -170,6 +177,21 @@ class HarborTrialTests(unittest.TestCase):
                             "mounts": [
                                 {"id": "one", "path": str(jobs)},
                                 {"id": "two", "path": str(jobs)},
+                            ]
+                        }
+                    },
+                )
+            with self.assertRaisesRegex(ValueError, "duplicate harbor task path"):
+                apply_toml_config(
+                    ToolConfig(),
+                    {
+                        "harbor": {
+                            "mounts": [
+                                {
+                                    "id": "one",
+                                    "path": str(jobs),
+                                    "task_paths": [str(dataset), str(dataset)],
+                                }
                             ]
                         }
                     },
@@ -259,6 +281,25 @@ class HarborTrialTests(unittest.TestCase):
             finally:
                 store.close()
 
+            task_workspace = base / "task-workspace"
+            task_workspace.mkdir()
+            store = open_workspace_state(str(task_workspace))
+            config = ToolConfig(
+                workspace_root=str(task_workspace),
+                harbor_mounts=(
+                    HarborMount(
+                        id="jobs-with-tasks",
+                        path=str(jobs),
+                        task_paths=(str(base / "missing-dataset"),),
+                    ),
+                ),
+            )
+            try:
+                with self.assertRaisesRegex(ValueError, "Task path.*not found"):
+                    WorkspaceCatalog(store, config).reconcile()
+            finally:
+                store.close()
+
     def test_workspace_overlay_symlink_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -291,6 +332,14 @@ class HarborTrialTests(unittest.TestCase):
             write_trial(
                 jobs / "job-a" / "completed", result=completed_result(reward=0.8)
             )
+            unique = completed_result()
+            unique["verifier_result"] = {"rewards": {"accuracy": 0.6}}
+            write_trial(jobs / "job-a" / "unique", result=unique)
+            multi_reward = completed_result()
+            multi_reward["verifier_result"] = {
+                "rewards": {"accuracy": 0.6, "safety": 1.0}
+            }
+            write_trial(jobs / "job-a" / "multi-reward", result=multi_reward)
             errored = completed_result()
             errored["exception_info"] = {"exception_type": "RuntimeError"}
             write_trial(jobs / "job-a" / "errored", result=errored)
@@ -308,6 +357,22 @@ class HarborTrialTests(unittest.TestCase):
                 self.assertEqual(rows["running"]["status"], "running")
                 self.assertEqual(rows["completed"]["status"], "completed")
                 self.assertEqual(rows["completed"]["score"], 0.8)
+                self.assertEqual(rows["unique"]["score"], 0.6)
+                self.assertEqual(rows["unique"]["rewards"], {"accuracy": 0.6})
+                self.assertIsNone(rows["multi-reward"]["score"])
+                self.assertEqual(
+                    rows["multi-reward"]["rewards"],
+                    {"accuracy": 0.6, "safety": 1.0},
+                )
+                summary = catalog.summarize_saved_views(
+                    [("all", CatalogQuery(), "overall")]
+                )["views"][0]
+                score_metric = next(
+                    metric
+                    for metric in summary["groups"][0]["metrics"]
+                    if metric["key"] == "score"
+                )
+                self.assertEqual(score_metric["count"], 3)
                 self.assertEqual(rows["errored"]["status"], "errored")
                 self.assertFalse(rows["multi"]["readable"])
                 self.assertEqual(rows["multi"]["last_status"], "unsupported")
@@ -774,20 +839,6 @@ class HarborTrialTests(unittest.TestCase):
                 )
             finally:
                 store.close()
-
-    def test_consistency_check_retries_and_fails_when_source_never_stabilizes(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            trial = Path(tmp) / "trial"
-            write_trial(trial)
-            changing = [(str(index),) for index in range(6)]
-            with patch(
-                "peval_py.state.workspace_sources._file_signature",
-                side_effect=changing,
-            ):
-                with self.assertRaisesRegex(ValueError, "changed while"):
-                    _read_consistent_source_objects(trial)
 
 
 if __name__ == "__main__":

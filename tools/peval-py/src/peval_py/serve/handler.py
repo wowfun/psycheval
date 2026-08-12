@@ -4,12 +4,17 @@ import json
 from dataclasses import replace
 from functools import partial
 from http.server import BaseHTTPRequestHandler
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from peval_py.config import (
+    HarborMount,
     ToolConfig,
+    apply_toml_config,
+    validate_harbor_mount_paths,
     write_workspace_adapter_default_db,
+    write_workspace_harbor_mounts,
     write_workspace_locale,
 )
 from peval_py.html import render_serve_html
@@ -25,7 +30,6 @@ from peval_py.serve.exports import (
 from peval_py.serve.path_picker import PathPickerUnavailable, pick_file_paths
 from peval_py.serve.payloads import (
     adapter_default_db_payload,
-    adapter_override_payload,
     alias_payload,
     category_payload,
     markdown_payload,
@@ -40,7 +44,7 @@ from peval_py.serve.payloads import (
 from peval_py.serve.runtime import ServeRuntime
 from peval_py.serve.sources import add_source_payload, db_sessions_payload
 from peval_py.state import CatalogBusyError, CatalogQuery, ServeStateStore
-from peval_py.state.workspace_sources import is_harbor_source
+from peval_py.state.workspace_sources import WorkspaceSources, is_harbor_source
 from peval_py.workspace_reports import (
     WorkspaceReportNotFound,
     render_workspace_report_preview,
@@ -108,6 +112,7 @@ def make_handler(
                             sources=[],
                             reports=[],
                             adapter_defaults=runtime.config.adapter_default_db_paths,
+                            harbor_mounts=runtime.config.harbor_mounts,
                             loading=not runtime.catalog.has_generation
                             or runtime.is_loading(),
                             load_error=runtime.load_error(),
@@ -230,6 +235,20 @@ def make_handler(
                             "default_db_path": resolved,
                             "adapter_defaults": adapter_defaults,
                         }
+                    )
+                    return
+                if path == "/api/config/harbor-mount":
+                    runtime.ensure_ready()
+                    self.write_json(
+                        runtime.mutate(
+                            "harbor-config",
+                            [],
+                            lambda: update_harbor_mount_config(
+                                store,
+                                runtime,
+                                payload,
+                            ),
+                        )
                     )
                     return
                 if path == "/api/db-sessions":
@@ -460,27 +479,6 @@ def make_handler(
                     )
                     self.write_json(operation.to_dict(), status=202)
                     return
-                if path == "/api/upload":
-                    runtime.ensure_ready()
-                    filename = required_string(payload, "filename")
-                    content = required_string(payload, "content")
-                    adapter = adapter_override_payload(payload)
-                    upload_alias = alias_payload(payload)
-                    self.write_json(
-                        runtime.mutate(
-                            "upload",
-                            [],
-                            lambda: upload_source(
-                                store,
-                                runtime.config,
-                                filename,
-                                content,
-                                adapter,
-                                upload_alias,
-                            ),
-                        )
-                    )
-                    return
                 if path == "/api/refresh":
                     runtime.ensure_ready()
                     source_keys = source_keys_payload(payload) or []
@@ -591,7 +589,7 @@ def make_handler(
             except ValueError as exc:
                 raise HttpError(400, "invalid Content-Length") from exc
             if content_length > MAX_JSON_BODY_BYTES:
-                raise HttpError(413, "request body exceeds serve upload limit")
+                raise HttpError(413, "request body exceeds serve limit")
             raw = self.rfile.read(content_length) if content_length else b"{}"
             try:
                 payload = json.loads(raw.decode("utf-8"))
@@ -799,6 +797,9 @@ def catalog_query(raw_query: str) -> CatalogQuery:
             agents=many("agent", "agents"),
             models=many("model", "models"),
             results=many("result", "results"),
+            tasks=repeated("task", "tasks"),
+            jobs=repeated("job", "jobs"),
+            providers=repeated("provider", "providers"),
             include_unreadable=first("surface", "leaderboard") == "sources",
         ).normalized()
     except ValueError as exc:
@@ -842,6 +843,9 @@ def catalog_query_payload(value: Any) -> CatalogQuery:
             agents=tuple(value.get("agents") or ()),
             models=tuple(value.get("models") or ()),
             results=tuple(value.get("results") or ()),
+            tasks=tuple(value.get("tasks") or ()),
+            jobs=tuple(value.get("jobs") or ()),
+            providers=tuple(value.get("providers") or ()),
         ).normalized()
     except (TypeError, ValueError) as exc:
         raise HttpError(400, str(exc)) from exc
@@ -888,19 +892,79 @@ def reject_linked_harbor_delete(rows: list[dict[str, Any]]) -> None:
         )
 
 
-def upload_source(
+def update_harbor_mount_config(
     store: ServeStateStore,
-    config: ToolConfig,
-    filename: str,
-    content: str,
-    adapter: str | None,
-    alias: str | None,
+    runtime: ServeRuntime,
+    payload: dict[str, Any],
 ) -> dict[str, Any]:
-    keys = store.ingest_upload(
-        filename,
-        content,
-        config,
-        adapter=adapter,
-        source_alias=alias,
+    mounts = harbor_mounts_from_payload(
+        runtime.config.harbor_mounts,
+        payload,
+        base_dir=store.paths.config_path.parent,
     )
-    return {"source_keys": keys}
+    validate_harbor_mount_paths(mounts)
+    proposed_config = replace(runtime.config, harbor_mounts=mounts)
+    WorkspaceSources(store, proposed_config).source_keys()
+    saved_mounts = write_workspace_harbor_mounts(store.paths.config_path, mounts)
+    runtime.set_config(replace(runtime.config, harbor_mounts=saved_mounts))
+    return {"harbor_mounts": [harbor_mount_payload(mount) for mount in saved_mounts]}
+
+
+def harbor_mounts_from_payload(
+    current: tuple[HarborMount, ...],
+    payload: dict[str, Any],
+    *,
+    base_dir: Path,
+) -> tuple[HarborMount, ...]:
+    action = required_string(payload, "action")
+    if action not in {"upsert", "delete"}:
+        raise HttpError(400, "Harbor mount action must be upsert or delete")
+    original_id = str(payload.get("original_id") or "").strip()
+    if action == "delete":
+        mount_id = original_id or required_string(payload, "mount_id")
+        if not any(mount.id == mount_id for mount in current):
+            raise HttpError(404, f"unknown Harbor mount: {mount_id}")
+        return tuple(mount for mount in current if mount.id != mount_id)
+
+    mount_id = required_string(payload, "mount_id")
+    jobs_path = required_string(payload, "jobs_path")
+    raw_task_paths = payload.get("task_paths", [])
+    if isinstance(raw_task_paths, str):
+        task_paths = [
+            line.strip() for line in raw_task_paths.splitlines() if line.strip()
+        ]
+    elif isinstance(raw_task_paths, list) and all(
+        isinstance(item, str) for item in raw_task_paths
+    ):
+        task_paths = [item.strip() for item in raw_task_paths if item.strip()]
+    else:
+        raise HttpError(400, "task_paths must be an array of strings")
+
+    raw_mounts: list[dict[str, Any]] = []
+    replaced = False
+    for mount in current:
+        raw = harbor_mount_payload(mount)
+        if original_id and mount.id == original_id:
+            raw = {"id": mount_id, "path": jobs_path, "task_paths": task_paths}
+            replaced = True
+        raw_mounts.append(raw)
+    if original_id and not replaced:
+        raise HttpError(404, f"unknown Harbor mount: {original_id}")
+    if not original_id:
+        raw_mounts.append({"id": mount_id, "path": jobs_path, "task_paths": task_paths})
+    try:
+        return apply_toml_config(
+            ToolConfig(workspace_root=str(base_dir)),
+            {"harbor": {"mounts": raw_mounts}},
+            base_dir=base_dir,
+        ).harbor_mounts
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
+
+
+def harbor_mount_payload(mount: HarborMount) -> dict[str, Any]:
+    return {
+        "id": mount.id,
+        "path": mount.path,
+        "task_paths": list(mount.task_paths),
+    }

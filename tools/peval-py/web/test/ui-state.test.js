@@ -33,6 +33,13 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());
 
+test("Harbor semantic Leaderboard columns use Catalog API sort keys", () => {
+  assert.equal(catalog.catalogSortKey("task_name"), "task");
+  assert.equal(catalog.catalogSortKey("job_name"), "job");
+  assert.equal(catalog.catalogSortKey("model_provider"), "provider");
+  assert.equal(catalog.catalogSortKey("reward"), "reward");
+});
+
 test("Saved View Category groups preserve a literal overall category", () => {
   const group = { key: "overall", label: "overall" };
   assert.equal(views.workspaceViewGroupLabel(group, "category"), "overall");

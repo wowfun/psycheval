@@ -177,9 +177,10 @@ def meta_with_source_metadata(
         seen: set[str] = set()
         for raw_tag in tags:
             tag = optional_str(raw_tag)
-            if not tag or tag in seen:
+            folded = tag.casefold() if tag else ""
+            if not tag or folded in seen:
                 continue
-            seen.add(tag)
+            seen.add(folded)
             tag_values.append(tag)
     if tag_values:
         copy = dict(copy)
@@ -187,6 +188,22 @@ def meta_with_source_metadata(
     elif "source_tags" in copy:
         copy = dict(copy)
         copy.pop("source_tags", None)
+    display_alias = optional_str(alias) or optional_str(copy.get("task_name"))
+    copy = dict(copy)
+    if display_alias:
+        copy["display_alias"] = display_alias
+    else:
+        copy.pop("display_alias", None)
+    display_tags: list[str] = []
+    seen_display: set[str] = set()
+    for raw_tag in [*(copy.get("task_keywords") or []), *tag_values]:
+        tag = optional_str(raw_tag)
+        folded = tag.casefold() if tag else ""
+        if not tag or folded in seen_display:
+            continue
+        seen_display.add(folded)
+        display_tags.append(tag)
+    copy["display_tags"] = display_tags
     return copy
 
 

@@ -28,7 +28,6 @@ from peval_py.config import load_config as load_config
 from peval_py.html import load_asset_text as load_asset_text
 from peval_py.html import render_html as render_html
 from peval_py.html import render_serve_html as render_serve_html
-from peval_py.input_table import read_input_table as read_input_table
 from peval_py.inputs import LoadedInputs as LoadedInputs
 from peval_py.inputs import LoadedSession as LoadedSession
 from peval_py.pipeline import (

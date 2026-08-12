@@ -7,7 +7,7 @@ import { closeWorkspaceReportReader } from "./workspace-reports.js";
 import { finalMetric, infoGrid, maxPositiveMetric, reasoningExposed, stepTimingStats, systemExposed, timeTitle, timingRatio, tokenTotal, trajectoryDurationHeatClass, trialWallDurationMs } from "./analysis-metrics.js";
 import { renderSelectedNotes } from "./analysis-notes.js";
 import { renderSelectedAnalysis } from "./analysis-rendering.js";
-import { renderSelectedEvidence } from "./analysis-selected.js";
+import { renderHarborEvidence, renderSelectedEvidence } from "./analysis-selected.js";
 import { disposeTimelineChart, initTimelineDiagnostics, renderTimelineDiagnostics } from "./timeline-shell.js";
 import { bindTimelineControls } from "./timeline-table.js";
 import { bindStepToggle, renderStep, renderStepsHeader, toolCallRatio, valuePreview } from "./steps.js";
@@ -171,6 +171,7 @@ function renderTrace() {
       [t("tool_success_total", "Tool success / total"), toolCallRatio(finalMetric(metrics, "total_tool_calls") ?? 0, finalMetric(metrics, "total_tool_errors") ?? 0)],
       [t("cost", "Cost"), fmtCost(metrics.total_cost_usd)]
     ])}
+    ${renderHarborEvidence(trial)}
     ${renderSelectedNotes(trial.trial_key)}
     ${renderSelectedAnalysis(trial.trial_key)}
     ${renderSelectedEvidence(trajectory, trial)}

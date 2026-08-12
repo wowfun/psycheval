@@ -11,7 +11,6 @@ from serve_state_support import (
     create_hermes_db,
     create_messages_db,
     create_opencode_db,
-    json,
     load_serve_inputs,
     make_handler,
     open_workspace_state,
@@ -92,10 +91,11 @@ class PevalPyServeStateNotesDbTests(unittest.TestCase):
                 self.assertEqual(status, 403)
                 self.assertIn("same-origin", rejected["error"])
 
-                snapshot_keys = store.ingest_upload(
+                snapshot_keys = store.ingest_report_snapshot(
+                    sample_report(config),
                     "saved-report.json",
-                    json.dumps(sample_report(config)),
                     config,
+                    materialize_annotations=True,
                 )
                 request_json(
                     port,

@@ -28,7 +28,6 @@ def rewrite_trial_cell_path_args(args: CliArgs) -> CliArgs:
         adapter=None,
         db=None,
         session_id=None,
-        input_table=None,
     )
     if getattr(args, "command", None) == "view":
         rewritten = replace(

@@ -27,12 +27,18 @@ from peval_py.atif import (
     convert_path,
     validate_atif_trajectory,
 )
-from peval_py.config import HarborMount, ToolConfig
+from peval_py.config import HarborMount, ToolConfig, validate_harbor_mount_paths
 from peval_py.report import project_meta_from_atif
 from peval_py.report.builder import iso_timestamp_ms
 from peval_py.report.metrics import final_metric
 from peval_py.report.timing import step_meta_reports, trial_active_duration_ms
 from peval_py.state.constants import SOURCE_STATE_DIR, SOURCE_STATE_FILENAME
+from peval_py.state.harbor_evidence import (
+    HarborEvidence,
+    HarborTaskIndex,
+    read_harbor_evidence,
+    read_harbor_task_index,
+)
 
 HARBOR_SOURCE_KIND = "harbor-trial"
 HARBOR_ADAPTER = "harbor"
@@ -100,6 +106,8 @@ class SourceCandidate:
     missing: bool = False
     multi_step: bool = False
     containment_root: Path | None = None
+    task_paths: tuple[str, ...] = ()
+    harbor_evidence: HarborEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -300,6 +308,7 @@ class WorkspaceSources:
         return candidates
 
     def _harbor_candidates(self) -> tuple[list[SourceCandidate], set[str]]:
+        validate_harbor_mount_paths(self.config.harbor_mounts)
         candidates: list[SourceCandidate] = []
         present_refs: set[str] = set()
         resolved_mounts: set[Path] = set()
@@ -313,6 +322,7 @@ class WorkspaceSources:
                 raise ValueError(f"duplicate Harbor mount path: {root}")
             resolved_mounts.add(root)
             _reject_linked_directories(root, "Job")
+            task_index = read_harbor_task_index(mount.task_paths)
             for job_dir in _child_dirs(root):
                 _reject_linked_directories(job_dir, "Trial")
                 for trial_dir in _child_dirs(job_dir):
@@ -324,6 +334,7 @@ class WorkspaceSources:
                         trial_dir.name,
                         trial_dir,
                         root,
+                        task_index,
                     )
                     candidates.append(candidate)
                     present_refs.add(candidate.source_ref)
@@ -336,15 +347,32 @@ class WorkspaceSources:
         trial_name: str,
         trial_dir: Path,
         mount_root: Path,
+        task_index: HarborTaskIndex,
     ) -> SourceCandidate:
         source_ref = f"harbor/{mount.id}/{job_name}/{trial_name}"
         overlay_dir = self.overlay_dir(source_ref)
         source_files = _harbor_source_files(trial_dir)
-        fingerprint = _fingerprint(
-            trial_dir,
-            source_files,
-            extra_root=overlay_dir,
-            extra_files=HARBOR_OVERLAY_FILES,
+        evidence: HarborEvidence | None = None
+        evidence_revision = "unavailable"
+        try:
+            evidence = read_harbor_evidence(
+                trial_dir,
+                jobs_root=mount_root,
+                task_paths=mount.task_paths,
+                mount_id=mount.id,
+                task_index=task_index,
+            )
+            evidence_revision = evidence.revision
+        except (OSError, ValueError):
+            pass
+        fingerprint = _combined_revision(
+            _fingerprint(
+                trial_dir,
+                source_files,
+                extra_root=overlay_dir,
+                extra_files=HARBOR_OVERLAY_FILES,
+            ),
+            evidence_revision,
         )
         return SourceCandidate(
             source_ref=source_ref,
@@ -357,6 +385,8 @@ class WorkspaceSources:
             trial_name=trial_name,
             multi_step=_is_multi_step_trial(trial_dir),
             containment_root=mount_root,
+            task_paths=mount.task_paths,
+            harbor_evidence=evidence,
         )
 
     def _retained_missing_candidates(
@@ -546,9 +576,14 @@ class WorkspaceSources:
         try:
             if candidate.multi_step:
                 raise ValueError("unsupported Harbor multi-step Trial")
-            values, revision = _read_consistent_source_objects(
-                candidate.path, candidate.containment_root
+            evidence = candidate.harbor_evidence or read_harbor_evidence(
+                candidate.path,
+                jobs_root=candidate.containment_root or candidate.path.parent.parent,
+                task_paths=candidate.task_paths,
+                mount_id=candidate.mount_id,
             )
+            values = evidence.trial_values
+            revision = evidence.revision
             config_json = values.get("config.json")
             lock_json = values.get("lock.json")
             result_json = values.get("result.json")
@@ -560,6 +595,7 @@ class WorkspaceSources:
                     lock_json,
                     result_json,
                     revision,
+                    evidence,
                 )
                 source = _harbor_source(
                     candidate,
@@ -567,6 +603,7 @@ class WorkspaceSources:
                     meta=meta,
                     config_json=config_json,
                     result_json=result_json,
+                    evidence=evidence,
                 )
                 lifecycle_status = str(meta.get("status") or "error")
                 last_status = (
@@ -580,11 +617,14 @@ class WorkspaceSources:
                     source=source,
                     trajectory=None,
                     meta=meta,
-                    fingerprint=_fingerprint(
-                        candidate.path,
-                        source_files,
-                        extra_root=self.overlay_dir(candidate.source_ref),
-                        extra_files=HARBOR_OVERLAY_FILES,
+                    fingerprint=_combined_revision(
+                        _fingerprint(
+                            candidate.path,
+                            source_files,
+                            extra_root=self.overlay_dir(candidate.source_ref),
+                            extra_files=HARBOR_OVERLAY_FILES,
+                        ),
+                        evidence.revision,
                     ),
                     updated_at_ms=_updated_at_ms(candidate.path, source_files),
                     input_bytes=_input_bytes(candidate.path, source_files),
@@ -622,6 +662,7 @@ class WorkspaceSources:
                 source_schema=source_schema,
                 telemetry=telemetry,
                 telemetry_warning=telemetry_warning,
+                evidence=evidence,
             )
             source = _harbor_source(
                 candidate,
@@ -630,6 +671,7 @@ class WorkspaceSources:
                 meta=meta,
                 config_json=config_json,
                 result_json=result_json,
+                evidence=evidence,
             )
             return SourceDocument(
                 source_ref=candidate.source_ref,
@@ -637,11 +679,14 @@ class WorkspaceSources:
                 source=source,
                 trajectory=trajectory,
                 meta=meta,
-                fingerprint=_fingerprint(
-                    candidate.path,
-                    source_files,
-                    extra_root=self.overlay_dir(candidate.source_ref),
-                    extra_files=HARBOR_OVERLAY_FILES,
+                fingerprint=_combined_revision(
+                    _fingerprint(
+                        candidate.path,
+                        source_files,
+                        extra_root=self.overlay_dir(candidate.source_ref),
+                        extra_files=HARBOR_OVERLAY_FILES,
+                    ),
+                    evidence.revision,
                 ),
                 updated_at_ms=_updated_at_ms(candidate.path, source_files),
                 input_bytes=_input_bytes(candidate.path, source_files),
@@ -1115,6 +1160,7 @@ def _result_only_meta(
     lock_json: dict[str, Any] | None,
     result_json: dict[str, Any] | None,
     revision: str,
+    evidence: HarborEvidence,
 ) -> dict[str, Any]:
     evaluation = _evaluation(result_json)
     identity_hash = hashlib.sha256(candidate.source_ref.encode("utf-8")).hexdigest()[
@@ -1123,14 +1169,7 @@ def _result_only_meta(
     trial_key = (
         f"harbor-{artifact_segment(candidate.trial_name, 'trial')[:48]}-{identity_hash}"
     )
-    trial_name = (
-        optional_str(
-            (result_json or {}).get("trial_name")
-            or (config_json or {}).get("trial_name")
-        )
-        or candidate.trial_name
-        or candidate.path.name
-    )
+    trial_name = evidence.trial_name
     data_ref = {
         "kind": HARBOR_SOURCE_KIND,
         "label": f"{candidate.job_name}/{candidate.trial_name}",
@@ -1139,7 +1178,10 @@ def _result_only_meta(
         "mount_id": candidate.mount_id,
         "source_revision": revision,
         "trial_name": trial_name,
+        "task_name": evidence.task_name,
+        "job_name": evidence.job_name,
     }
+    data_ref.update(_data_ref_provenance(evidence.provenance))
     meta: dict[str, Any] = {
         "trial_key": trial_key,
         "adapter": HARBOR_ADAPTER,
@@ -1153,7 +1195,21 @@ def _result_only_meta(
         "total_events": 0,
         "unmapped_events": 0,
         "prompt_unavailable": True,
-        "evaluation": {**evaluation, "trial_name": trial_name},
+        "evaluation": {
+            **evaluation,
+            "trial_name": trial_name,
+            "task_name": evidence.task_name,
+            "job_name": evidence.job_name,
+            "phase_timing": evidence.phase_timing,
+        },
+        "task_name": evidence.task_name,
+        "job_name": evidence.job_name,
+        "trial_name": trial_name,
+        "model_provider": evidence.model_provider,
+        "task_keywords": list(evidence.task_keywords),
+        "rewards": evaluation["rewards"],
+        "harbor_provenance": evidence.provenance,
+        "task_metadata": evidence.task_metadata,
         "import_context": {
             "kind": HARBOR_SOURCE_KIND,
             "source_revision": revision,
@@ -1195,6 +1251,7 @@ def _harbor_source(
     meta: dict[str, Any] | None = None,
     config_json: dict[str, Any] | None = None,
     result_json: dict[str, Any] | None = None,
+    evidence: HarborEvidence | None = None,
 ) -> dict[str, Any]:
     agent = (
         trajectory.get("agent")
@@ -1216,6 +1273,10 @@ def _harbor_source(
         if candidate.job_name and candidate.trial_name
         else f"Harbor mount: {candidate.mount_id}"
     )
+    source_alias = optional_str(overlay.get("source_alias"))
+    source_tags = _normalized_tags(overlay.get("source_tags"))
+    task_keywords = list(evidence.task_keywords) if evidence is not None else []
+    task_name = evidence.task_name if evidence is not None else None
     return {
         "kind": candidate.kind,
         "adapter": HARBOR_ADAPTER,
@@ -1223,9 +1284,21 @@ def _harbor_source(
         "input_path": None,
         "db_path": None,
         "session_id": optional_str((trajectory or {}).get("session_id")),
-        "source_alias": optional_str(overlay.get("source_alias")),
+        "source_alias": source_alias,
         "source_category": optional_str(overlay.get("source_category")),
-        "source_tags": _normalized_tags(overlay.get("source_tags")),
+        "source_tags": source_tags,
+        "display_alias": source_alias or task_name,
+        "display_tags": _merged_display_tags(task_keywords, source_tags),
+        "task_name": task_name,
+        "job_name": evidence.job_name if evidence is not None else candidate.job_name,
+        "trial_name": evidence.trial_name
+        if evidence is not None
+        else candidate.trial_name,
+        "model_provider": evidence.model_provider if evidence is not None else None,
+        "task_keywords": task_keywords,
+        "rewards": _evaluation(result_json)["rewards"],
+        "harbor_provenance": evidence.provenance if evidence is not None else {},
+        "task_metadata": evidence.task_metadata if evidence is not None else {},
         "agent_name": optional_str(agent.get("name") or result_agent.get("name")),
         "agent_version": optional_str(
             agent.get("version") or result_agent.get("version")
@@ -1248,6 +1321,7 @@ def _trajectory_meta(
     source_schema: str,
     telemetry: HarborTelemetry | None,
     telemetry_warning: str | None,
+    evidence: HarborEvidence,
 ) -> dict[str, Any]:
     evaluation = _evaluation(result_json)
     result_active = _result_duration_ms(result_json, "agent_execution")
@@ -1258,17 +1332,8 @@ def _trajectory_meta(
     )
     wall_duration = _result_duration_ms(result_json)
     agent = trajectory.get("agent") if isinstance(trajectory.get("agent"), dict) else {}
-    trial_name = (
-        optional_str(
-            (result_json or {}).get("trial_name")
-            or (config_json or {}).get("trial_name")
-        )
-        or candidate.trial_name
-        or candidate.path.name
-    )
-    task_name = optional_str((result_json or {}).get("task_name")) or _nested_string(
-        config_json, "task", "name"
-    )
+    trial_name = evidence.trial_name
+    task_name = evidence.task_name
     job_id = optional_str((config_json or {}).get("job_id"))
     result_id = optional_str((result_json or {}).get("id"))
     identity_hash = hashlib.sha256(candidate.source_ref.encode("utf-8")).hexdigest()[
@@ -1285,7 +1350,9 @@ def _trajectory_meta(
         "mount_id": candidate.mount_id,
         "source_revision": revision,
         "trial_name": trial_name,
+        "job_name": evidence.job_name,
     }
+    data_ref.update(_data_ref_provenance(evidence.provenance))
     for key, value in (
         ("job_id", job_id),
         ("result_id", result_id),
@@ -1312,10 +1379,20 @@ def _trajectory_meta(
         "evaluation": {
             **evaluation,
             "trial_name": trial_name,
+            "job_name": evidence.job_name,
             **({"task_name": task_name} if task_name else {}),
             **({"job_id": job_id} if job_id else {}),
             **({"result_id": result_id} if result_id else {}),
+            "phase_timing": evidence.phase_timing,
         },
+        "task_name": task_name,
+        "job_name": evidence.job_name,
+        "trial_name": trial_name,
+        "model_provider": evidence.model_provider,
+        "task_keywords": list(evidence.task_keywords),
+        "rewards": evaluation["rewards"],
+        "harbor_provenance": evidence.provenance,
+        "task_metadata": evidence.task_metadata,
         "import_context": {
             "kind": HARBOR_SOURCE_KIND,
             "source_revision": revision,
@@ -1345,6 +1422,36 @@ def _trajectory_meta(
         data_ref["lock_available"] = True
     projected = project_meta_from_atif(trajectory, meta)
     return projected
+
+
+def _data_ref_provenance(provenance: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "mount_id",
+        "job_id",
+        "result_id",
+        "harbor_version",
+        "task_digest",
+        "task_digest_source",
+        "task_source",
+        "task_version",
+        "task_checksum",
+        "regrade",
+    }
+    return {key: value for key, value in provenance.items() if key in allowed}
+
+
+def _merged_display_tags(*values: Iterable[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for tags in values:
+        for raw_tag in tags:
+            tag = str(raw_tag).strip()
+            folded = tag.casefold()
+            if not tag or folded in seen:
+                continue
+            seen.add(folded)
+            result.append(tag)
+    return result
 
 
 def _evaluation(result: dict[str, Any] | None) -> dict[str, Any]:
@@ -1389,60 +1496,6 @@ def _evaluation(result: dict[str, Any] | None) -> dict[str, Any]:
         )
         payload["exception"] = exception
     return payload
-
-
-def _read_consistent_source_objects(
-    trial_dir: Path,
-    containment_root: Path | None = None,
-) -> tuple[dict[str, dict[str, Any] | None], str]:
-    containment_root = containment_root or trial_dir
-    last_error: Exception | None = None
-    for _attempt in range(3):
-        before = _file_signature(trial_dir, HARBOR_JSON_SOURCE_FILES)
-        try:
-            values, revision = _read_source_objects(trial_dir, containment_root)
-        except Exception as exc:  # noqa: BLE001 - retry only if the source changed.
-            last_error = exc
-            if before != _file_signature(trial_dir, HARBOR_JSON_SOURCE_FILES):
-                continue
-            raise
-        if before == _file_signature(trial_dir, HARBOR_JSON_SOURCE_FILES):
-            return values, revision
-    if last_error is not None:
-        raise last_error
-    raise ValueError(f"Harbor Trial changed while it was being read: {trial_dir}")
-
-
-def _read_source_objects(
-    trial_dir: Path,
-    containment_root: Path,
-) -> tuple[dict[str, dict[str, Any] | None], str]:
-    values: dict[str, dict[str, Any] | None] = {}
-    digest = hashlib.sha256()
-    for relative in HARBOR_JSON_SOURCE_FILES:
-        path = trial_dir / relative
-        try:
-            file_stat = path.stat(follow_symlinks=False)
-        except FileNotFoundError:
-            values[relative] = None
-            digest.update(relative.encode("utf-8") + b"\0missing\0")
-            continue
-        except OSError as exc:
-            raise ValueError(
-                f"cannot inspect Harbor source file {path}: {exc}"
-            ) from exc
-        if not stat.S_ISREG(file_stat.st_mode):
-            raise ValueError(f"Harbor source file must be a regular file: {path}")
-        content = _read_bytes_no_follow(containment_root, path)
-        digest.update(relative.encode("utf-8") + b"\0" + content + b"\0")
-        try:
-            parsed = json.loads(content)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f"failed to parse {path}: {exc}") from exc
-        if not isinstance(parsed, dict):
-            raise ValueError(f"{path} must contain a JSON object")
-        values[relative] = parsed
-    return values, digest.hexdigest()
 
 
 def _read_bytes_no_follow(containment_root: Path, path: Path) -> bytes:
@@ -1641,6 +1694,10 @@ def _fingerprint(
     return _text_fingerprint("\n".join(parts))
 
 
+def _combined_revision(*values: str) -> str:
+    return _text_fingerprint("\0".join(values))
+
+
 def _file_signature(root: Path, relative_files: Iterable[str]) -> tuple[str, ...]:
     return tuple(_signature_parts(root, relative_files))
 
@@ -1699,8 +1756,9 @@ def _normalized_tags(value: Any) -> list[str]:
     seen: set[str] = set()
     for raw in value:
         text = str(raw or "").strip()
-        if text and text not in seen:
-            seen.add(text)
+        folded = text.casefold()
+        if text and folded not in seen:
+            seen.add(folded)
             tags.append(text)
     return tags
 

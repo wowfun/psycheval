@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from peval_py._state.annotations import (
-    is_report_json,
     matching_annotation_items,
     merged_analysis_json,
     merged_analysis_markdown,
@@ -29,20 +27,14 @@ from peval_py._state.sources import (
     trial_payload_from_report,
 )
 from peval_py.analysis import write_note_file
-from peval_py.atif import (
-    convert_atif_trajectory,
-    is_atif_trajectory,
-    validate_atif_trajectory,
-)
-from peval_py.config import ToolConfig, config_for_adapter
+from peval_py.atif import validate_atif_trajectory
+from peval_py.config import ToolConfig
 from peval_py.models import LoadedInputs, LoadedSession
 from peval_py.pipeline import report_session_for_loaded
-from peval_py.report import ReportSession, build_multi_report, project_meta_from_atif
-from peval_py.sources import read_jsonl_text
+from peval_py.report import build_multi_report, project_meta_from_atif
 from peval_py.state.constants import (
     SOURCE_STATUS_MISSING,
     SOURCE_STATUS_OK,
-    UPLOAD_LIMIT_BYTES,
 )
 from peval_py.state.summaries import now_ms, trial_summary
 from peval_py.state.workspace_sources import WorkspaceSources, is_harbor_source
@@ -239,76 +231,6 @@ class StateIngestMixin:
             source=source,
         )
         return artifact_dir, len(meta.get("warnings") or [])
-
-    def ingest_upload(
-        self,
-        filename: str,
-        content: str,
-        config: ToolConfig,
-        adapter: str | None = None,
-        source_alias: str | None = None,
-    ) -> list[str]:
-        if len(content.encode("utf-8")) > UPLOAD_LIMIT_BYTES:
-            raise ValueError("uploaded source exceeds 20 MiB limit")
-        label = Path(filename or "upload").name
-        parsed_json: Any = None
-        if label.endswith(".json"):
-            try:
-                parsed_json = json.loads(content)
-            except json.JSONDecodeError:
-                parsed_json = None
-        if isinstance(parsed_json, dict) and is_report_json(parsed_json):
-            return self.ingest_report_snapshot(
-                parsed_json,
-                label,
-                config,
-                materialize_annotations=True,
-                source_alias=source_alias,
-            )
-        if isinstance(parsed_json, dict) and is_atif_trajectory(parsed_json):
-            conversion = convert_atif_trajectory(parsed_json)
-            report = build_multi_report(
-                [
-                    ReportSession(
-                        conversion=conversion,
-                        input_label=label,
-                        adapter_id="atif",
-                    )
-                ],
-                config_for_adapter(config, "atif"),
-                [],
-            )
-            return self.ingest_report_snapshot(
-                report,
-                label,
-                config,
-                adapter="atif",
-                source_alias=source_alias,
-            )
-        if not label.endswith(".jsonl"):
-            raise ValueError("uploaded source must be JSONL, ATIF JSON, or report JSON")
-        source_config = config_for_adapter(config, adapter or config.adapter)
-        records = read_jsonl_text(content)
-        session = LoadedSession(
-            records=records,
-            input_label=label,
-            adapter_id=source_config.adapter,
-            session_hint=Path(label).stem or "session",
-            source_kind="upload",
-            source_alias=source_alias,
-        )
-        report = build_multi_report(
-            [report_session_for_loaded(session, source_config)],
-            source_config,
-            [],
-        )
-        return self.ingest_report_snapshot(
-            report,
-            label,
-            source_config,
-            adapter=source_config.adapter,
-            source_alias=source_alias,
-        )
 
     def ingest_report_snapshot(
         self,

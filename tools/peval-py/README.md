@@ -39,8 +39,7 @@ uv run --project tools/peval-py peval-py --help
 ## Build A Local Binary
 
 `peval-py` uses `pandas` for inspect-mode tabular analysis; `uv` installs that
-runtime dependency from `tools/peval-py/pyproject.toml`. Reading `.xlsx` input
-manifests is optional and requires `openpyxl` at runtime. Build on the same
+runtime dependency from `tools/peval-py/pyproject.toml`. Build on the same
 operating system and CPU architecture where you plan to run the file. Keep
 generated artifacts under `.local/`; the repository ignores that directory.
 
@@ -125,17 +124,11 @@ peval-py view tr -r .local/peval-py -d @opencode --list
 peval-py export tr -r .local/peval-py -d @opencode -s <session-id> -o
 ```
 
-Use `-i, --input-table PATH` when the inputs are easier to maintain as a CSV,
-JSON, or `.xlsx` manifest. Each table row becomes one session in the same
-report. Direct `-p/--path` and `-d/--db` inputs are loaded first, then table
-rows are appended in file order. Relative `path` and `db` values resolve from
-the manifest directory. `.xlsx` works only when `openpyxl` is installed.
-
-Use `--source-alias N=TEXT` or input-table `alias`/`label`/`source_alias`
-columns to add display-only source names. Aliases improve report readability
-without changing session ids, trial keys, source identity, or Evidence/Input
-Source paths. In the Leaderboard, the canonical Session column stays unchanged
-and aliases appear in the separate Session Alias column.
+Use `--source-alias N=TEXT` to add display-only source names. Aliases improve
+report readability without changing session ids, trial keys, source identity,
+or Evidence/Input Source paths. In the Leaderboard, the canonical Session
+column stays unchanged. Harbor rows use a separate Task / Alias column that
+falls back to Task name and keeps the Task visible beneath a custom alias.
 
 In comparison reports, the Leaderboard Duration column is derived from JSON
 `trajectory_meta[].duration_ms`, which stores active agent/tool work time. Long
@@ -154,10 +147,10 @@ for a path segment.
 
 The same task tree can also provide manual Trial notes at
 `runs/<analysis_eval_slug>/<agent-id>/<session-id>/<cell_key>/notes.md`.
-These appear in JSON `annotations.notes[]` before CLI/table notes. In
+These appear in JSON `annotations.notes[]` before CLI notes. In
 `peval-py serve`, local Trial artifacts use that cell-local `notes.md`, while
 Harbor sources use `harbor/<mount-id>/<job>/<trial>/notes.md` in the workspace;
-snapshot uploads remain read-only. Session-root `analysis.json`,
+immutable local snapshot artifacts remain read-only. Session-root `analysis.json`,
 `analysis.md`, and `notes.md` are reserved for session-level artifacts and are
 not read into Trial reports in this version.
 When serving snapshots or mounted Harbor Trials, current workspace-side `analysis.json`,
@@ -171,10 +164,20 @@ fixed CDN URL if the local script fails. Its Source Manager exposes configured
 default DB paths through the SQLite DB form's Save/Clear default actions, alias
 editing, Last Turn End sorting, and an
 English/Simplified Chinese selector that persists top-level `locale` in
-`peval-py.toml`. The Path source field also accepts another workspace root,
+`peval-py.toml`. Its Harbor section adds, edits, and removes read-only mounts
+with a stable ID, one Jobs root, and optional Task/Dataset paths. The Path source
+field also accepts another workspace root,
 `runs/`, `runs/<analysis_eval_slug>`, or a directory above Trial cells; serve
 recursively imports complete cells into the current workspace as snapshots and
 leaves the external workspace unchanged.
+
+Allowlisted Harbor Tasks contribute live keywords to display tags. The
+Leaderboard, Saved Views, Summary, Selected Trial evidence, JSON/snapshot
+reports, inspection, and XLSX exports also expose Task, Job, Trial, provider,
+reward dimensions, timing, and provenance. Live Task metadata stays usable when
+its digest differs from the historical Trial lock and is labeled accordingly.
+Package or Git artifact refs remain provenance and are not compared with a live
+local Task digest.
 
 `peval-py serve` can also attach an existing Markdown or HTML analysis report
 to one or more sessions. Select visible Leaderboard rows, choose
@@ -202,41 +205,6 @@ bindings by hand. A source that cannot be found is retained without rewriting
 readable again. Imports accept one UTF-8 file up to 20 MiB and
 copy only that file. Relative sibling images, styles, scripts, and other assets
 are not imported; embed them in the report or use external URLs when needed.
-
-CSV example:
-
-```csv
-path,db,session_id,adapter,alias,n,report_note,agent_name,agent_version,model
-runs/hermes.jsonl,,,,Hermes source,Hermes row note,Cross-agent comparison,Hermes,,deepseek-v4-flash
-,state.db,ses_123,opencode,OpenCode source,OpenCode row note,,,,
-```
-
-Then render one multi-session HTML report:
-
-```bash
-peval-py view tr \
-  -m raw \
-  -a psychevo \
-  -i inputs.csv \
-  -f html \
-  -o report.html
-```
-
-JSON manifests may be a top-level array or an object with `rows` and
-`report_notes`:
-
-```json
-{
-  "report_notes": ["Local cross-agent comparison."],
-  "rows": [
-    {"path": "runs/hermes.jsonl", "adapter": "hermes", "alias": "Hermes source", "note": "Hermes row"},
-    {"db": "opencode.db", "session_id": "ses_123", "adapter": "opencode", "source_alias": "OpenCode source"}
-  ]
-}
-```
-
-`export tr -i` is still single-session only after expansion. Use `view tr -i`
-for a manifest with multiple rows.
 
 For reporting, comparison, and custom adapter examples, read
 [peval-py Documentation](../../docs/peval-py/README.md).

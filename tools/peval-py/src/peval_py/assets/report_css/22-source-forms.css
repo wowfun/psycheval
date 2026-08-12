@@ -6,13 +6,40 @@
   padding:16px;
   overflow:hidden;
 }
-.source-manager-forms {
+.source-manager-controls {
   min-height:0;
   display:grid;
   gap:10px;
   align-content:start;
   overflow:auto;
   padding-right:2px;
+}
+.source-manager-forms,.harbor-config,.harbor-mount-list {
+  display:grid;
+  gap:10px;
+  align-content:start;
+}
+.harbor-config {
+  margin-top:4px;
+  padding-top:14px;
+  border-top:1px solid var(--rule);
+}
+.harbor-config-head {
+  display:grid;
+  gap:4px;
+}
+.harbor-config-head strong {
+  color:var(--ink);
+  font:700 13px/1.2 var(--mono);
+  text-transform:uppercase;
+}
+.harbor-config-head span {
+  color:var(--muted);
+  font:12px/1.35 var(--mono);
+}
+.harbor-mount-form>strong {
+  color:var(--ink);
+  text-transform:none;
 }
 .source-form {
   display:grid;

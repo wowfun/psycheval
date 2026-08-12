@@ -111,11 +111,10 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 runtime.wait_until_ready(timeout=5)
                 store.close()
 
-    def test_http_upload_report_json_and_same_origin_rejection(self) -> None:
+    def test_http_upload_endpoint_is_removed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_py_workspace(Path(tmp))
             config = ToolConfig(adapter="opencode")
-            report = sample_report(config)
             store = open_workspace_state(str(root))
             server = LocalHTTPServer(
                 ("127.0.0.1", 0),
@@ -129,55 +128,13 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                     port,
                     "POST",
                     "/api/upload",
-                    {
-                        "filename": "report.json",
-                        "content": json.dumps(report),
-                    },
-                    origin="http://example.test",
-                )
-                self.assertEqual(status, 403)
-                self.assertNotIn("access-control-allow-origin", headers)
-                self.assertIn("same-origin", body["error"])
-
-                status, headers, body = request_json(
-                    port,
-                    "POST",
-                    "/api/upload",
-                    {
-                        "filename": "report.json",
-                        "content": json.dumps(report),
-                    },
+                    {"filename": "report.json", "content": "{}"},
                     origin=f"http://127.0.0.1:{port}",
                 )
-                self.assertEqual(status, 200)
+                self.assertEqual(status, 404)
                 self.assertNotIn("access-control-allow-origin", headers)
-                self.assertEqual(len(body["sources"]), 1)
-                self.assertEqual(body["sources"][0]["kind"], "trial-artifact")
-                self.assertFalse(body["sources"][0]["refreshable"])
-                self.assertTrue(body["sources"][0]["snapshot"])
-                self.assertEqual(len(body["report"]["trajectory"]), 1)
-
-                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                source_key = body["sources"][0]["source_key"]
-                conn.request("GET", f"/api/report?source_key={source_key}")
-                response = conn.getresponse()
-                payload = json.loads(response.read().decode("utf-8"))
-                conn.close()
-                self.assertEqual(response.status, 200)
-                self.assertEqual(len(payload["report"]["trajectory"]), 1)
-
-                status, _, html = request_text(port, "/")
-                self.assertEqual(status, 200)
-                embedded = script_json(html, "peval-py-data")
-                options = script_json(html, "peval-py-render-options")
-                comparison = report_js_comparison_state(
-                    embedded,
-                    sources=options["sources"],
-                )
-                self.assertEqual(comparison["reportRows"], 0)
-                self.assertFalse(comparison["hasLeaderboard"])
-                self.assertTrue(comparison["hasSummary"])
-                self.assertFalse(comparison["hasOverview"])
+                self.assertEqual(body["error"], "not found")
+                self.assertEqual(store.source_payload(), [])
             finally:
                 server.shutdown()
                 server.server_close()
@@ -637,6 +594,117 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 thread.join(timeout=5)
                 store.close()
 
+    def test_http_harbor_mount_config_adds_edits_and_removes_jobs_and_tasks(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = peval_py_workspace(Path(tmp) / "workspace")
+            (root / "peval-py.toml").write_text(
+                '[adapters.opencode]\ndefault_db_path = "db/opencode.db"\n',
+                encoding="utf-8",
+            )
+            jobs = Path(tmp) / "jobs"
+            trial = jobs / "job-a" / "trial-a"
+            trial.mkdir(parents=True)
+            (trial.parent / "config.json").write_text(
+                json.dumps({"job_name": "job-a", "jobs_dir": str(jobs)}),
+                encoding="utf-8",
+            )
+            (trial / "config.json").write_text(
+                json.dumps({"trial_name": "trial-a", "job_id": "job-a"}),
+                encoding="utf-8",
+            )
+            dataset = Path(tmp) / "dataset"
+            task = dataset / "task-a"
+            task.mkdir(parents=True)
+            task_toml = task / "task.toml"
+            task_toml.write_text('[task]\nname = "task-a"\n', encoding="utf-8")
+            original_task = task_toml.read_bytes()
+            config = ToolConfig(adapter="opencode", locale="en")
+            store = open_workspace_state(str(root))
+            server = LocalHTTPServer(
+                ("127.0.0.1", 0),
+                make_handler(store, config),
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            port = server.server_port
+            origin = f"http://127.0.0.1:{port}"
+            try:
+                status, _, body = request_json(
+                    port,
+                    "POST",
+                    "/api/config/harbor-mount",
+                    {
+                        "action": "upsert",
+                        "mount_id": "pbench-jobs",
+                        "jobs_path": str(jobs),
+                        "task_paths": [str(dataset)],
+                    },
+                    origin=origin,
+                )
+                self.assertEqual(status, 200)
+                mounts = body["result"]["harbor_mounts"]
+                self.assertEqual(mounts[0]["id"], "pbench-jobs")
+                self.assertEqual(mounts[0]["task_paths"], [str(dataset)])
+                self.assertEqual(len(body["sources"]), 1)
+                self.assertEqual(body["sources"][0]["kind"], "harbor-trial")
+                config_text = (root / "peval-py.toml").read_text(encoding="utf-8")
+                self.assertIn("[[harbor.mounts]]", config_text)
+                self.assertIn('id = "pbench-jobs"', config_text)
+                self.assertIn("task_paths = [", config_text)
+                self.assertIn("[adapters.opencode]", config_text)
+
+                status, _, html = request_text(port, "/")
+                self.assertEqual(status, 200)
+                self.assertIn("data-harbor-mount-form", html)
+                self.assertIn('value="pbench-jobs"', html)
+                self.assertIn(str(dataset), html)
+
+                bad_link = Path(tmp) / "linked-dataset"
+                bad_link.symlink_to(dataset, target_is_directory=True)
+                before_invalid = config_text
+                status, _, rejected = request_json(
+                    port,
+                    "POST",
+                    "/api/config/harbor-mount",
+                    {
+                        "action": "upsert",
+                        "original_id": "pbench-jobs",
+                        "mount_id": "pbench-jobs",
+                        "jobs_path": str(jobs),
+                        "task_paths": [str(bad_link)],
+                    },
+                    origin=origin,
+                )
+                self.assertEqual(status, 400)
+                self.assertIn("symlink", rejected["error"])
+                self.assertEqual(
+                    (root / "peval-py.toml").read_text(encoding="utf-8"),
+                    before_invalid,
+                )
+
+                status, _, body = request_json(
+                    port,
+                    "POST",
+                    "/api/config/harbor-mount",
+                    {"action": "delete", "original_id": "pbench-jobs"},
+                    origin=origin,
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(body["result"]["harbor_mounts"], [])
+                self.assertEqual(body["sources"], [])
+                self.assertNotIn(
+                    "[[harbor.mounts]]",
+                    (root / "peval-py.toml").read_text(encoding="utf-8"),
+                )
+                self.assertEqual(task_toml.read_bytes(), original_task)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                store.close()
+
     @unittest.skip("superseded by compact mutation and background operation coverage")
     def test_http_sources_batch_path_quotes_failure_and_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -933,29 +1001,10 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 thread.join(timeout=5)
                 store.close()
 
-    def test_http_input_table_auto_adapter_requires_row_path_inference(self) -> None:
+    def test_http_input_table_source_is_removed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = peval_py_workspace(Path(tmp) / "workspace")
-            inferred_dir = root / ".opencode"
-            inferred_dir.mkdir()
-            shutil.copy(
-                FIXTURES / "common_session.jsonl", root / "common_session.jsonl"
-            )
-            shutil.copy(
-                FIXTURES / "common_session.jsonl", inferred_dir / "common_session.jsonl"
-            )
-            (root / "untagged.csv").write_text(
-                "path\ncommon_session.jsonl\n", encoding="utf-8"
-            )
-            (root / "inferred.csv").write_text(
-                "path\n.opencode/common_session.jsonl\n",
-                encoding="utf-8",
-            )
-            (root / "row_adapter.csv").write_text(
-                "path,adapter\ncommon_session.jsonl,opencode\n",
-                encoding="utf-8",
-            )
-            config = ToolConfig(adapter="opencode", workspace_root=str(root))
+            root = peval_py_workspace(Path(tmp))
+            config = ToolConfig(adapter="opencode")
             store = open_workspace_state(str(root))
             server = LocalHTTPServer(
                 ("127.0.0.1", 0),
@@ -966,38 +1015,16 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
             port = server.server_port
             origin = f"http://127.0.0.1:{port}"
             try:
-                status, _, failed = request_json(
+                status, _, body = request_json(
                     port,
                     "POST",
                     "/api/sources",
-                    {"input_table": "untagged.csv", "adapter": "auto"},
+                    {"input_table": "inputs.csv", "adapter": "auto"},
                     origin=origin,
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("could not infer adapter", failed["error"])
+                self.assertIn("path or db", body["error"])
                 self.assertEqual(store.source_payload(), [])
-
-                status, _, body = request_json(
-                    port,
-                    "POST",
-                    "/api/sources",
-                    {"input_table": "inferred.csv", "adapter": "auto"},
-                    origin=origin,
-                )
-                self.assertEqual(status, 200)
-                self.assertEqual(body["sources"][0]["adapter"], "opencode")
-                self.assertEqual(len(body["report"]["trajectory"]), 1)
-
-                status, _, body = request_json(
-                    port,
-                    "POST",
-                    "/api/sources",
-                    {"input_table": "row_adapter.csv", "adapter": "auto"},
-                    origin=origin,
-                )
-                self.assertEqual(status, 200)
-                self.assertEqual(body["sources"][0]["adapter"], "opencode")
-                self.assertEqual(len(body["report"]["trajectory"]), 1)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -1198,8 +1225,11 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
             config = ToolConfig(adapter="opencode")
             report = sample_report(config)
             store = open_workspace_state(str(root))
-            source_key = store.ingest_upload(
-                "saved-report.json", json.dumps(report), config
+            source_key = store.ingest_report_snapshot(
+                report,
+                "saved-report.json",
+                config,
+                materialize_annotations=True,
             )[0]
             source = store.source_payload()[0]
             artifact_dir = root / source["artifact_dir"]

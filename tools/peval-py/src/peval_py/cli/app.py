@@ -92,15 +92,6 @@ SessionIdOption = Annotated[
         help="DB session id; use dN=ID when multiple DB inputs are present",
     ),
 ]
-InputTableOption = Annotated[
-    list[str] | None,
-    typer.Option(
-        "-i",
-        "--input-table",
-        metavar="PATH",
-        help="CSV, JSON, or .xlsx input manifest; repeatable",
-    ),
-]
 MaxContentCharsOption = Annotated[
     int | None,
     typer.Option(help="Bound source content and inspect preview text"),
@@ -176,7 +167,6 @@ def input_values(
     path: list[str] | None,
     db: list[str] | None,
     session_id: list[str] | None,
-    input_table: list[str] | None,
     max_content_chars: int | None,
 ) -> dict[str, object]:
     return {
@@ -185,7 +175,6 @@ def input_values(
         "path": many(path),
         "db": many(db),
         "session_id": many(session_id),
-        "input_table": many(input_table),
         "max_content_chars": max_content_chars,
     }
 
@@ -237,7 +226,6 @@ def view_trajectory(
     path: PathOption = None,
     db: DbOption = None,
     session_id: SessionIdOption = None,
-    input_table: InputTableOption = None,
     max_content_chars: MaxContentCharsOption = None,
     output: OutputOption = None,
     agent_name: Annotated[
@@ -337,7 +325,6 @@ def view_trajectory(
                 path=path,
                 db=db,
                 session_id=session_id,
-                input_table=input_table,
                 max_content_chars=max_content_chars,
             ),
             output=output_value(output),
@@ -378,7 +365,6 @@ def export_trajectory(
     path: PathOption = None,
     db: DbOption = None,
     session_id: SessionIdOption = None,
-    input_table: InputTableOption = None,
     max_content_chars: MaxContentCharsOption = None,
     output: OutputOption = None,
     agent_name: AgentNameOption = None,
@@ -397,7 +383,6 @@ def export_trajectory(
                 path=path,
                 db=db,
                 session_id=session_id,
-                input_table=input_table,
                 max_content_chars=max_content_chars,
             ),
             output=output_value(output),
@@ -496,7 +481,6 @@ def serve_command(
     path: PathOption = None,
     db: DbOption = None,
     session_id: SessionIdOption = None,
-    input_table: InputTableOption = None,
     max_content_chars: MaxContentCharsOption = None,
     agent_name: AgentNameOption = None,
     agent_version: AgentVersionOption = None,
@@ -531,7 +515,6 @@ def serve_command(
                 path=path,
                 db=db,
                 session_id=session_id,
-                input_table=input_table,
                 max_content_chars=max_content_chars,
             ),
             agent_name=agent_name,
