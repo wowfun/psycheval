@@ -125,6 +125,35 @@ def test_exec_translates_paths_and_sets_portable_environment(tmp_path: Path) -> 
 
 
 @_LINUX_ONLY
+def test_exec_translates_complete_virtual_paths_in_environment_values(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        environment = make_environment(tmp_path)
+        await environment.start(force_build=False)
+        try:
+            result = await environment.exec(
+                'mkdir -p "$XDG_DATA_HOME"; printf "%s|%s" '
+                '"$XDG_DATA_HOME" "$UNCHANGED"',
+                env={
+                    "XDG_DATA_HOME": "/logs/agent/opencode/xdg-data",
+                    "UNCHANGED": "prefix:/logs/agent",
+                },
+            )
+            assert result.return_code == 0
+            data_home, unchanged = (result.stdout or "").split("|", 1)
+            assert Path(data_home) == (
+                environment.trial_paths.agent_dir / "opencode" / "xdg-data"
+            )
+            assert Path(data_home).is_dir()
+            assert unchanged == "prefix:/logs/agent"
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
+
+
+@_LINUX_ONLY
 def test_linux_command_translation_preserves_composed_home_paths(
     tmp_path: Path,
 ) -> None:
@@ -365,6 +394,7 @@ def test_windows_exec_uses_cmd_and_translates_runtime_aliases(
             result = await environment.exec(
                 "type C:/tests/source.txt > C:/logs/verifier/result.txt",
                 cwd="C:/app",
+                env={"XDG_DATA_HOME": "C:/logs/agent/opencode/xdg-data"},
             )
             assert result.return_code == 0
             assert calls
@@ -385,6 +415,9 @@ def test_windows_exec_uses_cmd_and_translates_runtime_aliases(
             assert '"' in translated
             assert Path(kwargs["cwd"]).name == "app"
             assert "creationflags" in kwargs
+            assert Path(kwargs["env"]["XDG_DATA_HOME"]) == (
+                environment.trial_paths.agent_dir / "opencode" / "xdg-data"
+            )
         finally:
             await environment.stop(delete=True)
 

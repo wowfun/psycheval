@@ -506,6 +506,13 @@ class HostEnvironment(BaseEnvironment):
     def _translate_command(self, command: str) -> str:
         return self._process_adapter.translate_command(command, self._runtime_dirs())
 
+    def _translate_env(self, env: dict[str, str] | None) -> dict[str, str]:
+        translated: dict[str, str] = {}
+        for key, value in (env or {}).items():
+            mapped = _translate_literal(value, self._runtime_dirs(), self.os)
+            translated[key] = mapped if mapped is not None else value
+        return translated
+
     def _portable_env(self) -> dict[str, str]:
         paths = self._runtime_dirs()
         return {
@@ -562,7 +569,7 @@ class HostEnvironment(BaseEnvironment):
         )
         translated_cwd.mkdir(parents=True, exist_ok=True)
         process_env = dict(os.environ)
-        process_env.update(self._merge_env(env) or {})
+        process_env.update(self._translate_env(self._merge_env(env)))
         process_env.update(self._portable_env())
         process = await asyncio.create_subprocess_exec(
             *self._process_adapter.shell_argv(translated_command),
