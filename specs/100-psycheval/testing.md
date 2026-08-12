@@ -10,10 +10,15 @@ Harbor compatibility, harnesses, HostEnvironment, conversion, and verifier.
 - Unit tests cover command validation, timeout and exit failures, ATIF loading,
   safe mount resolution, opt-in host execution, Psychevo event projection,
   Trial-owned Psychevo database isolation, ordered call matching, and artifact
-  validation.
-- Pure or injected tests cover host-specific path conversion, a leading quoted
-  Windows executable, user rejection, and process-tree termination without
-  pretending to execute a native Windows Trial on Linux, WSL, Wine, or Git Bash.
+  validation. They also prove that the Hermes compatibility Agent registers the
+  expected native Xiaomi mapping, delegates unchanged, exports the exact
+  reported session for upstream conversion, and rejects conflicts or missing
+  session identity. A failed exact-session export is logged without failing the
+  completed Agent run.
+- Pure or injected tests cover host-specific command and environment-value path
+  conversion, a leading quoted Windows executable, user rejection, and
+  process-tree termination without pretending to execute a native Windows Trial
+  on Linux, WSL, Wine, or Git Bash.
 - Tests assert observable results through public Psycheval interfaces rather
   than Harbor or module internals.
 - A wheel is built, installed into a clean temporary environment, and checked

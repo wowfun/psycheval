@@ -44,26 +44,9 @@ peval-py view tr -m raw \
 ## 自动选择 Adapter
 
 CLI path 会先按完整路径段或文件名 token 推断 adapter；多匹配直接失败，未匹配
-则回退到配置或默认 adapter。工作台的 Path、DB 和 input-table 在 `auto` 下要求
-唯一推断。JSONL upload 回退到当前配置；ATIF 和 report JSON upload 不需要 adapter。
-
-## Input Table
-
-CSV、JSON 和 XLSX 清单可以组合 path 与 DB。JSON 可以是顶层 array，也可以是带
-`rows` 和 `report_notes` 的 object：
-
-```json
-{
-  "report_notes": ["跨 Agent 对比。"],
-  "rows": [
-    {"path": "runs/hermes.jsonl", "adapter": "hermes", "alias": "Hermes"},
-    {"db": "opencode.db", "session_id": "ses_123", "adapter": "opencode"}
-  ]
-}
-```
-
-`alias`、`label` 和 `source_alias` 等价。多行报告使用 `view tr -i`；
-`export tr -i` 仍只接受一个 session。
+则回退到配置或默认 adapter。工作台的 Path 和 DB 在 `auto` 下要求唯一推断。
+peval-py 不再提供 input-table CLI 或 Source Manager snapshot upload；需要组合来源时，
+直接重复使用 `-p` 和 `-d`。
 
 ## 自定义 Adapter
 

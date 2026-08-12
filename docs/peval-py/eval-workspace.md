@@ -17,10 +17,10 @@ only if the local asset cannot load.
 
 ## Sources
 
-Source Manager imports Session/ATIF paths, supported SQLite DBs, input tables,
-JSONL, ATIF JSON, and normalized report JSON. Path and DB forms accept multiple
-quoted paths and preserve Windows/UNC paths; compatible WSL mount paths are
-resolved on POSIX.
+Source Manager imports Session/ATIF paths and supported SQLite DBs. It has no
+input-table or snapshot-upload form. Path and DB forms accept multiple quoted
+paths and preserve Windows/UNC paths; compatible WSL mount paths are resolved
+on POSIX.
 
 Serve reads single-step Harbor Trials directly from explicitly mounted jobs
 roots. There is no implicit workspace or `workspace/jobs` discovery. Give each
@@ -30,7 +30,12 @@ mount a stable lowercase ID; relative paths resolve from `peval-py.toml`:
 [[harbor.mounts]]
 id = "jobs-2026-08-08"
 path = "../harbor/jobs"
+task_paths = ["../datasets/pbench-v1.0"]
 ```
+
+The Source Manager Harbor section adds, edits, and removes these mounts. Each
+mount has one Jobs root and optional ordered Task or local Dataset paths. Changes
+write only workspace `peval-py.toml`; configured Harbor files stay read-only.
 
 The source reference is
 `harbor/<mount-id>/<job-name>/<trial-name>`. Reload reads the current
@@ -40,6 +45,23 @@ diagnostic, and invalid Trials show their current error without a last-good
 trajectory. A deleted Trial disappears unless a user overlay or report binding
 still refers to it; retained missing rows reconnect when the same source
 reference returns.
+
+For each readable Trial, the workspace projects Task, Job, Trial, provider,
+reward dimensions, phase timing, Harbor version, result/regrade identifiers,
+and recorded Task provenance into the catalog and report. Task identity uses
+result, then lock, then config evidence. Provider is shown only when Harbor
+records it explicitly or the recorded model uses an explicit `provider/model`
+form; agent names and unqualified model names are never treated as providers.
+
+Task metadata is resolved only from the mount's `task_paths`. An explicit
+lock/config Task path wins; otherwise peval-py matches the complete Task name
+against direct Dataset children. Ambiguous or missing matches produce a
+diagnostic without hiding the Trial. Description, version, keywords, and digest
+come from the current allowlisted Task and are marked as **live metadata**, not
+historical Job evidence. A digest mismatch remains usable and is shown in the
+Selected Trial Harbor Evidence section. A package or Git artifact `ref` is kept
+as recorded provenance but is labeled not comparable with the live local Task
+digest because the two hashes cover different artifact scopes.
 
 Older Harbor ATIF-v1.x trajectories are accepted only when a schema-label-only
 compatibility view passes the complete current validator. Serve derives missing
@@ -63,15 +85,29 @@ does not create that directory. `[harbor].roots` and `harbor-link.json` belong
 to the incompatible legacy projection layout; initialize a new workspace
 instead of migrating it in place.
 
-Path, DB, and input-table `auto` selection requires a unique inferred adapter.
-JSONL upload falls back to workspace config; ATIF/report upload is adapter-free.
-The browser add forms intentionally omit alias fields. CLI, manifests, JSON
-interfaces, and saved-row inline editing support aliases.
+The Leaderboard keeps the canonical Session ID and presents Task / Alias as a
+separate compact column. With no custom alias it displays the Task name; with an
+alias it displays that alias first and retains the Task as secondary evidence.
+Tags combine read-only Task keywords with editable custom tags, preserving
+order and removing case-insensitive duplicates. Clearing alias or tags restores
+the Task-derived display. Job, Provider, and Reward are filterable columns;
+Task, Job, Provider, and Reward are sortable, and Saved Views and Summary can
+group by Task, Job, or Provider. Multi-dimensional rewards remain separate; a
+numeric distribution is computed only for the `reward` dimension or a sole
+reward dimension.
+
+JSON reports, static/workspace snapshots, Source inspection, and Table/Summary
+XLSX exports carry the same Task, Job, Trial, provider, reward dimensions,
+display/custom overlay, and Harbor provenance fields.
+
+Path and DB `auto` selection requires a unique inferred adapter. The browser add
+forms intentionally omit alias fields. CLI, JSON interfaces, and saved-row
+inline editing support aliases.
 
 Archive and delete change workspace state only; they do not delete original
 files or databases. Linked Harbor Trials cannot be deleted and use Archive to
-hide them. Refreshable Harbor sources update overlay `notes.md`; uploaded
-snapshots remain read-only. `peval-py import analysis --source-ref ...` targets
+hide them. Refreshable Harbor sources update overlay `notes.md`; immutable local
+snapshot artifacts remain read-only. `peval-py import analysis --source-ref ...` targets
 either a local Trial artifact or a Harbor overlay by its source reference.
 
 ## Selection and Summary

@@ -2,17 +2,17 @@
 
 ## Input Forms
 
-peval-py accepts source paths, supported SQLite databases, JSON/JSONL report or
-trajectory uploads, and CSV/JSON/XLSX input-table manifests. Original inputs are
-read-only. Directory inputs expand deterministically and invalid entries report
-their own failure rather than silently changing source identity.
+peval-py inputs accept source paths and supported SQLite databases. Original
+inputs are read-only. Directory inputs expand deterministically and invalid
+entries report their own failure rather than silently changing source identity.
+
+The Evaluation Workspace Source Manager accepts only Path and supported SQLite
+DB sources. It does not expose input-table or file-upload inputs. The CLI does
+not accept input-table manifests. Workspace snapshots are an export format
+rather than an import format.
 
 Serve-mode linked Harbor sources use the discovery and persistence contract in
 [310. Evaluation Workspace Storage](../310-eval-workspace/storage.md).
-
-Input-table rows may provide the documented path, adapter, alias/label, and
-source metadata columns. `alias`, `label`, and `source_alias` are accepted alias
-forms at this machine-readable interface.
 
 ## Built-in Adapters
 
@@ -35,21 +35,18 @@ Automatic adapter behavior is intentionally surface-specific:
 - Direct CLI path input without an explicit bare `-a` first uses path-token
   inference; when no adapter is inferred, it falls back to configured/default
   adapter selection.
-- Evaluation Workspace Path, DB, and input-table sources treat omitted or
-  `auto` as infer-or-fail. Ambiguous or absent inference is a client error rather
-  than a default fallback.
-- Workspace JSONL upload with omitted or `auto` adapter falls back to the current
-  configured adapter.
-- ATIF and normalized report JSON uploads are adapter-free.
+- Evaluation Workspace Path and DB sources treat omitted or `auto` as
+  infer-or-fail. Ambiguous or absent inference is a client error rather than a
+  default fallback.
 
 An explicit adapter always wins when it supports the selected input form.
 
 ## Alias Surfaces
 
-The CLI `serve --source-alias`, input-table manifests, and JSON source/upload
-interfaces accept an initial alias. Browser Path, DB, input-table, and upload add
-forms intentionally omit an alias field. After import, aliases may be edited
-inline in Source Manager and Leaderboard surfaces.
+The CLI `serve --source-alias` and JSON Path/DB source interfaces accept an
+initial alias. Browser Path and DB add forms intentionally omit an alias field.
+After import, aliases may be edited inline in Source Manager and Leaderboard
+surfaces.
 
 ## Related Topics
 

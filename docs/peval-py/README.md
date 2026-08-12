@@ -32,7 +32,7 @@ peval-py serve --root .local/peval-py
 
 ## Guides
 
-- [Inputs and Adapters](inputs-and-adapters.md): JSONL, ATIF, SQLite, manifests,
+- [Inputs and Adapters](inputs-and-adapters.md): JSONL, ATIF, SQLite,
   built-in and custom adapters.
 - [Reports](reports.md): comparisons, notes, aliases, timing, localization, and
   cached analysis.

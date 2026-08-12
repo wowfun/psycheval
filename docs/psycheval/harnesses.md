@@ -30,6 +30,25 @@ python -m psycheval.harbor.psychevo_harness --pevo /path/to/pevo
 Psychevo Web Search and Web Fetch require configured model/provider access and
 real public Web access. They are opt-in live evaluations, not CI checks.
 
+## Hermes Xiaomi Compatibility
+
+Harbor 0.21's installed Hermes Agent predates Hermes's native Xiaomi provider.
+Use Psycheval's thin compatibility import with the real provider-qualified
+model; it preserves Harbor's `hermes` Agent identity and delegates execution and
+ATIF conversion upstream. It also exports the exact session reported by current
+Hermes so Harbor 0.21 does not lose a still-active CLI row during bulk export:
+
+```text
+--agent psycheval.harbor.hermes:HermesAgent \
+--model xiaomi/mimo-v2.5-pro
+```
+
+Provide `XIAOMI_API_KEY` in the Harbor parent process environment. Do not pass
+the key through `--agent-kwarg` or persist it in Job configuration.
+After Hermes reports a valid session ID, failure of this post-run telemetry
+export is logged as a warning and does not turn completed model work into an
+errored Trial. A missing or malformed session ID still fails explicitly.
+
 ## Diagnosing A Trial
 
 Inspect these files in order:

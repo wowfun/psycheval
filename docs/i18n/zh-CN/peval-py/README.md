@@ -31,7 +31,7 @@ peval-py serve --root .local/peval-py
 
 ## 指南
 
-- [输入与 Adapter](inputs-and-adapters.md)：JSONL、ATIF、SQLite、清单和自定义
+- [输入与 Adapter](inputs-and-adapters.md)：JSONL、ATIF、SQLite 和自定义
   adapter。
 - [报告](reports.md)：对比、备注、别名、时间、本地化和 cached analysis。
 - [评测工作台](eval-workspace.md)：source、存储、跨页选择和导出。

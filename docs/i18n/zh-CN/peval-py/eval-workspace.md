@@ -15,9 +15,9 @@ peval-py serve --root .local/peval-py
 
 ## Source
 
-Source Manager 可导入 Session/ATIF path、受支持的 SQLite DB、input table、
-JSONL、ATIF JSON 和规范化 report JSON。Path 与 DB 表单支持多个带引号 path，
-保留 Windows/UNC path，并在 POSIX 上解析可用的 WSL mount path。
+Source Manager 只导入 Session/ATIF path 和受支持的 SQLite DB，不再提供 input
+table 或 snapshot upload 表单。Path 与 DB 表单支持多个带引号 path，保留
+Windows/UNC path，并在 POSIX 上解析可用的 WSL mount path。
 
 Serve 只会从显式挂载的 jobs root 直接读取单步 Harbor Trial，不再隐式扫描
 workspace 或 `workspace/jobs`。每个 mount 都需要稳定的小写 ID；相对路径以
@@ -27,13 +27,31 @@ workspace 或 `workspace/jobs`。每个 mount 都需要稳定的小写 ID；相�
 [[harbor.mounts]]
 id = "jobs-2026-08-08"
 path = "../harbor/jobs"
+task_paths = ["../datasets/pbench-v1.0"]
 ```
+
+Source Manager 的 Harbor 区域可以添加、编辑和移除这些挂载。每个挂载包含一个
+Jobs root，以及可选且有序的 Task 或本地 Dataset 路径。修改只写入 workspace
+`peval-py.toml`，不会修改配置指向的 Harbor 文件。
 
 来源引用固定为 `harbor/<mount-id>/<job-name>/<trial-name>`。Reload 直接从
 Harbor 当前文件读取 trajectory、config、lock、result、reward 和运行状态，不会在
 workspace 中复制这些内容。多步 Trial 显示 unsupported；无效 Trial 只显示当前错误，
 不会回退到 last-good trajectory。已删除且没有用户 overlay 或 report binding 的 Trial
 会直接消失；有引用的 Trial 保留 missing 行，并在相同 source reference 恢复后自动重连。
+
+对每条可读 Trial，工作台会把 Task、Job、Trial、provider、完整 reward dimensions、
+阶段 timing、Harbor 版本、result/regrade 标识和历史 Task provenance 投影到 catalog
+与报告。Task identity 按 result、lock、config 顺序解析。Provider 只接受 Harbor 的
+显式记录或明确的 `provider/model` 模型格式；不会从 agent 名或无前缀模型名猜测。
+
+Task metadata 只会从 mount 的 `task_paths` 解析：优先匹配 lock/config 中的 Task path，
+否则用完整 Task name 匹配 Dataset 的直接子目录。缺失或多解只产生诊断，不会隐藏
+Trial。description、version、keywords 和 digest 来自当前白名单 Task，明确属于
+**live metadata**，不是历史 Job 证据。Digest 不匹配时仍采用这些字段，并在 Selected
+Trial 的 Harbor Evidence 区显示 mismatch。Package 或 Git artifact 的 `ref` 仍作为
+历史 provenance 保留，但由于它与本地 live Task digest 覆盖的 artifact 范围不同，
+两者会标记为不可比较。
 
 旧版 Harbor ATIF-v1.x 只有在“仅替换 schema 标识”后能通过当前完整校验时，才会以
 内存兼容视图读取。Serve 从 canonical steps 派生缺失的聚合计数，并可从匹配的 Harbor
@@ -51,13 +69,23 @@ Archive、alias、category、tags、notes 和 analysis 会按需写入
 `[harbor].roots` 与 `harbor-link.json` 属于不兼容的旧 projection layout；请初始化新
 workspace，不要原地迁移。
 
-Path、DB 和 input-table 的 `auto` 要求唯一推断。JSONL upload 回退到 workspace
-配置；ATIF/report upload 不需要 adapter。浏览器新增表单有意不展示 alias；CLI、
-manifest、JSON interface 和已保存行的内联编辑支持 alias。
+Leaderboard 保留 canonical Session ID，并使用独立的紧凑 Task / 别名列。没有自定义
+alias 时显示 Task name；存在 alias 时以 alias 为主，同时保留 Task 作为次级证据。
+Tags 合并只读 Task keywords 与可编辑 custom tags，保持顺序并按大小写不敏感去重；
+清空 alias 或 tags 后恢复 Task 派生显示。Job、Provider、Reward 可筛选；Task、Job、
+Provider、Reward 可排序；Saved Views 与 Summary 可按 Task、Job、Provider 分组。
+多维 reward 始终保持独立，只有 `reward` 维度或唯一维度会进入数值分布。
+
+JSON report、静态/workspace snapshot、Source inspect、Table/Summary XLSX 导出会同步
+携带 Task、Job、Trial、provider、reward dimensions、display/custom overlay 与 Harbor
+provenance。
+
+Path 和 DB 的 `auto` 要求唯一推断。浏览器新增表单有意不展示 alias；CLI、JSON
+interface 和已保存行的内联编辑支持 alias。
 
 Archive/delete 只修改 workspace state，不删除原始文件或数据库。关联的 Harbor
 Trial 不能删除，应使用 Archive 隐藏。可刷新 Harbor source 更新 overlay
-`notes.md`；上传的 snapshot 保持只读。`peval-py import analysis --source-ref ...`
+`notes.md`；不可变的本地 snapshot artifact 保持只读。`peval-py import analysis --source-ref ...`
 通过 source reference 定位本地 Trial artifact 或 Harbor overlay。
 
 ## 选择与 Summary

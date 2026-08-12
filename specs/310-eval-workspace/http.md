@@ -19,10 +19,23 @@ operation status that the client polls. Validation failures use an appropriate
 
 ## Source Inputs
 
-JSON Path, DB, input-table, and upload interfaces may accept an initial alias
-even though the corresponding browser add forms omit it. Adapter handling uses
-the surface-specific rules in
+The Source Manager HTTP interface accepts only Path and DB sources. These JSON
+interfaces may accept an initial alias even though the corresponding browser
+forms omit it. It has no input-table or snapshot-upload mutation. Adapter
+handling and the export-only workspace snapshot format are specified in
 [300. Inputs and Adapters](../300-peval-py/inputs.md).
+
+The Harbor configuration mutation replaces, updates, or removes one explicit
+mount in workspace `peval-py.toml`. It accepts a mount ID, one Jobs root, and
+zero or more Task/Dataset paths, then reloads the derived catalog through the
+new configuration. It never writes to a configured Harbor path.
+
+Catalog queries accept repeatable `task`, `job`, and `provider` refinements in
+addition to the existing filters and return matching Task, Job, and Provider
+facets. Task, Job, Provider, and scalar Reward are sortable. Saved View and
+workspace-snapshot query payloads use the plural `tasks`, `jobs`, and
+`providers` arrays; absent arrays remain empty so existing Saved Views continue
+to load.
 
 ## Exports
 

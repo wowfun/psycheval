@@ -30,6 +30,12 @@ contain no grader logic. Tasks use Harbor 0.21.0's schema version `1.4`.
 Every `task.toml` declares an explicit `[task].name` in
 `<dataset-directory>/<task-directory>` form.
 
+The Task manifests also declare stable discovery keywords:
+
+- `pbench-v1.0/web-search-01`: `web-agent`, `web-search`
+- `pbench-v1.0/web-fetch-01`: `web-agent`, `web-fetch`
+- `pbench-v1.0-plus/browser-control-01`: `web-agent`, `browser-control`
+
 ## Web Search
 
 The Agent must use a Web Search capability to identify IANA's Example Domains

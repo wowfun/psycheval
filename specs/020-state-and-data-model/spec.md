@@ -41,6 +41,42 @@ bindings. A Trial with no such state has no durable per-source workspace record.
 The query catalog may cache derived summaries and source fingerprints, but it is
 rebuildable and never becomes an authority for trajectory or evaluation facts.
 
+### Harbor Evidence Projection
+
+For a linked Harbor Trial, peval-py projects the parent Job identity, Trial
+identity, Task identity, model provider, complete reward dimensions, phase
+timing, and reproduction provenance from the mounted Harbor files. Task names
+use result, Trial lock, then Trial config precedence. Job and Trial directory
+names remain part of stable source identity even when recorded display names are
+available. Explicit model-provider evidence wins over a provider-qualified model
+name; an unqualified model never implies a provider.
+
+Task definitions are read only from the Task or Dataset paths explicitly
+allowlisted on the matching Harbor mount. A unique lock/config path match wins;
+otherwise a unique complete Task package name may match a Dataset's direct
+child. Missing, invalid, or ambiguous live metadata never makes an otherwise
+valid Trial unreadable and is represented by a diagnostic status.
+
+The recorded Task digest, source, and version are historical Harbor evidence.
+The currently mounted `task.toml` description, version, and keywords are live
+Task metadata. A live digest mismatch is reported but does not suppress those
+fields. A digest carried by a package or Git `ref` remains provenance but is not
+compared with a digest computed over the allowlisted local Task directory;
+those digests describe different artifact scopes. Parent Job files and resolved
+live Task metadata participate in the rebuildable source fingerprint. During
+one mount scan, the allowlisted Task index and each selected Task content digest
+are computed once and reused across that mount's Trials.
+
+`source_alias` and `source_tags` contain only user-authored overlay values.
+Derived presentation uses `display_alias = source_alias or task_name` and
+`display_tags = task_keywords + source_tags`, preserving order while removing
+case-insensitive duplicates. Category remains an independent user field.
+
+Harbor rewards retain their named dimensions. A numeric `reward` dimension, or
+the sole numeric dimension when no `reward` key exists, may be exposed as the
+scalar score. Multiple dimensions without `reward` do not produce a synthetic
+total and do not enter scalar Reward distributions.
+
 ### ATIF and peval-py Sidecar Ownership
 
 Every `trajectory.json` written or exported by peval-py is a complete,

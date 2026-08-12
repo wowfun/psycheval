@@ -20,7 +20,9 @@ Dataset-specific instructions and peval-py reporting.
 - Public Harbor integrations live below `psycheval.harbor`.
 - Harbor dynamically imports
   `psycheval.harbor.agent:ExternalHarnessAgent` and
-  `psycheval.harbor.environment:HostEnvironment`.
+  `psycheval.harbor.environment:HostEnvironment`. The pinned Harbor 0.21
+  compatibility import `psycheval.harbor.hermes:HermesAgent` retains Hermes's
+  upstream runtime identity while enabling its current native Xiaomi provider.
 - The distribution exposes `psycheval-canned-harness` and
   `psycheval-psychevo-harness` console scripts.
 - Users invoke Harbor directly. Psycheval does not add a wrapper CLI.
@@ -46,9 +48,12 @@ process adapter owns all OS-specific execution behavior:
   `taskkill /PID <pid> /T /F` for process-tree termination.
 
 Both adapters map Harbor's application, tests, logs, and artifact aliases to the
-same Trial-owned host directories. Windows does not emulate POSIX users and
-rejects explicit user switching. Unsupported native operating systems fail at
-construction.
+same Trial-owned host directories. This mapping applies both to command paths
+and to environment-variable values that are themselves one complete Harbor
+virtual path, including descendants such as an Agent's XDG data directory.
+Unrelated environment values are preserved. Windows does not emulate POSIX
+users and rejects explicit user switching. Unsupported native operating systems
+fail at construction.
 
 Linux recognizes only the POSIX virtual roots. It preserves relative `C:` names
 and backslashes as ordinary POSIX filename characters, and it rewrites a virtual
@@ -80,6 +85,23 @@ Bash, apt, or tmux.
 The public runtime identities remain `psycheval-external-harness`,
 `psycheval-host`, and `psycheval-canned`. `PSYCHEVAL_HARBOR_PYTHON` continues to
 select the interpreter available inside the Harbor task environment.
+
+## Hermes Compatibility Agent
+
+`HermesAgent` is a thin subclass of Harbor 0.21's installed Hermes Agent. It
+adds only the current Hermes-native `xiaomi` provider mapping
+(`XIAOMI_API_KEY`) before delegating setup, execution, trajectory conversion,
+and identity to Harbor. After execution it replaces Harbor 0.21's bulk
+`--source cli` session export with an exact export of the session ID reported by
+Hermes, because current active CLI rows are not bulk-export candidates until
+they have an `ended_at` value. A missing or malformed session ID is explicit
+failure. The compatibility layer MUST NOT copy or replace the upstream Hermes
+Agent implementation, expose credentials in Job configuration, or change the
+public Agent name from `hermes`. A conflicting future upstream mapping fails
+closed instead of being overwritten. Once a valid session identity has been
+reported, failure of the post-run exact-session export is a warning rather than
+an Agent failure; it may leave native session telemetry unavailable, but it
+must not turn completed model work into an errored Trial.
 
 ## Psychevo Harness
 
@@ -115,6 +137,9 @@ disables it in tests, but does not silently override the user's global choice.
   documented import and console script.
 - A deterministic external-harness Trial produces ATIF, checks, reward, and
   artifacts through Harbor 0.21.0 on Linux and native Windows hosts.
+- The Hermes compatibility Agent delegates to the pinned upstream Agent with
+  the native Xiaomi provider registered, exports the exact completed session
+  for upstream ATIF conversion, and rejects a conflicting mapping.
 - Host execution cannot be enabled accidentally.
 
 ## Attachments

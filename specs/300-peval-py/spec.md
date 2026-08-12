@@ -24,7 +24,7 @@ through one Typer command surface. It exposes `init`, `view trajectory`,
 `export trajectory`, `import analysis`, and `serve`; `tr` remains the short
 trajectory alias. `view tr` defaults to a bounded inspect digest; callers select
 `-m raw` when they need a complete JSON or HTML report. The CLI accepts explicit
-source paths and input-table manifests, resolves supported adapters, normalizes
+source paths and supported SQLite databases, resolves adapters, normalizes
 sessions, and produces machine-readable or human-readable output without
 modifying original sources.
 
@@ -34,8 +34,7 @@ completion is available through the root `--install-completion` and
 changes shell configuration implicitly.
 
 Errors identify the rejected input, adapter, or output condition and exit
-non-zero. Optional features such as XLSX manifest reading fail with an actionable
-dependency message when their optional runtime dependency is absent.
+non-zero.
 
 ## Reports
 

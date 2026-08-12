@@ -12,17 +12,25 @@ rebuildable.
 `serve -r` continues to select an initialized peval-py workspace. Harbor sources
 come only from explicit `[[harbor.mounts]]` entries in `peval-py.toml`; there is
 no implicit workspace or `jobs/` discovery. Each mount has a unique lowercase
-path-safe ID and a path, relative to the configuration file when not absolute,
-that identifies a Harbor jobs root with the exact shape
-`<root>/<job-name>/<trial-name>`. Initial load, explicit Reload, and single-source
-Refresh rescan mounts. There is no background watcher.
+path-safe ID, a `path` that identifies a Harbor jobs root with the exact shape
+`<root>/<job-name>/<trial-name>`, and optional ordered `task_paths` entries that
+each identify a Task directory or a Dataset whose direct child directories are
+Tasks. Relative paths resolve from the configuration file. Initial load,
+explicit Reload, single-source Refresh, and Source Manager configuration changes
+rescan mounts. There is no background watcher.
 
 Configured paths remain lexical until every existing component has been checked
-for symbolic links. A mount that is itself a link, traverses a linked component,
-or discovers a linked Job or Trial is rejected before canonical identity is
-calculated. Duplicate IDs, duplicate canonical paths, missing roots, direct Job
-or Trial mounts, and paths outside the declared root are rejected with an
+for symbolic links. A mount or Task path that is itself a link or traverses a
+linked component is rejected before canonical identity is calculated. Jobs
+discovery also rejects linked Job or Trial children. Duplicate IDs, duplicate
+canonical Jobs or Task paths, missing roots, direct Job or Trial mounts, invalid
+Task/Dataset roots, and paths outside the declared root are rejected with an
 explicit configuration or refresh error.
+
+Source Manager edits only the Harbor mount array in workspace `peval-py.toml`,
+preserves unrelated configuration, and validates the complete proposed array
+before writing. Removing a mount detaches its derived catalog rows but does not
+delete Harbor files or workspace overlays.
 
 A linked source reference is
 `harbor/<mount-id>/<job-name>/<trial-name>`. The source key is derived from that
@@ -55,6 +63,15 @@ last-good trajectory. A missing Trial with no user-authored state or report
 binding disappears. A retained missing Trial remains as a diagnostic and
 reattaches when the same source reference reappears. Linked rows cannot be
 deleted; archive remains the supported hide operation.
+
+The linked-source projection reads the parent Job config, lock, and result; the
+Trial config, lock, result, and trajectory; and a uniquely resolved allowlisted
+Task definition through one bounded no-follow evidence reader. It exposes Task,
+Job, Trial, provider, rewards, phase timing, and reproduction provenance without
+copying raw environment, agent kwargs, commands, or credentials. Task metadata
+resolution and live-digest state remain explicit diagnostics rather than hidden
+fallbacks. Discovery builds one Task allowlist index per mount and reuses it,
+including selected-Task content digests, across the mount's Trials.
 
 A discovered Trial that has a lifecycle result but no trajectory remains a
 catalog diagnostic rather than disappearing. Its result and source identity are

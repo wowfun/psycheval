@@ -29,6 +29,12 @@ Task scripts receive portable paths through:
 - `PSYCHEVAL_ARTIFACTS_DIR`
 - `PSYCHEVAL_HARBOR_PYTHON`
 
+Harbor virtual paths supplied as complete environment-variable values are also
+mapped into the same Trial-owned directories. This keeps installed Agents that
+set paths such as `XDG_DATA_HOME=/logs/agent/...` inside the Trial on native
+hosts. Values that merely contain a virtual path as part of another string are
+left unchanged.
+
 Use HostEnvironment only with code you trust. Use Harbor's isolated environment
 providers when the Task or harness is untrusted.
 

@@ -2,6 +2,7 @@ schema_version = "1.4"
 
 [task]
 name = "pbench-v1.0-plus/browser-control-01"
+keywords = ["web-agent", "browser-control"]
 
 [environment]
 workdir = "/app"

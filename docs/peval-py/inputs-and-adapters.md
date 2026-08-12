@@ -46,27 +46,9 @@ peval-py view tr -m raw \
 
 For direct CLI paths, peval-py first infers an adapter from full path-component
 or filename tokens. Ambiguity fails; no match falls back to configured/default
-adapter selection. Eval Workspace Path, DB, and manifest forms instead require
-unique inference when `auto` is selected. JSONL upload falls back to the current
-configured adapter, while ATIF and report JSON uploads need no adapter.
-
-## Input Tables
-
-CSV, JSON, and XLSX manifests can combine path and DB rows. JSON may be a
-top-level array or an object with `rows` and `report_notes`:
-
-```json
-{
-  "report_notes": ["Cross-agent comparison."],
-  "rows": [
-    {"path": "runs/hermes.jsonl", "adapter": "hermes", "alias": "Hermes"},
-    {"db": "opencode.db", "session_id": "ses_123", "adapter": "opencode"}
-  ]
-}
-```
-
-`alias`, `label`, and `source_alias` are equivalent manifest columns. Use
-`view tr -i` for multi-row reports; `export tr -i` remains single-session.
+adapter selection. Eval Workspace Path and DB forms instead require unique
+inference when `auto` is selected. peval-py has no input-table CLI or Source
+Manager snapshot upload; combine repeatable `-p` and `-d` inputs directly.
 
 ## Custom Adapters
 

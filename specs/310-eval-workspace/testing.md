@@ -12,7 +12,19 @@ state, report rendering, selection, mutation, and export behavior.
 - Direct HTTP tests assert compact synchronous mutations, queued `202`
   operations, validation errors, and the absence of full report payloads.
 - Source tests cover each surface-specific adapter rule and every supported
-  alias interface.
+  alias interface. Rendering and HTTP tests prove Source Manager exposes only
+  DB and Path inputs and rejects the removed input-table and snapshot-upload
+  mutations, while CLI tests reject `--input-table` and snapshot export remains
+  covered by its owning suite.
+- Harbor configuration tests cover add, edit, remove, preservation of unrelated
+  TOML, catalog reload, Task/Dataset path ordering, missing paths, duplicate
+  paths and IDs, symlink rejection, and zero writes under Harbor-owned roots.
+- Harbor evidence tests cover result-lock-config Task-name precedence; Job and
+  Trial identity; provider evidence; complete rewards and phase timing; regrade
+  provenance; allowlisted path and name resolution; ambiguity, missing roots,
+  invalid metadata, and symlink diagnostics; path-scoped live-digest mismatch;
+  non-comparable package/Git refs; per-mount Task-index reuse; and parent Job or
+  Task changes invalidating the catalog fingerprint.
 - Linked-source tests cover explicit jobs-root mounts; mount ID and path
   validation; relative and Windows-mapped paths; duplicate and symlink
   rejection; absence of implicit discovery; running, completed, errored, and
@@ -30,6 +42,11 @@ state, report rendering, selection, mutation, and export behavior.
   binding before reconnecting to the same source reference.
 - HTTP, report, export, and analysis-import tests resolve Harbor content through
   source keys and source references without a Harbor `artifact_dir`.
+- Catalog, HTTP, and rendering tests additionally cover Task, Job, and Provider
+  filters/facets/sorts; scalar Reward sorting and distributions; Saved View and
+  Summary grouping; Task/Alias fallback; derived/custom tag editing; Harbor
+  Evidence; and Task/Job/Reward/provenance in reports, snapshots, inspection,
+  and XLSX exports.
 - UI-state tests prove both selections survive pagination, header toggles affect
   only the current page, and each action uses and clears the correct selection.
 - Rendering tests cover the complete static/live/snapshot Summary row-count

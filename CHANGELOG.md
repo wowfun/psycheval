@@ -1,11 +1,23 @@
 # Changelog
 
+## 2026-08-13
+
+- Kept completed Hermes runs successful when best-effort exact-session telemetry
+  export fails, while retaining strict session-identity validation.
+- Reused per-mount Harbor Task metadata and digests during catalog refreshes,
+  with clearer handling of live Task status.
+
 ## 2026-08-12
 
-- Preserved quoted Windows harness paths and added native Trial coverage for
-  entrypoints whose paths contain spaces.
-- Kept HostEnvironment path handling host-specific and added independent CI
-  coverage for peval-py's frozen Python and Web test suites.
+- Simplified peval-py source management to Path and DB inputs, adding read-only
+  Harbor Job and Task/Dataset mounts while removing input-table and snapshot-
+  upload flows.
+- Added first-class Harbor Task, Job, Trial, Provider, Reward, timing, and
+  provenance data across catalog, filters, views, summaries, evidence, reports,
+  snapshots, inspection, and exports.
+- Added trusted-host Agent XDG path support, Hermes compatibility, and robust
+  Windows harness handling including quoted entrypoints with spaces.
+- Added independent Python and Web CI coverage for the peval-py suites.
 
 ## 2026-08-11
 
