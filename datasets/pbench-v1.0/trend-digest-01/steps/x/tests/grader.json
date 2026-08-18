@@ -1,0 +1,17 @@
+{
+  "platform": "x",
+  "max_age_seconds": 3600,
+  "snapshot": ".trend-digest/x.json",
+  "users": "input/x-users.xlsx",
+  "required_calls": [
+    {
+      "any": [
+        {
+          "tool_names": ["*exec*", "*terminal*", "*shell*", "bash"],
+          "argument_terms": ["x-daily"]
+        }
+      ]
+    }
+  ],
+  "required_artifacts": ["x-*.md"]
+}

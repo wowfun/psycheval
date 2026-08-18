@@ -1,0 +1,34 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "trajectory_id": "fixture:web-search",
+  "agent": {"name": "pbench-verifier-fixture", "version": "1"},
+  "steps": [
+    {"step_id": 1, "source": "user", "message": "fixture"},
+    {
+      "step_id": 2,
+      "source": "agent",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "search-1",
+          "function_name": "web_search",
+          "arguments": {"query": "IANA example domains example.com example.org"}
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "search-1",
+            "content": "{\"items\": [{\"snippet\": \"IANA maintains example.com and example.org for documentation purposes.\", \"title\": \"Example Domains\", \"url\": \"https://www.iana.org/help/example-domains\"}]}",
+            "extra": {"is_error": false, "status": "completed"}
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 3,
+      "source": "agent",
+      "message": "example.com and example.org — https://www.iana.org/help/example-domains"
+    }
+  ]
+}

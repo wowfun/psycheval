@@ -1,0 +1,17 @@
+{
+  "platform": "hacker-news",
+  "required_count": 12,
+  "max_age_seconds": 3600,
+  "snapshot": ".trend-digest/hacker-news.json",
+  "required_calls": [
+    {
+      "any": [
+        {
+          "tool_names": ["*exec*", "*terminal*", "*shell*", "bash"],
+          "argument_terms": ["hackernews-daily"]
+        }
+      ]
+    }
+  ],
+  "required_artifacts": ["hacker-news-*.md"]
+}

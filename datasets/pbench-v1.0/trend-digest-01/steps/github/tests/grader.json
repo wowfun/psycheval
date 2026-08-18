@@ -1,0 +1,7 @@
+{
+  "platform": "github",
+  "required_count": 10,
+  "max_age_seconds": 3600,
+  "source_url": "https://github.com/trending?since=weekly",
+  "required_artifacts": ["github-*.md"]
+}

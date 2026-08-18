@@ -1,0 +1,38 @@
+schema_version = "1.4"
+multi_step_reward_strategy = "mean"
+
+[task]
+name = "pbench-v1.0/trend-digest-01"
+description = "Collect weekly GitHub, rolling 24-hour X, and current Hacker News trends into three step-local Markdown digests."
+keywords = ["web-agent", "multi-step", "trend-research", "skills"]
+
+[environment]
+workdir = "/app"
+network_mode = "public"
+skills_dir = "/app/skills"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 60.0
+
+[[steps]]
+name = "github"
+min_reward = { source_evidence = 1.0, freshness = 1.0, format = 1.0, final_answer = 1.0 }
+
+[steps.verifier]
+environment_mode = "shared"
+
+[[steps]]
+name = "x"
+min_reward = { source_evidence = 1.0, freshness = 1.0, format = 1.0, final_answer = 1.0 }
+
+[steps.verifier]
+environment_mode = "shared"
+
+[[steps]]
+name = "hacker-news"
+
+[steps.verifier]
+environment_mode = "shared"

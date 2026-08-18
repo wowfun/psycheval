@@ -1,0 +1,76 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "trajectory_id": "fixture:browser-control",
+  "agent": {"name": "pbench-verifier-fixture", "version": "1"},
+  "steps": [
+    {"step_id": 1, "source": "user", "message": "fixture"},
+    {
+      "step_id": 2,
+      "source": "agent",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "browser-1",
+          "function_name": "browser_navigate",
+          "arguments": {"url": "https://www.selenium.dev/selenium/web/web-form.html"}
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "browser-1",
+            "content": "{\"title\": \"Web form\", \"url\": \"https://www.selenium.dev/selenium/web/web-form.html\"}",
+            "extra": {"is_error": false, "status": "completed"}
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 3,
+      "source": "agent",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "browser-2",
+          "function_name": "browser_type",
+          "arguments": {"selector": "input[name='my-text']", "text": "Harbor eval"}
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "browser-2",
+            "content": "{\"value\": \"Harbor eval\"}",
+            "extra": {"is_error": false, "status": "completed"}
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 4,
+      "source": "agent",
+      "message": "",
+      "tool_calls": [
+        {
+          "tool_call_id": "browser-3",
+          "function_name": "browser_click",
+          "arguments": {"selector": "button"}
+        }
+      ],
+      "observation": {
+        "results": [
+          {
+            "source_call_id": "browser-3",
+            "content": "{\"message\": \"Received!\", \"url\": \"https://www.selenium.dev/selenium/web/submitted-form.html\"}",
+            "extra": {"is_error": false, "status": "completed"}
+          }
+        ]
+      }
+    },
+    {
+      "step_id": 5,
+      "source": "agent",
+      "message": "Received! Final URL: https://www.selenium.dev/selenium/web/submitted-form.html. Screenshot: web-form-submitted.png"
+    }
+  ]
+}

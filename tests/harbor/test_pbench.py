@@ -8,15 +8,16 @@ from harbor.models.task.config import TaskOS
 from harbor.models.task.task import Task
 from harbor.models.trajectories import Trajectory
 
-from psycheval.harbor.canned_harness import _trajectory
-from psycheval.harbor.verifier import grade
+from psycheval.harbor.verifier import evaluate
+from tests.fixtures import load_pbench_trajectory
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _DATASETS_ROOT = _REPOSITORY_ROOT / "datasets"
+_FIXTURES_ROOT = _REPOSITORY_ROOT / "tests" / "fixtures" / "pbench"
 _TASK_CASES = [
-    ("web-search", "pbench-v1.0", "web-search-01"),
-    ("web-fetch", "pbench-v1.0", "web-fetch-01"),
-    ("browser-control", "pbench-v1.0-plus", "browser-control-01"),
+    ("pbench-v1.0", "web-search-01"),
+    ("pbench-v1.0", "web-fetch-01"),
+    ("pbench-v1.0-plus", "browser-control-01"),
 ]
 _TEMPLATE_ROOT = _REPOSITORY_ROOT / "examples" / "tasks" / "pbench-task-template"
 
@@ -24,7 +25,10 @@ _TEMPLATE_ROOT = _REPOSITORY_ROOT / "examples" / "tasks" / "pbench-task-template
 @pytest.mark.parametrize(
     ("dataset_name", "expected_task_dirs"),
     [
-        ("pbench-v1.0", {"web-search-01", "web-fetch-01"}),
+        (
+            "pbench-v1.0",
+            {"web-search-01", "web-fetch-01", "trend-digest-01"},
+        ),
         ("pbench-v1.0-plus", {"browser-control-01"}),
     ],
 )
@@ -46,11 +50,10 @@ def test_pbench_dataset_exposes_direct_named_harbor_tasks(
 
 
 @pytest.mark.parametrize(
-    ("scenario", "dataset_name", "task_dir"),
+    ("dataset_name", "task_dir"),
     _TASK_CASES,
 )
-def test_pbench_grader_accepts_canned_trajectory(
-    scenario: str,
+def test_pbench_grader_accepts_fixture_trajectory(
     dataset_name: str,
     task_dir: str,
     tmp_path: Path,
@@ -60,26 +63,27 @@ def test_pbench_grader_accepts_canned_trajectory(
         (task_root / "tests" / "grader.json").read_text(encoding="utf-8")
     )
     instruction = (task_root / "instruction.md").read_text(encoding="utf-8")
-    trajectory = Trajectory(**_trajectory(scenario, instruction, tmp_path))
+    trajectory = Trajectory(
+        **load_pbench_trajectory(_FIXTURES_ROOT / task_dir, instruction, tmp_path)
+    )
 
-    checks = grade(trajectory, config, tmp_path)
+    checks = evaluate(trajectory, config, tmp_path)
 
+    assert trajectory.agent.name == "pbench-verifier-fixture"
     assert checks
     assert all(check["passed"] for check in checks), checks
 
 
 @pytest.mark.parametrize(
-    ("scenario", "dataset_name", "task_dir", "canonical_name", "alias_name"),
+    ("dataset_name", "task_dir", "canonical_name", "alias_name"),
     [
         (
-            "web-search",
             "pbench-v1.0",
             "web-search-01",
             "web_search",
             "websearch",
         ),
         (
-            "web-fetch",
             "pbench-v1.0",
             "web-fetch-01",
             "web_fetch",
@@ -88,7 +92,6 @@ def test_pbench_grader_accepts_canned_trajectory(
     ],
 )
 def test_pbench_grader_accepts_explicit_web_tool_aliases(
-    scenario: str,
     dataset_name: str,
     task_dir: str,
     canonical_name: str,
@@ -99,7 +102,9 @@ def test_pbench_grader_accepts_explicit_web_tool_aliases(
     config = json.loads(
         (task_root / "tests" / "grader.json").read_text(encoding="utf-8")
     )
-    trajectory = Trajectory(**_trajectory(scenario, "Do it", tmp_path))
+    trajectory = Trajectory(
+        **load_pbench_trajectory(_FIXTURES_ROOT / task_dir, "Do it", tmp_path)
+    )
     call = next(
         call
         for step in trajectory.steps
@@ -108,7 +113,7 @@ def test_pbench_grader_accepts_explicit_web_tool_aliases(
     )
     call.function_name = alias_name
 
-    checks = grade(trajectory, config, tmp_path)
+    checks = evaluate(trajectory, config, tmp_path)
 
     assert all(check["passed"] for check in checks), checks
 
@@ -120,7 +125,11 @@ def test_pbench_browser_grader_accepts_harbor_computer_actions(
     config = json.loads(
         (task_root / "tests" / "grader.json").read_text(encoding="utf-8")
     )
-    trajectory = Trajectory(**_trajectory("browser-control", "Submit it", tmp_path))
+    trajectory = Trajectory(
+        **load_pbench_trajectory(
+            _FIXTURES_ROOT / "browser-control-01", "Submit it", tmp_path
+        )
+    )
     calls = [
         call
         for step in trajectory.steps
@@ -137,28 +146,25 @@ def test_pbench_browser_grader_accepts_harbor_computer_actions(
     calls[1].function_name = "computer_action"
     calls[1].arguments = {"type": "click", "x": 100, "y": 250}
 
-    checks = grade(trajectory, config, tmp_path)
+    checks = evaluate(trajectory, config, tmp_path)
 
     assert all(check["passed"] for check in checks), checks
 
 
 @pytest.mark.parametrize(
-    ("scenario", "dataset_name", "task_dir", "expected_tool_names"),
+    ("dataset_name", "task_dir", "expected_tool_names"),
     [
         (
-            "web-search",
             "pbench-v1.0",
             "web-search-01",
             [{"web_search", "websearch"}],
         ),
         (
-            "web-fetch",
             "pbench-v1.0",
             "web-fetch-01",
             [{"web_fetch", "webfetch"}],
         ),
         (
-            "browser-control",
             "pbench-v1.0-plus",
             "browser-control-01",
             [
@@ -169,12 +175,10 @@ def test_pbench_browser_grader_accepts_harbor_computer_actions(
     ],
 )
 def test_pbench_grader_uses_only_explicit_tool_branches(
-    scenario: str,
     dataset_name: str,
     task_dir: str,
     expected_tool_names: list[set[str]],
 ) -> None:
-    del scenario
     config = json.loads(
         (_DATASETS_ROOT / dataset_name / task_dir / "tests" / "grader.json").read_text(
             encoding="utf-8"
@@ -198,7 +202,7 @@ def test_pbench_grader_uses_only_explicit_tool_branches(
     [
         *[
             _DATASETS_ROOT / dataset_name / task_dir
-            for _scenario, dataset_name, task_dir in _TASK_CASES
+            for dataset_name, task_dir in _TASK_CASES
         ],
         _TEMPLATE_ROOT,
     ],
