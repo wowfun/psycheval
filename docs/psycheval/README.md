@@ -2,7 +2,7 @@
 
 Psycheval is an installable Python package that extends Harbor with a trusted
 host Environment, an external-harness Agent, a Psychevo-to-ATIF harness, a
-deterministic canned harness, and evidence-based verification.
+versioned runtime protocol, and evidence-based verification.
 
 ## Install
 
@@ -18,28 +18,61 @@ Public integration targets are:
 
 - `psycheval.harbor.environment:HostEnvironment`
 - `psycheval.harbor.agent:ExternalHarnessAgent`
-- `psycheval-canned-harness`
 - `psycheval-psychevo-harness`
 
-## Deterministic Trial
+## Installation Validation
 
-Run the PBench Web Search Task with the canned harness:
+Run the repository's generic Harbor integration fixtures after installation:
+
+```bash
+uv run pytest tests/harbor/test_cross_platform_trial.py
+```
+
+These tests use repository-internal single-step and multi-step synthetic
+fixtures to validate Harbor orchestration, paths, resume, artifacts, verifier
+execution, and reward behavior. The fixtures are not installed as a command and
+their results do not measure Agent quality. PBench Task verifiers are validated
+directly from explicit Task-owned fixtures; run PBench with a real compatible
+Agent for capability evaluation.
+
+By default, HostEnvironment gives each Agent Trial an anonymous
+`~/workspaces/<trial-short-uuid>` workdir. To select another root, point the
+Harbor parent process at a user TOML file:
+
+```bash
+PEVAL_CONFIG=/path/to/peval.toml uv run harbor run ...
+```
+
+```toml
+[harbor.host]
+workdir_root = "/path/to/workspaces"
+```
+
+An empty `workdir_root` restores the temporary Host workdir behavior. The user
+TOML is read-only from Psycheval's perspective; child processes receive the
+same variable pointing to a generated effective JSON instead.
+
+## External Workspace
+
+Select a writable workspace by binding an existing host directory to an
+environment path and passing that target to ExternalHarnessAgent:
 
 ```bash
 HARBOR_TELEMETRY=0 uv run harbor run \
-  --path datasets/pbench-v1.0/web-search-01 \
+  --path /path/to/task \
   --agent psycheval.harbor.agent:ExternalHarnessAgent \
-  --agent-kwarg "command=$PWD/.venv/bin/python -m psycheval.harbor.canned_harness --scenario web-search" \
+  --agent-kwarg "command=/path/to/harness" \
+  --agent-kwarg workdir=/workspace \
   --env psycheval.harbor.environment:HostEnvironment \
   --environment-kwarg allow_host_execution=true \
-  --jobs-dir .local/jobs \
+  --mounts '[{"type":"bind","source":"/path/to/repository","target":"/workspace"}]' \
   --n-concurrent 1 \
   --yes
 ```
 
-Use the `web-fetch-01` or `browser-control-01` Task with its matching
-`web-fetch` or `browser-control` canned scenario for the other deterministic
-cases.
+`workdir` is the environment-side mount target, not the host source. A Host
+workspace bind writes directly to the source directory and survives Trial
+cleanup. Do not share one writable source across concurrent Trials.
 
 ## Next Steps
 

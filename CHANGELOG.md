@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-08-15
+
+- Added Harbor multi-step support for External Harness, Psychevo, and Hermes,
+  including fresh/resumed sessions, step-local evidence, persistence, verifier
+  transfer, reward aggregation/termination, and artifact archival.
+- Added isolated per-Trial HostEnvironment workspaces configured through
+  user-owned `PEVAL_CONFIG`, with cross-platform ExternalHarnessAgent binding,
+  path mapping, and safe write-through semantics.
+- Added the three-step PBench Trend Digest task and deterministic coverage for
+  session/workspace persistence, evidence isolation, rewards, artifacts, exact
+  output metadata, and required skill calls.
+- Hardened Harbor verification with safe artifact globs, exact final-answer
+  references, call-evidence constraints, and fail-closed session/process
+  handling; removed legacy Psychevo runtime variables and public canned-harness
+  entry points.
+- Updated Browser Control, harness examples, documentation, specifications, and
+  internal synthetic fixtures for the new runtime and verification contracts.
+
 ## 2026-08-13
 
 - Kept completed Hermes runs successful when best-effort exact-session telemetry

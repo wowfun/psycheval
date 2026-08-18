@@ -20,23 +20,27 @@ Install Psycheval and its pinned Harbor runtime:
 uv sync
 ```
 
-Run a deterministic PBench Task through Harbor:
+Validate the installed Harbor integration without provider credentials or live
+Web access:
 
 ```bash
-HARBOR_TELEMETRY=0 uv run harbor run \
-  --path datasets/pbench-v1.0/web-search-01 \
-  --agent psycheval.harbor.agent:ExternalHarnessAgent \
-  --agent-kwarg "command=$PWD/.venv/bin/python -m psycheval.harbor.canned_harness --scenario web-search" \
+uv run pytest tests/harbor/test_cross_platform_trial.py
+```
+
+Run PBench with a real compatible Agent:
+
+```bash
+uv run harbor run \
+  -p datasets/pbench-v1.0 \
   --env psycheval.harbor.environment:HostEnvironment \
   --environment-kwarg allow_host_execution=true \
-  --jobs-dir .local/jobs \
-  --n-concurrent 1 \
-  --yes
+  [AGENT OPTIONS]
 ```
 
 HostEnvironment executes trusted code directly on a native Linux or Windows
 host and is not a sandbox. PBench remains Linux-targeted and does not claim
-Harbor Windows container support.
+Harbor Windows container support. Repository tests use synthetic trajectories
+only to validate framework integration; they are not Agent capability results.
 
 ## Documentation
 

@@ -29,10 +29,20 @@ Task definitions and verifier configuration are version-controlled inputs.
 Trial artifacts are execution outputs and must never be required to live beside
 source code.
 
-## Deterministic and Live Evaluation
+## Validation and Live Evaluation
 
-Deterministic validation uses canned trajectories, fixtures, or local fakes. It
-is the default for tests and release checks.
+Deterministic validation is split by the interface under test:
+
+- Task verifier validation loads explicit ATIF, source, and artifact fixtures
+  directly. It proves Task discovery, authoring contracts, and scoring behavior;
+  it does not need to create a Harbor Trial.
+- Harbor integration validation uses a small repository-internal synthetic
+  harness with representative single-step and multi-step Task fixtures. It
+  proves orchestration, paths, resume, artifact transfer, and verifier execution;
+  it does not measure Agent quality.
+
+Synthetic evidence is test input rather than an observed Agent execution. It
+must be described as such and must not be reported as a real Agent result.
 
 Live evaluation may depend on real Web content, network availability, provider
 credentials, model behavior, or browser infrastructure. It is always opt-in and
@@ -49,8 +59,10 @@ guarantee.
 
 - Every maintained Dataset exposes valid Tasks through Harbor's supported local
   Dataset loading behavior.
-- Every deterministic Task validation produces a Trial, trajectory, verifier
-  checks, reward, and exception status.
+- Every maintained Task has deterministic direct verifier coverage using
+  explicit fixtures.
+- Representative single-step and multi-step integration fixtures produce a
+  Harbor Trial, trajectory, verifier checks, reward, and exception status.
 - A failed prerequisite does not get reported as an Agent-quality failure.
 
 ## Related Topics
