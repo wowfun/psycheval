@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import platform
@@ -30,11 +31,13 @@ def make_environment(
     allow: object = True,
     config: EnvironmentConfig | None = None,
     extra_mounts: list[dict] | None = None,
+    trial_name: str = "trial",
+    environment_kwargs: dict[str, object] | None = None,
 ) -> HostEnvironment:
     environment_dir = tmp_path / "task" / "environment"
     environment_dir.mkdir(parents=True)
     (environment_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
-    trial_paths = TrialPaths(tmp_path / "trial")
+    trial_paths = TrialPaths(tmp_path / trial_name)
     trial_paths.mkdir()
     artifact_mount = trial_paths.artifacts_dir / "logs" / "artifacts"
     artifact_mount.mkdir(parents=True)
@@ -57,6 +60,31 @@ def make_environment(
         logger=logging.getLogger("test"),
         mounts=mounts,
         allow_host_execution=allow,
+        **(environment_kwargs or {}),
+    )
+
+
+def make_separate_verifier_environment(tmp_path: Path) -> HostEnvironment:
+    environment_dir = tmp_path / "task" / "steps" / "continue" / "tests"
+    environment_dir.mkdir(parents=True)
+    (environment_dir / "test.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    trial_paths = TrialPaths(tmp_path / "trial")
+    trial_paths.mkdir()
+    return HostEnvironment(
+        environment_dir=environment_dir,
+        environment_name="test-verifier",
+        session_id="test-verifier-env",
+        trial_paths=trial_paths,
+        task_env_config=EnvironmentConfig(workdir="/app"),
+        logger=logging.getLogger("test"),
+        mounts=[
+            {
+                "type": "bind",
+                "source": str(trial_paths.verifier_dir),
+                "target": "/logs/verifier",
+            }
+        ],
+        allow_host_execution=True,
     )
 
 
@@ -97,29 +125,223 @@ def test_rejects_force_build(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
+def test_rejects_workdir_root_environment_kwarg(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="configured through PEVAL_CONFIG"):
+        make_environment(
+            tmp_path,
+            environment_kwargs={"workdir_root": str(tmp_path / "workspaces")},
+        )
+
+
 @_LINUX_ONLY
-def test_exec_translates_paths_and_sets_portable_environment(tmp_path: Path) -> None:
+def test_automatic_workspace_reuses_trial_short_uuid_and_obeys_delete(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
-        environment = make_environment(tmp_path)
+        environment = make_environment(tmp_path, trial_name="task__YfQLWrD")
+        await environment.start(force_build=False)
+        result = await environment.exec('printf "%s|%s" "$PWD" "$PEVAL_CONFIG"')
+        cwd, config_path_value = (result.stdout or "").split("|", 1)
+        workspace = Path(cwd)
+        config_path = Path(config_path_value)
+        assert workspace == Path(os.environ["HOME"]) / "workspaces" / "YfQLWrD"
+        assert (workspace / "Dockerfile").is_file()
+        assert config_path.is_file()
+
+        await environment.stop(delete=False)
+        assert workspace.is_dir()
+        assert config_path.is_file()
+        await environment.stop(delete=True)
+        assert not workspace.exists()
+        assert not config_path.exists()
+        assert workspace.parent.is_dir()
+
+    asyncio.run(scenario())
+
+
+def test_owned_runtime_cleanup_attempts_every_root_after_one_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    environment = make_environment(tmp_path)
+    workspace = tmp_path / "owned-workspace"
+    runtime_root = tmp_path / "owned-runtime"
+    workspace.mkdir()
+    runtime_root.mkdir()
+    environment._automatic_workspace = workspace
+    environment._runtime_root = runtime_root
+    attempted: list[Path] = []
+
+    def fake_rmtree(path: Path, *, ignore_errors: bool) -> None:
+        assert ignore_errors is False
+        candidate = Path(path)
+        attempted.append(candidate)
+        if candidate == workspace:
+            raise OSError("workspace is busy")
+
+    monkeypatch.setattr("psycheval.harbor.environment.shutil.rmtree", fake_rmtree)
+
+    with pytest.raises(OSError, match="workspace is busy"):
+        environment._delete_owned_runtime()
+
+    assert attempted == [workspace, runtime_root]
+
+
+@_LINUX_ONLY
+def test_automatic_workspace_rejects_existing_trial_directory(tmp_path: Path) -> None:
+    workspace = Path(os.environ["HOME"]) / "workspaces" / "YfQLWrD"
+    workspace.mkdir(parents=True)
+    (workspace / "keep.txt").write_text("keep\n", encoding="utf-8")
+    environment = make_environment(tmp_path, trial_name="task__YfQLWrD")
+
+    async def scenario() -> None:
+        with pytest.raises(FileExistsError, match="refusing to reuse stale state"):
+            await environment.start(force_build=False)
+
+    asyncio.run(scenario())
+    assert (workspace / "keep.txt").read_text(encoding="utf-8") == "keep\n"
+
+
+@_LINUX_ONLY
+def test_automatic_workspace_generates_short_uuid_for_explicit_trial_name(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        environment = make_environment(tmp_path, trial_name="explicit-name")
+        await environment.start(force_build=False)
+        try:
+            result = await environment.exec("pwd")
+            workspace = Path((result.stdout or "").strip())
+            assert workspace.parent == Path(os.environ["HOME"]) / "workspaces"
+            assert len(workspace.name) == 7
+            assert workspace.name != "explicit-name"
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
+
+
+@_LINUX_ONLY
+def test_start_failure_removes_owned_automatic_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    environment = make_environment(tmp_path, trial_name="task__YfQLWrD")
+
+    def fail_copy(*_args, **_kwargs) -> None:
+        raise OSError("fixture copy failed")
+
+    monkeypatch.setattr("psycheval.harbor.environment.shutil.copytree", fail_copy)
+
+    async def scenario() -> None:
+        with pytest.raises(OSError, match="fixture copy failed"):
+            await environment.start(force_build=False)
+
+    asyncio.run(scenario())
+    assert not (Path(os.environ["HOME"]) / "workspaces" / "YfQLWrD").exists()
+
+
+@_LINUX_ONLY
+def test_empty_configured_root_restores_trial_temporary_workdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "peval.toml"
+    config.write_text('[harbor.host]\nworkdir_root = ""\n', encoding="utf-8")
+    original = config.read_bytes()
+    monkeypatch.setenv("PEVAL_CONFIG", str(config))
+
+    async def scenario() -> None:
+        environment = make_environment(tmp_path / "case")
+        await environment.start(force_build=False)
+        try:
+            result = await environment.exec("pwd")
+            assert (result.stdout or "").strip().startswith("/tmp/psycheval-harbor-")
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
+    assert config.read_bytes() == original
+
+
+@_LINUX_ONLY
+def test_separate_verifier_isolates_uploaded_agent_logs_and_artifacts(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        environment = make_separate_verifier_environment(tmp_path)
+        source_agent = tmp_path / "source-agent"
+        source_artifacts = tmp_path / "source-artifacts"
+        source_agent.mkdir()
+        source_artifacts.mkdir()
+        (source_agent / "trajectory.json").write_text("{}\n", encoding="utf-8")
+        (source_artifacts / "current.txt").write_text("current\n", encoding="utf-8")
+        await environment.start(force_build=False)
+        try:
+            await environment.upload_dir(source_agent, "/logs/agent")
+            await environment.upload_dir(source_artifacts, "/logs/artifacts")
+
+            assert (source_agent / "trajectory.json").is_file()
+            assert (source_artifacts / "current.txt").is_file()
+            result = await environment.exec(
+                "test -f /tests/test.sh && "
+                "test -f /logs/agent/trajectory.json && "
+                "test -f /logs/artifacts/current.txt && pwd"
+            )
+            assert result.return_code == 0
+            assert not Path((result.stdout or "").strip()).is_relative_to(
+                Path(os.environ["HOME"]) / "workspaces"
+            )
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
+
+
+@_LINUX_ONLY
+def test_exec_translates_paths_and_sets_effective_runtime_config(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        environment = make_environment(tmp_path, trial_name="task__YfQLWrD")
         await environment.start(force_build=False)
         try:
             source = tmp_path / "source.txt"
             source.write_text("fixture", encoding="utf-8")
             await environment.upload_file(source, "/tests/source.txt")
             result = await environment.exec(
-                "printf '%s|%s|' \"$PSYCHEVAL_WORKDIR\" "
-                '"$PSYCHEVAL_TESTS_DIR"; cat /tests/source.txt',
-                env={"CALL_ENV": "present"},
+                "printf '%s|' \"$PEVAL_CONFIG\"; cat /tests/source.txt",
+                env={"CALL_ENV": "present", "PSYCHEVAL_LEGACY": "hidden"},
             )
             assert result.return_code == 0
-            workdir, tests_dir, payload = (result.stdout or "").split("|", 2)
-            assert workdir.startswith("/tmp/psycheval-harbor-")
-            assert tests_dir.startswith("/tmp/psycheval-harbor-")
+            config_path, payload = (result.stdout or "").split("|", 1)
             assert payload == "fixture"
+            runtime = json.loads(Path(config_path).read_text(encoding="utf-8"))
+            workspace = Path(os.environ["HOME"]) / "workspaces" / "YfQLWrD"
+            assert Path(runtime["paths"]["workdir"]) == workspace
+            assert Path(runtime["harbor"]["host"]["workspace"]) == workspace
+            assert Path(runtime["paths"]["tests"]).name == "tests"
+            assert runtime["executables"]["python"] == sys.executable
+            assert "harness" not in runtime["harbor"]
+            first_config = Path(config_path)
+            second, third = await asyncio.gather(
+                environment.exec('printf "%s" "$PEVAL_CONFIG"'),
+                environment.exec('printf "%s" "$PEVAL_CONFIG"'),
+            )
+            generated = {
+                first_config,
+                Path((second.stdout or "").strip()),
+                Path((third.stdout or "").strip()),
+            }
+            assert len(generated) == 3
+            assert all(path.is_file() for path in generated)
+            env_result = await environment.exec("env")
+            assert "PSYCHEVAL_" not in (env_result.stdout or "")
+            assert "PEVAL_CONFIG=" in (env_result.stdout or "")
             url_result = await environment.exec("printf '%s' 'https://example.com/app'")
             assert url_result.stdout == "https://example.com/app"
         finally:
             await environment.stop(delete=True)
+
+        assert not workspace.exists()
+        assert workspace.parent.is_dir()
 
     asyncio.run(scenario())
 
@@ -323,6 +545,190 @@ def test_rejects_mounts_that_do_not_match_harbor_trial_ownership(
 
 
 @_LINUX_ONLY
+def test_workspace_bind_merges_task_context_and_writes_through(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        workspace = tmp_path / "workspace with spaces"
+        workspace.mkdir()
+        (workspace / "fixture.txt").write_text("old\n", encoding="utf-8")
+        (workspace / "unrelated.txt").write_text("keep\n", encoding="utf-8")
+        environment = make_environment(
+            tmp_path / "case",
+            config=EnvironmentConfig(workdir="/workspace"),
+            extra_mounts=[
+                {
+                    "type": "bind",
+                    "source": str(workspace),
+                    "target": "/workspace",
+                }
+            ],
+        )
+        (environment.environment_dir / "fixture.txt").write_text(
+            "task\n", encoding="utf-8"
+        )
+
+        await environment.start(force_build=False)
+        try:
+            await environment.ensure_dirs(["/workspace/nested"], chmod=False)
+            result = await environment.exec(
+                "printf '%s' \"$WORKSPACE_FILE\" > /workspace/nested/marker.txt; pwd",
+                cwd="/workspace/nested",
+                env={"WORKSPACE_FILE": "/workspace/nested/payload.txt"},
+            )
+            assert result.return_code == 0
+            assert Path((result.stdout or "").strip()) == workspace / "nested"
+            assert (workspace / "nested" / "marker.txt").read_text(
+                encoding="utf-8"
+            ) == str(workspace / "nested" / "payload.txt")
+            assert (workspace / "fixture.txt").read_text(encoding="utf-8") == ("task\n")
+            assert (workspace / "unrelated.txt").read_text(encoding="utf-8") == (
+                "keep\n"
+            )
+        finally:
+            await environment.stop(delete=True)
+
+        assert (workspace / "nested" / "marker.txt").is_file()
+        assert (workspace / "unrelated.txt").is_file()
+        assert not (Path(os.environ["HOME"]) / "workspaces").exists()
+
+    asyncio.run(scenario())
+
+
+@_LINUX_ONLY
+def test_unmounted_custom_workdir_uses_automatic_workspace(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        environment = make_environment(
+            tmp_path, config=EnvironmentConfig(workdir="/custom/nested")
+        )
+        (environment.environment_dir / "task-input.txt").write_text(
+            "input\n", encoding="utf-8"
+        )
+        await environment.start(force_build=False)
+        resolved: Path | None = None
+        try:
+            await environment.ensure_dirs(["/custom/nested"], chmod=False)
+            result = await environment.exec(
+                "test -f task-input.txt && pwd", cwd="/custom/nested"
+            )
+            assert result.return_code == 0
+            resolved = Path((result.stdout or "").strip())
+            assert len(resolved.name) == 7
+        finally:
+            await environment.stop(delete=True)
+
+        assert resolved is not None
+        assert not resolved.exists()
+
+    asyncio.run(scenario())
+
+
+@_LINUX_ONLY
+def test_unmounted_agent_workdir_override_uses_automatic_workspace(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        environment = make_environment(tmp_path, trial_name="task__YfQLWrD")
+        await environment.start(force_build=False)
+        try:
+            await environment.ensure_dirs(["/agent-selected/path"], chmod=False)
+            result = await environment.exec("pwd", cwd="/agent-selected/path")
+            assert Path((result.stdout or "").strip()) == (
+                Path(os.environ["HOME"]) / "workspaces" / "YfQLWrD"
+            )
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
+
+
+@_LINUX_ONLY
+def test_workspace_bind_rejects_workdir_outside_target(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        environment = make_environment(
+            tmp_path / "case",
+            extra_mounts=[
+                {
+                    "type": "bind",
+                    "source": str(workspace),
+                    "target": "/workspace",
+                }
+            ],
+        )
+        await environment.start(force_build=False)
+        try:
+            with pytest.raises(ValueError, match="workspace mount target"):
+                await environment.ensure_dirs(["/other"], chmod=False)
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("mount", "message"),
+    [
+        (
+            {"type": "volume", "source": "workspace", "target": "/workspace"},
+            "type='bind'",
+        ),
+        (
+            {
+                "type": "bind",
+                "source": "workspace",
+                "target": "/workspace",
+                "read_only": True,
+            },
+            "writable",
+        ),
+        (
+            {"type": "bind", "source": "missing", "target": "/workspace"},
+            "existing directory",
+        ),
+        (
+            {"type": "bind", "source": "workspace", "target": "/logs/cache"},
+            "reserved path",
+        ),
+        (
+            {"type": "bind", "source": "workspace", "target": "relative"},
+            "non-root absolute",
+        ),
+        (
+            {"type": "bind", "source": "workspace", "target": "/"},
+            "non-root absolute",
+        ),
+    ],
+)
+def test_rejects_invalid_workspace_mount(
+    tmp_path: Path, mount: dict, message: str
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    configured = dict(mount)
+    if configured["source"] == "workspace":
+        configured["source"] = str(workspace)
+    with pytest.raises(ValueError, match=message):
+        make_environment(tmp_path / "case", extra_mounts=[configured])
+
+
+def test_rejects_more_than_one_workspace_mount(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    with pytest.raises(ValueError, match="only one workspace mount"):
+        make_environment(
+            tmp_path / "case",
+            extra_mounts=[
+                {"type": "bind", "source": str(first), "target": "/first"},
+                {"type": "bind", "source": str(second), "target": "/second"},
+            ],
+        )
+
+
+@_LINUX_ONLY
 def test_timeout_terminates_the_process_group(tmp_path: Path) -> None:
     async def scenario() -> None:
         environment = make_environment(tmp_path)
@@ -413,7 +819,7 @@ def test_windows_exec_uses_cmd_and_translates_runtime_aliases(
             assert "source.txt" in translated
             assert "result.txt" in translated
             assert '"' in translated
-            assert Path(kwargs["cwd"]).name == "app"
+            assert len(Path(kwargs["cwd"]).name) == 7
             assert "creationflags" in kwargs
             assert Path(kwargs["env"]["XDG_DATA_HOME"]) == (
                 environment.trial_paths.agent_dir / "opencode" / "xdg-data"

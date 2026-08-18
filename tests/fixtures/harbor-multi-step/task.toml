@@ -1,0 +1,35 @@
+schema_version = "1.4"
+multi_step_reward_strategy = "mean"
+
+[task]
+name = "fixtures/harbor-multi-step"
+
+[environment]
+workdir = "/app"
+
+[agent]
+timeout_sec = 10.0
+
+[verifier]
+timeout_sec = 10.0
+
+[[steps]]
+name = "seed"
+min_reward = 1.0
+
+[steps.verifier]
+environment_mode = "shared"
+
+[[steps]]
+name = "continue"
+min_reward = 1.0
+artifacts = ["/logs/agent/trajectory.json"]
+
+[steps.verifier]
+environment_mode = "separate"
+
+[[steps]]
+name = "finish"
+
+[steps.verifier]
+environment_mode = "shared"

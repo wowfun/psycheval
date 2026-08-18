@@ -1,0 +1,15 @@
+{
+  "required_calls": [
+    {
+      "any": [
+        {
+          "tool_names": ["fixture_action"],
+          "argument_values": {"mode": "single-step"},
+          "observation_terms": ["fixture-complete"]
+        }
+      ]
+    }
+  ],
+  "final_terms": ["single complete", "single.txt"],
+  "required_artifacts": ["single.txt"]
+}

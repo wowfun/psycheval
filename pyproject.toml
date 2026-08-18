@@ -8,7 +8,6 @@ dependencies = [
 ]
 
 [project.scripts]
-psycheval-canned-harness = "psycheval.harbor.canned_harness:main"
 psycheval-psychevo-harness = "psycheval.harbor.psychevo_harness:main"
 
 [build-system]

@@ -1,0 +1,21 @@
+{
+  "required_calls": [
+    {
+      "any": [
+        {
+          "tool_names": ["multi_finish"],
+          "argument_values": {"action": "run", "sequence": 1},
+          "observation_terms": ["workspace-ready"]
+        },
+        {
+          "tool_names": ["multi_finish"],
+          "argument_values": {"action": "resume", "sequence": 3},
+          "observation_terms": ["workspace-ready"]
+        }
+      ]
+    }
+  ],
+  "forbidden_tool_names": ["multi_seed", "multi_continue"],
+  "final_terms": ["finish complete"],
+  "required_artifacts": ["finish.txt"]
+}

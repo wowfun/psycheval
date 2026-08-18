@@ -1,0 +1,16 @@
+{
+  "required_calls": [
+    {
+      "any": [
+        {
+          "tool_names": ["multi_seed"],
+          "argument_values": {"action": "run", "sequence": 1},
+          "observation_terms": ["workspace-ready"]
+        }
+      ]
+    }
+  ],
+  "forbidden_tool_names": ["multi_continue", "multi_finish"],
+  "final_terms": ["seed complete"],
+  "required_artifacts": ["seed.txt"]
+}

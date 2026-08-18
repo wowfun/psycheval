@@ -10,7 +10,18 @@ from pathlib import Path
 
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
-from psycheval.harbor.psychevo import parse_ndjson, psychevo_events_to_atif
+from psycheval.harbor.psychevo import (
+    parse_ndjson,
+    psychevo_events_to_atif,
+    terminal_event,
+)
+from psycheval.harbor.runtime_config import (
+    PEVAL_CONFIG_ENV,
+    RuntimeConfigError,
+    load_effective_runtime_config,
+)
+
+_SESSION_STATE_FILENAME = "psychevo-session.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,15 +38,30 @@ def main(argv: list[str] | None = None) -> int:
     instruction = sys.stdin.read()
     if not instruction.strip():
         raise SystemExit("Psychevo harness received an empty instruction")
+    try:
+        runtime = load_effective_runtime_config(require_harness=True)
+    except RuntimeConfigError as exc:
+        raise SystemExit(str(exc)) from exc
+    logs_dir = Path(runtime.paths.agent_logs)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    trajectory_path = logs_dir / "trajectory.json"
+    for output_path in (
+        trajectory_path,
+        logs_dir / "psychevo.ndjson",
+        logs_dir / "psychevo.stderr.log",
+    ):
+        output_path.unlink(missing_ok=True)
     pevo_path = Path(args.pevo).expanduser()
     pevo = str(pevo_path.resolve()) if pevo_path.is_file() else shutil.which(args.pevo)
     if not pevo:
         raise SystemExit(f"pevo executable not found: {args.pevo}")
-    logs_dir = Path(os.environ.get("PSYCHEVAL_AGENT_LOGS_DIR", "/logs/agent"))
-    workdir = Path(
-        args.workdir or os.environ.get("PSYCHEVAL_WORKDIR", "/app")
-    ).resolve()
-    logs_dir.mkdir(parents=True, exist_ok=True)
+    workdir = Path(args.workdir or runtime.paths.workdir).resolve()
+    action = runtime.harness.action
+    database_path = logs_dir / "psychevo-state.db"
+    resumed_session_id = (
+        _load_resume_session(logs_dir, database_path) if action == "resume" else None
+    )
+    (logs_dir / _SESSION_STATE_FILENAME).unlink(missing_ok=True)
     command = [
         str(pevo),
         "run",
@@ -47,13 +73,19 @@ def main(argv: list[str] | None = None) -> int:
         "--dir",
         str(workdir),
     ]
+    if resumed_session_id is not None:
+        command.extend(["--session", resumed_session_id])
     if args.profile:
         command.extend(["--profile", args.profile])
     if args.model:
         command.extend(["--model", args.model])
     command.extend(["--", instruction])
-    process_env = dict(os.environ)
-    process_env["PSYCHEVO_DB"] = str(logs_dir / "psychevo-state.db")
+    process_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != PEVAL_CONFIG_ENV and not key.startswith("PSYCHEVAL_")
+    }
+    process_env["PSYCHEVO_DB"] = str(database_path)
     completed = subprocess.run(
         command,
         cwd=workdir,
@@ -71,14 +103,23 @@ def main(argv: list[str] | None = None) -> int:
         )
     version = _pevo_version(str(pevo))
     try:
+        events = parse_ndjson(completed.stdout)
+        terminal = terminal_event(events)
+        session_id = terminal.get("threadId")
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError("Psychevo terminal event has no exact threadId")
+        if resumed_session_id is not None and session_id != resumed_session_id:
+            raise ValueError(
+                "Psychevo resumed a different session: "
+                f"expected {resumed_session_id!r}, got {session_id!r}"
+            )
         trajectory = psychevo_events_to_atif(
-            parse_ndjson(completed.stdout),
+            events,
             instruction=instruction,
             agent_version=version,
         )
     except (TypeError, ValueError) as exc:
         raise SystemExit(str(exc)) from exc
-    trajectory_path = logs_dir / "trajectory.json"
     trajectory_path.write_text(
         json.dumps(trajectory, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -87,7 +128,37 @@ def main(argv: list[str] | None = None) -> int:
     if not validator.validate(trajectory_path):
         trajectory_path.unlink(missing_ok=True)
         raise SystemExit("generated invalid ATIF: " + "; ".join(validator.errors))
+    _write_session_state(logs_dir, session_id)
     return 0
+
+
+def _load_resume_session(logs_dir: Path, database_path: Path) -> str:
+    if not database_path.is_file():
+        raise SystemExit("Psychevo resume requires the Trial-owned state database")
+    state_path = logs_dir / _SESSION_STATE_FILENAME
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise SystemExit("Psychevo resume requires an exact session marker") from exc
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit("Psychevo resume session marker is invalid") from exc
+    if not isinstance(state, dict) or state.get("protocol_version") != 1:
+        raise SystemExit("Psychevo resume session marker is invalid")
+    session_id = state.get("session_id")
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise SystemExit("Psychevo resume session marker has no exact session id")
+    return session_id
+
+
+def _write_session_state(logs_dir: Path, session_id: str) -> None:
+    (logs_dir / _SESSION_STATE_FILENAME).write_text(
+        json.dumps(
+            {"protocol_version": 1, "session_id": session_id},
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _pevo_version(pevo: str) -> str:
