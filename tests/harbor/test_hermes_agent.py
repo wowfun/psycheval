@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,120 @@ from harbor.agents.installed import hermes as harbor_hermes
 from harbor.environments.base import ExecResult
 from harbor.models.agent.context import AgentContext
 
-from psycheval.harbor.hermes import HermesAgent
+from psycheval.harbor.hermes import HermesAgent, _enrich_hermes_trajectory
+
+
+def test_enriches_exact_assistant_message_with_usage_and_cache() -> None:
+    trajectory = {
+        "steps": [
+            {"step_id": 1, "source": "user", "message": "Do it"},
+            {"step_id": 2, "source": "agent", "message": "Done"},
+        ]
+    }
+    session = json.dumps(
+        {
+            "messages": [
+                {"role": "user", "content": "Do it"},
+                {
+                    "role": "assistant",
+                    "content": "Done",
+                    "usage": {
+                        "input_tokens": 120,
+                        "output_tokens": 15,
+                        "cache_read_input_tokens": 48,
+                    },
+                },
+            ]
+        }
+    )
+
+    enriched = _enrich_hermes_trajectory(trajectory, session)
+
+    assert enriched["steps"][1]["metrics"]["cached_tokens"] == 48
+    assert enriched["final_metrics"]["total_prompt_tokens"] == 120
+    assert enriched["final_metrics"]["total_completion_tokens"] == 15
+    assert enriched["final_metrics"]["total_cached_tokens"] == 48
+    inference = enriched["final_metrics"]["extra"]["model_inference"]
+    assert inference["cache_prompt_tokens"] == 120
+    assert inference["cache_read_tokens"] == 48
+    assert "ttft_ms_sum" not in inference
+
+
+def test_enriches_structurally_aligned_list_content_and_tool_calls() -> None:
+    trajectory = {
+        "steps": [
+            {"step_id": 1, "source": "user", "message": "Do it"},
+            {"step_id": 2, "source": "agent", "message": "All done"},
+            {
+                "step_id": 3,
+                "source": "agent",
+                "message": "[tool call]",
+                "tool_calls": [{"function_name": "finish", "arguments": {}}],
+            },
+        ]
+    }
+    session = json.dumps(
+        {
+            "messages": [
+                {"role": "user", "content": "Do it"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "All"},
+                        {"type": "text", "text": "done"},
+                    ],
+                    "usage": {"input_tokens": 100, "output_tokens": 10},
+                },
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "function": {"name": "finish", "arguments": "{}"},
+                        }
+                    ],
+                    "usage": {"input_tokens": 120, "output_tokens": 5},
+                },
+            ]
+        }
+    )
+
+    enriched = _enrich_hermes_trajectory(trajectory, session)
+
+    assert enriched["steps"][1]["metrics"]["prompt_tokens"] == 100
+    assert enriched["steps"][2]["metrics"]["prompt_tokens"] == 120
+    assert enriched["final_metrics"]["total_prompt_tokens"] == 220
+    assert enriched["final_metrics"]["total_completion_tokens"] == 15
+
+
+def test_does_not_apply_usage_when_assistant_structure_is_unaligned(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    trajectory = {
+        "steps": [
+            {"step_id": 1, "source": "agent", "message": "first"},
+            {"step_id": 2, "source": "agent", "message": "second"},
+        ]
+    }
+    session = json.dumps(
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "first",
+                    "usage": {"input_tokens": 100, "output_tokens": 10},
+                }
+            ]
+        }
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="psycheval.harbor.hermes"):
+        enriched = _enrich_hermes_trajectory(trajectory, session)
+
+    assert all("metrics" not in step for step in enriched["steps"])
+    assert "total_prompt_tokens" not in enriched["final_metrics"]
+    assert "usage enrichment skipped" in caplog.text
 
 
 def test_setup_requires_native_resume_and_exact_export_capabilities(

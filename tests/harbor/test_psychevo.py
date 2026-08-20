@@ -239,6 +239,28 @@ def test_preserves_completed_assistant_occurrences_when_item_id_is_reused() -> N
     assert "The source confirms the answer." in messages
 
 
+def test_preserves_usage_and_cache_evidence_without_inventing_timing() -> None:
+    events = completed_events()
+    events[3]["item"]["usage"] = {
+        "prompt_tokens": 200,
+        "completion_tokens": 25,
+        "cached_tokens": 80,
+    }
+
+    value = psychevo_events_to_atif(
+        events, instruction="Fetch the page", agent_version="pevo 0.1.0"
+    )
+
+    inference = value["final_metrics"]["extra"]["model_inference"]
+    assert value["final_metrics"]["total_prompt_tokens"] == 200
+    assert value["final_metrics"]["total_completion_tokens"] == 25
+    assert value["final_metrics"]["total_cached_tokens"] == 80
+    assert inference["cache_prompt_tokens"] == 200
+    assert inference["cache_read_tokens"] == 80
+    assert "ttft_ms_sum" not in inference
+    assert "decode_duration_ms" not in inference
+
+
 def test_rejects_failed_terminal_event() -> None:
     events = completed_events()
     events[-1] = {

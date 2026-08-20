@@ -12,6 +12,10 @@ from harbor.utils.scripts import quote_shell_arg
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
 from psycheval import __version__
+from psycheval.harbor.inference_telemetry import (
+    load_trajectory,
+    populate_context_from_trajectory,
+)
 from psycheval.harbor.runtime_config import (
     PEVAL_CONFIG_ENV,
     EffectiveRuntimeConfig,
@@ -177,6 +181,7 @@ class ExternalHarnessAgent(BaseAgent):
             raise RuntimeError(
                 "external harness wrote invalid ATIF: " + "; ".join(validator.errors)
             )
+        populate_context_from_trajectory(context, load_trajectory(trajectory_path))
         context.metadata = {
             "harness_action": action,
             "harness_return_code": result.return_code,

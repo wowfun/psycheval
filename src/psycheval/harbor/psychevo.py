@@ -5,6 +5,12 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 
+from psycheval.harbor.inference_telemetry import (
+    finalize_trajectory_metrics,
+    metrics_from_observations,
+    observation_from_usage,
+)
+
 
 def parse_ndjson(raw: str) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
@@ -236,6 +242,11 @@ def psychevo_events_to_atif(
         timestamp = _timestamp(item.get("createdAtMs"))
         if timestamp:
             step["timestamp"] = timestamp
+        usage = observation_from_usage(
+            item.get("usage"), usage_source="psychevo.item.usage"
+        )
+        if usage is not None:
+            step["metrics"] = metrics_from_observations([usage])
         if call_ids:
             step["tool_calls"] = [
                 {
@@ -291,7 +302,7 @@ def psychevo_events_to_atif(
     model_name = _model_name(event_items)
     if model_name:
         agent["model_name"] = model_name
-    return {
+    trajectory = {
         "schema_version": "ATIF-v1.7",
         "session_id": thread_id,
         "trajectory_id": f"psychevo:{thread_id}",
@@ -303,6 +314,7 @@ def psychevo_events_to_atif(
             "tool_failures": terminal.get("toolFailures", 0),
         },
     }
+    return finalize_trajectory_metrics(trajectory)
 
 
 def _single_provider_id(
