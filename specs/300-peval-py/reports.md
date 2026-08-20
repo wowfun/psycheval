@@ -28,6 +28,12 @@ surface follows this row-count behavior:
 Static presentation does not inherit live-workspace empty-state behavior merely
 because both surfaces use the same Web modules.
 
+Static Leaderboard rows expose the canonical inference metrics defined by
+[020. Model Inference Telemetry](../020-state-and-data-model/spec.md#model-inference-telemetry).
+Columns whose semantic values are empty across every report row are omitted;
+numeric zero remains present. Static reports do not persist or expose manual
+column-layout controls.
+
 ## Output Formats
 
 The CLI may emit normalized JSON, strictly validated ATIF-v1.7 data,

@@ -4,12 +4,12 @@ name: Evaluation Workspace
 
 # Evaluation Workspace
 
-The Evaluation Workspace is peval-py's local serve mode for importing sources,
+The Evaluation Workspace is peval-py's serve mode for importing sources,
 organizing them, comparing results, and exporting reproducible views.
 
 ## Scope
 
-This topic owns workspace storage, source and report catalogs, the local HTTP
+This topic owns workspace storage, source and report catalogs, the HTTP
 interface, browser presentation, saved state, selection, and export behavior.
 It does not own source-format conversion rules or Harbor Trial execution.
 
@@ -37,6 +37,8 @@ It does not own source-format conversion rules or Harbor Trial execution.
 
 ## Attachments
 
+- [Access Control](access.md)
+- [Saved Views](saved-views.md)
 - [Storage](storage.md)
 - [HTTP Interface](http.md)
 - [Presentation](presentation.md)

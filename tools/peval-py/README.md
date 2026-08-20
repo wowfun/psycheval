@@ -114,15 +114,59 @@ DB path and bind the DB input to the same adapter.
 
 Use `-r, --root DIR` with `view tr` or `export tr` when you want to load an
 existing peval-py workspace's `peval-py.toml` from outside the workspace. This
-selects workspace config such as locale, `analysis_eval_slug`, adapter
+selects workspace config such as locale, the optional Markdown `description`,
+`analysis_eval_slug`, adapter
 defaults, and `default_db_path`; it does not initialize or modify the
 workspace. Run `peval-py init -r DIR` first when the workspace does not yet
 contain `peval-py.toml`.
+
+```toml
+description = "**Nightly** evaluation workspace — release candidate checks"
+```
+
+`serve` renders a non-blank description in the center of the workspace header
+for guests and administrators. Raw HTML is escaped, and Workspace snapshot
+exports preserve the Markdown content.
 
 ```bash
 peval-py view tr -r .local/peval-py -d @opencode --list
 peval-py export tr -r .local/peval-py -d @opencode -s <session-id> -o
 ```
+
+### Share the Eval Workspace on a trusted LAN
+
+`serve` has anonymous guest and authenticated administrator roles. On
+localhost, a workspace without a password opens with administrator access. To
+listen on another interface, configure a non-empty administrator password in
+the process environment or in `<workspace>/.env`, then restart serve:
+
+```bash
+cat >.local/peval-py/.env <<'EOF'
+PEVAL_PY_ADMIN_PASSWORD='replace with a long random password'
+EOF
+chmod 600 .local/peval-py/.env
+
+peval-py serve --root .local/peval-py --host 0.0.0.0
+```
+
+The process environment takes precedence over `.env`; an empty process value
+falls back to the file. peval-py reads only this key, does not create or update
+`.env`, and keeps administrator sessions in memory with a 12-hour idle expiry.
+On a multi-user POSIX host, keep `.env` readable only by the workspace owner.
+Guests can browse complete evaluation content, Saved Views, and imported
+reports and can use all read-only exports. Source paths, diagnostics, refresh,
+configuration, and workspace edits require administrator login.
+
+Guests can also save the current Catalog conditions as a browser-local Saved
+View. Local views are isolated by site and workspace, remain available after
+login or logout, and participate in combined filtering, summaries, and exports
+without being uploaded. Administrators can choose between Workspace (the
+default) and This browser when saving. If both locations contain the same exact
+name, the Workspace view is shown and the local copy remains stored until the
+name is free again.
+
+Direct non-local serve uses plain HTTP and is intended only for a trusted
+private network. Do not expose it directly to the public internet.
 
 Use `--source-alias N=TEXT` to add display-only source names. Aliases improve
 report readability without changing session ids, trial keys, source identity,
@@ -157,6 +201,15 @@ When serving snapshots or mounted Harbor Trials, current workspace-side `analysi
 `analysis.md`, and `notes.md` are overlaid when the active report is composed,
 so reload or Refresh can show note/analysis changes even if the original source
 DB or file no longer refreshes successfully.
+Mounted Harbor Trials additionally expose a selected read-only
+`artifacts/logs/**/analysis.md` in Selected Trial Analysis. The canonical
+`artifacts/logs/analysis.md` wins; otherwise the lexicographically first nested
+match is used, with a 20 MiB limit. When the workspace overlay also has
+`analysis.md`, the Harbor document appears first and each missing, blank, or
+invalid document hides only its own source-labelled block.
+The Leaderboard `#Analysis` column counts these origins: Harbor contributes one
+and a workspace overlay contributes one whether it has JSON, Markdown, or both,
+for a maximum of two.
 
 `peval-py serve` keeps static reports CDN-based, but serves ECharts local-first
 from `<workspace>/.cache/echarts/6.0.0/echarts.min.js` and falls back to the

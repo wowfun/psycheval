@@ -34,6 +34,12 @@ Harbor compatibility, harnesses, HostEnvironment, conversion, and verifier.
   outputs are removed before state or process validation, session state is
   invalidated until current ATIF succeeds, and no legacy runtime variable
   reaches `pevo`.
+- Inference-telemetry tests cross the Psycheval-owned module interface and cover
+  missing versus explicit-zero cache usage, inclusive prompt invariants,
+  retry-attempt aggregation, invalid timing or usage, ratio-of-sums outputs,
+  provenance, and Harbor context population. Psychevo and Hermes fixtures prove
+  current-invocation cache collection and prove that absent first-token evidence
+  leaves TTFT and decode TPS absent rather than estimated.
 - Pure or injected tests cover host-specific command and environment-value path
   conversion, a leading quoted Windows executable, rejection of non-`C:` virtual
   workdirs, user rejection, process-tree termination, and best-effort cleanup of

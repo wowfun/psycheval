@@ -1,10 +1,25 @@
 # Evaluation Workspace HTTP Interface
 
+Authentication, route authorization, and role-dependent response projection
+are specified by [Access Control](access.md).
+
+Browser-local Saved View query, summary, conflict, and export payload behavior
+is specified by [Saved Views](saved-views.md).
+
 ## Initial Load
 
 `GET /` returns the self-contained application shell without embedding a full
 active report. The client then loads the catalog and requests report detail by
 source key as needed.
+
+Shell, authentication, and API responses are not cacheable. A versioned static
+asset may instead use a long-lived immutable cache policy while retaining
+`nosniff` and referrer protections.
+
+Only explicitly classified request-validation failures return `4xx`. An
+unexpected exception, including an unclassified `ValueError`, returns `500`;
+guest responses use the generic projected error while administrator responses
+may retain the diagnostic.
 
 ## Mutation Results
 
@@ -37,15 +52,32 @@ workspace-snapshot query payloads use the plural `tasks`, `jobs`, and
 `providers` arrays; absent arrays remain empty so existing Saved Views continue
 to load.
 
+Catalog rows expose Avg TTFT, Decode TPS, Cache Hit, the sufficient statistics
+needed to recompute them, and `analysis_count` as the 0–2 count of distinct
+Harbor/workspace analysis sources. The three inference display values are
+sortable with nulls last. A catalog page also returns, from the same generation
+and unpaginated query predicate, a model-inference aggregate with matched and
+covered Trial counts and a canonical-column non-empty count map. These values
+drive the query-wide summary and stable automatic column visibility.
+
 ## Exports
 
 The generic export interface accepts normalized JSON and table XLSX kinds. It
 rejects legacy `kind=html`. Workspace snapshot HTML is a separate strict
 payload that includes resolved query scope, presentation, saved views, and
-attached reports.
+attached reports. Snapshot presentation includes the versioned Leaderboard
+column order and manual visibility overrides.
+
+A Leaderboard Summary XLSX request carries both the ordered source keys for its
+current-page distribution and the normalized complete catalog query, including
+applied Saved View names. The server derives the inference overview from that
+query in the same catalog generation rather than inferring complete-query scope
+from the page keys.
 
 ## Related Topics
 
 - [Evaluation Workspace](spec.md)
+- [Access Control](access.md)
+- [Saved Views](saved-views.md)
 - [Storage](storage.md)
 - [Presentation](presentation.md)

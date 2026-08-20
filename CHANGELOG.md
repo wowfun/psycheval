@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-08-19
+
+- Added guest and administrator access to `peval-py serve`, with password
+  discovery, idle sessions, throttled login, fail-closed authorization,
+  guest-safe projections and exports, and trusted-LAN listening.
+- Added browser-local Saved Views, workspace descriptions, Harbor Markdown
+  analysis overlays, `#Analysis` origin counts, and workspace-scoped Leaderboard
+  column visibility/order with snapshot and XLSX support.
+- Added versioned Harbor model-inference telemetry and peval-py Avg TTFT, Decode
+  TPS, and Cache Hit metrics with exact sufficient statistics, ratio-of-sums
+  aggregation, query-wide coverage, and explicit unknown-value handling.
+- Hardened serve caching, session and binding lifecycle, error handling, export
+  scope, metadata projection, nested analysis discovery, and snapshot previews;
+  fixed static/snapshot counts, sorting, column migration, and telemetry sample
+  accounting.
+
 ## 2026-08-15
 
 - Added Harbor multi-step support for External Harness, Psychevo, and Hermes,

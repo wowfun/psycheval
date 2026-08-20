@@ -167,6 +167,47 @@ used to reconstruct the complete total only when no inclusive input total is
 available. Step token totals and rankings add prompt and completion only;
 cached tokens remain a displayed subset rather than an additional total.
 
+### Model Inference Telemetry
+
+Portable model-inference telemetry uses the versioned
+`metrics.extra.model_inference` and `final_metrics.extra.model_inference`
+objects. The step and Trial forms retain sufficient statistics rather than
+only derived display scalars: summed first-token latency and its sample count,
+summed decode duration and its eligible output-token and sample counts, and
+cache-covered inclusive prompt tokens, cache-read tokens, and their sample
+count. Attempt and successful-attempt counts plus bounded timing and usage
+provenance may accompany those values. Trial values are the structural sum of
+the aligned step values; equal list lengths never establish that alignment.
+
+TTFT runs from provider request dispatch to the first non-empty token-bearing
+text, reasoning, or tool-call delta. Decode duration runs from that delta to
+the provider stream's terminal completion. A completed attempt contributes to
+TTFT only when both boundaries are exact, and to decode throughput only when
+those boundaries and non-negative provider output usage are all exact. Retry
+attempts remain distinct. Usage reported by any attempt may contribute to
+token and cache accounting even when that attempt does not complete.
+
+The derived Trial values are:
+
+- average TTFT = `ttft_ms_sum / ttft_sample_count`;
+- decode TPS = `1000 * decode_token_count / decode_duration_ms`;
+- cache hit rate = `cache_read_tokens / cache_prompt_tokens`.
+
+Cross-Trial aggregates use the same ratio-of-sums formulas; they never average
+Trial TPS or cache percentages. The cache denominator is the complete inclusive
+prompt-token total for attempts with an explicit cache-read measurement,
+including an explicit zero. Cache creation is validated as a subset of that
+inclusive total and may remain as provenance, but is neither added to nor used
+instead of the denominator. A missing cache-read field is unknown and
+contributes neither the cache numerator nor denominator, even when cache
+creation is present. When a provider payload exposes multiple recognized names
+for the same fact, normalization selects the first non-null value; a null alias
+does not hide a later value and numeric zero remains present. Missing,
+non-finite, negative, zero-denominator, or internally inconsistent evidence
+remains absent and diagnostic rather than
+being clamped or estimated. Agent, step, generation, and wall duration must
+not be relabelled as TTFT or decode duration.
+
 ## Identity and Ordering
 
 Source identity must remain stable across pagination, filtering, report

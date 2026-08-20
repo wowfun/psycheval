@@ -37,6 +37,9 @@ Agent Skill.
   tool and is not a peval-py runtime dependency.
 - Node tests cover browser-state behavior and interaction modules. Type checks
   and the committed bundle check run before the Node test suite.
+- Report tests cover exact inference metric projection, weighted aggregate
+  parity with serve mode, semantic empty-column hiding, and explicit-zero
+  preservation without reading live provider state.
 - Behavior tests assert structured results and user-visible invariants rather
   than volatile generated inventories.
 - Tests isolate environment, configuration, temporary files, sockets, browser

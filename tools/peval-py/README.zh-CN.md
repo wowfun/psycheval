@@ -106,13 +106,49 @@ adapter TOML 表可以设置 `default_db_path`；相对路径按定义该值的 
 
 当需要从 workspace 外读取已有 peval-py workspace 的 `peval-py.toml` 时，可以在
 `view tr` 或 `export tr` 中使用 `-r, --root DIR`。这会选择 workspace 配置，例如
-locale、`analysis_eval_slug`、adapter defaults 和 `default_db_path`；不会初始化或
+locale、可选的 Markdown `description`、`analysis_eval_slug`、adapter defaults 和
+`default_db_path`；不会初始化或
 修改 workspace。如果该目录还没有 `peval-py.toml`，请先运行 `peval-py init -r DIR`。
+
+```toml
+description = "**夜间评测**工作台 — 发布候选检查"
+```
+
+`serve` 会在工作台顶部中央为访客和管理员显示非空说明，并转义原始 HTML；
+Workspace snapshot 导出也会保留这段 Markdown 内容。
 
 ```bash
 peval-py view tr -r .local/peval-py -d @opencode --list
 peval-py export tr -r .local/peval-py -d @opencode -s <session-id> -o
 ```
+
+### 在受信局域网共享评测工作台
+
+`serve` 提供匿名访客和登录后的管理员两种角色。localhost 未配置密码时直接以
+管理员权限打开。要监听其他网卡，需先在进程环境变量或 `<workspace>/.env` 中设置
+非空管理员密码，然后重启服务：
+
+```bash
+cat >.local/peval-py/.env <<'EOF'
+PEVAL_PY_ADMIN_PASSWORD='请替换为足够长的随机密码'
+EOF
+chmod 600 .local/peval-py/.env
+
+peval-py serve --root .local/peval-py --host 0.0.0.0
+```
+
+进程环境变量优先于 `.env`；空进程变量会回退到文件值。peval-py 只读取这个键，
+不会创建或修改 `.env`。管理员 session 仅保存在进程内存中，空闲 12 小时后过期。
+在多用户 POSIX 主机上，应确保 `.env` 仅 workspace 所有者可读。
+访客可以浏览完整评测内容、Saved Views 和已导入报告，也可以使用全部只读导出；
+source path、诊断、刷新、配置和 workspace 编辑仅对管理员开放。
+
+访客还可以把当前 Catalog 条件保存为浏览器本地 Saved View。本地视图按站点和
+workspace 隔离，登录或退出后仍会保留，并可参与组合筛选、摘要和导出，但不会上传。
+管理员保存时可选择“工作区”（默认）或“此浏览器”。两处出现完全同名视图时优先显示
+工作区视图，本地副本仍保留，名称冲突消失后会重新出现。
+
+非本机监听使用直接 HTTP，只适合受信私有网络；不要直接暴露到公网。
 
 使用 `--source-alias N=TEXT` 可以给来源添加仅用于显示的名称。Alias 只提升报告
 可读性，不改变 session id、trial key、source identity 或 Evidence/Input Source 路径。
@@ -138,6 +174,13 @@ JSON `annotations.notes[]`，并排在 CLI notes 前面。在 `peval-py serve` �
 Serve 展示 snapshot 或已挂载 Harbor Trial 时，会在 active report 组合阶段叠加当前 workspace 里的
 `analysis.json`、`analysis.md` 和 `notes.md`；因此 reload 或 Refresh 即使遇到原始
 source DB/file 无法成功刷新，也能显示 notes/analysis 的更新。
+已挂载 Harbor Trial 的只读 `artifacts/logs/**/analysis.md` 也会显示在 Selected Trial
+的 Analysis 中：标准路径 `artifacts/logs/analysis.md` 优先，否则选择相对路径字典序
+中的第一个嵌套匹配，文件上限为 20 MiB。当 workspace overlay 同时存在
+`analysis.md` 时，Harbor 文档排在前面；缺失、空白或无效文档只隐藏自身带来源标题
+的区块。
+Leaderboard 的 `#Analysis` 列按来源计数：Harbor 分析计 1，workspace overlay
+无论包含 JSON、Markdown 还是两者都只计 1，最大值为 2。
 
 `peval-py serve` 保持静态报告继续使用 CDN，但在 serve 页面中会优先从
 `<workspace>/.cache/echarts/6.0.0/echarts.min.js` 提供 ECharts，本地脚本失败时

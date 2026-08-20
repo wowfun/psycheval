@@ -12,8 +12,73 @@ state path. `serve` resolves an explicit root, `PEVAL_ROOT`, or a current/parent
 config. It starts with an empty shell, then lazily loads catalog and selected
 report data.
 
+Set the optional top-level `description` to place a concise Markdown description
+in the center of the workspace header:
+
+```toml
+description = "**Nightly** evaluation workspace — release candidate checks"
+```
+
+Blank or missing descriptions are hidden. The description is visible to guests
+and administrators, escapes raw HTML, and is preserved in Workspace snapshot
+exports.
+
 The local page uses a cached ECharts 6.0.0 asset and falls back to its fixed CDN
 only if the local asset cannot load.
+
+## Guest and Administrator Access
+
+Serve has one anonymous guest role and one workspace-wide administrator
+password. Guests can browse, filter, open full trajectories, notes, analysis,
+Saved Views, and imported reports, and can create every read-only export.
+Source locations and diagnostics, refresh and operation status, source
+management, configuration, notes, workspace Saved View changes, and report
+bindings require administrator login.
+
+On localhost, no configured password means automatic administrator access. A
+non-local listener requires `PEVAL_PY_ADMIN_PASSWORD`. Serve resolves the first
+non-empty value from the process environment and then `<workspace>/.env`:
+
+```dotenv
+PEVAL_PY_ADMIN_PASSWORD='replace with a long random password'
+```
+
+On a multi-user POSIX host, restrict the file to the workspace owner:
+
+```bash
+chmod 600 .local/peval-py/.env
+```
+
+```bash
+peval-py serve --root .local/peval-py --host 0.0.0.0
+```
+
+The dotenv file is read only by `serve`; peval-py does not create, modify, or
+load it into the process environment. Password changes require restart.
+Administrator sessions are browser-session cookies backed by process memory,
+expire after 12 idle hours, and are invalidated by restart or logout.
+
+Direct non-local mode is plain HTTP. Use it only on a trusted private network,
+never as a public internet endpoint. Guest responses and exports omit
+structured server paths and operational diagnostics, while paths intentionally
+contained in prompts, tool evidence, notes, analysis prose, and
+administrator-published reports remain evaluation content.
+
+## Browser-local Saved Views
+
+Guests and administrators can save the current filters, search, source state,
+grouping, and notes to this browser. These views are scoped by origin and the
+opaque workspace ID, survive authentication changes, and are never uploaded or
+shared. They support the same application, mixed OR composition, summaries,
+Table/Leaderboard/Saved Views XLSX exports, and workspace snapshots as shared
+views. Administrators choose Workspace or This browser when saving; guests
+always save locally.
+
+Workspace views take precedence on an exact-name conflict. The browser copy is
+retained but hidden and returns when the workspace name disappears. Storage or
+quota failures are reported as errors rather than treated as successful saves.
+Workspace snapshots embed any included browser view definitions, notes, and
+summaries, so the exported page does not depend on the original browser.
 
 ## Sources
 
@@ -85,6 +150,15 @@ does not create that directory. `[harbor].roots` and `harbor-link.json` belong
 to the incompatible legacy projection layout; initialize a new workspace
 instead of migrating it in place.
 
+For a readable mounted Trial, the workspace also searches read-only
+`artifacts/logs/**/analysis.md`. The canonical `artifacts/logs/analysis.md`
+wins; otherwise the lexicographically first nested match is used. The selected
+UTF-8 regular file is limited to 20 MiB. Selected Trial Analysis shows that
+Harbor document before the workspace `analysis.md` overlay as two
+source-labelled blocks. A missing, blank, invalid, or oversized document hides
+only its block; Reload and Refresh detect creation, changes, removal, and
+selection changes without copying or modifying the Harbor file.
+
 The Leaderboard keeps the canonical Session ID and presents Task / Alias as a
 separate compact column. With no custom alias it displays the Task name; with an
 alias it displays that alias first and retains the Task as secondary evidence.
@@ -95,6 +169,14 @@ Task, Job, Provider, and Reward are sortable, and Saved Views and Summary can
 group by Task, Job, or Provider. Multi-dimensional rewards remain separate; a
 numeric distribution is computed only for the `reward` dimension or a sole
 reward dimension.
+
+`#Analysis` displays the number of analysis origins for each Trial. Harbor
+analysis contributes one and the workspace overlay contributes one whether it
+contains `analysis.json`, `analysis.md`, or both, so mounted Harbor Trials range
+from 0–2 and other sources from 0–1.
+
+The Columns control can hide or reorder every data column; the row-selection
+column stays fixed, including when all data columns are hidden.
 
 JSON reports, static/workspace snapshots, Source inspection, and Table/Summary
 XLSX exports carry the same Task, Job, Trial, provider, reward dimensions,
@@ -128,6 +210,9 @@ shows Summary from one row onward.
 | JSON Report | All retained selected keys, or the current catalog page when none are selected; at most 100 cells. |
 | Workspace snapshot `.html` | Complete query, or query intersected with retained selection; at most 100 final rows. |
 | Summary `.xlsx` | Current visible Leaderboard page; ignores selection. |
+
+Summary XLSX keeps those page-scoped distributions and also includes the
+inference overview for the complete current query, independent of pagination.
 
 The serve menu contains Table, JSON Report, and Workspace snapshot. There is no
 legacy HTML Report export; snapshot HTML is the self-contained workspace form.

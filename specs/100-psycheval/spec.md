@@ -226,6 +226,28 @@ before invoking `pevo` and writes a replacement only after current-turn ATIF
 validation succeeds. The `pevo` child receives its Trial-owned database path but
 neither `PEVAL_CONFIG` nor any legacy `PSYCHEVAL_*` runtime variable.
 
+## Model Inference Telemetry
+
+Psycheval owns one inference-telemetry module that normalizes Agent-native
+observations, validates their presence and token invariants, projects them into
+the canonical ATIF extension defined by
+[020. Model Inference Telemetry](../020-state-and-data-model/spec.md#model-inference-telemetry),
+and fills Harbor's token context from a validated trajectory. Agent adapters do
+not duplicate aggregation rules.
+
+ExternalHarnessAgent accepts exact telemetry already present in canonical ATIF
+and fills inclusive input, cache-read, and output context without manufacturing
+timing. Psychevo projects current-invocation typed usage and accounting, using
+native identifiers and trace boundaries rather than positional matching.
+Hermes exports the exact current native session after run or resume and parses
+that session's structured request usage during post-run context population.
+Optional telemetry failure does not invalidate an otherwise valid trajectory.
+
+The current Psychevo compact trace and Hermes session export do not expose a
+first-token event. Their generation durations may retain explicit provenance
+but must not populate TTFT or decode TPS. Those values remain absent until an
+exact producer-owned first-token boundary is available; no estimate is emitted.
+
 ## Verifier
 
 `psycheval.harbor.verifier` is a package module implementing the evidence and

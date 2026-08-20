@@ -11,7 +11,62 @@ peval-py serve --root .local/peval-py
 `serve` 按显式 root、`PEVAL_ROOT` 或当前/父级配置解析 workspace。首页先加载空壳，
 再按需请求 catalog 和选中的 report。
 
+可以在 `peval-py.toml` 顶层添加可选的 `description`，用 Markdown 在工作台顶部中央
+显示简短说明：
+
+```toml
+description = "**夜间评测**工作台 — 发布候选检查"
+```
+
+字段缺失或仅含空白时不会占位。说明对访客和管理员均可见，原始 HTML 会被转义，
+Workspace snapshot 导出也会保留这段内容。
+
 本地页面使用缓存的 ECharts 6.0.0；只有本地 asset 加载失败时才回退到固定 CDN。
+
+## 访客与管理员访问
+
+Serve 提供匿名访客角色和一个 workspace 级共享管理员密码。访客可以浏览、筛选、
+打开完整轨迹、笔记、分析、Saved Views 和已导入报告，并执行全部只读导出。Source
+位置与诊断、刷新与操作状态、source 管理、配置、笔记编辑、工作区 Saved View 修改和
+报告绑定必须先以管理员身份登录。
+
+localhost 未配置密码时自动拥有管理员权限。监听非本机地址必须配置
+`PEVAL_PY_ADMIN_PASSWORD`。Serve 依次采用非空进程环境变量和
+`<workspace>/.env`：
+
+```dotenv
+PEVAL_PY_ADMIN_PASSWORD='请替换为足够长的随机密码'
+```
+
+在多用户 POSIX 主机上，应把文件权限限制为仅 workspace 所有者可读：
+
+```bash
+chmod 600 .local/peval-py/.env
+```
+
+```bash
+peval-py serve --root .local/peval-py --host 0.0.0.0
+```
+
+`.env` 仅由 `serve` 读取；peval-py 不会创建、修改该文件，也不会把它加载进进程
+环境。修改密码后需要重启。管理员 session 使用浏览器 session Cookie 和进程内存，
+空闲 12 小时后过期，重启或退出登录也会立即失效。
+
+非本机模式是直接 HTTP，只能用于受信私有网络，不能作为公网服务直接暴露。访客
+响应和导出会删除结构化服务器 path 与运维诊断；提示词、工具证据、笔记正文、分析
+正文以及管理员主动导入报告中的 path 仍属于评测内容，不会被改写。
+
+## 浏览器本地 Saved Views
+
+访客和管理员都可以把当前筛选、搜索、source 状态、分组和备注保存到当前浏览器。
+这些视图按 origin 与不透明 workspace ID 隔离，登录状态变化后仍会保留，且不会上传或
+共享。本地视图与工作区视图一样支持应用、OR 组合、摘要、Table/Leaderboard/Saved
+Views XLSX 导出和 workspace snapshot。管理员保存时选择“工作区”或“此浏览器”；访客
+始终保存到本地。
+
+完全同名时工作区视图优先，本地副本保留但暂时隐藏，工作区名称消失后自动恢复。
+浏览器存储或配额失败会显示错误，不会伪装成保存成功。Workspace snapshot 会嵌入所含
+本地视图的定义、备注和摘要，打开导出页面时不依赖原浏览器。
 
 ## Source
 
@@ -69,12 +124,26 @@ Archive、alias、category、tags、notes 和 analysis 会按需写入
 `[harbor].roots` 与 `harbor-link.json` 属于不兼容的旧 projection layout；请初始化新
 workspace，不要原地迁移。
 
+对于可读的已挂载 Trial，工作台还会只读查找
+`artifacts/logs/**/analysis.md`：标准路径 `artifacts/logs/analysis.md` 优先，
+否则使用相对路径字典序中的第一个嵌套匹配。选中的 UTF-8 普通文件最大为 20 MiB。
+Selected Trial 的 Analysis 会先显示这份 Harbor 文档，再显示 workspace
+`analysis.md` overlay，并以来源标题分成两个区块。缺失、空白、无效或超限文档只隐藏
+自身区块；Reload 与 Refresh 能发现文件新增、修改、删除和候选切换，但不会复制或
+修改 Harbor 文件。
+
 Leaderboard 保留 canonical Session ID，并使用独立的紧凑 Task / 别名列。没有自定义
 alias 时显示 Task name；存在 alias 时以 alias 为主，同时保留 Task 作为次级证据。
 Tags 合并只读 Task keywords 与可编辑 custom tags，保持顺序并按大小写不敏感去重；
 清空 alias 或 tags 后恢复 Task 派生显示。Job、Provider、Reward 可筛选；Task、Job、
 Provider、Reward 可排序；Saved Views 与 Summary 可按 Task、Job、Provider 分组。
 多维 reward 始终保持独立，只有 `reward` 维度或唯一维度会进入数值分布。
+
+`#Analysis` 显示每条 Trial 的分析来源数量。Harbor 分析计 1，workspace overlay
+无论包含 `analysis.json`、`analysis.md` 还是两者都只计 1，因此挂载的 Harbor Trial
+取值为 0–2，其他来源为 0–1。
+
+Columns 控件可以隐藏或调整所有数据列；即使数据列全部隐藏，行选择列仍固定保留。
 
 JSON report、静态/workspace snapshot、Source inspect、Table/Summary XLSX 导出会同步
 携带 Task、Job、Trial、provider、reward dimensions、display/custom overlay 与 Harbor
@@ -104,6 +173,8 @@ snapshot 至少要匹配 1 行，并从 1 行开始显示 Summary。
 | JSON Report | 有选择时使用全部 retained key，否则使用当前 catalog 页；最多 100 个 cell。 |
 | Workspace snapshot `.html` | 无选择时使用完整 query，否则使用 query 与 retained selection 的交集；最终最多 100 行。 |
 | Summary `.xlsx` | 当前可见 Leaderboard 页；忽略 selection。 |
+
+Summary XLSX 的分布仍以当前页为范围，同时附带不受分页影响的完整当前 query 推理概览。
 
 Serve 菜单只包含 Table、JSON Report 和 Workspace snapshot，不存在旧 HTML Report。
 Snapshot HTML 是独立的自包含 workspace 导出。
