@@ -126,6 +126,7 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
                 source_row("cell_b", "runs/default/agent/s2/c2"),
             ]
             library = WorkspaceReportLibrary(root, lambda: rows)
+            self.assertEqual(library.bound_source_refs(), set())
             report_path = root / "analysis.md"
             report_path.write_text("report")
             report_id = library.import_file(report_path, ["cell_a", "cell_b"])
@@ -249,6 +250,41 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             self.assertFalse((root / "reports" / report_id).exists())
             with self.assertRaisesRegex(ValueError, "unknown report"):
                 library.read(report_id)
+
+    def test_bound_source_refs_are_cached_and_invalidated_by_mutations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rows = [
+                source_row("cell_a", "runs/default/agent/s1/c1"),
+                source_row("cell_b", "runs/default/agent/s2/c2"),
+            ]
+            library = WorkspaceReportLibrary(root, lambda: rows)
+            report_path = root / "analysis.md"
+            report_path.write_text("report")
+            report_id = library.import_file(report_path, ["cell_a"])
+
+            with patch.object(
+                library,
+                "_read_package_metadata",
+                wraps=library._read_package_metadata,
+            ) as read_metadata:
+                self.assertEqual(
+                    library.bound_source_refs(), {"runs/default/agent/s1/c1"}
+                )
+                self.assertEqual(
+                    library.bound_source_refs(), {"runs/default/agent/s1/c1"}
+                )
+                self.assertEqual(read_metadata.call_count, 1)
+
+                library.replace_bindings(report_id, ["cell_b"])
+                self.assertEqual(
+                    library.bound_source_refs(), {"runs/default/agent/s2/c2"}
+                )
+                self.assertEqual(read_metadata.call_count, 3)
+
+                library.delete(report_id)
+                self.assertEqual(library.bound_source_refs(), set())
+                self.assertEqual(read_metadata.call_count, 4)
 
     def test_markdown_preview_is_rich_but_escapes_raw_html_and_html_is_exact(
         self,

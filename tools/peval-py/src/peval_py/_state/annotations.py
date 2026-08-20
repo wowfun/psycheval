@@ -212,6 +212,8 @@ def source_report_with_current_annotations(
     trajectory: dict[str, Any],
     meta: dict[str, Any],
     config: ToolConfig | None,
+    *,
+    harbor_analysis: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if config is None:
         return {}
@@ -253,6 +255,12 @@ def source_report_with_current_annotations(
             session_id=session_id,
             trial_key=trial_key,
         )
+    if source_ref and source_ref.startswith("harbor/"):
+        current_analysis = harbor_analysis_report(
+            current_analysis,
+            harbor_analysis,
+            trial_key=trial_key,
+        )
     notes: list[dict[str, Any]] = []
     if current_note is not None:
         notes.append(current_note)
@@ -271,6 +279,82 @@ def source_report_with_current_annotations(
     ):
         return {"annotations": next_annotations}
     return {}
+
+
+def harbor_analysis_report(
+    workspace_analysis: dict[str, Any] | None,
+    harbor_analysis: dict[str, Any] | None,
+    *,
+    trial_key: str,
+) -> dict[str, Any] | None:
+    report = deepcopy(workspace_analysis) if workspace_analysis is not None else None
+    markdown_reports: list[dict[str, str]] = []
+    harbor_document = normalized_markdown_report(harbor_analysis)
+    if harbor_document is not None:
+        markdown_reports.append(harbor_document)
+
+    workspace_document: dict[str, str] | None = None
+    if report is not None:
+        markdown = optional_str(report.pop("md_report", None))
+        relative_paths = report.get("relative_paths")
+        workspace_path: str | None = None
+        if isinstance(relative_paths, dict):
+            workspace_path = optional_str(relative_paths.get("md"))
+            next_paths = {
+                str(key): deepcopy(value)
+                for key, value in relative_paths.items()
+                if key != "md"
+            }
+            if next_paths:
+                report["relative_paths"] = next_paths
+            else:
+                report.pop("relative_paths", None)
+        if workspace_path and report.get("relative_path") == workspace_path:
+            json_path = (
+                optional_str(report.get("relative_paths", {}).get("json"))
+                if isinstance(report.get("relative_paths"), dict)
+                else None
+            )
+            if json_path:
+                report["relative_path"] = json_path
+            else:
+                report.pop("relative_path", None)
+        workspace_document = normalized_markdown_report(
+            {
+                "source": "workspace_overlay",
+                "markdown": markdown,
+                "relative_path": workspace_path,
+            }
+        )
+    if workspace_document is not None:
+        markdown_reports.append(workspace_document)
+
+    if not markdown_reports:
+        return report
+    if report is None:
+        report = {
+            "trial_key": str(trial_key),
+            "status": "cached",
+        }
+    report["markdown_reports"] = markdown_reports
+    return report
+
+
+def normalized_markdown_report(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    source = optional_str(value.get("source"))
+    markdown = optional_str(value.get("markdown"))
+    if not source or not markdown or not markdown.strip():
+        return None
+    report = {
+        "source": source,
+        "markdown": markdown,
+    }
+    relative_path = optional_str(value.get("relative_path"))
+    if relative_path:
+        report["relative_path"] = relative_path
+    return report
 
 
 def annotation_agent_id(

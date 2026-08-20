@@ -1,7 +1,8 @@
-import { $, esc, fmtMs, fmtNum, fmtPct, hasMetricValue, listValue, lower, serveMode, state, t } from "./runtime.js";
+import { $, esc, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, serveMode, state, t } from "./runtime.js";
 import { agentNameFor, rowToolErrorRate, tableCellContent, tableValueAttributes } from "./data-tables.js";
 import { exportLeaderboardSummary, leaderboardRows } from "./serve-catalog.js";
 import { bindWorkspaceViewControls, renderWorkspaceViewControls } from "./workspace-views.js";
+import { aggregateInferenceRows } from "./inference-metrics.js";
 
 function renderLeaderboardSummary(rows = leaderboardRows()) {
   const target = $("leaderboard-summary");
@@ -28,10 +29,31 @@ function renderLeaderboardSummary(rows = leaderboardRows()) {
       </div>
       ${renderLeaderboardSummaryActions()}
     </div>
+    ${renderInferenceOverview(visibleRows)}
     ${renderLeaderboardSummaryTableDisclosure(groups)}
     ${state.leaderboardSummaryGroupBy === "overall" ? "" : renderLeaderboardSummaryCharts(groups)}
   `;
   bindLeaderboardSummaryControls(target);
+}
+
+function renderInferenceOverview(rows) {
+  const summary = serveMode() && state.catalogPage?.inference_summary
+    ? state.catalogPage.inference_summary
+    : aggregateInferenceRows(rows);
+  const matched = Number(summary?.matched_trials || 0);
+  const items = [
+    { key: "ttft", label: t("avg_ttft", "Avg TTFT"), value: fmtTtft(summary?.ttft?.value_ms), covered: summary?.ttft?.covered_trials },
+    { key: "tps", label: t("decode_tps", "Decode TPS"), value: fmtTps(summary?.tps?.value), covered: summary?.tps?.covered_trials },
+    { key: "cache", label: t("cache_hit", "Cache Hit"), value: fmtPct(summary?.cache_hit_rate?.value), covered: summary?.cache_hit_rate?.covered_trials },
+  ];
+  return `<section class="inference-overview" aria-label="${esc(t("inference_overview", "Inference overview"))}">
+    ${items.map(item => {
+      const coverage = String(t("metric_coverage", "{covered}/{matched} trials"))
+        .replace("{covered}", String(Number(item.covered || 0)))
+        .replace("{matched}", String(matched));
+      return `<div class="inference-overview-item" data-inference-summary="${esc(item.key)}"><span>${esc(item.label)}</span><strong>${esc(item.value)}</strong><small>${esc(coverage)}</small></div>`;
+    }).join("")}
+  </section>`;
 }
 
 function renderLeaderboardSummaryActions() {

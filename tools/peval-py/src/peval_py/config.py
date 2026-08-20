@@ -48,6 +48,7 @@ class ToolConfig:
     adapter: str = "psychevo"
     locale: str = "en"
     workspace_root: str | None = None
+    description: str | None = None
     analysis_eval_slug: str = "default"
     agent_name: str | None = None
     agent_version: str = "0.1.0"
@@ -128,6 +129,11 @@ def apply_toml_config(
 ) -> ToolConfig:
     if top_level_locale and "locale" in data:
         config = replace(config, locale=normalize_locale(data["locale"]))
+    if "description" in data:
+        raw_description = data["description"]
+        if not isinstance(raw_description, str):
+            raise ValueError("description must be a string")
+        config = replace(config, description=raw_description.strip() or None)
     if "analysis_eval_slug" in data:
         config = replace(
             config,

@@ -1,15 +1,19 @@
-import { SUBMENU_DETAILS_SELECTOR, adapterDefaults, closeOpenSubmenus, renderComparisonPanels, selectedKey, serveMode, state, t } from "./runtime.js";
+import { SUBMENU_DETAILS_SELECTOR, adapterDefaults, adminMode, closeOpenSubmenus, renderComparisonPanels, selectedKey, serveMode, state, t } from "./runtime.js";
 import { addSelectedDbSessions, choosePathSourceFiles, closeServeSourceManager, inspectDbSessions, removeHarborMount, setDbSessionSelection, submitHarborMountForm, submitServeSourceForm } from "./source-manager.js";
 import { mutateSelectedServeSourceState, selectedAdapterValue, serveApi, setServeStatus, showServeNotice } from "./serve-effects.js";
 import { deleteSelectedServeSources, openServeSourceManager, refreshServeReportFromServer, refreshServeSourcesFromServer, selectServeSource } from "./serve-catalog.js";
 import { bindWorkspaceReportGlobalControls, closeWorkspaceReportManager, closeWorkspaceReportReader } from "./workspace-reports.js";
 import { bindWorkspaceViewDialog, closeWorkspaceViewSaveDialog } from "./workspace-views.js";
 import { beginNotesEdit, cancelNotesEdit, saveSelectedNotes } from "./analysis-notes.js";
+import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
 
 function bindGlobalControls() {
   if (state.boundGlobalControls) return;
   document.addEventListener("keydown", event => {
     if (event.defaultPrevented) return;
+    if (event.key === "Escape" && closeAdminLogin()) {
+      return;
+    }
     if (event.key === "Escape" && closeWorkspaceViewSaveDialog()) {
       return;
     }
@@ -37,7 +41,7 @@ function bindGlobalControls() {
     renderComparisonPanels();
   });
   document.addEventListener("click", event => {
-    if (!serveMode()) return;
+    if (!adminMode()) return;
     const editButton = event.target?.closest?.("[data-notes-edit]");
     if (editButton) {
       event.preventDefault();
@@ -66,6 +70,7 @@ function bindGlobalControls() {
   state.boundGlobalControls = true;
 }
 function bindServeSourceControls() {
+  bindAuthenticationControls();
   bindWorkspaceReportGlobalControls();
   document.querySelectorAll("[data-source-manager-open]").forEach(button => {
     button.addEventListener("click", event => {
@@ -162,7 +167,78 @@ function bindServeSourceControls() {
     });
   }
 }
+function bindAuthenticationControls() {
+  document.querySelectorAll("[data-admin-login-open]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      openAdminLogin(button);
+    });
+  });
+  document.querySelectorAll("[data-admin-login-close]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      closeAdminLogin();
+    });
+  });
+  const dialog = document.querySelector("[data-admin-login-dialog]");
+  dialog?.addEventListener?.("click", event => {
+    if (event.target === dialog) closeAdminLogin();
+  });
+  dialog?.querySelector?.("[data-admin-login-form]")?.addEventListener("submit", submitAdminLogin);
+  document.querySelectorAll("[data-admin-logout]").forEach(button => {
+    button.addEventListener("click", async event => {
+      event.preventDefault();
+      button.disabled = true;
+      try {
+        await serveApi("/api/auth/logout", { method: "POST", body: {} });
+        window.location.reload();
+      } catch (error) {
+        button.disabled = false;
+        setServeStatus(error.message || String(error), true);
+      }
+    });
+  });
+}
+function openAdminLogin(opener = null) {
+  const dialog = document.querySelector("[data-admin-login-dialog]");
+  if (!dialog) return false;
+  const status = dialog.querySelector("[data-admin-login-status]");
+  if (status) {
+    status.hidden = true;
+    status.textContent = "";
+  }
+  openModalSurface(dialog, {
+    opener,
+    bodyClass: "admin-login-open",
+    focusTarget: dialog.querySelector('[name="password"]'),
+  });
+  return true;
+}
+function closeAdminLogin(options = {}) {
+  return closeModalSurface(document.querySelector("[data-admin-login-dialog]"), options);
+}
+async function submitAdminLogin(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const password = String(new FormData(form).get("password") || "");
+  const status = form.querySelector("[data-admin-login-status]");
+  const submit = form.querySelector('[type="submit"]');
+  if (submit) submit.disabled = true;
+  try {
+    await serveApi("/api/auth/login", { method: "POST", body: { password } });
+    window.location.reload();
+  } catch (error) {
+    if (status) {
+      status.textContent = error.message || t("serve_login_failed", "Login failed");
+      status.classList.add("danger");
+      status.hidden = false;
+    }
+    if (submit) submit.disabled = false;
+    form.querySelector('[name="password"]')?.focus?.();
+  }
+}
 async function changeServeLocale(locale) {
+  if (!adminMode()) return;
   try {
     await serveApi("/api/config/locale", {
       method: "POST",
@@ -216,6 +292,7 @@ function syncAllAdapterDefaultDbControls() {
   document.querySelectorAll("[data-source-add-form][data-source-kind=\"db\"]").forEach(syncAdapterDefaultDbControls);
 }
 async function saveAdapterDefaultDb(form, defaultDbPath) {
+  if (!adminMode()) return false;
   const adapter = selectedAdapterValue(form);
   if (!adapter) {
     const message = t("serve_select_adapter_for_default_db", "Select a specific adapter to manage its default DB");
@@ -292,11 +369,14 @@ export {
   applyDefaultDbToForm,
   applyUpdatedAdapterDefaultToDbForms,
   bindAdapterDefaultDbControls,
+  bindAuthenticationControls,
   bindGlobalControls,
   bindServeSourceControls,
   changeServeLocale,
+  closeAdminLogin,
   dbFieldFor,
   defaultDbForAdapter,
+  openAdminLogin,
   saveAdapterDefaultDb,
   syncAdapterDefaultDbControls,
   syncAllAdapterDefaultDbControls,

@@ -1,4 +1,4 @@
-import { $, esc, listValue, lower, readableServeSources, renderComparisonPanels, renderReadOnlySourceCategory, renderReadOnlySourceTags, serveMode, sourceCategoryEditValue, sourceCategoryFor, sourceCategoryValue, sourceTagsFor, state, t, workspaceDisplayMode, workspaceSnapshotMode } from "./runtime.js";
+import { $, adminMode, esc, listValue, lower, readableServeSources, renderComparisonPanels, renderReadOnlySourceCategory, renderReadOnlySourceTags, serveMode, sourceCategoryEditValue, sourceCategoryFor, sourceCategoryValue, sourceTagsFor, state, t, workspaceDisplayMode, workspaceSnapshotMode } from "./runtime.js";
 import { bindDataTableEditors } from "./data-tables.js";
 import { renderStepDrawer } from "./trajectory-trace.js";
 import { closeServeSourceManager, sourceDisplayLabel } from "./source-manager.js";
@@ -18,6 +18,7 @@ const REPORT_READER_MIN_WIDTH = 360;
 const REPORT_READER_MIN_WORKSPACE_WIDTH = 360;
 const REPORT_READER_KEYBOARD_STEP = 24;
 const REPORT_READER_PREVIEW_WIDTH = 1180;
+const WORKSPACE_REPORT_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;
 
 function workspaceReportPreviewPath(report) {
   return `/api/reports/${encodeURIComponent(report.report_id)}/preview`;
@@ -113,6 +114,7 @@ function renderWorkspaceReportCell(row) {
 }
 
 function renderAttachWorkspaceReportAction(rows = leaderboardRows()) {
+  if (!adminMode()) return "";
   const count = visibleSelectedSourceKeys(rows).length;
   return `<button class="action-button report-attach-button" type="button" data-report-attach data-workspace-report-control ${count ? "" : "disabled"}>${esc(reportMessage("attach_report", "Attach report ({count})", { count }))}</button>`;
 }
@@ -149,6 +151,7 @@ function bindWorkspaceReportLeaderboardControls(target) {
 }
 
 async function attachWorkspaceReport(button) {
+  if (!adminMode()) return;
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
   button.disabled = true;
@@ -227,6 +230,21 @@ async function loadWorkspaceReportManagerData(changes = {}) {
   setWorkspaceReportManagerStatus("");
   renderWorkspaceReportManager();
   state.reportManager.page = Math.max(1, Number(changes.page || state.reportManager.page || 1));
+  if (!adminMode()) {
+    try {
+      const reportsPayload = await serveApi("/api/reports");
+      applyWorkspaceReportCatalog(reportsPayload?.reports || []);
+      state.reportManager.sourceRows = [];
+      state.reportManager.loading = false;
+      setWorkspaceReportManagerStatus("");
+      renderWorkspaceReportManager();
+    } catch (error) {
+      state.reportManager.loading = false;
+      setWorkspaceReportManagerStatus(error.message || String(error), true);
+      renderWorkspaceReportManager();
+    }
+    return;
+  }
   const params = new URLSearchParams({
     state: "all",
     surface: "sources",
@@ -304,6 +322,13 @@ function renderWorkspaceReportManager() {
 }
 
 function renderWorkspaceReportInventoryItem(report) {
+  if (!adminMode()) {
+    return `<button class="report-inventory-item" type="button" data-report-manager-preview="${esc(report.report_id)}">
+      <strong>${esc(report.filename)}</strong>
+      <span>${esc(report.format.toUpperCase())} &middot; ${esc(reportMessage("report_sessions_count", "{count} sessions", { count: report.source_keys.length }))}</span>
+      <code>${esc(report.report_id)}</code>
+    </button>`;
+  }
   const selected = report.report_id === state.reportManager.selectedId;
   return `<button class="report-inventory-item ${selected ? "selected" : ""}" type="button" data-report-inventory-id="${esc(report.report_id)}" ${selected ? 'aria-current="true"' : ""}>
     <strong>${esc(report.filename)}</strong>
@@ -315,6 +340,10 @@ function renderWorkspaceReportInventoryItem(report) {
 function renderWorkspaceReportBindings() {
   const target = document.querySelector("[data-report-bindings]");
   if (!target) return;
+  if (!adminMode()) {
+    target.innerHTML = "";
+    return;
+  }
   target.setAttribute?.("aria-busy", state.reportManager.loading || state.reportManager.busy ? "true" : "false");
   if (state.reportManager.loading) {
     target.innerHTML = `<p class="report-manager-empty loading">${esc(t("loading", "Loading"))}</p>`;
@@ -531,6 +560,7 @@ function focusWorkspaceReportSearch() {
 }
 
 async function saveWorkspaceReportBindings() {
+  if (!adminMode()) return;
   const reportId = state.reportManager.selectedId;
   const sourceKeys = Array.from(state.reportManager.draftBindings);
   if (!reportId || !workspaceReportBindingsChanged()) return;
@@ -555,6 +585,7 @@ async function saveWorkspaceReportBindings() {
 }
 
 async function deleteWorkspaceReport(reportId) {
+  if (!adminMode()) return;
   const report = workspaceReportForId(reportId);
   if (!report) return;
   const prompt = reportMessage("report_delete_confirm", "Permanently delete {filename}?", { filename: report.filename });
@@ -607,9 +638,21 @@ function renderWorkspaceReportReader() {
   const report = workspaceReportForId(state.reportReader.openId);
   if (!target || !report) return;
   disconnectWorkspaceReportPreviewObserver();
-  const previewUrl = workspaceSnapshotMode() ? workspaceSnapshotReportPreviewUrl(report) : workspaceReportPreviewPath(report);
+  let previewUrl = workspaceReportPreviewPath(report);
+  let previewError = "";
+  if (workspaceSnapshotMode()) {
+    try {
+      previewUrl = workspaceSnapshotReportPreviewUrl(report);
+    } catch (error) {
+      previewUrl = "";
+      previewError = error?.message || String(error);
+    }
+  }
   const openTab = workspaceSnapshotMode() ? "" : `<a class="action-button compact report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>`;
-  const fitAttribute = report.format === "html" ? " data-report-preview-fit" : "";
+  const fitAttribute = report.format === "html" && !previewError ? " data-report-preview-fit" : "";
+  const preview = previewError
+    ? `<p class="copy danger report-reader-error" role="alert">${esc(previewError)}</p>`
+    : `<iframe class="report-reader-frame" data-report-reader-frame src="${esc(previewUrl)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>`;
   target.innerHTML = `<div class="report-reader-panel" role="dialog" aria-modal="false" aria-labelledby="report-reader-title">
     <header class="report-reader-head">
       <div>
@@ -623,7 +666,7 @@ function renderWorkspaceReportReader() {
       </div>
     </header>
     <div class="report-reader-frame-viewport" data-report-reader-viewport${fitAttribute}>
-      <iframe class="report-reader-frame" data-report-reader-frame src="${esc(previewUrl)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+      ${preview}
     </div>
   </div>
   <div class="report-reader-resize" data-report-reader-resize role="separator" aria-orientation="vertical" tabindex="0" aria-label="${esc(t("report_resize", "Resize report reader"))}"></div>`;
@@ -677,7 +720,22 @@ function observeWorkspaceReportReaderPreview(target = $("workspace-report-reader
 
 function workspaceSnapshotReportPreviewUrl(report) {
   if (state.reportReader.objectUrl) URL.revokeObjectURL?.(state.reportReader.objectUrl);
-  const binary = atob(report.preview_base64 || "");
+  state.reportReader.objectUrl = null;
+  const encoded = String(report?.preview_base64 || "");
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  const estimatedBytes = Math.max(0, Math.floor(encoded.length * 3 / 4) - padding);
+  if (estimatedBytes > WORKSPACE_REPORT_PREVIEW_MAX_BYTES) {
+    throw new Error(t("report_preview_too_large", "Report preview exceeds the 20 MiB limit"));
+  }
+  let binary;
+  try {
+    binary = atob(encoded);
+  } catch (cause) {
+    throw new Error(t("report_preview_invalid", "Report preview data is invalid"), { cause });
+  }
+  if (binary.length > WORKSPACE_REPORT_PREVIEW_MAX_BYTES) {
+    throw new Error(t("report_preview_too_large", "Report preview exceeds the 20 MiB limit"));
+  }
   const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
   state.reportReader.objectUrl = URL.createObjectURL(new Blob([bytes], { type: "text/html; charset=utf-8" }));
   return state.reportReader.objectUrl;
@@ -784,6 +842,7 @@ export {
   REPORT_READER_MIN_WIDTH,
   REPORT_READER_MIN_WORKSPACE_WIDTH,
   REPORT_READER_PREVIEW_WIDTH,
+  WORKSPACE_REPORT_PREVIEW_MAX_BYTES,
   applyWorkspaceReportCatalog,
   attachWorkspaceReport,
   bindWorkspaceReportBindingControls,

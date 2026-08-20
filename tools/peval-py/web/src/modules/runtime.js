@@ -7,6 +7,7 @@ import { leaderboardRows, metaFor, reportRows, sourceForTrialIndex, sourceForTri
 import { refreshWorkspaceViews } from "./workspace-views.js";
 import { finalMetric, tokenTotal, trialWallDurationMs } from "./analysis-metrics.js";
 import { renderMarkdown } from "./markdown.js";
+import { inferenceRowMetrics } from "./inference-metrics.js";
 
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
@@ -35,6 +36,12 @@ function fmtMs(value) {
   const seconds = Math.max(0, Number(value) / 1000);
   return seconds >= 60 ? `${Math.floor(seconds / 60)}m${(seconds % 60).toFixed(1)}s` : `${seconds.toFixed(1)}s`;
 }
+function fmtTtft(value) {
+  if (!hasMetricValue(value)) return "-";
+  const milliseconds = Math.max(0, Number(value));
+  return milliseconds < 1000 ? `${Math.round(milliseconds)} ms` : `${(milliseconds / 1000).toFixed(2)}s`;
+}
+function fmtTps(value) { return hasMetricValue(value) ? `${Number(value).toFixed(1)} tok/s` : "-"; }
 function fmtDate(value) { return value ? new Date(Number(value)).toLocaleString() : "-"; }
 function fmtCost(value) { return hasMetricValue(value) ? `$${Number(value).toFixed(4)}` : "-"; }
 function fmtPct(value) { return hasMetricValue(value) ? `${(Number(value) * 100).toFixed(1)}%` : "-"; }
@@ -49,6 +56,8 @@ function bootstrapData() {
   };
 }
 function serveMode() { return RENDER_OPTIONS?.mode === "serve"; }
+function adminMode() { return serveMode() && RENDER_OPTIONS?.role !== "guest"; }
+function authenticationEnabled() { return serveMode() && Boolean(RENDER_OPTIONS?.authentication_enabled); }
 function workspaceSnapshotMode() { return RENDER_OPTIONS?.mode === "workspace_snapshot"; }
 function workspaceDisplayMode() { return serveMode() || workspaceSnapshotMode(); }
 function initialAdapterDefaults() {
@@ -59,7 +68,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
+const state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: new Set(), sourceSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables).map(name => `server:${name}`) : []), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";
@@ -86,8 +95,8 @@ if (workspaceSnapshotMode()) {
     state.selectedStep = { trialKey: state.selectedTrial, stepId: String(presentation.selected_step_id) };
   }
 }
-const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control";
-const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open]";
+const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.column-control";
+const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.column-control[open]";
 function closeOpenSubmenus(except = null) {
   document.querySelectorAll(OPEN_SUBMENU_DETAILS_SELECTOR).forEach(details => {
     if (details !== except) details.open = false;
@@ -132,6 +141,10 @@ function synthesizedReportRow(trajectory, meta, index = -1) {
     tokens: tokenTotal(metrics),
     cost_usd: metrics.total_cost_usd,
     warnings: Array.isArray(meta?.warnings) ? meta.warnings.length : 0,
+    ...(source?.analysis_count !== null && source?.analysis_count !== undefined
+      ? { analysis_count: source.analysis_count }
+      : {}),
+    ...inferenceRowMetrics(metrics),
   };
 }
 function selectedKey() {
@@ -147,6 +160,7 @@ function finalMetricsFor(trialKey) { return trajectoryFor(trialKey)?.final_metri
 function stepMeta(meta, stepId) { return (meta.steps || []).find(item => item.step_id === stepId) || {}; }
 function render(view) {
   state.view = view;
+  renderWorkspaceDescription();
   if (serveMode()) state.serveReportCache[currentServeSourceMode()] = view;
   if (!state.selectedTrial) {
     const firstFailed = reportRows().find(row => lower(row.status) !== "passed");
@@ -160,6 +174,14 @@ function render(view) {
   if (serveMode() && !state.workspaceViewsLoaded) refreshWorkspaceViews();
   renderTrace();
   renderStepDrawer();
+}
+function renderWorkspaceDescription() {
+  const node = document.querySelector("[data-workspace-description]");
+  if (!node) return;
+  const markdown = String(RENDER_OPTIONS?.workspace_description || "");
+  const visible = workspaceDisplayMode() && Boolean(markdown.trim());
+  node.hidden = !visible;
+  node.innerHTML = visible ? renderMarkdown(markdown) : "";
 }
 function syncSelectedSourceFromView() {
   const trialKey = selectedKey();
@@ -205,6 +227,9 @@ function analysisArtifactPathsFor(trialKey) {
   const analysis = analysisFor(trialKey);
   if (!analysis) return [];
   const paths = [];
+  listValue(analysis.markdown_reports).forEach(report => {
+    if (typeof report?.relative_path === "string") paths.push(report.relative_path);
+  });
   const relativePaths = analysis.relative_paths || {};
   if (typeof relativePaths === "object") {
     ["md", "json"].forEach(key => {
@@ -471,10 +496,12 @@ export {
   TOKEN_ESTIMATES,
   WORKSPACE_SNAPSHOT,
   activeServeSources,
+  adminMode,
   adapterDefaults,
   allSearchActive,
   analysisArtifactPathsFor,
   analysisFor,
+  authenticationEnabled,
   applySessionSearch,
   bindComparisonScrollSync,
   bootstrapData,
@@ -492,6 +519,8 @@ export {
   fmtNum,
   fmtPct,
   fmtScore,
+  fmtTps,
+  fmtTtft,
   hasMetricValue,
   initialAdapterDefaults,
   isAnalysisArtifactPath,
@@ -509,6 +538,7 @@ export {
   renderNotesCell,
   renderReadOnlySourceCategory,
   renderReadOnlySourceTags,
+  renderWorkspaceDescription,
   renderTaskAlias,
   renderReportNotes,
   restoreComparisonScrollState,

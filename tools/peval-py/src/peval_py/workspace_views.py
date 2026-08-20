@@ -14,6 +14,7 @@ VIEW_SCHEMA_VERSION = 1
 VIEW_MAX_NOTE_BYTES = 1024 * 1024
 VIEW_SUFFIX = ".md"
 VIEW_NAME_MAX_CHARS = 120
+BROWSER_VIEW_LIMIT = 100
 VIEW_GROUP_BY_VALUES = frozenset(
     {"overall", "agent", "model", "category", "task", "job", "provider"}
 )
@@ -251,6 +252,34 @@ def view_from_values(
         group_by=group,
         notes=notes,
     )
+
+
+def browser_views_from_payload(value: Any) -> list[WorkspaceView]:
+    if not isinstance(value, list):
+        raise ValueError("browser_views must be an array")
+    if len(value) > BROWSER_VIEW_LIMIT:
+        raise ValueError(
+            f"browser_views may contain at most {BROWSER_VIEW_LIMIT} views"
+        )
+    fields = {"name", "filters", "group_by", "notes"}
+    views: list[WorkspaceView] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != fields:
+            raise ValueError(
+                "browser view fields must be name, filters, group_by, and notes"
+            )
+        views.append(
+            view_from_values(
+                name=item["name"],
+                filters=item["filters"],
+                group_by=item["group_by"],
+                notes=item["notes"],
+            )
+        )
+    names = [view.name for view in views]
+    if len(set(names)) != len(names):
+        raise ValueError("browser_views must not contain duplicate names")
+    return views
 
 
 def view_filters_dict(query: CatalogQuery) -> dict[str, Any]:

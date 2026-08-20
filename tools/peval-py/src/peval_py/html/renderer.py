@@ -25,6 +25,10 @@ def render_html(
     harbor_mounts: tuple[HarborMount, ...] | None = None,
     loading: bool = False,
     load_error: str | None = None,
+    workspace_id: str | None = None,
+    workspace_description: str | None = None,
+    role: str = "admin",
+    authentication_enabled: bool = False,
 ) -> str:
     normalized_mode = normalize_render_mode(mode)
     return _render_html_document(
@@ -37,6 +41,10 @@ def render_html(
         harbor_mounts=harbor_mounts,
         loading=loading,
         load_error=load_error,
+        workspace_id=workspace_id,
+        workspace_description=workspace_description,
+        role=role,
+        authentication_enabled=authentication_enabled,
     )
 
 
@@ -54,6 +62,7 @@ def render_workspace_snapshot_html(
         reports=list_value(snapshot.get("reports")),
         snapshot=snapshot,
         echarts_js=echarts_js,
+        workspace_description=str(snapshot.get("workspace_description") or ""),
     )
 
 
@@ -70,6 +79,10 @@ def _render_html_document(
     load_error: str | None = None,
     snapshot: dict[str, Any] | None = None,
     echarts_js: str | None = None,
+    workspace_id: str | None = None,
+    workspace_description: str | None = None,
+    role: str = "admin",
+    authentication_enabled: bool = False,
 ) -> str:
     normalized_mode = mode
     normalized_locale = normalize_locale(locale)
@@ -87,10 +100,16 @@ def _render_html_document(
         render_options["reports"] = list(reports or [])
         render_options["adapter_defaults"] = adapter_defaults or {}
         render_options["loading"] = bool(loading)
+        render_options["workspace_id"] = workspace_id or "default"
+        render_options["role"] = role
+        render_options["authentication_enabled"] = bool(authentication_enabled)
         if load_error:
             render_options["load_error"] = load_error
     elif normalized_mode == "workspace_snapshot":
         render_options["reports"] = list(reports or [])
+    normalized_description = str(workspace_description or "").strip()
+    if normalized_mode in {"serve", "workspace_snapshot"} and normalized_description:
+        render_options["workspace_description"] = normalized_description
     title_key = (
         "serve_title" if normalized_mode in {"serve", "workspace_snapshot"} else "title"
     )
@@ -102,6 +121,14 @@ def _render_html_document(
         (
             ""
             if normalized_mode == "serve"
+            else (
+                '<section class="topline workspace-snapshot-header">'
+                "<h1>__TITLE__</h1>"
+                '<div class="workspace-description note-body" '
+                "data-workspace-description hidden></div>"
+                "</section>"
+            )
+            if normalized_mode == "workspace_snapshot"
             else '<section class="topline"><h1>__TITLE__</h1></section>'
         ),
     )
@@ -120,13 +147,15 @@ def _render_html_document(
             adapter_defaults or {},
             harbor_mounts or (),
             loading=bool(loading),
+            role=role,
+            authentication_enabled=authentication_enabled,
         )
         if normalized_mode == "serve"
         else "",
     )
     payload = payload.replace(
         "__SERVE_REPORT_UI__",
-        render_serve_report_ui(messages)
+        render_serve_report_ui(messages, role=role)
         if normalized_mode == "serve"
         else (
             '<aside class="report-reader" id="workspace-report-reader" hidden></aside>'
@@ -200,6 +229,10 @@ def render_serve_html(
     harbor_mounts: tuple[HarborMount, ...] | None = None,
     loading: bool = False,
     load_error: str | None = None,
+    workspace_id: str | None = None,
+    workspace_description: str | None = None,
+    role: str = "admin",
+    authentication_enabled: bool = False,
 ) -> str:
     return render_html(
         report,
@@ -211,6 +244,10 @@ def render_serve_html(
         harbor_mounts=harbor_mounts,
         loading=loading,
         load_error=load_error,
+        workspace_id=workspace_id,
+        workspace_description=workspace_description,
+        role=role,
+        authentication_enabled=authentication_enabled,
     )
 
 

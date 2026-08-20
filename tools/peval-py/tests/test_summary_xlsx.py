@@ -53,17 +53,43 @@ class SummaryXlsxTests(unittest.TestCase):
             {
                 "scope": "leaderboard",
                 "source_keys": ["b", "a", "b"],
+                "query": {
+                    "state": "active",
+                    "search": "regression",
+                    "sort": "last_turn_end",
+                    "direction": "desc",
+                    "categories": [],
+                    "tags": [],
+                    "agents": [],
+                    "models": [],
+                    "results": [],
+                    "views": ["Saved A"],
+                },
                 "group_by": "model",
                 "statistic": "p95",
             }
         )
         self.assertEqual(request.source_keys, ("b", "a"))
+        self.assertEqual(request.query.search, "regression")
+        self.assertEqual(request.view_names, ("Saved A",))
         self.assertEqual(request.group_by, "model")
         self.assertEqual(request.statistic, "p95")
         category_request = summary_export_payload(
             {
                 "scope": "leaderboard",
                 "source_keys": ["a"],
+                "query": {
+                    "state": "active",
+                    "search": "",
+                    "sort": "last_turn_end",
+                    "direction": "desc",
+                    "categories": [],
+                    "tags": [],
+                    "agents": [],
+                    "models": [],
+                    "results": [],
+                    "views": [],
+                },
                 "group_by": "category",
                 "statistic": "mean",
             }
@@ -119,8 +145,12 @@ class SummaryXlsxTests(unittest.TestCase):
             workbook = archive.read("xl/workbook.xml").decode("utf-8")
             first_sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
             shared_strings = archive.read("xl/sharedStrings.xml").decode("utf-8")
-            chart = archive.read("xl/charts/chart1.xml").decode("utf-8")
-        self.assertIn("xl/charts/chart12.xml", names)
+            charts = [
+                archive.read(name).decode("utf-8")
+                for name in names
+                if name.startswith("xl/charts/") and name.endswith(".xml")
+            ]
+        self.assertEqual(len(charts), 20)
         self.assertIn("xl/drawings/drawing1.xml", names)
         self.assertIn('name="Unsafe_View"', workbook)
         self.assertIn('name="unsafe_view (2)"', workbook)
@@ -131,8 +161,9 @@ class SummaryXlsxTests(unittest.TestCase):
         self.assertNotIn("<f>", first_sheet)
         self.assertIn("1.157407407407407E-05", first_sheet)
         self.assertRegex(first_sheet, r"<v>0</v>")
-        self.assertIn("p95", chart.lower())
-        self.assertIn("$I$", chart)
+        self.assertTrue(
+            any("p95" in chart.lower() and "$I$" in chart for chart in charts)
+        )
 
     def test_zero_match_sheet_has_headers_and_no_chart_parts(self) -> None:
         content = summary_workbook(

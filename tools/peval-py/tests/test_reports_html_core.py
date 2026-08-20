@@ -241,12 +241,12 @@ class PevalPyReportHtmlCoreTests(unittest.TestCase):
         self.assertIn('key: "cost_usd"', html)
         self.assertNotIn("metric: true, value: (row) => row.cost_usd", html)
         self.assertIn(
-            'key: "analysised", label: t("analysised", "Analysised"), valueType: "status", filterable: true',
+            'key: "analysis_count", label: t("analysis_count", "#Analysis"), valueType: "number", numeric: true, filterable: true',
             html,
         )
-        self.assertIn("function rowAnalysised(row)", html)
+        self.assertIn("function rowAnalysisCount(row)", html)
         self.assertIn("function analysisArtifactPathsFor(trialKey)", html)
-        self.assertIn('"analysised": "Analysised"', html)
+        self.assertIn('"analysis_count": "#Analysis"', html)
         self.assertIn("function markdownTableAt(lines, index)", html)
         self.assertIn("function renderMarkdownTable(table)", html)
         self.assertIn('tableId: "leaderboard"', html)
@@ -825,7 +825,7 @@ console.log(result);
             self.assertIn("## Slow step", html)
             self.assertIn("Check cached markdown.", html)
             self.assertIn("| Metric | Value |", html)
-            self.assertIn("renderMarkdown(analysis.md_report)", html)
+            self.assertIn("renderMarkdown(report.markdown)", html)
             self.assertIn("\\u003cscript", html)
             self.assertNotIn("<script>alert(1)</script>", html)
             self.assertNotIn("<script>alert(2)</script>", html)

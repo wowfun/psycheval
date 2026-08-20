@@ -62,7 +62,7 @@ class StateQueryMixin:
             return empty_report("serve")
         annotation_config = self.annotation_config(config)
         readable_rows: list[dict[str, Any]] = []
-        stored: list[dict[str, dict[str, Any]]] = []
+        stored: list[dict[str, Any]] = []
         errors: list[str] = []
         for row in rows:
             try:
@@ -92,9 +92,11 @@ class StateQueryMixin:
                 trajectory,
                 meta,
                 annotation_config,
+                harbor_analysis=item.get("harbor_analysis"),
             )
-            for row, trajectory, meta in zip(
+            for row, item, trajectory, meta in zip(
                 readable_rows,
+                stored,
                 trajectories,
                 metas,
                 strict=True,

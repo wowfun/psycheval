@@ -20,6 +20,7 @@ ANALYSIS_REPORT_FIELDS = (
     "commands",
     "analysis_metrics",
     "confidence",
+    "markdown_reports",
 )
 ANALYSIS_INPUT_FIELDS = (
     "summary",

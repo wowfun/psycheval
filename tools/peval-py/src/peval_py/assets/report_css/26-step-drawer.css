@@ -87,7 +87,14 @@
   }
   .serve-source-toolbar {
     align-items:flex-start;
-    flex-direction:column;
+    grid-template-columns:1fr;
+  }
+  .serve-source-toolbar>.workspace-description,
+  .workspace-snapshot-header>.workspace-description {
+    grid-column:1;
+    grid-row:auto;
+    justify-self:start;
+    text-align:left;
   }
   .serve-source-heading {
     align-items:flex-start;

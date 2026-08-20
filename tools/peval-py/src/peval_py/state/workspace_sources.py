@@ -61,6 +61,8 @@ HARBOR_PSYCHEVO_TELEMETRY_FILES = (
     "agent/psychevo-state.db-shm",
 )
 HARBOR_HERMES_TELEMETRY_FILES = ("agent/hermes-session.jsonl",)
+HARBOR_ANALYSIS_MD_FILE = "artifacts/logs/analysis.md"
+HARBOR_ANALYSIS_MAX_BYTES = 20 * 1024 * 1024
 HARBOR_SOURCE_FILES = (
     HARBOR_JSON_SOURCE_FILES
     + HARBOR_OPENCODE_TELEMETRY_FILES
@@ -108,6 +110,7 @@ class SourceCandidate:
     containment_root: Path | None = None
     task_paths: tuple[str, ...] = ()
     harbor_evidence: HarborEvidence | None = None
+    harbor_analysis_relative_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,8 @@ class SourceDocument:
     active: bool
     last_status: str
     last_error: str | None
+    harbor_analysis_markdown: str | None = None
+    harbor_analysis_relative_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -351,7 +356,11 @@ class WorkspaceSources:
     ) -> SourceCandidate:
         source_ref = f"harbor/{mount.id}/{job_name}/{trial_name}"
         overlay_dir = self.overlay_dir(source_ref)
-        source_files = _harbor_source_files(trial_dir)
+        harbor_analysis_relative_path = _harbor_analysis_relative_path(trial_dir)
+        source_files = _harbor_source_files(
+            trial_dir,
+            harbor_analysis_relative_path,
+        )
         evidence: HarborEvidence | None = None
         evidence_revision = "unavailable"
         try:
@@ -387,6 +396,7 @@ class WorkspaceSources:
             containment_root=mount_root,
             task_paths=mount.task_paths,
             harbor_evidence=evidence,
+            harbor_analysis_relative_path=harbor_analysis_relative_path,
         )
 
     def _retained_missing_candidates(
@@ -538,6 +548,7 @@ class WorkspaceSources:
 
     def _load_harbor(self, candidate: SourceCandidate) -> SourceDocument:
         assert candidate.source_key is not None
+        harbor_analysis_markdown = _read_harbor_analysis_markdown(candidate)
         try:
             overlay = (
                 self.read_overlay(candidate.source_ref)
@@ -553,7 +564,10 @@ class WorkspaceSources:
                 }
             )
         source = _harbor_source(candidate, overlay)
-        source_files = _harbor_source_files(candidate.path)
+        source_files = _harbor_source_files(
+            candidate.path,
+            candidate.harbor_analysis_relative_path,
+        )
         timestamp = _updated_at_ms(candidate.path, source_files)
         if candidate.diagnostic is not None:
             return SourceDocument(
@@ -634,6 +648,12 @@ class WorkspaceSources:
                     active=bool(overlay.get("active", True)),
                     last_status=last_status,
                     last_error=_result_only_error(candidate, result_json),
+                    harbor_analysis_markdown=harbor_analysis_markdown,
+                    harbor_analysis_relative_path=(
+                        candidate.harbor_analysis_relative_path
+                        if harbor_analysis_markdown
+                        else None
+                    ),
                 )
             trajectory, source_schema = _compatible_harbor_trajectory(
                 raw_trajectory,
@@ -696,6 +716,12 @@ class WorkspaceSources:
                 active=bool(overlay.get("active", True)),
                 last_status="ok",
                 last_error=None,
+                harbor_analysis_markdown=harbor_analysis_markdown,
+                harbor_analysis_relative_path=(
+                    candidate.harbor_analysis_relative_path
+                    if harbor_analysis_markdown
+                    else None
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - one Trial becomes one diagnostic.
             source = _harbor_source(
@@ -1498,7 +1524,12 @@ def _evaluation(result: dict[str, Any] | None) -> dict[str, Any]:
     return payload
 
 
-def _read_bytes_no_follow(containment_root: Path, path: Path) -> bytes:
+def _read_bytes_no_follow(
+    containment_root: Path,
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+) -> bytes:
     _assert_safe_descendant(containment_root, path, label="Harbor source")
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -1509,12 +1540,97 @@ def _read_bytes_no_follow(containment_root: Path, path: Path) -> bytes:
         opened_stat = os.fstat(descriptor)
         if not stat.S_ISREG(opened_stat.st_mode):
             raise ValueError(f"Harbor source file must be a regular file: {path}")
+        if max_bytes is not None and opened_stat.st_size > max_bytes:
+            raise ValueError(f"Harbor source file exceeds {max_bytes} bytes: {path}")
         with os.fdopen(descriptor, "rb", closefd=False) as handle:
-            content = handle.read()
+            content = handle.read() if max_bytes is None else handle.read(max_bytes + 1)
+        if max_bytes is not None and len(content) > max_bytes:
+            raise ValueError(f"Harbor source file exceeds {max_bytes} bytes: {path}")
     finally:
         os.close(descriptor)
     _assert_safe_descendant(containment_root, path, label="Harbor source")
     return content
+
+
+def _read_harbor_analysis_markdown(candidate: SourceCandidate) -> str | None:
+    relative_path = candidate.harbor_analysis_relative_path
+    if relative_path is None:
+        return None
+    path = candidate.path / relative_path
+    try:
+        file_stat = path.stat(follow_symlinks=False)
+    except OSError:
+        return None
+    if not stat.S_ISREG(file_stat.st_mode):
+        return None
+    if file_stat.st_size > HARBOR_ANALYSIS_MAX_BYTES:
+        return None
+    try:
+        content = _read_bytes_no_follow(
+            candidate.containment_root or candidate.path,
+            path,
+            max_bytes=HARBOR_ANALYSIS_MAX_BYTES,
+        )
+        markdown = content.decode("utf-8")
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    return markdown if markdown.strip() else None
+
+
+def _harbor_analysis_relative_path(trial_dir: Path) -> str | None:
+    logs_dir = trial_dir / "artifacts" / "logs"
+    try:
+        _assert_safe_descendant(trial_dir, logs_dir, label="Harbor analysis")
+    except ValueError:
+        return None
+
+    canonical = trial_dir / HARBOR_ANALYSIS_MD_FILE
+    try:
+        canonical.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return HARBOR_ANALYSIS_MD_FILE
+    else:
+        return HARBOR_ANALYSIS_MD_FILE
+
+    return min(
+        _nested_harbor_analysis_paths(logs_dir, Path("artifacts/logs")),
+        default=None,
+    )
+
+
+def _nested_harbor_analysis_paths(
+    directory: Path,
+    relative_directory: Path,
+) -> Iterator[str]:
+    pending = [(directory, relative_directory)]
+    while pending:
+        current, current_relative = pending.pop()
+        try:
+            directory_stat = current.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            continue
+        try:
+            with os.scandir(current) as entries:
+                ordered = sorted(entries, key=lambda entry: entry.name)
+        except OSError:
+            continue
+        nested: list[tuple[Path, Path]] = []
+        for entry in ordered:
+            relative = current_relative / entry.name
+            if entry.name == "analysis.md":
+                yield relative.as_posix()
+                continue
+            try:
+                is_directory = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+            if is_directory:
+                nested.append((Path(entry.path), relative))
+        pending.extend(reversed(nested))
 
 
 def _assert_safe_descendant(root: Path, path: Path, *, label: str) -> None:
@@ -1653,11 +1769,16 @@ def _path_has_symlink(path: Path) -> bool:
         current = current.parent
 
 
-def _harbor_source_files(trial_dir: Path) -> tuple[str, ...]:
-    """Include late-arriving Psychevo trace state in the rebuildable fingerprint."""
+def _harbor_source_files(
+    trial_dir: Path,
+    harbor_analysis_relative_path: str | None,
+) -> tuple[str, ...]:
+    """Include safe supplemental Trial state in the rebuildable fingerprint."""
 
     relative_sessions = "agent/sessions"
     files = [*HARBOR_SOURCE_FILES, relative_sessions]
+    if harbor_analysis_relative_path is not None:
+        files.append(harbor_analysis_relative_path)
     sessions = trial_dir / relative_sessions
     try:
         sessions_stat = sessions.stat(follow_symlinks=False)

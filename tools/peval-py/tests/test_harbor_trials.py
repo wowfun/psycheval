@@ -12,9 +12,12 @@ from unittest.mock import patch
 from peval_py.analysis import import_analysis_artifacts
 from peval_py.atif import convert_db
 from peval_py.config import HarborMount, ToolConfig, load_config
+from peval_py.serve.exports import build_serve_export, build_workspace_snapshot_export
+from peval_py.serve.payloads import WorkspaceSnapshotPresentation
 from peval_py.state import CatalogQuery, WorkspaceCatalog, open_workspace_state
 from peval_py.state.workspace_sources import _telemetry_aligns
 from peval_py.workspace_reports import WorkspaceReportLibrary
+from peval_py.workspace_views import WorkspaceViewLibrary
 from peval_py_test_support import create_messages_db, create_opencode_event_timing_db
 
 
@@ -806,6 +809,346 @@ class HarborTrialTests(unittest.TestCase):
                 self.assertIn("failed to parse", row["last_error"])
                 with self.assertRaisesRegex(ValueError, "not readable"):
                     catalog.load_detail(source_key)
+            finally:
+                store.close()
+
+    def test_trial_and_workspace_analysis_markdown_are_composed_in_source_order(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            jobs = base / "jobs"
+            trial = jobs / "job-a" / "trial-a"
+            write_trial(trial)
+            harbor_analysis = trial / "artifacts/logs/analysis.md"
+            harbor_analysis.parent.mkdir(parents=True)
+            harbor_analysis.write_text("# Harbor review\n", encoding="utf-8")
+            workspace = base / "workspace"
+            store, config, catalog = self.workspace(workspace, jobs)
+            overlay = workspace / "harbor/jobs-2026-08-08/job-a/trial-a/analysis.md"
+            overlay.parent.mkdir(parents=True)
+            overlay.write_text("# Workspace review\n", encoding="utf-8")
+            before = {
+                path.relative_to(trial).as_posix(): path.read_bytes()
+                for path in trial.rglob("*")
+                if path.is_file()
+            }
+            try:
+                catalog.reconcile()
+                row = catalog.query(CatalogQuery()).items[0].to_dict()
+                self.assertEqual(row["analysis_count"], 2)
+                self.assertNotIn("analysised", row)
+                analysis = catalog.load_detail(row["source_key"]).report["annotations"][
+                    "analysis"
+                ][0]
+                self.assertNotIn("md_report", analysis)
+                self.assertEqual(
+                    analysis["markdown_reports"],
+                    [
+                        {
+                            "source": "harbor_trial",
+                            "markdown": "# Harbor review\n",
+                            "relative_path": "artifacts/logs/analysis.md",
+                        },
+                        {
+                            "source": "workspace_overlay",
+                            "markdown": "# Workspace review\n",
+                            "relative_path": (
+                                "harbor/jobs-2026-08-08/job-a/trial-a/analysis.md"
+                            ),
+                        },
+                    ],
+                )
+                json_export = build_serve_export(
+                    catalog,
+                    store,
+                    config,
+                    kind="json",
+                    source_keys=[row["source_key"]],
+                )
+                json_analysis = json.loads(json_export.content)["annotations"][
+                    "analysis"
+                ][0]
+                self.assertEqual(
+                    json_analysis["markdown_reports"],
+                    analysis["markdown_reports"],
+                )
+
+                snapshot = build_workspace_snapshot_export(
+                    catalog,
+                    store,
+                    WorkspaceViewLibrary(workspace),
+                    WorkspaceReportLibrary(workspace, catalog.binding_rows),
+                    config,
+                    query=CatalogQuery(),
+                    query_view_names=(),
+                    selected_source_keys=(),
+                    presentation=WorkspaceSnapshotPresentation(
+                        summary_group_by="agent",
+                        summary_statistic="mean",
+                        summary_table_open=False,
+                        selected_source_key=row["source_key"],
+                        selected_step_id=None,
+                        leaderboard_columns={
+                            "version": 1,
+                            "order": [],
+                            "visibility": {},
+                        },
+                        visible_view_names=(),
+                        workspace_view_filters={},
+                        open_view_tables=(),
+                    ),
+                    echarts_js=b"window.echarts={};",
+                )
+                snapshot_html = snapshot.content.decode("utf-8")
+                self.assertLess(
+                    snapshot_html.index("# Harbor review"),
+                    snapshot_html.index("# Workspace review"),
+                )
+                after = {
+                    path.relative_to(trial).as_posix(): path.read_bytes()
+                    for path in trial.rglob("*")
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                harbor_analysis.unlink()
+                catalog.reconcile()
+                self.assertEqual(
+                    catalog.row_for_key(row["source_key"])["analysis_count"], 1
+                )
+                overlay_only = catalog.load_detail(row["source_key"]).report[
+                    "annotations"
+                ]["analysis"][0]["markdown_reports"]
+                self.assertEqual(
+                    overlay_only,
+                    [
+                        {
+                            "source": "workspace_overlay",
+                            "markdown": "# Workspace review\n",
+                            "relative_path": (
+                                "harbor/jobs-2026-08-08/job-a/trial-a/analysis.md"
+                            ),
+                        }
+                    ],
+                )
+            finally:
+                store.close()
+
+    def test_harbor_analysis_refreshes_and_unsafe_inputs_stay_supplemental(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            jobs = base / "jobs"
+            trial = jobs / "job-a" / "trial-a"
+            write_trial(trial)
+            analysis = trial / "artifacts/logs/analysis.md"
+            analysis.parent.mkdir(parents=True)
+            store, config, catalog = self.workspace(base / "workspace", jobs)
+            try:
+                catalog.reconcile()
+                row = catalog.query(CatalogQuery()).items[0].to_dict()
+                source_key = row["source_key"]
+                first_revision = row["artifact_revision"]
+                self.assertEqual(row["analysis_count"], 0)
+
+                analysis.write_text("first", encoding="utf-8")
+                catalog.reconcile()
+                row = catalog.row_for_key(source_key)
+                second_revision = row["artifact_revision"]
+                self.assertNotEqual(second_revision, first_revision)
+                self.assertEqual(row["analysis_count"], 1)
+                self.assertEqual(
+                    catalog.load_detail(source_key).report["annotations"]["analysis"][
+                        0
+                    ]["markdown_reports"][0]["markdown"],
+                    "first",
+                )
+
+                analysis.write_text("second and longer", encoding="utf-8")
+                catalog.reconcile()
+                row = catalog.row_for_key(source_key)
+                self.assertNotEqual(row["artifact_revision"], second_revision)
+                self.assertEqual(
+                    catalog.load_detail(source_key).report["annotations"]["analysis"][
+                        0
+                    ]["markdown_reports"][0]["markdown"],
+                    "second and longer",
+                )
+
+                for content in (b" \n", b"\xff\xfe"):
+                    analysis.write_bytes(content)
+                    catalog.reconcile()
+                    row = catalog.row_for_key(source_key)
+                    self.assertTrue(row["readable"])
+                    self.assertEqual(row["analysis_count"], 0)
+                    self.assertNotIn(
+                        "markdown_reports",
+                        catalog.load_detail(source_key).report["annotations"][
+                            "analysis"
+                        ][0],
+                    )
+
+                analysis.unlink()
+                secret = base / "secret.md"
+                secret.write_text("must not leak", encoding="utf-8")
+                try:
+                    analysis.symlink_to(secret)
+                except OSError:
+                    pass
+                else:
+                    catalog.reconcile()
+                    row = catalog.row_for_key(source_key)
+                    self.assertTrue(row["readable"])
+                    self.assertEqual(row["analysis_count"], 0)
+                    self.assertNotIn(
+                        "must not leak",
+                        json.dumps(catalog.load_detail(source_key).report),
+                    )
+                    analysis.unlink()
+
+                analysis.mkdir()
+                catalog.reconcile()
+                row = catalog.row_for_key(source_key)
+                self.assertTrue(row["readable"])
+                self.assertEqual(row["analysis_count"], 0)
+                analysis.rmdir()
+
+                catalog.reconcile()
+                row = catalog.row_for_key(source_key)
+                self.assertEqual(row["analysis_count"], 0)
+            finally:
+                store.close()
+
+    def test_harbor_analysis_uses_canonical_then_stable_nested_fallback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            jobs = base / "jobs"
+            trial = jobs / "job-a" / "trial-a"
+            write_trial(trial)
+            first = trial / "artifacts/logs/a/analysis.md"
+            second = trial / "artifacts/logs/z/analysis.md"
+            second.parent.mkdir(parents=True)
+            first.parent.mkdir(parents=True)
+            second.write_text("# Second path\n", encoding="utf-8")
+            first.write_text("# First path\n", encoding="utf-8")
+            external = base / "external-analysis"
+            external.mkdir()
+            (external / "analysis.md").write_text("must not traverse", encoding="utf-8")
+            linked = trial / "artifacts/logs/0-linked"
+            try:
+                linked.symlink_to(external, target_is_directory=True)
+            except OSError:
+                pass
+            store, config, catalog = self.workspace(base / "workspace", jobs)
+            try:
+                catalog.reconcile()
+                row = catalog.query(CatalogQuery()).items[0].to_dict()
+                source_key = row["source_key"]
+                nested_revision = row["artifact_revision"]
+                self.assertEqual(
+                    catalog.load_detail(source_key).report["annotations"]["analysis"][
+                        0
+                    ]["markdown_reports"][0],
+                    {
+                        "source": "harbor_trial",
+                        "markdown": "# First path\n",
+                        "relative_path": "artifacts/logs/a/analysis.md",
+                    },
+                )
+                self.assertNotIn(
+                    "must not traverse",
+                    json.dumps(catalog.load_detail(source_key).report),
+                )
+
+                canonical = trial / "artifacts/logs/analysis.md"
+                canonical.write_text("# Canonical\n", encoding="utf-8")
+                catalog.reconcile()
+                row = catalog.row_for_key(source_key)
+                self.assertNotEqual(row["artifact_revision"], nested_revision)
+                canonical_revision = row["artifact_revision"]
+                self.assertEqual(
+                    catalog.load_detail(source_key).report["annotations"]["analysis"][
+                        0
+                    ]["markdown_reports"][0]["relative_path"],
+                    "artifacts/logs/analysis.md",
+                )
+
+                canonical.unlink()
+                catalog.reconcile()
+                row = catalog.row_for_key(source_key)
+                self.assertNotEqual(row["artifact_revision"], canonical_revision)
+                self.assertEqual(
+                    catalog.load_detail(source_key).report["annotations"]["analysis"][
+                        0
+                    ]["markdown_reports"][0]["relative_path"],
+                    "artifacts/logs/a/analysis.md",
+                )
+            finally:
+                store.close()
+
+    def test_deep_harbor_analysis_fallback_does_not_exhaust_the_call_stack(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            jobs = base / "jobs"
+            trial = jobs / "job-a" / "trial-a"
+            write_trial(trial)
+            nested = trial / "artifacts" / "logs"
+            nested.mkdir(parents=True)
+            nested_directories: list[Path] = []
+            for _index in range(1_050):
+                nested /= "d"
+                nested.mkdir()
+                nested_directories.append(nested)
+            analysis = nested / "analysis.md"
+            analysis.write_text("# Deep review\n", encoding="utf-8")
+            store, config, catalog = self.workspace(base / "workspace", jobs)
+            try:
+                catalog.reconcile()
+                row = catalog.query(CatalogQuery()).items[0].to_dict()
+                markdown = catalog.load_detail(row["source_key"]).report["annotations"][
+                    "analysis"
+                ][0]["markdown_reports"][0]
+                self.assertEqual(markdown["markdown"], "# Deep review\n")
+                self.assertTrue(markdown["relative_path"].endswith("/analysis.md"))
+            finally:
+                store.close()
+                analysis.unlink(missing_ok=True)
+                for directory in reversed(nested_directories):
+                    directory.rmdir()
+
+    def test_oversized_harbor_analysis_is_hidden_without_breaking_trial(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            jobs = base / "jobs"
+            trial = jobs / "job-a" / "trial-a"
+            write_trial(trial)
+            analysis = trial / "artifacts/logs/analysis.md"
+            analysis.parent.mkdir(parents=True)
+            analysis.write_text("too large", encoding="utf-8")
+            store, config, catalog = self.workspace(base / "workspace", jobs)
+            try:
+                with patch(
+                    "peval_py.state.workspace_sources.HARBOR_ANALYSIS_MAX_BYTES",
+                    4,
+                ):
+                    catalog.reconcile()
+                    row = catalog.query(CatalogQuery()).items[0].to_dict()
+                    self.assertTrue(row["readable"])
+                    self.assertEqual(row["analysis_count"], 0)
+                    self.assertNotIn(
+                        "markdown_reports",
+                        catalog.load_detail(row["source_key"]).report["annotations"][
+                            "analysis"
+                        ][0],
+                    )
             finally:
                 store.close()
 

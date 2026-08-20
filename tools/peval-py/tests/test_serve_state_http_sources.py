@@ -268,6 +268,12 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 status, headers, body = request_bytes(port, ECHARTS_ASSET_PATH)
                 self.assertEqual(status, 200)
                 self.assertIn("application/javascript", headers["content-type"])
+                self.assertEqual(
+                    headers["cache-control"],
+                    "public, max-age=31536000, immutable",
+                )
+                self.assertEqual(headers["x-content-type-options"], "nosniff")
+                self.assertEqual(headers["referrer-policy"], "no-referrer")
                 self.assertEqual(body, b"window.echarts={};")
 
                 cache_path.unlink()

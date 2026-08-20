@@ -106,7 +106,7 @@ class StateArtifactMixin:
 
     def read_source_document(
         self, row: dict[str, Any], config: ToolConfig
-    ) -> dict[str, dict[str, Any]]:
+    ) -> dict[str, Any]:
         if not is_harbor_source(row):
             return self.read_trial_artifacts(row)
         document = WorkspaceSources(self, config).load_ref(str(row["source_ref"]))
@@ -119,7 +119,17 @@ class StateArtifactMixin:
                 document.last_error
                 or f"Harbor Trial is not readable: {document.source_ref}"
             )
-        return {"trajectory": document.trajectory, "meta": document.meta}
+        payload: dict[str, Any] = {
+            "trajectory": document.trajectory,
+            "meta": document.meta,
+        }
+        if document.harbor_analysis_markdown and document.harbor_analysis_relative_path:
+            payload["harbor_analysis"] = {
+                "source": "harbor_trial",
+                "markdown": document.harbor_analysis_markdown,
+                "relative_path": document.harbor_analysis_relative_path,
+            }
+        return payload
 
     def resolve_artifact_dir(self, artifact_dir: str) -> Path:
         path = Path(artifact_dir)

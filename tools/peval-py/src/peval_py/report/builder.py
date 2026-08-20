@@ -655,7 +655,9 @@ def analysis_reports_from_snapshots(
                     *ANALYSIS_REPORT_FIELDS,
                 }
             }
-            if remapped.get("status") != "cached" or not remapped.get("relative_path"):
+            if remapped.get("status") != "cached" or not (
+                remapped.get("relative_path") or remapped.get("markdown_reports")
+            ):
                 continue
             remapped["trial_key"] = str(metas[index].get("trial_key") or "")
             report = merge_analysis_report(report, remapped)

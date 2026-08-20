@@ -16,12 +16,13 @@ from peval_py.serve.summary_xlsx import (
     SummaryWorksheet,
     summary_workbook,
 )
+from peval_py.serve.visibility import project_catalog_rows, project_report
 from peval_py.state import CatalogQuery, ServeStateStore, WorkspaceCatalog
 from peval_py.workspace_reports import (
     WorkspaceReportLibrary,
     render_workspace_report_preview,
 )
-from peval_py.workspace_views import WorkspaceViewLibrary
+from peval_py.workspace_views import WorkspaceView, WorkspaceViewLibrary
 
 MAX_REPORT_EXPORT_CELLS = 100
 MAX_REPORT_EXPORT_INPUT_BYTES = 50 * 1024 * 1024
@@ -62,6 +63,7 @@ def build_serve_export(
     query: CatalogQuery | None = None,
     view_queries: list[CatalogQuery] | None = None,
     source_keys: list[str] | None = None,
+    audience: str = "admin",
 ) -> ServeExport:
     normalized_kind = str(kind or "").strip().lower()
     if normalized_kind in {"xlsx", "table"}:
@@ -70,6 +72,7 @@ def build_serve_export(
             query or CatalogQuery(),
             view_queries=view_queries,
         )
+        rows = project_catalog_rows(rows, audience)
         return ServeExport(
             filename="peval-leaderboard.xlsx",
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -91,6 +94,8 @@ def build_serve_export(
     if input_bytes > MAX_REPORT_EXPORT_INPUT_BYTES:
         raise ValueError("JSON export trajectory/meta input exceeds 50 MiB")
     report = store.report_for_rows(rows, config)
+    if audience != "admin":
+        report = project_report(report)
     return ServeExport(
         filename="peval-report-v19.json",
         content_type="application/json; charset=utf-8",
@@ -109,20 +114,30 @@ def build_workspace_snapshot_export(
     *,
     query: CatalogQuery,
     query_view_names: tuple[str, ...],
+    query_browser_views: tuple[WorkspaceView, ...] = (),
+    browser_views: tuple[WorkspaceView, ...] = (),
     selected_source_keys: tuple[str, ...],
     presentation: WorkspaceSnapshotPresentation,
     echarts_js: bytes,
+    audience: str = "admin",
 ) -> ServeExport:
     with catalog.read_snapshot_rows(
         query,
         any_queries=lambda: [
             workspace_views.get(name).filters for name in query_view_names
-        ],
+        ]
+        + [view.filters for view in query_browser_views],
         selected_source_keys=selected_source_keys,
     ) as (generation, rows):
-        visible_views = [
-            workspace_views.get(name) for name in presentation.visible_view_names
-        ]
+        available_views = {
+            view.name: view for view in [*workspace_views.list(), *browser_views]
+        }
+        try:
+            visible_views = [
+                available_views[name] for name in presentation.visible_view_names
+            ]
+        except KeyError as exc:
+            raise ValueError(f"saved view does not exist: {exc.args[0]}") from exc
         if not rows:
             if selected_source_keys:
                 raise ValueError("selected sources do not match the current query")
@@ -190,7 +205,7 @@ def build_workspace_snapshot_export(
         visible_names = [view.name for view in visible_views]
         snapshot = {
             "generation": generation,
-            "catalog_rows": catalog_rows,
+            "catalog_rows": project_catalog_rows(catalog_rows, audience),
             "source_trial_keys": source_trial_keys,
             "presentation": {
                 "summary_group_by": presentation.summary_group_by,
@@ -198,6 +213,7 @@ def build_workspace_snapshot_export(
                 "summary_table_open": presentation.summary_table_open,
                 "selected_source_key": selected_source_key,
                 "selected_step_id": selected_step_id,
+                "leaderboard_columns": presentation.leaderboard_columns,
                 "visible_view_names": visible_names,
                 "workspace_view_filters": {
                     key: list(values)
@@ -213,12 +229,14 @@ def build_workspace_snapshot_export(
             "view_summaries": summary_payload["views"],
             "reports": report_payloads,
         }
+        if config.description:
+            snapshot["workspace_description"] = config.description
         try:
             echarts_text = echarts_js.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ValueError("cached ECharts asset must be UTF-8 JavaScript") from exc
         content = render_workspace_snapshot_html(
-            report,
+            project_report(report) if audience != "admin" else report,
             snapshot,
             config.locale,
             echarts_text,
@@ -292,12 +310,23 @@ def xlsx_summary(rows: list[dict[str, Any]]) -> bytes:
         ("Result", lambda row: row.get("status")),
         ("Last Turn End", lambda row: row.get("last_turn_finished_at_ms")),
         ("Active Duration", lambda row: row.get("duration_ms")),
+        ("Avg TTFT (ms)", lambda row: row.get("ttft_ms")),
+        ("Decode TPS", lambda row: row.get("tps")),
         ("Turns", lambda row: row.get("turns")),
         ("Tool Calls", lambda row: row.get("total_tool_calls")),
         ("Tool Errors", lambda row: row.get("total_tool_errors")),
         ("Tokens", lambda row: row.get("tokens")),
+        ("Cache Hit Rate", lambda row: row.get("cache_hit_rate")),
+        ("TTFT Sum (ms)", lambda row: row.get("ttft_ms_sum")),
+        ("TTFT Samples", lambda row: row.get("ttft_sample_count")),
+        ("Decode Duration (ms)", lambda row: row.get("decode_duration_ms")),
+        ("Decode Tokens", lambda row: row.get("decode_token_count")),
+        ("Decode Samples", lambda row: row.get("decode_sample_count")),
+        ("Cache-covered Prompt Tokens", lambda row: row.get("cache_prompt_tokens")),
+        ("Cache-read Tokens", lambda row: row.get("cache_read_tokens")),
+        ("Cache Samples", lambda row: row.get("cache_sample_count")),
         ("Cost", lambda row: row.get("cost_usd")),
-        ("Analysised", lambda row: bool(row.get("analysised"))),
+        ("#Analysis", lambda row: int(row.get("analysis_count") or 0)),
         ("Source Key", lambda row: row.get("source_key")),
     ]
     values = [[label for label, _value in columns]]

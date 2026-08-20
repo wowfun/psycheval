@@ -1,0 +1,332 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { installBrowserDom } from "./support/browser.js";
+
+const browser = installBrowserDom(`
+  <script type="application/json" id="peval-py-data">{}</script>
+  <script type="application/json" id="peval-py-token-estimates">{}</script>
+  <script type="application/json" id="peval-py-i18n">{}</script>
+  <script type="application/json" id="peval-py-render-options">{"mode":"serve","role":"guest","authentication_enabled":true,"sources":[]}</script>
+  <button data-admin-login-open>Login</button>
+  <div data-admin-login-dialog hidden>
+    <section aria-modal="true">
+      <button data-admin-login-close>Close</button>
+      <form data-admin-login-form>
+        <input name="password" type="password" value="wrong">
+        <p data-admin-login-status hidden></p>
+        <button type="submit">Login</button>
+      </form>
+    </section>
+  </div>
+  <div data-report-manager hidden><section aria-modal="true"><button data-report-manager-close>Close</button><p data-report-manager-status hidden></p><div data-report-inventory></div><span data-report-count></span><div data-report-bindings>stale admin content</div></section></div>
+  <aside id="workspace-report-reader" hidden></aside>
+  <main id="comparison"></main>
+  <section id="leaderboard"></section>
+  <aside id="workspace-views"></aside>
+  <div data-view-save-dialog hidden>
+    <form data-view-save-form>
+      <input data-view-name-input name="name">
+      <textarea data-view-notes-input name="notes"></textarea>
+      <input type="hidden" name="view_location" value="browser">
+      <dl data-view-current-configuration></dl>
+      <button data-view-save-cancel type="button">Cancel</button>
+    </form>
+  </div>
+`);
+
+const runtime = await import("../src/modules/runtime.js");
+const tables = await import("../src/modules/data-tables.js");
+const notes = await import("../src/modules/analysis-notes.js");
+const sourceState = await import("../src/modules/source-state-controls.js");
+const sourceManager = await import("../src/modules/source-manager.js");
+const catalog = await import("../src/modules/serve-catalog.js");
+const effects = await import("../src/modules/serve-effects.js");
+const reports = await import("../src/modules/workspace-reports.js");
+const views = await import("../src/modules/workspace-views.js");
+const controls = await import("../src/modules/serve-controls.js");
+const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+
+test.after(() => browser.cleanup());
+
+test("guest surfaces keep browsing controls and omit every workspace mutation", async () => {
+  assert.equal(runtime.adminMode(), false);
+  assert.equal(runtime.authenticationEnabled(), true);
+
+  const columns = tables.leaderboardColumns();
+  assert.equal(columns.find(column => column.key === "task_name").edit, undefined);
+  assert.equal(columns.find(column => column.key === "source_category").edit, undefined);
+  assert.equal(columns.find(column => column.key === "source_tags").edit, undefined);
+  assert.equal(notes.renderNotesAction("trial"), "");
+  assert.equal(reports.renderAttachWorkspaceReportAction([]), "");
+
+  const sourceControls = sourceState.renderServeSourceStateControls([]);
+  assert.match(sourceControls, /data-source-state-toggle/);
+  assert.doesNotMatch(sourceControls, /data-source-state-action/);
+
+  runtime.state.workspaceViews = [
+    {
+      id: "server:Readonly view",
+      origin: "server",
+      name: "Readonly view",
+      filters: {},
+      group_by: "agent",
+      notes: "Published notes",
+    },
+    {
+      id: "browser:My view",
+      origin: "browser",
+      name: "My view",
+      filters: {},
+      group_by: "agent",
+      notes: "Local notes",
+    },
+  ];
+  runtime.state.workspaceViewSelection = new Set(["server:Readonly view", "browser:My view"]);
+  const viewNameColumn = views.workspaceViewColumns().find(column => column.key === "name");
+  assert.equal(viewNameColumn.edit(runtime.state.workspaceViews[0]), undefined);
+  assert.ok(viewNameColumn.edit(runtime.state.workspaceViews[1]));
+  assert.match(views.renderWorkspaceViewControls(), /data-view-save/);
+  const viewIndex = views.renderWorkspaceViewIndex();
+  assert.match(viewIndex, /data-view-apply-selected/);
+  assert.match(viewIndex, /data-view-export-selected/);
+  assert.match(viewIndex, /data-view-delete-selected/);
+  assert.match(viewIndex, /Delete local \(1\)/);
+
+  runtime.state.workspaceReports = [{
+    report_id: "20260101-000000-000001",
+    filename: "published.md",
+    format: "markdown",
+    source_keys: [],
+  }];
+  const inventory = reports.renderWorkspaceReportInventoryItem(runtime.state.workspaceReports[0]);
+  assert.match(inventory, /data-report-manager-preview/);
+  assert.doesNotMatch(inventory, /data-report-inventory-id/);
+  reports.renderWorkspaceReportBindings();
+  assert.equal(document.querySelector("[data-report-bindings]").innerHTML, "");
+
+  await assert.rejects(
+    effects.commitSourceCellEdit({ source_key: "source" }, "alias", "blocked"),
+    /unavailable/,
+  );
+});
+
+test("guest report library fetches only public report inventory", async () => {
+  const calls = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async path => {
+    calls.push(String(path));
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => JSON.stringify({ reports: [] }),
+    };
+  };
+  try {
+    await reports.loadWorkspaceReportManagerData();
+    assert.deepEqual(calls, ["/api/reports"]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("serve API preserves HTTP errors when an upstream returns non-JSON", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 502,
+    statusText: "Bad Gateway",
+    text: async () => "<html>proxy failure</html>",
+  });
+  try {
+    await assert.rejects(
+      effects.serveApi("/api/views"),
+      error => error?.message === "Bad Gateway" && error?.status === 502,
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("guest administrator action functions issue no requests when invoked directly", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousConfirm = window.confirm;
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests += 1;
+    throw new Error("guest action reached the network");
+  };
+  window.confirm = () => true;
+  const sourceForm = document.createElement("form");
+  sourceForm.dataset.sourceKind = "path";
+  sourceForm.innerHTML = '<input name="path" value="/tmp/source.json">';
+  const dbForm = document.createElement("form");
+  dbForm.dataset.sourceKind = "db";
+  dbForm.innerHTML = '<input name="db" value="/tmp/source.db">';
+  const harborForm = document.createElement("form");
+  harborForm.innerHTML = '<input name="mount_id" value="private"><input name="jobs_path" value="/tmp/jobs">';
+  runtime.state.sourceManagerRows = [{ source_key: "source", kind: "json" }];
+  runtime.state.sourceSelection = new Set(["source"]);
+  try {
+    await catalog.refreshServeSourcesFromServer();
+    await catalog.deleteSelectedServeSources();
+    await controls.changeServeLocale("zh-CN");
+    await sourceManager.submitServeSourceForm(sourceForm);
+    await sourceManager.inspectDbSessions(dbForm);
+    await sourceManager.submitHarborMountForm(harborForm);
+    assert.equal(requests, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    window.confirm = previousConfirm;
+    runtime.state.sourceManagerRows = [];
+    runtime.state.sourceSelection.clear();
+  }
+});
+
+test("guest saves a view only to workspace-scoped browser storage", async () => {
+  const calls = [];
+  const published = {
+    name: "Published",
+    filters: {},
+    group_by: "agent",
+    notes: "Workspace view",
+  };
+  let serverViews = [published];
+  const previousFetch = globalThis.fetch;
+  window.localStorage.clear();
+  globalThis.fetch = async (path, options = {}) => {
+    calls.push({
+      path: String(path),
+      method: options.method || "GET",
+      body: options.body ? JSON.parse(String(options.body)) : null,
+    });
+    const payload = String(path) === "/api/views"
+      ? { views: serverViews }
+      : String(path) === "/api/views/summary"
+      ? { generation: 1, views: [{ name: "Guest local", matched_count: 0, groups: [] }] }
+      : { views: [] };
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => JSON.stringify(payload),
+    };
+  };
+  window.fetch = globalThis.fetch;
+  try {
+    runtime.state.workspaceViews = [];
+    runtime.state.workspaceViewsLoaded = false;
+    runtime.state.workspaceViewsRefreshPromise = null;
+    runtime.state.workspaceViewsRefreshQueued = false;
+    await views.refreshWorkspaceViews();
+    const dialog = document.querySelector("[data-view-save-dialog]");
+    dialog.querySelector("[data-view-name-input]").value = "Guest local";
+    dialog.querySelector("[data-view-notes-input]").value = "Only here";
+    await views.saveWorkspaceView(dialog);
+
+    assert.deepEqual(views.workspaceViews().map(view => [view.id, view.notes]), [
+      ["browser:Guest local", "Only here"],
+      ["server:Published", "Workspace view"],
+    ]);
+    assert.equal(calls.some(call => call.path === "/api/views" && call.method === "POST"), false);
+    assert.equal(
+      JSON.parse(window.localStorage.getItem("peval-py.saved-views.v1.default")).views[0].name,
+      "Guest local",
+    );
+    await views.commitWorkspaceViewCellEdit(
+      views.workspaceViewForId("browser:Guest local"),
+      "notes",
+      "Edited locally",
+    );
+    assert.equal(
+      JSON.parse(window.localStorage.getItem("peval-py.saved-views.v1.default")).views[0].notes,
+      "Edited locally",
+    );
+    assert.equal(calls.some(call => call.path === "/api/views/update"), false);
+    runtime.state.workspaceViewSelection = new Set(["browser:Guest local"]);
+    await views.applySelectedWorkspaceViews();
+    const catalogQuery = calls.find(call => call.path === "/api/catalog/query");
+    assert.deepEqual(catalogQuery.body.browser_views, [{
+      name: "Guest local",
+      filters: {},
+      group_by: "agent",
+      notes: "Edited locally",
+    }]);
+    assert.deepEqual(catalogQuery.body.views, []);
+
+    serverViews = [
+      {
+        name: "Guest local",
+        filters: { results: ["passed"] },
+        group_by: "overall",
+        notes: "Workspace definition",
+      },
+      published,
+    ];
+    await views.refreshWorkspaceViews();
+    assert.deepEqual(
+      views.workspaceViews().map(view => view.id),
+      ["server:Guest local", "server:Published"],
+    );
+    assert.deepEqual(Array.from(runtime.state.workspaceAppliedViewNames), []);
+    assert.deepEqual(runtime.state.catalogQuery.views, []);
+
+    serverViews = [published];
+    await views.refreshWorkspaceViews();
+    assert.deepEqual(
+      views.workspaceViews().map(view => view.id),
+      ["browser:Guest local", "server:Published"],
+    );
+    const previousConfirm = window.confirm;
+    window.confirm = () => true;
+    runtime.state.workspaceViewSelection = new Set([
+      "server:Published",
+      "browser:Guest local",
+    ]);
+    await views.deleteSelectedWorkspaceViews();
+    window.confirm = previousConfirm;
+    assert.deepEqual(Array.from(runtime.state.workspaceViewSelection), ["server:Published"]);
+    assert.equal(calls.some(call => call.path === "/api/views/delete"), false);
+    assert.deepEqual(
+      JSON.parse(window.localStorage.getItem("peval-py.saved-views.v1.default")).views,
+      [],
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    window.fetch = previousFetch;
+    window.localStorage.clear();
+  }
+});
+
+test("guest login dialog submits credentials, reports failure, and closes", async () => {
+  const calls = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (path, options = {}) => {
+    calls.push({ path: String(path), body: JSON.parse(String(options.body)) });
+    return {
+      ok: false,
+      status: 401,
+      statusText: "Unauthorized",
+      text: async () => JSON.stringify({ error: "invalid administrator password" }),
+    };
+  };
+  try {
+    controls.bindAuthenticationControls();
+    document.querySelector("[data-admin-login-open]").click();
+    const dialog = document.querySelector("[data-admin-login-dialog]");
+    assert.equal(dialog.hidden, false);
+    dialog.querySelector("form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await tick();
+    assert.deepEqual(calls, [{
+      path: "/api/auth/login",
+      body: { password: "wrong" },
+    }]);
+    assert.equal(dialog.querySelector("[data-admin-login-status]").hidden, false);
+    assert.match(dialog.querySelector("[data-admin-login-status]").textContent, /invalid administrator password/);
+    dialog.querySelector("[data-admin-login-close]").click();
+    assert.equal(dialog.hidden, true);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

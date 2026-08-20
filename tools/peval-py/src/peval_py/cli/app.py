@@ -499,7 +499,9 @@ def serve_command(
     ] = None,
     host: Annotated[
         str,
-        typer.Option(help="Localhost bind address; defaults to 127.0.0.1"),
+        typer.Option(
+            help=("Bind address; non-local addresses require PEVAL_PY_ADMIN_PASSWORD")
+        ),
     ] = "127.0.0.1",
     port: Annotated[
         int | None,

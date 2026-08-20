@@ -515,7 +515,11 @@ const context = {{
   document: {{
     body: {{ classList: {{ toggle() {{}} }} }},
     addEventListener() {{}},
-    getElementById: () => null,
+    getElementById(id) {{
+      return id === "peval-py-render-options"
+        ? {{ textContent: JSON.stringify({{ mode: "serve", role: "admin" }}) }}
+        : null;
+    }},
     querySelector(selector) {{
       if (selector === "[data-source-status]") return statusNode;
       return null;
@@ -1312,8 +1316,7 @@ console.log(result);
         self.assertNotIn("--time-pct", buttons["3"])
         self.assertIn("step 0.2s; 100% of slowest step", buttons["3"])
 
-    @unittest.skip("superseded by server-side catalog export coverage")
-    def test_html_runtime_rows_and_export_subset_avoid_persisted_comparison(
+    def test_html_runtime_rows_and_report_subset_avoid_persisted_comparison(
         self,
     ) -> None:
         if not shutil.which("node"):
@@ -1381,6 +1384,18 @@ console.log(result);
                     {
                         "trial_key": "trial:one",
                         "status": "cached",
+                        "markdown_reports": [
+                            {
+                                "source": "harbor_trial",
+                                "markdown": "Harbor",
+                                "relative_path": "artifacts/logs/analysis.md",
+                            },
+                            {
+                                "source": "workspace_overlay",
+                                "markdown": "Workspace",
+                                "relative_path": "harbor/mount/job/trial/analysis.md",
+                            },
+                        ],
                         "relative_paths": {
                             "json": "runs/default/agent-a/one/trial_one/analysis.json",
                             "md": "runs/default/agent-a/one/trial_one/analysis.md",
@@ -1448,44 +1463,36 @@ const result = vm.runInContext(`
   state.view = report;
   const rows = reportRows();
   const subset = reportSubset(rows);
-  const analysisedValues = rows.map(row => rowAnalysised(row));
-  const analysisedColumn = leaderboardColumns().find(column => column.key === "analysised");
-  const analysisedFilterable = Boolean(analysisedColumn?.filterable);
-  const analysisedOptions = filterOptions(analysisedColumn, reportRows());
-  setFilterValue("leaderboard", "analysised", "True", true);
-  const trueFilteredKeys = leaderboardRows().map(row => row.trial_key);
-  clearFilter("leaderboard", "analysised");
-  setFilterValue("leaderboard", "analysised", "False", true);
-  const falseFilteredKeys = leaderboardRows().map(row => row.trial_key);
-  clearFilter("leaderboard", "analysised");
+  const analysisCounts = rows.map(row => rowAnalysisCount(row));
+  const analysisColumn = leaderboardColumns().find(column => column.key === "analysis_count");
+  const analysisFilterable = Boolean(analysisColumn?.filterable);
+  const analysisOptions = filterOptions(analysisColumn, reportRows());
+  setFilterValue("leaderboard", "analysis_count", "2", true);
+  const twoAnalysisKeys = leaderboardRows().map(row => row.trial_key);
+  clearFilter("leaderboard", "analysis_count");
+  setFilterValue("leaderboard", "analysis_count", "0", true);
+  const zeroAnalysisKeys = leaderboardRows().map(row => row.trial_key);
+  clearFilter("leaderboard", "analysis_count");
   const xlsxBytes = xlsxBytesForRows(rows);
   const xlsxText = Buffer.from(xlsxBytes).toString("utf8");
-  let downloaded = null;
-  downloadBlob = (filename, mime, blob) => {{
-    downloaded = {{ filename, mime, type: blob.type, size: blob.size }};
-  }};
-  exportCurrentScope("xlsx");
   state.view = legacyReport;
   const legacyRows = reportRows();
   JSON.stringify({{
     rowCount: rows.length,
     firstAdapter: rows[0].adapter,
     firstErrorRate: rowToolErrorRate(rows[0]),
-    analysisedValues,
-    analysisedFilterable,
-    analysisedOptions,
-    trueFilteredKeys,
-    falseFilteredKeys,
+    analysisCounts,
+    analysisFilterable,
+    analysisOptions,
+    twoAnalysisKeys,
+    zeroAnalysisKeys,
     pathChecks: [
       isAnalysisArtifactPath("runs/default/agent/session/cell/analysis.md"),
       isAnalysisArtifactPath("runs/default/agent/session/cell/analysis.json"),
       isAnalysisArtifactPath("runs/default/agent/session/cell/notes.md")
     ],
     xlsxZipMagic: [xlsxBytes[0], xlsxBytes[1], xlsxBytes[2], xlsxBytes[3]],
-    xlsxHasHeader: xlsxText.includes("Analysised"),
-    xlsxHasTrue: xlsxText.includes("<t>True</t>"),
-    xlsxHasFalse: xlsxText.includes("<t>False</t>"),
-    downloaded,
+    xlsxHasHeader: xlsxText.includes("#Analysis"),
     subsetHasComparison: Object.prototype.hasOwnProperty.call(subset, "comparison"),
     subsetIncludes: subset.includes,
     subsetNotes: subset.annotations.notes.map(note => note.markdown),
@@ -1508,28 +1515,14 @@ console.log(result);
         self.assertEqual(result["rowCount"], 2)
         self.assertEqual(result["firstAdapter"], "psychevo")
         self.assertAlmostEqual(result["firstErrorRate"], 0.25)
-        self.assertEqual(result["analysisedValues"], ["True", "False"])
-        self.assertTrue(result["analysisedFilterable"])
-        self.assertEqual(result["analysisedOptions"], ["False", "True"])
-        self.assertEqual(result["trueFilteredKeys"], ["trial:one"])
-        self.assertEqual(result["falseFilteredKeys"], ["trial:two"])
+        self.assertEqual(result["analysisCounts"], [2, 0])
+        self.assertTrue(result["analysisFilterable"])
+        self.assertEqual(result["analysisOptions"], ["0", "2"])
+        self.assertEqual(result["twoAnalysisKeys"], ["trial:one"])
+        self.assertEqual(result["zeroAnalysisKeys"], ["trial:two"])
         self.assertEqual(result["pathChecks"], [True, True, False])
         self.assertEqual(result["xlsxZipMagic"], [80, 75, 3, 4])
         self.assertTrue(result["xlsxHasHeader"])
-        self.assertTrue(result["xlsxHasTrue"])
-        self.assertTrue(result["xlsxHasFalse"])
-        self.assertEqual(
-            result["downloaded"]["filename"], "peval-leaderboard-visible.xlsx"
-        )
-        self.assertEqual(
-            result["downloaded"]["mime"],
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        self.assertEqual(
-            result["downloaded"]["type"],
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-        self.assertGreater(result["downloaded"]["size"], 0)
         self.assertFalse(result["subsetHasComparison"])
         self.assertEqual(result["subsetIncludes"], ["core"])
         self.assertEqual(result["subsetNotes"], ["keep"])
@@ -3883,7 +3876,7 @@ const result = vm.runInContext(`(async () => {
   const controls = renderWorkspaceViewControls();
   renderWorkspaceViewRail();
   const collapsedRail = rail.innerHTML;
-  state.workspaceViewSelection = new Set(["Focused model"]);
+  state.workspaceViewSelection = new Set(["server:Focused model"]);
   renderWorkspaceViewRail();
   const partialSelectionRail = rail.innerHTML;
   setFilterValues("workspace-views", "categories", ["frontend"]);
@@ -3909,11 +3902,11 @@ const result = vm.runInContext(`(async () => {
   clearFilter("workspace-views", "group_by");
   state.workspaceViewSelection.clear();
   renderWorkspaceViewRail();
-  toggleWorkspaceViewTable("Agent slice");
+  toggleWorkspaceViewTable("server:Agent slice");
   const firstTableOpenRail = rail.innerHTML;
-  toggleWorkspaceViewTable("Focused model");
+  toggleWorkspaceViewTable("server:Focused model");
   const bothTablesOpenRail = rail.innerHTML;
-  state.workspaceViewSelection = new Set(["Agent slice", "Focused model"]);
+  state.workspaceViewSelection = new Set(["server:Agent slice", "server:Focused model"]);
   renderWorkspaceViewRail();
   const selectedRail = rail.innerHTML;
   const downloads = [];
@@ -3954,7 +3947,7 @@ const result = vm.runInContext(`(async () => {
     summaryTableOpen: state.leaderboardSummaryTableOpen,
     statistic: state.leaderboardSummaryStatistic,
   };
-  state.workspaceViewSelection.delete("Agent slice");
+  state.workspaceViewSelection.delete("server:Agent slice");
   renderWorkspaceViewRail();
   const draftChangedRail = rail.innerHTML;
   state.rowSelection.add("kept-row");
@@ -4072,8 +4065,11 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertEqual(result["categoryRail"].count('data-workspace-view="'), 1)
         self.assertEqual(result["visibleDaily"], ["Agent slice"])
         self.assertEqual(result["dailyRail"].count('data-workspace-view="'), 1)
-        self.assertEqual(result["afterVisibleSelect"], ["Focused model", "Agent slice"])
-        self.assertEqual(result["afterVisibleClear"], ["Focused model"])
+        self.assertEqual(
+            result["afterVisibleSelect"],
+            ["server:Focused model", "server:Agent slice"],
+        )
+        self.assertEqual(result["afterVisibleClear"], ["server:Focused model"])
         self.assertIn("workspace-view-index", result["zeroRail"])
         self.assertNotIn('data-workspace-view="', result["zeroRail"])
         self.assertEqual(result["groupOrRows"], ["Agent slice", "Focused model"])
@@ -4107,6 +4103,22 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                         "summary": {
                             "scope": "leaderboard",
                             "source_keys": ["visible-2", "visible-1"],
+                            "query": {
+                                "state": "active",
+                                "search": "",
+                                "sort": "last_turn_end",
+                                "direction": "desc",
+                                "categories": [],
+                                "tags": [],
+                                "agents": [],
+                                "models": [],
+                                "tasks": [],
+                                "jobs": [],
+                                "providers": [],
+                                "results": [],
+                                "views": [],
+                                "browser_views": [],
+                            },
                             "group_by": "model",
                             "statistic": "p95",
                         },
@@ -4120,6 +4132,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                         "summary": {
                             "scope": "saved_views",
                             "views": ["Agent slice", "Focused model"],
+                            "browser_views": [],
                         },
                     },
                     "filename": "peval-saved-views.xlsx",
@@ -4128,6 +4141,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                     "kind": "workspace_html",
                     "body": {
                         "kind": "workspace_html",
+                        "browser_views": [],
                         "query": {
                             "state": "archived",
                             "search": "needle",
@@ -4142,6 +4156,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                             "providers": [],
                             "results": ["failed"],
                             "views": ["Agent slice"],
+                            "browser_views": [],
                         },
                         "selected_source_keys": ["chosen-source"],
                         "presentation": {
@@ -4150,6 +4165,35 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                             "summary_table_open": True,
                             "selected_source_key": "visible-2",
                             "selected_step_id": "7",
+                            "leaderboard_columns": {
+                                "version": 1,
+                                "order": [
+                                    "source_category",
+                                    "source_tags",
+                                    "session_id",
+                                    "task_name",
+                                    "workspace_reports",
+                                    "agent",
+                                    "model",
+                                    "job_name",
+                                    "model_provider",
+                                    "reward",
+                                    "status",
+                                    "finished_at_ms",
+                                    "duration_ms",
+                                    "ttft_ms",
+                                    "tps",
+                                    "turns",
+                                    "total_tool_calls",
+                                    "tool_error_rate",
+                                    "tokens",
+                                    "cache_hit_rate",
+                                    "cost_usd",
+                                    "analysis_count",
+                                    "notes",
+                                ],
+                                "visibility": {},
+                            },
                             "visible_view_names": ["Agent slice"],
                             "workspace_view_filters": {
                                 "categories": ["frontend"],
@@ -4200,7 +4244,8 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
             },
         )
         self.assertEqual(
-            result["afterApply"]["applied"], ["Agent slice", "Focused model"]
+            result["afterApply"]["applied"],
+            ["server:Agent slice", "server:Focused model"],
         )
         self.assertEqual(result["afterApply"]["groupBy"], "model")
         self.assertTrue(result["afterApply"]["summaryTableOpen"])
@@ -4303,6 +4348,11 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
                 "summary_table_open": False,
                 "selected_source_key": None,
                 "selected_step_id": None,
+                "leaderboard_columns": {
+                    "version": 1,
+                    "order": [],
+                    "visibility": {},
+                },
                 "workspace_view_filters": {
                     "categories": ["frontend"],
                     "tags": [],
@@ -4412,7 +4462,8 @@ console.log(result);
         self.assertIn("Category: frontend", result["railHtml"])
         self.assertIn("Group by: Category", result["railHtml"])
         self.assertIn(
-            'data-view-table-toggle="Frontend" aria-expanded="true"', result["railHtml"]
+            'data-view-table-toggle="server:Frontend" aria-expanded="true"',
+            result["railHtml"],
         )
         self.assertNotIn("data-view-select-visible", result["railHtml"])
         self.assertNotIn("data-view-apply-selected", result["railHtml"])
@@ -4430,11 +4481,13 @@ const vm = require("vm");
 const asset = __ASSET__;
 const nameInput = { value: "Daily" };
 const notesInput = { value: "Review this cohort." };
+const workspaceLocation = { value: "workspace", checked: true };
 const dialog = {
   hidden: false,
   querySelector(selector) {
     if (selector === "[data-view-name-input]") return nameInput;
     if (selector === "[data-view-notes-input]") return notesInput;
+    if (selector === '[name="view_location"]:checked') return workspaceLocation;
     return null;
   },
 };
@@ -4475,6 +4528,7 @@ const context = {
   Array,
   RegExp,
   Promise,
+  localStorage: { getItem() { return null; }, setItem() {} },
   rail,
   dialog,
   staleList,
@@ -4525,7 +4579,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
 
-        self.assertEqual(result["listCalls"], 2)
+        self.assertEqual(result["listCalls"], 2, result)
         self.assertEqual(result["names"], ["Daily"])
         self.assertEqual(
             result["summaries"], [{"name": "Daily", "matched_count": 1, "groups": []}]
@@ -4534,7 +4588,8 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertIn("Daily", result["railHtml"])
         self.assertIn("1 matching sessions", result["railHtml"])
         self.assertIn(
-            'data-view-table-toggle="Daily" aria-expanded="false"', result["railHtml"]
+            'data-view-table-toggle="server:Daily" aria-expanded="false"',
+            result["railHtml"],
         )
         self.assertNotIn("workspace-view-menu", result["railHtml"])
         self.assertEqual(result["status"], {"message": "View saved", "error": False})
@@ -4803,6 +4858,8 @@ const asset = __ASSET__;
 const nameInput = { value: "Daily" };
 const notesInput = { value: "Original notes" };
 const configuration = { innerHTML: "" };
+const workspaceLocation = { value: "workspace", checked: true };
+const browserLocation = { value: "browser", checked: false };
 const dialog = {
   hidden: true,
   dataset: {},
@@ -4810,6 +4867,9 @@ const dialog = {
     if (selector === "[data-view-name-input]") return nameInput;
     if (selector === "[data-view-notes-input]") return notesInput;
     if (selector === "[data-view-current-configuration]") return configuration;
+    if (selector === '[name="view_location"][value="workspace"]') return workspaceLocation;
+    if (selector === '[name="view_location"][value="browser"]') return browserLocation;
+    if (selector === '[name="view_location"]:checked') return workspaceLocation;
     return null;
   },
   querySelectorAll() { return []; },
@@ -4883,6 +4943,7 @@ result.then(value => console.log(value)).catch(error => { console.error(error); 
         self.assertEqual(node.returncode, 0, node.stderr)
         result = json.loads(node.stdout)
 
+        self.assertIn("confirm", result, result)
         self.assertEqual(result["confirm"], "Replace Daily?")
         self.assertIn(
             "<dt>Search sessions</dt><dd>needle</dd>", result["savedConfiguration"]
@@ -4950,7 +5011,7 @@ const documentStub = {
   getElementById: () => null,
   querySelector: () => null,
   querySelectorAll(selector) {
-    if (selector !== ".export-menu[open],.filter-control[open]") {
+    if (selector !== ".export-menu[open],.filter-control[open],.column-control[open]") {
       throw new Error(`unexpected selector: ${selector}`);
     }
     return [exportMenu, filterMenu].filter(details => details.open);

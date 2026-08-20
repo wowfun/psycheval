@@ -1,10 +1,11 @@
-import { $, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, hasMetricValue, listValue, lower, noteSnippetFor, notesFor, notesPlainText, renderComparisonPanels, renderNotesCell, renderReadOnlySourceCategory, renderReadOnlySourceTags, renderTaskAlias, selectedKey, serveMode, sessionAliasValue, sourceCategoryEditValue, sourceCategoryFor, sourceCategoryValue, sourceIdentityFor, sourceTagsEditValue, sourceTagsFor, sourceTagsValue, state, statusLabel, t, workspaceDisplayMode } from "./runtime.js";
+import { $, RENDER_OPTIONS, WORKSPACE_SNAPSHOT, adminMode, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, noteSnippetFor, notesFor, notesPlainText, renderComparisonPanels, renderNotesCell, renderReadOnlySourceCategory, renderReadOnlySourceTags, renderTaskAlias, selectedKey, serveMode, sessionAliasValue, sourceCategoryEditValue, sourceCategoryFor, sourceCategoryValue, sourceIdentityFor, sourceTagsEditValue, sourceTagsFor, sourceTagsValue, state, statusLabel, t, workspaceDisplayMode, workspaceSnapshotMode } from "./runtime.js";
 import { bindServeExportControls, bindServeSelectionControls, bindTrialSelection } from "./export.js";
 import { bindServeSourceStateControls } from "./source-state-controls.js";
 import { renderSourceSelectionHeader } from "./source-manager.js";
 import { bindLeaderboardSearchControls, commitSourceCellEdit, existingSourceCategoryOptions, existingSourceTagOptions } from "./serve-effects.js";
-import { bindLeaderboardCatalogControls, filterOptions, leaderboardRows, renderLeaderboardPanelControls, renderLeaderboardSearchControls, reportRows, requestCatalogFacets, requestCatalogSort, rowAnalysised, trajectoryFor } from "./serve-catalog.js";
+import { bindLeaderboardCatalogControls, catalogSortKey, filterOptions, leaderboardRows, renderLeaderboardPanelControls, renderLeaderboardSearchControls, reportRows, requestCatalogFacets, requestCatalogSort, rowAnalysisCount, trajectoryFor } from "./serve-catalog.js";
 import { bindWorkspaceReportLeaderboardControls, workspaceReportLeaderboardColumn } from "./workspace-reports.js";
+import { loadColumnLayout, moveColumn, normalizeColumnLayout, presenceForColumns, resolveColumns, saveColumnLayout } from "./leaderboard-columns.js";
 
 function selectionColumn(options = {}) {
   return {
@@ -23,33 +24,36 @@ function selectionColumn(options = {}) {
 function leaderboardColumns() {
   const columns = [
     { key: "session_id", label: t("session", "Session"), valueType: "identity", filterable: true, value: row => sourceIdentityFor(row), cellTitle: row => row.trial_key && row.trial_key !== sourceIdentityFor(row) ? row.trial_key : "" },
-    { key: "task_name", label: t("task_alias", "Task / Alias"), valueType: "text", filterable: true, filterValues: row => [row?.task_name].filter(Boolean), sortable: true, value: row => sessionAliasValue(row), html: row => renderTaskAlias(row), edit: serveMode() ? { value: row => String(row?.source_alias || ""), commit: (row, value) => commitSourceCellEdit(row, "alias", value) } : undefined },
+    { key: "task_name", label: t("task_alias", "Task / Alias"), valueType: "text", filterable: true, filterValues: row => [row?.task_name].filter(Boolean), sortable: true, value: row => sessionAliasValue(row), html: row => renderTaskAlias(row), edit: adminMode() ? { value: row => String(row?.source_alias || ""), commit: (row, value) => commitSourceCellEdit(row, "alias", value) } : undefined },
     { key: "agent", label: t("agent", "Agent"), valueType: "identity", filterable: true, value: row => agentNameFor(row) },
     { key: "model", label: t("model", "Model"), valueType: "identity", filterable: true, value: row => row.model || "-" },
     { key: "job_name", label: t("job", "Job"), valueType: "identity", filterable: true, sortable: true, value: row => row?.job_name || "-" },
     { key: "model_provider", label: t("provider", "Provider"), valueType: "identity", filterable: true, sortable: true, value: row => row?.model_provider || "-" },
-    { key: "reward", label: t("reward", "Reward"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row?.score, format: (_value, row) => rewardValue(row) },
+    { key: "reward", label: t("reward", "Reward"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row?.score, presence: row => hasMetricValue(row?.score) ? row.score : Object.keys(row?.rewards || {}), format: (_value, row) => rewardValue(row) },
     { key: "status", label: t("result", "Result"), valueType: "status", filterable: true, value: row => row.status || "-", filterLabel: value => statusLabel(value), html: row => `<span class="stamp ${lower(row.status || "passed")}">${esc(statusLabel(row.status))}</span>` },
     { key: "finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.finished_at_ms, format: fmtDate },
     { key: "duration_ms", label: t("duration", "Active Duration"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.duration_ms, format: fmtMs },
+    { key: "ttft_ms", label: t("avg_ttft", "Avg TTFT"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.ttft_ms, format: fmtTtft },
+    { key: "tps", label: t("decode_tps", "Decode TPS"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.tps, format: fmtTps },
     { key: "turns", label: t("turns", "Turns"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.turns, format: fmtNum },
     { key: "total_tool_calls", label: t("tool_calls", "Tool Calls"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.total_tool_calls, format: value => hasMetricValue(value) ? fmtNum(value) : "-" },
     { key: "tool_error_rate", label: t("tool_error_rate", "Tool Error Rate"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => rowToolErrorRate(row), format: fmtPct },
     { key: "tokens", label: t("tokens", "Tokens"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.tokens, format: fmtNum },
+    { key: "cache_hit_rate", label: t("cache_hit", "Cache Hit"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.cache_hit_rate, format: fmtPct },
     { key: "cost_usd", label: t("cost", "Cost"), valueType: "number", numeric: true, sortable: true, value: row => row.cost_usd, format: fmtCost },
-    { key: "analysised", label: t("analysised", "Analysised"), valueType: "status", filterable: true, value: row => rowAnalysised(row) },
+    { key: "analysis_count", label: t("analysis_count", "#Analysis"), valueType: "number", numeric: true, filterable: true, value: row => rowAnalysisCount(row) },
     { key: "notes", label: t("notes", "Notes"), valueType: "markdown", value: row => noteSnippetFor(row.trial_key), html: row => renderNotesCell(row.trial_key), cellTitle: row => {
       const text = notesPlainText(notesFor(row.trial_key));
       return text && text !== noteSnippetFor(row.trial_key) ? text : "";
     } }
   ];
   if (!workspaceDisplayMode()) return columns;
-  const serveColumns = columns.map(column => ["session_id", "analysised"].includes(column.key)
+  const serveColumns = columns.map(column => ["session_id", "analysis_count"].includes(column.key)
     ? { ...column, filterable: false }
     : column);
   return [
-    { key: "source_category", label: t("category", "Category"), valueType: "text", filterable: true, filterValues: row => [sourceCategoryFor(row)].filter(Boolean), value: row => sourceCategoryValue(row), html: row => renderReadOnlySourceCategory(row), edit: serveMode() ? { value: row => sourceCategoryEditValue(row), suggestions: existingSourceCategoryOptions, commit: (row, value) => commitSourceCellEdit(row, "category", value) } : undefined },
-    { key: "source_tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: row => sourceTagsFor(row), value: row => sourceTagsValue(row), html: row => renderReadOnlySourceTags(row), edit: serveMode() ? { value: row => sourceTagsEditValue(row), suggestions: existingSourceTagOptions, commit: (row, value) => commitSourceCellEdit(row, "tags", value) } : undefined },
+    { key: "source_category", label: t("category", "Category"), valueType: "text", filterable: true, filterValues: row => [sourceCategoryFor(row)].filter(Boolean), value: row => sourceCategoryValue(row), html: row => renderReadOnlySourceCategory(row), edit: adminMode() ? { value: row => sourceCategoryEditValue(row), suggestions: existingSourceCategoryOptions, commit: (row, value) => commitSourceCellEdit(row, "category", value) } : undefined },
+    { key: "source_tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: row => sourceTagsFor(row), value: row => sourceTagsValue(row), html: row => renderReadOnlySourceTags(row), edit: adminMode() ? { value: row => sourceTagsEditValue(row), suggestions: existingSourceTagOptions, commit: (row, value) => commitSourceCellEdit(row, "tags", value) } : undefined },
     ...serveColumns.slice(0, 2),
     workspaceReportLeaderboardColumn(),
     ...serveColumns.slice(2)
@@ -60,8 +64,130 @@ function rewardValue(row) {
   const count = row?.rewards && typeof row.rewards === "object" ? Object.keys(row.rewards).length : 0;
   return count ? `${count} ${t("reward_dimensions_short", "dims")}` : "-";
 }
-function displayLeaderboardColumns() {
-  return serveMode() ? [selectionColumn(), ...leaderboardColumns()] : leaderboardColumns();
+function columnStorage() {
+  if (!serveMode() || typeof window === "undefined") return null;
+  try { return window.localStorage; } catch { return null; }
+}
+function cloneColumnLayout(layout) { return JSON.parse(JSON.stringify(layout)); }
+function leaderboardColumnLayout(columns = leaderboardColumns()) {
+  if (!state.leaderboardColumnLayout) {
+    state.leaderboardColumnLayout = loadColumnLayout(columns.map(column => column.key), {
+      workspaceId: RENDER_OPTIONS?.workspace_id,
+      snapshotLayout: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.leaderboard_columns : null,
+      storage: columnStorage(),
+    });
+  }
+  return normalizeColumnLayout(columns.map(column => column.key), state.leaderboardColumnLayout);
+}
+function currentLeaderboardColumnLayout() {
+  return cloneColumnLayout(leaderboardColumnLayout());
+}
+function leaderboardColumnContext(rows = leaderboardRows()) {
+  const columns = leaderboardColumns();
+  const layout = leaderboardColumnLayout(columns);
+  const serverPresence = serveMode() ? state.catalogPage?.column_presence : null;
+  const presence = presenceForColumns(columns, rows, serverPresence);
+  return { columns, layout, presence };
+}
+function displayLeaderboardColumns(rows = leaderboardRows()) {
+  const { columns, layout, presence } = leaderboardColumnContext(rows);
+  const displayed = resolveColumns(columns, layout, presence);
+  return serveMode() ? [selectionColumn(), ...displayed] : displayed;
+}
+function renderLeaderboardColumnControls(rows = leaderboardRows()) {
+  if (!workspaceDisplayMode()) return "";
+  const { columns, layout, presence } = leaderboardColumnContext(rows);
+  const draft = state.leaderboardColumnDraft
+    ? normalizeColumnLayout(columns.map(column => column.key), state.leaderboardColumnDraft)
+    : layout;
+  const ordered = draft.order.map(key => columns.find(column => column.key === key)).filter(Boolean);
+  const checked = column => draft.visibility[column.key] === "show"
+    || (draft.visibility[column.key] !== "hide" && presence[column.key]);
+  const visibleCount = ordered.filter(checked).length;
+  const rowsHtml = ordered.map((column, index) => {
+    const isChecked = checked(column);
+    const activeSort = serveMode()
+      ? catalogSortKey(state.catalogQuery?.sort) === catalogSortKey(column.key)
+      : tableControls("leaderboard").sort === column.key;
+    const filtered = activeFilterValues("leaderboard", column.key).length > 0;
+    const condition = [activeSort ? (serveMode() ? state.catalogQuery?.direction : tableControls("leaderboard").direction) : "", filtered ? t("filtered", "Filtered") : ""].filter(Boolean).join(" · ");
+    return `<li class="column-control-row${isChecked ? "" : " hidden-column"}" data-column-row="${esc(column.key)}">
+      <span class="column-control-index">${String(index + 1).padStart(2, "0")}</span>
+      <label><input type="checkbox" data-column-visible="${esc(column.key)}" ${isChecked ? "checked" : ""}><span>${esc(column.label)}</span></label>
+      <span class="column-control-state">${presence[column.key] ? "" : esc(t("no_data", "No data"))}${condition ? `<small>${esc(condition)}</small>` : ""}</span>
+      <span class="column-control-moves"><button type="button" data-column-move="${esc(column.key)}" data-column-direction="-1" aria-label="${esc(`${t("move_earlier", "Move earlier")}: ${column.label}`)}" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-column-move="${esc(column.key)}" data-column-direction="1" aria-label="${esc(`${t("move_later", "Move later")}: ${column.label}`)}" ${index === ordered.length - 1 ? "disabled" : ""}>↓</button></span>
+    </li>`;
+  }).join("");
+  return `<details class="column-control" ${state.leaderboardColumnDraft ? "open" : ""}>
+    <summary class="action-button column-control-button">${esc(t("columns", "Columns"))} ${visibleCount}/${ordered.length}</summary>
+    <div class="column-control-panel">
+      <div class="column-control-head"><strong>${esc(t("columns", "Columns"))}</strong><button type="button" data-column-reset>${esc(t("reset_auto", "Reset to auto"))}</button></div>
+      <ol class="column-control-list">${rowsHtml}</ol>
+      <div class="column-control-foot"><span aria-live="polite">${esc(`${visibleCount} / ${ordered.length}`)}</span><button type="button" class="action-button primary" data-column-apply>${esc(t("apply", "Apply"))}</button></div>
+    </div>
+  </details>`;
+}
+function renderLeaderboardAndRestoreColumnFocus(findControl) {
+  renderLeaderboard(leaderboardRows());
+  const root = $("leaderboard");
+  let control = findControl(root);
+  if (control?.disabled) {
+    const row = control.closest("[data-column-row]");
+    row?.setAttribute("tabindex", "-1");
+    control = row;
+  }
+  control?.focus();
+}
+function bindLeaderboardColumnControls(target) {
+  const details = target?.querySelector?.(".column-control");
+  if (!details) return;
+  details.addEventListener("toggle", () => {
+    if (details.open && !state.leaderboardColumnDraft) {
+      state.leaderboardColumnDraft = cloneColumnLayout(leaderboardColumnLayout());
+    } else if (!details.open) {
+      state.leaderboardColumnDraft = null;
+    }
+  });
+  details.addEventListener("keydown", event => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    state.leaderboardColumnDraft = null;
+    details.open = false;
+    details.querySelector("summary")?.focus();
+  });
+  details.querySelectorAll("[data-column-visible]").forEach(input => {
+    input.addEventListener("change", () => {
+      const columnKey = input.dataset.columnVisible;
+      const draft = state.leaderboardColumnDraft || cloneColumnLayout(leaderboardColumnLayout());
+      draft.visibility[columnKey] = input.checked ? "show" : "hide";
+      state.leaderboardColumnDraft = draft;
+      renderLeaderboardAndRestoreColumnFocus(root => Array.from(
+        root?.querySelectorAll?.("[data-column-visible]") || []
+      ).find(control => control.dataset.columnVisible === columnKey));
+    });
+  });
+  details.querySelectorAll("[data-column-move]").forEach(button => {
+    button.addEventListener("click", () => {
+      const columnKey = button.dataset.columnMove;
+      const direction = button.dataset.columnDirection;
+      const draft = state.leaderboardColumnDraft || cloneColumnLayout(leaderboardColumnLayout());
+      draft.order = moveColumn(draft.order, columnKey, Number(direction));
+      state.leaderboardColumnDraft = draft;
+      renderLeaderboardAndRestoreColumnFocus(root => Array.from(
+        root?.querySelectorAll?.("[data-column-move]") || []
+      ).find(control => control.dataset.columnMove === columnKey && control.dataset.columnDirection === direction));
+    });
+  });
+  details.querySelector("[data-column-reset]")?.addEventListener("click", () => {
+    state.leaderboardColumnDraft = normalizeColumnLayout(leaderboardColumns().map(column => column.key), null);
+    renderLeaderboardAndRestoreColumnFocus(root => root?.querySelector?.("[data-column-reset]"));
+  });
+  details.querySelector("[data-column-apply]")?.addEventListener("click", () => {
+    state.leaderboardColumnLayout = normalizeColumnLayout(leaderboardColumns().map(column => column.key), state.leaderboardColumnDraft);
+    saveColumnLayout(state.leaderboardColumnLayout, { workspaceId: RENDER_OPTIONS?.workspace_id, storage: columnStorage() });
+    state.leaderboardColumnDraft = null;
+    renderLeaderboardAndRestoreColumnFocus(root => root?.querySelector?.(".column-control > summary"));
+  });
 }
 function agentNameFor(row) {
   if (workspaceDisplayMode()) return row?.agent_name || row?.adapter || "-";
@@ -75,7 +201,7 @@ function rowToolErrorRate(row) {
 function renderLeaderboard(rows = leaderboardRows()) {
   const target = $("leaderboard");
   if (!target) return;
-  const columns = displayLeaderboardColumns();
+  const columns = displayLeaderboardColumns(rows);
   target.innerHTML = `
     <div class="panel-head leaderboard-panel-head">
       <div class="leaderboard-title-stack">
@@ -255,15 +381,20 @@ function renderDataTable({ tableId, columns, rows, rowKey = null, tableClass = "
 function renderTableHeader(tableId, column, controls, rows = [], filterOptionsRows = rows) {
   if (column.select) return renderSelectionHeader(rows, column);
   if (column.sourceSelect) return renderSourceSelectionHeader(rows);
-  const active = controls.sort === column.key;
-  const mark = active ? (controls.direction === "desc" ? "&#9660;" : "&#9650;") : "&#8597;";
+  const catalogSort = serveMode() && tableId === "leaderboard";
+  const active = catalogSort
+    ? catalogSortKey(state.catalogQuery?.sort) === catalogSortKey(column.key)
+    : controls.sort === column.key;
+  const direction = catalogSort ? state.catalogQuery?.direction : controls.direction;
+  const mark = active ? (direction === "desc" ? "&#9660;" : "&#9650;") : "&#8597;";
   const label = column.sortable
     ? `<button class="sort-button ${active ? "active" : ""}" type="button" data-table-sort="${esc(column.key)}" aria-label="${esc(t("sort", "Sort"))} ${esc(column.label)}"><span class="sort-label">${esc(column.label)}</span><span class="sort-mark">${mark}</span></button>`
     : `<span class="static-head">${esc(column.label)}</span>`;
   const filter = column.filterable ? renderFilterControl(tableId, column, filterOptionsRows) : "";
   const contentClass = column.filterable ? "table-head-cell table-head-inline" : "table-head-cell";
   const valueType = tableValueType(column);
-  return `<th class="${column.numeric ? "num " : ""}table-value-${esc(valueType)}" data-value-type="${esc(valueType)}"><div class="${contentClass}">${label}${filter}</div></th>`;
+  const ariaSort = column.sortable ? ` aria-sort="${active ? (direction === "desc" ? "descending" : "ascending") : "none"}"` : "";
+  return `<th class="${column.numeric ? "num " : ""}table-value-${esc(valueType)}" data-value-type="${esc(valueType)}"${ariaSort}><div class="${contentClass}">${label}${filter}</div></th>`;
 }
 function renderFilterControl(tableId, column, rows) {
   const selected = new Set(activeFilterValues(tableId, column.key));
@@ -750,10 +881,11 @@ function setDataTableFilterApplyDisabled(root, disabled) {
 function bindLeaderboardControls() {
   const target = $("leaderboard");
   if (!target) return;
+  const rows = leaderboardRows();
   bindDataTableControls(target, {
     tableId: "leaderboard",
-    columns: displayLeaderboardColumns(),
-    rows: leaderboardRows(),
+    columns: displayLeaderboardColumns(rows),
+    rows,
     rowKey: row => row.source_key || row.trial_key,
     onChange: () => renderComparisonPanels(),
   });
@@ -764,6 +896,7 @@ function bindLeaderboardControls() {
   bindWorkspaceReportLeaderboardControls(target);
   bindTrialSelection(target);
   bindLeaderboardCatalogControls(target);
+  bindLeaderboardColumnControls(target);
 }
 export {
   activeFilterValues,
@@ -774,8 +907,10 @@ export {
   bindDataTableControls,
   bindDataTableEditors,
   bindLeaderboardControls,
+  bindLeaderboardColumnControls,
   clearFilter,
   compareTableValues,
+  currentLeaderboardColumnLayout,
   dataTableFilterDraftValues,
   dataTableFilterMenu,
   displayLeaderboardColumns,
@@ -793,6 +928,7 @@ export {
   renderDataTable,
   renderFilterControl,
   renderLeaderboard,
+  renderLeaderboardColumnControls,
   renderLeaderboardExportControls,
   renderRowSelection,
   renderSelectionHeader,

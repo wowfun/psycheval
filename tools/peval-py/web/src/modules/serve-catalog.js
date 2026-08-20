@@ -1,11 +1,11 @@
-import { WORKSPACE_SNAPSHOT, analysisArtifactPathsFor, applySessionSearch, esc, hasMetricValue, isAnalysisArtifactPath, listValue, lower, normalizeServeSourceMode, render, renderComparison, renderComparisonPanels, selectedIndex, selectedKey, serveMode, state, synthesizedReportRow, t, workspaceSnapshotMode } from "./runtime.js";
-import { applyDataTableControls, filterValues, leaderboardColumns, renderLeaderboardExportControls, tableControls } from "./data-tables.js";
+import { WORKSPACE_SNAPSHOT, adminMode, applySessionSearch, esc, hasMetricValue, isAnalysisArtifactPath, listValue, lower, normalizeServeSourceMode, render, renderComparison, renderComparisonPanels, selectedIndex, selectedKey, serveMode, state, synthesizedReportRow, t, workspaceSnapshotMode } from "./runtime.js";
+import { applyDataTableControls, currentLeaderboardColumnLayout, filterValues, leaderboardColumns, renderLeaderboardColumnControls, renderLeaderboardExportControls, tableControls } from "./data-tables.js";
 import { downloadBlob, firstUserStepSelection } from "./export.js";
 import { renderServeSourceStateControls, serveSourceModeStatusText } from "./source-state-controls.js";
 import { renderServeSources, sourceColumns, syncSourceManagerBulkActions } from "./source-manager.js";
-import { emptyServeReport, hideServeNotice, serveApi, setServeStatus } from "./serve-effects.js";
+import { emptyServeReport, hideServeNotice, reloadExpiredAdminSession, serveApi, setServeStatus } from "./serve-effects.js";
 import { closeWorkspaceReportManager, closeWorkspaceReportReader, refreshWorkspaceReports, renderAttachWorkspaceReportAction } from "./workspace-reports.js";
-import { clearWorkspaceViewConditions, closeWorkspaceViewSaveDialog, refreshWorkspaceViews, workspaceViewRows, workspaceViews } from "./workspace-views.js";
+import { browserWorkspaceViewDefinitions, clearWorkspaceViewConditions, closeWorkspaceViewSaveDialog, refreshWorkspaceViews, workspaceViewQueryPayload, workspaceViewRows, workspaceViews } from "./workspace-views.js";
 import { renderStepDrawer } from "./trajectory-trace.js";
 import { openModalSurface } from "./modal-surfaces.js";
 
@@ -49,11 +49,29 @@ function leaderboardRows() {
   return applyDataTableControls("leaderboard", applySessionSearch(reportRows()), leaderboardColumns(), reportRows());
 }
 
-function rowAnalysised(row) {
-  if (serveMode() && Object.prototype.hasOwnProperty.call(row || {}, "analysised")) {
-    return row.analysised ? "True" : "False";
+function rowAnalysisCount(row) {
+  if (row?.analysis_count !== null && row?.analysis_count !== undefined) {
+    const value = Number(row.analysis_count);
+    return Number.isFinite(value) ? Math.max(0, Math.min(2, Math.trunc(value))) : 0;
   }
-  return analysisArtifactPathsFor(row?.trial_key).some(isAnalysisArtifactPath) ? "True" : "False";
+  const analysis = (state.view?.annotations?.analysis || [])
+    .find(item => item?.trial_key === row?.trial_key);
+  if (!analysis) return 0;
+  let harbor = false;
+  let workspace = false;
+  listValue(analysis.markdown_reports).forEach(report => {
+    if (!String(report?.markdown || "").trim()) return;
+    if (report?.source === "harbor_trial") harbor = true;
+    else workspace = true;
+  });
+  if (String(analysis.md_report || "").trim()) workspace = true;
+  const relativePaths = analysis.relative_paths;
+  if (relativePaths && typeof relativePaths === "object"
+      && [relativePaths.md, relativePaths.json].some(isAnalysisArtifactPath)) {
+    workspace = true;
+  }
+  if (isAnalysisArtifactPath(analysis.relative_path)) workspace = true;
+  return Number(harbor) + Number(workspace);
 }
 
 function trialIndexFor(trialKey) {
@@ -134,6 +152,7 @@ function sourceRows() {
 }
 
 function openServeSourceManager(opener = document.activeElement) {
+  if (!adminMode()) return;
   const manager = document.querySelector("[data-source-manager]");
   if (!manager) return;
   closeWorkspaceViewSaveDialog({ restoreFocus: false });
@@ -231,10 +250,13 @@ function filterOptions(column, rows) {
 }
 
 function renderLeaderboardPanelControls(rows) {
+  if (workspaceSnapshotMode()) {
+    return `<div class="leaderboard-actions"><div class="leaderboard-action-row">${renderLeaderboardColumnControls(rows)}</div></div>`;
+  }
   if (!serveMode()) return "";
   const selectedCount = state.rowSelection.size;
   return `<div class="leaderboard-actions">
-    <div class="leaderboard-action-row">${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardExportControls()}</div>
+    <div class="leaderboard-action-row">${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardColumnControls(rows)}${renderLeaderboardExportControls()}</div>
     <div class="catalog-page-controls" data-catalog-page-controls>
       <button type="button" class="action-button icon-only" data-catalog-prev aria-label="${esc(t("previous", "Previous"))}" ${state.catalogPage.page <= 1 ? "disabled" : ""}>‹</button>
       <span>${esc(catalogPageLabel())}</span>
@@ -400,7 +422,30 @@ async function loadCatalogPage(changes = {}, options = {}) {
   try {
     const wasChecking = Boolean(state.catalogPage?.checking);
     const previousGeneration = Number(state.catalogPage?.generation || 0);
-    const page = await serveApi(`/api/catalog?${catalogQueryString(options.surface || "leaderboard")}`);
+    const applied = workspaceViewQueryPayload();
+    state.catalogQuery.views = applied.views;
+    const page = applied.browser_views.length
+      ? await serveApi("/api/catalog/query", {
+        method: "POST",
+        body: {
+          state: state.catalogQuery.state || "active",
+          page: Number(state.catalogQuery.page || 1),
+          page_size: Number(state.catalogQuery.page_size || 100),
+          search: state.catalogQuery.search || "",
+          sort: catalogSortKey(state.catalogQuery.sort),
+          direction: state.catalogQuery.direction || "desc",
+          categories: listValue(state.catalogQuery.categories),
+          tags: listValue(state.catalogQuery.tags),
+          agents: listValue(state.catalogQuery.agents),
+          models: listValue(state.catalogQuery.models),
+          tasks: listValue(state.catalogQuery.tasks),
+          jobs: listValue(state.catalogQuery.jobs),
+          providers: listValue(state.catalogQuery.providers),
+          results: listValue(state.catalogQuery.results),
+          ...applied,
+        },
+      })
+      : await serveApi(`/api/catalog?${catalogQueryString(options.surface || "leaderboard")}`);
     state.catalogPage = page;
     state.serveSourceMode = normalizeServeSourceMode(state.catalogQuery.state);
     state.serveSources = listValue(page.items);
@@ -423,6 +468,16 @@ async function loadCatalogPage(changes = {}, options = {}) {
       || (workspaceViews().length >= 1 && Number(state.workspaceViewSummaryGeneration) !== Number(page.generation || 0))
     )) refreshWorkspaceViews();
   } catch (error) {
+    if (error?.status === 409 && state.workspaceAppliedViewNames.size) {
+      const appliedCount = state.workspaceAppliedViewNames.size;
+      await refreshWorkspaceViews();
+      if (state.workspaceAppliedViewNames.size < appliedCount) {
+        setTimeout(() => {
+          if (state.workspaceAppliedViewNames.size) loadCatalogPage({ page: 1 }, { force: true });
+          else clearWorkspaceViewConditions();
+        }, 0);
+      }
+    }
     setServeStatus(error.message || String(error), true);
   } finally {
     state.catalogLoading = false;
@@ -599,6 +654,7 @@ function setWorkspaceWriteControlsDisabled(disabled) {
 }
 
 async function refreshServeSourcesFromServer() {
+  if (!adminMode()) return;
   try {
     const payload = await serveApi("/api/sources/reload", { method: "POST", body: {} });
     await applyServeMutationPayload(payload);
@@ -613,6 +669,7 @@ async function refreshServeReportFromServer() {
 }
 
 async function deleteSelectedServeSources() {
+  if (!adminMode()) return;
   const sourceKeys = sourceSelectionKeys();
   if (!sourceKeys.length) return;
   if (!window.confirm(t("serve_delete_selected_confirm", "Delete selected sources from peval-py state?"))) return;
@@ -630,17 +687,20 @@ async function deleteSelectedServeSources() {
 function exportCurrentScope(kind) {
   if (!serveMode()) return;
   if (kind === "xlsx") {
+    const applied = workspaceViewQueryPayload();
     serveDownload("xlsx", {
       kind: "xlsx",
-      query: { ...state.catalogQuery, page: undefined, page_size: undefined }
+      query: { ...state.catalogQuery, ...applied, page: undefined, page_size: undefined }
     });
     return;
   }
   if (kind === "workspace_html") {
     const viewControls = tableControls("workspace-views");
     const visibleViews = typeof workspaceViewRows === "function" ? workspaceViewRows() : [];
+    const applied = workspaceViewQueryPayload();
     serveDownload("workspace_html", {
       kind: "workspace_html",
+      browser_views: browserWorkspaceViewDefinitions(),
       query: {
         state: state.catalogQuery.state || "active",
         search: state.catalogQuery.search || "",
@@ -654,7 +714,7 @@ function exportCurrentScope(kind) {
         jobs: listValue(state.catalogQuery.jobs),
         providers: listValue(state.catalogQuery.providers),
         results: listValue(state.catalogQuery.results),
-        views: listValue(state.catalogQuery.views),
+        ...applied,
       },
       selected_source_keys: Array.from(state.rowSelection),
       presentation: {
@@ -663,6 +723,7 @@ function exportCurrentScope(kind) {
         summary_table_open: Boolean(state.leaderboardSummaryTableOpen),
         selected_source_key: state.selectedSourceKey || null,
         selected_step_id: state.selectedStep?.stepId ?? null,
+        leaderboard_columns: currentLeaderboardColumnLayout(),
         visible_view_names: visibleViews.map(view => view.name),
         workspace_view_filters: {
           categories: listValue(viewControls.filters?.categories),
@@ -674,8 +735,8 @@ function exportCurrentScope(kind) {
           group_by: listValue(viewControls.filters?.group_by),
         },
         open_view_tables: visibleViews
-          .map(view => view.name)
-          .filter(name => state.workspaceViewTableOpen.has(name)),
+          .filter(view => state.workspaceViewTableOpen.has(view.id))
+          .map(view => view.name),
       },
     }, "peval-workspace-snapshot.html");
     return;
@@ -694,11 +755,13 @@ function exportLeaderboardSummary() {
   if (!serveMode()) return;
   const sourceKeys = leaderboardRows().map(row => row?.source_key).filter(Boolean);
   if (!sourceKeys.length) return;
+  const applied = workspaceViewQueryPayload();
   return serveDownload("summary_xlsx", {
     kind: "summary_xlsx",
     summary: {
       scope: "leaderboard",
       source_keys: sourceKeys,
+      query: { ...state.catalogQuery, ...applied, page: undefined, page_size: undefined },
       group_by: state.leaderboardSummaryGroupBy,
       statistic: state.leaderboardSummaryStatistic
     }
@@ -714,6 +777,7 @@ async function serveDownload(kind, body, requestedFilename = "") {
       credentials: "same-origin"
     });
     if (!response.ok) {
+      reloadExpiredAdminSession(response);
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload?.error || response.statusText);
     }
@@ -765,7 +829,7 @@ export {
   requestCatalogSort,
   refreshSourceCategoryOptions,
   resolveCatalogSelections,
-  rowAnalysised,
+  rowAnalysisCount,
   selectServeDetail,
   selectServeSource,
   serveDownload,

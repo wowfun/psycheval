@@ -19,6 +19,14 @@ from peval_py.config import (
 )
 from peval_py.html import render_serve_html
 from peval_py.i18n import normalize_locale
+from peval_py.serve.access import (
+    ADMIN_ROLE,
+    GUEST_ROLE,
+    AuthenticationDisabled,
+    InvalidCredentials,
+    LoginRateLimited,
+    ServeAccess,
+)
 from peval_py.serve.assets import ECHARTS_ASSET_PATH, cached_echarts_asset
 from peval_py.serve.constants import MAX_JSON_BODY_BYTES
 from peval_py.serve.errors import HttpError
@@ -31,6 +39,7 @@ from peval_py.serve.path_picker import PathPickerUnavailable, pick_file_paths
 from peval_py.serve.payloads import (
     adapter_default_db_payload,
     alias_payload,
+    catalog_post_query_payload,
     category_payload,
     markdown_payload,
     required_bool,
@@ -43,6 +52,11 @@ from peval_py.serve.payloads import (
 )
 from peval_py.serve.runtime import ServeRuntime
 from peval_py.serve.sources import add_source_payload, db_sessions_payload
+from peval_py.serve.visibility import (
+    project_catalog_payload,
+    project_detail_payload,
+    project_guest_error,
+)
 from peval_py.state import CatalogBusyError, CatalogQuery, ServeStateStore
 from peval_py.state.workspace_sources import WorkspaceSources, is_harbor_source
 from peval_py.workspace_reports import (
@@ -84,6 +98,8 @@ REPORT_READER_CSP = "; ".join(
 def make_handler(
     store_or_runtime: ServeStateStore | ServeRuntime,
     config: ToolConfig | None = None,
+    *,
+    access: ServeAccess | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     if isinstance(store_or_runtime, ServeRuntime):
         runtime = store_or_runtime
@@ -93,6 +109,7 @@ def make_handler(
             raise ValueError("config is required when make_handler receives a store")
         store = store_or_runtime
         runtime = ServeRuntime(store, config)
+    access_control = access or ServeAccess(None)
 
     class ServeHandler(BaseHTTPRequestHandler):
         server_version = "peval-py-serve/1"
@@ -103,19 +120,45 @@ def make_handler(
         def do_GET(self) -> None:  # noqa: N802
             parsed_url = urlsplit(self.path)
             path = parsed_url.path
+            self.begin_request(path)
             try:
+                self.require_route_access("GET", path)
+                if path == "/api/auth/session":
+                    self.write_json(
+                        access_control.session_payload(self.headers.get("Cookie"))
+                    )
+                    return
                 if path == "/":
+                    is_admin = self._serve_role == ADMIN_ROLE
                     self.write_html(
                         render_serve_html(
                             runtime.shell_report(),
                             locale=runtime.config.locale,
                             sources=[],
                             reports=[],
-                            adapter_defaults=runtime.config.adapter_default_db_paths,
-                            harbor_mounts=runtime.config.harbor_mounts,
+                            adapter_defaults=(
+                                runtime.config.adapter_default_db_paths
+                                if is_admin
+                                else {}
+                            ),
+                            harbor_mounts=(
+                                runtime.config.harbor_mounts if is_admin else ()
+                            ),
                             loading=not runtime.catalog.has_generation
                             or runtime.is_loading(),
-                            load_error=runtime.load_error(),
+                            load_error=(
+                                runtime.load_error()
+                                if is_admin
+                                else (
+                                    "workspace failed to load"
+                                    if runtime.load_error()
+                                    else None
+                                )
+                            ),
+                            workspace_id=runtime.workspace_id,
+                            workspace_description=runtime.config.description,
+                            role=self._serve_role,
+                            authentication_enabled=access_control.authentication_enabled,
                         )
                     )
                     return
@@ -130,14 +173,21 @@ def make_handler(
                         )
                     except WorkspaceViewNotFound as exc:
                         raise HttpError(400, str(exc)) from exc
-                    self.write_json(page.to_dict())
+                    self.write_json(
+                        project_catalog_payload(page.to_dict(), self._serve_role)
+                    )
                     return
                 if path == "/api/report":
                     source_key = single_query_value(parsed_url.query, "source_key")
                     if not source_key:
                         raise HttpError(400, "source_key is required")
                     try:
-                        self.write_json(runtime.detail(source_key).to_dict())
+                        self.write_json(
+                            project_detail_payload(
+                                runtime.detail(source_key).to_dict(),
+                                self._serve_role,
+                            )
+                        )
                     except ValueError as exc:
                         raise HttpError(400, str(exc)) from exc
                     return
@@ -188,9 +238,53 @@ def make_handler(
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlsplit(self.path).path
-            self._workspace_write_lease = None
+            self.begin_request(path)
             try:
+                self.require_route_access("POST", path)
                 payload = self.read_json_payload()
+                if path == "/api/auth/login":
+                    password = payload.get("password")
+                    if not isinstance(password, str) or not password:
+                        raise HttpError(400, "password must be a non-empty string")
+                    try:
+                        token = access_control.login(password, self.client_address[0])
+                    except AuthenticationDisabled as exc:
+                        raise HttpError(409, str(exc)) from exc
+                    except InvalidCredentials as exc:
+                        raise HttpError(401, str(exc)) from exc
+                    except LoginRateLimited as exc:
+                        self._response_headers["Retry-After"] = str(exc.retry_after)
+                        raise HttpError(429, "too many failed login attempts") from exc
+                    self._serve_role = ADMIN_ROLE
+                    self._response_headers["Set-Cookie"] = (
+                        access_control.session_cookie(token)
+                    )
+                    self.write_json(
+                        {
+                            "authentication_enabled": True,
+                            "role": ADMIN_ROLE,
+                        }
+                    )
+                    return
+                if path == "/api/auth/logout":
+                    access_control.logout(self.headers.get("Cookie"))
+                    self._serve_role = GUEST_ROLE
+                    self._response_headers["Set-Cookie"] = (
+                        access_control.expired_session_cookie()
+                    )
+                    self.write_json(
+                        {
+                            "authentication_enabled": (
+                                access_control.authentication_enabled
+                            ),
+                            "role": (
+                                GUEST_ROLE
+                                if access_control.authentication_enabled
+                                else ADMIN_ROLE
+                            ),
+                        }
+                    )
+                    return
                 if path == "/api/catalog/resolve":
                     self.write_json(
                         {
@@ -200,6 +294,48 @@ def make_handler(
                             ),
                         }
                     )
+                    return
+                if path == "/api/catalog/query":
+                    query, view_names, raw_browser_views = catalog_post_query_payload(
+                        payload
+                    )
+                    try:
+                        browser_views = runtime.validated_browser_views(
+                            raw_browser_views
+                        )
+                        page = runtime.catalog_page(
+                            query,
+                            view_names=view_names,
+                            browser_views=browser_views,
+                        )
+                        runtime.ensure_browser_view_names_available(browser_views)
+                    except WorkspaceViewConflict as exc:
+                        raise HttpError(409, str(exc)) from exc
+                    except (WorkspaceViewNotFound, ValueError) as exc:
+                        raise HttpError(400, str(exc)) from exc
+                    self.write_json(
+                        project_catalog_payload(page.to_dict(), self._serve_role)
+                    )
+                    return
+                if path == "/api/views/summary":
+                    if set(payload) != {"browser_views"}:
+                        raise HttpError(
+                            400, "browser view summary fields must be browser_views"
+                        )
+                    try:
+                        views = runtime.validated_browser_views(
+                            payload.get("browser_views")
+                        )
+                    except WorkspaceViewConflict as exc:
+                        raise HttpError(409, str(exc)) from exc
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
+                    result = runtime.browser_view_summaries(views)
+                    try:
+                        runtime.ensure_browser_view_names_available(views)
+                    except WorkspaceViewConflict as exc:
+                        raise HttpError(409, str(exc)) from exc
+                    self.write_json(result)
                     return
                 if path == "/api/config/locale":
                     runtime.ensure_ready()
@@ -213,11 +349,14 @@ def make_handler(
                     runtime.ensure_ready()
                     self.require_workspace_writable()
                     adapter_id, raw_db_path = adapter_default_db_payload(payload)
-                    resolved = write_workspace_adapter_default_db(
-                        store.paths.config_path,
-                        adapter_id,
-                        raw_db_path,
-                    )
+                    try:
+                        resolved = write_workspace_adapter_default_db(
+                            store.paths.config_path,
+                            adapter_id,
+                            raw_db_path,
+                        )
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
                     adapter_defaults = dict(runtime.config.adapter_default_db_paths)
                     if resolved:
                         adapter_defaults[adapter_id] = resolved
@@ -239,21 +378,27 @@ def make_handler(
                     return
                 if path == "/api/config/harbor-mount":
                     runtime.ensure_ready()
-                    self.write_json(
-                        runtime.mutate(
-                            "harbor-config",
-                            [],
-                            lambda: update_harbor_mount_config(
-                                store,
-                                runtime,
-                                payload,
-                            ),
+                    try:
+                        self.write_json(
+                            runtime.mutate(
+                                "harbor-config",
+                                [],
+                                lambda: update_harbor_mount_config(
+                                    store,
+                                    runtime,
+                                    payload,
+                                ),
+                            )
                         )
-                    )
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
                     return
                 if path == "/api/db-sessions":
                     runtime.ensure_ready()
-                    self.write_json(db_sessions_payload(store, payload))
+                    try:
+                        self.write_json(db_sessions_payload(store, payload))
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
                     return
                 if path == "/api/path-picker":
                     multiple = payload.get("multiple", True)
@@ -268,23 +413,40 @@ def make_handler(
                     export_kind = required_string(payload, "kind")
                     if export_kind.strip().lower() == "summary_xlsx":
                         summary_request = summary_export_payload(payload.get("summary"))
-                        if summary_request.scope == "leaderboard":
-                            sheets = [
-                                runtime.leaderboard_summary_worksheet(
-                                    summary_request.source_keys,
-                                    group_by=summary_request.group_by,
-                                    statistic=summary_request.statistic,
+                        try:
+                            if summary_request.scope == "leaderboard":
+                                assert summary_request.query is not None
+                                browser_views = runtime.validated_browser_views(
+                                    summary_request.browser_views
                                 )
-                            ]
-                        else:
-                            sheets = runtime.workspace_view_summary_worksheets(
-                                summary_request.views
+                                sheets = [
+                                    runtime.leaderboard_summary_worksheet(
+                                        summary_request.source_keys,
+                                        query=summary_request.query,
+                                        view_names=summary_request.view_names,
+                                        browser_views=browser_views,
+                                        group_by=summary_request.group_by,
+                                        statistic=summary_request.statistic,
+                                    )
+                                ]
+                            else:
+                                browser_views = runtime.validated_browser_views(
+                                    summary_request.browser_views
+                                )
+                                sheets = runtime.workspace_view_summary_worksheets(
+                                    summary_request.views,
+                                    browser_views,
+                                )
+                            export = build_summary_serve_export(
+                                sheets,
+                                runtime.config,
+                                scope=summary_request.scope,
                             )
-                        export = build_summary_serve_export(
-                            sheets,
-                            runtime.config,
-                            scope=summary_request.scope,
-                        )
+                            runtime.ensure_browser_view_names_available(browser_views)
+                        except WorkspaceViewConflict as exc:
+                            raise HttpError(409, str(exc)) from exc
+                        except ValueError as exc:
+                            raise HttpError(400, str(exc)) from exc
                         self.write_download(
                             export.content,
                             export.content_type,
@@ -293,18 +455,37 @@ def make_handler(
                         return
                     if export_kind.strip().lower() == "workspace_html":
                         snapshot_request = workspace_snapshot_export_payload(payload)
-                        export = build_workspace_snapshot_export(
-                            runtime.catalog,
-                            store,
-                            runtime.workspace_views,
-                            runtime.workspace_reports,
-                            runtime.config,
-                            query=snapshot_request.query,
-                            query_view_names=snapshot_request.view_names,
-                            selected_source_keys=snapshot_request.selected_source_keys,
-                            presentation=snapshot_request.presentation,
-                            echarts_js=cached_echarts_asset(store),
-                        )
+                        try:
+                            query_browser_views = runtime.validated_browser_views(
+                                snapshot_request.query_browser_views
+                            )
+                            browser_views = runtime.validated_browser_views(
+                                snapshot_request.browser_views
+                            )
+                            export = build_workspace_snapshot_export(
+                                runtime.catalog,
+                                store,
+                                runtime.workspace_views,
+                                runtime.workspace_reports,
+                                runtime.config,
+                                query=snapshot_request.query,
+                                query_view_names=snapshot_request.view_names,
+                                query_browser_views=query_browser_views,
+                                browser_views=browser_views,
+                                selected_source_keys=(
+                                    snapshot_request.selected_source_keys
+                                ),
+                                presentation=snapshot_request.presentation,
+                                echarts_js=cached_echarts_asset(store),
+                                audience=self._serve_role,
+                            )
+                            runtime.ensure_browser_view_names_available(
+                                [*query_browser_views, *browser_views]
+                            )
+                        except WorkspaceViewConflict as exc:
+                            raise HttpError(409, str(exc)) from exc
+                        except ValueError as exc:
+                            raise HttpError(400, str(exc)) from exc
                         self.write_download(
                             export.content,
                             export.content_type,
@@ -314,15 +495,29 @@ def make_handler(
                     raw_export_query = payload.get("query")
                     export_query = catalog_query_payload(raw_export_query)
                     view_names = catalog_view_names_payload(raw_export_query)
-                    export = build_serve_export(
-                        runtime.catalog,
-                        store,
-                        runtime.config,
-                        kind=export_kind,
-                        query=export_query,
-                        view_queries=runtime.workspace_view_queries(view_names),
-                        source_keys=source_keys_payload(payload),
-                    )
+                    try:
+                        browser_views = runtime.validated_browser_views(
+                            raw_export_query.get("browser_views", [])
+                            if isinstance(raw_export_query, dict)
+                            else []
+                        )
+                        export = build_serve_export(
+                            runtime.catalog,
+                            store,
+                            runtime.config,
+                            kind=export_kind,
+                            query=export_query,
+                            view_queries=runtime.workspace_view_queries(
+                                view_names, browser_views
+                            ),
+                            source_keys=source_keys_payload(payload),
+                            audience=self._serve_role,
+                        )
+                        runtime.ensure_browser_view_names_available(browser_views)
+                    except WorkspaceViewConflict as exc:
+                        raise HttpError(409, str(exc)) from exc
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
                     self.write_download(
                         export.content, export.content_type, export.filename
                     )
@@ -331,10 +526,13 @@ def make_handler(
                     runtime.ensure_ready()
                     self.require_workspace_writable()
                     source_keys = source_keys_payload(payload) or []
-                    report_id = runtime.workspace_reports.import_file(
-                        required_string(payload, "path"),
-                        source_keys,
-                    )
+                    try:
+                        report_id = runtime.workspace_reports.import_file(
+                            required_string(payload, "path"),
+                            source_keys,
+                        )
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
                     self.write_json(
                         {
                             "reports": runtime.workspace_report_catalog(),
@@ -358,6 +556,8 @@ def make_handler(
                         raise HttpError(409, str(exc)) from exc
                     except WorkspaceViewNotFound as exc:
                         raise HttpError(404, str(exc)) from exc
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
                     self.write_json(
                         {
                             "view": view.to_dict(),
@@ -372,6 +572,8 @@ def make_handler(
                         deleted = runtime.workspace_views.delete(payload.get("names"))
                     except WorkspaceViewNotFound as exc:
                         raise HttpError(404, str(exc)) from exc
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
                     self.write_json(
                         {
                             "deleted": deleted,
@@ -395,6 +597,8 @@ def make_handler(
                         )
                     except WorkspaceViewConflict as exc:
                         raise HttpError(409, str(exc)) from exc
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
                     self.write_json(
                         {
                             "view": view.to_dict(),
@@ -459,13 +663,16 @@ def make_handler(
                         )
                         self.write_json(operation.to_dict(), status=202)
                         return
-                    response = runtime.mutate(
-                        "source-import",
-                        [],
-                        lambda: add_source_result_payload(
-                            add_source_payload(store, runtime.config, payload)
-                        ),
-                    )
+                    try:
+                        response = runtime.mutate(
+                            "source-import",
+                            [],
+                            lambda: add_source_result_payload(
+                                add_source_payload(store, runtime.config, payload)
+                            ),
+                        )
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
                     self.write_json(response)
                     return
                 if path == "/api/sources/reload":
@@ -518,6 +725,8 @@ def make_handler(
                             raise HttpError(404, "unknown report action")
                     except WorkspaceReportNotFound as exc:
                         raise HttpError(404, str(exc)) from exc
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
                     self.write_json({"reports": runtime.workspace_report_catalog()})
                     return
 
@@ -562,7 +771,10 @@ def make_handler(
                         )
                     else:
                         raise HttpError(404, "unknown source action")
-                    self.write_json(runtime.mutate(action, [source_key], mutate))
+                    try:
+                        self.write_json(runtime.mutate(action, [source_key], mutate))
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
                     return
 
                 raise HttpError(404, "not found")
@@ -571,12 +783,22 @@ def make_handler(
             except CatalogBusyError as exc:
                 self.write_error(409, str(exc))
             except Exception as exc:  # noqa: BLE001 - HTTP boundary.
-                self.write_error(400, str(exc))
+                self.write_error(500, str(exc))
             finally:
                 lease = self._workspace_write_lease
                 self._workspace_write_lease = None
                 if lease is not None:
                     lease.__exit__(None, None, None)
+
+        def begin_request(self, path: str) -> None:
+            del path
+            self._workspace_write_lease = None
+            self._response_headers: dict[str, str] = {}
+            self._serve_role = access_control.role(self.headers.get("Cookie"))
+
+        def require_route_access(self, method: str, path: str) -> None:
+            if not access_control.permits(method, path, self._serve_role):
+                raise HttpError(403, "administrator access required")
 
         def read_json_payload(self) -> dict[str, Any]:
             self.require_same_origin()
@@ -636,6 +858,8 @@ def make_handler(
             data = html.encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("X-Frame-Options", "DENY")
+            self.write_common_headers()
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -644,6 +868,7 @@ def make_handler(
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.write_common_headers()
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -651,6 +876,10 @@ def make_handler(
         def write_js(self, data: bytes, status: int = 200) -> None:
             self.send_response(status)
             self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.write_pending_headers()
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -667,6 +896,7 @@ def make_handler(
             self.send_header(
                 "Content-Disposition", f'attachment; filename="{filename}"'
             )
+            self.write_common_headers()
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -678,6 +908,7 @@ def make_handler(
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "no-store")
+            self.write_pending_headers()
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -689,15 +920,27 @@ def make_handler(
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "no-store")
+            self.write_pending_headers()
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
 
+        def write_common_headers(self) -> None:
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.write_pending_headers()
+
+        def write_pending_headers(self) -> None:
+            for name, value in self._response_headers.items():
+                self.send_header(name, value)
+
         def write_error(self, status: int, message: str) -> None:
+            safe_message = project_guest_error(status, message, self._serve_role)
             if urlsplit(self.path).path.startswith("/api/"):
-                self.write_json({"error": message}, status=status)
+                self.write_json({"error": safe_message}, status=status)
                 return
-            self.write_html(f"{status} {message}\n", status=status)
+            self.write_html(f"{status} {safe_message}\n", status=status)
 
     return ServeHandler
 

@@ -7,7 +7,7 @@ const browser = installBrowserDom(`
   <script type="application/json" id="peval-py-data">{}</script>
   <script type="application/json" id="peval-py-token-estimates">{}</script>
   <script type="application/json" id="peval-py-i18n">{}</script>
-  <script type="application/json" id="peval-py-render-options">{"mode":"serve","sources":[]}</script>
+  <script type="application/json" id="peval-py-render-options">{"mode":"serve","role":"admin","authentication_enabled":true,"sources":[]}</script>
   <strong data-source-count></strong>
   <span data-source-status></span>
   <div data-source-manager hidden><section aria-modal="true"><button data-source-manager-close>Close</button><p data-source-manager-status hidden></p><ul data-source-list></ul></section></div>
@@ -22,6 +22,7 @@ const browser = installBrowserDom(`
 `);
 
 const runtime = await import("../src/modules/runtime.js");
+const tables = await import("../src/modules/data-tables.js");
 const sourceManager = await import("../src/modules/source-manager.js");
 const serveEffects = await import("../src/modules/serve-effects.js");
 const catalog = await import("../src/modules/serve-catalog.js");
@@ -33,11 +34,139 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());
 
+test("workspace description renders escaped Markdown and hides blank content", () => {
+  const node = document.createElement("div");
+  node.dataset.workspaceDescription = "";
+  node.hidden = true;
+  document.body.append(node);
+  try {
+    runtime.RENDER_OPTIONS.workspace_description = "**Nightly** <script>alert(1)</script>";
+    runtime.renderWorkspaceDescription();
+    assert.equal(node.hidden, false);
+    assert.match(node.innerHTML, /<strong>Nightly<\/strong>/);
+    assert.match(node.innerHTML, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+    assert.doesNotMatch(node.innerHTML, /<script>/);
+
+    runtime.RENDER_OPTIONS.workspace_description = "   ";
+    runtime.renderWorkspaceDescription();
+    assert.equal(node.hidden, true);
+    assert.equal(node.innerHTML, "");
+  } finally {
+    delete runtime.RENDER_OPTIONS.workspace_description;
+    node.remove();
+  }
+});
+
 test("Harbor semantic Leaderboard columns use Catalog API sort keys", () => {
   assert.equal(catalog.catalogSortKey("task_name"), "task");
   assert.equal(catalog.catalogSortKey("job_name"), "job");
   assert.equal(catalog.catalogSortKey("model_provider"), "provider");
   assert.equal(catalog.catalogSortKey("reward"), "reward");
+});
+
+test("initial Catalog sort is shown on the corresponding browser column", () => {
+  runtime.state.catalogQuery.sort = "last_turn_end";
+  runtime.state.catalogQuery.direction = "desc";
+  runtime.state.tables.leaderboard = {};
+  const host = document.createElement("div");
+  host.innerHTML = tables.renderLeaderboardColumnControls([]);
+
+  const state = host.querySelector('[data-column-row="finished_at_ms"] .column-control-state');
+  assert.match(state.textContent, /desc/);
+
+  const column = tables.leaderboardColumns().find(item => item.key === "finished_at_ms");
+  host.innerHTML = `<table><thead><tr>${tables.renderTableHeader(
+    "leaderboard",
+    column,
+    tables.tableControls("leaderboard"),
+  )}</tr></thead></table>`;
+  const header = host.querySelector("th");
+  assert.equal(header.getAttribute("aria-sort"), "descending");
+  assert.equal(header.querySelector("[data-table-sort]").classList.contains("active"), true);
+});
+
+test("the last visible data column remains hideable", () => {
+  runtime.state.catalogRows = [];
+  runtime.state.catalogPage.column_presence = { task_name: 1 };
+  runtime.state.leaderboardColumnDraft = null;
+  runtime.state.leaderboardColumnLayout = null;
+
+  const host = document.createElement("div");
+  host.innerHTML = tables.renderLeaderboardColumnControls([]);
+
+  const visibility = host.querySelector('[data-column-visible="task_name"]');
+  assert.equal(visibility.checked, true);
+  assert.equal(visibility.disabled, false);
+});
+
+test("column draft actions restore focus after replacing the control panel", () => {
+  runtime.state.catalogRows = [];
+  runtime.state.catalogPage.column_presence = { session_id: 1, task_name: 1 };
+  runtime.state.leaderboardColumnDraft = null;
+  runtime.state.leaderboardColumnLayout = null;
+  tables.renderLeaderboard([]);
+
+  let details = document.querySelector("#leaderboard .column-control");
+  details.open = true;
+  details.dispatchEvent(new window.Event("toggle"));
+
+  let visibility = details.querySelector('[data-column-visible="task_name"]');
+  visibility.focus();
+  visibility.checked = !visibility.checked;
+  visibility.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(document.activeElement?.dataset.columnVisible, "task_name");
+
+  let move = document.querySelector('#leaderboard [data-column-move="task_name"][data-column-direction="1"]');
+  move.focus();
+  move.click();
+  assert.equal(document.activeElement?.dataset.columnMove, "task_name");
+  assert.equal(document.activeElement?.dataset.columnDirection, "1");
+
+  let reset = document.querySelector("#leaderboard [data-column-reset]");
+  reset.focus();
+  reset.click();
+  assert.equal(document.activeElement?.hasAttribute("data-column-reset"), true);
+
+  const apply = document.querySelector("#leaderboard [data-column-apply]");
+  apply.focus();
+  apply.click();
+  assert.equal(document.activeElement, document.querySelector("#leaderboard .column-control > summary"));
+
+  runtime.state.leaderboardColumnDraft = null;
+  runtime.state.leaderboardColumnLayout = null;
+  runtime.state.catalogPage.column_presence = {};
+  tables.renderLeaderboard([]);
+  details = document.querySelector("#leaderboard .column-control");
+  details.open = true;
+  details.dispatchEvent(new window.Event("toggle"));
+  visibility = details.querySelector('[data-column-visible="task_name"]');
+  visibility.checked = true;
+  visibility.dispatchEvent(new window.Event("change", { bubbles: true }));
+  assert.equal(document.activeElement?.dataset.columnVisible, "task_name");
+
+  runtime.state.leaderboardColumnDraft = null;
+  runtime.state.leaderboardColumnLayout = null;
+});
+
+test("an expired administrator export reloads into guest state", async () => {
+  const previousFetch = globalThis.fetch;
+  const navigationErrors = [];
+  const onJsdomError = error => navigationErrors.push(error.message);
+  browser.dom.virtualConsole.on("jsdomError", onJsdomError);
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 403,
+    statusText: "Forbidden",
+    json: async () => ({ error: "administrator access required" }),
+  });
+
+  try {
+    await catalog.serveDownload("xlsx", { kind: "xlsx", source_keys: ["source"] });
+    assert.equal(navigationErrors.some(message => message.includes("navigation")), true);
+  } finally {
+    browser.dom.virtualConsole.off("jsdomError", onJsdomError);
+    globalThis.fetch = previousFetch;
+  }
 });
 
 test("Saved View Category groups preserve a literal overall category", () => {
@@ -658,7 +787,7 @@ test("clearing the final report binding immediately refreshes the rendered Leade
       path: `/api/reports/${report.report_id}/bindings`,
       body: { source_keys: [] },
     }]);
-    assert.doesNotMatch(reportCell("session-a").textContent, /binding-analysis\.md/);
+    assert.equal(reportCell("session-a"), null);
   } finally {
     globalThis.fetch = previousFetch;
     manager.hidden = true;
@@ -706,4 +835,35 @@ test("HTML report previews fit an 1180px design viewport into the reader pane", 
   assert.equal(frame.style.height, "1400px");
   assert.equal(frame.style.transform, "scale(0.5)");
   reports.closeWorkspaceReportReader({ restoreFocus: false });
+});
+
+test("workspace snapshot report previews fail closed for malformed or oversized data", () => {
+  const previousMode = runtime.RENDER_OPTIONS.mode;
+  runtime.RENDER_OPTIONS.mode = "workspace_snapshot";
+  runtime.state.workspaceReports = [{
+    report_id: "20260719-140000-000000",
+    filename: "broken-report.html",
+    format: "html",
+    source_keys: [],
+    preview_base64: "%%%not-base64%%%",
+  }];
+  try {
+    assert.doesNotThrow(() => {
+      reports.openWorkspaceReportReader("20260719-140000-000000");
+    });
+    const reader = document.querySelector("#workspace-report-reader");
+    assert.match(reader.textContent, /invalid/i);
+    assert.equal(reader.querySelector("[data-report-reader-frame]"), null);
+
+    const reportLimit = 20 * 1024 * 1024;
+    const oversizedBase64 = "A".repeat(Math.ceil((reportLimit + 1) / 3) * 4);
+    assert.throws(
+      () => reports.workspaceSnapshotReportPreviewUrl({ preview_base64: oversizedBase64 }),
+      /20 MiB/i,
+    );
+  } finally {
+    reports.closeWorkspaceReportReader({ restoreFocus: false });
+    runtime.state.workspaceReports = [];
+    runtime.RENDER_OPTIONS.mode = previousMode;
+  }
 });

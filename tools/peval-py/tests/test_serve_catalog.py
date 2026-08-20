@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -26,12 +27,136 @@ from peval_py.state import (
     WorkspaceCatalog,
     open_workspace_state,
 )
-from peval_py.state.catalog import CATALOG_SCHEMA_VERSION
+from peval_py.state.catalog import CATALOG_SCHEMA_VERSION, _count_matching_source_refs
 from peval_py.workspace_reports import WorkspaceReportLibrary
 from peval_py.workspace_views import WorkspaceViewLibrary
 
 
 class WorkspaceCatalogTests(unittest.TestCase):
+    def test_invalid_generation_retains_the_complete_zero_presence_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store, catalog = self.catalog(root)
+            try:
+                unavailable = catalog.query(CatalogQuery(), include_facets=False)
+                self.write_cell(root, 1)
+                catalog.reconcile()
+                available = catalog.query(CatalogQuery(), include_facets=False)
+
+                self.assertEqual(
+                    set(unavailable.column_presence), set(available.column_presence)
+                )
+                self.assertTrue(unavailable.column_presence)
+                self.assertTrue(
+                    all(value == 0 for value in unavailable.column_presence.values())
+                )
+            finally:
+                store.close()
+
+    def test_column_presence_uses_session_value_and_preserves_zero_analysis(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cell = self.write_cell(root, 1)
+            trajectory_path = cell / "agent" / "trajectory.json"
+            trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
+            trajectory.pop("session_id", None)
+            trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
+            store, catalog = self.catalog(root)
+            try:
+                catalog.reconcile()
+                page = catalog.query(CatalogQuery(), include_facets=False)
+
+                self.assertIsNone(page.items[0].payload["trial_session_id"])
+                self.assertEqual(page.column_presence["session_id"], 0)
+                self.assertEqual(page.items[0].payload["analysis_count"], 0)
+                self.assertEqual(page.column_presence["analysis_count"], 1)
+            finally:
+                store.close()
+
+    def test_report_binding_count_uses_one_set_valued_query(self) -> None:
+        connection = sqlite3.connect(":memory:")
+        connection.execute("CREATE TABLE cells (active INTEGER, source_ref TEXT)")
+        refs = [f"runs/default/agent/s{index}/c{index}" for index in range(1_205)]
+        connection.executemany(
+            "INSERT INTO cells (active, source_ref) VALUES (1, ?)",
+            [(source_ref,) for source_ref in refs],
+        )
+        statements: list[str] = []
+        connection.set_trace_callback(statements.append)
+
+        self.assertEqual(
+            _count_matching_source_refs(connection, "active = ?", [1], refs),
+            len(refs),
+        )
+        selects = [
+            statement
+            for statement in statements
+            if statement.lstrip().upper().startswith("SELECT")
+        ]
+        self.assertEqual(len(selects), 1)
+        connection.close()
+
+    def test_inference_summary_and_presence_cover_the_full_filtered_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = self.write_cell(root, 1)
+            second = self.write_cell(root, 2)
+            self.write_cell(root, 3)
+            self.write_inference_metrics(
+                first,
+                ttft_sum=100,
+                ttft_count=1,
+                decode_ms=100,
+                decode_tokens=10,
+                cache_prompt=100,
+                cache_read=90,
+            )
+            self.write_inference_metrics(
+                second,
+                ttft_sum=900,
+                ttft_count=9,
+                decode_ms=900,
+                decode_tokens=45,
+                cache_prompt=900,
+                cache_read=90,
+            )
+            store, catalog = self.catalog(root)
+            catalog.reconcile()
+
+            real_json_loads = json.loads
+            with patch(
+                "peval_py.state.catalog.json.loads", wraps=real_json_loads
+            ) as loads:
+                page = catalog.query(CatalogQuery(page_size=1), include_facets=False)
+
+            self.assertEqual(page.total, 3)
+            self.assertEqual(len(page.items), 1)
+            self.assertEqual(loads.call_count, 1)
+            self.assertFalse(hasattr(page, "matched_source_keys"))
+            self.assertEqual(page.inference_summary["matched_trials"], 3)
+            self.assertEqual(page.inference_summary["ttft"]["value_ms"], 100)
+            self.assertEqual(page.inference_summary["ttft"]["covered_trials"], 2)
+            self.assertEqual(page.inference_summary["tps"]["value"], 55)
+            self.assertEqual(page.inference_summary["cache_hit_rate"]["value"], 0.18)
+            self.assertEqual(page.column_presence["ttft_ms"], 2)
+            self.assertEqual(page.column_presence["tps"], 2)
+            self.assertEqual(page.column_presence["cache_hit_rate"], 2)
+            linked = catalog.query(
+                CatalogQuery(page_size=1),
+                include_facets=False,
+                workspace_report_source_refs=(page.items[0].payload["source_ref"],),
+            )
+            self.assertEqual(linked.column_presence["workspace_reports"], 1)
+
+            sorted_page = catalog.query(
+                CatalogQuery(sort="tps", direction="desc", page_size=3)
+            )
+            self.assertEqual(sorted_page.items[0].payload["trial_key"], "trial-0001")
+            self.assertIsNone(sorted_page.items[-1].payload["tps"])
+            store.close()
+
     def test_snapshot_rows_hold_one_generation_validate_selection_and_preserve_sort(
         self,
     ) -> None:
@@ -113,6 +238,11 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 summary_table_open=False,
                 selected_source_key=None,
                 selected_step_id=None,
+                leaderboard_columns={
+                    "version": 1,
+                    "order": [],
+                    "visibility": {},
+                },
                 visible_view_names=(),
                 workspace_view_filters={
                     "categories": (),
@@ -160,6 +290,31 @@ class WorkspaceCatalogTests(unittest.TestCase):
                         presentation=presentation,
                         echarts_js=b"window.echarts={};",
                     )
+
+            snapshot = build_workspace_snapshot_export(
+                catalog,
+                store,
+                views,
+                reports,
+                ToolConfig(
+                    workspace_root=str(root),
+                    description="**Nightly** workspace",
+                ),
+                query=CatalogQuery(),
+                query_view_names=(),
+                selected_source_keys=(),
+                presentation=presentation,
+                echarts_js=b"window.echarts={};",
+            )
+            snapshot_html = snapshot.content.decode("utf-8")
+            self.assertIn(
+                'class="workspace-description note-body" '
+                "data-workspace-description hidden",
+                snapshot_html,
+            )
+            self.assertIn(
+                '"workspace_description": "**Nightly** workspace"', snapshot_html
+            )
             self.assertEqual(MAX_REPORT_EXPORT_INPUT_BYTES, 50 * 1024 * 1024)
             store.close()
 
@@ -197,6 +352,37 @@ class WorkspaceCatalogTests(unittest.TestCase):
             trajectory["steps"][0]["message"] = text
             trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
         return cell
+
+    def write_inference_metrics(
+        self,
+        cell: Path,
+        *,
+        ttft_sum: int,
+        ttft_count: int,
+        decode_ms: int,
+        decode_tokens: int,
+        cache_prompt: int,
+        cache_read: int,
+    ) -> None:
+        trajectory_path = cell / "agent" / "trajectory.json"
+        trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
+        trajectory["final_metrics"] = {
+            **trajectory.get("final_metrics", {}),
+            "extra": {
+                "model_inference": {
+                    "schema_version": 1,
+                    "ttft_ms_sum": ttft_sum,
+                    "ttft_sample_count": ttft_count,
+                    "decode_duration_ms": decode_ms,
+                    "decode_token_count": decode_tokens,
+                    "decode_sample_count": 1,
+                    "cache_prompt_tokens": cache_prompt,
+                    "cache_read_tokens": cache_read,
+                    "cache_sample_count": 1,
+                }
+            },
+        }
+        trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
 
     def test_cold_build_warm_zero_parse_change_delete_and_detail_reads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -680,6 +866,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
                     worksheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
                 self.assertEqual(worksheet.count("<row "), 4)
                 self.assertLess(worksheet.index("Category"), worksheet.index("Tags"))
+                self.assertIn("#Analysis", worksheet)
+                self.assertIn("Decode Samples", worksheet)
+                self.assertIn("Cache Samples", worksheet)
             finally:
                 store.close()
 

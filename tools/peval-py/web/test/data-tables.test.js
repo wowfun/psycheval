@@ -21,10 +21,52 @@ const sourceManager = await import("../src/modules/source-manager.js");
 const views = await import("../src/modules/workspace-views.js");
 const summaries = await import("../src/modules/leaderboard-summary.js");
 const selected = await import("../src/modules/analysis-selected.js");
+const analysisRendering = await import("../src/modules/analysis-rendering.js");
+const catalog = await import("../src/modules/serve-catalog.js");
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());
+
+test("#Analysis counts Harbor and workspace origins without double-counting overlay files", () => {
+  const previousView = runtime.state.view;
+  try {
+    runtime.state.view = {
+      annotations: {
+        analysis: [
+          {
+            trial_key: "combined",
+            markdown_reports: [
+              { source: "harbor_trial", markdown: "Harbor" },
+              { source: "workspace_overlay", markdown: "Workspace" },
+            ],
+          },
+          {
+            trial_key: "overlay",
+            relative_paths: {
+              json: "runs/default/agent/session/trial/analysis.json",
+              md: "runs/default/agent/session/trial/analysis.md",
+            },
+          },
+          { trial_key: "legacy", md_report: "Legacy Markdown" },
+        ],
+      },
+    };
+
+    assert.equal(catalog.rowAnalysisCount({ trial_key: "combined" }), 2);
+    assert.equal(catalog.rowAnalysisCount({ trial_key: "overlay" }), 1);
+    assert.equal(catalog.rowAnalysisCount({ trial_key: "legacy" }), 1);
+    assert.equal(catalog.rowAnalysisCount({ trial_key: "none" }), 0);
+    assert.equal(catalog.rowAnalysisCount({ analysis_count: 8 }), 2);
+
+    const column = tables.leaderboardColumns().find(item => item.key === "analysis_count");
+    assert.equal(column.label, "#Analysis");
+    assert.equal(column.valueType, "number");
+    assert.equal(column.value({ trial_key: "combined" }), 2);
+  } finally {
+    runtime.state.view = previousView;
+  }
+});
 
 test("Harbor Task display merges derived evidence without changing editable overlay values", () => {
   const row = {
@@ -79,6 +121,67 @@ test("Harbor Task display merges derived evidence without changing editable over
     task_metadata: { status: "resolved", live_digest: "sha256:local", digest_matches: null, digest_comparison: "not_comparable" },
   });
   assert.match(refEvidence, /not comparable/);
+});
+
+test("Harbor and workspace Markdown render as ordered source blocks with legacy fallback", () => {
+  const previousView = runtime.state.view;
+  try {
+    runtime.state.view = {
+      annotations: {
+        analysis: [{
+          trial_key: "trial-analysis",
+          status: "cached",
+          findings: ["Structured finding remains"],
+          markdown_reports: [
+            {
+              source: "harbor_trial",
+              markdown: "# Harbor review",
+              relative_path: "artifacts/logs/analysis.md",
+            },
+            {
+              source: "workspace_overlay",
+              markdown: "# Workspace review",
+              relative_path: "harbor/mount/job/trial/analysis.md",
+            },
+            {
+              source: "workspace_overlay",
+              markdown: "   ",
+              relative_path: "hidden.md",
+            },
+          ],
+        }],
+      },
+    };
+    const combined = analysisRendering.renderSelectedAnalysis("trial-analysis");
+    assert.ok(combined.indexOf("Harbor Trial analysis") < combined.indexOf("Workspace analysis"));
+    assert.match(combined, /Harbor review/);
+    assert.match(combined, /Workspace review/);
+    assert.match(combined, /artifacts\/logs\/analysis\.md/);
+    assert.match(combined, /harbor\/mount\/job\/trial\/analysis\.md/);
+    assert.doesNotMatch(combined, /hidden\.md/);
+    assert.match(combined, /Structured finding remains/);
+
+    runtime.state.view.annotations.analysis = [{
+      trial_key: "trial-analysis",
+      status: "cached",
+      md_report: "# Legacy review",
+    }];
+    const legacy = analysisRendering.renderSelectedAnalysis("trial-analysis");
+    assert.match(legacy, /Legacy review/);
+    assert.doesNotMatch(legacy, /Harbor Trial analysis|Workspace analysis/);
+
+    runtime.state.view.annotations.analysis = [{
+      trial_key: "trial-analysis",
+      status: "cached",
+      findings: ["Structured only"],
+      markdown_reports: [],
+    }];
+    const structured = analysisRendering.renderSelectedAnalysis("trial-analysis");
+    assert.match(structured, /Structured only/);
+    assert.doesNotMatch(structured, /analysis-markdown-report/);
+  } finally {
+    runtime.state.view = previousView;
+  }
 });
 
 test("value types drive cell metadata, truncation classes, sorting, and read-only behavior", () => {
@@ -356,6 +459,7 @@ test("source and saved-view adapters keep persistence behind the shared edit sea
   runtime.state.workspaceViewsRefreshVersion = 0;
   runtime.state.workspaceViewsRefreshPromise = null;
   runtime.state.workspaceViewsRefreshQueued = false;
+  await views.refreshWorkspaceViews();
   const view = views.workspaceViewForName("Daily");
   await views.commitWorkspaceViewCellEdit(view, "tags", ["daily", "nightly"]);
   const update = calls.find(call => call.path === "/api/views/update");
@@ -411,19 +515,21 @@ test("Saved View Category editing preserves a scalar value containing a comma", 
     runtime.state.workspaceViewsLoaded = true;
     runtime.state.workspaceViewsRefreshPromise = null;
     runtime.state.workspaceViewsRefreshQueued = false;
+    await views.refreshWorkspaceViews();
+    const renderedView = views.workspaceViewForName(view.name);
     const column = views.workspaceViewColumns().find(item => item.key === "categories");
     const root = document.querySelector("#table-root");
     root.innerHTML = tables.renderDataTable({
       tableId: "saved-view-category-comma",
       columns: [column],
-      rows: [view],
-      rowKey: item => item.name,
+      rows: [renderedView],
+      rowKey: item => item.id,
     });
     tables.bindDataTableEditors(root, {
       tableId: "saved-view-category-comma",
       columns: [column],
-      rows: [view],
-      rowKey: item => item.name,
+      rows: [renderedView],
+      rowKey: item => item.id,
     });
     const cell = root.querySelector('[data-table-column-key="categories"]');
     cell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));

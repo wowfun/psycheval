@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+from threading import Lock
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
@@ -63,6 +64,8 @@ class WorkspaceReportLibrary:
         self.reports_root = self.workspace_root / "reports"
         self._source_rows = source_rows
         self._now = now or datetime.now
+        self._bound_source_refs_cache: frozenset[str] | None = None
+        self._bound_source_refs_lock = Lock()
 
     def import_file(self, source_path: str | Path, source_keys: list[str]) -> str:
         source_refs = self._source_refs_for_source_keys(source_keys)
@@ -87,6 +90,7 @@ class WorkspaceReportLibrary:
             if temp_dir.exists() and not temp_dir.is_symlink():
                 shutil.rmtree(temp_dir, ignore_errors=True)
             raise
+        self._invalidate_bound_source_refs()
         return report_id
 
     def catalog(
@@ -125,6 +129,27 @@ class WorkspaceReportLibrary:
             for report in reports
         ]
 
+    def bound_source_refs(self) -> set[str]:
+        with self._bound_source_refs_lock:
+            if self._bound_source_refs_cache is None:
+                source_refs: set[str] = set()
+                if self._reports_root_is_safe():
+                    for child in self.reports_root.iterdir():
+                        if (
+                            child.is_symlink()
+                            or not child.is_dir()
+                            or not self._is_valid_report_id(child.name)
+                        ):
+                            continue
+                        try:
+                            source_refs.update(
+                                self._read_package_metadata(child.name).source_refs
+                            )
+                        except (OSError, UnicodeError, ValueError):
+                            continue
+                self._bound_source_refs_cache = frozenset(source_refs)
+            return set(self._bound_source_refs_cache)
+
     def read(self, report_id: str) -> WorkspaceReport:
         metadata = self._read_package_metadata(report_id)
         content = self._read_content(metadata.report_path)
@@ -150,6 +175,7 @@ class WorkspaceReportLibrary:
         finally:
             if temp_path.exists() and not temp_path.is_symlink():
                 temp_path.unlink()
+        self._invalidate_bound_source_refs()
 
     def delete(self, report_id: str) -> None:
         report = self._read_package_metadata(report_id)
@@ -157,6 +183,11 @@ class WorkspaceReportLibrary:
         tombstone = self.reports_root / f".delete-{report.report_id}-{uuid4().hex}"
         package_dir.replace(tombstone)
         shutil.rmtree(tombstone)
+        self._invalidate_bound_source_refs()
+
+    def _invalidate_bound_source_refs(self) -> None:
+        with self._bound_source_refs_lock:
+            self._bound_source_refs_cache = None
 
     def _read_package_metadata(self, report_id: str) -> WorkspaceReportMetadata:
         package_dir = self._package_dir(report_id)

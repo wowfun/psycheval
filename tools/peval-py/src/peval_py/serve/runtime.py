@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from threading import Event, Lock, Thread
 from typing import Any, Callable, Sequence
 
@@ -20,7 +21,10 @@ from peval_py.state import (
 from peval_py.state.workspace_sources import WorkspaceSources
 from peval_py.workspace_reports import WorkspaceReportLibrary
 from peval_py.workspace_views import (
+    WorkspaceView,
+    WorkspaceViewConflict,
     WorkspaceViewLibrary,
+    browser_views_from_payload,
     render_editable_view_configuration,
 )
 
@@ -41,6 +45,9 @@ class ServeRuntime:
             self._all_catalog_rows,
         )
         self.workspace_views = WorkspaceViewLibrary(store.paths.root)
+        self.workspace_id = hashlib.sha256(
+            str(store.paths.root.resolve()).encode("utf-8")
+        ).hexdigest()[:20]
         self._lock = Lock()
         self._ready = Event()
         self._ready.set()
@@ -126,15 +133,58 @@ class ServeRuntime:
         query: CatalogQuery,
         *,
         view_names: Sequence[str] = (),
+        browser_views: Sequence[WorkspaceView] = (),
     ) -> CatalogPage:
+        bound_refs = self.workspace_reports.bound_source_refs()
         return self.catalog.query(
             query,
-            any_queries=self.workspace_view_queries(view_names),
+            any_queries=self.workspace_view_queries(view_names, browser_views),
+            workspace_report_source_refs=tuple(bound_refs),
         )
 
-    def workspace_view_queries(self, names: Sequence[str]) -> list[CatalogQuery]:
+    def workspace_view_queries(
+        self,
+        names: Sequence[str],
+        browser_views: Sequence[WorkspaceView] = (),
+    ) -> list[CatalogQuery]:
         ordered = list(dict.fromkeys(str(name) for name in names if str(name)))
-        return [self.workspace_views.get(name).filters for name in ordered]
+        return [self.workspace_views.get(name).filters for name in ordered] + [
+            view.filters for view in browser_views
+        ]
+
+    def validated_browser_views(self, value: Any) -> list[WorkspaceView]:
+        views = (
+            list(value)
+            if isinstance(value, (list, tuple))
+            and all(isinstance(item, WorkspaceView) for item in value)
+            else browser_views_from_payload(value)
+        )
+        self.ensure_browser_view_names_available(views)
+        return views
+
+    def ensure_browser_view_names_available(
+        self, views: Sequence[WorkspaceView]
+    ) -> None:
+        server_names = {view.name for view in self.workspace_views.list()}
+        conflict = next((view.name for view in views if view.name in server_names), None)
+        if conflict is not None:
+            raise WorkspaceViewConflict(
+                f"workspace saved view already exists: {conflict}"
+            )
+
+    def browser_view_summaries(
+        self, views: Sequence[WorkspaceView]
+    ) -> dict[str, Any]:
+        payload = self.catalog.summarize_saved_views(
+            [(view.name, view.filters, view.group_by) for view in views]
+        )
+        summaries = {item["name"]: item for item in payload["views"]}
+        return {
+            **payload,
+            "views": [
+                {**view.to_dict(), **summaries.get(view.name, {})} for view in views
+            ],
+        }
 
     def workspace_view_catalog(self) -> list[dict[str, Any]]:
         return [view.to_dict() for view in self.workspace_views.list()]
@@ -156,6 +206,9 @@ class ServeRuntime:
         self,
         source_keys: Sequence[str],
         *,
+        query: CatalogQuery,
+        view_names: Sequence[str] = (),
+        browser_views: Sequence[WorkspaceView] = (),
         group_by: str,
         statistic: str,
     ) -> SummaryWorksheet:
@@ -163,6 +216,10 @@ class ServeRuntime:
             source_keys,
             name="Leaderboard Summary",
             group_by=group_by,
+            inference_query=query,
+            inference_any_queries=self.workspace_view_queries(
+                view_names, browser_views
+            ),
         )
         summary = payload["summary"]
         return SummaryWorksheet(
@@ -171,6 +228,7 @@ class ServeRuntime:
             matched_count=int(summary["matched_count"]),
             groups=summary["groups"],
             statistic=statistic,
+            inference_summary=payload["inference_summary"],
             metadata=(
                 ("Scope", "Current visible Leaderboard page"),
                 ("Group", group_by),
@@ -182,8 +240,11 @@ class ServeRuntime:
     def workspace_view_summary_worksheets(
         self,
         names: Sequence[str],
+        browser_views: Sequence[WorkspaceView] = (),
     ) -> list[SummaryWorksheet]:
-        views = [self.workspace_views.get(name) for name in names]
+        views = [self.workspace_views.get(name) for name in names] + list(
+            browser_views
+        )
         payload = self.catalog.summarize_saved_views(
             [(view.name, view.filters, view.group_by) for view in views]
         )

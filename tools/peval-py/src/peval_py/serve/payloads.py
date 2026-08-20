@@ -14,6 +14,7 @@ from peval_py.inputs import infer_adapter_from_path, validate_selected_adapter
 from peval_py.serve.constants import WINDOWS_DRIVE_MOUNT_ROOT, WINDOWS_DRIVE_PATH_RE
 from peval_py.serve.errors import HttpError
 from peval_py.state import CatalogQuery, ServeStateStore
+from peval_py.workspace_views import WorkspaceView, browser_views_from_payload
 
 SUMMARY_GROUP_BY_VALUES = frozenset(
     {"overall", "agent", "model", "category", "task", "job", "provider"}
@@ -28,6 +29,9 @@ class SummaryExportPayload:
     views: tuple[str, ...] = ()
     group_by: str = "agent"
     statistic: str = "mean"
+    query: CatalogQuery | None = None
+    view_names: tuple[str, ...] = ()
+    browser_views: tuple[WorkspaceView, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,7 @@ class WorkspaceSnapshotPresentation:
     summary_table_open: bool
     selected_source_key: str | None
     selected_step_id: str | None
+    leaderboard_columns: dict[str, Any]
     visible_view_names: tuple[str, ...]
     workspace_view_filters: dict[str, tuple[str, ...]]
     open_view_tables: tuple[str, ...]
@@ -46,23 +51,21 @@ class WorkspaceSnapshotPresentation:
 class WorkspaceSnapshotExportPayload:
     query: CatalogQuery
     view_names: tuple[str, ...]
+    query_browser_views: tuple[WorkspaceView, ...]
+    browser_views: tuple[WorkspaceView, ...]
     selected_source_keys: tuple[str, ...]
     presentation: WorkspaceSnapshotPresentation
 
 
-def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPayload:
-    if not isinstance(payload, dict):
-        raise HttpError(400, "export payload must be an object")
-    if set(payload) != {"kind", "query", "selected_source_keys", "presentation"}:
-        raise HttpError(
-            400,
-            "workspace snapshot fields must be kind, query, selected_source_keys, and presentation",
-        )
-    query_value = payload.get("query")
-    if not isinstance(query_value, dict):
-        raise HttpError(400, "query must be an object")
-    required_query_fields = {
+def catalog_post_query_payload(
+    value: Any,
+) -> tuple[CatalogQuery, tuple[str, ...], Any]:
+    if not isinstance(value, dict):
+        raise HttpError(400, "catalog query must be an object")
+    required_fields = {
         "state",
+        "page",
+        "page_size",
         "search",
         "sort",
         "direction",
@@ -72,36 +75,63 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
         "models",
         "results",
         "views",
+        "browser_views",
     }
-    optional_query_fields = {"tasks", "jobs", "providers"}
-    if not required_query_fields.issubset(query_value) or not set(query_value).issubset(
-        required_query_fields | optional_query_fields
+    optional_fields = {"tasks", "jobs", "providers"}
+    if not required_fields.issubset(value) or not set(value).issubset(
+        required_fields | optional_fields
     ):
-        raise HttpError(400, "workspace snapshot query fields are invalid")
+        raise HttpError(400, "catalog query fields are invalid")
+    page = value.get("page")
+    page_size = value.get("page_size")
+    if isinstance(page, bool) or not isinstance(page, int):
+        raise HttpError(400, "query page must be an integer")
+    if isinstance(page_size, bool) or not isinstance(page_size, int):
+        raise HttpError(400, "query page_size must be an integer")
     try:
         query = CatalogQuery(
-            state=_required_text(query_value.get("state"), "query state"),
-            page=1,
-            page_size=100,
-            search=_string_value(query_value.get("search"), "query search"),
-            sort=_required_text(query_value.get("sort"), "query sort"),
-            direction=_required_text(query_value.get("direction"), "query direction"),
-            categories=tuple(
-                _string_array(query_value.get("categories"), "query categories")
-            ),
-            tags=tuple(_string_array(query_value.get("tags"), "query tags")),
-            agents=tuple(_string_array(query_value.get("agents"), "query agents")),
-            models=tuple(_string_array(query_value.get("models"), "query models")),
-            results=tuple(_string_array(query_value.get("results"), "query results")),
-            tasks=tuple(_string_array(query_value.get("tasks", []), "query tasks")),
-            jobs=tuple(_string_array(query_value.get("jobs", []), "query jobs")),
+            state=_required_text(value.get("state"), "query state"),
+            page=page,
+            page_size=page_size,
+            search=_string_value(value.get("search"), "query search"),
+            sort=_required_text(value.get("sort"), "query sort"),
+            direction=_required_text(value.get("direction"), "query direction"),
+            categories=tuple(_string_array(value.get("categories"), "query categories")),
+            tags=tuple(_string_array(value.get("tags"), "query tags")),
+            agents=tuple(_string_array(value.get("agents"), "query agents")),
+            models=tuple(_string_array(value.get("models"), "query models")),
+            results=tuple(_string_array(value.get("results"), "query results")),
+            tasks=tuple(_string_array(value.get("tasks", []), "query tasks")),
+            jobs=tuple(_string_array(value.get("jobs", []), "query jobs")),
             providers=tuple(
-                _string_array(query_value.get("providers", []), "query providers")
+                _string_array(value.get("providers", []), "query providers")
             ),
         ).normalized()
     except ValueError as exc:
         raise HttpError(400, str(exc)) from exc
-    view_names = tuple(_string_array(query_value.get("views"), "query views"))
+    return (
+        query,
+        tuple(_string_array(value.get("views"), "query views")),
+        value.get("browser_views"),
+    )
+
+
+def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPayload:
+    if not isinstance(payload, dict):
+        raise HttpError(400, "export payload must be an object")
+    required_fields = {"kind", "query", "selected_source_keys", "presentation"}
+    if not required_fields.issubset(payload) or not set(payload).issubset(
+        required_fields | {"browser_views"}
+    ):
+        raise HttpError(
+            400,
+            "workspace snapshot fields must be kind, query, selected_source_keys, and presentation",
+        )
+    query, view_names, query_browser_views = _strict_catalog_query_payload(
+        payload.get("query")
+    )
+    browser_views = _browser_views(payload.get("browser_views", []))
+
     selected = tuple(
         _string_array(payload.get("selected_source_keys"), "selected_source_keys")
     )
@@ -115,6 +145,7 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
         "summary_table_open",
         "selected_source_key",
         "selected_step_id",
+        "leaderboard_columns",
         "visible_view_names",
         "workspace_view_filters",
         "open_view_tables",
@@ -142,6 +173,9 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
     raw_step_id = presentation_value.get("selected_step_id")
     if raw_step_id is not None and not isinstance(raw_step_id, (str, int)):
         raise HttpError(400, "selected_step_id must be a string, integer, or null")
+    leaderboard_columns = _leaderboard_columns(
+        presentation_value.get("leaderboard_columns")
+    )
     filters = presentation_value.get("workspace_view_filters")
     required_filter_fields = {
         "categories",
@@ -184,6 +218,7 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
         summary_table_open=table_open,
         selected_source_key=selected_source_key,
         selected_step_id=None if raw_step_id is None else str(raw_step_id),
+        leaderboard_columns=leaderboard_columns,
         visible_view_names=tuple(
             _string_array(
                 presentation_value.get("visible_view_names"), "visible_view_names"
@@ -199,9 +234,86 @@ def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPa
     return WorkspaceSnapshotExportPayload(
         query=query,
         view_names=view_names,
+        query_browser_views=query_browser_views,
+        browser_views=browser_views,
         selected_source_keys=selected,
         presentation=presentation,
     )
+
+
+def _strict_catalog_query_payload(
+    query_value: object,
+) -> tuple[CatalogQuery, tuple[str, ...], tuple[WorkspaceView, ...]]:
+    if not isinstance(query_value, dict):
+        raise HttpError(400, "query must be an object")
+    required_query_fields = {
+        "state",
+        "search",
+        "sort",
+        "direction",
+        "categories",
+        "tags",
+        "agents",
+        "models",
+        "results",
+        "views",
+    }
+    optional_query_fields = {"tasks", "jobs", "providers", "browser_views"}
+    if not required_query_fields.issubset(query_value) or not set(query_value).issubset(
+        required_query_fields | optional_query_fields
+    ):
+        raise HttpError(400, "catalog query fields are invalid")
+    try:
+        query = CatalogQuery(
+            state=_required_text(query_value.get("state"), "query state"),
+            page=1,
+            page_size=100,
+            search=_string_value(query_value.get("search"), "query search"),
+            sort=_required_text(query_value.get("sort"), "query sort"),
+            direction=_required_text(query_value.get("direction"), "query direction"),
+            categories=tuple(
+                _string_array(query_value.get("categories"), "query categories")
+            ),
+            tags=tuple(_string_array(query_value.get("tags"), "query tags")),
+            agents=tuple(_string_array(query_value.get("agents"), "query agents")),
+            models=tuple(_string_array(query_value.get("models"), "query models")),
+            results=tuple(_string_array(query_value.get("results"), "query results")),
+            tasks=tuple(_string_array(query_value.get("tasks", []), "query tasks")),
+            jobs=tuple(_string_array(query_value.get("jobs", []), "query jobs")),
+            providers=tuple(
+                _string_array(query_value.get("providers", []), "query providers")
+            ),
+        ).normalized()
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
+    view_names = tuple(_string_array(query_value.get("views"), "query views"))
+    return query, view_names, _browser_views(query_value.get("browser_views", []))
+
+
+def _browser_views(value: Any) -> tuple[WorkspaceView, ...]:
+    try:
+        return tuple(browser_views_from_payload(value))
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
+
+
+def _leaderboard_columns(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {"version", "order", "visibility"}:
+        raise HttpError(400, "leaderboard_columns fields are invalid")
+    if value.get("version") != 1:
+        raise HttpError(400, "leaderboard_columns version must be 1")
+    order = _string_array(value.get("order"), "leaderboard_columns order")
+    visibility = value.get("visibility")
+    if not isinstance(visibility, dict) or any(
+        not isinstance(key, str) or mode not in {"show", "hide"}
+        for key, mode in visibility.items()
+    ):
+        raise HttpError(400, "leaderboard_columns visibility is invalid")
+    return {
+        "version": 1,
+        "order": order,
+        "visibility": dict(visibility),
+    }
 
 
 def _string_array(value: Any, field: str) -> list[str]:
@@ -234,11 +346,11 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
         raise HttpError(400, "summary must be an object")
     scope = value.get("scope")
     if scope == "leaderboard":
-        expected = {"scope", "source_keys", "group_by", "statistic"}
+        expected = {"scope", "source_keys", "query", "group_by", "statistic"}
         if set(value) != expected:
             raise HttpError(
                 400,
-                "leaderboard summary fields must be scope, source_keys, group_by, and statistic",
+                "leaderboard summary fields must be scope, source_keys, query, group_by, and statistic",
             )
         group_by = value.get("group_by")
         statistic = value.get("statistic")
@@ -252,6 +364,9 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
                 400,
                 "statistic must be mean, min, q1, p50, q3, p95, or max",
             )
+        query, view_names, browser_views = _strict_catalog_query_payload(
+            value.get("query")
+        )
         return SummaryExportPayload(
             scope=scope,
             source_keys=tuple(
@@ -259,19 +374,36 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
             ),
             group_by=group_by,
             statistic=statistic,
+            query=query,
+            view_names=view_names,
+            browser_views=browser_views,
         )
     if scope == "saved_views":
-        if set(value) != {"scope", "views"}:
-            raise HttpError(400, "saved views summary fields must be scope and views")
+        if not {"scope", "views"}.issubset(value) or not set(value).issubset(
+            {"scope", "views", "browser_views"}
+        ):
+            raise HttpError(
+                400,
+                "saved views summary fields must be scope, views, and browser_views",
+            )
+        browser_views = _browser_views(value.get("browser_views", []))
+        views = tuple(
+            _ordered_string_values(value.get("views"), "views", allow_empty=True)
+        )
+        if not views and not browser_views:
+            raise HttpError(400, "saved views summary must include at least one view")
         return SummaryExportPayload(
             scope=scope,
-            views=tuple(_ordered_string_values(value.get("views"), "views")),
+            views=views,
+            browser_views=browser_views,
         )
     raise HttpError(400, "summary scope must be leaderboard or saved_views")
 
 
-def _ordered_string_values(value: Any, field: str) -> list[str]:
-    if not isinstance(value, list) or not value:
+def _ordered_string_values(
+    value: Any, field: str, *, allow_empty: bool = False
+) -> list[str]:
+    if not isinstance(value, list) or (not value and not allow_empty):
         raise HttpError(400, f"{field} must include at least one value")
     if any(not isinstance(item, str) or not item.strip() for item in value):
         raise HttpError(400, f"{field} must be a non-empty string array")
@@ -279,22 +411,29 @@ def _ordered_string_values(value: Any, field: str) -> list[str]:
 
 
 def adapter_default_db_payload(payload: dict[str, Any]) -> tuple[str, str | None]:
-    adapter_id = validate_selected_adapter(
-        normalize_adapter_id(required_string(payload, "adapter")),
-        set(available_adapter_ids()),
-        "adapter default DB",
-    )
+    try:
+        adapter_id = validate_selected_adapter(
+            normalize_adapter_id(required_string(payload, "adapter")),
+            set(available_adapter_ids()),
+            "adapter default DB",
+        )
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
     return adapter_id, optional_string(payload.get("default_db_path"))
 
 
 def adapter_for_db_inspect(path: str, raw_adapter: str | None) -> tuple[str, bool]:
     available = set(available_adapter_ids())
     if raw_adapter:
-        return validate_selected_adapter(
-            normalize_adapter_id(raw_adapter),
-            available,
-            "DB session inspect",
-        ), False
+        try:
+            adapter_id = validate_selected_adapter(
+                normalize_adapter_id(raw_adapter),
+                available,
+                "DB session inspect",
+            )
+        except ValueError as exc:
+            raise HttpError(400, str(exc)) from exc
+        return adapter_id, False
     adapter_id = infer_adapter_from_path(path, available)
     if adapter_id is None:
         options = ", ".join(sorted(available)) or "<none>"

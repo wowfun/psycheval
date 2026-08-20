@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from cli_inputs_support import write_trial_cell_artifacts
 from peval_py.config import ToolConfig
-from peval_py.serve import LocalHTTPServer, ServeRuntime, make_handler
+from peval_py.serve import LocalHTTPServer, ServeAccess, ServeRuntime, make_handler
 from peval_py.serve.errors import HttpError
 from peval_py.serve.handler import catalog_query
 from peval_py.state import CatalogQuery, open_workspace_state
@@ -63,6 +63,11 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 "summary_table_open": False,
                 "selected_source_key": None,
                 "selected_step_id": None,
+                "leaderboard_columns": {
+                    "version": 1,
+                    "order": [],
+                    "visibility": {},
+                },
                 "visible_view_names": [],
                 "workspace_view_filters": {
                     "categories": [],
@@ -88,7 +93,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
             raise AssertionError("workspace snapshot projection script is missing")
         return json.loads(match.group(1))
 
-    def running_server(self, root: Path):
+    def running_server(self, root: Path, *, access: ServeAccess | None = None):
         (root / "peval-py.toml").write_text(
             'analysis_eval_slug = "default"\n', encoding="utf-8"
         )
@@ -97,7 +102,10 @@ class ServeCatalogHttpTests(unittest.TestCase):
             store,
             ToolConfig(workspace_root=str(root), analysis_eval_slug="default"),
         )
-        server = LocalHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+        server = LocalHTTPServer(
+            ("127.0.0.1", 0),
+            make_handler(runtime, access=access),
+        )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         return store, runtime, server, thread
@@ -152,6 +160,14 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertEqual(page["page_size"], 100)
                 self.assertEqual(page["total"], 1)
                 source_key = page["items"][0]["source_key"]
+                report_path = root / "published.md"
+                report_path.write_text("# Published\n", encoding="utf-8")
+                runtime.workspace_reports.import_file(report_path, [source_key])
+                status, _headers, body = self.request(server, "GET", "/api/catalog")
+                self.assertEqual(status, 200)
+                self.assertEqual(
+                    json.loads(body)["column_presence"]["workspace_reports"], 1
+                )
 
                 status, _headers, body = self.request(
                     server, "GET", f"/api/report?source_key={source_key}"
@@ -228,6 +244,30 @@ class ServeCatalogHttpTests(unittest.TestCase):
             finally:
                 self.stop(store, server, thread)
 
+    def test_unclassified_value_error_is_an_internal_guest_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store, runtime, server, thread = self.running_server(
+                root,
+                access=ServeAccess("password"),
+            )
+            try:
+                with patch.object(
+                    runtime,
+                    "resolve_keys",
+                    side_effect=ValueError("internal resolver invariant"),
+                ):
+                    status, _headers, body = self.request(
+                        server,
+                        "POST",
+                        "/api/catalog/resolve",
+                        {"source_keys": []},
+                    )
+                self.assertEqual(status, 500)
+                self.assertEqual(json.loads(body)["error"], "internal server error")
+            finally:
+                self.stop(store, server, thread)
+
     def test_workspace_snapshot_export_is_full_query_offline_and_read_only(
         self,
     ) -> None:
@@ -293,6 +333,11 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     {
                         "selected_source_key": source_keys[0],
                         "selected_step_id": "1",
+                        "leaderboard_columns": {
+                            "version": 1,
+                            "order": ["cache_hit_rate", "session_id"],
+                            "visibility": {"cache_hit_rate": "show"},
+                        },
                         "visible_view_names": ["Daily"],
                         "workspace_view_filters": {
                             "categories": ["daily-category"],
@@ -337,6 +382,14 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertEqual(
                     projection["presentation"]["workspace_view_filters"]["categories"],
                     ["daily-category"],
+                )
+                self.assertEqual(
+                    projection["presentation"]["leaderboard_columns"],
+                    {
+                        "version": 1,
+                        "order": ["cache_hit_rate", "session_id"],
+                        "visibility": {"cache_hit_rate": "show"},
+                    },
                 )
                 self.assertEqual(len(projection["reports"]), 2)
                 previews = {
@@ -762,6 +815,260 @@ class ServeCatalogHttpTests(unittest.TestCase):
             finally:
                 self.stop(store, server, thread)
 
+    def test_browser_view_catalog_query_and_summary_share_server_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index, result in enumerate(("passed", "failed", "passed")):
+                cell = root / f"runs/default/psychevo/s{index}/s{index}_t001"
+                write_trial_cell_artifacts(
+                    cell,
+                    session_id=f"s{index}",
+                    trial_key=f"s{index}_t001",
+                )
+                meta_path = cell / "agent" / "trajectory_meta.json"
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                meta["status"] = result
+                meta["finished_at_ms"] = 1_000 + index
+                meta_path.write_text(json.dumps(meta), encoding="utf-8")
+            store, _runtime, server, thread = self.running_server(root)
+            browser_view = {
+                "name": "Failed locally",
+                "filters": {"results": ["failed"]},
+                "group_by": "overall",
+                "notes": "browser note",
+            }
+            try:
+                status, _headers, _body = self.request(
+                    server,
+                    "POST",
+                    "/api/views",
+                    {
+                        "name": "Passed",
+                        "filters": {"results": ["passed"]},
+                        "group_by": "agent",
+                        "notes": "",
+                        "overwrite": False,
+                    },
+                )
+                self.assertEqual(status, 200)
+
+                query = {
+                    "state": "all",
+                    "page": 1,
+                    "page_size": 100,
+                    "search": "",
+                    "sort": "session",
+                    "direction": "asc",
+                    "categories": [],
+                    "tags": [],
+                    "agents": [],
+                    "models": [],
+                    "tasks": [],
+                    "jobs": [],
+                    "providers": [],
+                    "results": [],
+                    "views": ["Passed"],
+                    "browser_views": [browser_view],
+                }
+                status, _headers, body = self.request(
+                    server, "POST", "/api/catalog/query", query
+                )
+                self.assertEqual(status, 200, body)
+                self.assertEqual(
+                    [item["session_id"] for item in json.loads(body)["items"]],
+                    ["s0", "s1", "s2"],
+                )
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/catalog/query",
+                    {**query, "results": ["failed"]},
+                )
+                self.assertEqual(status, 200, body)
+                self.assertEqual(
+                    [item["session_id"] for item in json.loads(body)["items"]],
+                    ["s1"],
+                )
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/views/summary",
+                    {"browser_views": [browser_view]},
+                )
+                self.assertEqual(status, 200, body)
+                summary = json.loads(body)
+                self.assertEqual(summary["views"][0]["name"], "Failed locally")
+                self.assertEqual(summary["views"][0]["notes"], "browser note")
+                self.assertEqual(summary["views"][0]["matched_count"], 1)
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/views/summary",
+                    {"browser_views": [{**browser_view, "name": "Passed"}]},
+                )
+                self.assertEqual(status, 409, body)
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/views/summary",
+                    {"browser_views": [{**browser_view, "unexpected": True}]},
+                )
+                self.assertEqual(status, 400, body)
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/views/summary",
+                    {"browser_views": [browser_view, browser_view]},
+                )
+                self.assertEqual(status, 400, body)
+                self.assertIn("duplicate", json.loads(body)["error"])
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/views/summary",
+                    {
+                        "browser_views": [
+                            {**browser_view, "name": f"Local {index}"}
+                            for index in range(101)
+                        ]
+                    },
+                )
+                self.assertEqual(status, 400, body)
+                self.assertIn("at most 100", json.loads(body)["error"])
+            finally:
+                self.stop(store, server, thread)
+
+    def test_browser_views_flow_through_table_summary_and_snapshot_exports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index, result in enumerate(("passed", "failed")):
+                cell = root / f"runs/default/psychevo/s{index}/s{index}_t001"
+                write_trial_cell_artifacts(
+                    cell,
+                    session_id=f"s{index}",
+                    trial_key=f"s{index}_t001",
+                )
+                meta_path = cell / "agent" / "trajectory_meta.json"
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                meta["status"] = result
+                meta_path.write_text(json.dumps(meta), encoding="utf-8")
+            store, _runtime, server, thread = self.running_server(root)
+            local = {
+                "name": "Failed locally",
+                "filters": {"results": ["failed"]},
+                "group_by": "overall",
+                "notes": "local export note",
+            }
+            query = {
+                "state": "all",
+                "search": "",
+                "sort": "session",
+                "direction": "asc",
+                "categories": [],
+                "tags": [],
+                "agents": [],
+                "models": [],
+                "tasks": [],
+                "jobs": [],
+                "providers": [],
+                "results": [],
+                "views": ["Passed"],
+                "browser_views": [local],
+            }
+            try:
+                status, _headers, _body = self.request(
+                    server,
+                    "POST",
+                    "/api/views",
+                    {
+                        "name": "Passed",
+                        "filters": {"results": ["passed"]},
+                        "group_by": "agent",
+                        "notes": "server export note",
+                        "overwrite": False,
+                    },
+                )
+                self.assertEqual(status, 200)
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/exports",
+                    {"kind": "xlsx", "query": query},
+                )
+                self.assertEqual(status, 200, body[:200])
+                with zipfile.ZipFile(BytesIO(body)) as archive:
+                    strings = "\n".join(
+                        archive.read(name).decode("utf-8", errors="ignore")
+                        for name in archive.namelist()
+                        if name.endswith(".xml")
+                    )
+                self.assertIn("s0", strings)
+                self.assertIn("s1", strings)
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/exports",
+                    {
+                        "kind": "xlsx",
+                        "query": {
+                            **query,
+                            "views": [],
+                            "browser_views": [{**local, "name": "Passed"}],
+                        },
+                    },
+                )
+                self.assertEqual(status, 409, body)
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/exports",
+                    {
+                        "kind": "summary_xlsx",
+                        "summary": {
+                            "scope": "saved_views",
+                            "views": ["Passed"],
+                            "browser_views": [local],
+                        },
+                    },
+                )
+                self.assertEqual(status, 200, body[:200])
+                with zipfile.ZipFile(BytesIO(body)) as archive:
+                    workbook = archive.read("xl/workbook.xml").decode("utf-8")
+                    strings = archive.read("xl/sharedStrings.xml").decode("utf-8")
+                self.assertIn('name="Passed"', workbook)
+                self.assertIn('name="Failed locally"', workbook)
+                self.assertIn("local export note", strings)
+
+                echarts_path = root / ".cache/echarts/6.0.0/echarts.min.js"
+                echarts_path.parent.mkdir(parents=True, exist_ok=True)
+                echarts_path.write_text("window.echarts={};", encoding="utf-8")
+                snapshot = self.workspace_snapshot_payload(browser_views=[local])
+                snapshot["query"] = {**query, "views": [], "browser_views": [local]}
+                snapshot["presentation"]["visible_view_names"] = ["Failed locally"]
+                snapshot["presentation"]["open_view_tables"] = ["Failed locally"]
+                status, _headers, body = self.request(
+                    server, "POST", "/api/exports", snapshot
+                )
+                self.assertEqual(status, 200, body[:200])
+                projection = self.snapshot_projection(body)
+                self.assertEqual(
+                    [row["trial_session_id"] for row in projection["catalog_rows"]],
+                    ["s1"],
+                )
+                self.assertEqual(projection["views"], [local])
+                self.assertEqual(projection["view_summaries"][0]["matched_count"], 1)
+            finally:
+                self.stop(store, server, thread)
+
     def test_catalog_and_export_apply_repeated_saved_views_as_or(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1041,6 +1348,18 @@ class ServeCatalogHttpTests(unittest.TestCase):
                                 items[0].source_key,
                                 items[1].source_key,
                             ],
+                            "query": {
+                                "state": "active",
+                                "search": "",
+                                "sort": "last_turn_end",
+                                "direction": "desc",
+                                "categories": [],
+                                "tags": [],
+                                "agents": [],
+                                "models": [],
+                                "results": [],
+                                "views": [],
+                            },
                             "group_by": "category",
                             "statistic": "max",
                         },
@@ -1053,13 +1372,52 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 with zipfile.ZipFile(BytesIO(body)) as archive:
                     names = set(archive.namelist())
                     strings = archive.read("xl/sharedStrings.xml").decode("utf-8")
-                self.assertIn("xl/charts/chart6.xml", names)
-                self.assertIn("xl/charts/chart7.xml", names)
-                self.assertNotIn("xl/charts/chart8.xml", names)
+                self.assertEqual(
+                    len(
+                        {
+                            name
+                            for name in names
+                            if name.startswith("xl/charts/") and name.endswith(".xml")
+                        }
+                    ),
+                    10,
+                )
                 self.assertIn("Current visible Leaderboard page", strings)
                 self.assertIn("Category", strings)
                 self.assertIn("Regression", strings)
                 self.assertIn("<t>-</t>", strings)
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/exports",
+                    {
+                        "kind": "summary_xlsx",
+                        "summary": {
+                            "scope": "leaderboard",
+                            "source_keys": [items[0].source_key],
+                            "query": {
+                                "state": "active",
+                                "search": "",
+                                "sort": "last_turn_end",
+                                "direction": "desc",
+                                "categories": [],
+                                "tags": [],
+                                "agents": [],
+                                "models": [],
+                                "results": [],
+                                "views": [],
+                            },
+                            "group_by": "agent",
+                            "statistic": "mean",
+                        },
+                    },
+                )
+                self.assertEqual(status, 200)
+                with zipfile.ZipFile(BytesIO(body)) as archive:
+                    strings = archive.read("xl/sharedStrings.xml").decode("utf-8")
+                self.assertIn("Complete query", strings)
+                self.assertIn("0/2 trials", strings)
 
                 status, headers, body = self.request(
                     server,
@@ -1082,9 +1440,16 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertIn('name="All_ sessions"', workbook)
                 self.assertIn('name="Failed only"', workbook)
                 self.assertIn("=literal note", strings)
-                self.assertIn("xl/charts/chart6.xml", names)
-                self.assertIn("xl/charts/chart7.xml", names)
-                self.assertNotIn("xl/charts/chart8.xml", names)
+                self.assertEqual(
+                    len(
+                        {
+                            name
+                            for name in names
+                            if name.startswith("xl/charts/") and name.endswith(".xml")
+                        }
+                    ),
+                    10,
+                )
 
                 status, _headers, body = self.request(
                     server,
@@ -1095,6 +1460,18 @@ class ServeCatalogHttpTests(unittest.TestCase):
                         "summary": {
                             "scope": "leaderboard",
                             "source_keys": ["missing"],
+                            "query": {
+                                "state": "active",
+                                "search": "",
+                                "sort": "last_turn_end",
+                                "direction": "desc",
+                                "categories": [],
+                                "tags": [],
+                                "agents": [],
+                                "models": [],
+                                "results": [],
+                                "views": [],
+                            },
                             "group_by": "agent",
                             "statistic": "mean",
                         },

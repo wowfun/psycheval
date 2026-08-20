@@ -295,6 +295,7 @@ function renderSelectedNotes(trialKey) {
   </section>`;
 }
 function renderNotesAction(trialKey) {
+  if (!adminMode()) return "";
   const source = editableNotesSource(trialKey);
   if (!source || state.notesEditor?.trialKey === trialKey) return "";
   const cellNote = cellNoteFor(trialKey);
@@ -302,7 +303,7 @@ function renderNotesAction(trialKey) {
   return `<button class="action-button notes-edit-button" type="button" data-notes-edit data-trial-key="${esc(trialKey)}">${esc(label)}</button>`;
 }
 function renderNotesEditor(trialKey) {
-  if (!serveMode() || !trialKey || !state.notesEditor || state.notesEditor.trialKey !== trialKey) return "";
+  if (!adminMode() || !trialKey || !state.notesEditor || state.notesEditor.trialKey !== trialKey) return "";
   const markdown = state.notesEditor.markdown ?? "";
   const error = state.notesEditor.error ? `<p class="copy danger">${esc(state.notesEditor.error)}</p>` : "";
   const disabled = state.notesEditor.saving ? " disabled" : "";
@@ -316,7 +317,7 @@ function renderNotesEditor(trialKey) {
   </article>`;
 }
 function beginNotesEdit(trialKey) {
-  if (!trialKey || !editableNotesSource(trialKey)) return;
+  if (!adminMode() || !trialKey || !editableNotesSource(trialKey)) return;
   const note = cellNoteFor(trialKey);
   state.notesEditor = { trialKey, markdown: note?.markdown || "", error: "", saving: false };
   renderTrace();
@@ -326,6 +327,7 @@ function cancelNotesEdit() {
   renderTrace();
 }
 async function saveSelectedNotes(button) {
+  if (!adminMode()) return;
   const trialKey = button?.dataset?.trialKey || selectedKey();
   const source = editableNotesSource(trialKey);
   const panel = button?.closest?.("[data-notes-editor-panel]");
@@ -441,11 +443,33 @@ function renderSelectedAnalysis(trialKey) {
   const analysis = analysisFor(trialKey);
   if (!analysis) return "";
   const summary = analysis.summary ? `<pre>${esc(analysis.summary)}</pre>` : "";
-  const markdown = analysis.md_report ? `<div class="note-body analysis-md">${renderMarkdown(analysis.md_report)}</div>` : "";
+  const markdown = renderAnalysisMarkdownReports(analysis);
   const structured = renderStructuredAnalysis(analysis);
   const paths = renderAnalysisPaths(analysis);
   if (!summary && !markdown && !structured && !paths && analysis.status === "computed") return "";
   return `<section class="selected-extra selected-analysis"><h3>${esc(t("analysis", "Analysis"))}</h3><article class="selected-evidence-card analysis-card">${summary}${markdown}${structured}${paths}</article></section>`;
+}
+function renderAnalysisMarkdownReports(analysis) {
+  const reports = normalizedAnalysisMarkdownReports(analysis);
+  if (!reports.length) return "";
+  return `<div class="analysis-markdown-reports">${reports.map(renderAnalysisMarkdownReport).join("")}</div>`;
+}
+function normalizedAnalysisMarkdownReports(analysis) {
+  const reports = Array.isArray(analysis?.markdown_reports) ? analysis.markdown_reports.filter((report) => report && typeof report === "object" && String(report.markdown || "").trim()) : [];
+  if (reports.length) return reports;
+  return String(analysis?.md_report || "").trim() ? [{ source: "legacy", markdown: analysis.md_report }] : [];
+}
+function renderAnalysisMarkdownReport(report) {
+  const source = String(report.source || "");
+  const label = analysisMarkdownSourceLabel(source);
+  const heading = source === "legacy" ? "" : `<h4>${esc(label)}</h4>`;
+  const path = report.relative_path ? `<p class="copy analysis-path analysis-markdown-path"><span class="analysis-source-label">${esc(t("source", "Source"))}</span><code>${esc(report.relative_path)}</code></p>` : "";
+  return `<section class="analysis-markdown-report">${heading}<div class="note-body analysis-md">${renderMarkdown(report.markdown)}</div>${path}</section>`;
+}
+function analysisMarkdownSourceLabel(source) {
+  if (source === "harbor_trial") return t("analysis_source_harbor_trial", "Harbor Trial analysis");
+  if (source === "workspace_overlay") return t("analysis_source_workspace_overlay", "Workspace analysis");
+  return t("analysis", "Analysis");
 }
 function renderStructuredAnalysis(analysis) {
   const blocks = [
@@ -1713,7 +1737,7 @@ function hideModalSurface(root) {
 function openModalSurface(root, options = {}) {
   if (!root) return false;
   document.querySelectorAll('[aria-modal="true"]').forEach((candidate) => {
-    const otherRoot = candidate.closest("[data-source-manager],[data-report-manager],[data-view-save-dialog]") || candidate;
+    const otherRoot = candidate.closest("[data-source-manager],[data-report-manager],[data-view-save-dialog],[data-admin-login-dialog]") || candidate;
     if (otherRoot === root) return;
     hideModalSurface(otherRoot);
     modalOpeners.delete(otherRoot);
@@ -1747,6 +1771,7 @@ var REPORT_READER_MIN_WIDTH = 360;
 var REPORT_READER_MIN_WORKSPACE_WIDTH = 360;
 var REPORT_READER_KEYBOARD_STEP = 24;
 var REPORT_READER_PREVIEW_WIDTH = 1180;
+var WORKSPACE_REPORT_PREVIEW_MAX_BYTES = 20 * 1024 * 1024;
 function workspaceReportPreviewPath(report) {
   return `/api/reports/${encodeURIComponent(report.report_id)}/preview`;
 }
@@ -1828,6 +1853,7 @@ function renderWorkspaceReportCell(row) {
   </span>`;
 }
 function renderAttachWorkspaceReportAction(rows = leaderboardRows()) {
+  if (!adminMode()) return "";
   const count = visibleSelectedSourceKeys(rows).length;
   return `<button class="action-button report-attach-button" type="button" data-report-attach data-workspace-report-control ${count ? "" : "disabled"}>${esc(reportMessage("attach_report", "Attach report ({count})", { count }))}</button>`;
 }
@@ -1862,6 +1888,7 @@ function bindWorkspaceReportLeaderboardControls(target) {
   });
 }
 async function attachWorkspaceReport(button) {
+  if (!adminMode()) return;
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
   button.disabled = true;
@@ -1936,6 +1963,21 @@ async function loadWorkspaceReportManagerData(changes = {}) {
   setWorkspaceReportManagerStatus("");
   renderWorkspaceReportManager();
   state.reportManager.page = Math.max(1, Number(changes.page || state.reportManager.page || 1));
+  if (!adminMode()) {
+    try {
+      const reportsPayload = await serveApi("/api/reports");
+      applyWorkspaceReportCatalog(reportsPayload?.reports || []);
+      state.reportManager.sourceRows = [];
+      state.reportManager.loading = false;
+      setWorkspaceReportManagerStatus("");
+      renderWorkspaceReportManager();
+    } catch (error) {
+      state.reportManager.loading = false;
+      setWorkspaceReportManagerStatus(error.message || String(error), true);
+      renderWorkspaceReportManager();
+    }
+    return;
+  }
   const params = new URLSearchParams({
     state: "all",
     surface: "sources",
@@ -2003,6 +2045,13 @@ function renderWorkspaceReportManager() {
   bindWorkspaceReportManagerControls();
 }
 function renderWorkspaceReportInventoryItem(report) {
+  if (!adminMode()) {
+    return `<button class="report-inventory-item" type="button" data-report-manager-preview="${esc(report.report_id)}">
+      <strong>${esc(report.filename)}</strong>
+      <span>${esc(report.format.toUpperCase())} &middot; ${esc(reportMessage("report_sessions_count", "{count} sessions", { count: report.source_keys.length }))}</span>
+      <code>${esc(report.report_id)}</code>
+    </button>`;
+  }
   const selected = report.report_id === state.reportManager.selectedId;
   return `<button class="report-inventory-item ${selected ? "selected" : ""}" type="button" data-report-inventory-id="${esc(report.report_id)}" ${selected ? 'aria-current="true"' : ""}>
     <strong>${esc(report.filename)}</strong>
@@ -2013,6 +2062,10 @@ function renderWorkspaceReportInventoryItem(report) {
 function renderWorkspaceReportBindings() {
   const target = document.querySelector("[data-report-bindings]");
   if (!target) return;
+  if (!adminMode()) {
+    target.innerHTML = "";
+    return;
+  }
   target.setAttribute?.("aria-busy", state.reportManager.loading || state.reportManager.busy ? "true" : "false");
   if (state.reportManager.loading) {
     target.innerHTML = `<p class="report-manager-empty loading">${esc(t("loading", "Loading"))}</p>`;
@@ -2213,6 +2266,7 @@ function focusWorkspaceReportSearch() {
   input.setSelectionRange?.(end, end);
 }
 async function saveWorkspaceReportBindings() {
+  if (!adminMode()) return;
   const reportId = state.reportManager.selectedId;
   const sourceKeys = Array.from(state.reportManager.draftBindings);
   if (!reportId || !workspaceReportBindingsChanged()) return;
@@ -2236,6 +2290,7 @@ async function saveWorkspaceReportBindings() {
   }
 }
 async function deleteWorkspaceReport(reportId) {
+  if (!adminMode()) return;
   const report = workspaceReportForId(reportId);
   if (!report) return;
   const prompt = reportMessage("report_delete_confirm", "Permanently delete {filename}?", { filename: report.filename });
@@ -2285,9 +2340,19 @@ function renderWorkspaceReportReader() {
   const report = workspaceReportForId(state.reportReader.openId);
   if (!target || !report) return;
   disconnectWorkspaceReportPreviewObserver();
-  const previewUrl = workspaceSnapshotMode() ? workspaceSnapshotReportPreviewUrl(report) : workspaceReportPreviewPath(report);
+  let previewUrl = workspaceReportPreviewPath(report);
+  let previewError = "";
+  if (workspaceSnapshotMode()) {
+    try {
+      previewUrl = workspaceSnapshotReportPreviewUrl(report);
+    } catch (error) {
+      previewUrl = "";
+      previewError = error?.message || String(error);
+    }
+  }
   const openTab = workspaceSnapshotMode() ? "" : `<a class="action-button compact report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>`;
-  const fitAttribute = report.format === "html" ? " data-report-preview-fit" : "";
+  const fitAttribute = report.format === "html" && !previewError ? " data-report-preview-fit" : "";
+  const preview = previewError ? `<p class="copy danger report-reader-error" role="alert">${esc(previewError)}</p>` : `<iframe class="report-reader-frame" data-report-reader-frame src="${esc(previewUrl)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>`;
   target.innerHTML = `<div class="report-reader-panel" role="dialog" aria-modal="false" aria-labelledby="report-reader-title">
     <header class="report-reader-head">
       <div>
@@ -2301,7 +2366,7 @@ function renderWorkspaceReportReader() {
       </div>
     </header>
     <div class="report-reader-frame-viewport" data-report-reader-viewport${fitAttribute}>
-      <iframe class="report-reader-frame" data-report-reader-frame src="${esc(previewUrl)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+      ${preview}
     </div>
   </div>
   <div class="report-reader-resize" data-report-reader-resize role="separator" aria-orientation="vertical" tabindex="0" aria-label="${esc(t("report_resize", "Resize report reader"))}"></div>`;
@@ -2350,7 +2415,22 @@ function observeWorkspaceReportReaderPreview(target = $("workspace-report-reader
 }
 function workspaceSnapshotReportPreviewUrl(report) {
   if (state.reportReader.objectUrl) URL.revokeObjectURL?.(state.reportReader.objectUrl);
-  const binary = atob(report.preview_base64 || "");
+  state.reportReader.objectUrl = null;
+  const encoded = String(report?.preview_base64 || "");
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  const estimatedBytes = Math.max(0, Math.floor(encoded.length * 3 / 4) - padding);
+  if (estimatedBytes > WORKSPACE_REPORT_PREVIEW_MAX_BYTES) {
+    throw new Error(t("report_preview_too_large", "Report preview exceeds the 20 MiB limit"));
+  }
+  let binary;
+  try {
+    binary = atob(encoded);
+  } catch (cause) {
+    throw new Error(t("report_preview_invalid", "Report preview data is invalid"), { cause });
+  }
+  if (binary.length > WORKSPACE_REPORT_PREVIEW_MAX_BYTES) {
+    throw new Error(t("report_preview_too_large", "Report preview exceeds the 20 MiB limit"));
+  }
   const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
   state.reportReader.objectUrl = URL.createObjectURL(new Blob([bytes], { type: "text/html; charset=utf-8" }));
   return state.reportReader.objectUrl;
@@ -2445,6 +2525,62 @@ function closeWorkspaceReportReader(options = {}) {
   return true;
 }
 
+// web/src/modules/inference-metrics.js
+var SUFFICIENT_FIELDS = [
+  "ttft_ms_sum",
+  "ttft_sample_count",
+  "decode_duration_ms",
+  "decode_token_count",
+  "decode_sample_count",
+  "cache_prompt_tokens",
+  "cache_read_tokens",
+  "cache_sample_count",
+  "attempt_count",
+  "successful_attempt_count"
+];
+function metricNumber(value) {
+  if (value === null || value === void 0 || value === "" || typeof value === "boolean") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+}
+function inferenceRowMetrics(finalMetrics = {}) {
+  const metrics = finalMetrics && typeof finalMetrics === "object" ? finalMetrics : {};
+  const source = metrics?.extra?.model_inference && typeof metrics.extra.model_inference === "object" ? metrics.extra.model_inference : {};
+  const row = Object.fromEntries(SUFFICIENT_FIELDS.map((key) => [key, metricNumber(source[key])]));
+  row.ttft_ms = row.ttft_ms_sum !== null && row.ttft_sample_count > 0 ? row.ttft_ms_sum / row.ttft_sample_count : null;
+  row.tps = row.decode_token_count !== null && row.decode_duration_ms > 0 && row.decode_sample_count > 0 ? 1e3 * row.decode_token_count / row.decode_duration_ms : null;
+  row.cache_hit_rate = row.cache_read_tokens !== null && row.cache_prompt_tokens > 0 && row.cache_read_tokens <= row.cache_prompt_tokens && row.cache_sample_count > 0 ? row.cache_read_tokens / row.cache_prompt_tokens : null;
+  return row;
+}
+function aggregateInferenceRows(rows = []) {
+  const values = Array.isArray(rows) ? rows : [];
+  const pair = (numeratorKey, denominatorKey, { sampleCountKey = null, numeratorBounded = false } = {}) => {
+    let numerator = 0;
+    let denominator = 0;
+    let covered = 0;
+    values.forEach((row) => {
+      const left = metricNumber(row?.[numeratorKey]);
+      const right = metricNumber(row?.[denominatorKey]);
+      if (left === null || right === null || right <= 0) return;
+      if (sampleCountKey && !(metricNumber(row?.[sampleCountKey]) > 0)) return;
+      if (numeratorBounded && left > right) return;
+      numerator += left;
+      denominator += right;
+      covered += 1;
+    });
+    return { numerator, denominator, covered };
+  };
+  const ttft = pair("ttft_ms_sum", "ttft_sample_count");
+  const tps = pair("decode_token_count", "decode_duration_ms", { sampleCountKey: "decode_sample_count" });
+  const cache = pair("cache_read_tokens", "cache_prompt_tokens", { sampleCountKey: "cache_sample_count", numeratorBounded: true });
+  return {
+    matched_trials: values.length,
+    ttft: { value_ms: ttft.denominator > 0 ? ttft.numerator / ttft.denominator : null, covered_trials: ttft.covered, sample_count: ttft.denominator, ttft_ms_sum: ttft.numerator },
+    tps: { value: tps.denominator > 0 ? 1e3 * tps.numerator / tps.denominator : null, covered_trials: tps.covered, decode_token_count: tps.numerator, decode_duration_ms: tps.denominator },
+    cache_hit_rate: { value: cache.denominator > 0 ? cache.numerator / cache.denominator : null, covered_trials: cache.covered, cache_read_tokens: cache.numerator, cache_prompt_tokens: cache.denominator }
+  };
+}
+
 // web/src/modules/leaderboard-summary.js
 function renderLeaderboardSummary(rows = leaderboardRows()) {
   const target = $("leaderboard-summary");
@@ -2470,10 +2606,26 @@ function renderLeaderboardSummary(rows = leaderboardRows()) {
       </div>
       ${renderLeaderboardSummaryActions()}
     </div>
+    ${renderInferenceOverview(visibleRows)}
     ${renderLeaderboardSummaryTableDisclosure(groups)}
     ${state.leaderboardSummaryGroupBy === "overall" ? "" : renderLeaderboardSummaryCharts(groups)}
   `;
   bindLeaderboardSummaryControls(target);
+}
+function renderInferenceOverview(rows) {
+  const summary = serveMode() && state.catalogPage?.inference_summary ? state.catalogPage.inference_summary : aggregateInferenceRows(rows);
+  const matched = Number(summary?.matched_trials || 0);
+  const items = [
+    { key: "ttft", label: t("avg_ttft", "Avg TTFT"), value: fmtTtft(summary?.ttft?.value_ms), covered: summary?.ttft?.covered_trials },
+    { key: "tps", label: t("decode_tps", "Decode TPS"), value: fmtTps(summary?.tps?.value), covered: summary?.tps?.covered_trials },
+    { key: "cache", label: t("cache_hit", "Cache Hit"), value: fmtPct(summary?.cache_hit_rate?.value), covered: summary?.cache_hit_rate?.covered_trials }
+  ];
+  return `<section class="inference-overview" aria-label="${esc(t("inference_overview", "Inference overview"))}">
+    ${items.map((item) => {
+    const coverage = String(t("metric_coverage", "{covered}/{matched} trials")).replace("{covered}", String(Number(item.covered || 0))).replace("{matched}", String(matched));
+    return `<div class="inference-overview-item" data-inference-summary="${esc(item.key)}"><span>${esc(item.label)}</span><strong>${esc(item.value)}</strong><small>${esc(coverage)}</small></div>`;
+  }).join("")}
+  </section>`;
 }
 function renderLeaderboardSummaryActions() {
   const workspaceControls = typeof renderWorkspaceViewControls === "function" ? renderWorkspaceViewControls() : "";
@@ -2749,11 +2901,343 @@ function summaryNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+// web/src/modules/workspace-view-repository.js
+var BROWSER_VIEW_VERSION = 1;
+var BROWSER_VIEW_LIMIT = 100;
+var VIEW_NAME_LIMIT = 120;
+var VIEW_NOTES_BYTE_LIMIT = 1024 * 1024;
+var VIEW_GROUPS = /* @__PURE__ */ new Set(["overall", "agent", "model", "category", "task", "job", "provider"]);
+var FILTER_KEYS = /* @__PURE__ */ new Set([
+  "state",
+  "search",
+  "categories",
+  "tags",
+  "agents",
+  "models",
+  "results",
+  "tasks",
+  "jobs",
+  "providers"
+]);
+var LIST_FILTER_KEYS = [
+  "categories",
+  "tags",
+  "agents",
+  "models",
+  "results",
+  "tasks",
+  "jobs",
+  "providers"
+];
+var VIEW_KEYS = /* @__PURE__ */ new Set(["name", "filters", "group_by", "notes"]);
+function browserViewStorageKey(workspaceId) {
+  return `peval-py.saved-views.v${BROWSER_VIEW_VERSION}.${String(workspaceId || "default")}`;
+}
+function repositoryError(message, cause = null) {
+  const error = new Error(message);
+  if (cause) error.cause = cause;
+  return error;
+}
+function normalizeName(value) {
+  if (typeof value !== "string") throw repositoryError("View name must be a string.");
+  const name = value.trim();
+  if (!name) throw repositoryError("View name is required.");
+  if (name.length > VIEW_NAME_LIMIT) throw repositoryError(`View name exceeds ${VIEW_NAME_LIMIT} characters.`);
+  if (name === "." || name === ".." || /[\\/]/.test(name)) throw repositoryError("View name must be one filename stem.");
+  if (Array.from(name).some((character) => {
+    const code = character.codePointAt(0);
+    return code < 32 || code === 127;
+  })) throw repositoryError("View name must not contain control characters.");
+  return name;
+}
+function normalizeStringList(value, key) {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw repositoryError(`View filters ${key} must be a string array.`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  return value.filter((item) => {
+    if (seen.has(item)) return false;
+    seen.add(item);
+    return true;
+  });
+}
+function normalizeFilters(value) {
+  const filters = value === void 0 || value === null ? {} : value;
+  if (!filters || typeof filters !== "object" || Array.isArray(filters)) {
+    throw repositoryError("View filters must be an object.");
+  }
+  if (Object.keys(filters).some((key) => !FILTER_KEYS.has(key))) {
+    throw repositoryError("View filters contain unsupported fields.");
+  }
+  const state2 = filters.state === void 0 ? "active" : filters.state;
+  const search = filters.search === void 0 ? "" : filters.search;
+  if (typeof state2 !== "string" || typeof search !== "string") {
+    throw repositoryError("View filters state and search must be strings.");
+  }
+  if (!["active", "archived", "all"].includes(state2)) {
+    throw repositoryError("View filters state must be active, archived, or all.");
+  }
+  const normalized = {};
+  if (state2 !== "active") normalized.state = state2;
+  if (search) normalized.search = search;
+  LIST_FILTER_KEYS.forEach((key) => {
+    const items = normalizeStringList(filters[key] || [], key);
+    if (items.length) normalized[key] = items;
+  });
+  return normalized;
+}
+function utf8ByteLength(value) {
+  let bytes = 0;
+  for (const character of value) {
+    const code = character.codePointAt(0);
+    if (code <= 127) bytes += 1;
+    else if (code <= 2047) bytes += 2;
+    else if (code <= 65535) bytes += 3;
+    else bytes += 4;
+  }
+  return bytes;
+}
+function normalizeBrowserView(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw repositoryError("Browser view must be an object.");
+  }
+  if (Object.keys(value).some((key) => !VIEW_KEYS.has(key))) {
+    throw repositoryError("Browser view contains unsupported fields.");
+  }
+  const notes = value.notes === void 0 ? "" : value.notes;
+  if (typeof notes !== "string") throw repositoryError("View notes must be a string.");
+  if (utf8ByteLength(notes) > VIEW_NOTES_BYTE_LIMIT) {
+    throw repositoryError(`View notes exceed ${VIEW_NOTES_BYTE_LIMIT} byte limit.`);
+  }
+  const groupBy = String(value.group_by || "").trim().toLowerCase();
+  if (!VIEW_GROUPS.has(groupBy)) {
+    throw repositoryError("group_by must be overall, agent, model, category, task, job, or provider.");
+  }
+  return {
+    name: normalizeName(value.name),
+    filters: normalizeFilters(value.filters),
+    group_by: groupBy,
+    notes
+  };
+}
+function normalizeBrowserViews(value, { enforceLimit = true } = {}) {
+  if (!Array.isArray(value)) throw repositoryError("Browser Saved Views must be an array.");
+  if (enforceLimit && value.length > BROWSER_VIEW_LIMIT) {
+    throw repositoryError(`Browser Saved Views may contain at most ${BROWSER_VIEW_LIMIT} views.`);
+  }
+  const views = value.map(normalizeBrowserView);
+  const names = /* @__PURE__ */ new Set();
+  views.forEach((view) => {
+    if (names.has(view.name)) throw repositoryError(`Duplicate browser view: ${view.name}`);
+    names.add(view.name);
+  });
+  return views;
+}
+function identified(origin, view) {
+  const normalized = normalizeBrowserView(view);
+  return { ...normalized, id: `${origin}:${normalized.name}`, origin };
+}
+function viewSort(left, right) {
+  return left.name.localeCompare(right.name, void 0, { numeric: true, sensitivity: "base" });
+}
+function createWorkspaceViewRepository({ workspaceId, storage, request }) {
+  if (typeof request !== "function") throw repositoryError("Saved View request adapter is required.");
+  const storageKey = browserViewStorageKey(workspaceId);
+  let serverViews = [];
+  let browserViews = [];
+  let serverLoaded = false;
+  let browserLoaded = false;
+  function readBrowserViews() {
+    if (!storage || typeof storage.getItem !== "function") {
+      throw repositoryError("Browser Saved Views storage is unavailable.");
+    }
+    let text;
+    try {
+      text = storage.getItem(storageKey);
+    } catch (error) {
+      throw repositoryError(`Browser Saved Views could not be read: ${error?.message || error}`, error);
+    }
+    if (text === null || text === "") return [];
+    try {
+      const payload = JSON.parse(text);
+      if (!payload || typeof payload !== "object" || Array.isArray(payload) || payload.version !== BROWSER_VIEW_VERSION || !Object.prototype.hasOwnProperty.call(payload, "views")) {
+        throw new Error("unsupported or malformed storage payload");
+      }
+      return normalizeBrowserViews(payload.views);
+    } catch (error) {
+      throw repositoryError(`Browser Saved Views could not be read: ${error?.message || error}`, error);
+    }
+  }
+  function persist(next) {
+    if (!storage || typeof storage.setItem !== "function") {
+      throw repositoryError("Browser Saved Views storage is unavailable.");
+    }
+    const normalized = normalizeBrowserViews(next);
+    try {
+      storage.setItem(storageKey, JSON.stringify({ version: BROWSER_VIEW_VERSION, views: normalized }));
+    } catch (error) {
+      throw repositoryError(`Browser Saved Views could not be saved: ${error?.message || error}`, error);
+    }
+    browserViews = normalized;
+  }
+  function visibleViews() {
+    const serverNames = new Set(serverViews.map((view) => view.name));
+    return [
+      ...serverViews.map((view) => identified("server", view)),
+      ...browserViews.filter((view) => !serverNames.has(view.name)).map((view) => identified("browser", view))
+    ].sort(viewSort);
+  }
+  function findVisible(id) {
+    return visibleViews().find((view) => view.id === String(id || "")) || null;
+  }
+  async function refresh() {
+    const response = await request("/api/views");
+    const nextServer = normalizeBrowserViews(response?.views || [], { enforceLimit: false });
+    serverViews = nextServer;
+    serverLoaded = true;
+    browserLoaded = false;
+    browserViews = readBrowserViews();
+    browserLoaded = true;
+    return visibleViews();
+  }
+  async function save(definition, { location = "browser", overwrite = false } = {}) {
+    const view = normalizeBrowserView(definition);
+    if (location === "workspace") {
+      const response = await request("/api/views", {
+        method: "POST",
+        body: { ...view, overwrite: Boolean(overwrite) }
+      });
+      serverViews = normalizeBrowserViews(response?.views || serverViews, { enforceLimit: false });
+      serverLoaded = true;
+      return identified("server", view);
+    }
+    if (location !== "browser") throw repositoryError("Saved View location must be workspace or browser.");
+    if (!serverLoaded) throw repositoryError("Load workspace Saved Views before saving to this browser.");
+    if (!browserLoaded) throw repositoryError("Browser Saved Views storage must be read successfully before saving.");
+    if (serverViews.some((item) => item.name === view.name)) {
+      throw repositoryError(`A workspace Saved View already uses the name ${view.name}.`);
+    }
+    const index = browserViews.findIndex((item) => item.name === view.name);
+    if (index >= 0 && !overwrite) throw repositoryError(`Browser Saved View already exists: ${view.name}`);
+    const next = [...browserViews];
+    if (index >= 0) next[index] = view;
+    else next.push(view);
+    persist(next);
+    return identified("browser", view);
+  }
+  async function update(id, change) {
+    const current = findVisible(id);
+    if (!current) throw repositoryError(`Saved View is not available: ${id}`);
+    if (!change || !["name", "notes", "configuration"].includes(change.field)) {
+      throw repositoryError("Saved View update must change name, notes, or configuration.");
+    }
+    if (current.origin === "server") {
+      const response = await request("/api/views/update", {
+        method: "POST",
+        body: { name: current.name, field: change.field, value: change.value }
+      });
+      serverViews = normalizeBrowserViews(response?.views || serverViews, { enforceLimit: false });
+      return identified("server", response?.view || current);
+    }
+    let next = { name: current.name, filters: current.filters, group_by: current.group_by, notes: current.notes };
+    if (change.field === "name") next.name = change.value;
+    if (change.field === "notes") next.notes = change.value;
+    if (change.field === "configuration") {
+      if (!change.value || typeof change.value !== "object") throw repositoryError("Browser Saved View configuration must be an object.");
+      next = { ...next, filters: change.value.filters, group_by: change.value.group_by };
+    }
+    next = normalizeBrowserView(next);
+    if (serverViews.some((item) => item.name === next.name)) {
+      throw repositoryError(`A workspace Saved View already uses the name ${next.name}.`);
+    }
+    if (browserViews.some((item) => item.name === next.name && item.name !== current.name) && !change.overwrite) {
+      throw repositoryError(`Browser Saved View already exists: ${next.name}`);
+    }
+    persist([
+      ...browserViews.filter((item) => item.name !== current.name && item.name !== next.name),
+      next
+    ]);
+    return identified("browser", next);
+  }
+  async function remove(ids) {
+    const unique = Array.from(new Set((Array.isArray(ids) ? ids : []).map(String)));
+    const resolved = unique.map((id) => {
+      const view = findVisible(id);
+      if (!view) throw repositoryError(`Saved View is not available: ${id}`);
+      return view;
+    });
+    const serverNames = resolved.filter((view) => view.origin === "server").map((view) => view.name);
+    const browserNames = new Set(resolved.filter((view) => view.origin === "browser").map((view) => view.name));
+    if (serverNames.length) {
+      const response = await request("/api/views/delete", { method: "POST", body: { names: serverNames } });
+      serverViews = normalizeBrowserViews(
+        response?.views || serverViews.filter((view) => !serverNames.includes(view.name)),
+        { enforceLimit: false }
+      );
+    }
+    if (browserNames.size) persist(browserViews.filter((view) => !browserNames.has(view.name)));
+    return { server: serverNames, browser: Array.from(browserNames), views: visibleViews() };
+  }
+  function queryPayload(ids) {
+    const server = [];
+    const browser = [];
+    const seen = /* @__PURE__ */ new Set();
+    (Array.isArray(ids) ? ids : []).forEach((rawId) => {
+      const id = String(rawId);
+      if (seen.has(id)) return;
+      seen.add(id);
+      const view = findVisible(id);
+      if (!view) throw repositoryError(`Saved View is not available: ${id}`);
+      if (view.origin === "server") server.push(view.name);
+      else browser.push({ name: view.name, filters: view.filters, group_by: view.group_by, notes: view.notes });
+    });
+    return { views: server, browser_views: browser };
+  }
+  return {
+    refresh,
+    list: visibleViews,
+    save,
+    update,
+    delete: remove,
+    queryPayload,
+    ready: () => serverLoaded,
+    browserReady: () => browserLoaded
+  };
+}
+
 // web/src/modules/workspace-views.js
+var liveWorkspaceViewRepository = null;
+function browserStorageAdapter() {
+  try {
+    return globalThis.localStorage || globalThis.window?.localStorage;
+  } catch (error) {
+    return {
+      getItem() {
+        throw error;
+      },
+      setItem() {
+        throw error;
+      }
+    };
+  }
+}
+function workspaceViewRepository() {
+  if (!serveMode()) return null;
+  if (!liveWorkspaceViewRepository) {
+    liveWorkspaceViewRepository = createWorkspaceViewRepository({
+      workspaceId: RENDER_OPTIONS?.workspace_id || "default",
+      storage: browserStorageAdapter(),
+      request: serveApi
+    });
+  }
+  return liveWorkspaceViewRepository;
+}
 function workspaceViews() {
   return listValue(state.workspaceViews).filter((view) => view && typeof view.name === "string" && view.name.trim()).map((view) => ({
     ...view,
     name: String(view.name),
+    origin: view.origin === "browser" ? "browser" : "server",
+    id: String(view.id || `${view.origin === "browser" ? "browser" : "server"}:${view.name}`),
     filters: workspaceViewFilters(view.filters),
     group_by: ["overall", "agent", "model", "category", "task", "job", "provider"].includes(view.group_by) ? view.group_by : "agent",
     notes: typeof view.notes === "string" ? view.notes : ""
@@ -2777,18 +3261,21 @@ function workspaceViewFilters(value) {
 function workspaceViewForName(name) {
   return workspaceViews().find((view) => view.name === String(name || "")) || null;
 }
+function workspaceViewForId(id) {
+  return workspaceViews().find((view) => view.id === String(id || "")) || null;
+}
 function workspaceViewSummaryForName(name) {
   return listValue(state.workspaceViewSummaries).find((view) => view?.name === name) || null;
 }
 function workspaceViewColumns() {
-  const navigateAttrs = (view) => `data-view-navigate="${esc(view.name)}"${workspaceSnapshotMode() ? ' tabindex="0"' : ""}`;
-  const edit = (field, options = {}) => workspaceSnapshotMode() ? void 0 : {
-    value: (view) => workspaceViewEditValue(view, field),
-    commit: (view, value) => commitWorkspaceViewCellEdit(view, field, value),
+  const navigateAttrs = (view) => `data-view-navigate="${esc(view.id)}"${workspaceSnapshotMode() ? ' tabindex="0"' : ""}`;
+  const edit = (field, options = {}) => workspaceSnapshotMode() ? void 0 : (view) => view.origin === "browser" || adminMode() ? {
+    value: (view2) => workspaceViewEditValue(view2, field),
+    commit: (view2, value) => commitWorkspaceViewCellEdit(view2, field, value),
     ...options
-  };
+  } : void 0;
   const columns = [
-    { key: "name", label: t("view_name", "Name"), valueType: "text", value: (view) => view.name, html: (view) => `<strong>${esc(view.name)}</strong>`, cellAttrs: navigateAttrs, edit: edit("name") },
+    { key: "name", label: t("view_name", "Name"), valueType: "text", value: (view) => view.name, html: (view) => `<strong>${esc(view.name)}</strong>${view.origin === "browser" ? `<span class="workspace-view-local-badge">${esc(t("view_local", "Local"))}</span>` : ""}`, cellAttrs: navigateAttrs, edit: edit("name") },
     { key: "categories", label: t("category", "Category"), valueType: "scalar-list", filterable: true, filterValues: (view) => view.filters.categories, value: (view) => view.filters.categories.join(", ") || "-", html: (view) => renderWorkspaceViewValueList(view.filters.categories), cellAttrs: navigateAttrs, edit: edit("categories", { suggestions: workspaceViewCategorySuggestions }) },
     { key: "tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: (view) => view.filters.tags, value: (view) => view.filters.tags.join(", ") || "-", html: (view) => renderWorkspaceViewValueList(view.filters.tags), cellAttrs: navigateAttrs, edit: edit("tags", { suggestions: workspaceViewTagSuggestions }) },
     { key: "models", label: t("model", "Models"), valueType: "list", filterable: true, filterValues: (view) => view.filters.models, value: (view) => view.filters.models.join(", ") || "-", html: (view) => renderWorkspaceViewValueList(view.filters.models), cellAttrs: navigateAttrs, edit: edit("models", { suggestions: workspaceViewModelSuggestions }) },
@@ -2802,11 +3289,11 @@ function workspaceViewColumns() {
   if (workspaceSnapshotMode()) return columns;
   return [
     selectionColumn({
-      selectionKey: (view) => view?.name || "",
+      selectionKey: (view) => view?.id || "",
       selectionSet: () => state.workspaceViewSelection,
-      rowInputAttr: (name) => `data-view-select="${esc(name)}"`,
+      rowInputAttr: (id) => `data-view-select="${esc(id)}"`,
       headerInputAttr: "data-view-select-visible",
-      rowAriaLabel: (name) => workspaceViewMessage("select_view", "Select {name}", { name })
+      rowAriaLabel: (id) => workspaceViewMessage("select_view", "Select {name}", { name: workspaceViewForId(id)?.name || id })
     }),
     ...columns
   ];
@@ -2855,7 +3342,7 @@ function renderWorkspaceViewControls() {
   if (!workspaceDisplayMode()) return "";
   const compositeApplied = state.workspaceAppliedViewNames.size > 0;
   const reopen = state.workspaceViewsClosed && workspaceViews().length ? `<button type="button" class="action-button" data-workspace-views-open>${esc(t("saved_views", "Saved views"))}</button>` : "";
-  const save = serveMode() ? `<button type="button" class="action-button leaderboard-summary-save" data-view-save ${compositeApplied ? `disabled title="${esc(t("clear_conditions_before_saving_view", "Clear applied views before saving a new view."))}"` : ""}>${esc(t("save_view", "Save view"))}</button>` : "";
+  const save = `<button type="button" class="action-button leaderboard-summary-save" data-view-save ${compositeApplied || !state.workspaceViewsLoaded ? `disabled title="${esc(compositeApplied ? t("clear_conditions_before_saving_view", "Clear applied views before saving a new view.") : t("view_directory_required", "Load Saved Views before saving."))}"` : ""}>${esc(t("save_view", "Save view"))}</button>`;
   return reopen || save ? `<div class="workspace-view-controls" data-workspace-view-control>${reopen}${save}</div>` : "";
 }
 function bindWorkspaceViewControls(target) {
@@ -2866,7 +3353,7 @@ function bindWorkspaceViewControls(target) {
     tableId: "workspace-views",
     columns,
     rows,
-    rowKey: (view) => view.name,
+    rowKey: (view) => view.id,
     onChange: renderWorkspaceViewRail
   });
   target.querySelectorAll("[data-view-save]").forEach((button) => {
@@ -2911,9 +3398,9 @@ function bindWorkspaceViewControls(target) {
   target.querySelectorAll("[data-view-select]").forEach((input) => {
     input.addEventListener("click", (event) => event.stopPropagation());
     input.addEventListener("change", () => {
-      const name = String(input.dataset.viewSelect || "");
-      if (input.checked) state.workspaceViewSelection.add(name);
-      else state.workspaceViewSelection.delete(name);
+      const id = String(input.dataset.viewSelect || "");
+      if (input.checked) state.workspaceViewSelection.add(id);
+      else state.workspaceViewSelection.delete(id);
       renderWorkspaceViewRail();
     });
   });
@@ -2954,7 +3441,6 @@ function bindWorkspaceViewControls(target) {
   });
 }
 function bindWorkspaceViewDialog() {
-  if (!serveMode()) return;
   const dialog = document.querySelector?.("[data-view-save-dialog]");
   if (!dialog || dialog.dataset?.bound === "true") return;
   if (dialog.dataset) dialog.dataset.bound = "true";
@@ -2991,6 +3477,10 @@ function openWorkspaceViewSaveDialog(opener) {
   }
   const notesInput = dialog.querySelector?.("[data-view-notes-input]");
   if (notesInput) notesInput.value = "";
+  const workspaceLocation = dialog.querySelector?.('[name="view_location"][value="workspace"]');
+  const browserLocation = dialog.querySelector?.('[name="view_location"][value="browser"]');
+  if (adminMode() && workspaceLocation) workspaceLocation.checked = true;
+  else if (browserLocation) browserLocation.checked = true;
   renderWorkspaceViewCurrentConfiguration(dialog);
 }
 function workspaceViewDefaultName(filters = currentWorkspaceViewFilters(), groupBy = state.leaderboardSummaryGroupBy) {
@@ -3059,24 +3549,26 @@ function workspaceViewFilterConfig(filters = currentWorkspaceViewFilters()) {
 async function saveWorkspaceView(dialog) {
   const name = String(dialog.querySelector?.("[data-view-name-input]")?.value || "").trim();
   const notes = String(dialog.querySelector?.("[data-view-notes-input]")?.value || "");
+  const requestedLocation = String(dialog.querySelector?.('[name="view_location"]:checked')?.value || "browser");
+  const location = adminMode() && requestedLocation === "workspace" ? "workspace" : "browser";
   const payload = {
     name,
     filters: workspaceViewFilterConfig(),
     group_by: state.leaderboardSummaryGroupBy,
-    notes,
-    overwrite: false
+    notes
   };
   try {
-    let response;
+    const repository = workspaceViewRepository();
+    if (!repository) return;
     try {
-      response = await serveApi("/api/views", { method: "POST", body: payload });
+      await repository.save(payload, { location, overwrite: false });
     } catch (error) {
       if (!String(error?.message || error).includes("already exists")) throw error;
       const prompt = workspaceViewMessage("view_overwrite_confirm", "Replace the saved view {name}?", { name });
       if (typeof window.confirm === "function" && !window.confirm(prompt)) return;
-      response = await serveApi("/api/views", { method: "POST", body: { ...payload, overwrite: true } });
+      await repository.save(payload, { location, overwrite: true });
     }
-    state.workspaceViews = listValue(response?.views);
+    state.workspaceViews = repository.list();
     state.workspaceViewSummaries = [];
     state.workspaceViewsLoaded = true;
     state.workspaceViewsRefreshVersion += 1;
@@ -3097,23 +3589,32 @@ async function refreshWorkspaceViews() {
     while (state.workspaceViewsRefreshQueued) {
       state.workspaceViewsRefreshQueued = false;
       const revision = state.workspaceViewsRefreshVersion;
+      const appliedBefore = new Set(state.workspaceAppliedViewNames);
       try {
-        const catalog = await serveApi("/api/views");
+        const repository = workspaceViewRepository();
+        const views = repository ? await repository.refresh() : workspaceViews();
         if (revision !== state.workspaceViewsRefreshVersion) {
           state.workspaceViewsRefreshQueued = true;
           continue;
         }
-        const views = listValue(catalog?.views);
         let summaries = [];
         let generation = Number(state.catalogPage?.generation || 0);
         if (views.length) {
-          const summaryPayload = await serveApi("/api/views/summary");
+          const serverCount = views.filter((view) => view.origin === "server").length;
+          const browserIds = views.filter((view) => view.origin === "browser").map((view) => view.id);
+          const [serverSummary, browserSummary] = await Promise.all([
+            serverCount ? serveApi("/api/views/summary") : Promise.resolve({ views: [] }),
+            browserIds.length ? serveApi("/api/views/summary", {
+              method: "POST",
+              body: { browser_views: repository.queryPayload(browserIds).browser_views }
+            }) : Promise.resolve({ views: [] })
+          ]);
           if (revision !== state.workspaceViewsRefreshVersion) {
             state.workspaceViewsRefreshQueued = true;
             continue;
           }
-          summaries = listValue(summaryPayload?.views);
-          generation = Number(summaryPayload?.generation || 0);
+          summaries = [...listValue(serverSummary?.views), ...listValue(browserSummary?.views)];
+          generation = Number(serverSummary?.generation || browserSummary?.generation || 0);
         }
         state.workspaceViews = views;
         state.workspaceViewSummaries = summaries;
@@ -3122,8 +3623,23 @@ async function refreshWorkspaceViews() {
         pruneWorkspaceViewState();
         renderWorkspaceViewRail();
         if ($("leaderboard-summary")) renderLeaderboardSummary(leaderboardRows());
+        if (Array.from(appliedBefore).some((id) => !state.workspaceAppliedViewNames.has(id))) {
+          if (state.workspaceAppliedViewNames.size) await reloadAppliedWorkspaceViews();
+          else await clearWorkspaceViewConditions();
+        }
       } catch (error) {
-        if (revision === state.workspaceViewsRefreshVersion) setServeStatus(error.message || String(error), true);
+        if (revision === state.workspaceViewsRefreshVersion) {
+          const repository = workspaceViewRepository();
+          state.workspaceViews = repository?.list() || [];
+          state.workspaceViewsLoaded = Boolean(repository?.ready());
+          pruneWorkspaceViewState();
+          renderWorkspaceViewRail();
+          if (Array.from(appliedBefore).some((id) => !state.workspaceAppliedViewNames.has(id))) {
+            if (state.workspaceAppliedViewNames.size) await reloadAppliedWorkspaceViews();
+            else await clearWorkspaceViewConditions();
+          }
+          setServeStatus(error.message || String(error), true);
+        }
       }
     }
   })().finally(() => {
@@ -3134,17 +3650,19 @@ async function refreshWorkspaceViews() {
   return state.workspaceViewsRefreshPromise;
 }
 function pruneWorkspaceViewState() {
-  const names = new Set(workspaceViews().map((view) => view.name));
+  const ids = new Set(workspaceViews().map((view) => view.id));
   state.workspaceViewTableOpen = new Set(
-    Array.from(state.workspaceViewTableOpen).filter((name) => names.has(name))
+    Array.from(state.workspaceViewTableOpen).filter((id) => ids.has(id))
   );
   state.workspaceViewSelection = new Set(
-    Array.from(state.workspaceViewSelection).filter((name) => names.has(name))
+    Array.from(state.workspaceViewSelection).filter((id) => ids.has(id))
   );
   state.workspaceAppliedViewNames = new Set(
-    Array.from(state.workspaceAppliedViewNames).filter((name) => names.has(name))
+    Array.from(state.workspaceAppliedViewNames).filter((id) => ids.has(id))
   );
-  state.catalogQuery.views = workspaceViews().filter((view) => state.workspaceAppliedViewNames.has(view.name)).map((view) => view.name);
+  state.catalogQuery.views = workspaceViewQueryPayload(
+    Array.from(state.workspaceAppliedViewNames)
+  ).views;
 }
 function renderWorkspaceViewRail() {
   const target = $("workspace-views");
@@ -3207,34 +3725,42 @@ function openWorkspaceViewRail() {
   focusSoon(document.querySelector?.("[data-workspace-views-close]"));
 }
 function renderWorkspaceViewIndex(views = workspaceViewRows(), allViews = workspaceViews()) {
-  const selectedCount = allViews.filter((view) => state.workspaceViewSelection.has(view.name)).length;
+  const selected = allViews.filter((view) => state.workspaceViewSelection.has(view.id));
+  const selectedCount = selected.length;
+  const localDeleteCount = selected.filter((view) => view.origin === "browser").length;
+  const deleteCount = adminMode() ? selectedCount : localDeleteCount;
+  const deleteLabel = adminMode() ? t("delete_views", "Delete") : workspaceViewMessage("delete_local_views", "Delete local ({count})", { count: localDeleteCount });
   return `<section class="workspace-view-index" aria-label="${esc(t("saved_views", "Saved views"))}">
     ${serveMode() ? `<div class="workspace-view-index-toolbar">
       <span data-view-selection-count aria-live="polite">${esc(workspaceViewMessage("views_selected_count", "{count} selected", { count: selectedCount }))}</span>
       <div class="workspace-view-index-actions">
         <button type="button" class="action-button" data-view-apply-selected ${selectedCount ? "" : "disabled"}>${esc(t("apply", "Apply"))}</button>
         <button type="button" class="action-button" data-view-export-selected ${selectedCount ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>
-        <button type="button" class="action-button danger" data-view-delete-selected ${selectedCount ? "" : "disabled"}>${esc(t("delete_views", "Delete"))}</button>
+        <button type="button" class="action-button danger" data-view-delete-selected ${deleteCount ? "" : "disabled"}>${esc(deleteLabel)}</button>
       </div>
     </div>` : ""}
     ${renderDataTable({
     tableId: "workspace-views",
     columns: workspaceViewColumns(),
     rows: views,
-    rowKey: (view) => view.name,
+    rowKey: (view) => view.id,
     filterOptionsRows: allViews,
     tableClass: "workspace-view-index-table",
     shellClass: "workspace-view-index-shell",
-    rowClass: (view) => `${state.workspaceViewSelection.has(view.name) ? "selected " : ""}${state.workspaceAppliedViewNames.has(view.name) ? "applied" : ""}`,
-    rowAttrs: (view) => `data-view-index-row="${esc(view.name)}"`
+    rowClass: (view) => `${state.workspaceViewSelection.has(view.id) ? "selected " : ""}${state.workspaceAppliedViewNames.has(view.id) ? "applied" : ""}`,
+    rowAttrs: (view) => `data-view-index-row="${esc(view.id)}"`
   })}
   </section>`;
 }
 function syncWorkspaceViewIndexActions(target = $("workspace-views")) {
-  const count = workspaceViews().filter((view) => state.workspaceViewSelection.has(view.name)).length;
-  target?.querySelectorAll?.("[data-view-apply-selected],[data-view-export-selected],[data-view-delete-selected]").forEach((button) => {
+  const selected = workspaceViews().filter((view) => state.workspaceViewSelection.has(view.id));
+  const count = selected.length;
+  target?.querySelectorAll?.("[data-view-apply-selected],[data-view-export-selected]").forEach((button) => {
     button.disabled = count < 1;
   });
+  const deletable = adminMode() ? count : selected.filter((view) => view.origin === "browser").length;
+  const deleteButton = target?.querySelector?.("[data-view-delete-selected]");
+  if (deleteButton) deleteButton.disabled = deletable < 1;
   const label = target?.querySelector?.("[data-view-selection-count]");
   if (label) label.textContent = workspaceViewMessage("views_selected_count", "{count} selected", { count });
 }
@@ -3242,8 +3768,8 @@ function renderWorkspaceViewCard(view) {
   const summary = workspaceViewSummaryForName(view.name) || { matched_count: 0, groups: [] };
   const matchedCount = Number(summary.matched_count || 0);
   const filters = workspaceViewFilters(view.filters);
-  const applied = state.workspaceAppliedViewNames.has(view.name);
-  return `<article class="workspace-view-card leaderboard-summary${applied ? " applied" : ""}" data-workspace-view="${esc(view.name)}" tabindex="-1">
+  const applied = state.workspaceAppliedViewNames.has(view.id);
+  return `<article class="workspace-view-card leaderboard-summary${applied ? " applied" : ""}" data-workspace-view="${esc(view.id)}" tabindex="-1">
     <header class="workspace-view-card-head panel-head leaderboard-summary-head">
       <div><h3>${esc(view.name)}</h3><p>${esc(workspaceViewMessage("saved_view_matches", "{count} matching sessions", { count: fmtNum(matchedCount) }))}</p></div>
     </header>
@@ -3353,8 +3879,68 @@ function workspaceViewConfigurationEditValue(view, field, value) {
   if (field === "group_by") next.group_by = ["overall", "agent", "model", "category", "task", "job", "provider"].includes(value) ? value : view.group_by;
   return workspaceViewConfigurationYaml(next);
 }
-function navigateToWorkspaceView(name) {
-  const card = Array.from($("workspace-views")?.querySelectorAll?.("[data-workspace-view]") || []).find((item) => item.dataset?.workspaceView === String(name || ""));
+function parseWorkspaceViewOtherConditions(value) {
+  const filters = {};
+  let listKey = null;
+  String(value || "").split(/\r?\n/).forEach((rawLine, index) => {
+    const line = rawLine.trim();
+    if (!line) return;
+    const listMatch = line.match(/^([a-z_]+):$/);
+    if (listMatch) {
+      listKey = listMatch[1];
+      if (!["agents", "results"].includes(listKey)) throw new Error(`Unsupported condition on line ${index + 1}.`);
+      filters[listKey] = [];
+      return;
+    }
+    const itemMatch = line.match(/^-\s+(.+)$/);
+    if (itemMatch && listKey) {
+      let parsed2;
+      try {
+        parsed2 = JSON.parse(itemMatch[1]);
+      } catch {
+        parsed2 = itemMatch[1];
+      }
+      if (typeof parsed2 !== "string") throw new Error(`Condition value on line ${index + 1} must be text.`);
+      filters[listKey].push(parsed2);
+      return;
+    }
+    const scalarMatch = line.match(/^(state|search):\s*(.*)$/);
+    if (!scalarMatch) throw new Error(`Unsupported condition on line ${index + 1}.`);
+    listKey = null;
+    let parsed;
+    try {
+      parsed = JSON.parse(scalarMatch[2]);
+    } catch {
+      parsed = scalarMatch[2];
+    }
+    if (typeof parsed !== "string") throw new Error(`Condition value on line ${index + 1} must be text.`);
+    filters[scalarMatch[1]] = parsed;
+  });
+  return filters;
+}
+function workspaceViewEditedDefinition(view, field, value) {
+  const next = {
+    name: view.name,
+    filters: workspaceViewFilters(view.filters),
+    group_by: view.group_by,
+    notes: view.notes
+  };
+  if (field === "categories") next.filters.categories = workspaceViewScalarValues(value);
+  if (["tags", "models", "tasks", "jobs", "providers"].includes(field)) {
+    next.filters[field] = Array.isArray(value) ? value : workspaceViewCommaValues(value);
+  }
+  if (field === "group_by") next.group_by = value;
+  if (field === "other_conditions") {
+    const parsed = parseWorkspaceViewOtherConditions(value);
+    next.filters.state = parsed.state || "active";
+    next.filters.search = parsed.search || "";
+    next.filters.agents = listValue(parsed.agents);
+    next.filters.results = listValue(parsed.results);
+  }
+  return { ...next, filters: workspaceViewFilterConfig(next.filters) };
+}
+function navigateToWorkspaceView(id) {
+  const card = Array.from($("workspace-views")?.querySelectorAll?.("[data-workspace-view]") || []).find((item) => item.dataset?.workspaceView === String(id || ""));
   if (!card) return;
   card.scrollIntoView?.({ behavior: "smooth", block: "start" });
   card.focus?.({ preventScroll: true });
@@ -3362,21 +3948,29 @@ function navigateToWorkspaceView(name) {
   setTimeout(() => card.classList?.remove("navigated"), 1200);
 }
 async function commitWorkspaceViewCellEdit(view, field, value) {
-  const name = String(view?.name || "");
-  if (!name || !["name", "categories", "tags", "models", "tasks", "jobs", "providers", "group_by", "other_conditions", "notes"].includes(field)) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
-  const appliedBefore = state.workspaceAppliedViewNames.has(name);
+  const id = String(view?.id || "");
+  if (!id || view.origin !== "browser" && !adminMode() || !["name", "categories", "tags", "models", "tasks", "jobs", "providers", "group_by", "other_conditions", "notes"].includes(field)) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
+  const appliedBefore = state.workspaceAppliedViewNames.has(id);
   try {
-    const currentView = workspaceViewForName(name) || view;
+    const repository = workspaceViewRepository();
+    if (!repository) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
+    const currentView = workspaceViewForId(id) || view;
     const configurationField = ["categories", "tags", "models", "tasks", "jobs", "providers", "group_by", "other_conditions"].includes(field);
     const wireField = configurationField ? "configuration" : field;
-    const wireValue = configurationField ? workspaceViewConfigurationEditValue(currentView, field, value) : value;
-    const response = await serveApi("/api/views/update", {
-      method: "POST",
-      body: { name, field: wireField, value: wireValue }
-    });
-    const updatedName = String(response?.view?.name || name);
-    if (updatedName !== name) replaceWorkspaceViewStateName(name, updatedName);
-    state.workspaceViews = listValue(response?.views);
+    const definition = configurationField ? workspaceViewEditedDefinition(currentView, field, value) : null;
+    const wireValue = configurationField ? currentView.origin === "browser" ? definition : workspaceViewConfigurationYaml(definition) : value;
+    let updated;
+    try {
+      updated = await repository.update(id, { field: wireField, value: wireValue });
+    } catch (error) {
+      if (currentView.origin !== "browser" || !String(error?.message || error).includes("already exists")) throw error;
+      const nextName = field === "name" ? String(value || "").trim() : currentView.name;
+      const prompt = workspaceViewMessage("view_overwrite_confirm", "Replace the saved view {name}?", { name: nextName });
+      if (typeof window.confirm === "function" && !window.confirm(prompt)) throw error;
+      updated = await repository.update(id, { field: wireField, value: wireValue, overwrite: true });
+    }
+    if (updated.id !== id) replaceWorkspaceViewStateName(id, updated.id);
+    state.workspaceViews = repository.list();
     state.workspaceViewSummaries = [];
     state.workspaceViewsLoaded = true;
     state.workspaceViewsRefreshVersion += 1;
@@ -3384,8 +3978,9 @@ async function commitWorkspaceViewCellEdit(view, field, value) {
     await refreshWorkspaceViews();
     if (appliedBefore) await reloadAppliedWorkspaceViews();
     setServeStatus(t("view_updated", "View updated"));
-    return { rowKey: updatedName };
+    return { rowKey: updated.id };
   } catch (error) {
+    if (error?.status === 409) await refreshWorkspaceViews();
     setServeStatus(error.message || String(error), true);
     throw error;
   }
@@ -3398,26 +3993,26 @@ function replaceWorkspaceViewStateName(previousName, nextName) {
   });
 }
 async function deleteSelectedWorkspaceViews() {
-  const names = selectedWorkspaceViewNames();
-  if (!names.length) return;
+  const selectedIds = selectedWorkspaceViewIds();
+  const ids = adminMode() ? selectedIds : selectedIds.filter((id) => workspaceViewForId(id)?.origin === "browser");
+  if (!ids.length) return;
   const prompt = workspaceViewMessage(
     "view_delete_confirm",
     "Permanently delete {count} selected views?",
-    { count: names.length }
+    { count: ids.length }
   );
   if (typeof window.confirm === "function" && !window.confirm(prompt)) return;
-  const appliedChanged = names.some((name) => state.workspaceAppliedViewNames.has(name));
+  const appliedChanged = ids.some((id) => state.workspaceAppliedViewNames.has(id));
   try {
-    const response = await serveApi("/api/views/delete", {
-      method: "POST",
-      body: { names }
+    const repository = workspaceViewRepository();
+    if (!repository) return;
+    await repository.delete(ids);
+    ids.forEach((id) => {
+      state.workspaceViewSelection.delete(id);
+      state.workspaceAppliedViewNames.delete(id);
+      state.workspaceViewTableOpen.delete(id);
     });
-    names.forEach((name) => {
-      state.workspaceViewSelection.delete(name);
-      state.workspaceAppliedViewNames.delete(name);
-      state.workspaceViewTableOpen.delete(name);
-    });
-    state.workspaceViews = listValue(response?.views);
+    state.workspaceViews = repository.list();
     state.workspaceViewSummaries = [];
     state.workspaceViewsLoaded = true;
     state.workspaceViewsRefreshVersion += 1;
@@ -3445,13 +4040,13 @@ function workspaceViewGroupLabel(group, groupBy) {
   return groupBy === "overall" && group?.key === "overall" ? t("summary_overall", "Overall") : String(group?.label || "-");
 }
 function renderWorkspaceViewTableDisclosure(view, summary) {
-  const open = state.workspaceViewTableOpen.has(view.name);
+  const open = state.workspaceViewTableOpen.has(view.id);
   const groups = listValue(summary.groups);
   const unit = leaderboardSummaryGroupUnit(view.group_by);
   const description = `${leaderboardSummaryDefinitions().length} ${t("summary_metrics", "metrics")} · ${groups.length} ${unit}`;
-  const regionId = `workspace-view-table-${encodeURIComponent(view.name)}`;
+  const regionId = `workspace-view-table-${encodeURIComponent(view.id)}`;
   return `<div class="leaderboard-summary-table-disclosure workspace-view-table-disclosure">
-    <button type="button" class="leaderboard-summary-table-toggle" data-view-table-toggle="${esc(view.name)}" aria-expanded="${open}" aria-controls="${esc(regionId)}">
+    <button type="button" class="leaderboard-summary-table-toggle" data-view-table-toggle="${esc(view.id)}" aria-expanded="${open}" aria-controls="${esc(regionId)}">
       <span><strong>${esc(t(open ? "summary_hide_table" : "summary_show_table", open ? "Hide summary table" : "Show summary table"))}</strong><small>${esc(description)}</small></span>
       <i aria-hidden="true">${open ? "−" : "+"}</i>
     </button>
@@ -3474,11 +4069,11 @@ function renderWorkspaceViewTable(summary, groupBy) {
   }).join("")).join("")}</tbody>
   </table></div></div>`;
 }
-function toggleWorkspaceViewTable(name) {
-  const view = workspaceViewForName(name);
+function toggleWorkspaceViewTable(id) {
+  const view = workspaceViewForId(id);
   if (!view) return;
-  if (state.workspaceViewTableOpen.has(view.name)) state.workspaceViewTableOpen.delete(view.name);
-  else state.workspaceViewTableOpen.add(view.name);
+  if (state.workspaceViewTableOpen.has(view.id)) state.workspaceViewTableOpen.delete(view.id);
+  else state.workspaceViewTableOpen.add(view.id);
   renderWorkspaceViewRail();
 }
 function renderWorkspaceViewCharts(summary, groupBy) {
@@ -3504,23 +4099,40 @@ function renderWorkspaceViewChart(definition, groups, statistic, groupBy) {
     return `<div class="leaderboard-summary-bar" role="img" aria-label="${esc(`${groupLabel}; ${definition.label}; ${statistic.label} ${formatted}; n=${item.metric?.count || 0}`)}"><span class="leaderboard-summary-bar-label" title="${esc(groupLabel)}">${esc(groupLabel)}</span><span class="leaderboard-summary-bar-track"><i style="width:${Number(width.toFixed(2))}%"></i></span><span class="leaderboard-summary-bar-value"><strong>${esc(formatted)}</strong><small>n=${fmtNum(item.metric?.count || 0)}</small></span></div>`;
   }).join("")}</div></section>`;
 }
+function selectedWorkspaceViewIds() {
+  return workspaceViews().filter((view) => state.workspaceViewSelection.has(view.id)).map((view) => view.id);
+}
 function selectedWorkspaceViewNames() {
-  return workspaceViews().filter((view) => state.workspaceViewSelection.has(view.name)).map((view) => view.name);
+  return selectedWorkspaceViewIds().map((id) => workspaceViewForId(id)?.name).filter(Boolean);
+}
+function workspaceViewQueryPayload(ids = Array.from(state.workspaceAppliedViewNames)) {
+  const repository = workspaceViewRepository();
+  if (repository?.ready()) return repository.queryPayload(ids);
+  const selected = workspaceViews().filter((view) => ids.includes(view.id));
+  return {
+    views: selected.length ? selected.filter((view) => view.origin === "server").map((view) => view.name) : listValue(state.catalogQuery?.views).map(String),
+    browser_views: selected.filter((view) => view.origin === "browser").map((view) => ({ name: view.name, filters: workspaceViewFilterConfig(view.filters), group_by: view.group_by, notes: view.notes }))
+  };
+}
+function browserWorkspaceViewDefinitions() {
+  return workspaceViews().filter((view) => view.origin === "browser").map((view) => ({ name: view.name, filters: workspaceViewFilterConfig(view.filters), group_by: view.group_by, notes: view.notes }));
 }
 function exportSelectedWorkspaceViews() {
-  const names = selectedWorkspaceViewNames();
-  if (!serveMode() || !names.length) return;
+  const ids = selectedWorkspaceViewIds();
+  if (!serveMode() || !ids.length) return;
+  const payload = workspaceViewQueryPayload(ids);
   return serveDownload("summary_xlsx", {
     kind: "summary_xlsx",
-    summary: { scope: "saved_views", views: names }
+    summary: { scope: "saved_views", ...payload }
   }, "peval-saved-views.xlsx");
 }
 function appliedWorkspaceViewNames() {
-  return workspaceViews().filter((view) => state.workspaceAppliedViewNames.has(view.name)).map((view) => view.name);
+  return workspaceViewQueryPayload(Array.from(state.workspaceAppliedViewNames)).views;
 }
 async function applySelectedWorkspaceViews() {
-  const names = selectedWorkspaceViewNames();
-  if (!names.length || !serveMode()) return;
+  const ids = selectedWorkspaceViewIds();
+  if (!ids.length || !serveMode()) return;
+  const payload = workspaceViewQueryPayload(ids);
   closeOpenSubmenus();
   state.rowSelection.clear();
   state.sourceSelection.clear();
@@ -3528,7 +4140,7 @@ async function applySelectedWorkspaceViews() {
   state.selectedArtifactRevision = null;
   state.selectedTrial = null;
   state.selectedStep = null;
-  state.workspaceAppliedViewNames = new Set(names);
+  state.workspaceAppliedViewNames = new Set(ids);
   state.search.query = "";
   state.search.scope = "all";
   state.search.normalSourceMode = "all";
@@ -3561,14 +4173,15 @@ async function applySelectedWorkspaceViews() {
     jobs: [],
     providers: [],
     results: [],
-    views: names
+    views: payload.views
   }, { force: true });
 }
 async function reloadAppliedWorkspaceViews() {
-  const names = appliedWorkspaceViewNames();
-  state.catalogQuery.views = names;
-  if (!names.length) return;
-  await loadCatalogPage({ page: 1, views: names }, { force: true });
+  const ids = Array.from(state.workspaceAppliedViewNames);
+  const payload = workspaceViewQueryPayload(ids);
+  state.catalogQuery.views = payload.views;
+  if (!ids.length) return;
+  await loadCatalogPage({ page: 1, views: payload.views }, { force: true });
 }
 async function clearWorkspaceViewConditions() {
   if (!serveMode()) return;
@@ -3617,7 +4230,7 @@ async function clearWorkspaceViewConditions() {
 async function applyWorkspaceView(name) {
   const view = workspaceViewForName(name);
   if (!view) return;
-  state.workspaceViewSelection = /* @__PURE__ */ new Set([view.name]);
+  state.workspaceViewSelection = /* @__PURE__ */ new Set([view.id]);
   return applySelectedWorkspaceViews();
 }
 async function cancelWorkspaceViewApplication() {
@@ -3629,6 +4242,9 @@ function bindGlobalControls() {
   if (state.boundGlobalControls) return;
   document.addEventListener("keydown", (event) => {
     if (event.defaultPrevented) return;
+    if (event.key === "Escape" && closeAdminLogin()) {
+      return;
+    }
     if (event.key === "Escape" && closeWorkspaceViewSaveDialog()) {
       return;
     }
@@ -3656,7 +4272,7 @@ function bindGlobalControls() {
     renderComparisonPanels();
   });
   document.addEventListener("click", (event) => {
-    if (!serveMode()) return;
+    if (!adminMode()) return;
     const editButton = event.target?.closest?.("[data-notes-edit]");
     if (editButton) {
       event.preventDefault();
@@ -3685,6 +4301,7 @@ function bindGlobalControls() {
   state.boundGlobalControls = true;
 }
 function bindServeSourceControls() {
+  bindAuthenticationControls();
   bindWorkspaceReportGlobalControls();
   document.querySelectorAll("[data-source-manager-open]").forEach((button) => {
     button.addEventListener("click", (event) => {
@@ -3781,7 +4398,78 @@ function bindServeSourceControls() {
     });
   }
 }
+function bindAuthenticationControls() {
+  document.querySelectorAll("[data-admin-login-open]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      openAdminLogin(button);
+    });
+  });
+  document.querySelectorAll("[data-admin-login-close]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      closeAdminLogin();
+    });
+  });
+  const dialog = document.querySelector("[data-admin-login-dialog]");
+  dialog?.addEventListener?.("click", (event) => {
+    if (event.target === dialog) closeAdminLogin();
+  });
+  dialog?.querySelector?.("[data-admin-login-form]")?.addEventListener("submit", submitAdminLogin);
+  document.querySelectorAll("[data-admin-logout]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      button.disabled = true;
+      try {
+        await serveApi("/api/auth/logout", { method: "POST", body: {} });
+        window.location.reload();
+      } catch (error) {
+        button.disabled = false;
+        setServeStatus(error.message || String(error), true);
+      }
+    });
+  });
+}
+function openAdminLogin(opener = null) {
+  const dialog = document.querySelector("[data-admin-login-dialog]");
+  if (!dialog) return false;
+  const status = dialog.querySelector("[data-admin-login-status]");
+  if (status) {
+    status.hidden = true;
+    status.textContent = "";
+  }
+  openModalSurface(dialog, {
+    opener,
+    bodyClass: "admin-login-open",
+    focusTarget: dialog.querySelector('[name="password"]')
+  });
+  return true;
+}
+function closeAdminLogin(options = {}) {
+  return closeModalSurface(document.querySelector("[data-admin-login-dialog]"), options);
+}
+async function submitAdminLogin(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const password = String(new FormData(form).get("password") || "");
+  const status = form.querySelector("[data-admin-login-status]");
+  const submit = form.querySelector('[type="submit"]');
+  if (submit) submit.disabled = true;
+  try {
+    await serveApi("/api/auth/login", { method: "POST", body: { password } });
+    window.location.reload();
+  } catch (error) {
+    if (status) {
+      status.textContent = error.message || t("serve_login_failed", "Login failed");
+      status.classList.add("danger");
+      status.hidden = false;
+    }
+    if (submit) submit.disabled = false;
+    form.querySelector('[name="password"]')?.focus?.();
+  }
+}
 async function changeServeLocale(locale) {
+  if (!adminMode()) return;
   try {
     await serveApi("/api/config/locale", {
       method: "POST",
@@ -3835,6 +4523,7 @@ function syncAllAdapterDefaultDbControls() {
   document.querySelectorAll('[data-source-add-form][data-source-kind="db"]').forEach(syncAdapterDefaultDbControls);
 }
 async function saveAdapterDefaultDb(form, defaultDbPath) {
+  if (!adminMode()) return false;
   const adapter = selectedAdapterValue(form);
   if (!adapter) {
     const message = t("serve_select_adapter_for_default_db", "Select a specific adapter to manage its default DB");
@@ -4035,6 +4724,7 @@ function renderServeSourceAliasCell(source) {
   return alias ? esc(alias) : `<span class="muted">-</span>`;
 }
 async function choosePathSourceFiles(button) {
+  if (!adminMode()) return;
   const form = button?.closest?.("[data-source-add-form]");
   const field = form?.querySelector?.('[name="path"]');
   if (!field) return;
@@ -4117,6 +4807,7 @@ function bindSourceSelectionControls(root) {
   });
 }
 async function submitServeSourceForm(form) {
+  if (!adminMode()) return;
   if (form?.dataset?.sourceKind === "db") applyDefaultDbToForm(form);
   const body = formPayload(form);
   const kind = form.dataset.sourceKind;
@@ -4149,6 +4840,7 @@ function showImportResultsSummary(payload) {
   setServeStatus(message, failed > 0);
 }
 async function inspectDbSessions(form) {
+  if (!adminMode()) return;
   if (!form) return;
   applyDefaultDbToForm(form);
   const body = formPayload(form);
@@ -4240,6 +4932,7 @@ function updateDbSelectedCount(picker) {
   if (addButton) addButton.disabled = count < 1;
 }
 async function addSelectedDbSessions(form) {
+  if (!adminMode()) return;
   if (!form) return;
   const sessionIds = selectedDbSessionIds(form);
   if (!sessionIds.length) {
@@ -4284,6 +4977,7 @@ function harborMountPayload(form) {
   };
 }
 async function submitHarborMountForm(form) {
+  if (!adminMode()) return;
   try {
     setServeStatus(t("serve_save_harbor_mount", "Save mount"));
     await serveApi("/api/config/harbor-mount", {
@@ -4297,6 +4991,7 @@ async function submitHarborMountForm(form) {
   }
 }
 async function removeHarborMount(form) {
+  if (!adminMode()) return;
   const originalId = String(new FormData(form).get("original_id") || "").trim();
   if (!originalId || !window.confirm(t("serve_remove_harbor_mount_confirm", "Remove this Harbor mount from peval-py configuration?"))) return;
   try {
@@ -4323,6 +5018,7 @@ function formPayload(form) {
   return body;
 }
 async function mutateSelectedServeSourceState() {
+  if (!adminMode()) return;
   const rows = sourceRows();
   const sourceKeys = sourceSelectionKeys(rows);
   if (!sourceKeys.length) return;
@@ -4398,7 +5094,7 @@ function existingSourceCategoryOptions() {
 }
 async function commitSourceCellEdit(row, field, value) {
   const sourceKey = row?.source_key;
-  if (!serveMode() || !sourceKey || !["alias", "category", "tags"].includes(field)) throw new Error(t("source_edit_unavailable", "Source editing is unavailable"));
+  if (!adminMode() || !sourceKey || !["alias", "category", "tags"].includes(field)) throw new Error(t("source_edit_unavailable", "Source editing is unavailable"));
   const action = field;
   const body = action === "category" ? { category: String(value || "").trim() } : {
     report_source_state: currentServeSourceMode(),
@@ -4456,6 +5152,11 @@ function emptyServeReport() {
     trajectory_meta: []
   };
 }
+function reloadExpiredAdminSession(response) {
+  if (response?.status !== 403 || !adminMode() || !authenticationEnabled()) return false;
+  window.location.reload();
+  return true;
+}
 async function serveApi(path, options = {}) {
   const headers = { ...options.headers || {} };
   let body = options.body;
@@ -4470,9 +5171,22 @@ async function serveApi(path, options = {}) {
     credentials: "same-origin"
   });
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : {};
+  if (!response.ok) reloadExpiredAdminSession(response);
+  let payload = {};
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch (cause) {
+      const message = response.ok ? t("serve_invalid_json_response", "Server returned an invalid JSON response") : response.statusText || `HTTP ${response.status}`;
+      const error = new Error(message, { cause });
+      error.status = response.status;
+      throw error;
+    }
+  }
   if (!response.ok) {
-    throw new Error(payload?.error || response.statusText);
+    const error = new Error(payload?.error || response.statusText);
+    error.status = response.status;
+    throw error;
   }
   return payload;
 }
@@ -4519,12 +5233,13 @@ function renderServeSourceStateControls(rows = leaderboardRows()) {
   const toggleDisabled = allMode ? "disabled" : "";
   const selectedCount = visibleSelectedSourceKeys(rows).length;
   const actionLabel = archived ? t("activate_selected", "Activate selected") : t("archive_selected", "Archive selected");
+  const action = adminMode() ? `<button class="action-button primary" type="button" data-source-state-action ${selectedCount && !allMode ? "" : "disabled"}>${esc(allMode ? t("mixed_state_action_disabled", "Mixed view") : actionLabel)}</button>` : "";
   return `<div class="source-state-controls" data-source-state-controls>
     <label class="source-state-toggle">
       <input type="checkbox" data-source-state-toggle ${archived || allMode ? "checked" : ""} ${toggleDisabled}>
       <span>${esc(t("show_archived", "Show archived"))}</span>
     </label>
-    <button class="action-button primary" type="button" data-source-state-action ${selectedCount && !allMode ? "" : "disabled"}>${esc(allMode ? t("mixed_state_action_disabled", "Mixed view") : actionLabel)}</button>
+    ${action}
   </div>`;
 }
 function bindServeSourceStateControls(target) {
@@ -4544,6 +5259,7 @@ function bindServeSourceStateControls(target) {
   });
 }
 async function mutateVisibleServeSourceState() {
+  if (!adminMode()) return;
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
   const mode = currentServeSourceMode();
@@ -4612,11 +5328,27 @@ function leaderboardRows() {
   if (serveMode()) return reportRows();
   return applyDataTableControls("leaderboard", applySessionSearch(reportRows()), leaderboardColumns(), reportRows());
 }
-function rowAnalysised(row) {
-  if (serveMode() && Object.prototype.hasOwnProperty.call(row || {}, "analysised")) {
-    return row.analysised ? "True" : "False";
+function rowAnalysisCount(row) {
+  if (row?.analysis_count !== null && row?.analysis_count !== void 0) {
+    const value = Number(row.analysis_count);
+    return Number.isFinite(value) ? Math.max(0, Math.min(2, Math.trunc(value))) : 0;
   }
-  return analysisArtifactPathsFor(row?.trial_key).some(isAnalysisArtifactPath) ? "True" : "False";
+  const analysis = (state.view?.annotations?.analysis || []).find((item) => item?.trial_key === row?.trial_key);
+  if (!analysis) return 0;
+  let harbor = false;
+  let workspace = false;
+  listValue(analysis.markdown_reports).forEach((report) => {
+    if (!String(report?.markdown || "").trim()) return;
+    if (report?.source === "harbor_trial") harbor = true;
+    else workspace = true;
+  });
+  if (String(analysis.md_report || "").trim()) workspace = true;
+  const relativePaths = analysis.relative_paths;
+  if (relativePaths && typeof relativePaths === "object" && [relativePaths.md, relativePaths.json].some(isAnalysisArtifactPath)) {
+    workspace = true;
+  }
+  if (isAnalysisArtifactPath(analysis.relative_path)) workspace = true;
+  return Number(harbor) + Number(workspace);
 }
 function trialIndexFor(trialKey) {
   if (serveMode() && state.selectedSourceKey && trialKey === state.selectedSourceKey) return 0;
@@ -4684,6 +5416,7 @@ function sourceRows() {
   return applyDataTableControls("sources", listValue(state.sourceManagerRows), sourceColumns());
 }
 function openServeSourceManager(opener = document.activeElement) {
+  if (!adminMode()) return;
   const manager = document.querySelector("[data-source-manager]");
   if (!manager) return;
   closeWorkspaceViewSaveDialog({ restoreFocus: false });
@@ -4774,10 +5507,13 @@ function filterOptions(column, rows) {
   return listValue(state.catalogPage?.facets?.[facetKey]).map((item) => String(item?.value || "")).filter(Boolean);
 }
 function renderLeaderboardPanelControls(rows) {
+  if (workspaceSnapshotMode()) {
+    return `<div class="leaderboard-actions"><div class="leaderboard-action-row">${renderLeaderboardColumnControls(rows)}</div></div>`;
+  }
   if (!serveMode()) return "";
   const selectedCount = state.rowSelection.size;
   return `<div class="leaderboard-actions">
-    <div class="leaderboard-action-row">${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardExportControls()}</div>
+    <div class="leaderboard-action-row">${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardColumnControls(rows)}${renderLeaderboardExportControls()}</div>
     <div class="catalog-page-controls" data-catalog-page-controls>
       <button type="button" class="action-button icon-only" data-catalog-prev aria-label="${esc(t("previous", "Previous"))}" ${state.catalogPage.page <= 1 ? "disabled" : ""}>‹</button>
       <span>${esc(catalogPageLabel())}</span>
@@ -4913,7 +5649,28 @@ async function loadCatalogPage(changes = {}, options = {}) {
   try {
     const wasChecking = Boolean(state.catalogPage?.checking);
     const previousGeneration = Number(state.catalogPage?.generation || 0);
-    const page = await serveApi(`/api/catalog?${catalogQueryString(options.surface || "leaderboard")}`);
+    const applied = workspaceViewQueryPayload();
+    state.catalogQuery.views = applied.views;
+    const page = applied.browser_views.length ? await serveApi("/api/catalog/query", {
+      method: "POST",
+      body: {
+        state: state.catalogQuery.state || "active",
+        page: Number(state.catalogQuery.page || 1),
+        page_size: Number(state.catalogQuery.page_size || 100),
+        search: state.catalogQuery.search || "",
+        sort: catalogSortKey(state.catalogQuery.sort),
+        direction: state.catalogQuery.direction || "desc",
+        categories: listValue(state.catalogQuery.categories),
+        tags: listValue(state.catalogQuery.tags),
+        agents: listValue(state.catalogQuery.agents),
+        models: listValue(state.catalogQuery.models),
+        tasks: listValue(state.catalogQuery.tasks),
+        jobs: listValue(state.catalogQuery.jobs),
+        providers: listValue(state.catalogQuery.providers),
+        results: listValue(state.catalogQuery.results),
+        ...applied
+      }
+    }) : await serveApi(`/api/catalog?${catalogQueryString(options.surface || "leaderboard")}`);
     state.catalogPage = page;
     state.serveSourceMode = normalizeServeSourceMode(state.catalogQuery.state);
     state.serveSources = listValue(page.items);
@@ -4933,6 +5690,16 @@ async function loadCatalogPage(changes = {}, options = {}) {
     await ensureCatalogDetail(previousGeneration !== Number(page.generation || 0));
     if (typeof refreshWorkspaceViews === "function" && (!state.workspaceViewsLoaded || workspaceViews().length >= 1 && Number(state.workspaceViewSummaryGeneration) !== Number(page.generation || 0))) refreshWorkspaceViews();
   } catch (error) {
+    if (error?.status === 409 && state.workspaceAppliedViewNames.size) {
+      const appliedCount = state.workspaceAppliedViewNames.size;
+      await refreshWorkspaceViews();
+      if (state.workspaceAppliedViewNames.size < appliedCount) {
+        setTimeout(() => {
+          if (state.workspaceAppliedViewNames.size) loadCatalogPage({ page: 1 }, { force: true });
+          else clearWorkspaceViewConditions();
+        }, 0);
+      }
+    }
     setServeStatus(error.message || String(error), true);
   } finally {
     state.catalogLoading = false;
@@ -5094,6 +5861,7 @@ function setWorkspaceWriteControlsDisabled(disabled) {
   if (!disabled) syncSourceManagerBulkActions();
 }
 async function refreshServeSourcesFromServer() {
+  if (!adminMode()) return;
   try {
     const payload = await serveApi("/api/sources/reload", { method: "POST", body: {} });
     await applyServeMutationPayload(payload);
@@ -5106,6 +5874,7 @@ async function refreshServeReportFromServer() {
   return refreshServeSourcesFromServer();
 }
 async function deleteSelectedServeSources() {
+  if (!adminMode()) return;
   const sourceKeys = sourceSelectionKeys();
   if (!sourceKeys.length) return;
   if (!window.confirm(t("serve_delete_selected_confirm", "Delete selected sources from peval-py state?"))) return;
@@ -5122,17 +5891,20 @@ async function deleteSelectedServeSources() {
 function exportCurrentScope(kind) {
   if (!serveMode()) return;
   if (kind === "xlsx") {
+    const applied = workspaceViewQueryPayload();
     serveDownload("xlsx", {
       kind: "xlsx",
-      query: { ...state.catalogQuery, page: void 0, page_size: void 0 }
+      query: { ...state.catalogQuery, ...applied, page: void 0, page_size: void 0 }
     });
     return;
   }
   if (kind === "workspace_html") {
     const viewControls = tableControls("workspace-views");
     const visibleViews = typeof workspaceViewRows === "function" ? workspaceViewRows() : [];
+    const applied = workspaceViewQueryPayload();
     serveDownload("workspace_html", {
       kind: "workspace_html",
+      browser_views: browserWorkspaceViewDefinitions(),
       query: {
         state: state.catalogQuery.state || "active",
         search: state.catalogQuery.search || "",
@@ -5146,7 +5918,7 @@ function exportCurrentScope(kind) {
         jobs: listValue(state.catalogQuery.jobs),
         providers: listValue(state.catalogQuery.providers),
         results: listValue(state.catalogQuery.results),
-        views: listValue(state.catalogQuery.views)
+        ...applied
       },
       selected_source_keys: Array.from(state.rowSelection),
       presentation: {
@@ -5155,6 +5927,7 @@ function exportCurrentScope(kind) {
         summary_table_open: Boolean(state.leaderboardSummaryTableOpen),
         selected_source_key: state.selectedSourceKey || null,
         selected_step_id: state.selectedStep?.stepId ?? null,
+        leaderboard_columns: currentLeaderboardColumnLayout(),
         visible_view_names: visibleViews.map((view) => view.name),
         workspace_view_filters: {
           categories: listValue(viewControls.filters?.categories),
@@ -5165,7 +5938,7 @@ function exportCurrentScope(kind) {
           providers: listValue(viewControls.filters?.providers),
           group_by: listValue(viewControls.filters?.group_by)
         },
-        open_view_tables: visibleViews.map((view) => view.name).filter((name) => state.workspaceViewTableOpen.has(name))
+        open_view_tables: visibleViews.filter((view) => state.workspaceViewTableOpen.has(view.id)).map((view) => view.name)
       }
     }, "peval-workspace-snapshot.html");
     return;
@@ -5181,11 +5954,13 @@ function exportLeaderboardSummary() {
   if (!serveMode()) return;
   const sourceKeys = leaderboardRows().map((row) => row?.source_key).filter(Boolean);
   if (!sourceKeys.length) return;
+  const applied = workspaceViewQueryPayload();
   return serveDownload("summary_xlsx", {
     kind: "summary_xlsx",
     summary: {
       scope: "leaderboard",
       source_keys: sourceKeys,
+      query: { ...state.catalogQuery, ...applied, page: void 0, page_size: void 0 },
       group_by: state.leaderboardSummaryGroupBy,
       statistic: state.leaderboardSummaryStatistic
     }
@@ -5200,6 +5975,7 @@ async function serveDownload(kind, body, requestedFilename = "") {
       credentials: "same-origin"
     });
     if (!response.ok) {
+      reloadExpiredAdminSession(response);
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload?.error || response.statusText);
     }
@@ -5508,6 +6284,89 @@ function downloadBlob(filename, mime, blob) {
   URL.revokeObjectURL(url);
 }
 
+// web/src/modules/leaderboard-columns.js
+var COLUMN_LAYOUT_VERSION = 1;
+function normalizeColumnLayout(columnKeys, value) {
+  const canonical = Array.from(new Set(columnKeys.map(String)));
+  const known = new Set(canonical);
+  const rawOrder = Array.isArray(value?.order) ? value.order : [];
+  const order = [];
+  rawOrder.forEach((raw) => {
+    const key = String(raw || "");
+    if (known.has(key) && !order.includes(key)) order.push(key);
+  });
+  const canonicalIndexes = new Map(canonical.map((key, index) => [key, index]));
+  canonical.forEach((key) => {
+    if (order.includes(key)) return;
+    const keyIndex = canonicalIndexes.get(key);
+    const nextIndex = order.findIndex((candidate) => canonicalIndexes.get(candidate) > keyIndex);
+    if (nextIndex >= 0) order.splice(nextIndex, 0, key);
+    else order.push(key);
+  });
+  const visibility = {};
+  if (value?.visibility && typeof value.visibility === "object") {
+    Object.entries(value.visibility).forEach(([key, mode]) => {
+      if (known.has(key) && ["show", "hide"].includes(mode)) visibility[key] = mode;
+    });
+  }
+  return { version: COLUMN_LAYOUT_VERSION, order, visibility };
+}
+function layoutStorageKey(workspaceId) {
+  return `peval-py.leaderboard-columns.v${COLUMN_LAYOUT_VERSION}.${String(workspaceId || "default")}`;
+}
+function loadColumnLayout(columnKeys, { workspaceId, snapshotLayout, storage } = {}) {
+  if (snapshotLayout) return normalizeColumnLayout(columnKeys, snapshotLayout);
+  if (!storage) return normalizeColumnLayout(columnKeys, null);
+  try {
+    return normalizeColumnLayout(columnKeys, JSON.parse(storage.getItem(layoutStorageKey(workspaceId)) || "null"));
+  } catch {
+    return normalizeColumnLayout(columnKeys, null);
+  }
+}
+function saveColumnLayout(layout, { workspaceId, storage } = {}) {
+  if (!storage) return;
+  try {
+    storage.setItem(layoutStorageKey(workspaceId), JSON.stringify(layout));
+  } catch {
+  }
+}
+function semanticValuePresent(value) {
+  if (value === null || value === void 0) return false;
+  if (typeof value === "string") return value.trim() !== "" && value.trim() !== "-";
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+function presenceForColumns(columns, rows, serverPresence = null) {
+  return Object.fromEntries(columns.map((column) => {
+    if (serverPresence && Object.prototype.hasOwnProperty.call(serverPresence, column.key)) {
+      return [column.key, Number(serverPresence[column.key]) > 0];
+    }
+    const present = rows.some((row) => semanticValuePresent(
+      column.presence ? column.presence(row) : column.value ? column.value(row) : row?.[column.key]
+    ));
+    return [column.key, present];
+  }));
+}
+function resolveColumns(columns, layout, presence) {
+  const byKey = new Map(columns.map((column) => [column.key, column]));
+  const ordered = layout.order.flatMap((key) => byKey.has(key) ? [byKey.get(key)] : []);
+  const visible = ordered.filter((column) => {
+    const mode = layout.visibility[column.key];
+    if (mode === "show") return true;
+    if (mode === "hide") return false;
+    return Boolean(presence[column.key]);
+  });
+  return visible;
+}
+function moveColumn(order, key, direction) {
+  const next = [...order];
+  const index = next.indexOf(key);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= next.length) return next;
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
 // web/src/modules/data-tables.js
 function selectionColumn(options = {}) {
   return {
@@ -5526,31 +6385,34 @@ function selectionColumn(options = {}) {
 function leaderboardColumns() {
   const columns = [
     { key: "session_id", label: t("session", "Session"), valueType: "identity", filterable: true, value: (row) => sourceIdentityFor(row), cellTitle: (row) => row.trial_key && row.trial_key !== sourceIdentityFor(row) ? row.trial_key : "" },
-    { key: "task_name", label: t("task_alias", "Task / Alias"), valueType: "text", filterable: true, filterValues: (row) => [row?.task_name].filter(Boolean), sortable: true, value: (row) => sessionAliasValue(row), html: (row) => renderTaskAlias(row), edit: serveMode() ? { value: (row) => String(row?.source_alias || ""), commit: (row, value) => commitSourceCellEdit(row, "alias", value) } : void 0 },
+    { key: "task_name", label: t("task_alias", "Task / Alias"), valueType: "text", filterable: true, filterValues: (row) => [row?.task_name].filter(Boolean), sortable: true, value: (row) => sessionAliasValue(row), html: (row) => renderTaskAlias(row), edit: adminMode() ? { value: (row) => String(row?.source_alias || ""), commit: (row, value) => commitSourceCellEdit(row, "alias", value) } : void 0 },
     { key: "agent", label: t("agent", "Agent"), valueType: "identity", filterable: true, value: (row) => agentNameFor(row) },
     { key: "model", label: t("model", "Model"), valueType: "identity", filterable: true, value: (row) => row.model || "-" },
     { key: "job_name", label: t("job", "Job"), valueType: "identity", filterable: true, sortable: true, value: (row) => row?.job_name || "-" },
     { key: "model_provider", label: t("provider", "Provider"), valueType: "identity", filterable: true, sortable: true, value: (row) => row?.model_provider || "-" },
-    { key: "reward", label: t("reward", "Reward"), valueType: "number", numeric: true, sortable: true, metric: true, value: (row) => row?.score, format: (_value, row) => rewardValue(row) },
+    { key: "reward", label: t("reward", "Reward"), valueType: "number", numeric: true, sortable: true, metric: true, value: (row) => row?.score, presence: (row) => hasMetricValue(row?.score) ? row.score : Object.keys(row?.rewards || {}), format: (_value, row) => rewardValue(row) },
     { key: "status", label: t("result", "Result"), valueType: "status", filterable: true, value: (row) => row.status || "-", filterLabel: (value) => statusLabel(value), html: (row) => `<span class="stamp ${lower(row.status || "passed")}">${esc(statusLabel(row.status))}</span>` },
     { key: "finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: (row) => row.finished_at_ms, format: fmtDate },
     { key: "duration_ms", label: t("duration", "Active Duration"), valueType: "number", numeric: true, sortable: true, metric: true, value: (row) => row.duration_ms, format: fmtMs },
+    { key: "ttft_ms", label: t("avg_ttft", "Avg TTFT"), valueType: "number", numeric: true, sortable: true, metric: true, value: (row) => row.ttft_ms, format: fmtTtft },
+    { key: "tps", label: t("decode_tps", "Decode TPS"), valueType: "number", numeric: true, sortable: true, metric: true, value: (row) => row.tps, format: fmtTps },
     { key: "turns", label: t("turns", "Turns"), valueType: "number", numeric: true, sortable: true, metric: true, value: (row) => row.turns, format: fmtNum },
     { key: "total_tool_calls", label: t("tool_calls", "Tool Calls"), valueType: "number", numeric: true, sortable: true, metric: true, value: (row) => row.total_tool_calls, format: (value) => hasMetricValue(value) ? fmtNum(value) : "-" },
     { key: "tool_error_rate", label: t("tool_error_rate", "Tool Error Rate"), valueType: "number", numeric: true, sortable: true, metric: true, value: (row) => rowToolErrorRate(row), format: fmtPct },
     { key: "tokens", label: t("tokens", "Tokens"), valueType: "number", numeric: true, sortable: true, metric: true, value: (row) => row.tokens, format: fmtNum },
+    { key: "cache_hit_rate", label: t("cache_hit", "Cache Hit"), valueType: "number", numeric: true, sortable: true, metric: true, value: (row) => row.cache_hit_rate, format: fmtPct },
     { key: "cost_usd", label: t("cost", "Cost"), valueType: "number", numeric: true, sortable: true, value: (row) => row.cost_usd, format: fmtCost },
-    { key: "analysised", label: t("analysised", "Analysised"), valueType: "status", filterable: true, value: (row) => rowAnalysised(row) },
+    { key: "analysis_count", label: t("analysis_count", "#Analysis"), valueType: "number", numeric: true, filterable: true, value: (row) => rowAnalysisCount(row) },
     { key: "notes", label: t("notes", "Notes"), valueType: "markdown", value: (row) => noteSnippetFor(row.trial_key), html: (row) => renderNotesCell(row.trial_key), cellTitle: (row) => {
       const text = notesPlainText(notesFor(row.trial_key));
       return text && text !== noteSnippetFor(row.trial_key) ? text : "";
     } }
   ];
   if (!workspaceDisplayMode()) return columns;
-  const serveColumns = columns.map((column) => ["session_id", "analysised"].includes(column.key) ? { ...column, filterable: false } : column);
+  const serveColumns = columns.map((column) => ["session_id", "analysis_count"].includes(column.key) ? { ...column, filterable: false } : column);
   return [
-    { key: "source_category", label: t("category", "Category"), valueType: "text", filterable: true, filterValues: (row) => [sourceCategoryFor(row)].filter(Boolean), value: (row) => sourceCategoryValue(row), html: (row) => renderReadOnlySourceCategory(row), edit: serveMode() ? { value: (row) => sourceCategoryEditValue(row), suggestions: existingSourceCategoryOptions, commit: (row, value) => commitSourceCellEdit(row, "category", value) } : void 0 },
-    { key: "source_tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: (row) => sourceTagsFor(row), value: (row) => sourceTagsValue(row), html: (row) => renderReadOnlySourceTags(row), edit: serveMode() ? { value: (row) => sourceTagsEditValue(row), suggestions: existingSourceTagOptions, commit: (row, value) => commitSourceCellEdit(row, "tags", value) } : void 0 },
+    { key: "source_category", label: t("category", "Category"), valueType: "text", filterable: true, filterValues: (row) => [sourceCategoryFor(row)].filter(Boolean), value: (row) => sourceCategoryValue(row), html: (row) => renderReadOnlySourceCategory(row), edit: adminMode() ? { value: (row) => sourceCategoryEditValue(row), suggestions: existingSourceCategoryOptions, commit: (row, value) => commitSourceCellEdit(row, "category", value) } : void 0 },
+    { key: "source_tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: (row) => sourceTagsFor(row), value: (row) => sourceTagsValue(row), html: (row) => renderReadOnlySourceTags(row), edit: adminMode() ? { value: (row) => sourceTagsEditValue(row), suggestions: existingSourceTagOptions, commit: (row, value) => commitSourceCellEdit(row, "tags", value) } : void 0 },
     ...serveColumns.slice(0, 2),
     workspaceReportLeaderboardColumn(),
     ...serveColumns.slice(2)
@@ -5561,8 +6423,131 @@ function rewardValue(row) {
   const count = row?.rewards && typeof row.rewards === "object" ? Object.keys(row.rewards).length : 0;
   return count ? `${count} ${t("reward_dimensions_short", "dims")}` : "-";
 }
-function displayLeaderboardColumns() {
-  return serveMode() ? [selectionColumn(), ...leaderboardColumns()] : leaderboardColumns();
+function columnStorage() {
+  if (!serveMode() || typeof window === "undefined") return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+function cloneColumnLayout(layout) {
+  return JSON.parse(JSON.stringify(layout));
+}
+function leaderboardColumnLayout(columns = leaderboardColumns()) {
+  if (!state.leaderboardColumnLayout) {
+    state.leaderboardColumnLayout = loadColumnLayout(columns.map((column) => column.key), {
+      workspaceId: RENDER_OPTIONS?.workspace_id,
+      snapshotLayout: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.leaderboard_columns : null,
+      storage: columnStorage()
+    });
+  }
+  return normalizeColumnLayout(columns.map((column) => column.key), state.leaderboardColumnLayout);
+}
+function currentLeaderboardColumnLayout() {
+  return cloneColumnLayout(leaderboardColumnLayout());
+}
+function leaderboardColumnContext(rows = leaderboardRows()) {
+  const columns = leaderboardColumns();
+  const layout = leaderboardColumnLayout(columns);
+  const serverPresence = serveMode() ? state.catalogPage?.column_presence : null;
+  const presence = presenceForColumns(columns, rows, serverPresence);
+  return { columns, layout, presence };
+}
+function displayLeaderboardColumns(rows = leaderboardRows()) {
+  const { columns, layout, presence } = leaderboardColumnContext(rows);
+  const displayed = resolveColumns(columns, layout, presence);
+  return serveMode() ? [selectionColumn(), ...displayed] : displayed;
+}
+function renderLeaderboardColumnControls(rows = leaderboardRows()) {
+  if (!workspaceDisplayMode()) return "";
+  const { columns, layout, presence } = leaderboardColumnContext(rows);
+  const draft = state.leaderboardColumnDraft ? normalizeColumnLayout(columns.map((column) => column.key), state.leaderboardColumnDraft) : layout;
+  const ordered = draft.order.map((key) => columns.find((column) => column.key === key)).filter(Boolean);
+  const checked = (column) => draft.visibility[column.key] === "show" || draft.visibility[column.key] !== "hide" && presence[column.key];
+  const visibleCount = ordered.filter(checked).length;
+  const rowsHtml = ordered.map((column, index) => {
+    const isChecked = checked(column);
+    const activeSort = serveMode() ? catalogSortKey(state.catalogQuery?.sort) === catalogSortKey(column.key) : tableControls("leaderboard").sort === column.key;
+    const filtered = activeFilterValues("leaderboard", column.key).length > 0;
+    const condition = [activeSort ? serveMode() ? state.catalogQuery?.direction : tableControls("leaderboard").direction : "", filtered ? t("filtered", "Filtered") : ""].filter(Boolean).join(" · ");
+    return `<li class="column-control-row${isChecked ? "" : " hidden-column"}" data-column-row="${esc(column.key)}">
+      <span class="column-control-index">${String(index + 1).padStart(2, "0")}</span>
+      <label><input type="checkbox" data-column-visible="${esc(column.key)}" ${isChecked ? "checked" : ""}><span>${esc(column.label)}</span></label>
+      <span class="column-control-state">${presence[column.key] ? "" : esc(t("no_data", "No data"))}${condition ? `<small>${esc(condition)}</small>` : ""}</span>
+      <span class="column-control-moves"><button type="button" data-column-move="${esc(column.key)}" data-column-direction="-1" aria-label="${esc(`${t("move_earlier", "Move earlier")}: ${column.label}`)}" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-column-move="${esc(column.key)}" data-column-direction="1" aria-label="${esc(`${t("move_later", "Move later")}: ${column.label}`)}" ${index === ordered.length - 1 ? "disabled" : ""}>↓</button></span>
+    </li>`;
+  }).join("");
+  return `<details class="column-control" ${state.leaderboardColumnDraft ? "open" : ""}>
+    <summary class="action-button column-control-button">${esc(t("columns", "Columns"))} ${visibleCount}/${ordered.length}</summary>
+    <div class="column-control-panel">
+      <div class="column-control-head"><strong>${esc(t("columns", "Columns"))}</strong><button type="button" data-column-reset>${esc(t("reset_auto", "Reset to auto"))}</button></div>
+      <ol class="column-control-list">${rowsHtml}</ol>
+      <div class="column-control-foot"><span aria-live="polite">${esc(`${visibleCount} / ${ordered.length}`)}</span><button type="button" class="action-button primary" data-column-apply>${esc(t("apply", "Apply"))}</button></div>
+    </div>
+  </details>`;
+}
+function renderLeaderboardAndRestoreColumnFocus(findControl) {
+  renderLeaderboard(leaderboardRows());
+  const root = $("leaderboard");
+  let control = findControl(root);
+  if (control?.disabled) {
+    const row = control.closest("[data-column-row]");
+    row?.setAttribute("tabindex", "-1");
+    control = row;
+  }
+  control?.focus();
+}
+function bindLeaderboardColumnControls(target) {
+  const details = target?.querySelector?.(".column-control");
+  if (!details) return;
+  details.addEventListener("toggle", () => {
+    if (details.open && !state.leaderboardColumnDraft) {
+      state.leaderboardColumnDraft = cloneColumnLayout(leaderboardColumnLayout());
+    } else if (!details.open) {
+      state.leaderboardColumnDraft = null;
+    }
+  });
+  details.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    state.leaderboardColumnDraft = null;
+    details.open = false;
+    details.querySelector("summary")?.focus();
+  });
+  details.querySelectorAll("[data-column-visible]").forEach((input) => {
+    input.addEventListener("change", () => {
+      const columnKey = input.dataset.columnVisible;
+      const draft = state.leaderboardColumnDraft || cloneColumnLayout(leaderboardColumnLayout());
+      draft.visibility[columnKey] = input.checked ? "show" : "hide";
+      state.leaderboardColumnDraft = draft;
+      renderLeaderboardAndRestoreColumnFocus((root) => Array.from(
+        root?.querySelectorAll?.("[data-column-visible]") || []
+      ).find((control) => control.dataset.columnVisible === columnKey));
+    });
+  });
+  details.querySelectorAll("[data-column-move]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const columnKey = button.dataset.columnMove;
+      const direction = button.dataset.columnDirection;
+      const draft = state.leaderboardColumnDraft || cloneColumnLayout(leaderboardColumnLayout());
+      draft.order = moveColumn(draft.order, columnKey, Number(direction));
+      state.leaderboardColumnDraft = draft;
+      renderLeaderboardAndRestoreColumnFocus((root) => Array.from(
+        root?.querySelectorAll?.("[data-column-move]") || []
+      ).find((control) => control.dataset.columnMove === columnKey && control.dataset.columnDirection === direction));
+    });
+  });
+  details.querySelector("[data-column-reset]")?.addEventListener("click", () => {
+    state.leaderboardColumnDraft = normalizeColumnLayout(leaderboardColumns().map((column) => column.key), null);
+    renderLeaderboardAndRestoreColumnFocus((root) => root?.querySelector?.("[data-column-reset]"));
+  });
+  details.querySelector("[data-column-apply]")?.addEventListener("click", () => {
+    state.leaderboardColumnLayout = normalizeColumnLayout(leaderboardColumns().map((column) => column.key), state.leaderboardColumnDraft);
+    saveColumnLayout(state.leaderboardColumnLayout, { workspaceId: RENDER_OPTIONS?.workspace_id, storage: columnStorage() });
+    state.leaderboardColumnDraft = null;
+    renderLeaderboardAndRestoreColumnFocus((root) => root?.querySelector?.(".column-control > summary"));
+  });
 }
 function agentNameFor(row) {
   if (workspaceDisplayMode()) return row?.agent_name || row?.adapter || "-";
@@ -5576,7 +6561,7 @@ function rowToolErrorRate(row) {
 function renderLeaderboard(rows = leaderboardRows()) {
   const target = $("leaderboard");
   if (!target) return;
-  const columns = displayLeaderboardColumns();
+  const columns = displayLeaderboardColumns(rows);
   target.innerHTML = `
     <div class="panel-head leaderboard-panel-head">
       <div class="leaderboard-title-stack">
@@ -5752,13 +6737,16 @@ function renderDataTable({ tableId, columns, rows, rowKey = null, tableClass = "
 function renderTableHeader(tableId, column, controls, rows = [], filterOptionsRows = rows) {
   if (column.select) return renderSelectionHeader(rows, column);
   if (column.sourceSelect) return renderSourceSelectionHeader(rows);
-  const active = controls.sort === column.key;
-  const mark = active ? controls.direction === "desc" ? "&#9660;" : "&#9650;" : "&#8597;";
+  const catalogSort = serveMode() && tableId === "leaderboard";
+  const active = catalogSort ? catalogSortKey(state.catalogQuery?.sort) === catalogSortKey(column.key) : controls.sort === column.key;
+  const direction = catalogSort ? state.catalogQuery?.direction : controls.direction;
+  const mark = active ? direction === "desc" ? "&#9660;" : "&#9650;" : "&#8597;";
   const label = column.sortable ? `<button class="sort-button ${active ? "active" : ""}" type="button" data-table-sort="${esc(column.key)}" aria-label="${esc(t("sort", "Sort"))} ${esc(column.label)}"><span class="sort-label">${esc(column.label)}</span><span class="sort-mark">${mark}</span></button>` : `<span class="static-head">${esc(column.label)}</span>`;
   const filter = column.filterable ? renderFilterControl(tableId, column, filterOptionsRows) : "";
   const contentClass = column.filterable ? "table-head-cell table-head-inline" : "table-head-cell";
   const valueType = tableValueType(column);
-  return `<th class="${column.numeric ? "num " : ""}table-value-${esc(valueType)}" data-value-type="${esc(valueType)}"><div class="${contentClass}">${label}${filter}</div></th>`;
+  const ariaSort = column.sortable ? ` aria-sort="${active ? direction === "desc" ? "descending" : "ascending" : "none"}"` : "";
+  return `<th class="${column.numeric ? "num " : ""}table-value-${esc(valueType)}" data-value-type="${esc(valueType)}"${ariaSort}><div class="${contentClass}">${label}${filter}</div></th>`;
 }
 function renderFilterControl(tableId, column, rows) {
   const selected = new Set(activeFilterValues(tableId, column.key));
@@ -6239,10 +7227,11 @@ function setDataTableFilterApplyDisabled(root, disabled) {
 function bindLeaderboardControls() {
   const target = $("leaderboard");
   if (!target) return;
+  const rows = leaderboardRows();
   bindDataTableControls(target, {
     tableId: "leaderboard",
-    columns: displayLeaderboardColumns(),
-    rows: leaderboardRows(),
+    columns: displayLeaderboardColumns(rows),
+    rows,
     rowKey: (row) => row.source_key || row.trial_key,
     onChange: () => renderComparisonPanels()
   });
@@ -6253,6 +7242,7 @@ function bindLeaderboardControls() {
   bindWorkspaceReportLeaderboardControls(target);
   bindTrialSelection(target);
   bindLeaderboardCatalogControls(target);
+  bindLeaderboardColumnControls(target);
 }
 
 // web/src/modules/runtime.js
@@ -6285,6 +7275,14 @@ function fmtMs(value) {
   const seconds = Math.max(0, Number(value) / 1e3);
   return seconds >= 60 ? `${Math.floor(seconds / 60)}m${(seconds % 60).toFixed(1)}s` : `${seconds.toFixed(1)}s`;
 }
+function fmtTtft(value) {
+  if (!hasMetricValue(value)) return "-";
+  const milliseconds = Math.max(0, Number(value));
+  return milliseconds < 1e3 ? `${Math.round(milliseconds)} ms` : `${(milliseconds / 1e3).toFixed(2)}s`;
+}
+function fmtTps(value) {
+  return hasMetricValue(value) ? `${Number(value).toFixed(1)} tok/s` : "-";
+}
 function fmtDate(value) {
   return value ? new Date(Number(value)).toLocaleString() : "-";
 }
@@ -6313,6 +7311,12 @@ function bootstrapData() {
 function serveMode() {
   return RENDER_OPTIONS?.mode === "serve";
 }
+function adminMode() {
+  return serveMode() && RENDER_OPTIONS?.role !== "guest";
+}
+function authenticationEnabled() {
+  return serveMode() && Boolean(RENDER_OPTIONS?.authentication_enabled);
+}
 function workspaceSnapshotMode() {
   return RENDER_OPTIONS?.mode === "workspace_snapshot";
 }
@@ -6325,7 +7329,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-var state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: /* @__PURE__ */ new Set(), sourceSelection: /* @__PURE__ */ new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: /* @__PURE__ */ new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables) : []), workspaceViewSelection: /* @__PURE__ */ new Set(), workspaceAppliedViewNames: /* @__PURE__ */ new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
+var state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: /* @__PURE__ */ new Set(), sourceSelection: /* @__PURE__ */ new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: /* @__PURE__ */ new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables).map((name) => `server:${name}`) : []), workspaceViewSelection: /* @__PURE__ */ new Set(), workspaceAppliedViewNames: /* @__PURE__ */ new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";
@@ -6352,8 +7356,8 @@ if (workspaceSnapshotMode()) {
     state.selectedStep = { trialKey: state.selectedTrial, stepId: String(presentation.selected_step_id) };
   }
 }
-var SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control";
-var OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open]";
+var SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.column-control";
+var OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.column-control[open]";
 function closeOpenSubmenus(except = null) {
   document.querySelectorAll(OPEN_SUBMENU_DETAILS_SELECTOR).forEach((details) => {
     if (details !== except) details.open = false;
@@ -6397,7 +7401,9 @@ function synthesizedReportRow(trajectory, meta, index = -1) {
     total_tool_errors: totalToolErrors,
     tokens: tokenTotal(metrics),
     cost_usd: metrics.total_cost_usd,
-    warnings: Array.isArray(meta?.warnings) ? meta.warnings.length : 0
+    warnings: Array.isArray(meta?.warnings) ? meta.warnings.length : 0,
+    ...source?.analysis_count !== null && source?.analysis_count !== void 0 ? { analysis_count: source.analysis_count } : {},
+    ...inferenceRowMetrics(metrics)
   };
 }
 function selectedKey() {
@@ -6417,6 +7423,7 @@ function stepMeta(meta, stepId) {
 }
 function render(view) {
   state.view = view;
+  renderWorkspaceDescription();
   if (serveMode()) state.serveReportCache[currentServeSourceMode()] = view;
   if (!state.selectedTrial) {
     const firstFailed = reportRows().find((row) => lower(row.status) !== "passed");
@@ -6430,6 +7437,14 @@ function render(view) {
   if (serveMode() && !state.workspaceViewsLoaded) refreshWorkspaceViews();
   renderTrace();
   renderStepDrawer();
+}
+function renderWorkspaceDescription() {
+  const node = document.querySelector("[data-workspace-description]");
+  if (!node) return;
+  const markdown = String(RENDER_OPTIONS?.workspace_description || "");
+  const visible = workspaceDisplayMode() && Boolean(markdown.trim());
+  node.hidden = !visible;
+  node.innerHTML = visible ? renderMarkdown(markdown) : "";
 }
 function syncSelectedSourceFromView() {
   const trialKey = selectedKey();
@@ -6475,6 +7490,9 @@ function analysisArtifactPathsFor(trialKey) {
   const analysis = analysisFor(trialKey);
   if (!analysis) return [];
   const paths = [];
+  listValue(analysis.markdown_reports).forEach((report) => {
+    if (typeof report?.relative_path === "string") paths.push(report.relative_path);
+  });
   const relativePaths = analysis.relative_paths || {};
   if (typeof relativePaths === "object") {
     ["md", "json"].forEach((key) => {

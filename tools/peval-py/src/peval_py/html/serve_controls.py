@@ -16,6 +16,8 @@ def render_serve_source_manager(
     harbor_mounts: tuple[HarborMount, ...],
     *,
     loading: bool = False,
+    role: str = "admin",
+    authentication_enabled: bool = False,
 ) -> str:
     count = len(sources)
     source_word = messages["serve_source_count"]
@@ -29,6 +31,23 @@ def render_serve_source_manager(
         if loading
         else messages["serve_latest_snapshots"]
     )
+    if role != "admin":
+        return render_guest_toolbar(
+            messages,
+            source_summary=source_summary,
+            source_status=source_status,
+            loading=loading,
+        )
+    auth_control = (
+        '<span class="serve-role-badge admin">'
+        + escape(messages["serve_admin_role"])
+        + "</span>"
+        + '<button class="action-button" type="button" data-admin-logout>'
+        + escape(messages["serve_logout"])
+        + "</button>"
+        if authentication_enabled
+        else ""
+    )
     return replace_template_tokens(
         load_asset_text("serve_source_manager.html"),
         {
@@ -38,6 +57,7 @@ def render_serve_source_manager(
             "REFRESH": escape(messages["serve_refresh"]),
             "SOURCE_MANAGER": escape(messages["serve_source_manager"]),
             "REPORTS": escape(messages["workspace_reports"]),
+            "AUTH_CONTROL": auth_control,
             "LANGUAGE_CONTROL": render_language_control(messages, locale),
             "MANAGER_COPY": escape(messages["serve_source_manager_copy"]),
             "CLOSE": escape(messages["close"]),
@@ -60,26 +80,126 @@ def render_serve_source_manager(
     )
 
 
-def render_serve_report_ui(messages: dict[str, str]) -> str:
+def render_serve_report_ui(messages: dict[str, str], *, role: str = "admin") -> str:
     return replace_template_tokens(
         load_asset_text("serve_report_manager.html"),
         {
             "REPORTS": escape(messages["workspace_reports"]),
-            "REPORTS_COPY": escape(messages["workspace_reports_copy"]),
+            "REPORTS_COPY": escape(
+                messages[
+                    "workspace_reports_copy"
+                    if role == "admin"
+                    else "workspace_reports_guest_copy"
+                ]
+            ),
             "CLOSE": escape(messages["close"]),
             "REPORT_INVENTORY": escape(messages["report_inventory"]),
             "REPORT_BINDINGS": escape(messages["report_bindings"]),
-            "SAVE_VIEW": escape(messages["save_view"]),
-            "VIEW_CURRENT_CONFIGURATION": escape(
-                messages["view_current_configuration"]
-            ),
-            "SAVED_VIEWS": escape(messages["saved_views"]),
-            "VIEW_NAME": escape(messages["view_name"]),
-            "VIEW_NOTES": escape(messages["view_notes"]),
-            "SAVE": escape(messages["save"]),
-            "CANCEL": escape(messages["cancel"]),
+            "REPORT_BINDINGS_HIDDEN": " hidden" if role != "admin" else "",
+            "REPORT_MANAGER_BODY_CLASS": " readonly" if role != "admin" else "",
+            "VIEW_SAVE_DIALOG": render_view_save_dialog(messages, role=role),
         },
     )
+
+
+def render_view_save_dialog(
+    messages: dict[str, str], *, role: str = "admin"
+) -> str:
+    save_view = escape(messages["save_view"])
+    cancel = escape(messages["cancel"])
+    current_configuration = escape(messages["view_current_configuration"])
+    view_name = escape(messages["view_name"])
+    view_notes = escape(messages["view_notes"])
+    save = escape(messages["save"])
+    if role == "admin":
+        location = f"""
+        <fieldset class="view-save-location">
+          <legend>{escape(messages["view_save_location"])}</legend>
+          <label><input type="radio" name="view_location" value="workspace" checked> {escape(messages["view_workspace"])}</label>
+          <label><input type="radio" name="view_location" value="browser"> {escape(messages["view_this_browser"])}</label>
+        </fieldset>"""
+    else:
+        location = f"""
+        <input type="hidden" name="view_location" value="browser">
+        <p class="copy view-save-location-copy">{escape(messages["view_guest_local_copy"])}</p>"""
+    return f"""
+  <div class="view-save-backdrop" data-view-save-dialog hidden data-serve-only>
+    <section class="view-save-dialog" role="dialog" aria-modal="true" aria-labelledby="view-save-title">
+      <header class="view-save-head">
+        <h2 id="view-save-title">{save_view}</h2>
+        <button type="button" class="action-button compact" data-view-save-cancel aria-label="{cancel}">{cancel}</button>
+      </header>
+      <form data-view-save-form>
+        <section class="view-current-configuration" aria-labelledby="view-current-configuration-title">
+          <h3 id="view-current-configuration-title">{current_configuration}</h3>
+          <dl data-view-current-configuration></dl>
+        </section>
+        {location}
+        <label>{view_name}
+          <input name="name" autocomplete="off" required maxlength="120" data-view-name-input>
+        </label>
+        <label>{view_notes}
+          <textarea name="notes" rows="7" data-view-notes-input></textarea>
+        </label>
+        <div class="view-save-actions">
+          <button type="button" class="action-button" data-view-save-cancel>{cancel}</button>
+          <button type="submit" class="action-button primary">{save}</button>
+        </div>
+      </form>
+    </section>
+  </div>"""
+
+
+def render_guest_toolbar(
+    messages: dict[str, str],
+    *,
+    source_summary: str,
+    source_status: str,
+    loading: bool,
+) -> str:
+    status_class = "loading" if loading else ""
+    guest_role = escape(messages["serve_guest_role"])
+    workspace_reports = escape(messages["workspace_reports"])
+    login = escape(messages["serve_login"])
+    login_copy = escape(messages["serve_login_copy"])
+    close = escape(messages["close"])
+    admin_password = escape(messages["serve_admin_password"])
+    return f"""
+  <section class="serve-source-toolbar" data-serve-only>
+    <div class="serve-source-heading">
+      <h1>__TITLE__</h1>
+      <div class="serve-source-status">
+        <strong data-source-count>{escape(source_summary)}</strong>
+        <span class="{status_class}" data-source-status aria-live="polite">{escape(source_status)}</span>
+      </div>
+    </div>
+    <div class="workspace-description note-body" data-workspace-description hidden></div>
+    <div class="serve-source-actions">
+      <span class="serve-role-badge guest">{guest_role}</span>
+      <button class="action-button" type="button" data-report-manager-open>{workspace_reports}</button>
+      <button class="action-button primary" type="button" data-admin-login-open>{login}</button>
+    </div>
+  </section>
+  <div class="auth-backdrop" data-admin-login-dialog hidden data-serve-only>
+    <section class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-login-title">
+      <header class="source-manager-head">
+        <div>
+          <h2 id="admin-login-title">{login}</h2>
+          <p class="copy">{login_copy}</p>
+        </div>
+        <button class="action-button compact" type="button" data-admin-login-close aria-label="{close}">{close}</button>
+      </header>
+      <form data-admin-login-form>
+        <label>{admin_password}
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <p class="serve-notice" data-admin-login-status aria-live="polite" hidden></p>
+        <div class="source-form-actions">
+          <button class="action-button primary" type="submit">{login}</button>
+        </div>
+      </form>
+    </section>
+  </div>"""
 
 
 def render_language_control(messages: dict[str, str], locale: str) -> str:

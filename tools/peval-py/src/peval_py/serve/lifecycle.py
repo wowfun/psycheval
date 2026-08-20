@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 from peval_py.cli.arguments import CliArgs
 from peval_py.config import apply_overrides, config_for_adapter, load_config
 from peval_py.inputs import parse_adapter_assignments
+from peval_py.serve.access import ServeAccess
 from peval_py.serve.constants import DEFAULT_PORT_END, DEFAULT_PORT_START, LOCALHOSTS
 from peval_py.serve.handler import make_handler
 from peval_py.serve.runtime import ServeRuntime
@@ -19,11 +21,13 @@ class LocalHTTPServer(ThreadingHTTPServer):
 def run_serve_command(
     args: CliArgs,
 ) -> None:
-    host = validate_localhost(getattr(args, "host", None) or "127.0.0.1")
+    raw_host = getattr(args, "host", None) or "127.0.0.1"
     store = open_workspace_state(getattr(args, "root", None))
     server: HTTPServer | None = None
     runtime: ServeRuntime | None = None
     try:
+        access = ServeAccess.from_workspace(store.paths.root)
+        host = validate_bind_host(raw_host, access.authentication_enabled)
         config = apply_overrides(
             load_config(
                 getattr(args, "config", None),
@@ -37,9 +41,16 @@ def run_serve_command(
         )
         config = config_for_adapter(config, adapter_assignments.default_adapter)
         runtime = ServeRuntime(store, config, initialize_snapshot=False)
-        handler = make_handler(runtime)
+        handler = make_handler(runtime, access=access)
         server = bind_server(host, getattr(args, "port", None), handler)
         print(f"peval-py serve: {format_url(host, server.server_port)}", flush=True)
+        if host.lower() not in LOCALHOSTS:
+            print(
+                "warning: non-local peval-py HTTP is for trusted private networks only; "
+                "passwords and sessions are not protected by TLS",
+                file=sys.stderr,
+                flush=True,
+            )
         runtime.start_initial_load(args, adapter_assignments)
         server.serve_forever()
     except KeyboardInterrupt:
@@ -58,6 +69,19 @@ def validate_localhost(host: str) -> str:
     if normalized.lower() not in LOCALHOSTS:
         raise ValueError(
             "serve only binds localhost by default; use 127.0.0.1, localhost, or ::1"
+        )
+    return normalized
+
+
+def validate_bind_host(host: str, authentication_enabled: bool) -> str:
+    text = str(host).strip()
+    normalized = text[1:-1] if text.startswith("[") and text.endswith("]") else text
+    if not normalized:
+        raise ValueError("serve host must not be empty")
+    if normalized.lower() not in LOCALHOSTS and not authentication_enabled:
+        raise ValueError(
+            "non-local serve requires a non-empty PEVAL_PY_ADMIN_PASSWORD in "
+            "the process environment or workspace .env"
         )
     return normalized
 

@@ -7,10 +7,14 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from peval_py._state.annotations import optional_int, optional_str
 from peval_py.config import ToolConfig
+from peval_py.report.inference import (
+    aggregate_inference_rows,
+    inference_row_metrics,
+)
 from peval_py.report.metrics import final_metric, token_total
 from peval_py.state.store import ServeStateStore
 from peval_py.state.workspace_sources import (
@@ -19,7 +23,7 @@ from peval_py.state.workspace_sources import (
     WorkspaceSources,
 )
 
-CATALOG_SCHEMA_VERSION = 12
+CATALOG_SCHEMA_VERSION = 14
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 CATALOG_RELATIVE_PATH = Path(".cache/peval-py/serve-catalog.sqlite3")
@@ -99,6 +103,8 @@ class CatalogPage:
     page_size: int
     items: tuple[CatalogRow, ...]
     facets: dict[str, list[dict[str, Any]]]
+    inference_summary: dict[str, Any]
+    column_presence: dict[str, int]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -110,6 +116,8 @@ class CatalogPage:
             "page_size": self.page_size,
             "items": [item.to_dict() for item in self.items],
             "facets": self.facets,
+            "inference_summary": self.inference_summary,
+            "column_presence": self.column_presence,
         }
 
 
@@ -203,6 +211,7 @@ class WorkspaceCatalog:
         *,
         include_facets: bool = True,
         any_queries: Sequence[CatalogQuery] = (),
+        workspace_report_source_refs: Sequence[str] = (),
     ) -> CatalogPage:
         query = query.normalized()
         normalized_any_queries = tuple(item.normalized() for item in any_queries)
@@ -219,14 +228,22 @@ class WorkspaceCatalog:
                     page_size=query.page_size,
                     items=(),
                     facets=_empty_facets(),
+                    inference_summary=aggregate_inference_rows([]),
+                    column_presence=_empty_column_presence(),
                 )
             where, parameters = self._combined_query_where(
                 query, normalized_any_queries
             )
-            total = int(
-                connection.execute(
-                    f"SELECT count(*) FROM cells WHERE {where}", parameters
-                ).fetchone()[0]
+            total, inference_summary, column_presence = _catalog_query_aggregate(
+                connection,
+                where,
+                parameters,
+            )
+            column_presence["workspace_reports"] = _count_matching_source_refs(
+                connection,
+                where,
+                parameters,
+                workspace_report_source_refs,
             )
             sort_expression = _sort_expression(query.sort)
             direction = "ASC" if query.direction == "asc" else "DESC"
@@ -267,6 +284,8 @@ class WorkspaceCatalog:
             page_size=query.page_size,
             items=items,
             facets=facets,
+            inference_summary=inference_summary,
+            column_presence=column_presence,
         )
 
     @contextmanager
@@ -398,8 +417,10 @@ class WorkspaceCatalog:
         *,
         name: str,
         group_by: str,
+        inference_query: CatalogQuery | None = None,
+        inference_any_queries: Sequence[CatalogQuery] = (),
     ) -> dict[str, Any]:
-        """Summarize one explicit readable-row snapshot in one generation."""
+        """Summarize explicit rows and optional query inference in one generation."""
         ordered = list(dict.fromkeys(str(key) for key in source_keys if str(key)))
         if not ordered:
             raise ValueError("source_keys must include at least one source")
@@ -429,11 +450,21 @@ class WorkspaceCatalog:
                 if not bool(record["readable"]):
                     raise ValueError(f"source is not readable: {source_key}")
                 rows.append(json.loads(str(record["row_json"])))
+            inference_summary = None
+            if inference_query is not None:
+                where, parameters = self._combined_query_where(
+                    inference_query.normalized(),
+                    tuple(item.normalized() for item in inference_any_queries),
+                )
+                _total, inference_summary, _column_presence = _catalog_query_aggregate(
+                    connection, where, parameters
+                )
         return {
             "generation": generation,
             "checking": self.checking,
             "stale": self.checking,
             "summary": _saved_view_summary(name, group_by, rows),
+            "inference_summary": inference_summary,
         }
 
     def load_detail(self, source_key: str) -> DetailEnvelope:
@@ -651,9 +682,12 @@ class WorkspaceCatalog:
                         readable, active, last_status, search_doc, category, tags_json,
                         agent, model, result, task, job, provider, reward,
                         session_id, last_turn_end, duration_ms, turns, tool_calls,
-                        tool_errors, tokens, cost_usd,
+                        tool_errors, tokens, cost_usd, ttft_ms, tps, cache_hit_rate,
+                        ttft_ms_sum, ttft_sample_count, decode_duration_ms,
+                        decode_token_count, decode_sample_count, cache_prompt_tokens,
+                        cache_read_tokens, cache_sample_count,
                         created_at_ms, updated_at_ms, row_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         source_key,
@@ -684,6 +718,17 @@ class WorkspaceCatalog:
                         row.get("total_tool_errors"),
                         row.get("tokens"),
                         row.get("cost_usd"),
+                        row.get("ttft_ms"),
+                        row.get("tps"),
+                        row.get("cache_hit_rate"),
+                        row.get("ttft_ms_sum"),
+                        row.get("ttft_sample_count"),
+                        row.get("decode_duration_ms"),
+                        row.get("decode_token_count"),
+                        row.get("decode_sample_count"),
+                        row.get("cache_prompt_tokens"),
+                        row.get("cache_read_tokens"),
+                        row.get("cache_sample_count"),
                         int(row.get("created_at_ms") or 0),
                         int(row.get("updated_at_ms") or 0),
                         json.dumps(row, ensure_ascii=False, separators=(",", ":")),
@@ -726,7 +771,7 @@ class WorkspaceCatalog:
             summary = _catalog_summary(
                 trajectory,
                 meta,
-                self._analysis_present(document.source_ref, document.source),
+                self._analysis_count(document),
             )
             if not document.readable:
                 summary.pop("step_outline", None)
@@ -756,22 +801,31 @@ class WorkspaceCatalog:
             "last_error": document.last_error,
             "last_refreshed_at_ms": None,
             "input_bytes": document.input_bytes,
+            "notes_present": self._notes_present(document.source_ref, document.source),
         }
         if document.source_ref.startswith("runs/"):
             row["artifact_dir"] = document.source_ref
         return row, document.readable, _search_document(row, trajectory)
 
-    def _analysis_present(self, source_ref: str, source: dict[str, Any]) -> bool:
-        if source.get("kind") == HARBOR_SOURCE_KIND:
-            return any(
-                self.sources.annotation_path(source_ref, filename).is_file()
+    def _analysis_count(self, document: SourceDocument) -> int:
+        if document.source.get("kind") == HARBOR_SOURCE_KIND:
+            workspace_present = any(
+                self.sources.annotation_path(document.source_ref, filename).is_file()
                 for filename in ("analysis.json", "analysis.md")
             )
-        cell_dir = self.store.resolve_artifact_dir(source_ref)
-        return any(
-            (cell_dir / filename).is_file()
-            for filename in ("analysis.json", "analysis.md")
+            return int(bool(document.harbor_analysis_markdown)) + int(workspace_present)
+        cell_dir = self.store.resolve_artifact_dir(document.source_ref)
+        return int(
+            any(
+                (cell_dir / filename).is_file()
+                for filename in ("analysis.json", "analysis.md")
+            )
         )
+
+    def _notes_present(self, source_ref: str, source: dict[str, Any]) -> bool:
+        if source.get("kind") == HARBOR_SOURCE_KIND:
+            return self.sources.annotation_path(source_ref, "notes.md").is_file()
+        return (self.store.resolve_artifact_dir(source_ref) / "notes.md").is_file()
 
     def _query_where(self, query: CatalogQuery) -> tuple[str, list[Any]]:
         scope_where, parameters = self._facet_scope_where(query)
@@ -956,6 +1010,17 @@ class WorkspaceCatalog:
                 tool_errors REAL,
                 tokens REAL,
                 cost_usd REAL,
+                ttft_ms REAL,
+                tps REAL,
+                cache_hit_rate REAL,
+                ttft_ms_sum REAL,
+                ttft_sample_count REAL,
+                decode_duration_ms REAL,
+                decode_token_count REAL,
+                decode_sample_count REAL,
+                cache_prompt_tokens REAL,
+                cache_read_tokens REAL,
+                cache_sample_count REAL,
                 created_at_ms INTEGER NOT NULL,
                 updated_at_ms INTEGER NOT NULL,
                 row_json TEXT NOT NULL
@@ -1088,7 +1153,10 @@ class WorkspaceCatalog:
 
 _SAVED_VIEW_SUMMARY_METRICS = (
     ("duration_ms", "duration"),
+    ("ttft_ms", "duration"),
+    ("tps", "number"),
     ("tokens", "number"),
+    ("cache_hit_rate", "percent"),
     ("turns", "number"),
     ("model_duration_ms", "duration"),
     ("total_tool_calls", "number"),
@@ -1146,22 +1214,47 @@ def _saved_view_summary(
 
 def _saved_view_metric_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     metrics: list[dict[str, Any]] = []
+    inference = aggregate_inference_rows(rows)
     for key, value_type in _SAVED_VIEW_SUMMARY_METRICS:
         values = [
             value
             for value in (_saved_view_metric_value(row, key) for row in rows)
             if value is not None
         ]
+        weighted = _saved_view_inference_mean(inference, key)
         metrics.append(
             {
                 "key": key,
                 "type": value_type,
-                "count": len(values),
-                "mean": sum(values) / len(values) if values else None,
+                "count": weighted[0] if weighted is not None else len(values),
+                "mean": (
+                    weighted[1]
+                    if weighted is not None
+                    else sum(values) / len(values)
+                    if values
+                    else None
+                ),
                 "distribution": _saved_view_distribution(values),
             }
         )
     return metrics
+
+
+def _saved_view_inference_mean(
+    inference: Mapping[str, Any], key: str
+) -> tuple[int, float | None] | None:
+    metric_key, value_key = {
+        "ttft_ms": ("ttft", "value_ms"),
+        "tps": ("tps", "value"),
+        "cache_hit_rate": ("cache_hit_rate", "value"),
+    }.get(key, (None, None))
+    if metric_key is None or value_key is None:
+        return None
+    metric = inference.get(metric_key)
+    if not isinstance(metric, Mapping):
+        return (0, None)
+    value = _optional_number(metric.get(value_key))
+    return int(metric.get("covered_trials") or 0), value
 
 
 def _saved_view_metric_value(row: dict[str, Any], key: str) -> float | None:
@@ -1200,7 +1293,7 @@ def _saved_view_percentile(ordered: list[float], percentile: int) -> float:
 
 
 def _catalog_summary(
-    trajectory: dict[str, Any], meta: dict[str, Any], analysis_present: bool
+    trajectory: dict[str, Any], meta: dict[str, Any], analysis_count: int
 ) -> dict[str, Any]:
     metrics = _summary_metrics(trajectory, meta)
     agent = trajectory.get("agent")
@@ -1228,7 +1321,7 @@ def _catalog_summary(
         "tokens": token_total(metrics),
         "cost_usd": _optional_number(metrics.get("total_cost_usd")),
         "warnings": len(warnings) if isinstance(warnings, list) else 0,
-        "analysised": analysis_present,
+        "analysis_count": max(0, min(2, int(analysis_count))),
         "model": optional_str(agent.get("model_name")),
         "task_name": optional_str(meta.get("task_name")),
         "job_name": optional_str(meta.get("job_name")),
@@ -1238,6 +1331,7 @@ def _catalog_summary(
         "rewards": meta.get("rewards") or {},
         "harbor_provenance": meta.get("harbor_provenance") or {},
         "task_metadata": meta.get("task_metadata") or {},
+        **inference_row_metrics(metrics),
     }
 
 
@@ -1414,6 +1508,9 @@ def _sort_expression(sort: str) -> str:
         "tool_error_rate": "CASE WHEN tool_calls > 0 THEN coalesce(tool_errors, 0) / tool_calls END",
         "tokens": "tokens",
         "cost_usd": "cost_usd",
+        "ttft_ms": "ttft_ms",
+        "tps": "tps",
+        "cache_hit_rate": "cache_hit_rate",
         "created": "created_at_ms",
         "updated": "updated_at_ms",
         "source_key": "source_key",
@@ -1421,6 +1518,135 @@ def _sort_expression(sort: str) -> str:
     if sort not in mapping:
         raise ValueError(f"unsupported catalog sort: {sort}")
     return mapping[sort]
+
+
+def _json_value_present(path: str) -> str:
+    value_type = f"json_type(row_json, '{path}')"
+    value = f"json_extract(row_json, '{path}')"
+    return (
+        f"CASE {value_type} "
+        f"WHEN 'text' THEN trim({value}) <> '' "
+        f"WHEN 'array' THEN json_array_length({value}) > 0 "
+        f"WHEN 'object' THEN {value} <> '{{}}' "
+        f"WHEN 'null' THEN 0 "
+        f"ELSE {value_type} IS NOT NULL END"
+    )
+
+
+_CATALOG_COLUMN_PRESENCE_SQL = {
+    "source_category": "trim(category) <> ''",
+    "source_tags": "json_array_length(tags_json) > 0",
+    "session_id": "trim(session_id) <> ''",
+    "task_name": f"({_json_value_present('$.source_alias')}) OR trim(task) <> ''",
+    "agent": "trim(agent) <> ''",
+    "model": "trim(model) <> ''",
+    "job_name": "trim(job) <> ''",
+    "model_provider": "trim(provider) <> ''",
+    "reward": f"reward IS NOT NULL OR ({_json_value_present('$.rewards')})",
+    "status": "trim(last_status) <> ''",
+    "finished_at_ms": "last_turn_end IS NOT NULL",
+    "duration_ms": "duration_ms IS NOT NULL",
+    "ttft_ms": "ttft_ms IS NOT NULL",
+    "tps": "tps IS NOT NULL",
+    "turns": "turns IS NOT NULL",
+    "total_tool_calls": "tool_calls IS NOT NULL",
+    "tool_error_rate": "tool_calls > 0 AND tool_errors IS NOT NULL",
+    "tokens": "tokens IS NOT NULL",
+    "cache_hit_rate": "cache_hit_rate IS NOT NULL",
+    "cost_usd": "cost_usd IS NOT NULL",
+    "analysis_count": _json_value_present("$.analysis_count"),
+    "notes": "json_extract(row_json, '$.notes_present') = 1",
+}
+
+
+def _empty_column_presence() -> dict[str, int]:
+    return {**dict.fromkeys(_CATALOG_COLUMN_PRESENCE_SQL, 0), "workspace_reports": 0}
+
+
+def _catalog_query_aggregate(
+    connection: sqlite3.Connection,
+    where: str,
+    parameters: Sequence[Any],
+) -> tuple[int, dict[str, Any], dict[str, int]]:
+    ttft_valid = "ttft_ms_sum >= 0 AND ttft_sample_count > 0"
+    decode_valid = (
+        "decode_token_count >= 0 AND decode_duration_ms > 0 AND decode_sample_count > 0"
+    )
+    cache_valid = (
+        "cache_read_tokens >= 0 AND cache_prompt_tokens > 0 "
+        "AND cache_sample_count > 0 AND cache_read_tokens <= cache_prompt_tokens"
+    )
+    select_items = [
+        "count(*) AS matched_trials",
+        f"sum(CASE WHEN {ttft_valid} THEN ttft_ms_sum ELSE 0 END) AS ttft_sum",
+        f"sum(CASE WHEN {ttft_valid} THEN ttft_sample_count ELSE 0 END) AS ttft_count",
+        f"sum(CASE WHEN {ttft_valid} THEN 1 ELSE 0 END) AS ttft_covered",
+        f"sum(CASE WHEN {decode_valid} THEN decode_token_count ELSE 0 END) AS decode_tokens",
+        f"sum(CASE WHEN {decode_valid} THEN decode_duration_ms ELSE 0 END) AS decode_ms",
+        f"sum(CASE WHEN {decode_valid} THEN 1 ELSE 0 END) AS decode_covered",
+        f"sum(CASE WHEN {cache_valid} THEN cache_read_tokens ELSE 0 END) AS cache_read",
+        f"sum(CASE WHEN {cache_valid} THEN cache_prompt_tokens ELSE 0 END) AS cache_prompt",
+        f"sum(CASE WHEN {cache_valid} THEN 1 ELSE 0 END) AS cache_covered",
+        *(
+            f"sum(CASE WHEN {expression} THEN 1 ELSE 0 END) AS presence_{key}"
+            for key, expression in _CATALOG_COLUMN_PRESENCE_SQL.items()
+        ),
+    ]
+    record = connection.execute(
+        f"SELECT {', '.join(select_items)} FROM cells WHERE {where}",
+        parameters,
+    ).fetchone()
+    assert record is not None
+    matched = int(record["matched_trials"])
+    ttft_sum = float(record["ttft_sum"] or 0)
+    ttft_count = float(record["ttft_count"] or 0)
+    decode_tokens = float(record["decode_tokens"] or 0)
+    decode_ms = float(record["decode_ms"] or 0)
+    cache_read = float(record["cache_read"] or 0)
+    cache_prompt = float(record["cache_prompt"] or 0)
+    inference_summary = {
+        "matched_trials": matched,
+        "ttft": {
+            "value_ms": ttft_sum / ttft_count if ttft_count > 0 else None,
+            "covered_trials": int(record["ttft_covered"] or 0),
+            "sample_count": ttft_count,
+            "ttft_ms_sum": ttft_sum,
+        },
+        "tps": {
+            "value": 1000 * decode_tokens / decode_ms if decode_ms > 0 else None,
+            "covered_trials": int(record["decode_covered"] or 0),
+            "decode_token_count": decode_tokens,
+            "decode_duration_ms": decode_ms,
+        },
+        "cache_hit_rate": {
+            "value": cache_read / cache_prompt if cache_prompt > 0 else None,
+            "covered_trials": int(record["cache_covered"] or 0),
+            "cache_read_tokens": cache_read,
+            "cache_prompt_tokens": cache_prompt,
+        },
+    }
+    presence = {
+        key: int(record[f"presence_{key}"] or 0) for key in _CATALOG_COLUMN_PRESENCE_SQL
+    }
+    return matched, inference_summary, presence
+
+
+def _count_matching_source_refs(
+    connection: sqlite3.Connection,
+    where: str,
+    parameters: Sequence[Any],
+    source_refs: Sequence[str],
+) -> int:
+    ordered = list(dict.fromkeys(str(value) for value in source_refs if str(value)))
+    if not ordered:
+        return 0
+    return int(
+        connection.execute(
+            f"SELECT count(*) FROM cells WHERE ({where}) "
+            "AND source_ref IN (SELECT value FROM json_each(?))",
+            [*parameters, json.dumps(ordered, ensure_ascii=False)],
+        ).fetchone()[0]
+    )
 
 
 def _empty_facets() -> dict[str, list[dict[str, Any]]]:

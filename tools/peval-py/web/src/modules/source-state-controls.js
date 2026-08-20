@@ -1,4 +1,4 @@
-import { currentServeSourceMode, esc, listValue, normalizeServeSourceMode, readableServeSourcesFrom, serveMode, t } from "./runtime.js";
+import { adminMode, currentServeSourceMode, esc, listValue, normalizeServeSourceMode, readableServeSourcesFrom, serveMode, t } from "./runtime.js";
 import { serveApi, setServeStatus } from "./serve-effects.js";
 import { applyServeSourceStateMutationPayload, leaderboardRows, switchServeSourceMode, visibleSelectedSourceKeys } from "./serve-catalog.js";
 
@@ -12,12 +12,15 @@ function renderServeSourceStateControls(rows = leaderboardRows()) {
   const actionLabel = archived
     ? t("activate_selected", "Activate selected")
     : t("archive_selected", "Archive selected");
+  const action = adminMode()
+    ? `<button class="action-button primary" type="button" data-source-state-action ${selectedCount && !allMode ? "" : "disabled"}>${esc(allMode ? t("mixed_state_action_disabled", "Mixed view") : actionLabel)}</button>`
+    : "";
   return `<div class="source-state-controls" data-source-state-controls>
     <label class="source-state-toggle">
       <input type="checkbox" data-source-state-toggle ${archived || allMode ? "checked" : ""} ${toggleDisabled}>
       <span>${esc(t("show_archived", "Show archived"))}</span>
     </label>
-    <button class="action-button primary" type="button" data-source-state-action ${selectedCount && !allMode ? "" : "disabled"}>${esc(allMode ? t("mixed_state_action_disabled", "Mixed view") : actionLabel)}</button>
+    ${action}
   </div>`;
 }
 
@@ -39,6 +42,7 @@ function bindServeSourceStateControls(target) {
 }
 
 async function mutateVisibleServeSourceState() {
+  if (!adminMode()) return;
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
   const mode = currentServeSourceMode();

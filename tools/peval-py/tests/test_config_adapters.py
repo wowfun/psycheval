@@ -145,6 +145,36 @@ class PevalPyConfigAdapterTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
+    def test_workspace_description_is_optional_markdown_with_config_overlay(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root.joinpath("peval-py.toml").write_text(
+                'description = "**Nightly** evaluation workspace"\n',
+                encoding="utf-8",
+            )
+            explicit = root / "explicit.toml"
+            explicit.write_text(
+                'description = "# Release candidate"\n', encoding="utf-8"
+            )
+
+            discovered = load_config(None, workspace_root=str(root))
+            self.assertEqual(discovered.description, "**Nightly** evaluation workspace")
+            self.assertEqual(
+                load_config(str(explicit), workspace_root=str(root)).description,
+                "# Release candidate",
+            )
+
+            explicit.write_text('description = "   "\n', encoding="utf-8")
+            self.assertIsNone(
+                load_config(str(explicit), workspace_root=str(root)).description
+            )
+
+            explicit.write_text("description = 42\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "description must be a string"):
+                load_config(str(explicit), workspace_root=str(root))
+
     def test_config_passes_selected_adapter_options(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "adapters.toml"

@@ -100,6 +100,12 @@
   display:grid;
   grid-template-columns:minmax(280px,360px) minmax(0,1fr);
 }
+.report-manager-body.readonly {
+  grid-template-columns:minmax(0,1fr);
+}
+.report-manager-body.readonly .report-inventory-panel {
+  border-right:0;
+}
 .report-inventory-panel,
 .report-bindings-panel {
   min-height:0;

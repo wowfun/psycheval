@@ -1,4 +1,4 @@
-import { cellNoteFor, editableNotesSource, esc, notesFor, selectedKey, serveMode, state, t } from "./runtime.js";
+import { adminMode, cellNoteFor, editableNotesSource, esc, notesFor, selectedKey, state, t } from "./runtime.js";
 import { renderTrace } from "./trajectory-trace.js";
 import { serveApi, setServeStatus } from "./serve-effects.js";
 import { applyServeMutationPayload } from "./serve-catalog.js";
@@ -16,6 +16,7 @@ function renderSelectedNotes(trialKey) {
   </section>`;
 }
 function renderNotesAction(trialKey) {
+  if (!adminMode()) return "";
   const source = editableNotesSource(trialKey);
   if (!source || state.notesEditor?.trialKey === trialKey) return "";
   const cellNote = cellNoteFor(trialKey);
@@ -23,7 +24,7 @@ function renderNotesAction(trialKey) {
   return `<button class="action-button notes-edit-button" type="button" data-notes-edit data-trial-key="${esc(trialKey)}">${esc(label)}</button>`;
 }
 function renderNotesEditor(trialKey) {
-  if (!serveMode() || !trialKey || !state.notesEditor || state.notesEditor.trialKey !== trialKey) return "";
+  if (!adminMode() || !trialKey || !state.notesEditor || state.notesEditor.trialKey !== trialKey) return "";
   const markdown = state.notesEditor.markdown ?? "";
   const error = state.notesEditor.error ? `<p class="copy danger">${esc(state.notesEditor.error)}</p>` : "";
   const disabled = state.notesEditor.saving ? " disabled" : "";
@@ -37,7 +38,7 @@ function renderNotesEditor(trialKey) {
   </article>`;
 }
 function beginNotesEdit(trialKey) {
-  if (!trialKey || !editableNotesSource(trialKey)) return;
+  if (!adminMode() || !trialKey || !editableNotesSource(trialKey)) return;
   const note = cellNoteFor(trialKey);
   state.notesEditor = { trialKey, markdown: note?.markdown || "", error: "", saving: false };
   renderTrace();
@@ -47,6 +48,7 @@ function cancelNotesEdit() {
   renderTrace();
 }
 async function saveSelectedNotes(button) {
+  if (!adminMode()) return;
   const trialKey = button?.dataset?.trialKey || selectedKey();
   const source = editableNotesSource(trialKey);
   const panel = button?.closest?.("[data-notes-editor-panel]");

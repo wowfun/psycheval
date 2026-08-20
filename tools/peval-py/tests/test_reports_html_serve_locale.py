@@ -21,11 +21,51 @@ from reports_html_support import (
 
 
 class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
+    def test_workspace_description_is_public_escaped_markdown_chrome(self) -> None:
+        report = {
+            "schema_version": 19,
+            "trajectory": [],
+            "trajectory_meta": [],
+        }
+        description = "**Nightly** <script>alert(1)</script>"
+
+        static_html = render_html(report)
+        admin_html = render_serve_html(
+            report, workspace_description=description, role="admin"
+        )
+        guest_html = render_serve_html(
+            report, workspace_description=description, role="guest"
+        )
+        blank_html = render_serve_html(report, workspace_description="   ")
+
+        for html in (admin_html, guest_html):
+            self.assertEqual(
+                script_json(html, "peval-py-render-options")["workspace_description"],
+                description,
+            )
+            self.assertIn(
+                'class="workspace-description note-body" '
+                "data-workspace-description hidden",
+                html,
+            )
+            self.assertIn("Nightly** \\u003cscript", html)
+            self.assertNotIn("<script>alert(1)</script>", html)
+
+        self.assertNotIn(
+            "workspace_description", script_json(static_html, "peval-py-render-options")
+        )
+        self.assertNotIn(
+            "workspace_description", script_json(blank_html, "peval-py-render-options")
+        )
+
     def test_category_labels_are_localized_for_tables_and_summary_counts(self) -> None:
         self.assertEqual(messages_for("en")["category"], "Category")
         self.assertEqual(messages_for("en")["summary_categories"], "categories")
         self.assertEqual(messages_for("zh-CN")["category"], "分类")
         self.assertEqual(messages_for("zh-CN")["summary_categories"], "个分类")
+        self.assertEqual(
+            messages_for("zh-CN")["metric_coverage"], "{covered}/{matched} 个试次"
+        )
 
     def test_leaderboard_scrolls_with_the_main_analysis_content(self) -> None:
         html = render_serve_html(
@@ -541,7 +581,10 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         )
         self.assertIn("function renderTrace()", serve_html)
         self.assertIn("function renderStepDrawer()", serve_html)
-        self.assertIn("function displayLeaderboardColumns()", serve_html)
+        self.assertIn(
+            "function displayLeaderboardColumns(rows = leaderboardRows())",
+            serve_html,
+        )
         self.assertIn('t("task_alias", "Task / Alias")', serve_html)
         self.assertIn('t("last_turn_end", "Last Turn End")', serve_html)
         self.assertIn('key: "finished_at_ms"', serve_html)
@@ -561,7 +604,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('tableId: "sources"', serve_html)
         self.assertIn("rowKey: (source) => source?.source_key", serve_html)
         self.assertIn(
-            "serveMode() ? [selectionColumn(), ...leaderboardColumns()] : leaderboardColumns()",
+            "serveMode() ? [selectionColumn(), ...displayed] : displayed",
             serve_html,
         )
         self.assertIn("data-select-visible", serve_html)
@@ -624,7 +667,12 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("function renderAnalysisPaths(analysis)", serve_html)
         self.assertIn("analysis.md_report", serve_html)
         self.assertIn("analysis.relative_paths", serve_html)
-        self.assertIn("renderMarkdown(analysis.md_report)", serve_html)
+        self.assertIn("analysis.markdown_reports", serve_html)
+        self.assertIn("renderMarkdown(report.markdown)", serve_html)
+        self.assertIn("Harbor Trial analysis", serve_html)
+        self.assertIn("Harbor Trial 分析", zh_serve_html)
+        self.assertIn("Workspace analysis", serve_html)
+        self.assertIn("工作台分析", zh_serve_html)
         self.assertIn("function editableNotesSource(trialKey)", serve_html)
         self.assertIn("function saveSelectedNotes(button)", serve_html)
         self.assertIn("data-notes-edit", serve_html)

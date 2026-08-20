@@ -1,10 +1,36 @@
-import { $, closeOpenSubmenus, esc, fmtNum, listValue, normalizeServeSourceMode, serveMode, state, statusLabel, t, workspaceDisplayMode, workspaceSnapshotMode } from "./runtime.js";
+import { $, RENDER_OPTIONS, adminMode, closeOpenSubmenus, esc, fmtNum, listValue, normalizeServeSourceMode, serveMode, state, statusLabel, t, workspaceDisplayMode, workspaceSnapshotMode } from "./runtime.js";
 import { applyDataTableControls, bindDataTableControls, renderDataTable, selectionColumn, setVisibleSelection, tableCellContent, tableControls, tableValueAttributes } from "./data-tables.js";
 import { leaderboardSummaryDefinitions, leaderboardSummaryGroupHeading, leaderboardSummaryGroupUnit, leaderboardSummaryStatistics, leaderboardSummaryValue, renderLeaderboardSummary, summaryNumber } from "./leaderboard-summary.js";
 import { serveApi, setServeStatus } from "./serve-effects.js";
 import { leaderboardRows, loadCatalogPage, serveDownload } from "./serve-catalog.js";
 import { closeModalSurface, focusSoon, openModalSurface } from "./modal-surfaces.js";
 import { renderMarkdown } from "./markdown.js";
+import { createWorkspaceViewRepository } from "./workspace-view-repository.js";
+
+let liveWorkspaceViewRepository = null;
+
+function browserStorageAdapter() {
+  try {
+    return globalThis.localStorage || globalThis.window?.localStorage;
+  } catch (error) {
+    return {
+      getItem() { throw error; },
+      setItem() { throw error; },
+    };
+  }
+}
+
+function workspaceViewRepository() {
+  if (!serveMode()) return null;
+  if (!liveWorkspaceViewRepository) {
+    liveWorkspaceViewRepository = createWorkspaceViewRepository({
+      workspaceId: RENDER_OPTIONS?.workspace_id || "default",
+      storage: browserStorageAdapter(),
+      request: serveApi,
+    });
+  }
+  return liveWorkspaceViewRepository;
+}
 
 function workspaceViews() {
   return listValue(state.workspaceViews)
@@ -12,6 +38,8 @@ function workspaceViews() {
     .map(view => ({
       ...view,
       name: String(view.name),
+      origin: view.origin === "browser" ? "browser" : "server",
+      id: String(view.id || `${view.origin === "browser" ? "browser" : "server"}:${view.name}`),
       filters: workspaceViewFilters(view.filters),
       group_by: ["overall", "agent", "model", "category", "task", "job", "provider"].includes(view.group_by) ? view.group_by : "agent",
       notes: typeof view.notes === "string" ? view.notes : "",
@@ -39,19 +67,23 @@ function workspaceViewForName(name) {
   return workspaceViews().find(view => view.name === String(name || "")) || null;
 }
 
+function workspaceViewForId(id) {
+  return workspaceViews().find(view => view.id === String(id || "")) || null;
+}
+
 function workspaceViewSummaryForName(name) {
   return listValue(state.workspaceViewSummaries).find(view => view?.name === name) || null;
 }
 
 function workspaceViewColumns() {
-  const navigateAttrs = view => `data-view-navigate="${esc(view.name)}"${workspaceSnapshotMode() ? " tabindex=\"0\"" : ""}`;
-  const edit = (field, options = {}) => workspaceSnapshotMode() ? undefined : {
+  const navigateAttrs = view => `data-view-navigate="${esc(view.id)}"${workspaceSnapshotMode() ? " tabindex=\"0\"" : ""}`;
+  const edit = (field, options = {}) => workspaceSnapshotMode() ? undefined : view => (view.origin === "browser" || adminMode()) ? {
     value: view => workspaceViewEditValue(view, field),
     commit: (view, value) => commitWorkspaceViewCellEdit(view, field, value),
     ...options,
-  };
+  } : undefined;
   const columns = [
-    { key: "name", label: t("view_name", "Name"), valueType: "text", value: view => view.name, html: view => `<strong>${esc(view.name)}</strong>`, cellAttrs: navigateAttrs, edit: edit("name") },
+    { key: "name", label: t("view_name", "Name"), valueType: "text", value: view => view.name, html: view => `<strong>${esc(view.name)}</strong>${view.origin === "browser" ? `<span class="workspace-view-local-badge">${esc(t("view_local", "Local"))}</span>` : ""}`, cellAttrs: navigateAttrs, edit: edit("name") },
     { key: "categories", label: t("category", "Category"), valueType: "scalar-list", filterable: true, filterValues: view => view.filters.categories, value: view => view.filters.categories.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.categories), cellAttrs: navigateAttrs, edit: edit("categories", { suggestions: workspaceViewCategorySuggestions }) },
     { key: "tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: view => view.filters.tags, value: view => view.filters.tags.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.tags), cellAttrs: navigateAttrs, edit: edit("tags", { suggestions: workspaceViewTagSuggestions }) },
     { key: "models", label: t("model", "Models"), valueType: "list", filterable: true, filterValues: view => view.filters.models, value: view => view.filters.models.join(", ") || "-", html: view => renderWorkspaceViewValueList(view.filters.models), cellAttrs: navigateAttrs, edit: edit("models", { suggestions: workspaceViewModelSuggestions }) },
@@ -65,11 +97,11 @@ function workspaceViewColumns() {
   if (workspaceSnapshotMode()) return columns;
   return [
     selectionColumn({
-      selectionKey: view => view?.name || "",
+      selectionKey: view => view?.id || "",
       selectionSet: () => state.workspaceViewSelection,
-      rowInputAttr: name => `data-view-select="${esc(name)}"`,
+      rowInputAttr: id => `data-view-select="${esc(id)}"`,
       headerInputAttr: "data-view-select-visible",
-      rowAriaLabel: name => workspaceViewMessage("select_view", "Select {name}", { name }),
+      rowAriaLabel: id => workspaceViewMessage("select_view", "Select {name}", { name: workspaceViewForId(id)?.name || id }),
     }),
     ...columns,
   ];
@@ -130,9 +162,7 @@ function renderWorkspaceViewControls() {
   const reopen = state.workspaceViewsClosed && workspaceViews().length
     ? `<button type="button" class="action-button" data-workspace-views-open>${esc(t("saved_views", "Saved views"))}</button>`
     : "";
-  const save = serveMode()
-    ? `<button type="button" class="action-button leaderboard-summary-save" data-view-save ${compositeApplied ? `disabled title="${esc(t("clear_conditions_before_saving_view", "Clear applied views before saving a new view."))}"` : ""}>${esc(t("save_view", "Save view"))}</button>`
-    : "";
+  const save = `<button type="button" class="action-button leaderboard-summary-save" data-view-save ${compositeApplied || !state.workspaceViewsLoaded ? `disabled title="${esc(compositeApplied ? t("clear_conditions_before_saving_view", "Clear applied views before saving a new view.") : t("view_directory_required", "Load Saved Views before saving."))}"` : ""}>${esc(t("save_view", "Save view"))}</button>`;
   return reopen || save ? `<div class="workspace-view-controls" data-workspace-view-control>${reopen}${save}</div>` : "";
 }
 
@@ -144,7 +174,7 @@ function bindWorkspaceViewControls(target) {
     tableId: "workspace-views",
     columns,
     rows,
-    rowKey: view => view.name,
+    rowKey: view => view.id,
     onChange: renderWorkspaceViewRail,
   });
   target.querySelectorAll("[data-view-save]").forEach(button => {
@@ -189,9 +219,9 @@ function bindWorkspaceViewControls(target) {
   target.querySelectorAll("[data-view-select]").forEach(input => {
     input.addEventListener("click", event => event.stopPropagation());
     input.addEventListener("change", () => {
-      const name = String(input.dataset.viewSelect || "");
-      if (input.checked) state.workspaceViewSelection.add(name);
-      else state.workspaceViewSelection.delete(name);
+      const id = String(input.dataset.viewSelect || "");
+      if (input.checked) state.workspaceViewSelection.add(id);
+      else state.workspaceViewSelection.delete(id);
       renderWorkspaceViewRail();
     });
   });
@@ -233,7 +263,6 @@ function bindWorkspaceViewControls(target) {
 }
 
 function bindWorkspaceViewDialog() {
-  if (!serveMode()) return;
   const dialog = document.querySelector?.("[data-view-save-dialog]");
   if (!dialog || dialog.dataset?.bound === "true") return;
   if (dialog.dataset) dialog.dataset.bound = "true";
@@ -271,6 +300,10 @@ function openWorkspaceViewSaveDialog(opener) {
   }
   const notesInput = dialog.querySelector?.("[data-view-notes-input]");
   if (notesInput) notesInput.value = "";
+  const workspaceLocation = dialog.querySelector?.('[name="view_location"][value="workspace"]');
+  const browserLocation = dialog.querySelector?.('[name="view_location"][value="browser"]');
+  if (adminMode() && workspaceLocation) workspaceLocation.checked = true;
+  else if (browserLocation) browserLocation.checked = true;
   renderWorkspaceViewCurrentConfiguration(dialog);
 }
 
@@ -346,24 +379,26 @@ function workspaceViewFilterConfig(filters = currentWorkspaceViewFilters()) {
 async function saveWorkspaceView(dialog) {
   const name = String(dialog.querySelector?.("[data-view-name-input]")?.value || "").trim();
   const notes = String(dialog.querySelector?.("[data-view-notes-input]")?.value || "");
+  const requestedLocation = String(dialog.querySelector?.('[name="view_location"]:checked')?.value || "browser");
+  const location = adminMode() && requestedLocation === "workspace" ? "workspace" : "browser";
   const payload = {
     name,
     filters: workspaceViewFilterConfig(),
     group_by: state.leaderboardSummaryGroupBy,
     notes,
-    overwrite: false,
   };
   try {
-    let response;
+    const repository = workspaceViewRepository();
+    if (!repository) return;
     try {
-      response = await serveApi("/api/views", { method: "POST", body: payload });
+      await repository.save(payload, { location, overwrite: false });
     } catch (error) {
       if (!String(error?.message || error).includes("already exists")) throw error;
       const prompt = workspaceViewMessage("view_overwrite_confirm", "Replace the saved view {name}?", { name });
       if (typeof window.confirm === "function" && !window.confirm(prompt)) return;
-      response = await serveApi("/api/views", { method: "POST", body: { ...payload, overwrite: true } });
+      await repository.save(payload, { location, overwrite: true });
     }
-    state.workspaceViews = listValue(response?.views);
+    state.workspaceViews = repository.list();
     state.workspaceViewSummaries = [];
     state.workspaceViewsLoaded = true;
     state.workspaceViewsRefreshVersion += 1;
@@ -385,23 +420,32 @@ async function refreshWorkspaceViews() {
     while (state.workspaceViewsRefreshQueued) {
       state.workspaceViewsRefreshQueued = false;
       const revision = state.workspaceViewsRefreshVersion;
+      const appliedBefore = new Set(state.workspaceAppliedViewNames);
       try {
-        const catalog = await serveApi("/api/views");
+        const repository = workspaceViewRepository();
+        const views = repository ? await repository.refresh() : workspaceViews();
         if (revision !== state.workspaceViewsRefreshVersion) {
           state.workspaceViewsRefreshQueued = true;
           continue;
         }
-        const views = listValue(catalog?.views);
         let summaries = [];
         let generation = Number(state.catalogPage?.generation || 0);
         if (views.length) {
-          const summaryPayload = await serveApi("/api/views/summary");
+          const serverCount = views.filter(view => view.origin === "server").length;
+          const browserIds = views.filter(view => view.origin === "browser").map(view => view.id);
+          const [serverSummary, browserSummary] = await Promise.all([
+            serverCount ? serveApi("/api/views/summary") : Promise.resolve({ views: [] }),
+            browserIds.length ? serveApi("/api/views/summary", {
+              method: "POST",
+              body: { browser_views: repository.queryPayload(browserIds).browser_views },
+            }) : Promise.resolve({ views: [] }),
+          ]);
           if (revision !== state.workspaceViewsRefreshVersion) {
             state.workspaceViewsRefreshQueued = true;
             continue;
           }
-          summaries = listValue(summaryPayload?.views);
-          generation = Number(summaryPayload?.generation || 0);
+          summaries = [...listValue(serverSummary?.views), ...listValue(browserSummary?.views)];
+          generation = Number(serverSummary?.generation || browserSummary?.generation || 0);
         }
         state.workspaceViews = views;
         state.workspaceViewSummaries = summaries;
@@ -410,8 +454,23 @@ async function refreshWorkspaceViews() {
         pruneWorkspaceViewState();
         renderWorkspaceViewRail();
         if ($("leaderboard-summary")) renderLeaderboardSummary(leaderboardRows());
+        if (Array.from(appliedBefore).some(id => !state.workspaceAppliedViewNames.has(id))) {
+          if (state.workspaceAppliedViewNames.size) await reloadAppliedWorkspaceViews();
+          else await clearWorkspaceViewConditions();
+        }
       } catch (error) {
-        if (revision === state.workspaceViewsRefreshVersion) setServeStatus(error.message || String(error), true);
+        if (revision === state.workspaceViewsRefreshVersion) {
+          const repository = workspaceViewRepository();
+          state.workspaceViews = repository?.list() || [];
+          state.workspaceViewsLoaded = Boolean(repository?.ready());
+          pruneWorkspaceViewState();
+          renderWorkspaceViewRail();
+          if (Array.from(appliedBefore).some(id => !state.workspaceAppliedViewNames.has(id))) {
+            if (state.workspaceAppliedViewNames.size) await reloadAppliedWorkspaceViews();
+            else await clearWorkspaceViewConditions();
+          }
+          setServeStatus(error.message || String(error), true);
+        }
       }
     }
   })().finally(() => {
@@ -423,19 +482,19 @@ async function refreshWorkspaceViews() {
 }
 
 function pruneWorkspaceViewState() {
-  const names = new Set(workspaceViews().map(view => view.name));
+  const ids = new Set(workspaceViews().map(view => view.id));
   state.workspaceViewTableOpen = new Set(
-    Array.from(state.workspaceViewTableOpen).filter(name => names.has(name))
+    Array.from(state.workspaceViewTableOpen).filter(id => ids.has(id))
   );
   state.workspaceViewSelection = new Set(
-    Array.from(state.workspaceViewSelection).filter(name => names.has(name))
+    Array.from(state.workspaceViewSelection).filter(id => ids.has(id))
   );
   state.workspaceAppliedViewNames = new Set(
-    Array.from(state.workspaceAppliedViewNames).filter(name => names.has(name))
+    Array.from(state.workspaceAppliedViewNames).filter(id => ids.has(id))
   );
-  state.catalogQuery.views = workspaceViews()
-    .filter(view => state.workspaceAppliedViewNames.has(view.name))
-    .map(view => view.name);
+  state.catalogQuery.views = workspaceViewQueryPayload(
+    Array.from(state.workspaceAppliedViewNames)
+  ).views;
 }
 
 function renderWorkspaceViewRail() {
@@ -504,35 +563,43 @@ function openWorkspaceViewRail() {
 }
 
 function renderWorkspaceViewIndex(views = workspaceViewRows(), allViews = workspaceViews()) {
-  const selectedCount = allViews.filter(view => state.workspaceViewSelection.has(view.name)).length;
+  const selected = allViews.filter(view => state.workspaceViewSelection.has(view.id));
+  const selectedCount = selected.length;
+  const localDeleteCount = selected.filter(view => view.origin === "browser").length;
+  const deleteCount = adminMode() ? selectedCount : localDeleteCount;
+  const deleteLabel = adminMode()
+    ? t("delete_views", "Delete")
+    : workspaceViewMessage("delete_local_views", "Delete local ({count})", { count: localDeleteCount });
   return `<section class="workspace-view-index" aria-label="${esc(t("saved_views", "Saved views"))}">
     ${serveMode() ? `<div class="workspace-view-index-toolbar">
       <span data-view-selection-count aria-live="polite">${esc(workspaceViewMessage("views_selected_count", "{count} selected", { count: selectedCount }))}</span>
       <div class="workspace-view-index-actions">
         <button type="button" class="action-button" data-view-apply-selected ${selectedCount ? "" : "disabled"}>${esc(t("apply", "Apply"))}</button>
         <button type="button" class="action-button" data-view-export-selected ${selectedCount ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>
-        <button type="button" class="action-button danger" data-view-delete-selected ${selectedCount ? "" : "disabled"}>${esc(t("delete_views", "Delete"))}</button>
+        <button type="button" class="action-button danger" data-view-delete-selected ${deleteCount ? "" : "disabled"}>${esc(deleteLabel)}</button>
       </div>
     </div>` : ""}
     ${renderDataTable({
       tableId: "workspace-views",
       columns: workspaceViewColumns(),
       rows: views,
-      rowKey: view => view.name,
+      rowKey: view => view.id,
       filterOptionsRows: allViews,
       tableClass: "workspace-view-index-table",
       shellClass: "workspace-view-index-shell",
-      rowClass: view => `${state.workspaceViewSelection.has(view.name) ? "selected " : ""}${state.workspaceAppliedViewNames.has(view.name) ? "applied" : ""}`,
-      rowAttrs: view => `data-view-index-row="${esc(view.name)}"`,
+      rowClass: view => `${state.workspaceViewSelection.has(view.id) ? "selected " : ""}${state.workspaceAppliedViewNames.has(view.id) ? "applied" : ""}`,
+      rowAttrs: view => `data-view-index-row="${esc(view.id)}"`,
     })}
   </section>`;
 }
 
 function syncWorkspaceViewIndexActions(target = $("workspace-views")) {
-  const count = workspaceViews().filter(view => state.workspaceViewSelection.has(view.name)).length;
-  target?.querySelectorAll?.("[data-view-apply-selected],[data-view-export-selected],[data-view-delete-selected]").forEach(button => {
-    button.disabled = count < 1;
-  });
+  const selected = workspaceViews().filter(view => state.workspaceViewSelection.has(view.id));
+  const count = selected.length;
+  target?.querySelectorAll?.("[data-view-apply-selected],[data-view-export-selected]").forEach(button => { button.disabled = count < 1; });
+  const deletable = adminMode() ? count : selected.filter(view => view.origin === "browser").length;
+  const deleteButton = target?.querySelector?.("[data-view-delete-selected]");
+  if (deleteButton) deleteButton.disabled = deletable < 1;
   const label = target?.querySelector?.("[data-view-selection-count]");
   if (label) label.textContent = workspaceViewMessage("views_selected_count", "{count} selected", { count });
 }
@@ -541,8 +608,8 @@ function renderWorkspaceViewCard(view) {
   const summary = workspaceViewSummaryForName(view.name) || { matched_count: 0, groups: [] };
   const matchedCount = Number(summary.matched_count || 0);
   const filters = workspaceViewFilters(view.filters);
-  const applied = state.workspaceAppliedViewNames.has(view.name);
-  return `<article class="workspace-view-card leaderboard-summary${applied ? " applied" : ""}" data-workspace-view="${esc(view.name)}" tabindex="-1">
+  const applied = state.workspaceAppliedViewNames.has(view.id);
+  return `<article class="workspace-view-card leaderboard-summary${applied ? " applied" : ""}" data-workspace-view="${esc(view.id)}" tabindex="-1">
     <header class="workspace-view-card-head panel-head leaderboard-summary-head">
       <div><h3>${esc(view.name)}</h3><p>${esc(workspaceViewMessage("saved_view_matches", "{count} matching sessions", { count: fmtNum(matchedCount) }))}</p></div>
     </header>
@@ -667,9 +734,63 @@ function workspaceViewConfigurationEditValue(view, field, value) {
   return workspaceViewConfigurationYaml(next);
 }
 
-function navigateToWorkspaceView(name) {
+function parseWorkspaceViewOtherConditions(value) {
+  const filters = {};
+  let listKey = null;
+  String(value || "").split(/\r?\n/).forEach((rawLine, index) => {
+    const line = rawLine.trim();
+    if (!line) return;
+    const listMatch = line.match(/^([a-z_]+):$/);
+    if (listMatch) {
+      listKey = listMatch[1];
+      if (!["agents", "results"].includes(listKey)) throw new Error(`Unsupported condition on line ${index + 1}.`);
+      filters[listKey] = [];
+      return;
+    }
+    const itemMatch = line.match(/^-\s+(.+)$/);
+    if (itemMatch && listKey) {
+      let parsed;
+      try { parsed = JSON.parse(itemMatch[1]); } catch { parsed = itemMatch[1]; }
+      if (typeof parsed !== "string") throw new Error(`Condition value on line ${index + 1} must be text.`);
+      filters[listKey].push(parsed);
+      return;
+    }
+    const scalarMatch = line.match(/^(state|search):\s*(.*)$/);
+    if (!scalarMatch) throw new Error(`Unsupported condition on line ${index + 1}.`);
+    listKey = null;
+    let parsed;
+    try { parsed = JSON.parse(scalarMatch[2]); } catch { parsed = scalarMatch[2]; }
+    if (typeof parsed !== "string") throw new Error(`Condition value on line ${index + 1} must be text.`);
+    filters[scalarMatch[1]] = parsed;
+  });
+  return filters;
+}
+
+function workspaceViewEditedDefinition(view, field, value) {
+  const next = {
+    name: view.name,
+    filters: workspaceViewFilters(view.filters),
+    group_by: view.group_by,
+    notes: view.notes,
+  };
+  if (field === "categories") next.filters.categories = workspaceViewScalarValues(value);
+  if (["tags", "models", "tasks", "jobs", "providers"].includes(field)) {
+    next.filters[field] = Array.isArray(value) ? value : workspaceViewCommaValues(value);
+  }
+  if (field === "group_by") next.group_by = value;
+  if (field === "other_conditions") {
+    const parsed = parseWorkspaceViewOtherConditions(value);
+    next.filters.state = parsed.state || "active";
+    next.filters.search = parsed.search || "";
+    next.filters.agents = listValue(parsed.agents);
+    next.filters.results = listValue(parsed.results);
+  }
+  return { ...next, filters: workspaceViewFilterConfig(next.filters) };
+}
+
+function navigateToWorkspaceView(id) {
   const card = Array.from($("workspace-views")?.querySelectorAll?.("[data-workspace-view]") || [])
-    .find(item => item.dataset?.workspaceView === String(name || ""));
+    .find(item => item.dataset?.workspaceView === String(id || ""));
   if (!card) return;
   card.scrollIntoView?.({ behavior: "smooth", block: "start" });
   card.focus?.({ preventScroll: true });
@@ -678,21 +799,33 @@ function navigateToWorkspaceView(name) {
 }
 
 async function commitWorkspaceViewCellEdit(view, field, value) {
-  const name = String(view?.name || "");
-  if (!name || !["name", "categories", "tags", "models", "tasks", "jobs", "providers", "group_by", "other_conditions", "notes"].includes(field)) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
-  const appliedBefore = state.workspaceAppliedViewNames.has(name);
+  const id = String(view?.id || "");
+  if (!id || (view.origin !== "browser" && !adminMode()) || !["name", "categories", "tags", "models", "tasks", "jobs", "providers", "group_by", "other_conditions", "notes"].includes(field)) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
+  const appliedBefore = state.workspaceAppliedViewNames.has(id);
   try {
-    const currentView = workspaceViewForName(name) || view;
+    const repository = workspaceViewRepository();
+    if (!repository) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
+    const currentView = workspaceViewForId(id) || view;
     const configurationField = ["categories", "tags", "models", "tasks", "jobs", "providers", "group_by", "other_conditions"].includes(field);
     const wireField = configurationField ? "configuration" : field;
-    const wireValue = configurationField ? workspaceViewConfigurationEditValue(currentView, field, value) : value;
-    const response = await serveApi("/api/views/update", {
-      method: "POST",
-      body: { name, field: wireField, value: wireValue },
-    });
-    const updatedName = String(response?.view?.name || name);
-    if (updatedName !== name) replaceWorkspaceViewStateName(name, updatedName);
-    state.workspaceViews = listValue(response?.views);
+    const definition = configurationField
+      ? workspaceViewEditedDefinition(currentView, field, value)
+      : null;
+    const wireValue = configurationField
+      ? (currentView.origin === "browser" ? definition : workspaceViewConfigurationYaml(definition))
+      : value;
+    let updated;
+    try {
+      updated = await repository.update(id, { field: wireField, value: wireValue });
+    } catch (error) {
+      if (currentView.origin !== "browser" || !String(error?.message || error).includes("already exists")) throw error;
+      const nextName = field === "name" ? String(value || "").trim() : currentView.name;
+      const prompt = workspaceViewMessage("view_overwrite_confirm", "Replace the saved view {name}?", { name: nextName });
+      if (typeof window.confirm === "function" && !window.confirm(prompt)) throw error;
+      updated = await repository.update(id, { field: wireField, value: wireValue, overwrite: true });
+    }
+    if (updated.id !== id) replaceWorkspaceViewStateName(id, updated.id);
+    state.workspaceViews = repository.list();
     state.workspaceViewSummaries = [];
     state.workspaceViewsLoaded = true;
     state.workspaceViewsRefreshVersion += 1;
@@ -700,8 +833,9 @@ async function commitWorkspaceViewCellEdit(view, field, value) {
     await refreshWorkspaceViews();
     if (appliedBefore) await reloadAppliedWorkspaceViews();
     setServeStatus(t("view_updated", "View updated"));
-    return { rowKey: updatedName };
+    return { rowKey: updated.id };
   } catch (error) {
+    if (error?.status === 409) await refreshWorkspaceViews();
     setServeStatus(error.message || String(error), true);
     throw error;
   }
@@ -716,26 +850,28 @@ function replaceWorkspaceViewStateName(previousName, nextName) {
 }
 
 async function deleteSelectedWorkspaceViews() {
-  const names = selectedWorkspaceViewNames();
-  if (!names.length) return;
+  const selectedIds = selectedWorkspaceViewIds();
+  const ids = adminMode()
+    ? selectedIds
+    : selectedIds.filter(id => workspaceViewForId(id)?.origin === "browser");
+  if (!ids.length) return;
   const prompt = workspaceViewMessage(
     "view_delete_confirm",
     "Permanently delete {count} selected views?",
-    { count: names.length },
+    { count: ids.length },
   );
   if (typeof window.confirm === "function" && !window.confirm(prompt)) return;
-  const appliedChanged = names.some(name => state.workspaceAppliedViewNames.has(name));
+  const appliedChanged = ids.some(id => state.workspaceAppliedViewNames.has(id));
   try {
-    const response = await serveApi("/api/views/delete", {
-      method: "POST",
-      body: { names },
+    const repository = workspaceViewRepository();
+    if (!repository) return;
+    await repository.delete(ids);
+    ids.forEach(id => {
+      state.workspaceViewSelection.delete(id);
+      state.workspaceAppliedViewNames.delete(id);
+      state.workspaceViewTableOpen.delete(id);
     });
-    names.forEach(name => {
-      state.workspaceViewSelection.delete(name);
-      state.workspaceAppliedViewNames.delete(name);
-      state.workspaceViewTableOpen.delete(name);
-    });
-    state.workspaceViews = listValue(response?.views);
+    state.workspaceViews = repository.list();
     state.workspaceViewSummaries = [];
     state.workspaceViewsLoaded = true;
     state.workspaceViewsRefreshVersion += 1;
@@ -768,13 +904,13 @@ function workspaceViewGroupLabel(group, groupBy) {
 }
 
 function renderWorkspaceViewTableDisclosure(view, summary) {
-  const open = state.workspaceViewTableOpen.has(view.name);
+  const open = state.workspaceViewTableOpen.has(view.id);
   const groups = listValue(summary.groups);
   const unit = leaderboardSummaryGroupUnit(view.group_by);
   const description = `${leaderboardSummaryDefinitions().length} ${t("summary_metrics", "metrics")} · ${groups.length} ${unit}`;
-  const regionId = `workspace-view-table-${encodeURIComponent(view.name)}`;
+  const regionId = `workspace-view-table-${encodeURIComponent(view.id)}`;
   return `<div class="leaderboard-summary-table-disclosure workspace-view-table-disclosure">
-    <button type="button" class="leaderboard-summary-table-toggle" data-view-table-toggle="${esc(view.name)}" aria-expanded="${open}" aria-controls="${esc(regionId)}">
+    <button type="button" class="leaderboard-summary-table-toggle" data-view-table-toggle="${esc(view.id)}" aria-expanded="${open}" aria-controls="${esc(regionId)}">
       <span><strong>${esc(t(open ? "summary_hide_table" : "summary_show_table", open ? "Hide summary table" : "Show summary table"))}</strong><small>${esc(description)}</small></span>
       <i aria-hidden="true">${open ? "−" : "+"}</i>
     </button>
@@ -796,11 +932,11 @@ function renderWorkspaceViewTable(summary, groupBy) {
   </table></div></div>`;
 }
 
-function toggleWorkspaceViewTable(name) {
-  const view = workspaceViewForName(name);
+function toggleWorkspaceViewTable(id) {
+  const view = workspaceViewForId(id);
   if (!view) return;
-  if (state.workspaceViewTableOpen.has(view.name)) state.workspaceViewTableOpen.delete(view.name);
-  else state.workspaceViewTableOpen.add(view.name);
+  if (state.workspaceViewTableOpen.has(view.id)) state.workspaceViewTableOpen.delete(view.id);
+  else state.workspaceViewTableOpen.add(view.id);
   renderWorkspaceViewRail();
 }
 
@@ -829,30 +965,54 @@ function renderWorkspaceViewChart(definition, groups, statistic, groupBy) {
   }).join("")}</div></section>`;
 }
 
-function selectedWorkspaceViewNames() {
+function selectedWorkspaceViewIds() {
   return workspaceViews()
-    .filter(view => state.workspaceViewSelection.has(view.name))
-    .map(view => view.name);
+    .filter(view => state.workspaceViewSelection.has(view.id))
+    .map(view => view.id);
+}
+
+function selectedWorkspaceViewNames() {
+  return selectedWorkspaceViewIds().map(id => workspaceViewForId(id)?.name).filter(Boolean);
+}
+
+function workspaceViewQueryPayload(ids = Array.from(state.workspaceAppliedViewNames)) {
+  const repository = workspaceViewRepository();
+  if (repository?.ready()) return repository.queryPayload(ids);
+  const selected = workspaceViews().filter(view => ids.includes(view.id));
+  return {
+    views: selected.length
+      ? selected.filter(view => view.origin === "server").map(view => view.name)
+      : listValue(state.catalogQuery?.views).map(String),
+    browser_views: selected
+      .filter(view => view.origin === "browser")
+      .map(view => ({ name: view.name, filters: workspaceViewFilterConfig(view.filters), group_by: view.group_by, notes: view.notes })),
+  };
+}
+
+function browserWorkspaceViewDefinitions() {
+  return workspaceViews()
+    .filter(view => view.origin === "browser")
+    .map(view => ({ name: view.name, filters: workspaceViewFilterConfig(view.filters), group_by: view.group_by, notes: view.notes }));
 }
 
 function exportSelectedWorkspaceViews() {
-  const names = selectedWorkspaceViewNames();
-  if (!serveMode() || !names.length) return;
+  const ids = selectedWorkspaceViewIds();
+  if (!serveMode() || !ids.length) return;
+  const payload = workspaceViewQueryPayload(ids);
   return serveDownload("summary_xlsx", {
     kind: "summary_xlsx",
-    summary: { scope: "saved_views", views: names }
+    summary: { scope: "saved_views", ...payload }
   }, "peval-saved-views.xlsx");
 }
 
 function appliedWorkspaceViewNames() {
-  return workspaceViews()
-    .filter(view => state.workspaceAppliedViewNames.has(view.name))
-    .map(view => view.name);
+  return workspaceViewQueryPayload(Array.from(state.workspaceAppliedViewNames)).views;
 }
 
 async function applySelectedWorkspaceViews() {
-  const names = selectedWorkspaceViewNames();
-  if (!names.length || !serveMode()) return;
+  const ids = selectedWorkspaceViewIds();
+  if (!ids.length || !serveMode()) return;
+  const payload = workspaceViewQueryPayload(ids);
   closeOpenSubmenus();
   state.rowSelection.clear();
   state.sourceSelection.clear();
@@ -860,7 +1020,7 @@ async function applySelectedWorkspaceViews() {
   state.selectedArtifactRevision = null;
   state.selectedTrial = null;
   state.selectedStep = null;
-  state.workspaceAppliedViewNames = new Set(names);
+  state.workspaceAppliedViewNames = new Set(ids);
   state.search.query = "";
   state.search.scope = "all";
   state.search.normalSourceMode = "all";
@@ -893,15 +1053,16 @@ async function applySelectedWorkspaceViews() {
     jobs: [],
     providers: [],
     results: [],
-    views: names,
+    views: payload.views,
   }, { force: true });
 }
 
 async function reloadAppliedWorkspaceViews() {
-  const names = appliedWorkspaceViewNames();
-  state.catalogQuery.views = names;
-  if (!names.length) return;
-  await loadCatalogPage({ page: 1, views: names }, { force: true });
+  const ids = Array.from(state.workspaceAppliedViewNames);
+  const payload = workspaceViewQueryPayload(ids);
+  state.catalogQuery.views = payload.views;
+  if (!ids.length) return;
+  await loadCatalogPage({ page: 1, views: payload.views }, { force: true });
 }
 
 async function clearWorkspaceViewConditions() {
@@ -952,7 +1113,7 @@ async function clearWorkspaceViewConditions() {
 async function applyWorkspaceView(name) {
   const view = workspaceViewForName(name);
   if (!view) return;
-  state.workspaceViewSelection = new Set([view.name]);
+  state.workspaceViewSelection = new Set([view.id]);
   return applySelectedWorkspaceViews();
 }
 
@@ -963,6 +1124,7 @@ export {
   appliedWorkspaceViewNames,
   applySelectedWorkspaceViews,
   applyWorkspaceView,
+  browserWorkspaceViewDefinitions,
   bindWorkspaceViewControls,
   bindWorkspaceViewDialog,
   cancelWorkspaceViewApplication,
@@ -994,6 +1156,7 @@ export {
   replaceWorkspaceViewStateName,
   restoreWorkspaceViewScrollState,
   saveWorkspaceView,
+  selectedWorkspaceViewIds,
   selectedWorkspaceViewNames,
   syncWorkspaceViewIndexActions,
   toggleWorkspaceViewTable,
@@ -1007,6 +1170,7 @@ export {
   workspaceViewEditValue,
   workspaceViewFilterConfig,
   workspaceViewFilters,
+  workspaceViewForId,
   workspaceViewForName,
   workspaceViewGroupByLabel,
   workspaceViewGroupLabel,
@@ -1015,6 +1179,7 @@ export {
   workspaceViewOtherConditionsParts,
   workspaceViewOtherConditionsYaml,
   workspaceViewRows,
+  workspaceViewQueryPayload,
   workspaceViewScalarValues,
   workspaceViewStateLabel,
   workspaceViewSummaryForName,

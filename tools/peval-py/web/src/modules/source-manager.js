@@ -1,4 +1,4 @@
-import { esc, fmtDate, renderReadOnlySourceCategory, renderReadOnlySourceTags, serveMode, sourceCategoryEditValue, sourceCategoryValue, sourceTagsEditValue, sourceTagsValue, state, t } from "./runtime.js";
+import { adminMode, esc, fmtDate, renderReadOnlySourceCategory, renderReadOnlySourceTags, serveMode, sourceCategoryEditValue, sourceCategoryValue, sourceTagsEditValue, sourceTagsValue, state, t } from "./runtime.js";
 import { bindDataTableControls, renderDataTable, tableCellContent, tableValueAttributes } from "./data-tables.js";
 import { applyDefaultDbToForm, syncAdapterDefaultDbControls } from "./serve-controls.js";
 import { commitSourceCellEdit, existingSourceCategoryOptions, existingSourceTagOptions, formPayload, selectedAdapterValue, serveApi, setAdapterChoice, setServeStatus, showServeNotice } from "./serve-effects.js";
@@ -138,6 +138,7 @@ function renderServeSourceAliasCell(source) {
   return alias ? esc(alias) : `<span class="muted">-</span>`;
 }
 async function choosePathSourceFiles(button) {
+  if (!adminMode()) return;
   const form = button?.closest?.("[data-source-add-form]");
   const field = form?.querySelector?.("[name=\"path\"]");
   if (!field) return;
@@ -224,6 +225,7 @@ function bindSourceSelectionControls(root) {
   });
 }
 async function submitServeSourceForm(form) {
+  if (!adminMode()) return;
   if (form?.dataset?.sourceKind === "db") applyDefaultDbToForm(form);
   const body = formPayload(form);
   const kind = form.dataset.sourceKind;
@@ -256,6 +258,7 @@ function showImportResultsSummary(payload) {
   setServeStatus(message, failed > 0);
 }
 async function inspectDbSessions(form) {
+  if (!adminMode()) return;
   if (!form) return;
   applyDefaultDbToForm(form);
   const body = formPayload(form);
@@ -349,6 +352,7 @@ function updateDbSelectedCount(picker) {
   if (addButton) addButton.disabled = count < 1;
 }
 async function addSelectedDbSessions(form) {
+  if (!adminMode()) return;
   if (!form) return;
   const sessionIds = selectedDbSessionIds(form);
   if (!sessionIds.length) {
@@ -396,6 +400,7 @@ function harborMountPayload(form) {
   };
 }
 async function submitHarborMountForm(form) {
+  if (!adminMode()) return;
   try {
     setServeStatus(t("serve_save_harbor_mount", "Save mount"));
     await serveApi("/api/config/harbor-mount", {
@@ -409,6 +414,7 @@ async function submitHarborMountForm(form) {
   }
 }
 async function removeHarborMount(form) {
+  if (!adminMode()) return;
   const originalId = String(new FormData(form).get("original_id") || "").trim();
   if (!originalId || !window.confirm(t("serve_remove_harbor_mount_confirm", "Remove this Harbor mount from peval-py configuration?"))) return;
   try {

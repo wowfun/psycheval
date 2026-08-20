@@ -8,7 +8,7 @@
         <button class="action-button compact" type="button" data-report-manager-close aria-label="__CLOSE__">__CLOSE__</button>
       </header>
       <p class="report-manager-status" data-report-manager-status aria-live="polite" hidden></p>
-      <div class="report-manager-body">
+      <div class="report-manager-body__REPORT_MANAGER_BODY_CLASS__">
         <section class="report-inventory-panel" aria-labelledby="report-inventory-title">
           <div class="report-manager-section-head">
             <h3 id="report-inventory-title">__REPORT_INVENTORY__</h3>
@@ -16,7 +16,7 @@
           </div>
           <div class="report-inventory" data-report-inventory></div>
         </section>
-        <section class="report-bindings-panel" aria-labelledby="report-bindings-title">
+        <section class="report-bindings-panel" aria-labelledby="report-bindings-title"__REPORT_BINDINGS_HIDDEN__>
           <h3 id="report-bindings-title">__REPORT_BINDINGS__</h3>
           <div data-report-bindings></div>
         </section>
@@ -24,27 +24,4 @@
     </section>
   </div>
   <aside class="report-reader" id="workspace-report-reader" hidden data-serve-only></aside>
-  <div class="view-save-backdrop" data-view-save-dialog hidden data-serve-only>
-    <section class="view-save-dialog" role="dialog" aria-modal="true" aria-labelledby="view-save-title">
-      <header class="view-save-head">
-        <h2 id="view-save-title">__SAVE_VIEW__</h2>
-        <button type="button" class="action-button compact" data-view-save-cancel aria-label="__CANCEL__">__CANCEL__</button>
-      </header>
-      <form data-view-save-form>
-        <section class="view-current-configuration" aria-labelledby="view-current-configuration-title">
-          <h3 id="view-current-configuration-title">__VIEW_CURRENT_CONFIGURATION__</h3>
-          <dl data-view-current-configuration></dl>
-        </section>
-        <label>__VIEW_NAME__
-          <input name="name" autocomplete="off" required maxlength="120" data-view-name-input>
-        </label>
-        <label>__VIEW_NOTES__
-          <textarea name="notes" rows="7" data-view-notes-input></textarea>
-        </label>
-        <div class="view-save-actions">
-          <button type="button" class="action-button" data-view-save-cancel>__CANCEL__</button>
-          <button type="submit" class="action-button primary">__SAVE__</button>
-        </div>
-      </form>
-    </section>
-  </div>
+  __VIEW_SAVE_DIALOG__

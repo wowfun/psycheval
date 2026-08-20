@@ -1,4 +1,4 @@
-import { currentServeSourceMode, data, listValue, normalizeServeSourceMode, readableServeSources, selectedKey, serveMode, sourceTagsFromValue, state, t } from "./runtime.js";
+import { adminMode, authenticationEnabled, currentServeSourceMode, data, listValue, normalizeServeSourceMode, readableServeSources, selectedKey, serveMode, sourceTagsFromValue, state, t } from "./runtime.js";
 import { sourceBulkStateTarget } from "./source-manager.js";
 import { applyLeaderboardSearchMode, applyServeMutationPayload, applyServeSourceStateMutationPayload, refreshSourceCategoryOptions, sourceRows, sourceSelectionKeys } from "./serve-catalog.js";
 
@@ -12,6 +12,7 @@ function formPayload(form) {
   return body;
 }
 async function mutateSelectedServeSourceState() {
+  if (!adminMode()) return;
   const rows = sourceRows();
   const sourceKeys = sourceSelectionKeys(rows);
   if (!sourceKeys.length) return;
@@ -91,7 +92,7 @@ function existingSourceCategoryOptions() {
 }
 async function commitSourceCellEdit(row, field, value) {
   const sourceKey = row?.source_key;
-  if (!serveMode() || !sourceKey || !["alias", "category", "tags"].includes(field)) throw new Error(t("source_edit_unavailable", "Source editing is unavailable"));
+  if (!adminMode() || !sourceKey || !["alias", "category", "tags"].includes(field)) throw new Error(t("source_edit_unavailable", "Source editing is unavailable"));
   const action = field;
   const body = action === "category"
     ? { category: String(value || "").trim() }
@@ -151,6 +152,11 @@ function emptyServeReport() {
     trajectory_meta: []
   };
 }
+function reloadExpiredAdminSession(response) {
+  if (response?.status !== 403 || !adminMode() || !authenticationEnabled()) return false;
+  window.location.reload();
+  return true;
+}
 async function serveApi(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   let body = options.body;
@@ -165,9 +171,24 @@ async function serveApi(path, options = {}) {
     credentials: "same-origin"
   });
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : {};
+  if (!response.ok) reloadExpiredAdminSession(response);
+  let payload = {};
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch (cause) {
+      const message = response.ok
+        ? t("serve_invalid_json_response", "Server returned an invalid JSON response")
+        : response.statusText || `HTTP ${response.status}`;
+      const error = new Error(message, { cause });
+      error.status = response.status;
+      throw error;
+    }
+  }
   if (!response.ok) {
-    throw new Error(payload?.error || response.statusText);
+    const error = new Error(payload?.error || response.statusText);
+    error.status = response.status;
+    throw error;
   }
   return payload;
 }
@@ -217,6 +238,7 @@ export {
   mutateSelectedServeSourceState,
   normalizeAdapterValue,
   readableSourceKey,
+  reloadExpiredAdminSession,
   reportHasTrialKey,
   selectedAdapterValue,
   serveApi,
