@@ -96,7 +96,9 @@ def catalog_post_query_payload(
             search=_string_value(value.get("search"), "query search"),
             sort=_required_text(value.get("sort"), "query sort"),
             direction=_required_text(value.get("direction"), "query direction"),
-            categories=tuple(_string_array(value.get("categories"), "query categories")),
+            categories=tuple(
+                _string_array(value.get("categories"), "query categories")
+            ),
             tags=tuple(_string_array(value.get("tags"), "query tags")),
             agents=tuple(_string_array(value.get("agents"), "query agents")),
             models=tuple(_string_array(value.get("models"), "query models")),

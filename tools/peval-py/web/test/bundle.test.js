@@ -5,7 +5,23 @@ import { pathToFileURL } from "node:url";
 import { REPORT_BUNDLE_PATH } from "../scripts/report-bundle.mjs";
 import { installBrowserDom } from "./support/browser.js";
 
-function reportShell(mode, workspaceSnapshot = null) {
+function reportShell(mode, workspaceSnapshot = null, renderOptions = {}) {
+  const options = { mode, sources: [], ...renderOptions };
+  const datasetPage = options.serve_page === "datasets" ? `
+    <section data-harbor-workbench>
+      <button data-harbor-reload>Reload</button>
+      <input data-harbor-search type="search">
+      <span data-harbor-overview-count></span>
+      <div data-harbor-overview></div>
+      <h2 data-harbor-selected-title></h2>
+      <span data-harbor-selected-meta></span>
+      <p data-harbor-workbench-status hidden></p>
+      <div data-harbor-file-tree></div>
+      <strong data-harbor-editor-path></strong>
+      <span data-harbor-editor-meta></span>
+      <textarea data-harbor-editor disabled></textarea>
+      <div data-harbor-diagnostics></div>
+    </section>` : "";
   return `
     <main>
       <section id="report-notes"></section>
@@ -16,11 +32,12 @@ function reportShell(mode, workspaceSnapshot = null) {
     <aside id="step-drawer" hidden></aside>
     <strong data-source-count></strong>
     <span data-source-status></span>
+    ${datasetPage}
     <script type="application/json" id="peval-py-data">{"trajectory":[],"trajectory_meta":[],"annotations":{}}</script>
     <script type="application/json" id="peval-py-token-estimates">{}</script>
     <script type="application/json" id="peval-py-i18n">{}</script>
     ${workspaceSnapshot === null ? "" : `<script type="application/json" id="peval-py-workspace-snapshot">${JSON.stringify(workspaceSnapshot)}</script>`}
-    <script type="application/json" id="peval-py-render-options">{"mode":"${mode}","sources":[]}</script>
+    <script type="application/json" id="peval-py-render-options">${JSON.stringify(options)}</script>
   `;
 }
 
@@ -93,6 +110,31 @@ test("committed ESM bundle starts the serve catalog and detail flow", async () =
     assert.ok(requests.some(url => url.startsWith("/api/report?source_key=source-one")));
     assert.ok(requests.includes("/api/views"));
     assert.ok(requests.includes("/api/reports"));
+  } finally {
+    browser.cleanup();
+  }
+});
+
+test("committed ESM bundle starts Datasets without requesting the Leaderboard catalog", async () => {
+  const requests = [];
+  const browser = installBrowserDom(reportShell("serve", null, {
+    serve_page: "datasets",
+    role: "guest",
+  }), {
+    fetch: async input => {
+      const url = String(input);
+      requests.push(url);
+      if (url === "/api/harbor/datasets") {
+        return new Response(JSON.stringify({ datasets: [] }));
+      }
+      throw new Error(`unexpected request: ${url}`);
+    },
+  });
+  try {
+    await import(`${pathToFileURL(REPORT_BUNDLE_PATH).href}?datasets-smoke=${Date.now()}`);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(requests, ["/api/harbor/datasets"]);
+    assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 0);
   } finally {
     browser.cleanup();
   }

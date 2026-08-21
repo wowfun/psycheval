@@ -3,13 +3,11 @@ import { bindDataTableControls, renderDataTable, tableCellContent, tableValueAtt
 import { applyDefaultDbToForm, syncAdapterDefaultDbControls } from "./serve-controls.js";
 import { commitSourceCellEdit, existingSourceCategoryOptions, existingSourceTagOptions, formPayload, selectedAdapterValue, serveApi, setAdapterChoice, setServeStatus, showServeNotice } from "./serve-effects.js";
 import { applyServeMutationPayload, bindSourceManagerPagination, pruneSourceSelection, renderSourceManagerPagination, sourceRows, sourceSelectionKeys } from "./serve-catalog.js";
-import { closeModalSurface } from "./modal-surfaces.js";
 
 const selectedSourceRows = new Map();
 
 function closeServeSourceManager(options = {}) {
-  const manager = document.querySelector("[data-source-manager]");
-  return closeModalSurface(manager, options);
+  return false;
 }
 function renderServeSources() {
   if (!serveMode()) return;
@@ -390,12 +388,12 @@ function harborMountPayload(form) {
   const formData = new FormData(form);
   return {
     action: "upsert",
+    expected_revision: String(formData.get("expected_revision") || "").trim(),
     original_id: String(formData.get("original_id") || "").trim(),
     mount_id: String(formData.get("mount_id") || "").trim(),
     jobs_path: String(formData.get("jobs_path") || "").trim(),
-    task_paths: String(formData.get("task_paths") || "")
-      .split(/\r?\n/)
-      .map(value => value.trim())
+    dataset_ids: formData.getAll("dataset_ids")
+      .map(value => String(value).trim())
       .filter(Boolean)
   };
 }
@@ -421,7 +419,11 @@ async function removeHarborMount(form) {
     setServeStatus(t("serve_remove_harbor_mount", "Remove mount"));
     await serveApi("/api/config/harbor-mount", {
       method: "POST",
-      body: { action: "delete", original_id: originalId }
+      body: {
+        action: "delete",
+        original_id: originalId,
+        expected_revision: String(new FormData(form).get("expected_revision") || "").trim()
+      }
     });
     window.location.reload();
   } catch (error) {

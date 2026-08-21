@@ -1,4 +1,4 @@
-import { adminMode, authenticationEnabled, currentServeSourceMode, data, listValue, normalizeServeSourceMode, readableServeSources, selectedKey, serveMode, sourceTagsFromValue, state, t } from "./runtime.js";
+import { RENDER_OPTIONS, adminMode, authenticationEnabled, currentServeSourceMode, data, listValue, normalizeServeSourceMode, readableServeSources, selectedKey, serveMode, sourceTagsFromValue, state, t } from "./runtime.js";
 import { sourceBulkStateTarget } from "./source-manager.js";
 import { applyLeaderboardSearchMode, applyServeMutationPayload, applyServeSourceStateMutationPayload, refreshSourceCategoryOptions, sourceRows, sourceSelectionKeys } from "./serve-catalog.js";
 
@@ -154,7 +154,8 @@ function emptyServeReport() {
 }
 function reloadExpiredAdminSession(response) {
   if (response?.status !== 403 || !adminMode() || !authenticationEnabled()) return false;
-  window.location.reload();
+  if (RENDER_OPTIONS?.serve_page === "sources") window.location.assign("/");
+  else window.location.reload();
   return true;
 }
 async function serveApi(path, options = {}) {

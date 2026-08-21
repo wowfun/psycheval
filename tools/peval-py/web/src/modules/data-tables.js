@@ -5,7 +5,7 @@ import { renderSourceSelectionHeader } from "./source-manager.js";
 import { bindLeaderboardSearchControls, commitSourceCellEdit, existingSourceCategoryOptions, existingSourceTagOptions } from "./serve-effects.js";
 import { bindLeaderboardCatalogControls, catalogSortKey, filterOptions, leaderboardRows, renderLeaderboardPanelControls, renderLeaderboardSearchControls, reportRows, requestCatalogFacets, requestCatalogSort, rowAnalysisCount, trajectoryFor } from "./serve-catalog.js";
 import { bindWorkspaceReportLeaderboardControls, workspaceReportLeaderboardColumn } from "./workspace-reports.js";
-import { loadColumnLayout, moveColumn, normalizeColumnLayout, presenceForColumns, resolveColumns, saveColumnLayout } from "./leaderboard-columns.js";
+import { columnVisibleForLayout, loadColumnLayout, moveColumn, normalizeColumnLayout, presenceForColumns, resolveColumns, saveColumnLayout } from "./leaderboard-columns.js";
 
 function selectionColumn(options = {}) {
   return {
@@ -23,12 +23,11 @@ function selectionColumn(options = {}) {
 }
 function leaderboardColumns() {
   const columns = [
-    { key: "session_id", label: t("session", "Session"), valueType: "identity", filterable: true, value: row => sourceIdentityFor(row), cellTitle: row => row.trial_key && row.trial_key !== sourceIdentityFor(row) ? row.trial_key : "" },
+    { key: "job_name", label: t("job", "Job"), valueType: "identity", filterable: true, sortable: true, value: row => row?.job_name || "-" },
     { key: "task_name", label: t("task_alias", "Task / Alias"), valueType: "text", filterable: true, filterValues: row => [row?.task_name].filter(Boolean), sortable: true, value: row => sessionAliasValue(row), html: row => renderTaskAlias(row), edit: adminMode() ? { value: row => String(row?.source_alias || ""), commit: (row, value) => commitSourceCellEdit(row, "alias", value) } : undefined },
     { key: "agent", label: t("agent", "Agent"), valueType: "identity", filterable: true, value: row => agentNameFor(row) },
     { key: "model", label: t("model", "Model"), valueType: "identity", filterable: true, value: row => row.model || "-" },
-    { key: "job_name", label: t("job", "Job"), valueType: "identity", filterable: true, sortable: true, value: row => row?.job_name || "-" },
-    { key: "model_provider", label: t("provider", "Provider"), valueType: "identity", filterable: true, sortable: true, value: row => row?.model_provider || "-" },
+    { key: "model_provider", label: t("provider", "Provider"), valueType: "identity", defaultVisible: false, filterable: true, sortable: true, value: row => row?.model_provider || "-" },
     { key: "reward", label: t("reward", "Reward"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row?.score, presence: row => hasMetricValue(row?.score) ? row.score : Object.keys(row?.rewards || {}), format: (_value, row) => rewardValue(row) },
     { key: "status", label: t("result", "Result"), valueType: "status", filterable: true, value: row => row.status || "-", filterLabel: value => statusLabel(value), html: row => `<span class="stamp ${lower(row.status || "passed")}">${esc(statusLabel(row.status))}</span>` },
     { key: "finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.finished_at_ms, format: fmtDate },
@@ -45,7 +44,8 @@ function leaderboardColumns() {
     { key: "notes", label: t("notes", "Notes"), valueType: "markdown", value: row => noteSnippetFor(row.trial_key), html: row => renderNotesCell(row.trial_key), cellTitle: row => {
       const text = notesPlainText(notesFor(row.trial_key));
       return text && text !== noteSnippetFor(row.trial_key) ? text : "";
-    } }
+    } },
+    { key: "session_id", label: t("session", "Session"), valueType: "identity", filterable: true, value: row => sourceIdentityFor(row), cellTitle: row => row.trial_key && row.trial_key !== sourceIdentityFor(row) ? row.trial_key : "" }
   ];
   if (!workspaceDisplayMode()) return columns;
   const serveColumns = columns.map(column => ["session_id", "analysis_count"].includes(column.key)
@@ -101,8 +101,7 @@ function renderLeaderboardColumnControls(rows = leaderboardRows()) {
     ? normalizeColumnLayout(columns.map(column => column.key), state.leaderboardColumnDraft)
     : layout;
   const ordered = draft.order.map(key => columns.find(column => column.key === key)).filter(Boolean);
-  const checked = column => draft.visibility[column.key] === "show"
-    || (draft.visibility[column.key] !== "hide" && presence[column.key]);
+  const checked = column => columnVisibleForLayout(column, draft, presence);
   const visibleCount = ordered.filter(checked).length;
   const rowsHtml = ordered.map((column, index) => {
     const isChecked = checked(column);

@@ -815,7 +815,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
             finally:
                 self.stop(store, server, thread)
 
-    def test_browser_view_catalog_query_and_summary_share_server_validation(self) -> None:
+    def test_browser_view_catalog_query_and_summary_share_server_validation(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for index, result in enumerate(("passed", "failed", "passed")):
@@ -944,7 +946,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
             finally:
                 self.stop(store, server, thread)
 
-    def test_browser_views_flow_through_table_summary_and_snapshot_exports(self) -> None:
+    def test_browser_views_flow_through_table_summary_and_snapshot_exports(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for index, result in enumerate(("passed", "failed")):

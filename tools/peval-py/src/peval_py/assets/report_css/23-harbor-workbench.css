@@ -1,0 +1,440 @@
+.harbor-dataset-choices {
+  display:grid;
+  gap:6px;
+  margin:0;
+  border:1px solid var(--rule);
+  border-radius:6px;
+  padding:8px;
+}
+.harbor-dataset-choices legend {
+  color:var(--muted);
+  padding:0 4px;
+  font:700 12px/1.2 var(--mono);
+}
+.harbor-dataset-choice {
+  grid-template-columns:auto minmax(0,1fr)!important;
+  align-items:start;
+}
+.harbor-dataset-choice span {
+  min-width:0;
+  display:grid;
+  gap:2px;
+}
+.harbor-dataset-choice small {
+  overflow:hidden;
+  color:var(--muted);
+  font:12px/1.3 var(--mono);
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.harbor-workbench-backdrop[hidden],
+.harbor-workbench-status[hidden],
+.harbor-file-actions[hidden] {
+  display:none;
+}
+.harbor-workbench-backdrop {
+  position:fixed;
+  inset:0;
+  z-index:70;
+  display:grid;
+  place-items:center;
+  padding:14px;
+  background:rgba(39,35,27,.42);
+}
+.harbor-workbench-open {
+  overflow:hidden;
+}
+.harbor-workbench {
+  width:min(1500px,calc(100vw - 28px));
+  height:min(900px,calc(100vh - 28px));
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  border:1px solid var(--rule);
+  border-radius:var(--radius);
+  background:var(--surface);
+  box-shadow:0 28px 78px rgba(39,35,27,.3);
+}
+.harbor-workbench-head {
+  flex:0 0 auto;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:16px;
+  align-items:start;
+  border-bottom:1px solid var(--rule);
+  padding:16px;
+}
+.harbor-workbench-head-actions,
+.harbor-workbench-tools,
+.harbor-editor-actions,
+.harbor-file-actions,
+.harbor-row-actions {
+  display:flex;
+  align-items:center;
+  gap:7px;
+  flex-wrap:wrap;
+}
+.harbor-workbench-tools {
+  flex:0 0 auto;
+  border-bottom:1px solid var(--rule);
+  background:color-mix(in oklch,var(--surface),var(--surface-2) 18%);
+  padding:9px 16px;
+}
+.harbor-operation-status {
+  margin-left:auto;
+  color:var(--muted);
+  font:12px/1.3 var(--mono);
+}
+.harbor-workbench-status {
+  position:static;
+  inset:auto;
+  z-index:auto;
+  flex:0 0 auto;
+  margin:0;
+  border:0;
+  border-bottom:1px solid var(--rule);
+  border-radius:0;
+  background:var(--surface-2);
+  padding:8px 16px;
+  font:700 12px/1.35 var(--mono);
+}
+.harbor-workbench-grid {
+  flex:1 1 auto;
+  width:100%;
+  min-height:0;
+  display:grid;
+  grid-template-columns:minmax(250px,320px) minmax(240px,320px) minmax(420px,1fr);
+  overflow:hidden;
+}
+.harbor-pane {
+  min-width:0;
+  min-height:0;
+  overflow:auto;
+  border-right:1px solid var(--rule);
+}
+.harbor-pane:last-child {
+  border-right:0;
+}
+.harbor-catalog-pane {
+  display:grid;
+  grid-template-rows:auto minmax(0,1fr);
+  background:color-mix(in oklch,var(--surface),var(--surface-2) 14%);
+}
+.harbor-dataset-list,
+.harbor-task-list,
+.harbor-file-tree {
+  min-height:0;
+  display:grid;
+  align-content:start;
+  gap:5px;
+  overflow:auto;
+  padding:10px;
+}
+.harbor-dataset-list {
+  border-bottom:1px solid var(--rule);
+}
+.harbor-task-list h3 {
+  margin:4px 2px 7px;
+  color:var(--muted);
+  font:700 12px/1.2 var(--mono);
+  letter-spacing:.06em;
+  text-transform:uppercase;
+}
+.harbor-dataset-row,
+.harbor-task-row {
+  min-width:0;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:5px;
+  align-items:center;
+  border:1px solid transparent;
+  border-radius:6px;
+  background:var(--surface);
+}
+.harbor-dataset-row.selected,
+.harbor-task-row.selected {
+  border-color:color-mix(in oklch,var(--focus),var(--rule) 35%);
+  background:color-mix(in oklch,var(--focus),var(--surface) 95%);
+}
+.harbor-task-row {
+  position:relative;
+  padding-left:5px;
+}
+.harbor-task-row::before {
+  position:absolute;
+  inset:3px auto 3px 0;
+  width:3px;
+  border-radius:99px;
+  background:var(--muted);
+  content:"";
+}
+.harbor-task-row.status-valid::before { background:var(--pass); }
+.harbor-task-row.status-draft::before { background:#bd7b20; }
+.harbor-task-row.status-conflict::before,
+.harbor-task-row.status-trash::before { background:var(--fail); }
+.harbor-dataset-select,
+.harbor-task-select,
+.harbor-file-row {
+  min-width:0;
+  display:grid;
+  border:0;
+  background:transparent;
+  color:var(--ink);
+  padding:9px;
+  text-align:left;
+  cursor:pointer;
+}
+.harbor-dataset-select strong,
+.harbor-task-select span,
+.harbor-file-row span:nth-child(2) {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.harbor-dataset-select small,
+.harbor-task-select small,
+.harbor-file-row small {
+  color:var(--muted);
+  font:12px/1.3 var(--mono);
+}
+.harbor-row-actions {
+  padding-right:5px;
+}
+.harbor-files-pane {
+  display:grid;
+  grid-template-rows:auto minmax(0,1fr);
+}
+.harbor-file-actions {
+  border-bottom:1px solid var(--rule);
+  padding:9px;
+}
+.harbor-file-row {
+  grid-template-columns:auto minmax(0,1fr) auto;
+  gap:7px;
+  align-items:center;
+  padding-left:calc(9px + var(--depth) * 14px);
+  border-radius:5px;
+  font:12px/1.3 var(--mono);
+}
+.harbor-file-row:hover,
+.harbor-file-row.selected {
+  background:var(--surface-2);
+}
+.harbor-file-row.kind-directory {
+  color:var(--muted);
+  cursor:default;
+}
+.harbor-editor-pane {
+  display:grid;
+  grid-template-rows:auto minmax(180px,1fr) auto;
+  overflow:hidden;
+}
+.harbor-editor-head {
+  min-width:0;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:10px;
+  align-items:center;
+  border-bottom:1px solid var(--rule);
+  padding:10px 12px;
+}
+.harbor-editor-head>div:first-child {
+  min-width:0;
+  display:grid;
+  gap:2px;
+}
+.harbor-editor-head strong,
+.harbor-editor-head span {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.harbor-editor-head strong { font:700 13px/1.3 var(--mono); }
+.harbor-editor-head span { color:var(--muted); font:12px/1.3 var(--mono); }
+.harbor-editor {
+  width:100%;
+  height:100%;
+  min-height:0;
+  resize:none;
+  border:0;
+  outline:0;
+  background:#fbfaf6;
+  color:var(--ink);
+  padding:16px;
+  tab-size:2;
+  font:13px/1.55 var(--mono);
+}
+.harbor-editor:focus {
+  box-shadow:inset 0 0 0 2px color-mix(in oklch,var(--focus),transparent 55%);
+}
+.harbor-editor:disabled {
+  background:var(--surface-2);
+}
+.harbor-diagnostics {
+  max-height:180px;
+  overflow:auto;
+  border-top:1px solid var(--rule);
+  background:color-mix(in oklch,var(--fail),var(--surface) 96%);
+  padding:10px 13px;
+}
+.harbor-diagnostics:empty { display:none; }
+.harbor-diagnostics p {
+  margin:0 0 6px;
+  color:var(--fail);
+  font:12px/1.4 var(--mono);
+  white-space:pre-wrap;
+}
+.harbor-empty {
+  padding:8px;
+  font:12px/1.4 var(--mono);
+}
+.harbor-workbench :is(button,textarea,input):focus-visible,
+.harbor-dataset-choice input:focus-visible {
+  outline:2px solid var(--focus);
+  outline-offset:2px;
+}
+@media (max-width:900px) {
+  .harbor-workbench-head {
+    grid-template-columns:1fr;
+  }
+  .harbor-workbench {
+    width:calc(100vw - 16px);
+    height:calc(100vh - 16px);
+  }
+  .harbor-workbench-grid {
+    grid-template-columns:minmax(260px,82vw) minmax(260px,82vw) minmax(320px,92vw);
+    overflow-x:auto;
+    scroll-snap-type:x proximity;
+  }
+  .harbor-pane {
+    scroll-snap-align:start;
+  }
+}
+
+/* The Dataset workbench is a document page: overview first, selected Task next. */
+.serve-page-datasets .harbor-workbench {
+  width:100%;
+  height:auto;
+  min-height:0;
+  display:flex;
+  overflow:visible;
+  box-shadow:0 16px 38px rgba(51,44,27,.10);
+}
+.harbor-overview-panel {
+  flex:0 0 auto;
+  border-bottom:1px solid var(--rule);
+}
+.harbor-overview-head {
+  min-width:0;
+  display:flex;
+  align-items:end;
+  justify-content:space-between;
+  gap:16px;
+  padding:14px 16px 10px;
+}
+.harbor-overview-head>div {
+  display:flex;
+  align-items:baseline;
+  gap:10px;
+}
+.harbor-overview-head span,
+.harbor-task-detail-head>span {
+  color:var(--muted);
+  font:12px/1.3 var(--mono);
+}
+.harbor-search {
+  width:min(360px,100%);
+}
+.harbor-search input {
+  width:100%;
+  min-height:36px;
+  border:1px solid var(--rule);
+  border-radius:6px;
+  background:var(--surface);
+  color:var(--ink);
+  padding:0 10px;
+  font:13px/1.2 var(--mono);
+}
+.harbor-overview {
+  min-height:190px;
+  max-height:42vh;
+  overflow:auto;
+  padding:0 16px 16px;
+}
+.harbor-overview .table-wrap {
+  max-height:100%;
+}
+.harbor-overview-row {
+  cursor:pointer;
+}
+.harbor-overview-row:focus-visible {
+  outline:2px solid var(--focus);
+  outline-offset:-2px;
+}
+.harbor-status-rail {
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  font:700 12px/1.2 var(--mono);
+  text-transform:capitalize;
+}
+.harbor-status-rail::before {
+  width:4px;
+  height:18px;
+  background:var(--muted);
+  content:"";
+}
+.harbor-status-rail.valid::before { background:var(--pass); }
+.harbor-status-rail.draft::before { background:#bf7a23; }
+.harbor-status-rail.conflict::before,
+.harbor-status-rail.trash::before { background:var(--fail); }
+.harbor-task-detail {
+  flex:1 1 auto;
+  min-height:430px;
+  display:grid;
+  grid-template-rows:auto minmax(360px,1fr);
+}
+.harbor-task-detail-head {
+  min-width:0;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  border-bottom:1px solid var(--rule);
+  padding:14px 16px;
+}
+.serve-page-datasets .harbor-workbench-grid {
+  min-height:420px;
+  grid-template-columns:minmax(250px,330px) minmax(0,1fr);
+}
+.serve-page-datasets .harbor-editor[readonly] {
+  cursor:text;
+}
+@media (max-width:760px) {
+  .serve-page-datasets .harbor-workbench {
+    width:100%;
+    min-height:0;
+  }
+  .harbor-overview-head,
+  .harbor-task-detail-head {
+    align-items:stretch;
+    flex-direction:column;
+  }
+  .harbor-search {
+    width:100%;
+  }
+  .serve-page-datasets .harbor-workbench-grid {
+    display:grid;
+    grid-template-columns:1fr;
+    overflow:visible;
+  }
+  .serve-page-datasets .harbor-pane {
+    min-height:280px;
+    border-right:0;
+    border-bottom:1px solid var(--rule);
+  }
+  .serve-page-datasets .harbor-pane:last-child {
+    border-bottom:0;
+  }
+}

@@ -5,7 +5,6 @@ import json
 import os
 import posixpath
 import stat
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from typing import Any, Iterable
@@ -385,38 +384,37 @@ def _task_candidates_once(
         for task_dir in task_dirs:
             config_path = task_dir / "task.toml"
             try:
+                _walk_regular_files(task_dir, task_dir)
                 config_bytes = _read_bytes_no_follow(task_dir, config_path)
-                parsed = tomllib.loads(config_bytes.decode("utf-8"))
-                task = parsed.get("task")
-                if not isinstance(task, dict):
+                from harbor.models.task.task import Task
+
+                validated_task = Task(task_dir)
+                task = validated_task.config.task
+                if task is None:
                     raise ValueError("task.toml must contain a [task] table")
                 metadata = {
-                    "name": optional_str(task.get("name")),
-                    "version": optional_str(task.get("version")),
-                    "description": str(task.get("description") or ""),
-                    "keywords": _string_list(task.get("keywords")),
+                    "name": optional_str(task.name),
+                    "version": optional_str(task.version),
+                    "description": str(task.description or ""),
+                    "keywords": _string_list(task.keywords),
                 }
                 error = None
-            except (
-                OSError,
-                UnicodeDecodeError,
-                tomllib.TOMLDecodeError,
-                ValueError,
-            ) as exc:
+            except Exception as exc:  # noqa: BLE001 - Harbor owns validation types.
                 config_bytes = None
                 metadata = None
                 error = str(exc)
             index_digest.update(str(task_dir).encode("utf-8") + b"\0")
             index_digest.update(config_bytes or str(error).encode("utf-8"))
             index_digest.update(b"\0")
-            candidates.append(
-                _TaskCandidate(
-                    path=task_dir,
-                    metadata=metadata,
-                    error=error,
-                    config_bytes=config_bytes,
+            if metadata is not None:
+                candidates.append(
+                    _TaskCandidate(
+                        path=task_dir,
+                        metadata=metadata,
+                        error=error,
+                        config_bytes=config_bytes,
+                    )
                 )
-            )
     return candidates, index_digest.hexdigest()
 
 
@@ -615,6 +613,8 @@ def _walk_regular_files(containment_root: Path, root: Path) -> list[Path]:
                 result.extend(_walk_regular_files(containment_root, path))
             elif entry.is_file(follow_symlinks=False):
                 result.append(path)
+            else:
+                raise ValueError(f"Harbor Task content must be a regular file: {path}")
     return result
 
 

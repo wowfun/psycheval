@@ -68,15 +68,17 @@ function presenceForColumns(columns, rows, serverPresence = null) {
   }));
 }
 
+function columnVisibleForLayout(column, layout, presence) {
+  const mode = layout?.visibility?.[column.key];
+  if (mode === "show") return true;
+  if (mode === "hide") return false;
+  return column.defaultVisible !== false && Boolean(presence[column.key]);
+}
+
 function resolveColumns(columns, layout, presence) {
   const byKey = new Map(columns.map(column => [column.key, column]));
   const ordered = layout.order.flatMap(key => byKey.has(key) ? [byKey.get(key)] : []);
-  const visible = ordered.filter(column => {
-    const mode = layout.visibility[column.key];
-    if (mode === "show") return true;
-    if (mode === "hide") return false;
-    return Boolean(presence[column.key]);
-  });
+  const visible = ordered.filter(column => columnVisibleForLayout(column, layout, presence));
   return visible;
 }
 
@@ -91,6 +93,7 @@ function moveColumn(order, key, direction) {
 
 export {
   COLUMN_LAYOUT_VERSION,
+  columnVisibleForLayout,
   layoutStorageKey,
   loadColumnLayout,
   moveColumn,

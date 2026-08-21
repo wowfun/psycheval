@@ -21,6 +21,21 @@ const browser = installBrowserDom(`
   </div>
   <div data-report-manager hidden><section aria-modal="true"><button data-report-manager-close>Close</button><p data-report-manager-status hidden></p><div data-report-inventory></div><span data-report-count></span><div data-report-bindings>stale admin content</div></section></div>
   <aside id="workspace-report-reader" hidden></aside>
+  <section data-harbor-workbench>
+    <button data-harbor-reload>Reload</button>
+    <input data-harbor-search type="search">
+    <span data-harbor-overview-count></span>
+    <div data-harbor-overview></div>
+    <h2 data-harbor-selected-title></h2>
+    <span data-harbor-selected-meta></span>
+    <p data-harbor-workbench-status hidden></p>
+    <div data-harbor-file-actions hidden></div>
+    <div data-harbor-file-tree></div>
+    <strong data-harbor-editor-path></strong>
+    <span data-harbor-editor-meta></span>
+    <textarea data-harbor-editor disabled></textarea>
+    <div data-harbor-diagnostics></div>
+  </section>
   <main id="comparison"></main>
   <section id="leaderboard"></section>
   <aside id="workspace-views"></aside>
@@ -45,6 +60,7 @@ const effects = await import("../src/modules/serve-effects.js");
 const reports = await import("../src/modules/workspace-reports.js");
 const views = await import("../src/modules/workspace-views.js");
 const controls = await import("../src/modules/serve-controls.js");
+const harbor = await import("../src/modules/harbor-workbench.js");
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());
@@ -131,6 +147,35 @@ test("guest report library fetches only public report inventory", async () => {
   }
 });
 
+test("guest Dataset page loads Task text as read-only without download controls", async () => {
+  const calls = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async path => {
+    calls.push(String(path));
+    const value = String(path);
+    const payload = value === "/api/harbor/datasets"
+      ? { datasets: [{ id: "public", tasks: [{ directory: "task-1", package_name: "org/task", status: "valid", diagnostics: [] }] }] }
+      : value.startsWith("/api/harbor/task?")
+        ? { dataset_id: "public", task: { directory: "task-1", package_name: "org/task", status: "valid", diagnostics: [] }, tree: [{ path: "solution/solve.sh", kind: "file", size: 9, editable: true }] }
+        : { path: "solution/solve.sh", content: "echo done" };
+    return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(payload) };
+  };
+  try {
+    await harbor.initializeHarborWorkbench();
+    assert.deepEqual(calls.slice(0, 2), [
+      "/api/harbor/datasets",
+      "/api/harbor/task?dataset_id=public&task=task-1",
+    ]);
+    document.querySelector(".harbor-file-row.kind-file").click();
+    await tick();
+    assert.equal(document.querySelector("[data-harbor-editor]").value, "echo done");
+    assert.equal(document.querySelector("[data-harbor-editor]").readOnly, true);
+    assert.equal(document.querySelector("[data-harbor-download]"), null);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("serve API preserves HTTP errors when an upstream returns non-JSON", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async () => ({
@@ -152,6 +197,7 @@ test("serve API preserves HTTP errors when an upstream returns non-JSON", async 
 test("guest administrator action functions issue no requests when invoked directly", async () => {
   const previousFetch = globalThis.fetch;
   const previousConfirm = window.confirm;
+  const previousPrompt = window.prompt;
   let requests = 0;
   globalThis.fetch = async () => {
     requests += 1;
@@ -175,10 +221,50 @@ test("guest administrator action functions issue no requests when invoked direct
     await sourceManager.submitServeSourceForm(sourceForm);
     await sourceManager.inspectDbSessions(dbForm);
     await sourceManager.submitHarborMountForm(harborForm);
+    await harbor.saveFile();
+    const task = { directory: "private-task", revision: "task-r1" };
+    const trash = { entry_id: "trash-1", directory: "private-task", revision: "trash-r1" };
+    harbor.workbenchState.inventory = {
+      datasets: [{ id: "private", revision: "dataset-r1", tasks: [task], trash: [trash] }],
+    };
+    harbor.workbenchState.datasetId = "private";
+    harbor.workbenchState.taskName = "private-task";
+    let prompts = 0;
+    let confirms = 0;
+    let fileReads = 0;
+    window.prompt = () => {
+      prompts += 1;
+      return "blocked";
+    };
+    window.confirm = () => {
+      confirms += 1;
+      return true;
+    };
+    await harbor.renameTask(task);
+    await harbor.trashTask(task);
+    await harbor.restoreTrash(trash);
+    await harbor.purgeTrash(trash);
+    await harbor.createFile("file");
+    await harbor.uploadFile({
+      name: "private.bin",
+      size: 1,
+      arrayBuffer: async () => {
+        fileReads += 1;
+        return new ArrayBuffer(1);
+      },
+    });
+    await harbor.fileActionMenu({ path: "private.txt" });
     assert.equal(requests, 0);
+    assert.equal(prompts, 0);
+    assert.equal(confirms, 0);
+    assert.equal(fileReads, 0);
   } finally {
     globalThis.fetch = previousFetch;
     window.confirm = previousConfirm;
+    window.prompt = previousPrompt;
+    harbor.workbenchState.inventory = null;
+    harbor.workbenchState.datasetId = null;
+    harbor.workbenchState.taskName = null;
     runtime.state.sourceManagerRows = [];
     runtime.state.sourceSelection.clear();
   }

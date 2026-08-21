@@ -19,7 +19,7 @@ function hideModalSurface(root) {
 function openModalSurface(root, options = {}) {
   if (!root) return false;
   document.querySelectorAll('[aria-modal="true"]').forEach(candidate => {
-    const otherRoot = candidate.closest("[data-source-manager],[data-report-manager],[data-view-save-dialog],[data-admin-login-dialog]") || candidate;
+    const otherRoot = candidate.closest("[data-view-save-dialog],[data-admin-login-dialog]") || candidate;
     if (otherRoot === root) return;
     hideModalSurface(otherRoot);
     modalOpeners.delete(otherRoot);

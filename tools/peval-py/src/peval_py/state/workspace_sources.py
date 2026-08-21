@@ -27,7 +27,12 @@ from peval_py.atif import (
     convert_path,
     validate_atif_trajectory,
 )
-from peval_py.config import HarborMount, ToolConfig, validate_harbor_mount_paths
+from peval_py.config import (
+    HarborMount,
+    ToolConfig,
+    harbor_dataset_paths_for_mount,
+    validate_harbor_mount_paths,
+)
 from peval_py.report import project_meta_from_atif
 from peval_py.report.builder import iso_timestamp_ms
 from peval_py.report.metrics import final_metric
@@ -313,7 +318,10 @@ class WorkspaceSources:
         return candidates
 
     def _harbor_candidates(self) -> tuple[list[SourceCandidate], set[str]]:
-        validate_harbor_mount_paths(self.config.harbor_mounts)
+        validate_harbor_mount_paths(
+            self.config.harbor_mounts,
+            self.config.harbor_datasets,
+        )
         candidates: list[SourceCandidate] = []
         present_refs: set[str] = set()
         resolved_mounts: set[Path] = set()
@@ -327,7 +335,8 @@ class WorkspaceSources:
                 raise ValueError(f"duplicate Harbor mount path: {root}")
             resolved_mounts.add(root)
             _reject_linked_directories(root, "Job")
-            task_index = read_harbor_task_index(mount.task_paths)
+            dataset_paths = harbor_dataset_paths_for_mount(self.config, mount)
+            task_index = read_harbor_task_index(dataset_paths)
             for job_dir in _child_dirs(root):
                 _reject_linked_directories(job_dir, "Trial")
                 for trial_dir in _child_dirs(job_dir):
@@ -340,6 +349,7 @@ class WorkspaceSources:
                         trial_dir,
                         root,
                         task_index,
+                        dataset_paths,
                     )
                     candidates.append(candidate)
                     present_refs.add(candidate.source_ref)
@@ -353,6 +363,7 @@ class WorkspaceSources:
         trial_dir: Path,
         mount_root: Path,
         task_index: HarborTaskIndex,
+        dataset_paths: tuple[str, ...],
     ) -> SourceCandidate:
         source_ref = f"harbor/{mount.id}/{job_name}/{trial_name}"
         overlay_dir = self.overlay_dir(source_ref)
@@ -367,7 +378,7 @@ class WorkspaceSources:
             evidence = read_harbor_evidence(
                 trial_dir,
                 jobs_root=mount_root,
-                task_paths=mount.task_paths,
+                task_paths=dataset_paths,
                 mount_id=mount.id,
                 task_index=task_index,
             )
@@ -394,7 +405,7 @@ class WorkspaceSources:
             trial_name=trial_name,
             multi_step=_is_multi_step_trial(trial_dir),
             containment_root=mount_root,
-            task_paths=mount.task_paths,
+            task_paths=dataset_paths,
             harbor_evidence=evidence,
             harbor_analysis_relative_path=harbor_analysis_relative_path,
         )

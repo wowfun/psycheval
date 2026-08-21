@@ -91,6 +91,10 @@ test("Harbor Task display merges derived evidence without changing editable over
   assert.match(tagsHtml, /source-tag-chip custom/);
 
   const columns = tables.leaderboardColumns();
+  assert.equal(columns.at(-1)?.key, "session_id");
+  const jobIndex = columns.findIndex(column => column.key === "job_name");
+  const taskIndex = columns.findIndex(column => column.key === "task_name");
+  assert.equal(jobIndex + 1, taskIndex);
   assert.deepEqual(
     ["task_name", "job_name", "model_provider", "reward"].map(key => columns.find(column => column.key === key)?.key),
     ["task_name", "job_name", "model_provider", "reward"],

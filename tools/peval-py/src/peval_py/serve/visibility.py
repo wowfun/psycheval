@@ -107,6 +107,42 @@ def project_detail_payload(payload: dict[str, Any], role: str) -> dict[str, Any]
     return projected
 
 
+def project_harbor_inventory(payload: dict[str, Any], role: str) -> dict[str, Any]:
+    if role == ADMIN_ROLE:
+        return payload
+    datasets = payload.get("datasets")
+    return {
+        "datasets": [
+            _project_harbor_dataset(item) for item in datasets if isinstance(item, dict)
+        ]
+        if isinstance(datasets, list)
+        else []
+    }
+
+
+def project_harbor_task(payload: dict[str, Any], role: str) -> dict[str, Any]:
+    if role == ADMIN_ROLE:
+        return payload
+    task = payload.get("task")
+    tree = payload.get("tree")
+    return {
+        "dataset_id": str(payload.get("dataset_id") or ""),
+        "task": _project_harbor_task_summary(task) if isinstance(task, dict) else {},
+        "tree": [_project_harbor_file(item) for item in tree if isinstance(item, dict)]
+        if isinstance(tree, list)
+        else [],
+    }
+
+
+def project_harbor_text_file(payload: dict[str, Any], role: str) -> dict[str, Any]:
+    if role == ADMIN_ROLE:
+        return payload
+    return {
+        "path": str(payload.get("path") or ""),
+        "content": str(payload.get("content") or ""),
+    }
+
+
 def project_report(report: dict[str, Any]) -> dict[str, Any]:
     projected = dict(report)
     trajectory_meta = report.get("trajectory_meta")
@@ -183,6 +219,46 @@ def project_guest_error(status: int, message: str, role: str) -> str:
     return "internal server error"
 
 
+def _project_harbor_dataset(value: dict[str, Any]) -> dict[str, Any]:
+    tasks = value.get("tasks")
+    return {
+        "id": str(value.get("id") or ""),
+        "tasks": [
+            _project_harbor_task_summary(item)
+            for item in tasks
+            if isinstance(item, dict)
+        ]
+        if isinstance(tasks, list)
+        else [],
+    }
+
+
+def _project_harbor_task_summary(value: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = value.get("diagnostics")
+    return {
+        "directory": str(value.get("directory") or ""),
+        "status": str(value.get("status") or "draft"),
+        "package_name": (
+            str(value["package_name"])
+            if value.get("package_name") is not None
+            else None
+        ),
+        "diagnostics": [
+            project_guest_error(400, item, "guest")
+            for item in diagnostics
+            if isinstance(item, str) and item.strip()
+        ]
+        if isinstance(diagnostics, list)
+        else [],
+    }
+
+
+def _project_harbor_file(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value[key] for key in ("path", "kind", "size", "editable") if key in value
+    }
+
+
 def _contains_server_path(message: str) -> bool:
     for match in ABSOLUTE_PATH_IN_ERROR_RE.finditer(message):
         candidate = match.group("path")
@@ -208,11 +284,15 @@ def _project_harbor_provenance(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _project_task_metadata(value: dict[str, Any]) -> dict[str, Any]:
-    return {key: item for key, item in value.items() if key in TASK_METADATA_PUBLIC_FIELDS}
+    return {
+        key: item for key, item in value.items() if key in TASK_METADATA_PUBLIC_FIELDS
+    }
 
 
 def _project_data_ref(value: dict[str, Any]) -> dict[str, Any]:
-    projected = {key: item for key, item in value.items() if key in DATA_REF_PUBLIC_FIELDS}
+    projected = {
+        key: item for key, item in value.items() if key in DATA_REF_PUBLIC_FIELDS
+    }
     regrade = value.get("regrade")
     if isinstance(regrade, dict):
         projected["regrade"] = {

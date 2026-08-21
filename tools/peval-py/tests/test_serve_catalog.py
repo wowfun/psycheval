@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -218,6 +219,65 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 catalog._writer_lock.release()
             store.close()
 
+    def test_background_reconcile_reports_lifecycle_contention_and_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store, catalog = self.catalog(root)
+            try:
+                self.assertTrue(catalog._writer_lock.acquire(blocking=False))
+                try:
+                    with self.assertRaisesRegex(CatalogBusyError, "writer operation"):
+                        catalog.mutate_with_background_reconcile(
+                            "blocked", lambda: None
+                        )
+                finally:
+                    catalog._writer_lock.release()
+
+                entered = threading.Event()
+                release = threading.Event()
+
+                def reconcile() -> None:
+                    entered.set()
+                    self.assertTrue(release.wait(timeout=5))
+
+                with patch.object(catalog, "_reconcile_locked", side_effect=reconcile):
+                    result, status = catalog.mutate_with_background_reconcile(
+                        "harbor-task-reconcile",
+                        lambda: {"changed": True},
+                    )
+                    self.assertEqual(result, {"changed": True})
+                    self.assertTrue(entered.wait(timeout=5))
+                    running = catalog.operation(status.operation_id)
+                    self.assertEqual(running.state, "running")
+                    with self.assertRaisesRegex(CatalogBusyError, "writer operation"):
+                        catalog.mutate(lambda: None)
+                    release.set()
+                    completed = self._wait_catalog_operation(
+                        catalog, status.operation_id
+                    )
+                self.assertEqual(completed.state, "completed")
+                self.assertEqual(completed.completed, 1)
+                self.assertEqual(completed.failures, [])
+
+                with patch.object(
+                    catalog,
+                    "_reconcile_locked",
+                    side_effect=RuntimeError("reconcile failed"),
+                ):
+                    _result, failed_status = catalog.mutate_with_background_reconcile(
+                        "harbor-task-reconcile",
+                        lambda: None,
+                    )
+                    failed = self._wait_catalog_operation(
+                        catalog, failed_status.operation_id
+                    )
+                self.assertEqual(failed.state, "failed")
+                self.assertIn("reconcile failed", failed.failures[0]["error"])
+            finally:
+                store.close()
+
     def test_workspace_snapshot_limits_include_unique_bound_report_content(
         self,
     ) -> None:
@@ -327,6 +387,19 @@ class WorkspaceCatalogTests(unittest.TestCase):
         store = open_workspace_state(str(root))
         config = ToolConfig(workspace_root=str(root), analysis_eval_slug=slug)
         return store, WorkspaceCatalog(store, config)
+
+    def _wait_catalog_operation(
+        self,
+        catalog: WorkspaceCatalog,
+        operation_id: str,
+    ):
+        deadline = time.monotonic() + 5
+        status = catalog.operation(operation_id)
+        while status.state in {"queued", "running"} and time.monotonic() < deadline:
+            time.sleep(0.01)
+            status = catalog.operation(operation_id)
+        self.assertNotIn(status.state, {"queued", "running"}, status.to_dict())
+        return status
 
     def write_cell(
         self,

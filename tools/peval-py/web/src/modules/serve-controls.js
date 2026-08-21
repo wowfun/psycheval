@@ -1,11 +1,12 @@
-import { SUBMENU_DETAILS_SELECTOR, adapterDefaults, adminMode, closeOpenSubmenus, renderComparisonPanels, selectedKey, serveMode, state, t } from "./runtime.js";
-import { addSelectedDbSessions, choosePathSourceFiles, closeServeSourceManager, inspectDbSessions, removeHarborMount, setDbSessionSelection, submitHarborMountForm, submitServeSourceForm } from "./source-manager.js";
+import { RENDER_OPTIONS, SUBMENU_DETAILS_SELECTOR, adapterDefaults, adminMode, closeOpenSubmenus, renderComparisonPanels, selectedKey, serveMode, state, t } from "./runtime.js";
+import { addSelectedDbSessions, choosePathSourceFiles, inspectDbSessions, removeHarborMount, setDbSessionSelection, submitHarborMountForm, submitServeSourceForm } from "./source-manager.js";
 import { mutateSelectedServeSourceState, selectedAdapterValue, serveApi, setServeStatus, showServeNotice } from "./serve-effects.js";
-import { deleteSelectedServeSources, openServeSourceManager, refreshServeReportFromServer, refreshServeSourcesFromServer, selectServeSource } from "./serve-catalog.js";
-import { bindWorkspaceReportGlobalControls, closeWorkspaceReportManager, closeWorkspaceReportReader } from "./workspace-reports.js";
+import { deleteSelectedServeSources, refreshServeReportFromServer, refreshServeSourcesFromServer, selectServeSource } from "./serve-catalog.js";
+import { bindWorkspaceReportGlobalControls, closeWorkspaceReportReader, workspaceReportBindingsChanged } from "./workspace-reports.js";
 import { bindWorkspaceViewDialog, closeWorkspaceViewSaveDialog } from "./workspace-views.js";
 import { beginNotesEdit, cancelNotesEdit, saveSelectedNotes } from "./analysis-notes.js";
 import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
+import { bindHarborWorkbench, confirmDiscard, isHarborDirty } from "./harbor-workbench.js";
 
 function bindGlobalControls() {
   if (state.boundGlobalControls) return;
@@ -15,12 +16,6 @@ function bindGlobalControls() {
       return;
     }
     if (event.key === "Escape" && closeWorkspaceViewSaveDialog()) {
-      return;
-    }
-    if (event.key === "Escape" && closeWorkspaceReportManager()) {
-      return;
-    }
-    if (event.key === "Escape" && closeServeSourceManager()) {
       return;
     }
     if (event.key === "Escape" && closeWorkspaceReportReader()) {
@@ -34,9 +29,20 @@ function bindGlobalControls() {
     closeOpenSubmenus(event.target?.closest?.(SUBMENU_DETAILS_SELECTOR) || null);
   }, true);
   document.addEventListener("click", event => {
+    const link = event.target?.closest?.(".workspace-nav-link[href]");
+    if (!link) return;
+    if (isHarborDirty() && !confirmDiscard()) {
+      event.preventDefault();
+      return;
+    }
+    if (workspaceReportBindingsChanged() && !window.confirm(t("report_discard_bindings", "Discard unsaved report binding changes?"))) {
+      event.preventDefault();
+    }
+  });
+  document.addEventListener("click", event => {
     if (!state.selectedStep) return;
     const target = event.target;
-    if (target?.closest?.("#step-drawer") || target?.closest?.("#workspace-report-reader") || target?.closest?.("[data-report-manager]") || target?.closest?.("[data-workspace-report-control]") || target?.closest?.("[data-source-manager]") || target?.closest?.("[data-step]") || target?.closest?.("[data-step-action]") || target?.closest?.("[data-step-id]") || target?.closest?.("[data-timeline-step-id]") || target?.closest?.("[data-timeline-chart]")) return;
+    if (target?.closest?.("#step-drawer") || target?.closest?.("#workspace-report-reader") || target?.closest?.("[data-report-manager]") || target?.closest?.("[data-workspace-report-control]") || target?.closest?.("[data-source-manager]") || target?.closest?.("[data-harbor-workbench]") || target?.closest?.("[data-step]") || target?.closest?.("[data-step-action]") || target?.closest?.("[data-step-id]") || target?.closest?.("[data-timeline-step-id]") || target?.closest?.("[data-timeline-chart]")) return;
     state.selectedStep = null;
     renderComparisonPanels();
   });
@@ -72,24 +78,7 @@ function bindGlobalControls() {
 function bindServeSourceControls() {
   bindAuthenticationControls();
   bindWorkspaceReportGlobalControls();
-  document.querySelectorAll("[data-source-manager-open]").forEach(button => {
-    button.addEventListener("click", event => {
-      event.preventDefault();
-      openServeSourceManager();
-    });
-  });
-  document.querySelectorAll("[data-source-manager-close]").forEach(button => {
-    button.addEventListener("click", event => {
-      event.preventDefault();
-      closeServeSourceManager();
-    });
-  });
-  const manager = document.querySelector("[data-source-manager]");
-  if (manager) {
-    manager.addEventListener("click", event => {
-      if (event.target === manager) closeServeSourceManager();
-    });
-  }
+  bindHarborWorkbench();
   document.querySelectorAll("[data-refresh-all]").forEach(button => {
     button.addEventListener("click", () => refreshServeReportFromServer({ refresh: true }));
   });
@@ -191,7 +180,8 @@ function bindAuthenticationControls() {
       button.disabled = true;
       try {
         await serveApi("/api/auth/logout", { method: "POST", body: {} });
-        window.location.reload();
+        if (RENDER_OPTIONS?.serve_page === "sources") window.location.assign("/");
+        else window.location.reload();
       } catch (error) {
         button.disabled = false;
         setServeStatus(error.message || String(error), true);

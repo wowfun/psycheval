@@ -4,63 +4,106 @@ from html import escape
 from typing import Any
 
 from peval_py.adapters import available_adapter_ids
-from peval_py.config import HarborMount
+from peval_py.config import HarborDataset, HarborMount
 from peval_py.html.assets import load_asset_text, replace_template_tokens
+
+
+def render_serve_header(
+    sources: list[dict[str, Any]],
+    messages: dict[str, str],
+    locale: str,
+    *,
+    page: str,
+    loading: bool = False,
+    role: str = "admin",
+    authentication_enabled: bool = False,
+) -> str:
+    pages = [
+        ("home", "/", messages["workspace_home"]),
+        ("datasets", "/datasets", messages["harbor_datasets"]),
+        ("reports", "/reports", messages["workspace_reports"]),
+    ]
+    if role == "admin":
+        pages.append(("sources", "/sources", messages["serve_source_manager"]))
+    links = "".join(
+        f'<a href="{href}" class="workspace-nav-link'
+        f'{" active" if key == page else ""}"'
+        f"{' aria-current="page"' if key == page else ''}>{escape(label)}</a>"
+        for key, href, label in pages
+    )
+    if role == "admin":
+        auth_control = (
+            '<span class="serve-role-badge admin">'
+            + escape(messages["serve_admin_role"])
+            + "</span>"
+        )
+        if authentication_enabled:
+            auth_control += (
+                '<button class="action-button" type="button" data-admin-logout>'
+                + escape(messages["serve_logout"])
+                + "</button>"
+            )
+        language = render_language_control(messages, locale)
+    else:
+        auth_control = (
+            '<span class="serve-role-badge guest">'
+            + escape(messages["serve_guest_role"])
+            + "</span>"
+            + '<button class="action-button primary" type="button" data-admin-login-open>'
+            + escape(messages["serve_login"])
+            + "</button>"
+        )
+        language = ""
+    return f"""
+  <header class="workspace-header" data-serve-only>
+    <div class="workspace-header-left">
+      <a class="workspace-brand" href="/">__TITLE__</a>
+      <nav class="workspace-nav" aria-label="{escape(messages["workspace_navigation"])}">
+        {links}
+      </nav>
+    </div>
+    <div class="workspace-utilities">
+      {auth_control}
+      {language}
+    </div>
+  </header>"""
+
+
+def render_serve_home() -> str:
+    return """
+    <div class="workspace-description note-body" data-workspace-description hidden></div>
+  <div class="workspace-content">
+    <main class="workspace-main">
+      <section id="report-notes"></section>
+      <div class="workspace-main-scroll" data-workspace-main-scroll>
+        <section class="panel-stack workspace-leaderboard-region" id="leaderboard-region"></section>
+        <section class="panel-stack" id="comparison"></section>
+        <section class="trace-panel" id="trace"></section>
+      </div>
+    </main>
+    <div class="workspace-side-region" id="workspace-side-region">
+      <aside class="workspace-views" id="workspace-views" hidden data-serve-only></aside>
+      <aside class="step-drawer" id="step-drawer" hidden></aside>
+    </div>
+  </div>"""
 
 
 def render_serve_source_manager(
     sources: list[dict[str, Any]],
     messages: dict[str, str],
-    locale: str,
     adapter_defaults: dict[str, str],
     harbor_mounts: tuple[HarborMount, ...],
+    harbor_datasets: tuple[HarborDataset, ...] = (),
+    harbor_revision: str = "",
     *,
     loading: bool = False,
-    role: str = "admin",
-    authentication_enabled: bool = False,
 ) -> str:
-    count = len(sources)
-    source_word = messages["serve_source_count"]
-    if count != 1:
-        source_word = messages["serve_sources_count"]
-    source_summary = (
-        messages["serve_loading_sources"] if loading else f"{count} {source_word}"
-    )
-    source_status = (
-        messages["serve_scanning_runs"]
-        if loading
-        else messages["serve_latest_snapshots"]
-    )
-    if role != "admin":
-        return render_guest_toolbar(
-            messages,
-            source_summary=source_summary,
-            source_status=source_status,
-            loading=loading,
-        )
-    auth_control = (
-        '<span class="serve-role-badge admin">'
-        + escape(messages["serve_admin_role"])
-        + "</span>"
-        + '<button class="action-button" type="button" data-admin-logout>'
-        + escape(messages["serve_logout"])
-        + "</button>"
-        if authentication_enabled
-        else ""
-    )
     return replace_template_tokens(
         load_asset_text("serve_source_manager.html"),
         {
-            "SOURCE_SUMMARY": escape(source_summary),
-            "SOURCE_STATUS": escape(source_status),
-            "SOURCE_STATUS_CLASS": "loading" if loading else "",
-            "REFRESH": escape(messages["serve_refresh"]),
+            "WORKSPACE_LABEL": escape(messages["workspace_label"]),
             "SOURCE_MANAGER": escape(messages["serve_source_manager"]),
-            "REPORTS": escape(messages["workspace_reports"]),
-            "AUTH_CONTROL": auth_control,
-            "LANGUAGE_CONTROL": render_language_control(messages, locale),
             "MANAGER_COPY": escape(messages["serve_source_manager_copy"]),
-            "CLOSE": escape(messages["close"]),
             "ADD_SOURCE": escape(messages["serve_add_source"]),
             "SOURCE_FORMS": "".join(
                 [
@@ -68,7 +111,9 @@ def render_serve_source_manager(
                     render_source_add_form("path", messages, adapter_defaults),
                 ]
             ),
-            "HARBOR_CONFIG": render_harbor_config(harbor_mounts, messages),
+            "HARBOR_CONFIG": render_harbor_config(
+                harbor_mounts, harbor_datasets, harbor_revision, messages
+            ),
             "SOURCES": escape(messages["serve_sources"]),
             "RELOAD": escape(messages["serve_reload"]),
             "ARCHIVE_SELECTED": escape(messages["archive_selected"]),
@@ -80,10 +125,11 @@ def render_serve_source_manager(
     )
 
 
-def render_serve_report_ui(messages: dict[str, str], *, role: str = "admin") -> str:
+def render_serve_report_page(messages: dict[str, str], *, role: str = "admin") -> str:
     return replace_template_tokens(
         load_asset_text("serve_report_manager.html"),
         {
+            "WORKSPACE_LABEL": escape(messages["workspace_label"]),
             "REPORTS": escape(messages["workspace_reports"]),
             "REPORTS_COPY": escape(
                 messages[
@@ -92,19 +138,16 @@ def render_serve_report_ui(messages: dict[str, str], *, role: str = "admin") -> 
                     else "workspace_reports_guest_copy"
                 ]
             ),
-            "CLOSE": escape(messages["close"]),
+            "RELOAD": escape(messages["serve_reload"]),
             "REPORT_INVENTORY": escape(messages["report_inventory"]),
             "REPORT_BINDINGS": escape(messages["report_bindings"]),
             "REPORT_BINDINGS_HIDDEN": " hidden" if role != "admin" else "",
             "REPORT_MANAGER_BODY_CLASS": " readonly" if role != "admin" else "",
-            "VIEW_SAVE_DIALOG": render_view_save_dialog(messages, role=role),
         },
     )
 
 
-def render_view_save_dialog(
-    messages: dict[str, str], *, role: str = "admin"
-) -> str:
+def render_view_save_dialog(messages: dict[str, str], *, role: str = "admin") -> str:
     save_view = escape(messages["save_view"])
     cancel = escape(messages["cancel"])
     current_configuration = escape(messages["view_current_configuration"])
@@ -150,36 +193,32 @@ def render_view_save_dialog(
   </div>"""
 
 
-def render_guest_toolbar(
+def render_serve_overlays(
     messages: dict[str, str],
     *,
-    source_summary: str,
-    source_status: str,
-    loading: bool,
+    page: str,
+    role: str,
+    authentication_enabled: bool,
 ) -> str:
-    status_class = "loading" if loading else ""
-    guest_role = escape(messages["serve_guest_role"])
-    workspace_reports = escape(messages["workspace_reports"])
+    parts: list[str] = []
+    if role != "admin" and authentication_enabled:
+        parts.append(render_auth_dialog(messages))
+    if page == "home":
+        parts.append(render_view_save_dialog(messages, role=role))
+    if page in {"home", "reports"}:
+        parts.append(
+            '<aside class="report-reader" id="workspace-report-reader" '
+            "hidden data-serve-only></aside>"
+        )
+    return "".join(parts)
+
+
+def render_auth_dialog(messages: dict[str, str]) -> str:
     login = escape(messages["serve_login"])
     login_copy = escape(messages["serve_login_copy"])
     close = escape(messages["close"])
     admin_password = escape(messages["serve_admin_password"])
     return f"""
-  <section class="serve-source-toolbar" data-serve-only>
-    <div class="serve-source-heading">
-      <h1>__TITLE__</h1>
-      <div class="serve-source-status">
-        <strong data-source-count>{escape(source_summary)}</strong>
-        <span class="{status_class}" data-source-status aria-live="polite">{escape(source_status)}</span>
-      </div>
-    </div>
-    <div class="workspace-description note-body" data-workspace-description hidden></div>
-    <div class="serve-source-actions">
-      <span class="serve-role-badge guest">{guest_role}</span>
-      <button class="action-button" type="button" data-report-manager-open>{workspace_reports}</button>
-      <button class="action-button primary" type="button" data-admin-login-open>{login}</button>
-    </div>
-  </section>
   <div class="auth-backdrop" data-admin-login-dialog hidden data-serve-only>
     <section class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-login-title">
       <header class="source-manager-head">
@@ -286,9 +325,14 @@ def render_source_add_form(
 
 def render_harbor_config(
     mounts: tuple[HarborMount, ...],
+    datasets: tuple[HarborDataset, ...],
+    revision: str,
     messages: dict[str, str],
 ) -> str:
-    existing = "".join(render_harbor_mount_form(mount, messages) for mount in mounts)
+    existing = "".join(
+        render_harbor_mount_form(mount, datasets, revision, messages)
+        for mount in mounts
+    )
     return f"""
           <section class="harbor-config" aria-label="{escape(messages["serve_harbor_config"])}">
             <header class="harbor-config-head">
@@ -296,17 +340,18 @@ def render_harbor_config(
               <span>{escape(messages["serve_harbor_config_copy"])}</span>
             </header>
             <div class="harbor-mount-list">{existing}</div>
-            {render_harbor_mount_form(None, messages)}
+            {render_harbor_mount_form(None, datasets, revision, messages)}
           </section>"""
 
 
 def render_harbor_mount_form(
     mount: HarborMount | None,
+    datasets: tuple[HarborDataset, ...],
+    revision: str,
     messages: dict[str, str],
 ) -> str:
     mount_id = mount.id if mount is not None else ""
     jobs_path = mount.path if mount is not None else ""
-    task_paths = "\n".join(mount.task_paths) if mount is not None else ""
     title = mount_id or messages["serve_add_harbor_mount"]
     original = (
         f'<input name="original_id" type="hidden" value="{escape(mount_id)}">'
@@ -327,20 +372,110 @@ def render_harbor_mount_form(
             <form class="source-form harbor-mount-form" data-harbor-mount-form>
               <strong>{escape(title)}</strong>
               {original}
+              <input name="expected_revision" type="hidden" value="{escape(revision)}">
               <label>{escape(messages["serve_harbor_mount_id"])}
                 <input name="mount_id" autocomplete="off" required value="{escape(mount_id)}">
               </label>
               <label>{escape(messages["serve_harbor_jobs_path"])}
                 <textarea name="jobs_path" autocomplete="off" required rows="2">{escape(jobs_path)}</textarea>
               </label>
-              <label>{escape(messages["serve_harbor_task_paths"])}
-                <textarea name="task_paths" autocomplete="off" rows="3" placeholder="{escape(messages["serve_one_path_per_line"])}">{escape(task_paths)}</textarea>
-              </label>
+              {render_harbor_dataset_choices(mount, datasets, messages)}
               <div class="source-form-actions">
                 {remove}
                 <button class="action-button primary" type="submit">{escape(submit)}</button>
               </div>
             </form>"""
+
+
+def render_harbor_dataset_choices(
+    mount: HarborMount | None,
+    datasets: tuple[HarborDataset, ...],
+    messages: dict[str, str],
+) -> str:
+    selected = set(mount.dataset_ids if mount is not None else ())
+    if not datasets:
+        return (
+            '<p class="copy harbor-dataset-empty">'
+            + escape(messages["harbor_register_dataset_first"])
+            + "</p>"
+        )
+    choices = "".join(
+        '<label class="harbor-dataset-choice">'
+        f'<input type="checkbox" name="dataset_ids" value="{escape(dataset.id)}" '
+        f"{'checked' if dataset.id in selected else ''}>"
+        f"<span><strong>{escape(dataset.id)}</strong>"
+        f"<small>{escape(dataset.path)}</small></span></label>"
+        for dataset in datasets
+    )
+    return f"""
+              <fieldset class="harbor-dataset-choices">
+                <legend>{escape(messages["harbor_mount_datasets"])}</legend>
+                {choices}
+              </fieldset>"""
+
+
+def render_harbor_dataset_page(messages: dict[str, str], *, role: str = "admin") -> str:
+    admin_dataset_actions = ""
+    admin_task_actions = ""
+    admin_file_actions = ""
+    admin_editor_actions = ""
+    if role == "admin":
+        admin_dataset_actions = f"""
+        <button class="action-button" type="button" data-harbor-add-dataset>{escape(messages["harbor_add_dataset"])}</button>
+        <button class="action-button" type="button" data-harbor-register-dataset>{escape(messages["harbor_register_dataset"])}</button>"""
+        admin_task_actions = f"""
+      <div class="harbor-workbench-tools">
+        <button class="action-button" type="button" data-harbor-edit-dataset data-harbor-live-action disabled>{escape(messages["harbor_edit"])}</button>
+        <button class="action-button danger" type="button" data-harbor-remove-dataset data-harbor-live-action disabled>{escape(messages["harbor_remove"])}</button>
+        <button class="action-button primary" type="button" data-harbor-create-task data-harbor-live-action disabled>{escape(messages["harbor_create_task"])}</button>
+        <button class="action-button" type="button" data-harbor-sync-manifest data-harbor-live-action disabled>{escape(messages["harbor_sync_manifest"])}</button>
+        <button class="action-button" type="button" data-harbor-rename-task data-harbor-live-action disabled>{escape(messages["harbor_rename"])}</button>
+        <button class="action-button danger" type="button" data-harbor-trash-task data-harbor-live-action disabled>{escape(messages["harbor_trash"])}</button>
+        <button class="action-button" type="button" data-harbor-restore-task data-harbor-trash-action hidden disabled>{escape(messages["harbor_restore"])}</button>
+        <button class="action-button danger" type="button" data-harbor-purge-task data-harbor-trash-action hidden disabled>{escape(messages["harbor_purge"])}</button>
+        <button class="action-button" type="button" data-harbor-show-trash disabled>{escape(messages["harbor_trash"])}</button>
+        <span class="harbor-operation-status" data-harbor-operation-status aria-live="polite"></span>
+      </div>"""
+        admin_file_actions = f"""
+          <div class="harbor-file-actions" data-harbor-file-actions hidden>
+            <button class="action-button compact" type="button" data-harbor-new-file>{escape(messages["harbor_new_file"])}</button>
+            <button class="action-button compact" type="button" data-harbor-new-directory>{escape(messages["harbor_new_folder"])}</button>
+            <button class="action-button compact" type="button" data-harbor-upload>{escape(messages["harbor_upload"])}</button>
+            <input type="file" data-harbor-upload-input hidden>
+          </div>"""
+        admin_editor_actions = f"""
+            <div class="harbor-editor-actions">
+              <button class="action-button compact" type="button" data-harbor-download hidden>{escape(messages["harbor_download"])}</button>
+              <button class="action-button primary compact" type="button" data-harbor-save disabled>{escape(messages["save"])}</button>
+            </div>"""
+    return replace_template_tokens(
+        load_asset_text("serve_harbor_datasets.html"),
+        {
+            "WORKSPACE_LABEL": escape(messages["workspace_label"]),
+            "DATASETS": escape(messages["harbor_datasets"]),
+            "DATASETS_COPY": escape(
+                messages[
+                    "harbor_datasets_copy"
+                    if role == "admin"
+                    else "harbor_datasets_guest_copy"
+                ]
+            ),
+            "RELOAD": escape(messages["serve_reload"]),
+            "DATASET_EMPTY": escape(messages["harbor_dataset_empty"]),
+            "FILE_EMPTY": escape(messages["harbor_file_empty"]),
+            "EDITOR_EMPTY": escape(messages["harbor_editor_empty"]),
+            "TASKS": escape(messages["harbor_tasks"]),
+            "SELECTED_TASK": escape(messages["harbor_selected_task"]),
+            "TASK_DETAIL_EMPTY": escape(messages["harbor_task_detail_empty"]),
+            "SEARCH": escape(messages["harbor_search"]),
+            "FILES": escape(messages["harbor_files"]),
+            "EDITOR": escape(messages["harbor_editor"]),
+            "ADMIN_DATASET_ACTIONS": admin_dataset_actions,
+            "ADMIN_TASK_ACTIONS": admin_task_actions,
+            "ADMIN_FILE_ACTIONS": admin_file_actions,
+            "ADMIN_EDITOR_ACTIONS": admin_editor_actions,
+        },
+    )
 
 
 def render_adapter_select(

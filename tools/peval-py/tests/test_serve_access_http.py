@@ -165,7 +165,10 @@ class ServeAccessHttpTests(unittest.TestCase):
                     flags=re.DOTALL,
                 )
                 self.assertIn(b"data-admin-login-open", guest_markup)
-                self.assertNotIn(b"data-source-manager-open", guest_markup)
+                self.assertNotIn(b"data-harbor-workbench", guest_markup)
+                self.assertIn(b'href="/datasets"', guest_markup)
+                self.assertIn(b'href="/reports"', guest_markup)
+                self.assertNotIn(b'href="/sources"', guest_markup)
                 self.assertNotIn(b"data-locale-select", guest_markup)
                 self.assertIn(b"data-view-save-dialog", guest_markup)
                 self.assertIn(b'value="browser"', guest_markup)
@@ -196,6 +199,42 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(server, "GET", "/api/sources")
                 self.assertEqual(status, 403)
                 self.assertIn("administrator", json.loads(body)["error"])
+                status, _headers, body = self.request(
+                    server, "GET", "/api/harbor/datasets"
+                )
+                self.assertEqual(status, 200)
+                harbor_inventory = json.loads(body)
+                self.assertEqual(harbor_inventory, {"datasets": []})
+                self.assertNotIn("revision", harbor_inventory)
+                status, _headers, datasets_shell = self.request(
+                    server, "GET", "/datasets"
+                )
+                self.assertEqual(status, 200)
+                datasets_markup = re.sub(
+                    rb"<script(?:\s[^>]*)?>.*?</script>",
+                    b"",
+                    datasets_shell,
+                    flags=re.DOTALL,
+                )
+                self.assertIn(b"data-harbor-workbench", datasets_markup)
+                self.assertIn(b'aria-current="page">Datasets</a>', datasets_markup)
+                self.assertNotIn(b"data-harbor-add-dataset", datasets_markup)
+                self.assertNotIn(b"data-harbor-download", datasets_markup)
+                self.assertNotIn(str(root).encode(), datasets_markup)
+                status, _headers, reports_shell = self.request(
+                    server, "GET", "/reports"
+                )
+                self.assertEqual(status, 200)
+                self.assertIn(b"data-report-manager", reports_shell)
+                status, _headers, _body = self.request(server, "GET", "/sources")
+                self.assertEqual(status, 403)
+                status, _headers, _body = self.request(
+                    server,
+                    "POST",
+                    "/api/harbor/tasks",
+                    {"action": "create"},
+                )
+                self.assertEqual(status, 403)
                 status, _headers, _body = self.request(
                     server,
                     "POST",
@@ -262,11 +301,58 @@ class ServeAccessHttpTests(unittest.TestCase):
                     flags=re.DOTALL,
                 )
                 self.assertIn(b"data-admin-logout", admin_markup)
-                self.assertIn(b"data-source-manager-open", admin_markup)
+                self.assertIn(b'href="/datasets"', admin_markup)
+                self.assertIn(b'href="/reports"', admin_markup)
+                self.assertIn(b'href="/sources"', admin_markup)
+                self.assertNotIn(b"data-harbor-workbench", admin_markup)
+                self.assertLess(
+                    admin_markup.index(b'href="/datasets"'),
+                    admin_markup.index(b'href="/reports"'),
+                )
+                self.assertLess(
+                    admin_markup.index(b'href="/reports"'),
+                    admin_markup.index(b'href="/sources"'),
+                )
                 self.assertIn(b"data-locale-select", admin_markup)
                 self.assertIn(b'value="workspace" checked', admin_markup)
                 self.assertIn(b'value="browser"', admin_markup)
                 self.assertNotIn(b"data-admin-login-open", admin_markup)
+                status, _headers, admin_datasets = self.request(
+                    server, "GET", "/datasets", cookie=cookie
+                )
+                self.assertEqual(status, 200)
+                admin_datasets_markup = re.sub(
+                    rb"<script(?:\s[^>]*)?>.*?</script>",
+                    b"",
+                    admin_datasets,
+                    flags=re.DOTALL,
+                )
+                self.assertIn(b"data-harbor-workbench", admin_datasets_markup)
+                self.assertNotIn(b"data-source-manager", admin_datasets_markup)
+                status, _headers, admin_reports = self.request(
+                    server, "GET", "/reports", cookie=cookie
+                )
+                self.assertEqual(status, 200)
+                admin_reports_markup = re.sub(
+                    rb"<script(?:\s[^>]*)?>.*?</script>",
+                    b"",
+                    admin_reports,
+                    flags=re.DOTALL,
+                )
+                self.assertIn(b"data-report-manager", admin_reports_markup)
+                self.assertNotIn(b"data-harbor-workbench", admin_reports_markup)
+                status, _headers, admin_sources = self.request(
+                    server, "GET", "/sources", cookie=cookie
+                )
+                self.assertEqual(status, 200)
+                admin_sources_markup = re.sub(
+                    rb"<script(?:\s[^>]*)?>.*?</script>",
+                    b"",
+                    admin_sources,
+                    flags=re.DOTALL,
+                )
+                self.assertIn(b"data-source-manager", admin_sources_markup)
+                self.assertNotIn(b"data-report-manager", admin_sources_markup)
                 status, _headers, body = self.request(
                     server, "GET", "/api/sources", cookie=cookie
                 )
@@ -482,7 +568,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                             "path": "/srv/regrade/source-trial",
                             "trial_id": "original-trial",
                             "future_log_path": "/srv/future/regrade.log",
-                        }
+                        },
                     },
                 }
             )

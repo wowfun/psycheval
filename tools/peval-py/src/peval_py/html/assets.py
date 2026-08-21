@@ -21,6 +21,7 @@ ASSET_BUNDLES = {
         "report_css/16-timeline.css",
         "report_css/20-serve-toolbar.css",
         "report_css/22-source-forms.css",
+        "report_css/23-harbor-workbench.css",
         "report_css/24-source-list-export.css",
         "report_css/26-step-drawer.css",
         "report_css/28-workspace-reports.css",

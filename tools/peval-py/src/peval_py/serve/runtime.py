@@ -166,15 +166,15 @@ class ServeRuntime:
         self, views: Sequence[WorkspaceView]
     ) -> None:
         server_names = {view.name for view in self.workspace_views.list()}
-        conflict = next((view.name for view in views if view.name in server_names), None)
+        conflict = next(
+            (view.name for view in views if view.name in server_names), None
+        )
         if conflict is not None:
             raise WorkspaceViewConflict(
                 f"workspace saved view already exists: {conflict}"
             )
 
-    def browser_view_summaries(
-        self, views: Sequence[WorkspaceView]
-    ) -> dict[str, Any]:
+    def browser_view_summaries(self, views: Sequence[WorkspaceView]) -> dict[str, Any]:
         payload = self.catalog.summarize_saved_views(
             [(view.name, view.filters, view.group_by) for view in views]
         )
@@ -242,9 +242,7 @@ class ServeRuntime:
         names: Sequence[str],
         browser_views: Sequence[WorkspaceView] = (),
     ) -> list[SummaryWorksheet]:
-        views = [self.workspace_views.get(name) for name in names] + list(
-            browser_views
-        )
+        views = [self.workspace_views.get(name) for name in names] + list(browser_views)
         payload = self.catalog.summarize_saved_views(
             [(view.name, view.filters, view.group_by) for view in views]
         )
@@ -315,6 +313,21 @@ class ServeRuntime:
         if result is not None:
             payload["result"] = result
         return payload
+
+    def mutate_with_background_reconcile(
+        self,
+        change_type: str,
+        action: Callable[[], Any],
+    ) -> dict[str, Any]:
+        result, operation = self.catalog.mutate_with_background_reconcile(
+            change_type,
+            action,
+        )
+        return {
+            "change": change_type,
+            "result": result,
+            "operation": operation.to_dict(),
+        }
 
     def start_operation(
         self,

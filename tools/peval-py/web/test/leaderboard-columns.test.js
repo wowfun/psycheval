@@ -68,6 +68,26 @@ test("auto-hides query-empty columns but manual show and hide win", () => {
   assert.deepEqual(queryWide, { session: true, ttft: true, cache: false });
 });
 
+test("default-hidden columns remain manually showable", () => {
+  const defaultHiddenColumns = [
+    { key: "provider", defaultVisible: false, value: row => row.provider },
+    { key: "session", value: row => row.session },
+  ];
+  const keys = defaultHiddenColumns.map(column => column.key);
+  const presence = presenceForColumns(defaultHiddenColumns, [{ provider: "openai", session: "s-1" }]);
+
+  assert.deepEqual(
+    resolveColumns(defaultHiddenColumns, normalizeColumnLayout(keys, null), presence).map(column => column.key),
+    ["session"],
+  );
+  assert.deepEqual(
+    resolveColumns(defaultHiddenColumns, normalizeColumnLayout(keys, {
+      visibility: { provider: "show" },
+    }), presence).map(column => column.key),
+    ["provider", "session"],
+  );
+});
+
 test("moves columns and persists a workspace-scoped versioned layout", () => {
   assert.deepEqual(moveColumn(["session", "ttft", "cache"], "cache", -1), ["session", "cache", "ttft"]);
   const entries = new Map();

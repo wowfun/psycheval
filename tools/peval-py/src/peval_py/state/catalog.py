@@ -572,6 +572,73 @@ class WorkspaceCatalog:
                 self._checking = False
             self._writer_lock.release()
 
+    def mutate_with_background_reconcile(
+        self,
+        operation_type: str,
+        action: Callable[[], Any],
+    ) -> tuple[Any, OperationStatus]:
+        """Commit one workspace mutation, then reconcile it in the background."""
+        if not self._writer_lock.acquire(blocking=False):
+            raise CatalogBusyError(
+                "serve catalog is busy with another writer operation"
+            )
+        status: OperationStatus | None = None
+        try:
+            with self._state_lock:
+                if self._checking:
+                    raise CatalogBusyError("serve catalog is checking runs")
+            with self._workspace_writer_lease():
+                result = action()
+            status = OperationStatus(
+                operation_id=uuid.uuid4().hex,
+                operation_type=operation_type,
+                state="queued",
+                completed=0,
+                total=1,
+            )
+            with self._state_lock:
+                self._current_operation = status
+                self._checking = True
+        finally:
+            self._writer_lock.release()
+        assert status is not None
+        threading.Thread(
+            target=self._run_reconcile_operation,
+            args=(status,),
+            daemon=True,
+        ).start()
+        return result, OperationStatus(**status.to_dict())
+
+    def _run_reconcile_operation(self, status: OperationStatus) -> None:
+        try:
+            if not self._writer_lock.acquire(blocking=False):
+                raise CatalogBusyError(
+                    "serve catalog is busy with another writer operation"
+                )
+            try:
+                with self._workspace_writer_lease():
+                    with self._state_lock:
+                        status.state = "running"
+                    self._reconcile_locked()
+                    with self._state_lock:
+                        status.completed = 1
+                        status.successes.append({"index": 0, "status": "ok"})
+            finally:
+                self._writer_lock.release()
+            with self._state_lock:
+                status.state = "completed"
+        except Exception as exc:  # noqa: BLE001 - operation thread boundary.
+            with self._state_lock:
+                status.state = "failed"
+                status.failures.append(
+                    {"index": 0, "status": "error", "error": str(exc)}
+                )
+        finally:
+            with self._state_lock:
+                self._checking = False
+                self._recent_operation = status
+                self._current_operation = status
+
     def operation(self, operation_id: str) -> OperationStatus:
         with self._state_lock:
             for status in (self._current_operation, self._recent_operation):

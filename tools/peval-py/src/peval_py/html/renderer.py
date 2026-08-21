@@ -6,10 +6,14 @@ from html import escape
 from importlib import import_module
 from typing import Any
 
-from peval_py.config import HarborMount
+from peval_py.config import HarborDataset, HarborMount
 from peval_py.html.assets import load_asset_text, render_echarts_script
 from peval_py.html.serve_controls import (
-    render_serve_report_ui,
+    render_harbor_dataset_page,
+    render_serve_header,
+    render_serve_home,
+    render_serve_overlays,
+    render_serve_report_page,
     render_serve_source_manager,
 )
 from peval_py.i18n import messages_for, normalize_locale
@@ -23,12 +27,15 @@ def render_html(
     reports: list[dict[str, Any]] | None = None,
     adapter_defaults: dict[str, str] | None = None,
     harbor_mounts: tuple[HarborMount, ...] | None = None,
+    harbor_datasets: tuple[HarborDataset, ...] | None = None,
+    harbor_revision: str | None = None,
     loading: bool = False,
     load_error: str | None = None,
     workspace_id: str | None = None,
     workspace_description: str | None = None,
     role: str = "admin",
     authentication_enabled: bool = False,
+    serve_page: str = "home",
 ) -> str:
     normalized_mode = normalize_render_mode(mode)
     return _render_html_document(
@@ -39,12 +46,15 @@ def render_html(
         reports=reports,
         adapter_defaults=adapter_defaults,
         harbor_mounts=harbor_mounts,
+        harbor_datasets=harbor_datasets,
+        harbor_revision=harbor_revision,
         loading=loading,
         load_error=load_error,
         workspace_id=workspace_id,
         workspace_description=workspace_description,
         role=role,
         authentication_enabled=authentication_enabled,
+        serve_page=serve_page,
     )
 
 
@@ -75,6 +85,8 @@ def _render_html_document(
     reports: list[dict[str, Any]] | None = None,
     adapter_defaults: dict[str, str] | None = None,
     harbor_mounts: tuple[HarborMount, ...] | None = None,
+    harbor_datasets: tuple[HarborDataset, ...] | None = None,
+    harbor_revision: str | None = None,
     loading: bool = False,
     load_error: str | None = None,
     snapshot: dict[str, Any] | None = None,
@@ -83,8 +95,10 @@ def _render_html_document(
     workspace_description: str | None = None,
     role: str = "admin",
     authentication_enabled: bool = False,
+    serve_page: str = "home",
 ) -> str:
     normalized_mode = mode
+    normalized_serve_page = normalize_serve_page(serve_page)
     normalized_locale = normalize_locale(locale)
     messages = messages_for(normalized_locale)
     serve_source_payload = (
@@ -103,6 +117,7 @@ def _render_html_document(
         render_options["workspace_id"] = workspace_id or "default"
         render_options["role"] = role
         render_options["authentication_enabled"] = bool(authentication_enabled)
+        render_options["serve_page"] = normalized_serve_page
         if load_error:
             render_options["load_error"] = load_error
     elif normalized_mode == "workspace_snapshot":
@@ -116,74 +131,65 @@ def _render_html_document(
     payload = load_asset_text("report.html").replace(
         "__LANG__", escape(normalized_locale)
     )
-    payload = payload.replace(
-        "__TITLE_REGION__",
-        (
-            ""
-            if normalized_mode == "serve"
-            else (
-                '<section class="topline workspace-snapshot-header">'
-                "<h1>__TITLE__</h1>"
-                '<div class="workspace-description note-body" '
-                "data-workspace-description hidden></div>"
-                "</section>"
-            )
-            if normalized_mode == "workspace_snapshot"
-            else '<section class="topline"><h1>__TITLE__</h1></section>'
-        ),
-    )
     body_class = (
         "serve-mode workspace-snapshot-mode"
         if normalized_mode == "workspace_snapshot"
-        else f"{normalized_mode}-mode"
+        else (
+            f"serve-mode serve-page-{normalized_serve_page}"
+            if normalized_mode == "serve"
+            else f"{normalized_mode}-mode"
+        )
     )
     payload = payload.replace("__BODY_CLASS__", escape(body_class))
-    payload = payload.replace(
-        "__SERVE_SOURCE_MANAGER__",
-        render_serve_source_manager(
+    if normalized_mode == "serve":
+        serve_header = render_serve_header(
             serve_source_payload,
             messages,
             normalized_locale,
-            adapter_defaults or {},
-            harbor_mounts or (),
+            page=normalized_serve_page,
             loading=bool(loading),
             role=role,
             authentication_enabled=authentication_enabled,
         )
-        if normalized_mode == "serve"
-        else "",
-    )
-    payload = payload.replace(
-        "__SERVE_REPORT_UI__",
-        render_serve_report_ui(messages, role=role)
-        if normalized_mode == "serve"
-        else (
-            '<aside class="report-reader" id="workspace-report-reader" hidden></aside>'
-            if normalized_mode == "workspace_snapshot"
-            else ""
-        ),
-    )
-    payload = payload.replace(
-        "__SERVE_SIDE_REGION__",
-        (
-            '<div class="workspace-side-region" id="workspace-side-region">'
-            '<aside class="workspace-views" id="workspace-views" hidden data-serve-only></aside>'
-            '<aside class="step-drawer" id="step-drawer" hidden></aside>'
-            "</div>"
+        if normalized_serve_page == "home":
+            page_content = render_serve_home()
+        elif normalized_serve_page == "datasets":
+            page_content = render_harbor_dataset_page(messages, role=role)
+        elif normalized_serve_page == "reports":
+            page_content = render_serve_report_page(messages, role=role)
+        else:
+            page_content = render_serve_source_manager(
+                serve_source_payload,
+                messages,
+                adapter_defaults or {},
+                harbor_mounts or (),
+                harbor_datasets or (),
+                harbor_revision or "",
+                loading=bool(loading),
+            )
+        serve_overlays = render_serve_overlays(
+            messages,
+            page=normalized_serve_page,
+            role=role,
+            authentication_enabled=authentication_enabled,
         )
-        if normalized_mode in {"serve", "workspace_snapshot"}
-        else "",
-    )
-    payload = payload.replace(
-        "__REPORT_STEP_DRAWER__",
-        '<aside class="step-drawer" id="step-drawer" hidden></aside>'
-        if normalized_mode == "report"
-        else "",
-    )
+    else:
+        serve_header = ""
+        page_content = render_report_content(normalized_mode)
+        serve_overlays = (
+            '<aside class="step-drawer" id="step-drawer" hidden></aside>'
+            if normalized_mode == "report"
+            else '<aside class="report-reader" id="workspace-report-reader" hidden></aside>'
+        )
+    payload = payload.replace("__SERVE_HEADER__", serve_header)
+    payload = payload.replace("__PAGE_CONTENT__", page_content)
+    payload = payload.replace("__SERVE_OVERLAYS__", serve_overlays)
     payload = payload.replace("__TITLE__", escape(messages[title_key]))
     if normalized_mode == "workspace_snapshot":
         inline_echarts = str(echarts_js or "").replace("</script", "<\\/script")
         echarts_script = f"<script>{inline_echarts}</script>"
+    elif normalized_mode == "serve" and normalized_serve_page != "home":
+        echarts_script = ""
     else:
         echarts_script = render_echarts_script(normalized_mode)
     payload = payload.replace("__ECHARTS_SCRIPT__", echarts_script)
@@ -227,12 +233,15 @@ def render_serve_html(
     reports: list[dict[str, Any]] | None = None,
     adapter_defaults: dict[str, str] | None = None,
     harbor_mounts: tuple[HarborMount, ...] | None = None,
+    harbor_datasets: tuple[HarborDataset, ...] | None = None,
+    harbor_revision: str | None = None,
     loading: bool = False,
     load_error: str | None = None,
     workspace_id: str | None = None,
     workspace_description: str | None = None,
     role: str = "admin",
     authentication_enabled: bool = False,
+    serve_page: str = "home",
 ) -> str:
     return render_html(
         report,
@@ -242,13 +251,56 @@ def render_serve_html(
         reports=reports,
         adapter_defaults=adapter_defaults,
         harbor_mounts=harbor_mounts,
+        harbor_datasets=harbor_datasets,
+        harbor_revision=harbor_revision,
         loading=loading,
         load_error=load_error,
         workspace_id=workspace_id,
         workspace_description=workspace_description,
         role=role,
         authentication_enabled=authentication_enabled,
+        serve_page=serve_page,
     )
+
+
+def normalize_serve_page(value: object) -> str:
+    page = str(value or "home").strip().lower()
+    if page not in {"home", "datasets", "reports", "sources"}:
+        raise ValueError(f"unsupported serve page: {page}")
+    return page
+
+
+def render_report_content(mode: str) -> str:
+    if mode == "workspace_snapshot":
+        title = (
+            '<section class="topline workspace-snapshot-header">'
+            "<h1>__TITLE__</h1>"
+            '<div class="workspace-description note-body" '
+            "data-workspace-description hidden></div>"
+            "</section>"
+        )
+        side = (
+            '<div class="workspace-side-region" id="workspace-side-region">'
+            '<aside class="workspace-views" id="workspace-views" hidden data-serve-only></aside>'
+            '<aside class="step-drawer" id="step-drawer" hidden></aside>'
+            "</div>"
+        )
+    else:
+        title = '<section class="topline"><h1>__TITLE__</h1></section>'
+        side = ""
+    return f"""
+  <div class="workspace-content">
+    <main class="workspace-main">
+      {title}
+      <section id="report-notes"></section>
+      <div class="workspace-main-scroll" data-workspace-main-scroll>
+        <section class="panel-stack workspace-leaderboard-region" id="leaderboard-region"></section>
+        <section class="panel-stack" id="comparison"></section>
+        <section class="trace-panel" id="trace"></section>
+      </div>
+    </main>
+    {side}
+  </div>"""
 
 
 def normalize_render_mode(mode: object) -> str:

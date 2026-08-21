@@ -1,0 +1,58 @@
+  <section class="workspace-page harbor-workbench" data-harbor-workbench data-serve-only aria-labelledby="harbor-workbench-title">
+    <header class="workspace-page-head harbor-workbench-head">
+      <div>
+        <p class="eyebrow">__WORKSPACE_LABEL__</p>
+        <h1 id="harbor-workbench-title">__DATASETS__</h1>
+        <p class="copy">__DATASETS_COPY__</p>
+      </div>
+      <div class="harbor-workbench-head-actions">
+        <button class="action-button" type="button" data-harbor-reload>__RELOAD__</button>
+        __ADMIN_DATASET_ACTIONS__
+      </div>
+    </header>
+    <p class="serve-notice harbor-workbench-status workspace-page-status" data-harbor-workbench-status aria-live="polite" hidden></p>
+    <section class="harbor-overview-panel" aria-labelledby="harbor-overview-title">
+      <div class="harbor-overview-head">
+        <div>
+          <h2 id="harbor-overview-title">__TASKS__</h2>
+          <span data-harbor-overview-count></span>
+        </div>
+        <label class="harbor-search">
+          <span class="sr-only">__SEARCH__</span>
+          <input type="search" data-harbor-search placeholder="__SEARCH__" autocomplete="off">
+        </label>
+      </div>
+      __ADMIN_TASK_ACTIONS__
+      <div class="harbor-overview" data-harbor-overview>
+        <p class="copy harbor-empty">__DATASET_EMPTY__</p>
+      </div>
+    </section>
+    <section class="harbor-task-detail" aria-labelledby="harbor-task-detail-title">
+      <header class="harbor-task-detail-head">
+        <div>
+          <p class="eyebrow">__SELECTED_TASK__</p>
+          <h2 id="harbor-task-detail-title" data-harbor-selected-title>__TASK_DETAIL_EMPTY__</h2>
+        </div>
+        <span data-harbor-selected-meta></span>
+      </header>
+      <div class="harbor-workbench-grid">
+        <section class="harbor-pane harbor-files-pane" aria-label="__FILES__">
+          __ADMIN_FILE_ACTIONS__
+          <div class="harbor-file-tree" data-harbor-file-tree>
+            <p class="copy harbor-empty">__FILE_EMPTY__</p>
+          </div>
+        </section>
+        <section class="harbor-pane harbor-editor-pane" aria-label="__EDITOR__">
+          <header class="harbor-editor-head">
+            <div>
+              <strong data-harbor-editor-path>__EDITOR_EMPTY__</strong>
+              <span data-harbor-editor-meta></span>
+            </div>
+            __ADMIN_EDITOR_ACTIONS__
+          </header>
+          <textarea class="harbor-editor" data-harbor-editor spellcheck="false" disabled></textarea>
+          <section class="harbor-diagnostics" data-harbor-diagnostics aria-live="polite"></section>
+        </section>
+      </div>
+    </section>
+  </section>

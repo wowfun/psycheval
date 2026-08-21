@@ -87,7 +87,7 @@ test("initial Catalog sort is shown on the corresponding browser column", () => 
 
 test("the last visible data column remains hideable", () => {
   runtime.state.catalogRows = [];
-  runtime.state.catalogPage.column_presence = { task_name: 1 };
+  runtime.state.catalogPage.column_presence = { task_name: 1, model_provider: 1 };
   runtime.state.leaderboardColumnDraft = null;
   runtime.state.leaderboardColumnLayout = null;
 
@@ -97,6 +97,9 @@ test("the last visible data column remains hideable", () => {
   const visibility = host.querySelector('[data-column-visible="task_name"]');
   assert.equal(visibility.checked, true);
   assert.equal(visibility.disabled, false);
+  const providerVisibility = host.querySelector('[data-column-visible="model_provider"]');
+  assert.equal(providerVisibility.checked, false);
+  assert.equal(providerVisibility.disabled, false);
 });
 
 test("column draft actions restore focus after replacing the control panel", () => {
@@ -447,31 +450,41 @@ test("Category grouping keeps missing values separate from a literal dash catego
   );
 });
 
-test("modal surfaces are mutually exclusive and restore focus", () => {
+test("remaining dialog surfaces are mutually exclusive and restore focus", () => {
   const opener = document.createElement("button");
+  const login = document.createElement("div");
+  const savedView = document.createElement("div");
+  login.dataset.adminLoginDialog = "";
+  login.innerHTML = '<section aria-modal="true"><button>Login</button></section>';
+  savedView.dataset.viewSaveDialog = "";
+  savedView.innerHTML = '<section aria-modal="true"><button>Save</button></section>';
+  login.hidden = true;
+  savedView.hidden = true;
   document.body.append(opener);
+  document.body.append(login, savedView);
   opener.focus();
-  const source = document.querySelector("[data-source-manager]");
-  const report = document.querySelector("[data-report-manager]");
 
-  modals.openModalSurface(source, {
+  modals.openModalSurface(login, {
     opener,
-    bodyClass: "source-manager-open",
-    focusTarget: source.querySelector("button"),
+    bodyClass: "admin-login-open",
+    focusTarget: login.querySelector("button"),
   });
-  assert.equal(source.hidden, false);
-  assert.equal(document.activeElement, source.querySelector("button"));
+  assert.equal(login.hidden, false);
+  assert.equal(document.activeElement, login.querySelector("button"));
 
-  modals.openModalSurface(report, {
+  modals.openModalSurface(savedView, {
     opener,
-    bodyClass: "report-manager-open",
-    focusTarget: report.querySelector("button"),
+    bodyClass: "view-save-open",
+    focusTarget: savedView.querySelector("button"),
   });
-  assert.equal(source.hidden, true);
-  assert.equal(report.hidden, false);
+  assert.equal(login.hidden, true);
+  assert.equal(savedView.hidden, false);
 
-  modals.closeModalSurface(report);
+  modals.closeModalSurface(savedView);
   assert.equal(document.activeElement, opener);
+  login.remove();
+  savedView.remove();
+  opener.remove();
 });
 
 test("Reports Manager distinguishes loading from empty and clears old errors", () => {

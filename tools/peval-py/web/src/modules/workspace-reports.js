@@ -1,10 +1,10 @@
 import { $, adminMode, esc, listValue, lower, readableServeSources, renderComparisonPanels, renderReadOnlySourceCategory, renderReadOnlySourceTags, serveMode, sourceCategoryEditValue, sourceCategoryFor, sourceCategoryValue, sourceTagsFor, state, t, workspaceDisplayMode, workspaceSnapshotMode } from "./runtime.js";
 import { bindDataTableEditors } from "./data-tables.js";
 import { renderStepDrawer } from "./trajectory-trace.js";
-import { closeServeSourceManager, sourceDisplayLabel } from "./source-manager.js";
+import { sourceDisplayLabel } from "./source-manager.js";
 import { commitSourceCellEdit, existingSourceCategoryOptions, serveApi, setServeStatus } from "./serve-effects.js";
 import { leaderboardRows, visibleSelectedSourceKeys } from "./serve-catalog.js";
-import { closeModalSurface, focusSoon, openModalSurface } from "./modal-surfaces.js";
+import { focusSoon } from "./modal-surfaces.js";
 
 function reportMessage(key, fallback, values = {}) {
   let message = String(t(key, fallback));
@@ -181,33 +181,28 @@ async function attachWorkspaceReport(button) {
 }
 
 function bindWorkspaceReportGlobalControls() {
-  document.querySelectorAll("[data-report-manager-open]").forEach(button => {
+  document.querySelectorAll("[data-report-manager-reload]").forEach(button => {
     button.addEventListener("click", event => {
       event.preventDefault();
-      openWorkspaceReportManager(button);
+      loadWorkspaceReportManagerData();
     });
   });
-  document.querySelectorAll("[data-report-manager-close]").forEach(button => {
-    button.addEventListener("click", event => {
+  if (document.querySelector("[data-report-manager]")) {
+    window.addEventListener("beforeunload", event => {
+      if (!workspaceReportBindingsChanged()) return;
       event.preventDefault();
-      closeWorkspaceReportManager();
+      event.returnValue = "";
     });
-  });
-  const manager = document.querySelector("[data-report-manager]");
-  manager?.addEventListener?.("click", event => {
-    if (event.target === manager) closeWorkspaceReportManager();
-  });
+  }
 }
 
 function workspaceReportManagerOpen() {
-  const manager = document.querySelector("[data-report-manager]");
-  return Boolean(manager && !manager.hidden);
+  return Boolean(document.querySelector("[data-report-manager]"));
 }
 
 function openWorkspaceReportManager(opener = null) {
   const manager = document.querySelector("[data-report-manager]");
-  if (!manager) return;
-  closeServeSourceManager();
+  if (!manager) return false;
   closeWorkspaceReportReader({ restoreFocus: false });
   state.selectedStep = null;
   renderStepDrawer();
@@ -215,13 +210,12 @@ function openWorkspaceReportManager(opener = null) {
     state.reportManager.selectedId = workspaceReports()[0]?.report_id || null;
     syncWorkspaceReportDraft();
   }
-  openModalSurface(manager, {
-    opener,
-    bodyClass: "report-manager-open",
-    focusTarget: manager.querySelector("[data-report-manager-close]"),
-  });
   renderWorkspaceReportManager();
-  loadWorkspaceReportManagerData();
+  return loadWorkspaceReportManagerData();
+}
+
+function initializeWorkspaceReportPage() {
+  return openWorkspaceReportManager();
 }
 
 async function loadWorkspaceReportManagerData(changes = {}) {
@@ -273,8 +267,7 @@ async function loadWorkspaceReportManagerData(changes = {}) {
 }
 
 function closeWorkspaceReportManager(options = {}) {
-  const manager = document.querySelector("[data-report-manager]");
-  return closeModalSurface(manager, options);
+  return false;
 }
 
 function syncWorkspaceReportDraft() {
@@ -480,9 +473,8 @@ function bindWorkspaceReportManagerControls() {
   manager.querySelectorAll?.("[data-report-manager-preview]").forEach(button => {
     button.addEventListener("click", () => {
       const reportId = button.dataset.reportManagerPreview;
-      closeWorkspaceReportManager({ restoreFocus: false });
       openWorkspaceReportReader(reportId, {
-        opener: document.querySelector("[data-report-manager-open]")
+        opener: button
       });
     });
   });
@@ -624,7 +616,6 @@ function setWorkspaceReportManagerStatus(message, error = false) {
 function openWorkspaceReportReader(reportId, options = {}) {
   const report = workspaceReportForId(reportId);
   if (!report) return false;
-  closeWorkspaceReportManager({ restoreFocus: false });
   state.reportReader.openId = report.report_id;
   state.reportReader.opener = options.opener || document.activeElement || null;
   state.selectedStep = null;
@@ -858,6 +849,7 @@ export {
   fitWorkspaceReportReaderPreview,
   focusSoon,
   focusWorkspaceReportSearch,
+  initializeWorkspaceReportPage,
   loadWorkspaceReportManagerData,
   normalizedWorkspaceReports,
   openWorkspaceReportManager,

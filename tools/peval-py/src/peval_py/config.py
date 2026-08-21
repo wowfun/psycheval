@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
+import tempfile
 import tomllib
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
@@ -16,6 +18,7 @@ HARBOR_MOUNT_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 DEFAULT_DB_PATH_RE = re.compile(r"^\s*default_db_path\s*=")
 TABLE_HEADER_RE = re.compile(r"^\s*\[([^\]\n]+)\]\s*(?:#.*)?$")
 HARBOR_MOUNT_HEADER_RE = re.compile(r"^\s*\[\[\s*harbor\.mounts\s*\]\]\s*(?:#.*)?$")
+HARBOR_DATASET_HEADER_RE = re.compile(r"^\s*\[\[\s*harbor\.datasets\s*\]\]\s*(?:#.*)?$")
 PEVAL_PY_CONFIG = "peval-py.toml"
 WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 WINDOWS_DRIVE_MOUNT_ROOT = Path("/mnt")
@@ -37,10 +40,16 @@ class DbMapping:
 
 
 @dataclass(frozen=True)
+class HarborDataset:
+    id: str
+    path: str
+
+
+@dataclass(frozen=True)
 class HarborMount:
     id: str
     path: str
-    task_paths: tuple[str, ...] = ()
+    dataset_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -65,6 +74,7 @@ class ToolConfig:
     adapter_default_db_paths: dict[str, str] = dataclass_field(
         default_factory=dict, repr=False
     )
+    harbor_datasets: tuple[HarborDataset, ...] = ()
     harbor_mounts: tuple[HarborMount, ...] = ()
 
 
@@ -148,47 +158,89 @@ def apply_toml_config(
                 "legacy [harbor].roots is unsupported; initialize a new workspace "
                 "and configure [[harbor.mounts]] with id and path"
             )
-        unknown = sorted(set(harbor) - {"mounts"})
+        unknown = sorted(set(harbor) - {"datasets", "mounts"})
         if unknown:
             raise ValueError(f"unknown harbor config field: {unknown[0]}")
-        raw_mounts = harbor.get("mounts", [])
+        raw_datasets = harbor.get("datasets")
+        datasets = list(config.harbor_datasets)
+        if raw_datasets is not None:
+            if not isinstance(raw_datasets, list):
+                raise ValueError("harbor.datasets must be an array of tables")
+            datasets = []
+            seen_dataset_ids: set[str] = set()
+            seen_dataset_paths: set[str] = set()
+            for index, raw_dataset in enumerate(raw_datasets):
+                if not isinstance(raw_dataset, dict):
+                    raise ValueError(f"harbor.datasets[{index}] must be a TOML table")
+                dataset_unknown = sorted(set(raw_dataset) - {"id", "path"})
+                if dataset_unknown:
+                    raise ValueError(
+                        f"unknown harbor dataset field: {dataset_unknown[0]}"
+                    )
+                dataset_id = _harbor_id(raw_dataset.get("id"), kind="dataset")
+                raw_path = raw_dataset.get("path")
+                if not isinstance(raw_path, str) or not raw_path.strip():
+                    raise ValueError("harbor dataset path must be a non-empty string")
+                dataset_path = _lexical_config_path(raw_path, base_dir=base_dir)
+                path_identity = os.path.normcase(os.path.normpath(dataset_path))
+                if dataset_id in seen_dataset_ids:
+                    raise ValueError(f"duplicate harbor dataset id: {dataset_id}")
+                if path_identity in seen_dataset_paths:
+                    raise ValueError(f"duplicate harbor dataset path: {dataset_path}")
+                seen_dataset_ids.add(dataset_id)
+                seen_dataset_paths.add(path_identity)
+                datasets.append(HarborDataset(id=dataset_id, path=dataset_path))
+
+        raw_mounts = harbor.get("mounts")
+        if raw_mounts is None:
+            raw_mounts = [
+                {"id": mount.id, "path": mount.path, "dataset_ids": mount.dataset_ids}
+                for mount in config.harbor_mounts
+            ]
         if not isinstance(raw_mounts, list):
             raise ValueError("harbor.mounts must be an array of tables")
         mounts: list[HarborMount] = []
         seen_ids: set[str] = set()
         seen_paths: set[str] = set()
-        seen_task_paths: set[str] = set()
+        dataset_id_set = {dataset.id for dataset in datasets}
         for index, raw_mount in enumerate(raw_mounts):
             if not isinstance(raw_mount, dict):
                 raise ValueError(f"harbor.mounts[{index}] must be a TOML table")
-            mount_unknown = sorted(set(raw_mount) - {"id", "path", "task_paths"})
+            if "task_paths" in raw_mount:
+                raise ValueError(
+                    "harbor.mounts.task_paths is no longer supported; register each "
+                    "Dataset with [[harbor.datasets]] id/path, then reference it with "
+                    'dataset_ids = ["dataset-id"] in [[harbor.mounts]]'
+                )
+            mount_unknown = sorted(set(raw_mount) - {"id", "path", "dataset_ids"})
             if mount_unknown:
                 raise ValueError(f"unknown harbor mount field: {mount_unknown[0]}")
-            mount_id = str(raw_mount.get("id") or "").strip()
-            if HARBOR_MOUNT_ID_RE.fullmatch(mount_id) is None:
-                raise ValueError(
-                    "harbor mount id must be a lowercase path-safe identifier"
-                )
+            mount_id = _harbor_id(raw_mount.get("id"), kind="mount")
             raw_path = raw_mount.get("path")
             if not isinstance(raw_path, str) or not raw_path.strip():
                 raise ValueError("harbor mount path must be a non-empty string")
             mount_path = _lexical_config_path(raw_path, base_dir=base_dir)
             path_identity = os.path.normcase(os.path.normpath(mount_path))
-            raw_task_paths = raw_mount.get("task_paths", [])
-            if not isinstance(raw_task_paths, list):
+            raw_dataset_ids = raw_mount.get("dataset_ids", [])
+            if not isinstance(raw_dataset_ids, (list, tuple)):
                 raise ValueError(
-                    f"harbor.mounts[{index}].task_paths must be an array of strings"
+                    f"harbor.mounts[{index}].dataset_ids must be an array of strings"
                 )
-            task_paths: list[str] = []
-            for raw_task_path in raw_task_paths:
-                if not isinstance(raw_task_path, str) or not raw_task_path.strip():
-                    raise ValueError("harbor task path must be a non-empty string")
-                task_path = _lexical_config_path(raw_task_path, base_dir=base_dir)
-                task_identity = os.path.normcase(os.path.normpath(task_path))
-                if task_identity in seen_task_paths:
-                    raise ValueError(f"duplicate harbor task path: {task_path}")
-                seen_task_paths.add(task_identity)
-                task_paths.append(task_path)
+            dataset_ids: list[str] = []
+            seen_mount_dataset_ids: set[str] = set()
+            for raw_dataset_id in raw_dataset_ids:
+                dataset_id = _harbor_id(raw_dataset_id, kind="dataset")
+                if dataset_id in seen_mount_dataset_ids:
+                    raise ValueError(
+                        f"duplicate dataset id {dataset_id} in harbor mount {mount_id}"
+                    )
+                if dataset_id not in dataset_id_set:
+                    raise ValueError(
+                        f"harbor mount {mount_id} references unknown dataset id: "
+                        f"{dataset_id}"
+                    )
+                seen_mount_dataset_ids.add(dataset_id)
+                dataset_ids.append(dataset_id)
             if mount_id in seen_ids:
                 raise ValueError(f"duplicate harbor mount id: {mount_id}")
             if path_identity in seen_paths:
@@ -199,10 +251,14 @@ def apply_toml_config(
                 HarborMount(
                     id=mount_id,
                     path=mount_path,
-                    task_paths=tuple(task_paths),
+                    dataset_ids=tuple(dataset_ids),
                 )
             )
-        config = replace(config, harbor_mounts=tuple(mounts))
+        config = replace(
+            config,
+            harbor_datasets=tuple(datasets),
+            harbor_mounts=tuple(mounts),
+        )
     defaults = data.get("defaults", {})
     if defaults:
         if not isinstance(defaults, dict):
@@ -333,16 +389,49 @@ def write_workspace_harbor_mounts(
     mounts: tuple[HarborMount, ...],
 ) -> tuple[HarborMount, ...]:
     path = config_path.expanduser()
+    data = tomllib.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    current = apply_toml_config(
+        ToolConfig(workspace_root=str(path.parent)),
+        data,
+        top_level_locale=True,
+        base_dir=path.parent,
+    )
+    _, validated_mounts = write_workspace_harbor_config(
+        config_path,
+        current.harbor_datasets,
+        mounts,
+    )
+    return validated_mounts
+
+
+def write_workspace_harbor_config(
+    config_path: Path,
+    datasets: tuple[HarborDataset, ...],
+    mounts: tuple[HarborMount, ...],
+) -> tuple[tuple[HarborDataset, ...], tuple[HarborMount, ...]]:
+    path = config_path.expanduser()
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     lines = text.splitlines(keepends=True)
-    for start, end in reversed(_harbor_mount_table_ranges(lines)):
+    for start, end in reversed(_harbor_table_ranges(lines)):
         del lines[start:end]
     while lines and not lines[-1].strip():
         lines.pop()
     if lines and not lines[-1].endswith(("\n", "\r")):
         lines[-1] += "\n"
-    if mounts:
+    if datasets or mounts:
         if lines:
+            lines.append("\n")
+        for index, dataset in enumerate(datasets):
+            if index:
+                lines.append("\n")
+            lines.extend(
+                [
+                    "[[harbor.datasets]]\n",
+                    f"id = {json.dumps(dataset.id)}\n",
+                    f"path = {json.dumps(_stored_harbor_path(dataset.path, path.parent))}\n",
+                ]
+            )
+        if datasets and mounts:
             lines.append("\n")
         for index, mount in enumerate(mounts):
             if index:
@@ -354,58 +443,78 @@ def write_workspace_harbor_mounts(
                     f"path = {json.dumps(_stored_harbor_path(mount.path, path.parent))}\n",
                 ]
             )
-            if mount.task_paths:
-                stored_tasks = [
-                    _stored_harbor_path(task_path, path.parent)
-                    for task_path in mount.task_paths
-                ]
+            if mount.dataset_ids:
                 lines.append(
-                    f"task_paths = {json.dumps(stored_tasks, ensure_ascii=False)}\n"
+                    "dataset_ids = "
+                    f"{json.dumps(list(mount.dataset_ids), ensure_ascii=False)}\n"
                 )
     rendered = "".join(lines)
     data = tomllib.loads(rendered) if rendered.strip() else {}
-    validated = apply_toml_config(
+    validated_config = apply_toml_config(
         ToolConfig(workspace_root=str(path.parent)),
         data,
         top_level_locale=True,
         base_dir=path.parent,
-    ).harbor_mounts
-    validate_harbor_mount_paths(validated)
-    path.write_text(rendered, encoding="utf-8")
-    return validated
+    )
+    validate_harbor_mount_paths(
+        validated_config.harbor_mounts,
+        validated_config.harbor_datasets,
+    )
+    _atomic_write_text(path, rendered)
+    return validated_config.harbor_datasets, validated_config.harbor_mounts
 
 
-def validate_harbor_mount_paths(mounts: tuple[HarborMount, ...]) -> None:
+def write_workspace_harbor_datasets(
+    config_path: Path,
+    datasets: tuple[HarborDataset, ...],
+    mounts: tuple[HarborMount, ...],
+) -> tuple[HarborDataset, ...]:
+    validated_datasets, _ = write_workspace_harbor_config(
+        config_path,
+        datasets,
+        mounts,
+    )
+    return validated_datasets
+
+
+def validate_harbor_mount_paths(
+    mounts: tuple[HarborMount, ...],
+    datasets: tuple[HarborDataset, ...] = (),
+) -> None:
+    datasets_by_id = {dataset.id: dataset for dataset in datasets}
+    seen_dataset_paths: set[str] = set()
+    for dataset in datasets:
+        identity = os.path.normcase(os.path.normpath(dataset.path))
+        if identity in seen_dataset_paths:
+            raise ValueError(f"duplicate harbor dataset path: {dataset.path}")
+        seen_dataset_paths.add(identity)
+        _validate_harbor_dataset_directory(dataset)
     for mount in mounts:
         _validate_existing_unlinked_directory(
             mount.path,
             label=f"Harbor Jobs path for {mount.id}",
         )
-        for task_path in mount.task_paths:
-            root = _validate_existing_unlinked_directory(
-                task_path,
-                label=f"Harbor Task path for {mount.id}",
-            )
-            if _regular_task_file(root / "task.toml"):
-                continue
-            try:
-                children = sorted(root.iterdir(), key=lambda item: item.name)
-            except OSError as exc:
+        for dataset_id in mount.dataset_ids:
+            if dataset_id not in datasets_by_id:
                 raise ValueError(
-                    f"cannot scan Harbor Dataset path {root}: {exc}"
-                ) from exc
-            task_children = [
-                child
-                for child in children
-                if child.is_dir()
-                and not child.is_symlink()
-                and _regular_task_file(child / "task.toml")
-            ]
-            if not task_children:
-                raise ValueError(
-                    "Harbor Task path must identify a Task or Dataset directory: "
-                    f"{root}"
+                    f"harbor mount {mount.id} references unknown dataset id: "
+                    f"{dataset_id}"
                 )
+
+
+def harbor_dataset_paths_for_mount(
+    config: ToolConfig,
+    mount: HarborMount,
+) -> tuple[str, ...]:
+    datasets_by_id = {dataset.id: dataset.path for dataset in config.harbor_datasets}
+    return tuple(datasets_by_id[dataset_id] for dataset_id in mount.dataset_ids)
+
+
+def _validate_harbor_dataset_directory(dataset: HarborDataset) -> None:
+    _validate_existing_unlinked_directory(
+        dataset.path,
+        label=f"Harbor Dataset path for {dataset.id}",
+    )
 
 
 def _validate_existing_unlinked_directory(value: str, *, label: str) -> Path:
@@ -425,13 +534,11 @@ def _validate_existing_unlinked_directory(value: str, *, label: str) -> Path:
     return path
 
 
-def _regular_task_file(path: Path) -> bool:
-    return path.is_file() and not path.is_symlink() and not path.parent.is_symlink()
-
-
-def _harbor_mount_table_ranges(lines: list[str]) -> list[tuple[int, int]]:
+def _harbor_table_ranges(lines: list[str]) -> list[tuple[int, int]]:
     starts = [
-        index for index, line in enumerate(lines) if HARBOR_MOUNT_HEADER_RE.match(line)
+        index
+        for index, line in enumerate(lines)
+        if HARBOR_MOUNT_HEADER_RE.match(line) or HARBOR_DATASET_HEADER_RE.match(line)
     ]
     ranges: list[tuple[int, int]] = []
     for start in starts:
@@ -442,6 +549,33 @@ def _harbor_mount_table_ranges(lines: list[str]) -> list[tuple[int, int]]:
                 break
         ranges.append((start, end))
     return ranges
+
+
+def _harbor_id(value: object, *, kind: str) -> str:
+    identifier = str(value or "").strip()
+    if HARBOR_MOUNT_ID_RE.fullmatch(identifier) is None:
+        raise ValueError(f"harbor {kind} id must be a lowercase path-safe identifier")
+    return identifier
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise ValueError("workspace config must not be a symbolic link")
+    if path.exists() and not stat.S_ISREG(path.stat(follow_symlinks=False).st_mode):
+        raise ValueError("workspace config must be a regular file")
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _stored_harbor_path(value: str, base_dir: Path) -> str:

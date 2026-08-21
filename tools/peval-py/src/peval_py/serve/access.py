@@ -234,9 +234,15 @@ def _guest_route(method: str, path: str) -> bool:
     if normalized_method == "GET":
         if path in {
             "/",
+            "/datasets",
+            "/reports",
             ECHARTS_ASSET_PATH,
             "/api/auth/session",
             "/api/catalog",
+            "/api/harbor/datasets",
+            "/api/harbor/tasks",
+            "/api/harbor/task",
+            "/api/harbor/files",
             "/api/report",
             "/api/reports",
             "/api/views",

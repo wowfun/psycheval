@@ -65,3 +65,21 @@ test("serve mode renders its shell before loading workspace catalogs", async () 
 
   assert.deepEqual(calls, [["render", { rows: [] }], ["load-serve-workspace"]]);
 });
+
+test("serve management pages start only their page controller", async () => {
+  const calls = [];
+  const runtime = createModeRuntime({
+    report: { rows: [] },
+    renderOptions: { mode: "serve", serve_page: "datasets" },
+    workspaceSnapshot: null,
+  }, {
+    renderReport: report => calls.push(["render", report]),
+    renderWorkspaceViewRail: () => calls.push(["rail"]),
+    loadServeWorkspace: async () => calls.push(["load-serve-workspace"]),
+    startServePage: async (page, report) => calls.push(["start-page", page, report]),
+  });
+
+  await runtime.start();
+
+  assert.deepEqual(calls, [["start-page", "datasets", { rows: [] }]]);
+});

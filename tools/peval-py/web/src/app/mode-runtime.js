@@ -4,7 +4,7 @@
 
 /**
  * @param {BrowserBootstrap} bootstrap
- * @param {{ renderReport: (report: Record<string, unknown>) => void, renderWorkspaceViewRail: () => void, loadServeWorkspace?: () => void | Promise<void> }} effects
+ * @param {{ renderReport: (report: Record<string, unknown>) => void, renderWorkspaceViewRail: () => void, loadServeWorkspace?: () => void | Promise<void>, startServePage?: (page: string, report: Record<string, unknown>) => void | Promise<void> }} effects
  */
 function createModeRuntime(bootstrap, effects) {
   const rawMode = String(bootstrap.renderOptions.mode || "report");
@@ -16,6 +16,9 @@ function createModeRuntime(bootstrap, effects) {
   return {
     kind,
     start() {
+      if (kind === "serve" && effects.startServePage) {
+        return effects.startServePage(String(bootstrap.renderOptions.serve_page || "home"), bootstrap.report);
+      }
       effects.renderReport(bootstrap.report);
       if (kind === "serve") return effects.loadServeWorkspace?.();
       if (kind === "workspace_snapshot") effects.renderWorkspaceViewRail();

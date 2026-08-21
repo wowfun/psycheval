@@ -35,6 +35,14 @@ from peval_py.serve.exports import (
     build_summary_serve_export,
     build_workspace_snapshot_export,
 )
+from peval_py.serve.harbor_workspace import (
+    HarborConflictError,
+    HarborNotFoundError,
+    HarborSizeError,
+    HarborWorkspace,
+    HarborWorkspaceError,
+    config_revision,
+)
 from peval_py.serve.path_picker import PathPickerUnavailable, pick_file_paths
 from peval_py.serve.payloads import (
     adapter_default_db_payload,
@@ -56,6 +64,9 @@ from peval_py.serve.visibility import (
     project_catalog_payload,
     project_detail_payload,
     project_guest_error,
+    project_harbor_inventory,
+    project_harbor_task,
+    project_harbor_text_file,
 )
 from peval_py.state import CatalogBusyError, CatalogQuery, ServeStateStore
 from peval_py.state.workspace_sources import WorkspaceSources, is_harbor_source
@@ -128,7 +139,13 @@ def make_handler(
                         access_control.session_payload(self.headers.get("Cookie"))
                     )
                     return
-                if path == "/":
+                serve_page = {
+                    "/": "home",
+                    "/datasets": "datasets",
+                    "/reports": "reports",
+                    "/sources": "sources",
+                }.get(path)
+                if serve_page is not None:
                     is_admin = self._serve_role == ADMIN_ROLE
                     self.write_html(
                         render_serve_html(
@@ -143,6 +160,14 @@ def make_handler(
                             ),
                             harbor_mounts=(
                                 runtime.config.harbor_mounts if is_admin else ()
+                            ),
+                            harbor_datasets=(
+                                runtime.config.harbor_datasets if is_admin else ()
+                            ),
+                            harbor_revision=(
+                                config_revision(store.paths.config_path)
+                                if is_admin
+                                else None
                             ),
                             loading=not runtime.catalog.has_generation
                             or runtime.is_loading(),
@@ -159,6 +184,7 @@ def make_handler(
                             workspace_description=runtime.config.description,
                             role=self._serve_role,
                             authentication_enabled=access_control.authentication_enabled,
+                            serve_page=serve_page,
                         )
                     )
                     return
@@ -193,6 +219,63 @@ def make_handler(
                     return
                 if path == "/api/sources":
                     self.write_json(runtime.source_envelope())
+                    return
+                if path == "/api/harbor/datasets":
+                    self.write_json(
+                        project_harbor_inventory(
+                            harbor_workspace(store, runtime).inventory(),
+                            self._serve_role,
+                        )
+                    )
+                    return
+                if path == "/api/harbor/tasks":
+                    self.write_json(
+                        project_harbor_inventory(
+                            harbor_workspace(store, runtime).task_inventory(
+                                single_query_value(parsed_url.query, "dataset_id")
+                            ),
+                            self._serve_role,
+                        )
+                    )
+                    return
+                if path == "/api/harbor/task":
+                    self.write_json(
+                        project_harbor_task(
+                            harbor_workspace(store, runtime).task_detail(
+                                required_query_value(parsed_url.query, "dataset_id"),
+                                required_query_value(parsed_url.query, "task"),
+                            ),
+                            self._serve_role,
+                        )
+                    )
+                    return
+                if path == "/api/harbor/files":
+                    download = single_query_value(parsed_url.query, "download") == "1"
+                    if download and self._serve_role != ADMIN_ROLE:
+                        raise HttpError(403, "administrator access required")
+                    file_payload = harbor_workspace(store, runtime).read_file(
+                        required_query_value(parsed_url.query, "dataset_id"),
+                        required_query_value(parsed_url.query, "task"),
+                        required_query_value(parsed_url.query, "path"),
+                        download=download,
+                    )
+                    if isinstance(file_payload.get("content"), bytes):
+                        self._response_headers["ETag"] = f'"{file_payload["revision"]}"'
+                        self._response_headers["X-Peval-Task-Revision"] = str(
+                            file_payload["task_revision"]
+                        )
+                        self.write_download(
+                            file_payload["content"],
+                            "application/octet-stream",
+                            str(file_payload["name"]),
+                        )
+                    else:
+                        self.write_json(
+                            project_harbor_text_file(
+                                file_payload,
+                                self._serve_role,
+                            )
+                        )
                     return
                 if path == "/api/reports":
                     self.write_json({"reports": runtime.workspace_report_catalog()})
@@ -231,6 +314,8 @@ def make_handler(
                 raise HttpError(404, "not found")
             except HttpError as exc:
                 self.write_error(exc.status, exc.message)
+            except HarborWorkspaceError as exc:
+                self.write_error(harbor_error_status(exc), str(exc))
             except CatalogBusyError as exc:
                 self.write_error(409, str(exc))
             except Exception as exc:  # noqa: BLE001 - HTTP boundary.
@@ -317,6 +402,57 @@ def make_handler(
                         project_catalog_payload(page.to_dict(), self._serve_role)
                     )
                     return
+                if path == "/api/harbor/datasets":
+                    runtime.ensure_ready()
+                    action = required_string(payload, "action")
+                    if action == "sync_manifest":
+                        self.require_workspace_writable()
+                        self.write_json(
+                            harbor_workspace(store, runtime).sync_manifest(
+                                dataset_id=required_string(payload, "dataset_id"),
+                                expected_revision=required_string(
+                                    payload, "expected_revision"
+                                ),
+                            )
+                        )
+                        return
+                    self.write_json(
+                        runtime.mutate_with_background_reconcile(
+                            "harbor-dataset-config",
+                            lambda: mutate_harbor_dataset(
+                                store,
+                                runtime,
+                                action,
+                                payload,
+                            ),
+                        ),
+                        status=202,
+                    )
+                    return
+                if path == "/api/harbor/tasks":
+                    runtime.ensure_ready()
+                    self.write_json(
+                        runtime.mutate_with_background_reconcile(
+                            "harbor-task-reconcile",
+                            lambda: mutate_harbor_task(
+                                harbor_workspace(store, runtime), payload
+                            ),
+                        ),
+                        status=202,
+                    )
+                    return
+                if path == "/api/harbor/files":
+                    runtime.ensure_ready()
+                    self.write_json(
+                        runtime.mutate_with_background_reconcile(
+                            "harbor-task-reconcile",
+                            lambda: harbor_workspace(store, runtime).mutate_file(
+                                required_string(payload, "action"), payload
+                            ),
+                        ),
+                        status=202,
+                    )
+                    return
                 if path == "/api/views/summary":
                     if set(payload) != {"browser_views"}:
                         raise HttpError(
@@ -390,6 +526,8 @@ def make_handler(
                                 ),
                             )
                         )
+                    except HarborConflictError:
+                        raise
                     except ValueError as exc:
                         raise HttpError(400, str(exc)) from exc
                     return
@@ -780,6 +918,8 @@ def make_handler(
                 raise HttpError(404, "not found")
             except HttpError as exc:
                 self.write_error(exc.status, exc.message)
+            except HarborWorkspaceError as exc:
+                self.write_error(harbor_error_status(exc), str(exc))
             except CatalogBusyError as exc:
                 self.write_error(409, str(exc))
             except Exception as exc:  # noqa: BLE001 - HTTP boundary.
@@ -974,6 +1114,30 @@ def single_query_value(query: str, key: str) -> str | None:
     return None
 
 
+def required_query_value(query: str, key: str) -> str:
+    value = single_query_value(query, key)
+    if value is None:
+        raise HttpError(400, f"{key} is required")
+    return value
+
+
+def harbor_error_status(exc: HarborWorkspaceError) -> int:
+    if isinstance(exc, HarborConflictError):
+        return 409
+    if isinstance(exc, HarborNotFoundError):
+        return 404
+    if isinstance(exc, HarborSizeError):
+        return 413
+    return 400
+
+
+def harbor_workspace(
+    store: ServeStateStore,
+    runtime: ServeRuntime,
+) -> HarborWorkspace:
+    return HarborWorkspace(store.paths.config_path, runtime.config)
+
+
 def catalog_view_names(raw_query: str) -> tuple[str, ...]:
     values = parse_qs(raw_query, keep_blank_values=True)
     names = [
@@ -1135,22 +1299,122 @@ def reject_linked_harbor_delete(rows: list[dict[str, Any]]) -> None:
         )
 
 
+def mutate_harbor_dataset(
+    store: ServeStateStore,
+    runtime: ServeRuntime,
+    action: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    library = harbor_workspace(store, runtime)
+    expected_revision = required_string(payload, "expected_revision")
+    if action == "create":
+        config = library.create_dataset(
+            dataset_id=required_string(payload, "dataset_id"),
+            path=required_string(payload, "path"),
+            package_name=required_string(payload, "package_name"),
+            description=str(payload.get("description") or ""),
+            expected_revision=expected_revision,
+        )
+    elif action == "register":
+        config = library.register_dataset(
+            dataset_id=required_string(payload, "dataset_id"),
+            path=required_string(payload, "path"),
+            expected_revision=expected_revision,
+        )
+    elif action == "update":
+        config = library.update_dataset(
+            dataset_id=required_string(payload, "dataset_id"),
+            new_id=required_string(payload, "new_id"),
+            path=required_string(payload, "path"),
+            expected_revision=expected_revision,
+        )
+    elif action == "remove":
+        config = library.remove_dataset(
+            dataset_id=required_string(payload, "dataset_id"),
+            expected_revision=expected_revision,
+        )
+    else:
+        raise HarborWorkspaceError(
+            "Dataset action must be create, register, update, or remove"
+        )
+    runtime.set_config(config)
+    return HarborWorkspace(store.paths.config_path, config).inventory()
+
+
+def mutate_harbor_task(
+    library: HarborWorkspace,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    action = required_string(payload, "action")
+    common = {
+        "dataset_id": required_string(payload, "dataset_id"),
+        "expected_revision": required_string(payload, "expected_revision"),
+    }
+    if action == "create":
+        raw_steps = payload.get("steps", 0)
+        if not isinstance(raw_steps, int) or isinstance(raw_steps, bool):
+            raise HarborWorkspaceError("steps must be an integer")
+        return library.create_task(
+            **common,
+            directory=required_string(payload, "directory"),
+            package_name=required_string(payload, "package_name"),
+            steps=raw_steps,
+        )
+    if action == "rename":
+        return library.rename_task(
+            **common,
+            task=required_string(payload, "task"),
+            new_directory=required_string(payload, "new_directory"),
+        )
+    if action == "trash":
+        return library.trash_task(
+            **common,
+            task=required_string(payload, "task"),
+        )
+    if action == "restore":
+        raw_directory = payload.get("directory")
+        if raw_directory is not None and not isinstance(raw_directory, str):
+            raise HarborWorkspaceError("directory must be a string")
+        return library.restore_task(
+            **common,
+            entry_id=required_string(payload, "entry_id"),
+            directory=raw_directory.strip() if raw_directory else None,
+        )
+    if action == "purge":
+        return library.purge_task(
+            **common,
+            entry_id=required_string(payload, "entry_id"),
+        )
+    raise HarborWorkspaceError(
+        "Task action must be create, rename, trash, restore, or purge"
+    )
+
+
 def update_harbor_mount_config(
     store: ServeStateStore,
     runtime: ServeRuntime,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    expected_revision = required_string(payload, "expected_revision")
+    if config_revision(store.paths.config_path) != expected_revision:
+        raise HarborConflictError(
+            "Workspace configuration changed; refresh before saving"
+        )
     mounts = harbor_mounts_from_payload(
         runtime.config.harbor_mounts,
         payload,
         base_dir=store.paths.config_path.parent,
+        datasets=runtime.config.harbor_datasets,
     )
-    validate_harbor_mount_paths(mounts)
+    validate_harbor_mount_paths(mounts, runtime.config.harbor_datasets)
     proposed_config = replace(runtime.config, harbor_mounts=mounts)
     WorkspaceSources(store, proposed_config).source_keys()
     saved_mounts = write_workspace_harbor_mounts(store.paths.config_path, mounts)
     runtime.set_config(replace(runtime.config, harbor_mounts=saved_mounts))
-    return {"harbor_mounts": [harbor_mount_payload(mount) for mount in saved_mounts]}
+    return {
+        "revision": config_revision(store.paths.config_path),
+        "harbor_mounts": [harbor_mount_payload(mount) for mount in saved_mounts],
+    }
 
 
 def harbor_mounts_from_payload(
@@ -1158,6 +1422,7 @@ def harbor_mounts_from_payload(
     payload: dict[str, Any],
     *,
     base_dir: Path,
+    datasets: tuple[Any, ...],
 ) -> tuple[HarborMount, ...]:
     action = required_string(payload, "action")
     if action not in {"upsert", "delete"}:
@@ -1171,34 +1436,39 @@ def harbor_mounts_from_payload(
 
     mount_id = required_string(payload, "mount_id")
     jobs_path = required_string(payload, "jobs_path")
-    raw_task_paths = payload.get("task_paths", [])
-    if isinstance(raw_task_paths, str):
-        task_paths = [
-            line.strip() for line in raw_task_paths.splitlines() if line.strip()
-        ]
-    elif isinstance(raw_task_paths, list) and all(
-        isinstance(item, str) for item in raw_task_paths
+    raw_dataset_ids = payload.get("dataset_ids", [])
+    if isinstance(raw_dataset_ids, list) and all(
+        isinstance(item, str) for item in raw_dataset_ids
     ):
-        task_paths = [item.strip() for item in raw_task_paths if item.strip()]
+        dataset_ids = [item.strip() for item in raw_dataset_ids if item.strip()]
     else:
-        raise HttpError(400, "task_paths must be an array of strings")
+        raise HttpError(400, "dataset_ids must be an array of strings")
 
     raw_mounts: list[dict[str, Any]] = []
     replaced = False
     for mount in current:
         raw = harbor_mount_payload(mount)
         if original_id and mount.id == original_id:
-            raw = {"id": mount_id, "path": jobs_path, "task_paths": task_paths}
+            raw = {"id": mount_id, "path": jobs_path, "dataset_ids": dataset_ids}
             replaced = True
         raw_mounts.append(raw)
     if original_id and not replaced:
         raise HttpError(404, f"unknown Harbor mount: {original_id}")
     if not original_id:
-        raw_mounts.append({"id": mount_id, "path": jobs_path, "task_paths": task_paths})
+        raw_mounts.append(
+            {"id": mount_id, "path": jobs_path, "dataset_ids": dataset_ids}
+        )
     try:
         return apply_toml_config(
             ToolConfig(workspace_root=str(base_dir)),
-            {"harbor": {"mounts": raw_mounts}},
+            {
+                "harbor": {
+                    "datasets": [
+                        {"id": dataset.id, "path": dataset.path} for dataset in datasets
+                    ],
+                    "mounts": raw_mounts,
+                }
+            },
             base_dir=base_dir,
         ).harbor_mounts
     except ValueError as exc:
@@ -1209,5 +1479,5 @@ def harbor_mount_payload(mount: HarborMount) -> dict[str, Any]:
     return {
         "id": mount.id,
         "path": mount.path,
-        "task_paths": list(mount.task_paths),
+        "dataset_ids": list(mount.dataset_ids),
     }

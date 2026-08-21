@@ -73,7 +73,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
                 "schema_version": 19,
                 "trajectory": [],
                 "trajectory_meta": [],
-            }
+            },
         )
         workspace_main = re.search(
             r'<main class="workspace-main">(.*?)</main>',
@@ -121,7 +121,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertEqual(action_declarations.get("display"), "inline-flex")
         self.assertEqual(action_declarations.get("white-space"), "normal")
 
-        for selector in (".serve-source-actions", ".workspace-view-index-actions"):
+        for selector in (".leaderboard-action-row", ".workspace-view-index-actions"):
             rule = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
             self.assertIsNotNone(rule)
             declarations = {
@@ -178,7 +178,8 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
                 "schema_version": 19,
                 "trajectory": [],
                 "trajectory_meta": [],
-            }
+            },
+            serve_page="sources",
         )
         forms_panel = re.search(
             r'<section class="source-manager-forms"[^>]*>(.*?)</section>',
@@ -312,6 +313,13 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
 
         static_html = render_html(report)
         serve_html = render_serve_html(report, reports=catalog)
+        reports_html = render_serve_html(report, reports=catalog, serve_page="reports")
+        serve_markup = re.sub(
+            r"<script(?:\s[^>]*)?>.*?</script>", "", serve_html, flags=re.DOTALL
+        )
+        reports_markup = re.sub(
+            r"<script(?:\s[^>]*)?>.*?</script>", "", reports_html, flags=re.DOTALL
+        )
 
         self.assertEqual(
             script_json(static_html, "peval-py-render-options"),
@@ -320,10 +328,12 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertNotIn('<div class="report-manager-backdrop"', static_html)
         self.assertNotIn('<aside class="report-reader"', static_html)
         self.assertNotIn('<aside class="workspace-views"', static_html)
-        serve_options = script_json(serve_html, "peval-py-render-options")
+        serve_options = script_json(reports_html, "peval-py-render-options")
         self.assertEqual(serve_options["reports"], catalog)
-        self.assertIn("data-report-manager-open>Reports</button>", serve_html)
-        self.assertIn('<div class="report-manager-backdrop"', serve_html)
+        self.assertIn('href="/reports"', serve_html)
+        self.assertNotIn("data-report-manager", serve_markup)
+        self.assertIn("data-report-manager", reports_markup)
+        self.assertNotIn('<div class="report-manager-backdrop"', reports_html)
         self.assertIn('<aside class="report-reader"', serve_html)
         self.assertIn(
             '<div class="workspace-side-region" id="workspace-side-region">', serve_html
@@ -332,8 +342,8 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
             '<aside class="workspace-views" id="workspace-views" hidden data-serve-only>',
             serve_html,
         )
-        self.assertIn("data-report-inventory", serve_html)
-        self.assertIn("data-report-bindings", serve_html)
+        self.assertIn("data-report-inventory", reports_html)
+        self.assertIn("data-report-bindings", reports_html)
         self.assertIn('sandbox="allow-scripts"', serve_html)
         self.assertNotIn("allow-same-origin", serve_html)
         self.assertIn("data-report-reader-open-tab", serve_html)
@@ -379,11 +389,23 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertEqual(report["trajectory_meta"][0]["finished_at_ms"], 1500)
 
         static_html = render_html(report)
-        serve_html = render_serve_html(
+        home_html = render_serve_html(
             report,
             adapter_defaults={"opencode": "/tmp/opencode.db"},
         )
-        zh_serve_html = render_serve_html(report, locale="zh-CN")
+        sources_html = render_serve_html(
+            report,
+            adapter_defaults={"opencode": "/tmp/opencode.db"},
+            serve_page="sources",
+        )
+        datasets_html = render_serve_html(report, serve_page="datasets")
+        reports_html = render_serve_html(report, serve_page="reports")
+        serve_html = home_html + sources_html + datasets_html + reports_html
+        zh_serve_html = (
+            render_serve_html(report, locale="zh-CN")
+            + render_serve_html(report, locale="zh-CN", serve_page="sources")
+            + render_serve_html(report, locale="zh-CN", serve_page="datasets")
+        )
         compact_serve_html = compact_css_text(serve_html)
 
         self.assertIn('<body class="report-mode">', static_html)
@@ -409,26 +431,80 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
             {"mode": "report", "sources": []},
         )
 
-        serve_options = script_json(serve_html, "peval-py-render-options")
+        serve_options = script_json(home_html, "peval-py-render-options")
         self.assertEqual(serve_options["mode"], "serve")
         self.assertEqual(len(serve_options["sources"]), 2)
         self.assertEqual(
             serve_options["adapter_defaults"],
             {"opencode": "/tmp/opencode.db"},
         )
-        self.assertIn('<body class="serve-mode">', serve_html)
+        self.assertIn('<body class="serve-mode serve-page-home">', home_html)
         self.assertIn("<title>Eval Workspace</title>", serve_html)
-        self.assertIn("<h1>Eval Workspace</h1>", serve_html)
-        self.assertIn(
-            '<div class="serve-source-heading">\n      <h1>Eval Workspace</h1>',
-            serve_html,
-        )
+        self.assertNotIn("<h1>Home</h1>", home_html)
+        self.assertNotIn('class="serve-source-heading"', home_html)
+        self.assertNotRegex(home_html, r"<[^>]+\sdata-source-count(?:\s|>)")
+        self.assertNotRegex(home_html, r"<[^>]+\sdata-source-status(?:\s|>)")
+        self.assertNotRegex(home_html, r"<[^>]+\sdata-refresh-all(?:\s|>)")
         self.assertNotIn(
             '<section class="topline"><h1>Eval Workspace</h1></section>',
             serve_html,
         )
         self.assertIn("<title>评测工作台</title>", zh_serve_html)
-        self.assertIn("<h1>评测工作台</h1>", zh_serve_html)
+        self.assertNotIn("<h1>主页</h1>", zh_serve_html)
+        self.assertIn('<h1 id="harbor-workbench-title">数据集</h1>', zh_serve_html)
+        self.assertIn(">新建文件</button>", zh_serve_html)
+        self.assertIn(">新建文件夹</button>", zh_serve_html)
+        self.assertIn(">上传</button>", zh_serve_html)
+        self.assertIn(">下载</button>", zh_serve_html)
+        self.assertIn(
+            ".serve-page-datasets .workspace,\n"
+            ".serve-page-reports .workspace,\n"
+            ".serve-page-sources .workspace {\n"
+            "  max-width:1500px",
+            serve_html,
+        )
+        self.assertIn(
+            compact_css_text(
+                ".serve-page-datasets .workspace,"
+                ".serve-page-reports .workspace,"
+                ".serve-page-sources .workspace{"
+                "max-width:1500px;min-height:100vh;min-height:100dvh;"
+                "display:flex;flex-direction:column}"
+            ),
+            compact_serve_html,
+        )
+        self.assertIn(
+            compact_css_text(
+                ".serve-page-datasets .harbor-workbench{"
+                "width:100%;height:auto;min-height:0;display:flex"
+            ),
+            compact_serve_html,
+        )
+        self.assertIn(
+            compact_css_text(".harbor-task-detail{flex:1 1 auto"),
+            compact_serve_html,
+        )
+        self.assertIn(
+            compact_css_text(
+                ".serve-page-home .workspace-description{"
+                "margin:0 0 14px auto;text-align:right}"
+            ),
+            compact_serve_html,
+        )
+        self.assertIn(
+            compact_css_text(
+                ".serve-page-reports .report-manager-page{"
+                "min-height:0;display:flex;flex-direction:column}"
+            ),
+            compact_serve_html,
+        )
+        self.assertIn(
+            compact_css_text(
+                ".serve-page-reports .report-manager-body{"
+                "flex:1 1 auto;min-height:620px}"
+            ),
+            compact_serve_html,
+        )
         self.assertIn("--step-drawer-width:clamp(620px,44vw,760px)", serve_html)
         self.assertIn("width:100%;\n  max-width:none", serve_html)
         self.assertIn(".workspace {\n  max-width:1180px", serve_html)
@@ -454,10 +530,9 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
             serve_html,
         )
         self.assertNotIn('class="serve-import-panel"', serve_html)
-        self.assertIn('class="serve-source-toolbar"', serve_html)
+        self.assertIn('class="workspace-header"', serve_html)
         self.assertIn("data-locale-select", serve_html)
-        self.assertIn('class="source-manager-modal"', serve_html)
-        self.assertIn("width:min(1480px,calc(100vw - 28px));", serve_html)
+        self.assertIn('class="workspace-page source-manager-page"', sources_html)
         self.assertNotIn('class="adapter-default-db-panel"', serve_html)
         self.assertNotIn("data-adapter-default-db-form", serve_html)
         self.assertIn("grid-template-rows:auto minmax(0,1fr)", serve_html)
@@ -474,7 +549,9 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('aria-describedby="source-db-auto-help"', serve_html)
         self.assertNotIn('data-source-kind="input_table"', serve_html)
         self.assertIn("data-harbor-mount-form", serve_html)
-        self.assertIn("Task / Dataset paths", serve_html)
+        self.assertIn("Register a Dataset before assigning it", serve_html)
+        self.assertIn('href="/datasets"', home_html)
+        self.assertIn("data-harbor-workbench", serve_html)
         self.assertIn("Jobs 路径", zh_serve_html)
         self.assertIn(
             "Auto infers the adapter only when the source path contains an adapter name.",
@@ -564,7 +641,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("function renderSourceSelectionHeader(rows)", serve_html)
         self.assertIn("function mutateSelectedServeSourceState()", serve_html)
         self.assertIn("function deleteSelectedServeSources()", serve_html)
-        self.assertIn("2 sources", serve_html)
+        self.assertNotIn("2 sources", home_html)
         self.assertIn("common_session.jsonl", serve_html)
         self.assertIn("Timeline Waterfall", serve_html)
         self.assertIn("Timeline Detail Table", serve_html)
@@ -637,7 +714,7 @@ class PevalPyReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('serveApi("/api/config/harbor-mount"', serve_html)
         self.assertIn('serveApi("/api/sources"', serve_html)
         self.assertIn('serveApi("/api/sources/reload"', serve_html)
-        self.assertIn("data-source-manager-open", serve_html)
+        self.assertIn('href="/sources"', home_html)
         self.assertIn("data-source-list", serve_html)
         self.assertNotIn("data-source-upload-form", serve_html)
         self.assertIn('t("export", "Export")', serve_html)

@@ -4,10 +4,8 @@ import { downloadBlob, firstUserStepSelection } from "./export.js";
 import { renderServeSourceStateControls, serveSourceModeStatusText } from "./source-state-controls.js";
 import { renderServeSources, sourceColumns, syncSourceManagerBulkActions } from "./source-manager.js";
 import { emptyServeReport, hideServeNotice, reloadExpiredAdminSession, serveApi, setServeStatus } from "./serve-effects.js";
-import { closeWorkspaceReportManager, closeWorkspaceReportReader, refreshWorkspaceReports, renderAttachWorkspaceReportAction } from "./workspace-reports.js";
-import { browserWorkspaceViewDefinitions, clearWorkspaceViewConditions, closeWorkspaceViewSaveDialog, refreshWorkspaceViews, workspaceViewQueryPayload, workspaceViewRows, workspaceViews } from "./workspace-views.js";
-import { renderStepDrawer } from "./trajectory-trace.js";
-import { openModalSurface } from "./modal-surfaces.js";
+import { refreshWorkspaceReports, renderAttachWorkspaceReportAction } from "./workspace-reports.js";
+import { browserWorkspaceViewDefinitions, clearWorkspaceViewConditions, refreshWorkspaceViews, workspaceViewQueryPayload, workspaceViewRows, workspaceViews } from "./workspace-views.js";
 
 function reportRows() {
   if (serveMode() && (state.catalogRows.length || state.catalogPage.generation)) return listValue(state.catalogRows);
@@ -152,25 +150,15 @@ function sourceRows() {
 }
 
 function openServeSourceManager(opener = document.activeElement) {
-  if (!adminMode()) return;
+  if (!adminMode()) return false;
   const manager = document.querySelector("[data-source-manager]");
-  if (!manager) return;
-  closeWorkspaceViewSaveDialog({ restoreFocus: false });
-  closeWorkspaceReportManager({ restoreFocus: false });
-  closeWorkspaceReportReader({ restoreFocus: false });
-  state.selectedStep = null;
-  renderStepDrawer();
+  if (!manager) return false;
   state.sourceManagerStatus = {
     phase: "loading",
     message: t("loading", "Loading"),
   };
-  openModalSurface(manager, {
-    opener,
-    bodyClass: "source-manager-open",
-    focusTarget: manager.querySelector("[data-source-manager-close]"),
-  });
   renderServeSources();
-  loadSourceManagerPage();
+  return loadSourceManagerPage();
 }
 
 async function loadSourceManagerPage(pageNumber = Number(state.sourceManagerPage?.page || 1)) {

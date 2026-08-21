@@ -35,6 +35,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: tools/peval-py/uv.lock
+          python-version: "3.12"
       - uses: actions/setup-node@v6
         with:
           node-version: 22.13.0

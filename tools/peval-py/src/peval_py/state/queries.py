@@ -137,6 +137,7 @@ class StateQueryMixin:
             adapter_options=config.adapter_options,
             adapter_options_by_id=config.adapter_options_by_id,
             adapter_default_db_paths=config.adapter_default_db_paths,
+            harbor_datasets=config.harbor_datasets,
             harbor_mounts=config.harbor_mounts,
         )
 

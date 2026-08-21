@@ -123,10 +123,10 @@ def build_workspace_snapshot_export(
 ) -> ServeExport:
     with catalog.read_snapshot_rows(
         query,
-        any_queries=lambda: [
-            workspace_views.get(name).filters for name in query_view_names
-        ]
-        + [view.filters for view in query_browser_views],
+        any_queries=lambda: (
+            [workspace_views.get(name).filters for name in query_view_names]
+            + [view.filters for view in query_browser_views]
+        ),
         selected_source_keys=selected_source_keys,
     ) as (generation, rows):
         available_views = {

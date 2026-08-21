@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from peval_py._inspection.frames import InspectFrames
-from peval_py.config import HarborMount, ToolConfig
+from peval_py.config import HarborDataset, HarborMount, ToolConfig
 from peval_py.serve.exports import build_serve_export
 from peval_py.state import (
     CatalogQuery,
@@ -44,6 +44,12 @@ def write_task(
         encoding="utf-8",
     )
     (path / "instruction.md").write_text("Do the task.\n", encoding="utf-8")
+    (path / "environment").mkdir()
+    (path / "environment" / "Dockerfile").write_text(
+        "FROM python:3.12-slim\n", encoding="utf-8"
+    )
+    (path / "tests").mkdir()
+    (path / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
 
 
 def write_evidence_trial(
@@ -355,9 +361,7 @@ class HarborEvidenceTests(unittest.TestCase):
                 },
             )
             metadata = self.read(trial, (dataset,)).task_metadata
-            self.assertEqual(metadata["status"], "invalid")
-            self.assertEqual(metadata["path"], str(invalid))
-            self.assertTrue(metadata["diagnostic"])
+            self.assertEqual(metadata["status"], "not_found")
 
     def test_parent_job_and_live_task_changes_invalidate_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -384,11 +388,12 @@ class HarborEvidenceTests(unittest.TestCase):
             store = open_workspace_state(str(workspace))
             config = ToolConfig(
                 workspace_root=str(workspace),
+                harbor_datasets=(HarborDataset(id="tasks", path=str(task.parent)),),
                 harbor_mounts=(
                     HarborMount(
                         id="jobs",
                         path=str(jobs),
-                        task_paths=(str(task.parent),),
+                        dataset_ids=("tasks",),
                     ),
                 ),
             )
@@ -549,11 +554,12 @@ class HarborEvidenceTests(unittest.TestCase):
             store = open_workspace_state(str(workspace))
             config = ToolConfig(
                 workspace_root=str(workspace),
+                harbor_datasets=(HarborDataset(id="tasks", path=str(task.parent)),),
                 harbor_mounts=(
                     HarborMount(
                         id="jobs",
                         path=str(jobs),
-                        task_paths=(str(task.parent),),
+                        dataset_ids=("tasks",),
                     ),
                 ),
             )
@@ -584,7 +590,6 @@ class HarborEvidenceTests(unittest.TestCase):
             root = Path(tmp)
             task = root / "dataset" / "task"
             write_task(task, "org/task")
-            (task / "environment").mkdir()
             target = root / "outside.txt"
             target.write_text("secret", encoding="utf-8")
             try:
@@ -597,8 +602,7 @@ class HarborEvidenceTests(unittest.TestCase):
                 config_task={"name": "task", "source": "org"},
             )
             evidence = self.read(trial, (task.parent,))
-            self.assertEqual(evidence.task_metadata["status"], "invalid")
-            self.assertIn("symlink", evidence.task_metadata["diagnostic"])
+            self.assertEqual(evidence.task_metadata["status"], "not_configured")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from peval_py.config import HarborDataset
+from peval_py.serve.harbor_workspace import config_revision
 from peval_py.serve.path_picker import PathPickerUnavailable
 from serve_state_support import (
     ECHARTS_ASSET_PATH,
@@ -65,7 +67,7 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
             thread.start()
             port = server.server_port
             try:
-                status, _, html = request_text(port, "/")
+                status, _, html = request_text(port, "/sources")
                 self.assertEqual(status, 200)
                 self.assertEqual(script_json(html, "peval-py-data")["trajectory"], [])
                 options = script_json(html, "peval-py-render-options")
@@ -488,11 +490,11 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 config_text = (root / "peval-py.toml").read_text(encoding="utf-8")
                 self.assertIn('locale = "zh-CN"\n', config_text)
 
-                status, _, html = request_text(port, "/")
+                status, _, html = request_text(port, "/datasets")
                 self.assertEqual(status, 200)
                 self.assertIn('<html lang="zh-CN">', html)
                 self.assertIn("<title>评测工作台</title>", html)
-                self.assertIn("<h1>评测工作台</h1>", html)
+                self.assertIn('<h1 id="harbor-workbench-title">数据集</h1>', html)
 
                 status, _, body = request_json(
                     port,
@@ -568,7 +570,7 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                 self.assertIn("[adapters.opencode]\n", config_text)
                 self.assertIn('default_db_path = "db/opencode.db"\n', config_text)
 
-                status, _, html = request_text(port, "/")
+                status, _, html = request_text(port, "/sources")
                 self.assertEqual(status, 200)
                 self.assertIn(
                     f'<option value="opencode"  data-default-db="{expected}">opencode</option>',
@@ -591,7 +593,7 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                     (root / "peval-py.toml").read_text(encoding="utf-8"),
                 )
 
-                status, _, html = request_text(port, "/")
+                status, _, html = request_text(port, "/sources")
                 self.assertEqual(status, 200)
                 self.assertNotIn(expected, html)
             finally:
@@ -624,9 +626,29 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
             task = dataset / "task-a"
             task.mkdir(parents=True)
             task_toml = task / "task.toml"
-            task_toml.write_text('[task]\nname = "task-a"\n', encoding="utf-8")
+            task_toml.write_text(
+                '[task]\nname = "local/task-a"\nversion = "1.0.0"\n',
+                encoding="utf-8",
+            )
+            (task / "instruction.md").write_text("Do it.\n", encoding="utf-8")
+            (task / "environment").mkdir()
+            (task / "environment" / "Dockerfile").write_text(
+                "FROM python:3.12-slim\n", encoding="utf-8"
+            )
+            (task / "tests").mkdir()
+            (task / "tests" / "test.sh").write_text("#!/bin/sh\n", encoding="utf-8")
             original_task = task_toml.read_bytes()
-            config = ToolConfig(adapter="opencode", locale="en")
+            with (root / "peval-py.toml").open("a", encoding="utf-8") as handle:
+                handle.write(
+                    "\n[[harbor.datasets]]\n"
+                    'id = "pbench"\n'
+                    f"path = {json.dumps(str(dataset))}\n"
+                )
+            config = ToolConfig(
+                adapter="opencode",
+                locale="en",
+                harbor_datasets=(HarborDataset("pbench", str(dataset)),),
+            )
             store = open_workspace_state(str(root))
             server = LocalHTTPServer(
                 ("127.0.0.1", 0),
@@ -643,32 +665,32 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                     "/api/config/harbor-mount",
                     {
                         "action": "upsert",
+                        "expected_revision": config_revision(root / "peval-py.toml"),
                         "mount_id": "pbench-jobs",
                         "jobs_path": str(jobs),
-                        "task_paths": [str(dataset)],
+                        "dataset_ids": ["pbench"],
                     },
                     origin=origin,
                 )
                 self.assertEqual(status, 200)
+                mount_revision = body["result"]["revision"]
                 mounts = body["result"]["harbor_mounts"]
                 self.assertEqual(mounts[0]["id"], "pbench-jobs")
-                self.assertEqual(mounts[0]["task_paths"], [str(dataset)])
+                self.assertEqual(mounts[0]["dataset_ids"], ["pbench"])
                 self.assertEqual(len(body["sources"]), 1)
                 self.assertEqual(body["sources"][0]["kind"], "harbor-trial")
                 config_text = (root / "peval-py.toml").read_text(encoding="utf-8")
                 self.assertIn("[[harbor.mounts]]", config_text)
                 self.assertIn('id = "pbench-jobs"', config_text)
-                self.assertIn("task_paths = [", config_text)
+                self.assertIn('dataset_ids = ["pbench"]', config_text)
                 self.assertIn("[adapters.opencode]", config_text)
 
-                status, _, html = request_text(port, "/")
+                status, _, html = request_text(port, "/sources")
                 self.assertEqual(status, 200)
                 self.assertIn("data-harbor-mount-form", html)
                 self.assertIn('value="pbench-jobs"', html)
                 self.assertIn(str(dataset), html)
 
-                bad_link = Path(tmp) / "linked-dataset"
-                bad_link.symlink_to(dataset, target_is_directory=True)
                 before_invalid = config_text
                 status, _, rejected = request_json(
                     port,
@@ -676,15 +698,16 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                     "/api/config/harbor-mount",
                     {
                         "action": "upsert",
+                        "expected_revision": mount_revision,
                         "original_id": "pbench-jobs",
                         "mount_id": "pbench-jobs",
                         "jobs_path": str(jobs),
-                        "task_paths": [str(bad_link)],
+                        "dataset_ids": ["missing"],
                     },
                     origin=origin,
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("symlink", rejected["error"])
+                self.assertIn("unknown dataset id", rejected["error"])
                 self.assertEqual(
                     (root / "peval-py.toml").read_text(encoding="utf-8"),
                     before_invalid,
@@ -694,7 +717,11 @@ class PevalPyServeStateHttpSourceTests(unittest.TestCase):
                     port,
                     "POST",
                     "/api/config/harbor-mount",
-                    {"action": "delete", "original_id": "pbench-jobs"},
+                    {
+                        "action": "delete",
+                        "original_id": "pbench-jobs",
+                        "expected_revision": mount_revision,
+                    },
                     origin=origin,
                 )
                 self.assertEqual(status, 200)

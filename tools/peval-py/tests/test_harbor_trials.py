@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from peval_py.analysis import import_analysis_artifacts
 from peval_py.atif import convert_db
-from peval_py.config import HarborMount, ToolConfig, load_config
+from peval_py.config import HarborDataset, HarborMount, ToolConfig, load_config
 from peval_py.serve.exports import build_serve_export, build_workspace_snapshot_export
 from peval_py.serve.payloads import WorkspaceSnapshotPresentation
 from peval_py.state import CatalogQuery, WorkspaceCatalog, open_workspace_state
@@ -141,17 +141,19 @@ class HarborTrialTests(unittest.TestCase):
             write_trial(jobs / "job-a" / "trial-a")
             workspace.mkdir()
             (workspace / "peval-py.toml").write_text(
+                '[[harbor.datasets]]\nid = "pbench"\npath = "../dataset"\n\n'
                 '[[harbor.mounts]]\nid = "jobs-2026-08-08"\n'
-                'path = "../jobs"\ntask_paths = ["../dataset"]\n',
+                'path = "../jobs"\ndataset_ids = ["pbench"]\n',
                 encoding="utf-8",
             )
             config = load_config(None, workspace_root=str(workspace))
             self.assertEqual(config.harbor_mounts[0].id, "jobs-2026-08-08")
             self.assertEqual(config.harbor_mounts[0].path, str(jobs.absolute()))
             self.assertEqual(
-                config.harbor_mounts[0].task_paths,
-                (str(dataset.absolute()),),
+                config.harbor_datasets[0].path,
+                str(dataset.absolute()),
             )
+            self.assertEqual(config.harbor_mounts[0].dataset_ids, ("pbench",))
 
             duplicate_id = {
                 "harbor": {
@@ -184,7 +186,37 @@ class HarborTrialTests(unittest.TestCase):
                         }
                     },
                 )
-            with self.assertRaisesRegex(ValueError, "duplicate harbor task path"):
+            with self.assertRaisesRegex(ValueError, "duplicate harbor dataset path"):
+                apply_toml_config(
+                    ToolConfig(),
+                    {
+                        "harbor": {
+                            "datasets": [
+                                {"id": "one", "path": str(dataset)},
+                                {"id": "two", "path": str(dataset)},
+                            ]
+                        }
+                    },
+                )
+            with self.assertRaisesRegex(ValueError, "duplicate dataset id pbench"):
+                apply_toml_config(
+                    ToolConfig(),
+                    {
+                        "harbor": {
+                            "datasets": [
+                                {"id": "pbench", "path": str(dataset)},
+                            ],
+                            "mounts": [
+                                {
+                                    "id": "jobs",
+                                    "path": str(jobs),
+                                    "dataset_ids": ["pbench", "pbench"],
+                                }
+                            ],
+                        }
+                    },
+                )
+            with self.assertRaisesRegex(ValueError, "task_paths.*no longer"):
                 apply_toml_config(
                     ToolConfig(),
                     {
@@ -193,7 +225,7 @@ class HarborTrialTests(unittest.TestCase):
                                 {
                                     "id": "one",
                                     "path": str(jobs),
-                                    "task_paths": [str(dataset), str(dataset)],
+                                    "task_paths": [str(dataset)],
                                 }
                             ]
                         }
@@ -289,16 +321,22 @@ class HarborTrialTests(unittest.TestCase):
             store = open_workspace_state(str(task_workspace))
             config = ToolConfig(
                 workspace_root=str(task_workspace),
+                harbor_datasets=(
+                    HarborDataset(
+                        id="missing",
+                        path=str(base / "missing-dataset"),
+                    ),
+                ),
                 harbor_mounts=(
                     HarborMount(
                         id="jobs-with-tasks",
                         path=str(jobs),
-                        task_paths=(str(base / "missing-dataset"),),
+                        dataset_ids=("missing",),
                     ),
                 ),
             )
             try:
-                with self.assertRaisesRegex(ValueError, "Task path.*not found"):
+                with self.assertRaisesRegex(ValueError, "Dataset path.*not found"):
                     WorkspaceCatalog(store, config).reconcile()
             finally:
                 store.close()
