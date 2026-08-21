@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-08-21
+
+- Split `peval-py serve` into bookmarkable Home, Datasets, Reports, and Sources
+  pages with shared navigation, page-scoped loading, guest-safe Dataset/Task
+  browsing, and administrator-only Sources access and writes.
+- Added a Harbor Dataset and Task workbench with searchable tables, registered
+  Dataset configuration, Harbor 1.4 scaffolding and validation, revision-checked
+  editing, drafts, Dataset-local trash, explicit manifest synchronization, and
+  background catalog reconciliation.
+- Replaced per-mount `task_paths` with the global `[[harbor.datasets]]` registry
+  and ordered `dataset_ids`; legacy configuration now fails instead of being
+  migrated implicitly. Standalone peval-py now targets Python 3.12 and pins
+  `harbor==0.21.0`.
+- Hardened Harbor operations and guest boundaries, including missing scaffold
+  data, overlapping selections, file growth, restore cleanup, browser uploads,
+  invalid step counts, and guest-side action invocation.
+- Reworked manifest validation and the Dataset, Report, and Source layouts;
+  simplified Home and refined the canonical Leaderboard columns while retaining
+  report reading and dirty guards.
+
 ## 2026-08-19
 
 - Added guest and administrator access to `peval-py serve`, with password

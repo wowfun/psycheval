@@ -34,8 +34,8 @@ peval-py serve --root .local/peval-py
 - [输入与 Adapter](inputs-and-adapters.md)：JSONL、ATIF、SQLite 和自定义
   adapter。
 - [报告](reports.md)：对比、备注、别名、时间、本地化和 cached analysis。
-- [评测工作台](eval-workspace.md)：访客/管理员访问、浏览器本地 Saved Views、source、
-  跨页选择和导出。
+- [评测工作台](eval-workspace.md)：访客/管理员访问、Harbor Dataset/Task 管理、浏览器
+  本地 Saved Views、source、跨页选择和导出。
 
 稳定行为由 [`specs/300-peval-py`](../../../../specs/300-peval-py/spec.md) 和
 [`specs/310-eval-workspace`](../../../../specs/310-eval-workspace/spec.md) 定义。

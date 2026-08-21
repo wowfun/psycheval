@@ -6,6 +6,9 @@
 轨迹。它读取 JSONL session 或 adapter 拥有的 SQLite database，并输出 ATIF JSON
 或静态 peval 风格报告。
 
+需要 Python 3.12 或更高版本。独立包固定依赖 Harbor 0.21.0，评测工作台直接使用
+Harbor 的 Task/Dataset 模型完成脚手架、校验和 manifest digest。
+
 ## 从 Checkout 安装
 
 用 `uv` 安装本地 Python 工具：
@@ -37,8 +40,8 @@ uv run --project tools/peval-py peval-py --help
 
 ## 构建本地二进制
 
-`peval-py` 使用 `pandas` 为 inspect 模式提供表格化分析；`uv` 会根据
-`tools/peval-py/pyproject.toml` 安装该运行时依赖。请在目标操作系统和 CPU 架构上构建。生成物建议放在
+`peval-py` 使用 `pandas` 为 inspect 模式提供表格化分析，并使用 Harbor 支持 Dataset
+工作台；`uv` 会根据 `tools/peval-py/pyproject.toml` 安装这些运行时依赖。请在目标操作系统和 CPU 架构上构建。生成物建议放在
 `.local/` 下，仓库会忽略这个目录。
 
 PyInstaller 是最简单的单文件打包方式：
@@ -48,6 +51,7 @@ cd /path/to/psycheval
 
 uv run --project tools/peval-py --with pyinstaller pyinstaller \
   --onefile \
+  --collect-data harbor \
   --name peval-py \
   --paths tools/peval-py/src \
   --distpath .local/peval-py-build/dist \
@@ -186,8 +190,11 @@ Leaderboard 的 `#Analysis` 列按来源计数：Harbor 分析计 1，workspace 
 `<workspace>/.cache/echarts/6.0.0/echarts.min.js` 提供 ECharts，本地脚本失败时
 回退到固定 CDN URL。Source Manager 会在 SQLite DB 表单内提供默认 DB 的保存/清除
 操作，并提供 source alias 编辑、Last Turn End 排序和 English/简体中文选择器；语言选择
-会把顶层 `locale` 持久化到 `peval-py.toml`。Harbor 区域可以按稳定 ID 添加、编辑和移除
-只读挂载，并配置一个 Jobs root 与可选的 Task/Dataset 路径。Path 来源字段也可以输入
+会把顶层 `locale` 持久化到 `peval-py.toml`。Live serve 通过顶部左侧导航提供独立的
+主页、数据集、报告和来源页面。数据集页面用于管理已注册的 Harbor Dataset、可搜索的
+Task 行、草稿与文件、回收区和显式 manifest 同步；访客可以浏览 solution 和 verifier
+等 Task 文本，但不能下载或修改。来源页面中的挂载使用
+稳定 ID 和一个 Jobs root，再按顺序引用 Dataset ID。Path 来源字段也可以输入
 另一个 workspace root、
 `runs/`、`runs/<analysis_eval_slug>`，或 Trial cell 上层目录；serve 会递归导入完整
 cell 到当前 workspace 作为 snapshot，并保持外部 workspace 不变。
@@ -201,7 +208,7 @@ artifact ref 仍保留在 provenance 中，但不会与本地 live Task digest �
 `peval-py serve` 也可以把已有的 Markdown 或 HTML 分析报告绑定到一个或多个
 session。先勾选 Leaderboard 中当前可见的行，再点击 `Attach report (N)`，并选择一个
 本地 `.md`、`.markdown`、`.html` 或 `.htm` 文件。Reports 列会在左侧的沙箱预览器中
-打开已绑定的报告。工具栏中的 Reports Manager 可以预览导入的报告、替换它们与
+打开已绑定的报告。报告页面可以预览导入的报告、替换它们与
 active 或 archived 可读 session 的绑定，或永久删除报告。这个工作流只在 serve
 页面中提供，不会修改导出的 report JSON 或静态 HTML 报告。
 

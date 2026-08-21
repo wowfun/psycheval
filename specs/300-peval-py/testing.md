@@ -33,8 +33,8 @@ Agent Skill.
   identities, and inclusive prompt totals drive token rankings without adding
   cached subsets twice.
 - Representative exports from every adapter are cross-validated with the
-  public `harbor==0.21.0` validator. Harbor remains a development validation
-  tool and is not a peval-py runtime dependency.
+  runtime `harbor==0.21.0` validator. The independent peval-py environment pins
+  Python 3.12 and the same Harbor version used by its Dataset workbench.
 - Node tests cover browser-state behavior and interaction modules. Type checks
   and the committed bundle check run before the Node test suite.
 - Report tests cover exact inference metric projection, weighted aggregate

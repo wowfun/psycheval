@@ -8,9 +8,18 @@ is specified by [Saved Views](saved-views.md).
 
 ## Initial Load
 
-`GET /` returns the self-contained application shell without embedding a full
-active report. The client then loads the catalog and requests report detail by
-source key as needed.
+Live serve has real page routes: `GET /`, `GET /datasets`, `GET /reports`, and
+administrator-only `GET /sources`. Each returns the shared shell with one
+active page and a `serve_page` render option; direct refresh and browser history
+therefore retain the page. Home lazily loads the catalog and report detail,
+Datasets loads only Harbor inventory, Reports loads its report catalog plus
+administrator binding data when applicable, and Sources loads its source page.
+Inactive management markup is not embedded in Home.
+
+Guests may call `GET /api/harbor/datasets`, `GET /api/harbor/tasks`,
+`GET /api/harbor/task`, and non-download `GET /api/harbor/files` through the
+projection specified by Access Control. Guest `download=1` and every Harbor
+POST return `403`.
 
 Shell, authentication, and API responses are not cacheable. A versioned static
 asset may instead use a long-lived immutable cache policy while retaining
@@ -34,16 +43,18 @@ operation status that the client polls. Validation failures use an appropriate
 
 ## Source Inputs
 
-The Source Manager HTTP interface accepts only Path and DB sources. These JSON
+The Sources-page HTTP interface accepts only Path and DB sources. These JSON
 interfaces may accept an initial alias even though the corresponding browser
 forms omit it. It has no input-table or snapshot-upload mutation. Adapter
 handling and the export-only workspace snapshot format are specified in
 [300. Inputs and Adapters](../300-peval-py/inputs.md).
 
-The Harbor configuration mutation replaces, updates, or removes one explicit
-mount in workspace `peval-py.toml`. It accepts a mount ID, one Jobs root, and
-zero or more Task/Dataset paths, then reloads the derived catalog through the
-new configuration. It never writes to a configured Harbor path.
+The Harbor mount configuration mutation replaces, updates, or removes one
+explicit mount in workspace `peval-py.toml`. It accepts a mount ID, one Jobs
+root, and ordered Dataset IDs, then reloads the derived catalog through the new
+configuration. Dataset registration and Task/file interfaces are specified by
+[Harbor Dataset Management](harbor-datasets.md). Mount mutation never writes to
+a Jobs root.
 
 Catalog queries accept repeatable `task`, `job`, and `provider` refinements in
 addition to the existing filters and return matching Task, Job, and Provider
@@ -78,6 +89,7 @@ from the page keys.
 
 - [Evaluation Workspace](spec.md)
 - [Access Control](access.md)
+- [Harbor Dataset Management](harbor-datasets.md)
 - [Saved Views](saved-views.md)
 - [Storage](storage.md)
 - [Presentation](presentation.md)

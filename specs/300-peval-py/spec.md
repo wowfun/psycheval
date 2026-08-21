@@ -6,6 +6,8 @@ name: peval-py
 
 peval-py is an independently installable CLI and static-report generator for
 normalizing agent session data, inspecting trajectories, and comparing results.
+It requires Python 3.12 or newer and pins Harbor 0.21.0 for live Dataset and Task
+management as well as Harbor compatibility validation.
 
 ## Scope
 

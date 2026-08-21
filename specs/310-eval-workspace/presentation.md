@@ -3,17 +3,50 @@
 Role-specific controls and guest-safe content projection are specified by
 [Access Control](access.md).
 
+Live serve uses a shared top header with low-profile text navigation on its
+left. Home, Datasets, Reports, and Sources are real pages; the active link has a
+visible focus-blue lower rule and `aria-current="page"`. Guests omit Sources.
+Role, authentication, and locale controls remain on the right, while reload and
+mutation actions belong to the active page. Static reports and workspace
+snapshots do not acquire this navigation.
+
+Home starts directly with its report notes, Leaderboard, and analysis content
+below the shared navigation. It does not repeat a Home page title, expose a
+source-count/status summary, or provide a page-level Refresh action. A configured
+workspace description remains as the only optional identity text between the
+navigation and main content. On Home, that compact description is aligned to
+the right edge of the content surface and its ordinary prose is right-aligned;
+structured Markdown such as lists and tables retains its readable left
+alignment.
+
+Datasets uses the shared data table above the selected Task detail specified by
+[Harbor Dataset Management](harbor-datasets.md). Its semantic Task status
+remains visible without turning the navigation or page actions into decorative
+pill tabs. Reports retains its inventory/bindings layout as a page and keeps
+the existing right-side Reader. Sources retains its input/configuration region
+and paginated table as a page. Modal backdrops, modal close controls, and body
+scroll locks are removed from these three management surfaces.
+Datasets, Reports, and Sources use the same outer workspace width so changing
+routes does not shift the shared header or page edges; each page handles wider
+internal tables with its own scrolling instead of changing that outer width.
+Their page surfaces fill the viewport space remaining below the shared header.
+When Dataset or Report content is short, the final detail/body region stretches
+to the surface's lower edge so columns share one visible bottom boundary instead
+of leaving an unowned blank band. Content may still grow the document when its
+minimum usable height exceeds the viewport, and narrow-screen stacking retains
+its own content-driven height.
+
 The shared server/browser Saved Views presentation and local mutation behavior
 is specified by [Saved Views](saved-views.md).
 
 ## Workspace Identity
 
-Live serve renders the effective workspace `description` as Markdown in a
-lightweight centered region of the top toolbar. Guests and administrators see
-the same description. Missing or blank content removes the region without
-leaving an empty card or placeholder. Rendering uses the same HTML-escaping
-Markdown subset as report notes, so configuration content cannot inject raw
-HTML. Workspace snapshots preserve the description and its top placement;
+Home renders the effective workspace `description` as Markdown in a lightweight
+identity region below the shared header. Guests and administrators see the same
+description. Missing or blank content removes the region without leaving an
+empty card or placeholder. Rendering uses the same HTML-escaping Markdown
+subset as report notes, so configuration content cannot inject raw HTML.
+Workspace snapshots preserve the description in their existing top placement;
 ordinary static reports do not acquire workspace identity content.
 
 ## Summary Availability
@@ -27,32 +60,32 @@ ordinary static reports do not acquire workspace identity content.
 
 ## Selection
 
-Leaderboard and Source Manager maintain independent selections. A table-header
+Leaderboard and the Sources page maintain independent selections. A table-header
 checkbox adds or removes only the current page's keys, while actions consume the
 entire retained selection unless their specific contract says otherwise.
 
 Pagination and filtering do not silently prune valid off-page selections.
 Generation reconciliation removes only keys that no longer exist.
 
-## Source Manager Inputs
+## Sources Page Inputs
 
-Source Manager presents only the SQLite DB and Path add forms, in that order.
+Sources presents only the SQLite DB and Path add forms, in that order.
 It does not present an input-table form, snapshot upload, or a replacement empty
 card. Workspace snapshots remain available only from the export menu.
 
 Harbor configuration is a separate section rather than another ordinary source
-form. It shows each explicit mount's ID, Jobs root, and ordered Task/Dataset
-paths; supports add, edit, and remove; and labels configuration changes as
+form. It shows each explicit mount's ID, Jobs root, and ordered Dataset IDs;
+supports add, edit, and remove; and labels configuration changes as
 workspace-only. An empty add form remains available when no Harbor mount exists.
 
 ## Harbor Trial Semantics
 
-Leaderboard keeps the canonical Session identifier and replaces the separate
-alias presentation with a compact Task / Alias cell. Task is the default; a
-user alias becomes primary while Task remains secondary. Job, Provider, and
-Reward are first-class columns. Reward preserves numeric zero, identifies a
-dimension-only result without inventing a scalar, and is absent only when no
-numeric reward evidence exists.
+Leaderboard places Job immediately before the compact Task / Alias cell in its
+canonical column order and keeps the canonical Session identifier as its final
+data column. Task is the default; a user alias becomes primary while Task
+remains secondary. Job, Provider, and Reward are first-class columns. Reward
+preserves numeric zero, identifies a dimension-only result without inventing a
+scalar, and is absent only when no numeric reward evidence exists.
 
 Tags combine read-only live Task keywords with editable custom tags. Editing
 changes only custom tags; clearing an edit restores the keyword-only display.
@@ -96,7 +129,8 @@ semantic value is absent for every row in that complete result. Pagination
 does not change the automatic set; search or filter changes may. Null, missing,
 blank-string, empty-list, and the renderer's `-` missing-value sentinel are
 empty, while numeric zero and false are present. Static reports and workspace
-snapshots apply the same rule to all of their embedded rows.
+snapshots apply the same rule to all of their embedded rows. Provider is hidden
+by default even when present, but the Columns control may explicitly show it.
 
 Column presence follows the displayed semantic field rather than an unrelated
 row identity. In particular, Session is absent when the canonical session ID is
@@ -122,7 +156,8 @@ by an opaque workspace identifier. Unknown, duplicate, or malformed entries
 fall back safely, and newly introduced columns enter at their canonical
 position. When more than one column is introduced, the new columns retain their
 canonical relative order while stored columns retain their saved relative
-order. Workspace snapshots embed the resolved manual order and overrides and
+order. A stored manual order remains authoritative when the default canonical
+order changes. Workspace snapshots embed the resolved manual order and overrides and
 do not depend on browser-local state. Ordinary static reports perform only
 automatic hiding. Screen visibility and order do not remove or reorder fields
 in data exports.
@@ -156,6 +191,7 @@ It does not expose a legacy HTML Report action.
 
 - [Evaluation Workspace](spec.md)
 - [Access Control](access.md)
+- [Harbor Dataset Management](harbor-datasets.md)
 - [Saved Views](saved-views.md)
 - [Storage](storage.md)
 - [HTTP Interface](http.md)

@@ -11,7 +11,7 @@ peval-py serve --root .local/peval-py
 `serve` 按显式 root、`PEVAL_ROOT` 或当前/父级配置解析 workspace。首页先加载空壳，
 再按需请求 catalog 和选中的 report。
 
-可以在 `peval-py.toml` 顶层添加可选的 `description`，用 Markdown 在工作台顶部中央
+可以在 `peval-py.toml` 顶层添加可选的 `description`，用 Markdown 在主页内容上方右侧
 显示简短说明：
 
 ```toml
@@ -26,7 +26,10 @@ Workspace snapshot 导出也会保留这段内容。
 ## 访客与管理员访问
 
 Serve 提供匿名访客角色和一个 workspace 级共享管理员密码。访客可以浏览、筛选、
-打开完整轨迹、笔记、分析、Saved Views 和已导入报告，并执行全部只读导出。Source
+打开完整轨迹、笔记、分析、Saved Views、已导入报告，以及已注册的 Harbor Dataset 与
+Task。Dataset 的访客权限包括 Task 文件树和不超过 2 MiB 的 UTF-8 文本（含 solution 与
+verifier），但不允许下载，也不会返回 Dataset 物理路径、revision、回收区、mount 配置或
+写入动作。访客还可以执行全部只读评测导出。Source
 位置与诊断、刷新与操作状态、source 管理、配置、笔记编辑、工作区 Saved View 修改和
 报告绑定必须先以管理员身份登录。
 
@@ -70,7 +73,13 @@ Views XLSX 导出和 workspace snapshot。管理员保存时选择“工作区�
 
 ## Source
 
-Source Manager 只导入 Session/ATIF path 和受支持的 SQLite DB，不再提供 input
+Live serve 提供四个可直接访问的页面：主页 `/`、数据集 `/datasets`、报告 `/reports`
+和来源 `/sources`。共享的顶部左侧导航会标记当前页面，并支持刷新、收藏和浏览器前进
+后退。访客只看到主页、数据集和报告；来源入口不渲染，直接访问返回 `403`。每个页面只
+加载自身初始数据。主页从可选的右对齐说明和 Leaderboard 开始，不重复显示主页标题、
+来源计数或页面级刷新动作；打开数据集页面不会启动 Leaderboard catalog 请求。
+
+来源页面只导入 Session/ATIF path 和受支持的 SQLite DB，不再提供 input
 table 或 snapshot upload 表单。Path 与 DB 表单支持多个带引号 path，保留
 Windows/UNC path，并在 POSIX 上解析可用的 WSL mount path。
 
@@ -79,15 +88,44 @@ workspace 或 `workspace/jobs`。每个 mount 都需要稳定的小写 ID；相�
 `peval-py.toml` 所在目录为基准：
 
 ```toml
+[[harbor.datasets]]
+id = "pbench"
+path = "../datasets/pbench-v1.0"
+
 [[harbor.mounts]]
 id = "jobs-2026-08-08"
 path = "../harbor/jobs"
-task_paths = ["../datasets/pbench-v1.0"]
+dataset_ids = ["pbench"]
 ```
 
-Source Manager 的 Harbor 区域可以添加、编辑和移除这些挂载。每个挂载包含一个
-Jobs root，以及可选且有序的 Task 或本地 Dataset 路径。修改只写入 workspace
-`peval-py.toml`，不会修改配置指向的 Harbor 文件。
+来源页面的 Harbor 区域可以添加、编辑和移除这些挂载。每个挂载包含一个
+Jobs root 和一组有序的已注册 Dataset ID。Dataset ID 与规范化路径全局唯一。已删除的
+`task_paths` 字段不会自动迁移；加载时会明确报错，并给出替代格式示例。挂载修改只写入
+workspace `peval-py.toml`。
+
+数据集页面可以新建
+包含 `dataset.toml` 与 `README.md` 的 Dataset、注册已有 Dataset、修改 ID/路径，以及
+只解除注册而不删除文件。注册和普通浏览不会解析或校验 `dataset.toml`，因此 manifest
+缺失或无效不会隐藏 Dataset 或其中的 Task；仍被 mount 引用的 Dataset 不能解除注册。
+
+工作台使用 Harbor 1.4 创建单步或多步 Task 脚手架，并复用可排序、筛选的共享表格：
+每个 live Task 占一行，没有 Task 的 Dataset 保留一条空占位行。搜索会匹配 Dataset、
+Task、package、状态和诊断字段，并保持第一条可见记录被选中。回收区是仅供
+管理员使用的独立视图，不混入 live 总览。选中行后，下方显示文件树和纯文本编辑器。
+文件通过按钮或 Ctrl/Cmd+S 显式保存，切换页面、行或文件前会保护未保存内容。
+无效编辑保留为带 Harbor 精确诊断的 Draft，并从实时 Task evidence 中排除。文本编辑上限
+为 2 MiB、Base64 上传为 16 MiB、下载为 20 MiB；链接、特殊文件、路径穿越和保留控制
+路径均会被拒绝。删除 Task 会把整个目录移到 Dataset 内的回收区，可恢复或永久清空；
+单个文件删除是永久操作。
+
+普通 Dataset 和 Task 操作不会解析或改写 `dataset.toml`。只有显式同步 manifest 才会
+校验它，再使用 Harbor digest 添加或更新有效 Task，并移除已回收 Task 的引用。每次写入
+都携带 revision；浏览器状态过期或外部并发修改会返回 `409`，不会覆盖。Task 磁盘变化
+会触发一个后台 catalog reconcile，工作台持续显示进度和失败；仅同步 manifest 不刷新
+Trial。
+
+报告页面展示导入报告列表，并为管理员提供 session 关联管理。加载后默认选中第一份
+报告，原有可调整宽度的 Report Reader 和新标签页预览行为保持不变。
 
 来源引用固定为 `harbor/<mount-id>/<job-name>/<trial-name>`。Reload 直接从
 Harbor 当前文件读取 trajectory、config、lock、result、reward 和运行状态，不会在
@@ -100,8 +138,8 @@ workspace 中复制这些内容。多步 Trial 显示 unsupported；无效 Trial
 与报告。Task identity 按 result、lock、config 顺序解析。Provider 只接受 Harbor 的
 显式记录或明确的 `provider/model` 模型格式；不会从 agent 名或无前缀模型名猜测。
 
-Task metadata 只会从 mount 的 `task_paths` 解析：优先匹配 lock/config 中的 Task path，
-否则用完整 Task name 匹配 Dataset 的直接子目录。缺失或多解只产生诊断，不会隐藏
+Task metadata 只会从 mount 注册的 `dataset_ids` 解析：优先匹配 lock/config 中的 Task path，
+否则用完整 Task name 匹配 Harbor 校验有效的 Dataset 直接子目录；Draft 会被排除。缺失或多解只产生诊断，不会隐藏
 Trial。description、version、keywords 和 digest 来自当前白名单 Task，明确属于
 **live metadata**，不是历史 Job 证据。Digest 不匹配时仍采用这些字段，并在 Selected
 Trial 的 Harbor Evidence 区显示 mismatch。Package 或 Git artifact 的 `ref` 仍作为
@@ -132,8 +170,9 @@ Selected Trial 的 Analysis 会先显示这份 Harbor 文档，再显示 workspa
 自身区块；Reload 与 Refresh 能发现文件新增、修改、删除和候选切换，但不会复制或
 修改 Harbor 文件。
 
-Leaderboard 保留 canonical Session ID，并使用独立的紧凑 Task / 别名列。没有自定义
-alias 时显示 Task name；存在 alias 时以 alias 为主，同时保留 Task 作为次级证据。
+Leaderboard 将 Job 放在紧凑的 Task / 别名列之前，并将 canonical Session ID 保留为
+最后一个数据列。没有自定义 alias 时显示 Task name；存在 alias 时以 alias 为主，同时
+保留 Task 作为次级证据。
 Tags 合并只读 Task keywords 与可编辑 custom tags，保持顺序并按大小写不敏感去重；
 清空 alias 或 tags 后恢复 Task 派生显示。Job、Provider、Reward 可筛选；Task、Job、
 Provider、Reward 可排序；Saved Views 与 Summary 可按 Task、Job、Provider 分组。

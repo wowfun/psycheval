@@ -21,7 +21,7 @@ It does not own source-format conversion rules or Harbor Trial execution.
   active/archive transitions, report attachment, and exports.
 - Workspace mutations expose generation-aware results and never require clients
   to replace the entire workspace from one response.
-- Separate Leaderboard and Source Manager selections persist across pages and
+- Separate Leaderboard and Sources-page selections persist across pages and
   are reconciled only with sources that no longer exist.
 - Saved views, report attachments, aliases, and presentation settings remain
   user-authored overlays over rebuildable report data.
@@ -38,6 +38,7 @@ It does not own source-format conversion rules or Harbor Trial execution.
 ## Attachments
 
 - [Access Control](access.md)
+- [Harbor Dataset Management](harbor-datasets.md)
 - [Saved Views](saved-views.md)
 - [Storage](storage.md)
 - [HTTP Interface](http.md)

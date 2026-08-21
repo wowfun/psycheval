@@ -27,24 +27,25 @@ their authority, isolation, limits, and merge behavior are specified by
 come only from explicit `[[harbor.mounts]]` entries in `peval-py.toml`; there is
 no implicit workspace or `jobs/` discovery. Each mount has a unique lowercase
 path-safe ID, a `path` that identifies a Harbor jobs root with the exact shape
-`<root>/<job-name>/<trial-name>`, and optional ordered `task_paths` entries that
-each identify a Task directory or a Dataset whose direct child directories are
-Tasks. Relative paths resolve from the configuration file. Initial load,
-explicit Reload, single-source Refresh, and Source Manager configuration changes
+`<root>/<job-name>/<trial-name>`, and ordered `dataset_ids` entries referencing
+the Dataset registry owned by [Harbor Dataset Management](harbor-datasets.md).
+Relative paths resolve from the configuration file. Initial load,
+explicit Reload, single-source Refresh, and Sources-page configuration changes
 rescan mounts. There is no background watcher.
 
 Configured paths remain lexical until every existing component has been checked
-for symbolic links. A mount or Task path that is itself a link or traverses a
-linked component is rejected before canonical identity is calculated. Jobs
+for symbolic links. A mount or Dataset path that is itself a link or traverses
+a linked component is rejected before canonical identity is calculated. Jobs
 discovery also rejects linked Job or Trial children. Duplicate IDs, duplicate
-canonical Jobs or Task paths, missing roots, direct Job or Trial mounts, invalid
-Task/Dataset roots, and paths outside the declared root are rejected with an
-explicit configuration or refresh error.
+canonical Jobs or Dataset paths, missing roots, unresolved Dataset references,
+direct Job or Trial mounts, invalid Dataset roots, and paths outside the
+declared root are rejected with an explicit configuration or refresh error.
 
-Source Manager edits only the Harbor mount array in workspace `peval-py.toml`,
+The Sources page edits only the Harbor mount array in workspace `peval-py.toml`,
 preserves unrelated configuration, and validates the complete proposed array
-before writing. Removing a mount detaches its derived catalog rows but does not
-delete Harbor files or workspace overlays.
+before writing. Dataset configuration is owned by the Dataset workbench.
+Removing a mount detaches its derived catalog rows but does not delete Harbor
+files or workspace overlays.
 
 A linked source reference is
 `harbor/<mount-id>/<job-name>/<trial-name>`. The source key is derived from that
@@ -129,13 +130,14 @@ terminal state.
 
 Leaderboard Archive and Activate reload the original query after completion and
 do not clear retained Leaderboard selection or automatically switch catalog
-mode. Source Manager bulk state clears its own selection on success; bulk delete
+mode. Sources-page bulk state clears its own selection on success; bulk delete
 clears it when the operation is submitted. Report attachment uses the retained
 Leaderboard selection and clears it after successful attachment.
 
 ## Related Topics
 
 - [Evaluation Workspace](spec.md)
+- [Harbor Dataset Management](harbor-datasets.md)
 - [Saved Views](saved-views.md)
 - [HTTP Interface](http.md)
 - [Presentation](presentation.md)

@@ -13,7 +13,7 @@ config. It starts with an empty shell, then lazily loads catalog and selected
 report data.
 
 Set the optional top-level `description` to place a concise Markdown description
-in the center of the workspace header:
+at the right edge above the Home content:
 
 ```toml
 description = "**Nightly** evaluation workspace — release candidate checks"
@@ -30,7 +30,11 @@ only if the local asset cannot load.
 
 Serve has one anonymous guest role and one workspace-wide administrator
 password. Guests can browse, filter, open full trajectories, notes, analysis,
-Saved Views, and imported reports, and can create every read-only export.
+Saved Views, imported reports, and registered Harbor Datasets and Tasks. Guest
+Dataset access includes Task file trees and UTF-8 text files up to 2 MiB,
+including solution and verifier files, but never downloads, physical Dataset
+paths, revisions, trash, mount configuration, or write actions. Guests can also
+create every read-only evaluation export.
 Source locations and diagnostics, refresh and operation status, source
 management, configuration, notes, workspace Saved View changes, and report
 bindings require administrator login.
@@ -82,7 +86,16 @@ summaries, so the exported page does not depend on the original browser.
 
 ## Sources
 
-Source Manager imports Session/ATIF paths and supported SQLite DBs. It has no
+Live serve has four directly addressable pages: Home at `/`, Datasets at
+`/datasets`, Reports at `/reports`, and Sources at `/sources`. The shared
+top-left navigation marks the current page and supports normal refresh,
+bookmarks, and browser history. Guests see Home, Datasets, and Reports; Sources
+is omitted and direct guest access returns `403`. Home starts directly with its
+optional right-aligned description and Leaderboard; it does not repeat the page
+title, source count, or page-level Refresh action. Each page loads only its own
+initial data, so opening Datasets does not start a Leaderboard catalog request.
+
+The Sources page imports Session/ATIF paths and supported SQLite DBs. It has no
 input-table or snapshot-upload form. Path and DB forms accept multiple quoted
 paths and preserve Windows/UNC paths; compatible WSL mount paths are resolved
 on POSIX.
@@ -92,15 +105,54 @@ roots. There is no implicit workspace or `workspace/jobs` discovery. Give each
 mount a stable lowercase ID; relative paths resolve from `peval-py.toml`:
 
 ```toml
+[[harbor.datasets]]
+id = "pbench"
+path = "../datasets/pbench-v1.0"
+
 [[harbor.mounts]]
 id = "jobs-2026-08-08"
 path = "../harbor/jobs"
-task_paths = ["../datasets/pbench-v1.0"]
+dataset_ids = ["pbench"]
 ```
 
-The Source Manager Harbor section adds, edits, and removes these mounts. Each
-mount has one Jobs root and optional ordered Task or local Dataset paths. Changes
-write only workspace `peval-py.toml`; configured Harbor files stay read-only.
+The Sources page Harbor section adds, edits, and removes these mounts. Each
+mount has one Jobs root and an ordered list of registered Dataset IDs. Dataset
+IDs and normalized paths are globally unique. The removed `task_paths` field is
+not migrated and fails with the replacement syntax. Mount configuration changes
+write only workspace `peval-py.toml`.
+
+The Datasets page creates a Dataset with `dataset.toml` and `README.md`,
+registers an existing Dataset, updates its ID or path, and unregisters it without
+deleting files. Registration and ordinary browsing do not parse or validate
+`dataset.toml`, so a missing or invalid manifest does not hide the Dataset or
+its Tasks. A Dataset referenced by a mount cannot be unregistered.
+
+The workbench creates Harbor 1.4 single-step or multi-step Task scaffolds and
+uses the shared sortable/filterable data table for one row per live Task, with
+an empty placeholder row for a Dataset that has no Tasks. Search matches
+Dataset, Task, package, status, and diagnostics fields and keeps the
+first visible row selected. Trash is an administrator-only separate view rather
+than part of the live overview. The selected row opens a file tree and
+plain-text editor below the table. Save is explicit
+through the button or Ctrl/Cmd+S, and navigation protects unsaved text. Invalid
+edits remain as Drafts with Harbor diagnostics and are excluded from live Task
+evidence. Text editing is limited to 2 MiB, Base64 uploads to 16 MiB, and
+downloads to 20 MiB; symlinks, special files, traversal, and reserved control
+paths are rejected. Task deletion moves the complete directory into the
+Dataset-local trash for restore or permanent purge. Individual file deletion is
+permanent.
+
+Ordinary Dataset and Task operations do not parse or rewrite `dataset.toml`.
+Explicit Sync manifest is the only action that validates it, then adds or
+updates valid Task references with Harbor digests and removes references for
+trashed Tasks. Each write carries a revision; stale browser or external edits
+receive `409` and are never overwritten. Task disk changes start one background
+catalog reconcile whose progress and failure remain visible in the workbench;
+manifest-only synchronization does not refresh Trials.
+
+The Reports page contains the imported report inventory and, for
+administrators, session bindings. It selects the first report after loading and
+retains the existing resizable Report Reader and new-tab preview behavior.
 
 The source reference is
 `harbor/<mount-id>/<job-name>/<trial-name>`. Reload reads the current
@@ -118,9 +170,9 @@ result, then lock, then config evidence. Provider is shown only when Harbor
 records it explicitly or the recorded model uses an explicit `provider/model`
 form; agent names and unqualified model names are never treated as providers.
 
-Task metadata is resolved only from the mount's `task_paths`. An explicit
+Task metadata is resolved only from the mount's registered `dataset_ids`. An explicit
 lock/config Task path wins; otherwise peval-py matches the complete Task name
-against direct Dataset children. Ambiguous or missing matches produce a
+against Harbor-valid direct Dataset children. Drafts are excluded. Ambiguous or missing matches produce a
 diagnostic without hiding the Trial. Description, version, keywords, and digest
 come from the current allowlisted Task and are marked as **live metadata**, not
 historical Job evidence. A digest mismatch remains usable and is shown in the
@@ -159,9 +211,10 @@ source-labelled blocks. A missing, blank, invalid, or oversized document hides
 only its block; Reload and Refresh detect creation, changes, removal, and
 selection changes without copying or modifying the Harbor file.
 
-The Leaderboard keeps the canonical Session ID and presents Task / Alias as a
-separate compact column. With no custom alias it displays the Task name; with an
-alias it displays that alias first and retains the Task as secondary evidence.
+The Leaderboard places Job immediately before its compact Task / Alias column
+and keeps the canonical Session ID as the final data column. With no custom
+alias it displays the Task name; with an alias it displays that alias first and
+retains the Task as secondary evidence.
 Tags combine read-only Task keywords with editable custom tags, preserving
 order and removing case-insensitive duplicates. Clearing alias or tags restores
 the Task-derived display. Job, Provider, and Reward are filterable columns;

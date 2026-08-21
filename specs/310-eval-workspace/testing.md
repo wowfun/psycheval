@@ -12,18 +12,29 @@ state, report rendering, selection, mutation, and export behavior.
   expiry, idempotent logout, centralized guest/admin authorization, stale
   authentication-state reclamation, guest-safe shell/data/export projection,
   expired-session download handling, and role-specific presentation.
-- Initial-load tests assert an empty shell followed by lazy catalog and report
-  requests.
+- Initial-load tests assert direct Home, Datasets, Reports, and Sources routes,
+  role-specific navigation and active-page semantics, absence of inactive
+  management markup, Home's absence of duplicate title/count/refresh chrome,
+  and page-specific lazy requests. Guest Sources is `403`.
 - Direct HTTP tests assert compact synchronous mutations, queued `202`
   operations, validation errors, and the absence of full report payloads.
 - Source tests cover each surface-specific adapter rule and every supported
-  alias interface. Rendering and HTTP tests prove Source Manager exposes only
+  alias interface. Rendering and HTTP tests prove the Sources page exposes only
   DB and Path inputs and rejects the removed input-table and snapshot-upload
   mutations, while CLI tests reject `--input-table` and snapshot export remains
   covered by its owning suite.
-- Harbor configuration tests cover add, edit, remove, preservation of unrelated
-  TOML, catalog reload, Task/Dataset path ordering, missing paths, duplicate
-  paths and IDs, symlink rejection, and zero writes under Harbor-owned roots.
+- Harbor configuration tests cover Dataset create/register/edit/remove,
+  preservation of unrelated TOML, mount Dataset-reference ordering, rejection
+  of legacy `task_paths`, missing references, duplicate paths and IDs, symlink
+  rejection, registration and browsing independent of `dataset.toml` validity,
+  and zero writes under Harbor Job and Trial roots.
+- Harbor Dataset page tests cover the shared overview table, cross-field
+  search, sorting/filtering, first-visible selection, empty Datasets, keyboard
+  selection, selected Task file detail, official scaffold parity, valid/draft
+  transitions, file inventories and bounds, explicit text save, binary upload,
+  revision conflicts, containment and symlink rejection, atomic replacement,
+  Task rename, trash/restore/purge, manifest-independent inventory and explicit sync,
+  navigation dirty guards, and coalesced catalog reconciliation.
 - Harbor evidence tests cover result-lock-config Task-name precedence; Job and
   Trial identity; provider evidence; complete rewards and phase timing; regrade
   provenance; allowlisted path and name resolution; ambiguity, missing roots,
@@ -56,10 +67,12 @@ state, report rendering, selection, mutation, and export behavior.
 - Catalog, rendering, snapshot, and XLSX tests cover `#Analysis` source counts
   of 0, 1, and 2, treating JSON and Markdown in one workspace overlay as one
   source and keeping Harbor plus workspace analysis as two sources.
+- Leaderboard presentation tests keep Job immediately before Task / Alias in
+  the canonical order and Session last while preserving stored manual orders.
 - Config and rendering tests cover an optional top-level workspace description,
   normal config precedence, non-string rejection, blank hiding, escaped
-  Markdown in the centered live toolbar for both roles, snapshot preservation,
-  and absence from ordinary static reports.
+  Markdown in the right-aligned Home identity region for both roles, snapshot
+  preservation, and absence from ordinary static reports.
 - HTTP, report, export, and analysis-import tests resolve Harbor content through
   source keys and source references without a Harbor `artifact_dir`.
 - Catalog, HTTP, and rendering tests additionally cover Task, Job, and Provider
@@ -102,6 +115,11 @@ state, report rendering, selection, mutation, and export behavior.
   user configuration or persistent host state.
 - Guest UI tests invoke administrator-only action functions directly and prove
   they issue no requests, independently of whether their controls were rendered.
+- Guest access tests prove Datasets navigation and projected live inventory,
+  Task trees, solution/verifier text reads, and sanitized diagnostics are
+  available while physical roots, revisions, root files, trash, download mode,
+  binary/oversized content, and every mutation remain unavailable. Guest UI
+  renders no Dataset download or mutation control.
 - Guest projection tests inject unknown path-bearing fields into internal Task
   metadata and Harbor provenance and prove those fields are excluded from live
   and export projections until explicitly allowlisted.
@@ -117,5 +135,6 @@ state, report rendering, selection, mutation, and export behavior.
 
 - [Evaluation Workspace](spec.md)
 - [Access Control](access.md)
+- [Harbor Dataset Management](harbor-datasets.md)
 - [Saved Views](saved-views.md)
 - [300. peval-py Testing](../300-peval-py/testing.md)

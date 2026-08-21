@@ -6,6 +6,10 @@ Language: English | [简体中文](README.zh-CN.md)
 trajectories. It reads JSONL sessions or adapter-owned SQLite databases and
 writes ATIF JSON or static peval-style reports.
 
+Python 3.12 or newer is required. The standalone package pins Harbor 0.21.0 so
+the Eval Workspace uses Harbor's Task and Dataset models for scaffolding,
+validation, and manifest digests.
+
 ## Install From A Checkout
 
 Install the local Python tool once with `uv`:
@@ -38,8 +42,9 @@ uv run --project tools/peval-py peval-py --help
 
 ## Build A Local Binary
 
-`peval-py` uses `pandas` for inspect-mode tabular analysis; `uv` installs that
-runtime dependency from `tools/peval-py/pyproject.toml`. Build on the same
+`peval-py` uses `pandas` for inspect-mode tabular analysis and Harbor for the
+Dataset workbench; `uv` installs those runtime dependencies from
+`tools/peval-py/pyproject.toml`. Build on the same
 operating system and CPU architecture where you plan to run the file. Keep
 generated artifacts under `.local/`; the repository ignores that directory.
 
@@ -50,6 +55,7 @@ cd /path/to/psycheval
 
 uv run --project tools/peval-py --with pyinstaller pyinstaller \
   --onefile \
+  --collect-data harbor \
   --name peval-py \
   --paths tools/peval-py/src \
   --distpath .local/peval-py-build/dist \
@@ -217,9 +223,13 @@ fixed CDN URL if the local script fails. Its Source Manager exposes configured
 default DB paths through the SQLite DB form's Save/Clear default actions, alias
 editing, Last Turn End sorting, and an
 English/Simplified Chinese selector that persists top-level `locale` in
-`peval-py.toml`. Its Harbor section adds, edits, and removes read-only mounts
-with a stable ID, one Jobs root, and optional Task/Dataset paths. The Path source
-field also accepts another workspace root,
+`peval-py.toml`. Live serve exposes Home, Datasets, Reports, and Sources as
+separate pages in a shared top-left navigation. The Datasets page manages
+registered Harbor Datasets, searchable Task rows, drafts and files, trash, and
+explicit manifest synchronization. Guests can browse Task text, including
+solution and verifier files, but cannot download or mutate it. Sources mounts
+keep a stable ID and one Jobs root, then reference those
+Datasets by ordered ID. The Path source field also accepts another workspace root,
 `runs/`, `runs/<analysis_eval_slug>`, or a directory above Trial cells; serve
 recursively imports complete cells into the current workspace as snapshots and
 leaves the external workspace unchanged.
@@ -236,7 +246,7 @@ local Task digest.
 to one or more sessions. Select visible Leaderboard rows, choose
 `Attach report (N)`, and pick one local `.md`, `.markdown`, `.html`, or `.htm`
 file. The Reports column opens attached files in a sandboxed left-side preview.
-Use the toolbar's Reports Manager to preview imported reports, replace their
+Use the Reports page to preview imported reports, replace their
 bindings across readable active and archived sessions, or permanently delete
 them. This workflow is serve-only and does not change exported report JSON or
 static HTML reports.

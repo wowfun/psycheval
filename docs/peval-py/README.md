@@ -36,8 +36,8 @@ peval-py serve --root .local/peval-py
   built-in and custom adapters.
 - [Reports](reports.md): comparisons, notes, aliases, timing, localization, and
   cached analysis.
-- [Eval Workspace](eval-workspace.md): guest/admin access, browser-local Saved
-  Views, sources, selection, and exports.
+- [Eval Workspace](eval-workspace.md): guest/admin access, Harbor Dataset and
+  Task management, browser-local Saved Views, sources, selection, and exports.
 
 Stable behavior is specified by [`specs/300-peval-py`](../../specs/300-peval-py/spec.md)
 and [`specs/310-eval-workspace`](../../specs/310-eval-workspace/spec.md).
