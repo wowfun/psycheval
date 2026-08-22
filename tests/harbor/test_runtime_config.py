@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from psycheval.config import load_config as load_peval_config
 from psycheval.harbor.runtime_config import (
     EffectiveRuntimeConfig,
     HarnessInvocation,
@@ -55,12 +56,16 @@ def test_host_settings_use_builtin_default_without_user_file(
     assert settings.workdir_root == home / "workspaces"
 
 
-def test_host_settings_load_only_harbor_host_table(tmp_path: Path) -> None:
+def test_unified_config_is_read_by_each_section_owner(tmp_path: Path) -> None:
     config = tmp_path / "config" / "peval.toml"
     config.parent.mkdir()
     config.write_text(
-        '[other]\nvalue = "preserved"\n\n'
-        '[harbor.host]\nworkdir_root = "relative workspaces"\n',
+        'description = "Nightly workspace"\n\n'
+        '[adapters.psychevo]\ndefault_db_path = "state.db"\n\n'
+        '[harbor.host]\nworkdir_root = "relative workspaces"\n'
+        '[[harbor.datasets]]\nid = "pbench"\npath = "datasets/pbench"\n\n'
+        '[[harbor.mounts]]\nid = "nightly"\npath = "runs/nightly"\n'
+        'dataset_ids = ["pbench"]\n',
         encoding="utf-8",
     )
     original = config.read_bytes()
@@ -71,6 +76,13 @@ def test_host_settings_load_only_harbor_host_table(tmp_path: Path) -> None:
 
     assert settings.source_path == config.resolve()
     assert settings.workdir_root == config.parent / "relative workspaces"
+    workspace = load_peval_config(None, workspace_root=str(config.parent))
+    assert workspace.description == "Nightly workspace"
+    assert workspace.adapter_default_db_paths == {
+        "psychevo": str((config.parent / "state.db").resolve())
+    }
+    assert workspace.harbor_datasets[0].id == "pbench"
+    assert workspace.harbor_mounts[0].dataset_ids == ("pbench",)
     assert config.read_bytes() == original
 
 
