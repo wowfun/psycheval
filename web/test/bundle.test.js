@@ -33,11 +33,11 @@ function reportShell(mode, workspaceSnapshot = null, renderOptions = {}) {
     <strong data-source-count></strong>
     <span data-source-status></span>
     ${datasetPage}
-    <script type="application/json" id="peval-py-data">{"trajectory":[],"trajectory_meta":[],"annotations":{}}</script>
-    <script type="application/json" id="peval-py-token-estimates">{}</script>
-    <script type="application/json" id="peval-py-i18n">{}</script>
-    ${workspaceSnapshot === null ? "" : `<script type="application/json" id="peval-py-workspace-snapshot">${JSON.stringify(workspaceSnapshot)}</script>`}
-    <script type="application/json" id="peval-py-render-options">${JSON.stringify(options)}</script>
+    <script type="application/json" id="peval-data">{"trajectory":[],"trajectory_meta":[],"annotations":{}}</script>
+    <script type="application/json" id="peval-token-estimates">{}</script>
+    <script type="application/json" id="peval-i18n">{}</script>
+    ${workspaceSnapshot === null ? "" : `<script type="application/json" id="peval-workspace-snapshot">${JSON.stringify(workspaceSnapshot)}</script>`}
+    <script type="application/json" id="peval-render-options">${JSON.stringify(options)}</script>
   `;
 }
 

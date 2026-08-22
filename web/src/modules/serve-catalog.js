@@ -660,7 +660,7 @@ async function deleteSelectedServeSources() {
   if (!adminMode()) return;
   const sourceKeys = sourceSelectionKeys();
   if (!sourceKeys.length) return;
-  if (!window.confirm(t("serve_delete_selected_confirm", "Delete selected sources from peval-py state?"))) return;
+  if (!window.confirm(t("serve_delete_selected_confirm", "Delete selected sources from peval state?"))) return;
   try {
     state.sourceSelection.clear();
     applyServeMutationPayload(await serveApi("/api/sources/delete", {

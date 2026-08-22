@@ -8,7 +8,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const PROJECT_ROOT = path.resolve(SCRIPT_DIR, "../..");
 export const REPORT_BUNDLE_PATH = path.join(
   PROJECT_ROOT,
-  "src/peval_py/assets/report.js",
+  "src/psycheval/assets/report.js",
 );
 
 const GENERATED_BANNER =
@@ -18,7 +18,7 @@ export async function buildReportBundle() {
   const result = await build({
     absWorkingDir: PROJECT_ROOT,
     entryPoints: ["web/src/main.js"],
-    outfile: "src/peval_py/assets/report.js",
+    outfile: "src/psycheval/assets/report.js",
     bundle: true,
     format: "esm",
     platform: "browser",

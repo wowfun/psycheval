@@ -21,10 +21,10 @@ function scriptJson(id, fallback) {
     return fallback;
   }
 }
-const I18N = scriptJson("peval-py-i18n", {});
-const TOKEN_ESTIMATES = scriptJson("peval-py-token-estimates", {});
-const RENDER_OPTIONS = scriptJson("peval-py-render-options", { mode: "report" });
-const WORKSPACE_SNAPSHOT = scriptJson("peval-py-workspace-snapshot", null);
+const I18N = scriptJson("peval-i18n", {});
+const TOKEN_ESTIMATES = scriptJson("peval-token-estimates", {});
+const RENDER_OPTIONS = scriptJson("peval-render-options", { mode: "report" });
+const WORKSPACE_SNAPSHOT = scriptJson("peval-workspace-snapshot", null);
 function t(key, fallback) { return Object.prototype.hasOwnProperty.call(I18N, key) ? I18N[key] : (fallback ?? key); }
 function statusLabel(value) {
   const raw = String(value || "-");
@@ -47,7 +47,7 @@ function fmtCost(value) { return hasMetricValue(value) ? `$${Number(value).toFix
 function fmtPct(value) { return hasMetricValue(value) ? `${(Number(value) * 100).toFixed(1)}%` : "-"; }
 function fmtScore(value) { return hasMetricValue(value) ? Number(value).toLocaleString() : "-"; }
 function hasMetricValue(value) { return value !== null && value !== undefined && value !== "" && !Number.isNaN(Number(value)); }
-function data() { return JSON.parse($("peval-py-data").textContent || "{}"); }
+function data() { return JSON.parse($("peval-data").textContent || "{}"); }
 function bootstrapData() {
   return {
     report: data(),

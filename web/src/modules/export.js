@@ -238,9 +238,9 @@ function htmlReportForSubset(report) {
     const node = clone.querySelector(`#${id}`);
     if (node) node.innerHTML = "";
   });
-  const dataNode = clone.querySelector("#peval-py-data");
+  const dataNode = clone.querySelector("#peval-data");
   if (dataNode) dataNode.textContent = safeJsonForScript(JSON.stringify(report));
-  const optionsNode = clone.querySelector("#peval-py-render-options");
+  const optionsNode = clone.querySelector("#peval-render-options");
   if (optionsNode) optionsNode.textContent = safeJsonForScript(JSON.stringify({ mode: "report" }));
   const body = clone.querySelector("body");
   if (body) {

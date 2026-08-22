@@ -414,7 +414,7 @@ async function submitHarborMountForm(form) {
 async function removeHarborMount(form) {
   if (!adminMode()) return;
   const originalId = String(new FormData(form).get("original_id") || "").trim();
-  if (!originalId || !window.confirm(t("serve_remove_harbor_mount_confirm", "Remove this Harbor mount from peval-py configuration?"))) return;
+  if (!originalId || !window.confirm(t("serve_remove_harbor_mount_confirm", "Remove this Harbor mount from peval configuration?"))) return;
   try {
     setServeStatus(t("serve_remove_harbor_mount", "Remove mount"));
     await serveApi("/api/config/harbor-mount", {

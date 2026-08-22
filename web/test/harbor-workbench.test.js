@@ -5,10 +5,10 @@ import test from "node:test";
 import { installBrowserDom } from "./support/browser.js";
 
 const browser = installBrowserDom(`
-  <script type="application/json" id="peval-py-data">{}</script>
-  <script type="application/json" id="peval-py-token-estimates">{}</script>
-  <script type="application/json" id="peval-py-i18n">{}</script>
-  <script type="application/json" id="peval-py-render-options">{"mode":"serve","role":"admin","sources":[]}</script>
+  <script type="application/json" id="peval-data">{}</script>
+  <script type="application/json" id="peval-token-estimates">{}</script>
+  <script type="application/json" id="peval-i18n">{}</script>
+  <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","sources":[]}</script>
   <section data-harbor-workbench>
       <button data-harbor-reload>Reload</button>
       <button data-harbor-add-dataset>New Dataset</button>
@@ -57,7 +57,7 @@ test("workbench page fills its content when its status notice is hidden", () => 
     "20-serve-toolbar.css",
     "23-harbor-workbench.css",
   ].map(name => readFileSync(
-    new URL(`../../src/peval_py/assets/report_css/${name}`, import.meta.url),
+    new URL(`../../src/psycheval/assets/report_css/${name}`, import.meta.url),
     "utf8",
   )).join("\n");
   const workbench = document.createElement("section");

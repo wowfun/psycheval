@@ -4,10 +4,10 @@ import test from "node:test";
 import { installBrowserDom } from "./support/browser.js";
 
 const browser = installBrowserDom(`
-  <script type="application/json" id="peval-py-data">{}</script>
-  <script type="application/json" id="peval-py-token-estimates">{}</script>
-  <script type="application/json" id="peval-py-i18n">{}</script>
-  <script type="application/json" id="peval-py-render-options">{"mode":"serve","role":"guest","authentication_enabled":true,"sources":[]}</script>
+  <script type="application/json" id="peval-data">{}</script>
+  <script type="application/json" id="peval-token-estimates">{}</script>
+  <script type="application/json" id="peval-i18n">{}</script>
+  <script type="application/json" id="peval-render-options">{"mode":"serve","role":"guest","authentication_enabled":true,"sources":[]}</script>
   <button data-admin-login-open>Login</button>
   <div data-admin-login-dialog hidden>
     <section aria-modal="true">
@@ -317,7 +317,7 @@ test("guest saves a view only to workspace-scoped browser storage", async () => 
     ]);
     assert.equal(calls.some(call => call.path === "/api/views" && call.method === "POST"), false);
     assert.equal(
-      JSON.parse(window.localStorage.getItem("peval-py.saved-views.v1.default")).views[0].name,
+      JSON.parse(window.localStorage.getItem("peval.saved-views.v1.default")).views[0].name,
       "Guest local",
     );
     await views.commitWorkspaceViewCellEdit(
@@ -326,7 +326,7 @@ test("guest saves a view only to workspace-scoped browser storage", async () => 
       "Edited locally",
     );
     assert.equal(
-      JSON.parse(window.localStorage.getItem("peval-py.saved-views.v1.default")).views[0].notes,
+      JSON.parse(window.localStorage.getItem("peval.saved-views.v1.default")).views[0].notes,
       "Edited locally",
     );
     assert.equal(calls.some(call => call.path === "/api/views/update"), false);
@@ -375,7 +375,7 @@ test("guest saves a view only to workspace-scoped browser storage", async () => 
     assert.deepEqual(Array.from(runtime.state.workspaceViewSelection), ["server:Published"]);
     assert.equal(calls.some(call => call.path === "/api/views/delete"), false);
     assert.deepEqual(
-      JSON.parse(window.localStorage.getItem("peval-py.saved-views.v1.default")).views,
+      JSON.parse(window.localStorage.getItem("peval.saved-views.v1.default")).views,
       [],
     );
   } finally {

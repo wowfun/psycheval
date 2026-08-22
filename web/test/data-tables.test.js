@@ -4,10 +4,10 @@ import test from "node:test";
 import { installBrowserDom } from "./support/browser.js";
 
 const browser = installBrowserDom(`
-  <script type="application/json" id="peval-py-data">{}</script>
-  <script type="application/json" id="peval-py-token-estimates">{}</script>
-  <script type="application/json" id="peval-py-i18n">{}</script>
-  <script type="application/json" id="peval-py-render-options">{"mode":"serve","sources":[]}</script>
+  <script type="application/json" id="peval-data">{}</script>
+  <script type="application/json" id="peval-token-estimates">{}</script>
+  <script type="application/json" id="peval-i18n">{}</script>
+  <script type="application/json" id="peval-render-options">{"mode":"serve","sources":[]}</script>
   <div id="table-root"></div>
   <button id="outside">Outside</button>
   <div class="workspace-main-scroll" data-workspace-main-scroll></div>

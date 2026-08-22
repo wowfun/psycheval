@@ -14,7 +14,7 @@ const [expected, actual] = await Promise.all([
 
 if (!expected.equals(actual)) {
   throw new Error(
-    "committed report.js is stale; run `npm --prefix tools/peval-py run build`",
+    "committed report.js is stale; run `npm run build`",
   );
 }
 process.stdout.write("report.js matches the ESM source graph\n");

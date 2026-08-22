@@ -27,7 +27,7 @@ function normalizeColumnLayout(columnKeys, value) {
 }
 
 function layoutStorageKey(workspaceId) {
-  return `peval-py.leaderboard-columns.v${COLUMN_LAYOUT_VERSION}.${String(workspaceId || "default")}`;
+  return `peval.leaderboard-columns.v${COLUMN_LAYOUT_VERSION}.${String(workspaceId || "default")}`;
 }
 
 function loadColumnLayout(columnKeys, { workspaceId, snapshotLayout, storage } = {}) {

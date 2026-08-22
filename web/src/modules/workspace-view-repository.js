@@ -13,7 +13,7 @@ const LIST_FILTER_KEYS = [
 const VIEW_KEYS = new Set(["name", "filters", "group_by", "notes"]);
 
 function browserViewStorageKey(workspaceId) {
-  return `peval-py.saved-views.v${BROWSER_VIEW_VERSION}.${String(workspaceId || "default")}`;
+  return `peval.saved-views.v${BROWSER_VIEW_VERSION}.${String(workspaceId || "default")}`;
 }
 
 function repositoryError(message, cause = null) {

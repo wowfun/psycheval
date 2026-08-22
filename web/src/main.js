@@ -8,7 +8,7 @@ import { initializeHarborWorkbench } from "./modules/harbor-workbench.js";
 import { initializeWorkspaceReportPage } from "./modules/workspace-reports.js";
 import { renderWorkspaceViewRail } from "./modules/workspace-views.js";
 
-"peval-py-entrypoint";
+"peval-entrypoint";
 const bootstrap = bootstrapData();
 const platform = createBrowserPlatform(globalThis);
 
