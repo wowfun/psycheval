@@ -206,6 +206,7 @@ class ServeSessionTests(unittest.TestCase):
             )
         )
         self.assertFalse(self.access.permits("GET", "/api/sources", GUEST_ROLE))
+        self.assertFalse(self.access.permits("GET", "/api/config/harbor", GUEST_ROLE))
         self.assertFalse(self.access.permits("POST", "/api/views", GUEST_ROLE))
         self.assertFalse(self.access.permits("GET", "/api/future", GUEST_ROLE))
         self.assertTrue(self.access.permits("GET", "/api/future", ADMIN_ROLE))

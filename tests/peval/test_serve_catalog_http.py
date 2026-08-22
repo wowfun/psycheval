@@ -1250,6 +1250,68 @@ class ServeCatalogHttpTests(unittest.TestCase):
             finally:
                 self.stop(store, server, thread)
 
+    def test_permanent_source_delete_and_linked_harbor_rejection_are_atomic(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_trial_cell_artifacts(
+                root / "runs/default/psychevo/session/trial",
+                session_id="session",
+                trial_key="trial",
+            )
+            store, runtime, server, thread = self.running_server(root)
+            try:
+                source_key = runtime.catalog.query(CatalogQuery()).items[0].source_key
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/sources/delete",
+                    {"source_keys": [source_key]},
+                )
+                self.assertEqual(status, 202, body)
+                operation_id = json.loads(body)["operation_id"]
+                operation = None
+                for _attempt in range(100):
+                    status, _headers, body = self.request(
+                        server, "GET", f"/api/operations/{operation_id}"
+                    )
+                    operation = json.loads(body)
+                    if operation["state"] not in {"queued", "running"}:
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(operation["state"], "completed")
+                self.assertEqual(len(operation["successes"]), 1)
+                self.assertEqual(runtime.catalog.query(CatalogQuery()).total, 0)
+
+                rows = {
+                    "normal": {"source_key": "normal", "kind": "path"},
+                    "linked": {
+                        "source_key": "linked",
+                        "kind": "harbor-trial",
+                    },
+                }
+                original_row_for_key = runtime.catalog.row_for_key
+                runtime.catalog.row_for_key = lambda key: rows[key]
+                deleted = []
+                original_delete = store.delete_source_row
+                store.delete_source_row = lambda row: deleted.append(row["source_key"])
+                try:
+                    status, _headers, body = self.request(
+                        server,
+                        "POST",
+                        "/api/sources/delete",
+                        {"source_keys": ["normal", "linked"]},
+                    )
+                finally:
+                    runtime.catalog.row_for_key = original_row_for_key
+                    store.delete_source_row = original_delete
+                self.assertEqual(status, 400, body)
+                self.assertIn("linked Harbor Trials", json.loads(body)["error"])
+                self.assertEqual(deleted, [])
+            finally:
+                self.stop(store, server, thread)
+
     def test_server_exports_filtered_xlsx_selected_json_and_rejects_legacy_html(
         self,
     ) -> None:

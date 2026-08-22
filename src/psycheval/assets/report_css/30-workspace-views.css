@@ -397,12 +397,10 @@
   flex-wrap:wrap;
 }
 @media (min-width:1181px) {
-  .serve-mode.workspace-views-open,
-  .serve-mode.step-drawer-open {
+  .serve-mode.workspace-views-open {
     overflow:hidden;
   }
-  .serve-mode.workspace-views-open .workspace,
-  .serve-mode.step-drawer-open .workspace {
+  .serve-mode.workspace-views-open .workspace {
     display:flex;
     flex-direction:column;
     height:100vh;
@@ -410,29 +408,25 @@
     padding:18px;
     overflow:hidden;
   }
-  .serve-mode.workspace-views-open .workspace-content,
-  .serve-mode.step-drawer-open .workspace-content {
+  .serve-mode.workspace-views-open .workspace-content {
     height:auto;
     flex:1 1 auto;
     min-height:0;
     align-items:stretch;
   }
-  .serve-mode.workspace-views-open .workspace-main,
-  .serve-mode.step-drawer-open .workspace-main {
+  .serve-mode.workspace-views-open .workspace-main {
     display:grid;
     grid-template-rows:auto auto minmax(0,1fr);
     min-height:0;
     overflow:hidden;
   }
-  .serve-mode.workspace-views-open .workspace-main-scroll,
-  .serve-mode.step-drawer-open .workspace-main-scroll {
+  .serve-mode.workspace-views-open .workspace-main-scroll {
     min-height:0;
     overflow:auto;
     overscroll-behavior:contain;
     padding-right:2px;
   }
-  .serve-mode.workspace-views-open .workspace-leaderboard-region,
-  .serve-mode.step-drawer-open .workspace-leaderboard-region {
+  .serve-mode.workspace-views-open .workspace-leaderboard-region {
     min-height:0;
     margin-bottom:14px;
   }
@@ -451,8 +445,7 @@
   .serve-mode.step-drawer-open .leaderboard .table-wrap {
     max-height:min(calc(45px + (48px * 10)),42dvh);
   }
-  .serve-mode.workspace-views-open .workspace-side-region,
-  .serve-mode.step-drawer-open .workspace-side-region {
+  .serve-mode.workspace-views-open .workspace-side-region {
     position:relative;
     top:auto;
     height:100%;

@@ -21,6 +21,7 @@ from harbor.models.task.task import Task
 from harbor.publisher.packager import Packager
 
 from psycheval.config import (
+    HARBOR_ID_RE,
     HarborDataset,
     ToolConfig,
     write_workspace_harbor_config,
@@ -32,7 +33,6 @@ DOWNLOAD_LIMIT = 20 * 1024 * 1024
 TRASH_DIRNAME = ".peval-trash"
 TRASH_METADATA = "metadata.json"
 TASK_DIR_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$")
-DATASET_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 
 
 class HarborWorkspaceError(ValueError):
@@ -157,6 +157,7 @@ class HarborWorkspace:
         dataset_id: str,
         new_id: str,
         path: str,
+        mount_ids: Iterable[str],
         expected_revision: str,
     ) -> ToolConfig:
         self._expect_config_revision(expected_revision)
@@ -169,36 +170,74 @@ class HarborWorkspace:
         root = self._config_path(path)
         self._ensure_unique_dataset_path(root, excluding=dataset_id)
         self._validate_dataset_directory(root)
+        selected_mount_ids = tuple(str(value).strip() for value in mount_ids)
+        if any(not value for value in selected_mount_ids):
+            raise HarborWorkspaceError("mount_ids must contain only non-empty strings")
+        if len(set(selected_mount_ids)) != len(selected_mount_ids):
+            raise HarborWorkspaceError("mount_ids must not contain duplicates")
+        known_mount_ids = {mount.id for mount in self.config.harbor_mounts}
+        unknown_mount_ids = [
+            mount_id
+            for mount_id in selected_mount_ids
+            if mount_id not in known_mount_ids
+        ]
+        if unknown_mount_ids:
+            raise HarborNotFoundError(
+                f"Harbor mount not found: {', '.join(unknown_mount_ids)}"
+            )
+        selected_mount_id_set = set(selected_mount_ids)
         datasets = tuple(
             HarborDataset(new_id, str(root)) if item.id == current.id else item
             for item in self.config.harbor_datasets
         )
-        mounts = tuple(
-            replace(
-                mount,
-                dataset_ids=tuple(
-                    new_id if item == dataset_id else item for item in mount.dataset_ids
-                ),
-            )
-            for mount in self.config.harbor_mounts
-        )
-        return self._save_config(datasets, mounts)
+        mounts = []
+        for mount in self.config.harbor_mounts:
+            dataset_ids = [
+                new_id if item == dataset_id else item for item in mount.dataset_ids
+            ]
+            if mount.id in selected_mount_id_set:
+                if new_id not in dataset_ids:
+                    dataset_ids.append(new_id)
+            else:
+                dataset_ids = [item for item in dataset_ids if item != new_id]
+            mounts.append(replace(mount, dataset_ids=tuple(dataset_ids)))
+        return self._save_config(datasets, tuple(mounts))
 
     def remove_dataset(self, *, dataset_id: str, expected_revision: str) -> ToolConfig:
+        return self.remove_datasets(
+            dataset_ids=(dataset_id,), expected_revision=expected_revision
+        )
+
+    def remove_datasets(
+        self, *, dataset_ids: Iterable[str], expected_revision: str
+    ) -> ToolConfig:
         self._expect_config_revision(expected_revision)
-        self._dataset(dataset_id)
-        referencing = [
-            mount.id
-            for mount in self.config.harbor_mounts
-            if dataset_id in mount.dataset_ids
-        ]
+        requested = tuple(dict.fromkeys(str(value).strip() for value in dataset_ids))
+        if not requested or any(not value for value in requested):
+            raise HarborWorkspaceError("dataset_ids must include at least one Dataset")
+        for dataset_id in requested:
+            self._dataset(dataset_id)
+        selected = set(requested)
+        referencing = {
+            dataset_id: [
+                mount.id
+                for mount in self.config.harbor_mounts
+                if dataset_id in mount.dataset_ids
+            ]
+            for dataset_id in requested
+        }
+        referencing = {key: value for key, value in referencing.items() if value}
         if referencing:
+            detail = "; ".join(
+                f"{dataset_id}: {', '.join(mounts)}"
+                for dataset_id, mounts in referencing.items()
+            )
             raise HarborConflictError(
-                f"Dataset {dataset_id} is referenced by mount(s): {', '.join(referencing)}"
+                f"Dataset registration is referenced by mount(s): {detail}"
             )
         return self._save_config(
             tuple(
-                item for item in self.config.harbor_datasets if item.id != dataset_id
+                item for item in self.config.harbor_datasets if item.id not in selected
             ),
             self.config.harbor_mounts,
         )
@@ -252,6 +291,26 @@ class HarborWorkspace:
             raise HarborConflictError(f"Task directory already exists: {new_name}")
         source.replace(target)
         return self.task_detail(dataset_id, new_name)
+
+    def rename_archived_task(
+        self,
+        *,
+        dataset_id: str,
+        entry_id: str,
+        new_directory: str,
+        expected_revision: str,
+    ) -> dict[str, Any]:
+        dataset = self._dataset(dataset_id)
+        root = self._dataset_root(dataset)
+        entry = self._trash_entry(root, entry_id)
+        self._expect_revision(entry, expected_revision)
+        metadata = self._trash_metadata(entry)
+        metadata["directory"] = self._task_directory(new_directory)
+        _atomic_write(
+            entry / TRASH_METADATA,
+            json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8") + b"\n",
+        )
+        return self._trash_summary(dataset, entry)
 
     def trash_task(
         self,
@@ -340,6 +399,20 @@ class HarborWorkspace:
         self._expect_revision(entry, expected_revision)
         shutil.rmtree(entry)
         return self.task_inventory(dataset_id)
+
+    def delete_task(
+        self,
+        *,
+        dataset_id: str,
+        task: str,
+        expected_revision: str,
+    ) -> dict[str, Any]:
+        dataset = self._dataset(dataset_id)
+        root = self._dataset_root(dataset)
+        task_dir = self._task_path(root, task)
+        self._expect_revision(task_dir, expected_revision)
+        shutil.rmtree(task_dir)
+        return {"dataset_id": dataset_id, "task": task}
 
     def task_detail(self, dataset_id: str, task: str) -> dict[str, Any]:
         dataset = self._dataset(dataset_id)
@@ -697,7 +770,7 @@ class HarborWorkspace:
         return Path(os.path.abspath(path))
 
     def _validate_dataset_id(self, value: str) -> None:
-        if DATASET_ID_RE.fullmatch(value) is None:
+        if HARBOR_ID_RE.fullmatch(value) is None:
             raise HarborWorkspaceError(
                 "Dataset id must be a lowercase path-safe identifier"
             )

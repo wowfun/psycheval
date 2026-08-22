@@ -63,6 +63,7 @@ def run_serve_command(
         if server is not None:
             server.server_close()
         if runtime is not None:
+            runtime.close()
             runtime.wait_until_ready(timeout=5)
         store.close()
 

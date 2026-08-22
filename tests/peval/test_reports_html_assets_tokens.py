@@ -122,7 +122,7 @@ class PevalReportHtmlAssetTokenTests(unittest.TestCase):
         )
         self.assertIn(
             compact_css_text(
-                ".source-form{display:grid;gap:8px;border:1px solid var(--rule);"
+                ".source-form{min-width:0;display:grid;gap:8px;border:1px solid var(--rule);"
                 "border-radius:var(--radius);background:transparent;padding:12px}"
             ),
             compact_css,
@@ -214,7 +214,7 @@ class PevalReportHtmlAssetTokenTests(unittest.TestCase):
             compact_css,
         )
         self.assertNotIn(".timeline-distribution", css)
-        self.assertNotIn("table-layout:fixed", css)
+        self.assertNotIn("table-layout:fixed", css_declarations(".timeline-table"))
         self.assertNotIn(".timeline-col-stage", css)
         self.assertNotIn(".timeline-category-chip", css)
         self.assertNotIn(".timeline-category-external,.timeline-category-error", css)

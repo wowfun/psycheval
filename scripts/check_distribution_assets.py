@@ -25,9 +25,14 @@ WHEEL_REQUIRED = {
     "psycheval/assets/report_css/26-step-drawer.css",
     "psycheval/assets/report_css/28-workspace-reports.css",
     "psycheval/assets/report_css/30-workspace-views.css",
+    "psycheval/assets/report_css/32-acp-client.css",
     "psycheval/assets/serve_harbor_datasets.html",
     "psycheval/assets/serve_report_manager.html",
-    "psycheval/assets/serve_source_manager.html",
+    "psycheval/assets/serve_configuration.html",
+    "psycheval/assets/prompt_assets/evaluation-review.md",
+    "psycheval/assets/prompt_assets/failure-diagnosis.md",
+    "psycheval/assets/prompt_assets/task-audit.md",
+    "psycheval/assets/prompt_assets/report-review.md",
 }
 SDIST_REQUIRED = {
     "package.json",

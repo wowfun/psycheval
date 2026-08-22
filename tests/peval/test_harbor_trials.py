@@ -11,14 +11,20 @@ from unittest.mock import patch
 
 from psycheval.analysis import import_analysis_artifacts
 from psycheval.atif import convert_db
-from psycheval.config import HarborDataset, HarborMount, ToolConfig, load_config
+from psycheval.config import (
+    HarborDataset,
+    HarborMount,
+    ToolConfig,
+    load_config,
+    unique_harbor_id_from_path,
+)
 from psycheval.serve.exports import (
     build_serve_export,
     build_workspace_snapshot_export,
 )
 from psycheval.serve.payloads import WorkspaceSnapshotPresentation
 from psycheval.state import CatalogQuery, WorkspaceCatalog, open_workspace_state
-from psycheval.state.workspace_sources import _telemetry_aligns
+from psycheval.state.workspace_harbor import _telemetry_aligns
 from psycheval.workspace_reports import WorkspaceReportLibrary
 from psycheval.workspace_views import WorkspaceViewLibrary
 from tests.peval.peval_test_support import (
@@ -117,6 +123,35 @@ def completed_result(*, reward: float = 0.75) -> dict[str, object]:
 
 
 class HarborTrialTests(unittest.TestCase):
+    def test_generated_harbor_ids_are_bounded_and_retry_random_collisions(
+        self,
+    ) -> None:
+        basename = "a" * 64
+        self.assertEqual(
+            unique_harbor_id_from_path(
+                f"/datasets/{basename}", fallback="dataset", existing_ids=()
+            ),
+            basename,
+        )
+        with patch(
+            "psycheval.config.secrets.token_hex",
+            side_effect=["abc123", "abc123", "def456"],
+        ):
+            shortened = unique_harbor_id_from_path(
+                f"/other/{basename}",
+                fallback="dataset",
+                existing_ids=(basename,),
+            )
+            fallback = unique_harbor_id_from_path(
+                "/jobs/Invalid.Name",
+                fallback="jobs",
+                existing_ids=("jobs-abc123",),
+            )
+
+        self.assertEqual(shortened, f"{'a' * 57}-abc123")
+        self.assertEqual(len(shortened), 64)
+        self.assertEqual(fallback, "jobs-def456")
+
     def workspace(self, workspace: Path, jobs_root: Path):
         workspace.mkdir(parents=True, exist_ok=True)
         (workspace / "peval.toml").write_text(
@@ -1261,7 +1296,7 @@ class HarborTrialTests(unittest.TestCase):
             store, config, catalog = self.workspace(base / "workspace", jobs)
             try:
                 with patch(
-                    "psycheval.state.workspace_sources.HARBOR_ANALYSIS_MAX_BYTES",
+                    "psycheval.state.workspace_harbor.HARBOR_ANALYSIS_MAX_BYTES",
                     4,
                 ):
                     catalog.reconcile()

@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 from html import escape
-from typing import Any
 
 from psycheval.adapters import available_adapter_ids
-from psycheval.config import HarborDataset, HarborMount
 from psycheval.html.assets import load_asset_text, replace_template_tokens
 
 
 def render_serve_header(
-    sources: list[dict[str, Any]],
     messages: dict[str, str],
     locale: str,
     *,
     page: str,
-    loading: bool = False,
     role: str = "admin",
     authentication_enabled: bool = False,
 ) -> str:
@@ -24,7 +20,7 @@ def render_serve_header(
         ("reports", "/reports", messages["workspace_reports"]),
     ]
     if role == "admin":
-        pages.append(("sources", "/sources", messages["serve_source_manager"]))
+        pages.append(("config", "/config", messages["workspace_configuration"]))
     links = "".join(
         f'<a href="{href}" class="workspace-nav-link'
         f'{" active" if key == page else ""}"'
@@ -43,7 +39,12 @@ def render_serve_header(
                 + escape(messages["serve_logout"])
                 + "</button>"
             )
-        language = render_language_control(messages, locale)
+        language = (
+            '<button class="action-button acp-launch" type="button" data-acp-open '
+            f'aria-haspopup="dialog">{escape(messages["acp_client"])}'
+            '<span class="acp-launch-mark" aria-hidden="true"></span></button>'
+            + render_language_control(messages, locale)
+        )
     else:
         auth_control = (
             '<span class="serve-role-badge guest">'
@@ -88,22 +89,14 @@ def render_serve_home() -> str:
   </div>"""
 
 
-def render_serve_source_manager(
-    sources: list[dict[str, Any]],
+def render_serve_configuration_page(
     messages: dict[str, str],
     adapter_defaults: dict[str, str],
-    harbor_mounts: tuple[HarborMount, ...],
-    harbor_datasets: tuple[HarborDataset, ...] = (),
-    harbor_revision: str = "",
-    *,
-    loading: bool = False,
 ) -> str:
     return replace_template_tokens(
-        load_asset_text("serve_source_manager.html"),
+        load_asset_text("serve_configuration.html"),
         {
-            "WORKSPACE_LABEL": escape(messages["workspace_label"]),
-            "SOURCE_MANAGER": escape(messages["serve_source_manager"]),
-            "MANAGER_COPY": escape(messages["serve_source_manager_copy"]),
+            "CONFIGURATION": escape(messages["workspace_configuration"]),
             "ADD_SOURCE": escape(messages["serve_add_source"]),
             "SOURCE_FORMS": "".join(
                 [
@@ -111,16 +104,32 @@ def render_serve_source_manager(
                     render_source_add_form("path", messages, adapter_defaults),
                 ]
             ),
-            "HARBOR_CONFIG": render_harbor_config(
-                harbor_mounts, harbor_datasets, harbor_revision, messages
-            ),
-            "SOURCES": escape(messages["serve_sources"]),
             "RELOAD": escape(messages["serve_reload"]),
-            "ARCHIVE_SELECTED": escape(messages["archive_selected"]),
-            "DELETE_SELECTED": escape(messages["delete_selected"]),
-            "SOURCE_LIST_ITEMS": render_source_list_items(
-                sources, messages, loading=loading
+            "RESCAN": escape(messages["serve_rescan"]),
+            "TRAJECTORY_INGESTION": escape(messages["serve_trajectory_ingestion"]),
+            "TRAJECTORY_INGESTION_COPY": escape(
+                messages["serve_trajectory_ingestion_copy"]
             ),
+            "ACP_AGENTS": escape(messages["serve_acp_agents"]),
+            "ACP_AGENTS_COPY": escape(messages["serve_acp_agents_copy"]),
+            "ACP_AGENTS_TRUST_COPY": escape(messages["serve_acp_agents_trust_copy"]),
+            "LOCAL_PROCESS": escape(messages["serve_local_process"]),
+            "ADD_ACP_AGENT": escape(messages["serve_add_acp_agent"]),
+            "REMOVE_SELECTED_AGENTS": escape(messages["serve_remove_selected_agents"]),
+            "PROMPT_ASSETS": escape(messages["serve_prompt_assets"]),
+            "PROMPT_ASSETS_COPY": escape(messages["serve_prompt_assets_copy"]),
+            "PROMPT_CONTENT": escape(messages["serve_prompt_content"]),
+            "RESTORE_DEFAULT": escape(messages["serve_restore_default"]),
+            "SAVE_PROMPT": escape(messages["serve_save_prompt"]),
+            "DATASET_REGISTRY": escape(messages["serve_dataset_registry"]),
+            "DATASET_REGISTRY_COPY": escape(messages["serve_dataset_registry_copy"]),
+            "NEW_DATASET": escape(messages["harbor_add_dataset"]),
+            "REGISTER_DATASET": escape(messages["harbor_register_dataset"]),
+            "UNREGISTER_SELECTED": escape(messages["harbor_unregister_selected"]),
+            "HARBOR_MOUNTS": escape(messages["serve_harbor_mounts"]),
+            "HARBOR_MOUNTS_COPY": escape(messages["serve_harbor_config_copy"]),
+            "ADD_HARBOR_MOUNT": escape(messages["serve_add_harbor_mount"]),
+            "REMOVE_SELECTED_MOUNTS": escape(messages["harbor_remove_selected_mounts"]),
         },
     )
 
@@ -129,15 +138,7 @@ def render_serve_report_page(messages: dict[str, str], *, role: str = "admin") -
     return replace_template_tokens(
         load_asset_text("serve_report_manager.html"),
         {
-            "WORKSPACE_LABEL": escape(messages["workspace_label"]),
             "REPORTS": escape(messages["workspace_reports"]),
-            "REPORTS_COPY": escape(
-                messages[
-                    "workspace_reports_copy"
-                    if role == "admin"
-                    else "workspace_reports_guest_copy"
-                ]
-            ),
             "RELOAD": escape(messages["serve_reload"]),
             "REPORT_INVENTORY": escape(messages["report_inventory"]),
             "REPORT_BINDINGS": escape(messages["report_bindings"]),
@@ -210,7 +211,64 @@ def render_serve_overlays(
             '<aside class="report-reader" id="workspace-report-reader" '
             "hidden data-serve-only></aside>"
         )
+    if role == "admin":
+        parts.append(render_acp_drawer(messages))
     return "".join(parts)
+
+
+def render_acp_drawer(messages: dict[str, str]) -> str:
+    return f"""
+  <div class="acp-backdrop" data-acp-backdrop hidden data-serve-only></div>
+  <aside class="acp-drawer" data-acp-drawer hidden data-serve-only role="dialog"
+    aria-modal="true" aria-labelledby="acp-drawer-title">
+    <header class="acp-drawer-head">
+      <div>
+        <p class="eyebrow">{escape(messages["acp_client"])}</p>
+        <h2 id="acp-drawer-title">{escape(messages["acp_assistant"])}</h2>
+        <p class="copy">{escape(messages["acp_assistant_copy"])}</p>
+      </div>
+      <button class="action-button compact" type="button" data-acp-close
+        aria-label="{escape(messages["close"])}">{escape(messages["close"])}</button>
+    </header>
+    <section class="acp-controls" aria-label="{escape(messages["acp_client"])}">
+      <label><span>{escape(messages["acp_agent"])}</span>
+        <select data-acp-agent></select>
+      </label>
+      <button class="action-button" type="button" data-acp-connect>{escape(messages["acp_connect"])}</button>
+      <span class="acp-protocol" data-acp-protocol>ACP · —</span>
+      <label class="acp-session-control"><span>{escape(messages["acp_session"])}</span>
+        <select data-acp-session><option value="">{escape(messages["acp_no_session"])}</option></select>
+      </label>
+      <button class="action-button" type="button" data-acp-new-session>{escape(messages["acp_new_session"])}</button>
+      <button class="action-button compact acp-session-close" type="button" data-acp-session-close aria-label="{escape(messages["close"])}">×</button>
+    </section>
+    <section class="acp-context-bar">
+      <div class="acp-context-chip" data-acp-context-chip>
+        <span class="acp-context-glyph" aria-hidden="true"></span>
+        <span data-acp-context-label>{escape(messages["acp_context_none"])}</span>
+      </div>
+      <button class="action-button compact" type="button" data-acp-context-capture>{escape(messages["acp_attach_context"])}</button>
+    </section>
+    <p class="acp-notice" data-acp-notice aria-live="polite" hidden></p>
+    <div class="acp-event-log" data-acp-events tabindex="0">
+      <div class="acp-empty" data-acp-empty>{escape(messages["acp_empty"])}</div>
+    </div>
+    <section class="acp-session-options" data-acp-session-options hidden></section>
+    <form class="acp-composer" data-acp-composer>
+      <div class="acp-prompt-assets">
+        <label><span>{escape(messages["acp_prompt_asset"])}</span>
+          <select data-acp-prompt-asset><option value="">{escape(messages["acp_prompt_custom"])}</option></select>
+        </label>
+        <button class="action-button compact" type="button" data-acp-use-prompt>{escape(messages["acp_use_prompt"])}</button>
+      </div>
+      <textarea rows="3" data-acp-prompt placeholder="{escape(messages["acp_prompt_placeholder"])}"></textarea>
+      <div class="acp-composer-actions">
+        <span class="acp-usage" data-acp-usage></span>
+        <button class="action-button" type="button" data-acp-stop hidden>{escape(messages["acp_stop"])}</button>
+        <button class="action-button primary" type="submit" data-acp-send>{escape(messages["acp_send"])}</button>
+      </div>
+    </form>
+  </aside>"""
 
 
 def render_auth_dialog(messages: dict[str, str]) -> str:
@@ -221,7 +279,7 @@ def render_auth_dialog(messages: dict[str, str]) -> str:
     return f"""
   <div class="auth-backdrop" data-admin-login-dialog hidden data-serve-only>
     <section class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-login-title">
-      <header class="source-manager-head">
+      <header class="configuration-page-head">
         <div>
           <h2 id="admin-login-title">{login}</h2>
           <p class="copy">{login_copy}</p>
@@ -323,119 +381,18 @@ def render_source_add_form(
           </form>"""
 
 
-def render_harbor_config(
-    mounts: tuple[HarborMount, ...],
-    datasets: tuple[HarborDataset, ...],
-    revision: str,
-    messages: dict[str, str],
-) -> str:
-    existing = "".join(
-        render_harbor_mount_form(mount, datasets, revision, messages)
-        for mount in mounts
-    )
-    return f"""
-          <section class="harbor-config" aria-label="{escape(messages["serve_harbor_config"])}">
-            <header class="harbor-config-head">
-              <strong>{escape(messages["serve_harbor_config"])}</strong>
-              <span>{escape(messages["serve_harbor_config_copy"])}</span>
-            </header>
-            <div class="harbor-mount-list">{existing}</div>
-            {render_harbor_mount_form(None, datasets, revision, messages)}
-          </section>"""
-
-
-def render_harbor_mount_form(
-    mount: HarborMount | None,
-    datasets: tuple[HarborDataset, ...],
-    revision: str,
-    messages: dict[str, str],
-) -> str:
-    mount_id = mount.id if mount is not None else ""
-    jobs_path = mount.path if mount is not None else ""
-    title = mount_id or messages["serve_add_harbor_mount"]
-    original = (
-        f'<input name="original_id" type="hidden" value="{escape(mount_id)}">'
-        if mount is not None
-        else ""
-    )
-    remove = (
-        f'<button class="action-button danger" type="button" data-harbor-mount-remove>{escape(messages["serve_remove_harbor_mount"])}</button>'
-        if mount is not None
-        else ""
-    )
-    submit = (
-        messages["serve_save_harbor_mount"]
-        if mount is not None
-        else messages["serve_add_harbor_mount"]
-    )
-    return f"""
-            <form class="source-form harbor-mount-form" data-harbor-mount-form>
-              <strong>{escape(title)}</strong>
-              {original}
-              <input name="expected_revision" type="hidden" value="{escape(revision)}">
-              <label>{escape(messages["serve_harbor_mount_id"])}
-                <input name="mount_id" autocomplete="off" required value="{escape(mount_id)}">
-              </label>
-              <label>{escape(messages["serve_harbor_jobs_path"])}
-                <textarea name="jobs_path" autocomplete="off" required rows="2">{escape(jobs_path)}</textarea>
-              </label>
-              {render_harbor_dataset_choices(mount, datasets, messages)}
-              <div class="source-form-actions">
-                {remove}
-                <button class="action-button primary" type="submit">{escape(submit)}</button>
-              </div>
-            </form>"""
-
-
-def render_harbor_dataset_choices(
-    mount: HarborMount | None,
-    datasets: tuple[HarborDataset, ...],
-    messages: dict[str, str],
-) -> str:
-    selected = set(mount.dataset_ids if mount is not None else ())
-    if not datasets:
-        return (
-            '<p class="copy harbor-dataset-empty">'
-            + escape(messages["harbor_register_dataset_first"])
-            + "</p>"
-        )
-    choices = "".join(
-        '<label class="harbor-dataset-choice">'
-        f'<input type="checkbox" name="dataset_ids" value="{escape(dataset.id)}" '
-        f"{'checked' if dataset.id in selected else ''}>"
-        f"<span><strong>{escape(dataset.id)}</strong>"
-        f"<small>{escape(dataset.path)}</small></span></label>"
-        for dataset in datasets
-    )
-    return f"""
-              <fieldset class="harbor-dataset-choices">
-                <legend>{escape(messages["harbor_mount_datasets"])}</legend>
-                {choices}
-              </fieldset>"""
-
-
 def render_harbor_dataset_page(messages: dict[str, str], *, role: str = "admin") -> str:
-    admin_dataset_actions = ""
     admin_task_actions = ""
     admin_file_actions = ""
     admin_editor_actions = ""
     if role == "admin":
-        admin_dataset_actions = f"""
-        <button class="action-button" type="button" data-harbor-add-dataset>{escape(messages["harbor_add_dataset"])}</button>
-        <button class="action-button" type="button" data-harbor-register-dataset>{escape(messages["harbor_register_dataset"])}</button>"""
         admin_task_actions = f"""
-      <div class="harbor-workbench-tools">
-        <button class="action-button" type="button" data-harbor-edit-dataset data-harbor-live-action disabled>{escape(messages["harbor_edit"])}</button>
-        <button class="action-button danger" type="button" data-harbor-remove-dataset data-harbor-live-action disabled>{escape(messages["harbor_remove"])}</button>
-        <button class="action-button primary" type="button" data-harbor-create-task data-harbor-live-action disabled>{escape(messages["harbor_create_task"])}</button>
-        <button class="action-button" type="button" data-harbor-sync-manifest data-harbor-live-action disabled>{escape(messages["harbor_sync_manifest"])}</button>
-        <button class="action-button" type="button" data-harbor-rename-task data-harbor-live-action disabled>{escape(messages["harbor_rename"])}</button>
-        <button class="action-button danger" type="button" data-harbor-trash-task data-harbor-live-action disabled>{escape(messages["harbor_trash"])}</button>
-        <button class="action-button" type="button" data-harbor-restore-task data-harbor-trash-action hidden disabled>{escape(messages["harbor_restore"])}</button>
-        <button class="action-button danger" type="button" data-harbor-purge-task data-harbor-trash-action hidden disabled>{escape(messages["harbor_purge"])}</button>
-        <button class="action-button" type="button" data-harbor-show-trash disabled>{escape(messages["harbor_trash"])}</button>
-        <span class="harbor-operation-status" data-harbor-operation-status aria-live="polite"></span>
-      </div>"""
+        <button class="action-button" type="button" data-harbor-show-trash aria-pressed="false" disabled>{escape(messages["show_archived"])}</button>
+        <button class="action-button primary" type="button" data-harbor-create-task disabled>{escape(messages["harbor_create_task"])}</button>
+        <button class="action-button" type="button" data-harbor-sync-manifest disabled>{escape(messages["harbor_sync_manifest"])}</button>
+        <button class="action-button" type="button" data-harbor-state-selected disabled>{escape(messages["archive_selected"])}</button>
+        <button class="action-button danger" type="button" data-harbor-delete-selected disabled>{escape(messages["delete_selected"])}</button>
+        <span class="harbor-operation-status" data-harbor-operation-status aria-live="polite"></span>"""
         admin_file_actions = f"""
           <div class="harbor-file-actions" data-harbor-file-actions hidden>
             <button class="action-button compact" type="button" data-harbor-new-file>{escape(messages["harbor_new_file"])}</button>
@@ -451,16 +408,7 @@ def render_harbor_dataset_page(messages: dict[str, str], *, role: str = "admin")
     return replace_template_tokens(
         load_asset_text("serve_harbor_datasets.html"),
         {
-            "WORKSPACE_LABEL": escape(messages["workspace_label"]),
             "DATASETS": escape(messages["harbor_datasets"]),
-            "DATASETS_COPY": escape(
-                messages[
-                    "harbor_datasets_copy"
-                    if role == "admin"
-                    else "harbor_datasets_guest_copy"
-                ]
-            ),
-            "RELOAD": escape(messages["serve_reload"]),
             "DATASET_EMPTY": escape(messages["harbor_dataset_empty"]),
             "FILE_EMPTY": escape(messages["harbor_file_empty"]),
             "EDITOR_EMPTY": escape(messages["harbor_editor_empty"]),
@@ -470,8 +418,11 @@ def render_harbor_dataset_page(messages: dict[str, str], *, role: str = "admin")
             "SEARCH": escape(messages["harbor_search"]),
             "FILES": escape(messages["harbor_files"]),
             "EDITOR": escape(messages["harbor_editor"]),
-            "ADMIN_DATASET_ACTIONS": admin_dataset_actions,
-            "ADMIN_TASK_ACTIONS": admin_task_actions,
+            "TASK_ACTIONS": f"""
+      <div class="harbor-workbench-tools">
+        {admin_task_actions}
+        <button class="action-button" type="button" data-harbor-reload>{escape(messages["serve_reload"])}</button>
+      </div>""",
             "ADMIN_FILE_ACTIONS": admin_file_actions,
             "ADMIN_EDITOR_ACTIONS": admin_editor_actions,
         },
@@ -507,63 +458,3 @@ def render_adapter_option(
     default_attr = f' data-default-db="{escape(default_db)}"' if default_db else ""
     selected = "selected" if value == "auto" else ""
     return f'<option value="{escape(value)}" {selected}{default_attr}>{escape(label)}</option>'
-
-
-def render_source_list_items(
-    sources: list[dict[str, Any]],
-    messages: dict[str, str],
-    *,
-    loading: bool = False,
-) -> str:
-    if loading:
-        return f'<li class="source-row empty loading">{escape(messages["serve_scanning_runs"])}</li>'
-    if not sources:
-        return (
-            f'<li class="source-row empty">{escape(messages["serve_no_sources"])}</li>'
-        )
-    return "".join(render_source_list_item(source, messages) for source in sources)
-
-
-def render_source_list_item(
-    source: dict[str, Any],
-    messages: dict[str, str],
-) -> str:
-    label = str(source.get("label") or source.get("source_key") or "source")
-    alias = str(source.get("source_alias") or "")
-    display_label = alias or label
-    kind = str(source.get("kind") or "source")
-    adapter = str(source.get("adapter") or "-")
-    status = str(source.get("last_status") or "-")
-    active = bool(source.get("active", True))
-    source_key = str(source.get("source_key") or "")
-    trial_key = str(source.get("trial_key") or "")
-    source_checkbox = (
-        f'<label class="select-box"><input type="checkbox" data-source-row-select="{escape(source_key)}" '
-        f'aria-label="{escape(messages["select_source"])}: {escape(source_key)}"><span></span></label>'
-        if source_key
-        else ""
-    )
-    state_label = messages["serve_active"] if active else messages["serve_archived"]
-    alias_html = escape(alias) if alias else '<span class="muted">-</span>'
-    alias_cell = (
-        f'<span class="editable-source-cell" data-source-inline-edit="alias" '
-        f'data-source-key="{escape(source_key)}" data-trial-key="{escape(trial_key)}" '
-        f'data-value="{escape(alias)}" title="{escape(messages["double_click_to_edit"])}">'
-        f"{alias_html}</span>"
-    )
-    return f"""
-            <li class="source-row {"archived" if not active else ""}" data-source-row data-source-key="{escape(source_key)}">
-              <div class="source-row-select">{source_checkbox}</div>
-              <div class="source-row-main">
-                <strong>{escape(display_label)}</strong>
-                {render_source_origin(label, alias)}
-                <span>{escape(kind)} / {escape(adapter)} / {escape(status)} / {escape(state_label)}</span>
-                {alias_cell}
-              </div>
-            </li>"""
-
-
-def render_source_origin(label: str, alias: str) -> str:
-    if not alias:
-        return ""
-    return f'<span class="source-origin">{escape(label)}</span>'

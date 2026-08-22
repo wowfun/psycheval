@@ -3,22 +3,25 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import stat
 import tempfile
 import tomllib
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
-from pathlib import Path
-from typing import Any
+from pathlib import Path, PureWindowsPath
+from typing import Any, Iterable
 
 from psycheval.i18n import normalize_locale
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-HARBOR_MOUNT_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
+HARBOR_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
+ACP_AGENT_ID_RE = HARBOR_ID_RE
 DEFAULT_DB_PATH_RE = re.compile(r"^\s*default_db_path\s*=")
 TABLE_HEADER_RE = re.compile(r"^\s*\[([^\]\n]+)\]\s*(?:#.*)?$")
 HARBOR_MOUNT_HEADER_RE = re.compile(r"^\s*\[\[\s*harbor\.mounts\s*\]\]\s*(?:#.*)?$")
 HARBOR_DATASET_HEADER_RE = re.compile(r"^\s*\[\[\s*harbor\.datasets\s*\]\]\s*(?:#.*)?$")
+ACP_AGENT_HEADER_RE = re.compile(r"^\s*\[\[\s*acp\.agents\s*\]\]\s*(?:#.*)?$")
 PEVAL_CONFIG_FILENAME = "peval.toml"
 WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 WINDOWS_DRIVE_MOUNT_ROOT = Path("/mnt")
@@ -53,6 +56,14 @@ class HarborMount:
 
 
 @dataclass(frozen=True)
+class AcpAgent:
+    id: str
+    title: str
+    command: str
+    args: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ToolConfig:
     adapter: str = "psychevo"
     locale: str = "en"
@@ -76,6 +87,7 @@ class ToolConfig:
     )
     harbor_datasets: tuple[HarborDataset, ...] = ()
     harbor_mounts: tuple[HarborMount, ...] = ()
+    acp_agents: tuple[AcpAgent, ...] = ()
 
 
 def default_workspace_config_text() -> str:
@@ -144,6 +156,8 @@ def apply_toml_config(
         if not isinstance(raw_description, str):
             raise ValueError("description must be a string")
         config = replace(config, description=raw_description.strip() or None)
+    if "acp" in data:
+        config = replace(config, acp_agents=_acp_agents(data["acp"]))
     if "analysis_eval_slug" in data:
         config = replace(
             config,
@@ -331,6 +345,53 @@ def apply_toml_config(
     return config
 
 
+def _acp_agents(value: Any) -> tuple[AcpAgent, ...]:
+    if not isinstance(value, dict):
+        raise ValueError("acp config must be a TOML table")
+    unknown = sorted(set(value) - {"agents"})
+    if unknown:
+        raise ValueError(f"unknown acp config field: {unknown[0]}")
+    raw_agents = value.get("agents", [])
+    if not isinstance(raw_agents, list):
+        raise ValueError("acp.agents must be an array of tables")
+    agents: list[AcpAgent] = []
+    seen: set[str] = set()
+    for index, raw_agent in enumerate(raw_agents):
+        if not isinstance(raw_agent, dict):
+            raise ValueError(f"acp.agents[{index}] must be a TOML table")
+        agent_unknown = sorted(set(raw_agent) - {"id", "title", "command", "args"})
+        if agent_unknown:
+            raise ValueError(f"unknown acp agent field: {agent_unknown[0]}")
+        agent_id = raw_agent.get("id")
+        if not isinstance(agent_id, str) or not ACP_AGENT_ID_RE.fullmatch(agent_id):
+            raise ValueError(
+                "acp agent id must be 1-64 lowercase letters, numbers, '.', '_' or '-'"
+            )
+        if agent_id in seen:
+            raise ValueError(f"duplicate acp agent id: {agent_id}")
+        title = raw_agent.get("title")
+        command = raw_agent.get("command")
+        raw_args = raw_agent.get("args", [])
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("acp agent title must be a non-empty string")
+        if not isinstance(command, str) or not command.strip():
+            raise ValueError("acp agent command must be a non-empty string")
+        if not isinstance(raw_args, list) or not all(
+            isinstance(item, str) for item in raw_args
+        ):
+            raise ValueError("acp agent args must be an array of strings")
+        seen.add(agent_id)
+        agents.append(
+            AcpAgent(
+                id=agent_id,
+                title=title.strip(),
+                command=command.strip(),
+                args=tuple(raw_args),
+            )
+        )
+    return tuple(agents)
+
+
 def apply_overrides(config: ToolConfig, args: Any) -> ToolConfig:
     updates: dict[str, Any] = {}
     adapter = _adapter_override(getattr(args, "adapter", None))
@@ -404,6 +465,49 @@ def write_workspace_harbor_mounts(
         mounts,
     )
     return validated_mounts
+
+
+def write_workspace_acp_agents(
+    config_path: Path,
+    agents: tuple[AcpAgent, ...],
+) -> tuple[AcpAgent, ...]:
+    path = config_path.expanduser()
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    lines = text.splitlines(keepends=True)
+    for start, end in reversed(_acp_table_ranges(lines)):
+        del lines[start:end]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines and not lines[-1].endswith(("\n", "\r")):
+        lines[-1] += "\n"
+    if agents:
+        if lines:
+            lines.append("\n")
+        for index, agent in enumerate(agents):
+            if index:
+                lines.append("\n")
+            lines.extend(
+                [
+                    "[[acp.agents]]\n",
+                    f"id = {json.dumps(agent.id)}\n",
+                    f"title = {json.dumps(agent.title, ensure_ascii=False)}\n",
+                    f"command = {json.dumps(agent.command, ensure_ascii=False)}\n",
+                ]
+            )
+            if agent.args:
+                lines.append(
+                    f"args = {json.dumps(list(agent.args), ensure_ascii=False)}\n"
+                )
+    rendered = "".join(lines)
+    data = tomllib.loads(rendered) if rendered.strip() else {}
+    validated_config = apply_toml_config(
+        ToolConfig(workspace_root=str(path.parent)),
+        data,
+        top_level_locale=True,
+        base_dir=path.parent,
+    )
+    _atomic_write_text(path, rendered)
+    return validated_config.acp_agents
 
 
 def write_workspace_harbor_config(
@@ -553,11 +657,52 @@ def _harbor_table_ranges(lines: list[str]) -> list[tuple[int, int]]:
     return ranges
 
 
+def _acp_table_ranges(lines: list[str]) -> list[tuple[int, int]]:
+    starts = [
+        index for index, line in enumerate(lines) if ACP_AGENT_HEADER_RE.match(line)
+    ]
+    ranges: list[tuple[int, int]] = []
+    for start in starts:
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            if lines[index].lstrip().startswith("["):
+                end = index
+                break
+        ranges.append((start, end))
+    return ranges
+
+
 def _harbor_id(value: object, *, kind: str) -> str:
     identifier = str(value or "").strip()
-    if HARBOR_MOUNT_ID_RE.fullmatch(identifier) is None:
+    if HARBOR_ID_RE.fullmatch(identifier) is None:
         raise ValueError(f"harbor {kind} id must be a lowercase path-safe identifier")
     return identifier
+
+
+def unique_harbor_id_from_path(
+    value: object,
+    *,
+    fallback: str,
+    existing_ids: Iterable[str],
+    base_dir: Path | None = None,
+) -> str:
+    text = _lexical_config_path(value, base_dir=base_dir).rstrip("/\\")
+    basename = (
+        PureWindowsPath(text).name
+        if is_windows_absolute_like_path(text)
+        else Path(text).name
+    )
+    occupied = set(existing_ids)
+    if HARBOR_ID_RE.fullmatch(basename) is not None and basename not in occupied:
+        return basename
+
+    base = basename if HARBOR_ID_RE.fullmatch(basename) is not None else fallback
+    while True:
+        suffix = secrets.token_hex(3)
+        prefix = base[: 63 - len(suffix)].rstrip("_-")
+        candidate = f"{prefix}-{suffix}"
+        if candidate not in occupied:
+            return candidate
 
 
 def _atomic_write_text(path: Path, text: str) -> None:

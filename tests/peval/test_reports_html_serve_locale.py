@@ -4,6 +4,7 @@ from psycheval.i18n import messages_for
 from tests.peval.reports_html_support import (
     FIXTURES,
     MessageRecord,
+    Path,
     ReportSession,
     ToolConfig,
     build_multi_report,
@@ -21,6 +22,18 @@ from tests.peval.reports_html_support import (
 
 
 class PevalReportHtmlServeLocaleTests(unittest.TestCase):
+    def test_frontend_literal_translation_keys_exist_in_every_locale(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        frontend_keys: set[str] = set()
+        for path in (root / "web" / "src").rglob("*.js"):
+            frontend_keys.update(
+                re.findall(r'\bt\("([^"]+)"\s*,', path.read_text(encoding="utf-8"))
+            )
+
+        for locale in ("en", "zh-CN"):
+            with self.subTest(locale=locale):
+                self.assertEqual(frontend_keys - messages_for(locale).keys(), set())
+
     def test_workspace_description_is_public_escaped_markdown_chrome(self) -> None:
         report = {
             "schema_version": 19,
@@ -66,6 +79,23 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertEqual(
             messages_for("zh-CN")["metric_coverage"], "{covered}/{matched} 个试次"
         )
+
+    def test_retired_source_manager_messages_are_not_shipped(self) -> None:
+        retired = {
+            "double_click_to_edit",
+            "select_source",
+            "select_visible_sources",
+            "serve_activate",
+            "serve_archive",
+            "serve_delete",
+            "serve_delete_confirm",
+            "serve_no_sources",
+            "serve_source_count",
+            "serve_sources",
+            "serve_sources_count",
+        }
+        for locale in ("en", "zh-CN"):
+            self.assertTrue(retired.isdisjoint(messages_for(locale)))
 
     def test_leaderboard_scrolls_with_the_main_analysis_content(self) -> None:
         html = render_serve_html(
@@ -132,57 +162,53 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
             }
             self.assertEqual(declarations.get("flex-wrap"), "wrap")
 
-    def test_source_manager_list_keeps_horizontal_access_to_all_columns(self) -> None:
+    def test_source_configuration_sections_are_full_width_and_scrollable(self) -> None:
         css = load_asset_text("report.css")
-        list_rule = re.search(r"\.source-manager-list\s*\{([^}]*)\}", css)
-        table_rule = re.search(r"\.source-table\s*\{([^}]*)\}", css)
+        sections_rule = re.search(r"\.configuration-sections\s*\{([^}]*)\}", css)
 
-        self.assertIsNotNone(list_rule)
-        self.assertIsNotNone(table_rule)
-        list_declarations = {
+        self.assertIsNotNone(sections_rule)
+        declarations = {
             name.strip(): value.strip()
-            for declaration in list_rule.group(1).split(";")
+            for declaration in sections_rule.group(1).split(";")
             if ":" in declaration
             for name, value in [declaration.split(":", 1)]
         }
-        table_declarations = {
-            name.strip(): value.strip()
-            for declaration in table_rule.group(1).split(";")
-            if ":" in declaration
-            for name, value in [declaration.split(":", 1)]
-        }
-        self.assertEqual(list_declarations.get("overflow"), "auto")
-        self.assertEqual(table_declarations.get("min-width"), "1136px")
+        self.assertEqual(declarations.get("overflow"), "auto")
+        self.assertNotIn(".source-manager-list", css)
+        self.assertNotIn(".source-table", css)
 
-        forms_rules = re.findall(r"\.source-manager-controls\s*\{[^}]*\}", css)
-        list_panel_rules = re.findall(
-            r"\.source-manager-list-panel\s*\{[^}]*\}",
+    def test_harbor_registries_use_shared_data_table_column_widths(self) -> None:
+        css = load_asset_text("report.css")
+
+        self.assertNotIn(".harbor-dataset-registry-table", css)
+        self.assertNotIn(".harbor-mount-registry-table", css)
+        self.assertIn("table-layout:auto", css)
+        path_width_rules = re.findall(
+            r'([^{}]*\[data-value-type="path"\][^{}]*)\{([^{}]*)\}',
             css,
         )
         self.assertTrue(
             any(
-                "min-height:auto" in compact_css_text(rule)
-                and "overflow:visible" in compact_css_text(rule)
-                for rule in forms_rules
+                "--table-column-max:40ch" in declarations
+                for _, declarations in path_width_rules
             )
         )
-        self.assertTrue(
-            any(
-                "min-height:auto" in compact_css_text(rule) for rule in list_panel_rules
-            )
+        self.assertIn(
+            "max-width:var(--table-column-max)",
+            css,
         )
 
-    def test_source_manager_puts_sqlite_db_import_first(self) -> None:
+    def test_configuration_puts_sqlite_db_import_first(self) -> None:
         html = render_serve_html(
             {
                 "schema_version": 19,
                 "trajectory": [],
                 "trajectory_meta": [],
             },
-            serve_page="sources",
+            serve_page="config",
         )
         forms_panel = re.search(
-            r'<section class="source-manager-forms"[^>]*>(.*?)</section>',
+            r'<div class="trajectory-ingestion-forms"[^>]*>(.*?)</div>\s*</section>',
             html,
             re.DOTALL,
         )
@@ -258,7 +284,22 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         )
         self.assertEqual(rail_declarations.get("justify-items"), "stretch")
 
-    def test_desktop_side_rail_assigns_only_remaining_height_to_workspace_content(
+    def test_desktop_step_drawer_preserves_the_document_scroll_owner(self) -> None:
+        css = load_asset_text("report.css")
+        desktop_css = css.split("@media (min-width:1181px)", 1)[1].split(
+            "@media (max-width:1180px)", 1
+        )[0]
+
+        self.assertNotIn(
+            ".serve-mode.step-drawer-open {\n    overflow:hidden",
+            desktop_css,
+        )
+        self.assertNotIn(
+            ".serve-mode.step-drawer-open .workspace-main-scroll",
+            desktop_css,
+        )
+
+    def test_desktop_saved_views_assign_only_remaining_height_to_workspace_content(
         self,
     ) -> None:
         css = load_asset_text("report.css")
@@ -266,13 +307,11 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
             "@media (max-width:1180px)", 1
         )[0]
         workspace_rule = re.search(
-            r"\.serve-mode\.workspace-views-open \.workspace,\s*"
-            r"\.serve-mode\.step-drawer-open \.workspace\s*\{([^}]*)\}",
+            r"\.serve-mode\.workspace-views-open \.workspace\s*\{([^}]*)\}",
             desktop_css,
         )
         content_rule = re.search(
-            r"\.serve-mode\.workspace-views-open \.workspace-content,\s*"
-            r"\.serve-mode\.step-drawer-open \.workspace-content\s*\{([^}]*)\}",
+            r"\.serve-mode\.workspace-views-open \.workspace-content\s*\{([^}]*)\}",
             desktop_css,
         )
 
@@ -396,14 +435,14 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         sources_html = render_serve_html(
             report,
             adapter_defaults={"opencode": "/tmp/opencode.db"},
-            serve_page="sources",
+            serve_page="config",
         )
         datasets_html = render_serve_html(report, serve_page="datasets")
         reports_html = render_serve_html(report, serve_page="reports")
         serve_html = home_html + sources_html + datasets_html + reports_html
         zh_serve_html = (
             render_serve_html(report, locale="zh-CN")
-            + render_serve_html(report, locale="zh-CN", serve_page="sources")
+            + render_serve_html(report, locale="zh-CN", serve_page="config")
             + render_serve_html(report, locale="zh-CN", serve_page="datasets")
         )
         compact_serve_html = compact_css_text(serve_html)
@@ -451,24 +490,39 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         )
         self.assertIn("<title>评测工作台</title>", zh_serve_html)
         self.assertNotIn("<h1>主页</h1>", zh_serve_html)
-        self.assertIn('<h1 id="harbor-workbench-title">数据集</h1>', zh_serve_html)
+        self.assertNotIn('<h1 id="harbor-workbench-title">数据集</h1>', zh_serve_html)
+        self.assertNotIn('class="workspace-page-head', serve_html)
+        self.assertIn('aria-label="Datasets"', datasets_html)
+        self.assertIn('aria-label="Reports"', reports_html)
+        self.assertIn('aria-label="Configuration"', sources_html)
         self.assertIn(">新建文件</button>", zh_serve_html)
         self.assertIn(">新建文件夹</button>", zh_serve_html)
         self.assertIn(">上传</button>", zh_serve_html)
         self.assertIn(">下载</button>", zh_serve_html)
         self.assertIn(
+            ".serve-page-home .workspace,\n"
             ".serve-page-datasets .workspace,\n"
             ".serve-page-reports .workspace,\n"
-            ".serve-page-sources .workspace {\n"
+            ".serve-page-config .workspace {\n"
             "  max-width:1500px",
             serve_html,
         )
         self.assertIn(
             compact_css_text(
+                ".serve-page-home .workspace,"
                 ".serve-page-datasets .workspace,"
                 ".serve-page-reports .workspace,"
-                ".serve-page-sources .workspace{"
-                "max-width:1500px;min-height:100vh;min-height:100dvh;"
+                ".serve-page-config .workspace{"
+                "max-width:1500px}"
+            ),
+            compact_serve_html,
+        )
+        self.assertIn(
+            compact_css_text(
+                ".serve-page-datasets .workspace,"
+                ".serve-page-reports .workspace,"
+                ".serve-page-config .workspace{"
+                "min-height:100vh;min-height:100dvh;"
                 "display:flex;flex-direction:column}"
             ),
             compact_serve_html,
@@ -532,14 +586,20 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertNotIn('class="serve-import-panel"', serve_html)
         self.assertIn('class="workspace-header"', serve_html)
         self.assertIn("data-locale-select", serve_html)
-        self.assertIn('class="workspace-page source-manager-page"', sources_html)
+        self.assertIn(
+            'class="workspace-page configuration-page"',
+            sources_html,
+        )
         self.assertNotIn('class="adapter-default-db-panel"', serve_html)
         self.assertNotIn("data-adapter-default-db-form", serve_html)
-        self.assertIn("grid-template-rows:auto minmax(0,1fr)", serve_html)
+        self.assertIn("configuration-sections", serve_html)
         self.assertIn("data-adapter-default-db-save", serve_html)
         self.assertIn("data-adapter-default-db-clear", serve_html)
         self.assertIn("Save as default", serve_html)
         self.assertIn("保存为默认", zh_serve_html)
+        self.assertIn("LOCAL PROCESS", sources_html)
+        self.assertIn("本地进程", zh_serve_html)
+        self.assertNotIn("LOCAL PROCESS", zh_serve_html)
         self.assertNotIn("Upload snapshot", serve_html)
         self.assertNotIn("report JSON uploads", serve_html)
         self.assertIn("Session / ATIF / runs Path", serve_html)
@@ -548,8 +608,10 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('aria-describedby="source-path-auto-help"', serve_html)
         self.assertIn('aria-describedby="source-db-auto-help"', serve_html)
         self.assertNotIn('data-source-kind="input_table"', serve_html)
-        self.assertIn("data-harbor-mount-form", serve_html)
-        self.assertIn("Register a Dataset before assigning it", serve_html)
+        self.assertNotIn("data-harbor-mount-form", serve_html)
+        self.assertIn("data-harbor-add-mount", serve_html)
+        self.assertIn("data-harbor-remove-mounts", serve_html)
+        self.assertIn("data-harbor-mount-count", serve_html)
         self.assertIn('href="/datasets"', home_html)
         self.assertIn("data-harbor-workbench", serve_html)
         self.assertIn("Jobs 路径", zh_serve_html)
@@ -566,7 +628,7 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("data-db-inspect", serve_html)
         self.assertIn("data-db-session-picker", serve_html)
         self.assertIn("data-db-add-selected", serve_html)
-        self.assertIn("data-db-select-all", serve_html)
+        self.assertIn("data-table-select-visible", serve_html)
         self.assertEqual(serve_html.count('class="source-adapter-select"'), 2)
         self.assertEqual(
             len(re.findall(r'class="[^"]*\bsource-add-actions\b', serve_html)), 2
@@ -595,25 +657,13 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertNotIn("data-source-alias-input", serve_html)
         self.assertIn('data-table-column-key="${esc(column.key)}"', serve_html)
         self.assertIn(
-            'valueType: "text", value: (source) => String(source?.source_alias',
-            serve_html,
-        )
-        self.assertIn(
             compact_css_text(
-                ".source-manager-body{min-height:0;display:grid;"
-                "grid-template-columns:minmax(360px,480px) minmax(0,1fr);"
-                "gap:14px;padding:16px;overflow:hidden}"
+                ".configuration-sections{min-height:0;display:grid;"
+                "gap:0;padding:16px;overflow:auto}"
             ),
             compact_serve_html,
         )
-        self.assertIn(
-            compact_css_text(
-                ".source-manager-list{min-height:0;display:grid;gap:8px;"
-                "align-content:start;margin:0;padding:0;list-style:none;"
-                "overflow:auto;overscroll-behavior:contain}"
-            ),
-            compact_serve_html,
-        )
+        self.assertNotIn("source-manager-list", serve_html)
         self.assertIn(
             compact_css_text(
                 ".db-path-control{display:grid;"
@@ -628,19 +678,20 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertNotIn(
             '{ key: "actions", label: t("serve_refresh", "Refresh")', serve_html
         )
-        self.assertIn("data-refresh-sources", serve_html)
+        self.assertIn("data-source-config-rescan", sources_html)
         self.assertNotIn('data-source-action="delete"', serve_html)
-        self.assertIn("data-source-bulk-state", serve_html)
-        self.assertIn("data-source-bulk-delete", serve_html)
+        self.assertNotIn("data-source-bulk-state", serve_html)
+        self.assertNotIn("data-source-bulk-delete", serve_html)
+        self.assertIn("data-source-state-action", serve_html)
+        self.assertIn("data-source-delete-action", serve_html)
         self.assertIn("Delete selected", serve_html)
         self.assertIn("删除所选", zh_serve_html)
-        self.assertIn("Delete selected sources from peval state?", serve_html)
-        self.assertIn("从 peval state 中删除所选来源？", zh_serve_html)
-        self.assertIn("data-source-row-select", serve_html)
-        self.assertIn("data-source-select-visible", serve_html)
-        self.assertIn("function renderSourceSelectionHeader(rows)", serve_html)
-        self.assertIn("function mutateSelectedServeSourceState()", serve_html)
-        self.assertIn("function deleteSelectedServeSources()", serve_html)
+        self.assertIn("Permanently delete selected sources?", serve_html)
+        self.assertIn("永久删除所选来源？", zh_serve_html)
+        self.assertIn("data-table-row-select", serve_html)
+        self.assertIn("data-table-select-visible", serve_html)
+        self.assertNotIn("function renderSourceSelectionHeader(rows)", serve_html)
+        self.assertIn("function deleteVisibleServeSources()", serve_html)
         self.assertNotIn("2 sources", home_html)
         self.assertIn("common_session.jsonl", serve_html)
         self.assertIn("Timeline Waterfall", serve_html)
@@ -665,27 +716,27 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('t("task_alias", "Task / Alias")', serve_html)
         self.assertIn('t("last_turn_end", "Last Turn End")', serve_html)
         self.assertIn('key: "finished_at_ms"', serve_html)
-        self.assertIn("function sourceColumns()", serve_html)
+        self.assertNotIn("function sourceColumns()", serve_html)
         self.assertIn("last_turn_finished_at_ms", serve_html)
         self.assertIn(
             '{ key: "source_tags", label: t("tags", "Tags"), valueType: "list"',
             serve_html,
         )
         self.assertIn(
-            'commit: (source, value) => commitSourceCellEdit(source, "tags", value)',
+            'commit: (row, value) => commitSourceCellEdit(row, "tags", value)',
             serve_html,
         )
-        self.assertIn("source-table", serve_html)
-        self.assertIn("sourceSelection:", serve_html)
+        self.assertNotIn("source-table", serve_html)
+        self.assertNotIn("sourceSelection:", serve_html)
+        self.assertNotIn("function pruneSourceSelection()", serve_html)
         self.assertIn("new Set()", serve_html)
-        self.assertIn('tableId: "sources"', serve_html)
-        self.assertIn("rowKey: (source) => source?.source_key", serve_html)
+        self.assertIn('tableId: "harbor-dataset-registry"', serve_html)
         self.assertIn(
             "serveMode() ? [selectionColumn(), ...displayed] : displayed",
             serve_html,
         )
-        self.assertIn("data-select-visible", serve_html)
-        self.assertIn("data-row-select", serve_html)
+        self.assertIn("data-table-select-visible", serve_html)
+        self.assertIn("data-table-row-select", serve_html)
         self.assertIn("leaderboard-export", serve_html)
         self.assertIn("function bindServeSourceControls()", serve_html)
         self.assertIn("function choosePathSourceFiles(button)", serve_html)
@@ -699,7 +750,7 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("function saveAdapterDefaultDb(form, defaultDbPath)", serve_html)
         self.assertIn("function updateAdapterDefaultOptions()", serve_html)
         self.assertIn("function bindAdapterDefaultDbControls()", serve_html)
-        self.assertIn("function renderServeSourceAliasCell(source)", serve_html)
+        self.assertNotIn("function renderServeSourceAliasCell(source)", serve_html)
         self.assertIn("function commitSourceCellEdit(row, field, value)", serve_html)
         self.assertIn(
             "function beginTableCellEdit(cell, { tableId, column, row, onChange = null })",
@@ -711,11 +762,14 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn("function addSelectedDbSessions(form)", serve_html)
         self.assertIn("session_ids: sessionIds", serve_html)
         self.assertNotIn('serveApi("/api/upload"', serve_html)
-        self.assertIn('serveApi("/api/config/harbor-mount"', serve_html)
+        self.assertIn('serveApi("/api/config/harbor/mounts"', serve_html)
         self.assertIn('serveApi("/api/sources"', serve_html)
         self.assertIn('serveApi("/api/sources/reload"', serve_html)
-        self.assertIn('href="/sources"', home_html)
-        self.assertIn("data-source-list", serve_html)
+        self.assertIn('href="/config"', home_html)
+        self.assertNotIn("data-source-list", serve_html)
+        self.assertIn("data-harbor-dataset-registry", serve_html)
+        self.assertIn("data-harbor-mount-config", serve_html)
+        self.assertNotIn("surface=sources", serve_html)
         self.assertNotIn("data-source-upload-form", serve_html)
         self.assertIn('t("export", "Export")', serve_html)
         self.assertIn('t("export_excel", "Export Excel")', serve_html)
@@ -766,7 +820,7 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             serve_html,
         )
-        self.assertIn("function xlsxBytesForRows(rows)", serve_html)
+        self.assertIn("function xlsxBytesForRows(rows, columns)", serve_html)
         self.assertNotIn("peval-leaderboard-visible.csv", serve_html)
 
     def test_html_render_mode_rejects_unknown_mode(self) -> None:
@@ -835,7 +889,7 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('"activate_selected": "Activate selected"', english_html)
         self.assertIn('"serve_archived_snapshots": "Archived snapshots"', english_html)
         self.assertIn(
-            '"archived_view_unavailable": "No sessions are available in that view. Use Sources to manage archived sessions."',
+            '"archived_view_unavailable": "No sessions are available in that view. Change the filters or turn off Show archived."',
             english_html,
         )
         self.assertNotIn("Not enough archived sessions", english_html)
@@ -871,7 +925,7 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         self.assertIn('"activate_selected": "启用所选"', zh_html)
         self.assertIn('"serve_archived_snapshots": "已归档快照"', zh_html)
         self.assertIn(
-            '"archived_view_unavailable": "该视图没有可显示的会话。请在 Sources 中管理已归档会话。"',
+            '"archived_view_unavailable": "该视图没有可显示的会话。请调整筛选条件或关闭“显示已归档”。"',
             zh_html,
         )
         self.assertNotIn("不足两条", zh_html)

@@ -173,7 +173,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 self.assertNotIn(b"data-harbor-workbench", guest_markup)
                 self.assertIn(b'href="/datasets"', guest_markup)
                 self.assertIn(b'href="/reports"', guest_markup)
-                self.assertNotIn(b'href="/sources"', guest_markup)
+                self.assertNotIn(b'href="/config"', guest_markup)
                 self.assertNotIn(b"data-locale-select", guest_markup)
                 self.assertIn(b"data-view-save-dialog", guest_markup)
                 self.assertIn(b'value="browser"', guest_markup)
@@ -205,6 +205,11 @@ class ServeAccessHttpTests(unittest.TestCase):
                 self.assertEqual(status, 403)
                 self.assertIn("administrator", json.loads(body)["error"])
                 status, _headers, body = self.request(
+                    server, "GET", "/api/config/harbor"
+                )
+                self.assertEqual(status, 403)
+                self.assertIn("administrator", json.loads(body)["error"])
+                status, _headers, body = self.request(
                     server, "GET", "/api/harbor/datasets"
                 )
                 self.assertEqual(status, 200)
@@ -231,7 +236,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertIn(b"data-report-manager", reports_shell)
-                status, _headers, _body = self.request(server, "GET", "/sources")
+                status, _headers, _body = self.request(server, "GET", "/config")
                 self.assertEqual(status, 403)
                 status, _headers, _body = self.request(
                     server,
@@ -308,7 +313,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 self.assertIn(b"data-admin-logout", admin_markup)
                 self.assertIn(b'href="/datasets"', admin_markup)
                 self.assertIn(b'href="/reports"', admin_markup)
-                self.assertIn(b'href="/sources"', admin_markup)
+                self.assertIn(b'href="/config"', admin_markup)
                 self.assertNotIn(b"data-harbor-workbench", admin_markup)
                 self.assertLess(
                     admin_markup.index(b'href="/datasets"'),
@@ -316,7 +321,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 )
                 self.assertLess(
                     admin_markup.index(b'href="/reports"'),
-                    admin_markup.index(b'href="/sources"'),
+                    admin_markup.index(b'href="/config"'),
                 )
                 self.assertIn(b"data-locale-select", admin_markup)
                 self.assertIn(b'value="workspace" checked', admin_markup)
@@ -333,7 +338,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                     flags=re.DOTALL,
                 )
                 self.assertIn(b"data-harbor-workbench", admin_datasets_markup)
-                self.assertNotIn(b"data-source-manager", admin_datasets_markup)
+                self.assertNotIn(b"data-config-page", admin_datasets_markup)
                 status, _headers, admin_reports = self.request(
                     server, "GET", "/reports", cookie=cookie
                 )
@@ -346,18 +351,29 @@ class ServeAccessHttpTests(unittest.TestCase):
                 )
                 self.assertIn(b"data-report-manager", admin_reports_markup)
                 self.assertNotIn(b"data-harbor-workbench", admin_reports_markup)
-                status, _headers, admin_sources = self.request(
-                    server, "GET", "/sources", cookie=cookie
+                status, _headers, admin_config = self.request(
+                    server, "GET", "/config", cookie=cookie
                 )
                 self.assertEqual(status, 200)
-                admin_sources_markup = re.sub(
+                admin_config_markup = re.sub(
                     rb"<script(?:\s[^>]*)?>.*?</script>",
                     b"",
-                    admin_sources,
+                    admin_config,
                     flags=re.DOTALL,
                 )
-                self.assertIn(b"data-source-manager", admin_sources_markup)
-                self.assertNotIn(b"data-report-manager", admin_sources_markup)
+                self.assertIn(b"data-config-page", admin_config_markup)
+                self.assertNotIn(b"data-report-manager", admin_config_markup)
+                status, _headers, _body = self.request(
+                    server, "GET", "/sources", cookie=cookie
+                )
+                self.assertEqual(status, 404)
+                status, _headers, body = self.request(
+                    server, "GET", "/api/config/harbor", cookie=cookie
+                )
+                self.assertEqual(status, 200, body)
+                self.assertEqual(
+                    set(json.loads(body)), {"revision", "datasets", "mounts"}
+                )
                 status, _headers, body = self.request(
                     server, "GET", "/api/sources", cookie=cookie
                 )
@@ -426,6 +442,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 )
                 status, _headers, body = self.request(server, "GET", "/api/reports")
                 self.assertEqual(status, 200, body)
+
                 reports = json.loads(body)["reports"]
                 self.assertEqual([item["report_id"] for item in reports], [report_id])
 
@@ -708,6 +725,134 @@ class ServeAccessHttpTests(unittest.TestCase):
                     "/srv/future/artifact.json",
                 )
             finally:
+                self.stop(store, server, thread)
+
+    def test_admin_configures_acp_and_same_name_prompt_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store, runtime, server, thread = self.running_server(root)
+            try:
+                status, headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/auth/login",
+                    {"password": "correct horse battery staple"},
+                )
+                self.assertEqual(status, 200, body)
+                cookie = headers["set-cookie"].split(";", 1)[0]
+
+                status, _headers, body = self.request(
+                    server, "GET", "/api/config", cookie=cookie
+                )
+                self.assertEqual(status, 200, body)
+                snapshot = json.loads(body)
+                self.assertEqual(snapshot["acp_agents"], [])
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/config/acp/agents",
+                    {
+                        "action": "upsert",
+                        "agent_id": "opencode",
+                        "title": "OpenCode",
+                        "command": "opencode",
+                        "args": ["acp"],
+                        "expected_revision": snapshot["revision"],
+                    },
+                    cookie=cookie,
+                )
+                self.assertEqual(status, 200, body)
+                configured = json.loads(body)
+                self.assertEqual(configured["acp_agents"][0]["args"], ["acp"])
+                self.assertIn(
+                    "[[acp.agents]]",
+                    (root / "peval.toml").read_text(encoding="utf-8"),
+                )
+
+                status, _headers, _body = self.request(
+                    server,
+                    "POST",
+                    "/api/config/acp/agents",
+                    {
+                        "action": "upsert",
+                        "agent_id": "stale",
+                        "title": "Stale",
+                        "command": "stale",
+                        "args": [],
+                        "expected_revision": snapshot["revision"],
+                    },
+                    cookie=cookie,
+                )
+                self.assertEqual(status, 409)
+                status, _headers, _body = self.request(
+                    server,
+                    "POST",
+                    "/api/config/acp/agents",
+                    {
+                        "action": "delete",
+                        "agent_ids": ["missing"],
+                        "expected_revision": configured["revision"],
+                    },
+                    cookie=cookie,
+                )
+                self.assertEqual(status, 404)
+
+                status, _headers, body = self.request(
+                    server, "GET", "/api/prompts", cookie=cookie
+                )
+                self.assertEqual(status, 200, body)
+                prompt = json.loads(body)["prompts"][0]
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/prompts",
+                    {
+                        "action": "save",
+                        "prompt_id": prompt["id"],
+                        "content": "# Workspace review\n\nUse local criteria.\n",
+                        "expected_revision": prompt["revision"],
+                    },
+                    cookie=cookie,
+                )
+                self.assertEqual(status, 200, body)
+                customized = json.loads(body)["prompt"]
+                self.assertTrue(customized["customized"])
+                self.assertEqual(
+                    (root / "prompts" / prompt["filename"]).read_text(encoding="utf-8"),
+                    "# Workspace review\n\nUse local criteria.\n",
+                )
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/prompts",
+                    {
+                        "action": "reset",
+                        "prompt_id": prompt["id"],
+                        "expected_revision": customized["revision"],
+                    },
+                    cookie=cookie,
+                )
+                self.assertEqual(status, 200, body)
+                self.assertFalse(json.loads(body)["prompt"]["customized"])
+                self.assertFalse((root / "prompts" / prompt["filename"]).exists())
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/config/acp/agents",
+                    {
+                        "action": "delete",
+                        "agent_ids": ["opencode"],
+                        "expected_revision": configured["revision"],
+                    },
+                    cookie=cookie,
+                )
+                self.assertEqual(status, 200, body)
+                self.assertEqual(json.loads(body)["acp_agents"], [])
+            finally:
+                runtime.close()
                 self.stop(store, server, thread)
 
 

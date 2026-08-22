@@ -28,6 +28,7 @@ from psycheval.serve import (
 )
 from psycheval.serve.harbor_workspace import (
     HarborConflictError,
+    HarborNotFoundError,
     HarborSizeError,
     HarborWorkspace,
     HarborWorkspaceError,
@@ -66,7 +67,7 @@ class HarborWorkspaceTests(unittest.TestCase):
 
     def _wait_operation(
         self, server: LocalHTTPServer, operation: dict[str, object]
-    ) -> None:
+    ) -> dict[str, object]:
         operation_id = str(operation["operation_id"])
         deadline = time.monotonic() + 5
         last_body: dict[str, object] = {}
@@ -78,7 +79,7 @@ class HarborWorkspaceTests(unittest.TestCase):
             self.assertEqual(status, 200)
             if body["state"] not in {"queued", "running"}:
                 self.assertEqual(body["state"], "completed", body)
-                return
+                return body
             time.sleep(0.01)
         self.fail(f"Harbor reconcile operation did not complete: {last_body}")
 
@@ -187,6 +188,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 dataset_id="pbench",
                 new_id="pbench-renamed",
                 path=str(dataset_root),
+                mount_ids=("jobs",),
                 expected_revision=config_revision(config_path),
             )
             self.assertEqual(config.harbor_datasets[0].id, "pbench-renamed")
@@ -207,6 +209,66 @@ class HarborWorkspaceTests(unittest.TestCase):
             )
             self.assertEqual(unreferenced.harbor_datasets, ())
             self.assertTrue(dataset_root.is_dir(), "unregister must preserve files")
+
+    def test_update_dataset_reconciles_mount_membership_without_reordering(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "peval.toml"
+            config_path.write_text("", encoding="utf-8")
+            for name in (
+                "alpha",
+                "pbench",
+                "beta",
+                "jobs-one",
+                "jobs-two",
+                "jobs-three",
+            ):
+                (root / name).mkdir()
+            config = ToolConfig(
+                workspace_root=str(root),
+                harbor_datasets=(
+                    HarborDataset("alpha", str(root / "alpha")),
+                    HarborDataset("pbench", str(root / "pbench")),
+                    HarborDataset("beta", str(root / "beta")),
+                ),
+                harbor_mounts=(
+                    HarborMount(
+                        "one", str(root / "jobs-one"), ("alpha", "pbench", "beta")
+                    ),
+                    HarborMount("two", str(root / "jobs-two"), ("alpha",)),
+                    HarborMount("three", str(root / "jobs-three"), ("pbench", "alpha")),
+                ),
+            )
+
+            updated = HarborWorkspace(config_path, config).update_dataset(
+                dataset_id="pbench",
+                new_id="pbench-v1.0",
+                path=str(root / "pbench"),
+                mount_ids=("one", "two"),
+                expected_revision=config_revision(config_path),
+            )
+
+            self.assertEqual(
+                [mount.dataset_ids for mount in updated.harbor_mounts],
+                [
+                    ("alpha", "pbench-v1.0", "beta"),
+                    ("alpha", "pbench-v1.0"),
+                    ("alpha",),
+                ],
+            )
+
+            before = config_path.read_bytes()
+            with self.assertRaisesRegex(HarborNotFoundError, "missing"):
+                HarborWorkspace(config_path, updated).update_dataset(
+                    dataset_id="pbench-v1.0",
+                    new_id="pbench-v1.0",
+                    path=str(root / "pbench"),
+                    mount_ids=("missing",),
+                    expected_revision=config_revision(config_path),
+                )
+            self.assertEqual(config_path.read_bytes(), before)
 
     def test_registration_and_inventory_do_not_validate_dataset_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -243,6 +305,34 @@ class HarborWorkspaceTests(unittest.TestCase):
                 expected_revision=config_revision(config_path),
             )
             self.assertEqual(registered.harbor_datasets[0].id, "unrelated")
+
+    def test_batch_unregister_is_atomic_when_any_dataset_is_mounted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "peval.toml"
+            config_path.write_text("", encoding="utf-8")
+            for name in ("one", "two"):
+                (root / name).mkdir()
+            config = ToolConfig(
+                workspace_root=str(root),
+                harbor_datasets=(
+                    HarborDataset("one", str(root / "one")),
+                    HarborDataset("two", str(root / "two")),
+                ),
+                harbor_mounts=(
+                    HarborMount("jobs", str(root / "jobs"), dataset_ids=("two",)),
+                ),
+            )
+            before = config_path.read_bytes()
+            with self.assertRaisesRegex(HarborConflictError, "two: jobs"):
+                HarborWorkspace(config_path, config).remove_datasets(
+                    dataset_ids=("one", "two"),
+                    expected_revision=config_revision(config_path),
+                )
+            self.assertEqual(config_path.read_bytes(), before)
+            self.assertEqual(
+                [dataset.id for dataset in config.harbor_datasets], ["one", "two"]
+            )
 
     def test_task_draft_manifest_trash_and_restore_lifecycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -317,6 +407,16 @@ class HarborWorkspaceTests(unittest.TestCase):
                 expected_revision=task["revision"],
             )
             self.assertFalse((root / "dataset" / "hello").exists())
+            self.assertEqual(
+                [
+                    item.name
+                    for item in DatasetManifest.from_toml_file(
+                        root / "dataset" / "dataset.toml"
+                    ).tasks
+                ],
+                ["local/hello"],
+                "archive must not implicitly rewrite the manifest",
+            )
             dataset = library.inventory()["datasets"][0]
             library.sync_manifest(
                 dataset_id="tasks", expected_revision=dataset["revision"]
@@ -326,6 +426,12 @@ class HarborWorkspaceTests(unittest.TestCase):
                 [],
             )
             trash_entry = root / "dataset" / ".peval-trash" / trashed["entry_id"]
+            trashed = library.rename_archived_task(
+                dataset_id="tasks",
+                entry_id=trashed["entry_id"],
+                new_directory="restored",
+                expected_revision=trashed["revision"],
+            )
             with (
                 patch.object(Path, "rmdir", side_effect=OSError("blocked")),
                 self.assertRaisesRegex(HarborWorkspaceError, "restore cleanup failed"),
@@ -339,14 +445,48 @@ class HarborWorkspaceTests(unittest.TestCase):
             self.assertFalse((root / "dataset" / "failed-restore").exists())
             self.assertTrue((trash_entry / "task").is_dir())
             self.assertTrue((trash_entry / "metadata.json").is_file())
+            (root / "dataset" / "restored").mkdir()
+            with self.assertRaisesRegex(HarborConflictError, "already exists"):
+                library.restore_task(
+                    dataset_id="tasks",
+                    entry_id=trashed["entry_id"],
+                    directory=None,
+                    expected_revision=trashed["revision"],
+                )
+            (root / "dataset" / "restored").rmdir()
             restored = library.restore_task(
                 dataset_id="tasks",
                 entry_id=trashed["entry_id"],
-                directory="restored",
+                directory=None,
                 expected_revision=trashed["revision"],
             )
             self.assertEqual(restored["task"]["directory"], "restored")
             self.assertEqual(restored["task"]["package_name"], "local/hello")
+
+            dataset = library.inventory()["datasets"][0]
+            delete_me = library.create_task(
+                dataset_id="tasks",
+                directory="delete-me",
+                package_name="local/delete-me",
+                steps=0,
+                expected_revision=dataset["revision"],
+            )
+            dataset = library.inventory()["datasets"][0]
+            library.sync_manifest(
+                dataset_id="tasks", expected_revision=dataset["revision"]
+            )
+            manifest_before_delete = (root / "dataset" / "dataset.toml").read_bytes()
+            library.delete_task(
+                dataset_id="tasks",
+                task="delete-me",
+                expected_revision=delete_me["task"]["revision"],
+            )
+            self.assertFalse((root / "dataset" / "delete-me").exists())
+            self.assertEqual(
+                (root / "dataset" / "dataset.toml").read_bytes(),
+                manifest_before_delete,
+                "permanent delete must not implicitly rewrite the manifest",
+            )
             trashed_again = library.trash_task(
                 dataset_id="tasks",
                 task="restored",
@@ -558,15 +698,22 @@ class HarborWorkspaceTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                status, inventory = self._request(server, "GET", "/api/harbor/datasets")
+                status, legacy = self._request(
+                    server, "POST", "/api/harbor/datasets", {}
+                )
+                self.assertEqual(status, 404, legacy)
+                status, legacy = self._request(
+                    server, "POST", "/api/config/harbor-mount", {}
+                )
+                self.assertEqual(status, 404, legacy)
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
                 self.assertEqual(status, 200)
                 status, registered = self._request(
                     server,
                     "POST",
-                    "/api/harbor/datasets",
+                    "/api/config/harbor/datasets",
                     {
                         "action": "register",
-                        "dataset_id": "existing",
                         "path": str(existing),
                         "expected_revision": inventory["revision"],
                     },
@@ -574,7 +721,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 self.assertEqual(status, 202, registered)
                 self._wait_operation(server, registered["operation"])
 
-                status, inventory = self._request(server, "GET", "/api/harbor/datasets")
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
                 self.assertEqual(status, 200)
                 self.assertEqual(
                     [item["id"] for item in inventory["datasets"]], ["existing"]
@@ -582,10 +729,9 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, duplicate = self._request(
                     server,
                     "POST",
-                    "/api/harbor/datasets",
+                    "/api/config/harbor/datasets",
                     {
                         "action": "register",
-                        "dataset_id": "existing",
                         "path": str(existing),
                         "expected_revision": inventory["revision"],
                     },
@@ -595,10 +741,9 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, missing = self._request(
                     server,
                     "POST",
-                    "/api/harbor/datasets",
+                    "/api/config/harbor/datasets",
                     {
                         "action": "register",
-                        "dataset_id": "missing",
                         "path": str(root / "missing"),
                         "expected_revision": inventory["revision"],
                     },
@@ -614,10 +759,9 @@ class HarborWorkspaceTests(unittest.TestCase):
                     status, symlinked = self._request(
                         server,
                         "POST",
-                        "/api/harbor/datasets",
+                        "/api/config/harbor/datasets",
                         {
                             "action": "register",
-                            "dataset_id": "linked",
                             "path": str(linked),
                             "expected_revision": inventory["revision"],
                         },
@@ -625,22 +769,23 @@ class HarborWorkspaceTests(unittest.TestCase):
                     self.assertEqual(status, 400, symlinked)
                     self.assertIn("symbolic link", symlinked["error"])
 
-                status, inventory = self._request(server, "GET", "/api/harbor/datasets")
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
                 status, updated = self._request(
                     server,
                     "POST",
-                    "/api/harbor/datasets",
+                    "/api/config/harbor/datasets",
                     {
                         "action": "update",
                         "dataset_id": "existing",
                         "new_id": "renamed",
                         "path": str(existing),
+                        "mount_ids": [],
                         "expected_revision": inventory["revision"],
                     },
                 )
                 self.assertEqual(status, 202, updated)
                 self._wait_operation(server, updated["operation"])
-                status, inventory = self._request(server, "GET", "/api/harbor/datasets")
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
                 self.assertEqual(
                     [item["id"] for item in inventory["datasets"]], ["renamed"]
                 )
@@ -648,18 +793,291 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, removed = self._request(
                     server,
                     "POST",
-                    "/api/harbor/datasets",
+                    "/api/config/harbor/datasets",
                     {
-                        "action": "remove",
-                        "dataset_id": "renamed",
+                        "action": "unregister",
+                        "dataset_ids": ["renamed"],
                         "expected_revision": inventory["revision"],
                     },
                 )
                 self.assertEqual(status, 202, removed)
                 self._wait_operation(server, removed["operation"])
-                status, inventory = self._request(server, "GET", "/api/harbor/datasets")
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
                 self.assertEqual(inventory["datasets"], [])
                 self.assertTrue(existing.is_dir(), "unregister must preserve files")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                store.close()
+
+    def test_http_register_dataset_derives_id_from_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "peval.toml").write_text("", encoding="utf-8")
+            dataset = root / "pbench-v1.0"
+            dataset.mkdir()
+            store = open_workspace_state(str(root))
+            runtime = ServeRuntime(store, ToolConfig(workspace_root=str(root)))
+            server = LocalHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                self.assertEqual(status, 200)
+                status, registered = self._request(
+                    server,
+                    "POST",
+                    "/api/config/harbor/datasets",
+                    {
+                        "action": "register",
+                        "path": str(dataset),
+                        "expected_revision": inventory["revision"],
+                    },
+                )
+                self.assertEqual(status, 202, registered)
+                self._wait_operation(server, registered["operation"])
+
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                self.assertEqual(status, 200)
+                self.assertEqual(
+                    inventory["datasets"],
+                    [{"id": "pbench-v1.0", "path": str(dataset)}],
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                store.close()
+
+    def test_http_register_dataset_suffixes_conflicts_and_invalid_basenames(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "peval.toml").write_text("", encoding="utf-8")
+            paths = [
+                root / "one" / "shared",
+                root / "two" / "shared",
+                root / "Invalid.Name",
+            ]
+            for path in paths:
+                path.mkdir(parents=True)
+            store = open_workspace_state(str(root))
+            runtime = ServeRuntime(store, ToolConfig(workspace_root=str(root)))
+            server = LocalHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with patch(
+                    "psycheval.config.secrets.token_hex",
+                    side_effect=["abc123", "def456"],
+                ):
+                    for path in paths:
+                        status, inventory = self._request(
+                            server, "GET", "/api/config/harbor"
+                        )
+                        self.assertEqual(status, 200)
+                        status, registered = self._request(
+                            server,
+                            "POST",
+                            "/api/config/harbor/datasets",
+                            {
+                                "action": "register",
+                                "path": str(path),
+                                "expected_revision": inventory["revision"],
+                            },
+                        )
+                        self.assertEqual(status, 202, registered)
+                        self._wait_operation(server, registered["operation"])
+
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                self.assertEqual(status, 200)
+                self.assertEqual(
+                    [item["id"] for item in inventory["datasets"]],
+                    ["shared", "shared-abc123", "dataset-def456"],
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                store.close()
+
+    def test_http_add_harbor_mount_derives_id_and_starts_without_datasets(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "peval.toml").write_text("", encoding="utf-8")
+            jobs = root / "nightly-jobs"
+            jobs.mkdir()
+            store = open_workspace_state(str(root))
+            runtime = ServeRuntime(store, ToolConfig(workspace_root=str(root)))
+            server = LocalHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                self.assertEqual(status, 200)
+                status, mounted = self._request(
+                    server,
+                    "POST",
+                    "/api/config/harbor/mounts",
+                    {
+                        "action": "upsert",
+                        "jobs_path": str(jobs),
+                        "expected_revision": inventory["revision"],
+                    },
+                )
+                self.assertEqual(status, 200, mounted)
+                self.assertEqual(
+                    mounted["result"]["mounts"],
+                    [
+                        {
+                            "id": "nightly-jobs",
+                            "path": str(jobs),
+                            "dataset_ids": [],
+                        }
+                    ],
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                store.close()
+
+    def test_http_dataset_update_sets_mount_membership_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "tasks"
+            jobs_one = root / "jobs-one"
+            jobs_two = root / "jobs-two"
+            for path in (dataset, jobs_one, jobs_two):
+                path.mkdir()
+            config_path = root / "peval.toml"
+            config_path.write_text(
+                '[[harbor.datasets]]\nid = "tasks"\npath = "tasks"\n\n'
+                '[[harbor.mounts]]\nid = "one"\npath = "jobs-one"\n'
+                'dataset_ids = ["tasks"]\n\n'
+                '[[harbor.mounts]]\nid = "two"\npath = "jobs-two"\n',
+                encoding="utf-8",
+            )
+            config = ToolConfig(
+                workspace_root=str(root),
+                harbor_datasets=(HarborDataset("tasks", str(dataset)),),
+                harbor_mounts=(
+                    HarborMount("one", str(jobs_one), ("tasks",)),
+                    HarborMount("two", str(jobs_two), ()),
+                ),
+            )
+            store = open_workspace_state(str(root))
+            runtime = ServeRuntime(store, config)
+            server = LocalHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                self.assertEqual(status, 200)
+                status, updated = self._request(
+                    server,
+                    "POST",
+                    "/api/config/harbor/datasets",
+                    {
+                        "action": "update",
+                        "dataset_id": "tasks",
+                        "new_id": "tasks",
+                        "path": str(dataset),
+                        "mount_ids": ["two"],
+                        "expected_revision": inventory["revision"],
+                    },
+                )
+                self.assertEqual(status, 202, updated)
+                self.assertEqual(
+                    [mount["dataset_ids"] for mount in updated["result"]["mounts"]],
+                    [[], ["tasks"]],
+                )
+                self._wait_operation(server, updated["operation"])
+
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                self.assertEqual(status, 200)
+                before = config_path.read_bytes()
+                status, rejected = self._request(
+                    server,
+                    "POST",
+                    "/api/config/harbor/datasets",
+                    {
+                        "action": "update",
+                        "dataset_id": "tasks",
+                        "new_id": "tasks",
+                        "path": str(dataset),
+                        "mount_ids": ["missing"],
+                        "expected_revision": inventory["revision"],
+                    },
+                )
+                self.assertEqual(status, 404, rejected)
+                self.assertEqual(config_path.read_bytes(), before)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                store.close()
+
+    def test_http_batch_remove_harbor_mounts_is_atomic_and_preserves_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs_one = root / "jobs-one"
+            jobs_two = root / "jobs-two"
+            jobs_one.mkdir()
+            jobs_two.mkdir()
+            config_path = root / "peval.toml"
+            config_path.write_text(
+                '[[harbor.mounts]]\nid = "one"\npath = "jobs-one"\n\n'
+                '[[harbor.mounts]]\nid = "two"\npath = "jobs-two"\n',
+                encoding="utf-8",
+            )
+            config = ToolConfig(
+                workspace_root=str(root),
+                harbor_mounts=(
+                    HarborMount("one", str(jobs_one)),
+                    HarborMount("two", str(jobs_two)),
+                ),
+            )
+            store = open_workspace_state(str(root))
+            runtime = ServeRuntime(store, config)
+            server = LocalHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                self.assertEqual(status, 200)
+                before = config_path.read_bytes()
+                status, rejected = self._request(
+                    server,
+                    "POST",
+                    "/api/config/harbor/mounts",
+                    {
+                        "action": "delete",
+                        "mount_ids": ["one", "missing"],
+                        "expected_revision": inventory["revision"],
+                    },
+                )
+                self.assertEqual(status, 404, rejected)
+                self.assertEqual(config_path.read_bytes(), before)
+
+                status, removed = self._request(
+                    server,
+                    "POST",
+                    "/api/config/harbor/mounts",
+                    {
+                        "action": "delete",
+                        "mount_ids": ["one", "two"],
+                        "expected_revision": inventory["revision"],
+                    },
+                )
+                self.assertEqual(status, 200, removed)
+                self.assertEqual(removed["result"]["mounts"], [])
+                self.assertTrue(jobs_one.is_dir())
+                self.assertTrue(jobs_two.is_dir())
             finally:
                 server.shutdown()
                 server.server_close()
@@ -676,13 +1094,13 @@ class HarborWorkspaceTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                status, inventory = self._request(server, "GET", "/api/harbor/datasets")
+                status, inventory = self._request(server, "GET", "/api/config/harbor")
                 self.assertEqual(status, 200)
                 self.assertEqual(status, 200)
                 status, created = self._request(
                     server,
                     "POST",
-                    "/api/harbor/datasets",
+                    "/api/config/harbor/datasets",
                     {
                         "action": "create",
                         "dataset_id": "tasks",
@@ -718,9 +1136,8 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, synchronized = self._request(
                     server,
                     "POST",
-                    "/api/harbor/datasets",
+                    "/api/harbor/tasks/manifest",
                     {
-                        "action": "sync_manifest",
                         "dataset_id": "tasks",
                         "expected_revision": dataset["revision"],
                     },
@@ -823,60 +1240,85 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, trashed = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks",
+                    "/api/harbor/tasks/state",
                     {
-                        "action": "trash",
-                        "dataset_id": "tasks",
-                        "task": "renamed",
-                        "expected_revision": renamed_task["revision"],
+                        "archived": True,
+                        "items": [
+                            {
+                                "dataset_id": "tasks",
+                                "task": "renamed",
+                                "expected_revision": renamed_task["revision"],
+                            }
+                        ],
                     },
                 )
                 self.assertEqual(status, 202, trashed)
-                self._wait_operation(server, trashed["operation"])
+                self._wait_operation(server, trashed)
+
+                status, inventory = self._request(server, "GET", "/api/harbor/datasets")
+                archived = inventory["datasets"][0]["trash"][0]
 
                 status, restored = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks",
+                    "/api/harbor/tasks/state",
                     {
-                        "action": "restore",
-                        "dataset_id": "tasks",
-                        "entry_id": trashed["result"]["entry_id"],
-                        "directory": "restored",
-                        "expected_revision": trashed["result"]["revision"],
+                        "archived": False,
+                        "items": [
+                            {
+                                "dataset_id": "tasks",
+                                "entry_id": archived["entry_id"],
+                                "directory": "restored",
+                                "expected_revision": archived["revision"],
+                            }
+                        ],
                     },
                 )
                 self.assertEqual(status, 202, restored)
-                self._wait_operation(server, restored["operation"])
+                self._wait_operation(server, restored)
+
+                status, inventory = self._request(server, "GET", "/api/harbor/datasets")
+                restored_task = inventory["datasets"][0]["tasks"][0]
 
                 status, trashed_again = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks",
+                    "/api/harbor/tasks/state",
                     {
-                        "action": "trash",
-                        "dataset_id": "tasks",
-                        "task": "restored",
-                        "expected_revision": restored["result"]["task"]["revision"],
+                        "archived": True,
+                        "items": [
+                            {
+                                "dataset_id": "tasks",
+                                "task": "restored",
+                                "expected_revision": restored_task["revision"],
+                            }
+                        ],
                     },
                 )
                 self.assertEqual(status, 202, trashed_again)
-                self._wait_operation(server, trashed_again["operation"])
+                self._wait_operation(server, trashed_again)
+
+                status, inventory = self._request(server, "GET", "/api/harbor/datasets")
+                archived_again = inventory["datasets"][0]["trash"][0]
 
                 status, purged = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks",
+                    "/api/harbor/tasks/delete",
                     {
-                        "action": "purge",
-                        "dataset_id": "tasks",
-                        "entry_id": trashed_again["result"]["entry_id"],
-                        "expected_revision": trashed_again["result"]["revision"],
+                        "items": [
+                            {
+                                "dataset_id": "tasks",
+                                "entry_id": archived_again["entry_id"],
+                                "expected_revision": archived_again["revision"],
+                            }
+                        ],
                     },
                 )
                 self.assertEqual(status, 202, purged)
-                self._wait_operation(server, purged["operation"])
-                self.assertEqual(purged["result"]["datasets"][0]["trash"], [])
+                self._wait_operation(server, purged)
+                status, inventory = self._request(server, "GET", "/api/harbor/datasets")
+                self.assertEqual(inventory["datasets"][0]["trash"], [])
 
                 status, unknown = self._request(
                     server,
@@ -905,6 +1347,107 @@ class HarborWorkspaceTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(status, 400, invalid_steps)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                store.close()
+
+    def test_task_batch_isolates_failures_and_active_delete_preserves_manifest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "peval.toml"
+            config_path.write_text("", encoding="utf-8")
+            config = HarborWorkspace(
+                config_path, ToolConfig(workspace_root=str(root))
+            ).create_dataset(
+                dataset_id="tasks",
+                path="dataset",
+                package_name="local/tasks",
+                expected_revision=config_revision(config_path),
+            )
+            library = HarborWorkspace(config_path, config)
+            for directory in ("first", "second"):
+                dataset = library.inventory()["datasets"][0]
+                library.create_task(
+                    dataset_id="tasks",
+                    directory=directory,
+                    package_name=f"local/{directory}",
+                    steps=0,
+                    expected_revision=dataset["revision"],
+                )
+            tasks = {
+                task["directory"]: task
+                for task in library.inventory()["datasets"][0]["tasks"]
+            }
+            manifest_before = (root / "dataset" / "dataset.toml").read_bytes()
+
+            store = open_workspace_state(str(root))
+            runtime = ServeRuntime(store, config)
+            server = LocalHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                status, operation = self._request(
+                    server,
+                    "POST",
+                    "/api/harbor/tasks/state",
+                    {
+                        "archived": True,
+                        "items": [
+                            {
+                                "dataset_id": "tasks",
+                                "task": "first",
+                                "expected_revision": tasks["first"]["revision"],
+                            },
+                            {
+                                "dataset_id": "tasks",
+                                "task": "second",
+                                "expected_revision": "stale",
+                            },
+                        ],
+                    },
+                )
+                self.assertEqual(status, 202, operation)
+                completed = self._wait_operation(server, operation)
+                self.assertEqual(len(completed["successes"]), 1)
+                self.assertEqual(len(completed["failures"]), 1)
+                self.assertIn("refresh", completed["failures"][0]["error"])
+
+                status, inventory = self._request(server, "GET", "/api/harbor/datasets")
+                self.assertEqual(status, 200)
+                dataset = inventory["datasets"][0]
+                self.assertEqual(
+                    [task["directory"] for task in dataset["tasks"]], ["second"]
+                )
+                self.assertEqual(len(dataset["trash"]), 1)
+
+                status, operation = self._request(
+                    server,
+                    "POST",
+                    "/api/harbor/tasks/delete",
+                    {
+                        "items": [
+                            {
+                                "dataset_id": "tasks",
+                                "task": "second",
+                                "expected_revision": dataset["tasks"][0]["revision"],
+                            }
+                        ]
+                    },
+                )
+                self.assertEqual(status, 202, operation)
+                completed = self._wait_operation(server, operation)
+                self.assertEqual(len(completed["successes"]), 1)
+                status, inventory = self._request(server, "GET", "/api/harbor/datasets")
+                self.assertEqual(status, 200)
+                self.assertEqual(inventory["datasets"][0]["tasks"], [])
+                self.assertEqual(
+                    (root / "dataset" / "dataset.toml").read_bytes(),
+                    manifest_before,
+                )
             finally:
                 server.shutdown()
                 server.server_close()

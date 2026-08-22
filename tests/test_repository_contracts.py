@@ -7,6 +7,43 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+CODE_SUFFIXES = {
+    ".bash",
+    ".cjs",
+    ".css",
+    ".fish",
+    ".html",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".ps1",
+    ".py",
+    ".pyi",
+    ".sh",
+    ".ts",
+    ".tsx",
+}
+GENERATED_CODE = {Path("src/psycheval/assets/report.js")}
+
+
+def test_authored_code_files_stay_below_semantic_split_threshold() -> None:
+    oversized: dict[str, int] = {}
+    for source_root in ("src", "tests", "scripts", "web"):
+        for path in (ROOT / source_root).rglob("*"):
+            relative = path.relative_to(ROOT)
+            if (
+                not path.is_file()
+                or path.suffix not in CODE_SUFFIXES
+                or relative in GENERATED_CODE
+                or "node_modules" in relative.parts
+                or "__pycache__" in relative.parts
+            ):
+                continue
+            line_count = len(path.read_text(encoding="utf-8").splitlines())
+            if line_count > 2_000:
+                oversized[relative.as_posix()] = line_count
+
+    assert oversized == {}
 
 
 def test_distribution_declares_the_repository_license() -> None:

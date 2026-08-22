@@ -1,18 +1,13 @@
-  <section class="workspace-page report-manager-page" data-report-manager data-serve-only aria-labelledby="report-manager-title">
-    <header class="workspace-page-head report-manager-head">
-      <div>
-        <p class="eyebrow">__WORKSPACE_LABEL__</p>
-        <h1 id="report-manager-title">__REPORTS__</h1>
-        <p class="copy">__REPORTS_COPY__</p>
-      </div>
-      <button class="action-button" type="button" data-report-manager-reload>__RELOAD__</button>
-    </header>
+  <section class="workspace-page report-manager-page" data-report-manager data-serve-only aria-label="__REPORTS__">
     <p class="report-manager-status workspace-page-status" data-report-manager-status aria-live="polite" hidden></p>
     <div class="report-manager-body__REPORT_MANAGER_BODY_CLASS__">
       <section class="report-inventory-panel" aria-labelledby="report-inventory-title">
         <div class="report-manager-section-head">
           <h2 id="report-inventory-title">__REPORT_INVENTORY__</h2>
-          <span data-report-count></span>
+          <div class="report-manager-section-actions">
+            <span data-report-count></span>
+            <button class="action-button" type="button" data-report-manager-reload>__RELOAD__</button>
+          </div>
         </div>
         <div class="report-inventory" data-report-inventory></div>
       </section>

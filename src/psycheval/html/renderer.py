@@ -6,15 +6,14 @@ from html import escape
 from importlib import import_module
 from typing import Any
 
-from psycheval.config import HarborDataset, HarborMount
 from psycheval.html.assets import load_asset_text, render_echarts_script
 from psycheval.html.serve_controls import (
     render_harbor_dataset_page,
+    render_serve_configuration_page,
     render_serve_header,
     render_serve_home,
     render_serve_overlays,
     render_serve_report_page,
-    render_serve_source_manager,
 )
 from psycheval.i18n import messages_for, normalize_locale
 
@@ -26,9 +25,6 @@ def render_html(
     sources: list[dict[str, Any]] | None = None,
     reports: list[dict[str, Any]] | None = None,
     adapter_defaults: dict[str, str] | None = None,
-    harbor_mounts: tuple[HarborMount, ...] | None = None,
-    harbor_datasets: tuple[HarborDataset, ...] | None = None,
-    harbor_revision: str | None = None,
     loading: bool = False,
     load_error: str | None = None,
     workspace_id: str | None = None,
@@ -45,9 +41,6 @@ def render_html(
         sources=sources,
         reports=reports,
         adapter_defaults=adapter_defaults,
-        harbor_mounts=harbor_mounts,
-        harbor_datasets=harbor_datasets,
-        harbor_revision=harbor_revision,
         loading=loading,
         load_error=load_error,
         workspace_id=workspace_id,
@@ -84,9 +77,6 @@ def _render_html_document(
     sources: list[dict[str, Any]] | None = None,
     reports: list[dict[str, Any]] | None = None,
     adapter_defaults: dict[str, str] | None = None,
-    harbor_mounts: tuple[HarborMount, ...] | None = None,
-    harbor_datasets: tuple[HarborDataset, ...] | None = None,
-    harbor_revision: str | None = None,
     loading: bool = False,
     load_error: str | None = None,
     snapshot: dict[str, Any] | None = None,
@@ -143,11 +133,9 @@ def _render_html_document(
     payload = payload.replace("__BODY_CLASS__", escape(body_class))
     if normalized_mode == "serve":
         serve_header = render_serve_header(
-            serve_source_payload,
             messages,
             normalized_locale,
             page=normalized_serve_page,
-            loading=bool(loading),
             role=role,
             authentication_enabled=authentication_enabled,
         )
@@ -158,14 +146,9 @@ def _render_html_document(
         elif normalized_serve_page == "reports":
             page_content = render_serve_report_page(messages, role=role)
         else:
-            page_content = render_serve_source_manager(
-                serve_source_payload,
+            page_content = render_serve_configuration_page(
                 messages,
                 adapter_defaults or {},
-                harbor_mounts or (),
-                harbor_datasets or (),
-                harbor_revision or "",
-                loading=bool(loading),
             )
         serve_overlays = render_serve_overlays(
             messages,
@@ -232,9 +215,6 @@ def render_serve_html(
     sources: list[dict[str, Any]] | None = None,
     reports: list[dict[str, Any]] | None = None,
     adapter_defaults: dict[str, str] | None = None,
-    harbor_mounts: tuple[HarborMount, ...] | None = None,
-    harbor_datasets: tuple[HarborDataset, ...] | None = None,
-    harbor_revision: str | None = None,
     loading: bool = False,
     load_error: str | None = None,
     workspace_id: str | None = None,
@@ -250,9 +230,6 @@ def render_serve_html(
         sources=sources,
         reports=reports,
         adapter_defaults=adapter_defaults,
-        harbor_mounts=harbor_mounts,
-        harbor_datasets=harbor_datasets,
-        harbor_revision=harbor_revision,
         loading=loading,
         load_error=load_error,
         workspace_id=workspace_id,
@@ -265,7 +242,7 @@ def render_serve_html(
 
 def normalize_serve_page(value: object) -> str:
     page = str(value or "home").strip().lower()
-    if page not in {"home", "datasets", "reports", "sources"}:
+    if page not in {"home", "datasets", "reports", "config"}:
         raise ValueError(f"unsupported serve page: {page}")
     return page
 

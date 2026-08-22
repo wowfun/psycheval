@@ -82,7 +82,7 @@
   .topline,.panel-head,.trace-head,.step>summary,.trajectory-row {
     grid-template-columns:1fr;
   }
-  .source-manager-head,.source-manager-body,.source-row {
+  .configuration-page-head {
     grid-template-columns:1fr;
   }
   .workspace-snapshot-header>.workspace-description {
@@ -90,26 +90,6 @@
     grid-row:auto;
     justify-self:start;
     text-align:left;
-  }
-  .source-manager-list-actions {
-    justify-content:flex-start;
-  }
-  .source-manager-backdrop {
-    padding:10px;
-  }
-  .source-manager-modal {
-    width:100%;
-    height:calc(100vh - 20px);
-  }
-  .source-manager-body {
-    overflow:auto;
-  }
-  .source-manager-controls {
-    min-height:auto;
-    overflow:visible;
-  }
-  .source-manager-list-panel {
-    min-height:auto;
   }
   .leaderboard-actions {
     justify-items:start;

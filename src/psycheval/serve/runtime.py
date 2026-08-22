@@ -7,6 +7,8 @@ from typing import Any, Callable, Sequence
 from psycheval.config import ToolConfig
 from psycheval.inputs import AdapterAssignments
 from psycheval.report import empty_report
+from psycheval.serve.acp import AcpManager
+from psycheval.serve.prompt_assets import PromptAssetLibrary
 from psycheval.serve.sources import load_serve_inputs
 from psycheval.serve.summary_xlsx import SummaryWorksheet
 from psycheval.state import (
@@ -48,6 +50,8 @@ class ServeRuntime:
         self.workspace_id = hashlib.sha256(
             str(store.paths.root.resolve()).encode("utf-8")
         ).hexdigest()[:20]
+        self.acp = AcpManager(config.acp_agents, store.paths.root)
+        self.prompt_assets = PromptAssetLibrary(store.paths.root)
         self._lock = Lock()
         self._ready = Event()
         self._ready.set()
@@ -124,9 +128,17 @@ class ServeRuntime:
 
     def set_config(self, config: ToolConfig) -> None:
         with self._lock:
+            self.acp.reconfigure(config.acp_agents)
             self.config = config
             self.catalog.config = config
             self.catalog.sources = WorkspaceSources(self.store, config)
+
+    def config_with_acp_status(self) -> tuple[ToolConfig, dict[str, Any]]:
+        with self._lock:
+            return self.config, self.acp.agents()
+
+    def close(self) -> None:
+        self.acp.close()
 
     def catalog_page(
         self,

@@ -9,10 +9,13 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from psycheval.config import (
+    AcpAgent,
     HarborMount,
     ToolConfig,
     apply_toml_config,
+    unique_harbor_id_from_path,
     validate_harbor_mount_paths,
+    write_workspace_acp_agents,
     write_workspace_adapter_default_db,
     write_workspace_harbor_mounts,
     write_workspace_locale,
@@ -27,6 +30,7 @@ from psycheval.serve.access import (
     LoginRateLimited,
     ServeAccess,
 )
+from psycheval.serve.acp import AcpError
 from psycheval.serve.assets import ECHARTS_ASSET_PATH, cached_echarts_asset
 from psycheval.serve.constants import MAX_JSON_BODY_BYTES
 from psycheval.serve.errors import HttpError
@@ -58,6 +62,7 @@ from psycheval.serve.payloads import (
     tags_payload,
     workspace_snapshot_export_payload,
 )
+from psycheval.serve.prompt_assets import PromptAssetConflict
 from psycheval.serve.runtime import ServeRuntime
 from psycheval.serve.sources import add_source_payload, db_sessions_payload
 from psycheval.serve.visibility import (
@@ -143,37 +148,24 @@ def make_handler(
                     "/": "home",
                     "/datasets": "datasets",
                     "/reports": "reports",
-                    "/sources": "sources",
+                    "/config": "config",
                 }.get(path)
                 if serve_page is not None:
-                    is_admin = self._serve_role == ADMIN_ROLE
                     self.write_html(
                         render_serve_html(
                             runtime.shell_report(),
                             locale=runtime.config.locale,
-                            sources=[],
                             reports=[],
                             adapter_defaults=(
                                 runtime.config.adapter_default_db_paths
-                                if is_admin
+                                if self._serve_role == ADMIN_ROLE
                                 else {}
-                            ),
-                            harbor_mounts=(
-                                runtime.config.harbor_mounts if is_admin else ()
-                            ),
-                            harbor_datasets=(
-                                runtime.config.harbor_datasets if is_admin else ()
-                            ),
-                            harbor_revision=(
-                                config_revision(store.paths.config_path)
-                                if is_admin
-                                else None
                             ),
                             loading=not runtime.catalog.has_generation
                             or runtime.is_loading(),
                             load_error=(
                                 runtime.load_error()
-                                if is_admin
+                                if self._serve_role == ADMIN_ROLE
                                 else (
                                     "workspace failed to load"
                                     if runtime.load_error()
@@ -190,6 +182,40 @@ def make_handler(
                     return
                 if path == ECHARTS_ASSET_PATH:
                     self.write_js(cached_echarts_asset(store))
+                    return
+                if path == "/api/acp/agents":
+                    self.write_json(runtime.acp.agents())
+                    return
+                if path == "/api/acp/sessions":
+                    agent_id = required_query_value(parsed_url.query, "agent_id")
+                    self.write_json(
+                        runtime.acp.sessions(
+                            agent_id,
+                            refresh=single_query_value(parsed_url.query, "refresh")
+                            == "1",
+                        )
+                    )
+                    return
+                if path == "/api/acp/events":
+                    try:
+                        after = int(
+                            single_query_value(parsed_url.query, "after") or "0"
+                        )
+                        wait = float(
+                            single_query_value(parsed_url.query, "wait") or "20"
+                        )
+                    except ValueError as exc:
+                        raise HttpError(400, "after and wait must be numbers") from exc
+                    if after < 0:
+                        raise HttpError(400, "after must not be negative")
+                    self.write_json(
+                        runtime.acp.events(
+                            required_query_value(parsed_url.query, "agent_id"),
+                            required_query_value(parsed_url.query, "session_id"),
+                            after=after,
+                            wait=wait,
+                        )
+                    )
                     return
                 if path == "/api/catalog":
                     try:
@@ -219,6 +245,18 @@ def make_handler(
                     return
                 if path == "/api/sources":
                     self.write_json(runtime.source_envelope())
+                    return
+                if path == "/api/config":
+                    self.write_json(workspace_config_payload(store, runtime))
+                    return
+                if path == "/api/config/harbor":
+                    self.write_json(harbor_config_payload(store, runtime))
+                    return
+                if path == "/api/prompts":
+                    try:
+                        self.write_json(runtime.prompt_assets.catalog())
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
                     return
                 if path == "/api/harbor/datasets":
                     self.write_json(
@@ -318,6 +356,8 @@ def make_handler(
                 self.write_error(harbor_error_status(exc), str(exc))
             except CatalogBusyError as exc:
                 self.write_error(409, str(exc))
+            except AcpError as exc:
+                self.write_error(exc.status, str(exc))
             except Exception as exc:  # noqa: BLE001 - HTTP boundary.
                 self.write_error(500, str(exc))
 
@@ -370,6 +410,100 @@ def make_handler(
                         }
                     )
                     return
+                if path == "/api/acp/connect":
+                    self.write_json(
+                        runtime.acp.connect(required_string(payload, "agent_id"))
+                    )
+                    return
+                if path == "/api/acp/disconnect":
+                    self.write_json(
+                        runtime.acp.disconnect(required_string(payload, "agent_id"))
+                    )
+                    return
+                if path == "/api/acp/sessions":
+                    resume_session_id = payload.get("resume_session_id")
+                    if resume_session_id is not None and not isinstance(
+                        resume_session_id, str
+                    ):
+                        raise HttpError(400, "resume_session_id must be a string")
+                    self.write_json(
+                        runtime.acp.open_session(
+                            required_string(payload, "agent_id"),
+                            resume_session_id=(resume_session_id or None),
+                        ),
+                        status=201,
+                    )
+                    return
+                if path == "/api/acp/prompt":
+                    prompt = required_string(payload, "prompt")
+                    blocks = acp_prompt_blocks(
+                        store, runtime, prompt, payload.get("context")
+                    )
+                    self.write_json(
+                        runtime.acp.prompt(
+                            required_string(payload, "agent_id"),
+                            required_string(payload, "session_id"),
+                            blocks,
+                        ),
+                        status=202,
+                    )
+                    return
+                if path == "/api/acp/cancel":
+                    self.write_json(
+                        runtime.acp.cancel(
+                            required_string(payload, "agent_id"),
+                            required_string(payload, "session_id"),
+                        )
+                    )
+                    return
+                if path == "/api/acp/close":
+                    self.write_json(
+                        runtime.acp.close_session(
+                            required_string(payload, "agent_id"),
+                            required_string(payload, "session_id"),
+                        )
+                    )
+                    return
+                if path == "/api/acp/permission":
+                    request_id = payload.get("request_id")
+                    if not isinstance(request_id, (int, str)) or isinstance(
+                        request_id, bool
+                    ):
+                        raise HttpError(400, "request_id must be a string or number")
+                    option_id = payload.get("option_id")
+                    if option_id is not None and not isinstance(option_id, str):
+                        raise HttpError(400, "option_id must be a string")
+                    self.write_json(
+                        runtime.acp.permission(
+                            required_string(payload, "agent_id"),
+                            required_string(payload, "session_id"),
+                            request_id,
+                            option_id,
+                            cancelled=payload.get("cancelled") is True,
+                        )
+                    )
+                    return
+                if path == "/api/acp/session-mode":
+                    self.write_json(
+                        runtime.acp.set_mode(
+                            required_string(payload, "agent_id"),
+                            required_string(payload, "session_id"),
+                            required_string(payload, "mode_id"),
+                        )
+                    )
+                    return
+                if path == "/api/acp/session-config":
+                    if "value" not in payload:
+                        raise HttpError(400, "value is required")
+                    self.write_json(
+                        runtime.acp.set_config(
+                            required_string(payload, "agent_id"),
+                            required_string(payload, "session_id"),
+                            required_string(payload, "option_id"),
+                            payload["value"],
+                        )
+                    )
+                    return
                 if path == "/api/catalog/resolve":
                     self.write_json(
                         {
@@ -402,20 +536,48 @@ def make_handler(
                         project_catalog_payload(page.to_dict(), self._serve_role)
                     )
                     return
-                if path == "/api/harbor/datasets":
+                if path == "/api/config/acp/agents":
+                    runtime.ensure_ready()
+                    self.require_workspace_writable()
+                    try:
+                        self.write_json(mutate_acp_agents(store, runtime, payload))
+                    except HarborConflictError:
+                        raise
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
+                    return
+                if path == "/api/prompts":
+                    runtime.ensure_ready()
+                    self.require_workspace_writable()
+                    action = required_string(payload, "action")
+                    prompt_id = required_string(payload, "prompt_id")
+                    expected_revision = required_string(payload, "expected_revision")
+                    try:
+                        if action == "save":
+                            content = payload.get("content")
+                            if not isinstance(content, str):
+                                raise ValueError("prompt content must be a string")
+                            prompt_asset = runtime.prompt_assets.save(
+                                prompt_id,
+                                content,
+                                expected_revision=expected_revision,
+                            )
+                        elif action == "reset":
+                            prompt_asset = runtime.prompt_assets.reset(
+                                prompt_id,
+                                expected_revision=expected_revision,
+                            )
+                        else:
+                            raise ValueError("prompt action must be save or reset")
+                    except PromptAssetConflict as exc:
+                        raise HttpError(409, str(exc)) from exc
+                    except ValueError as exc:
+                        raise HttpError(400, str(exc)) from exc
+                    self.write_json({"prompt": prompt_asset.to_dict()})
+                    return
+                if path == "/api/config/harbor/datasets":
                     runtime.ensure_ready()
                     action = required_string(payload, "action")
-                    if action == "sync_manifest":
-                        self.require_workspace_writable()
-                        self.write_json(
-                            harbor_workspace(store, runtime).sync_manifest(
-                                dataset_id=required_string(payload, "dataset_id"),
-                                expected_revision=required_string(
-                                    payload, "expected_revision"
-                                ),
-                            )
-                        )
-                        return
                     self.write_json(
                         runtime.mutate_with_background_reconcile(
                             "harbor-dataset-config",
@@ -429,6 +591,18 @@ def make_handler(
                         status=202,
                     )
                     return
+                if path == "/api/harbor/tasks/manifest":
+                    runtime.ensure_ready()
+                    self.require_workspace_writable()
+                    self.write_json(
+                        harbor_workspace(store, runtime).sync_manifest(
+                            dataset_id=required_string(payload, "dataset_id"),
+                            expected_revision=required_string(
+                                payload, "expected_revision"
+                            ),
+                        )
+                    )
+                    return
                 if path == "/api/harbor/tasks":
                     runtime.ensure_ready()
                     self.write_json(
@@ -440,6 +614,31 @@ def make_handler(
                         ),
                         status=202,
                     )
+                    return
+                if path == "/api/harbor/tasks/state":
+                    runtime.ensure_ready()
+                    archived = required_bool(payload, "archived")
+                    items = harbor_task_items_payload(payload)
+                    operation = runtime.start_operation(
+                        "harbor-task-archive" if archived else "harbor-task-restore",
+                        items,
+                        lambda item: mutate_harbor_task_state(
+                            harbor_workspace(store, runtime), item, archived=archived
+                        ),
+                    )
+                    self.write_json(operation.to_dict(), status=202)
+                    return
+                if path == "/api/harbor/tasks/delete":
+                    runtime.ensure_ready()
+                    items = harbor_task_items_payload(payload)
+                    operation = runtime.start_operation(
+                        "harbor-task-delete",
+                        items,
+                        lambda item: delete_harbor_task(
+                            harbor_workspace(store, runtime), item
+                        ),
+                    )
+                    self.write_json(operation.to_dict(), status=202)
                     return
                 if path == "/api/harbor/files":
                     runtime.ensure_ready()
@@ -512,7 +711,7 @@ def make_handler(
                         }
                     )
                     return
-                if path == "/api/config/harbor-mount":
+                if path == "/api/config/harbor/mounts":
                     runtime.ensure_ready()
                     try:
                         self.write_json(
@@ -526,7 +725,7 @@ def make_handler(
                                 ),
                             )
                         )
-                    except HarborConflictError:
+                    except HarborWorkspaceError:
                         raise
                     except ValueError as exc:
                         raise HttpError(400, str(exc)) from exc
@@ -922,6 +1121,8 @@ def make_handler(
                 self.write_error(harbor_error_status(exc), str(exc))
             except CatalogBusyError as exc:
                 self.write_error(409, str(exc))
+            except AcpError as exc:
+                self.write_error(exc.status, str(exc))
             except Exception as exc:  # noqa: BLE001 - HTTP boundary.
                 self.write_error(500, str(exc))
             finally:
@@ -1299,6 +1500,121 @@ def reject_linked_harbor_delete(rows: list[dict[str, Any]]) -> None:
         )
 
 
+def harbor_config_payload(
+    store: ServeStateStore,
+    runtime: ServeRuntime,
+    *,
+    config: ToolConfig | None = None,
+) -> dict[str, Any]:
+    current = config or runtime.config
+    return {
+        "revision": config_revision(store.paths.config_path),
+        "datasets": [
+            {"id": dataset.id, "path": dataset.path}
+            for dataset in current.harbor_datasets
+        ],
+        "mounts": [harbor_mount_payload(mount) for mount in current.harbor_mounts],
+    }
+
+
+def workspace_config_payload(
+    store: ServeStateStore, runtime: ServeRuntime
+) -> dict[str, Any]:
+    config, acp_status = runtime.config_with_acp_status()
+    status_by_id = {item["id"]: item for item in acp_status.get("agents", [])}
+    payload = harbor_config_payload(store, runtime, config=config)
+    payload["acp_agents"] = [
+        {
+            "id": agent.id,
+            "title": agent.title,
+            "command": agent.command,
+            "args": list(agent.args),
+            "connected": bool(status_by_id.get(agent.id, {}).get("connected")),
+            "protocol_version": status_by_id.get(agent.id, {}).get("protocol_version"),
+        }
+        for agent in config.acp_agents
+    ]
+    return payload
+
+
+def mutate_acp_agents(
+    store: ServeStateStore,
+    runtime: ServeRuntime,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    expected_revision = required_string(payload, "expected_revision")
+    if config_revision(store.paths.config_path) != expected_revision:
+        raise HarborConflictError(
+            "Workspace configuration changed; refresh before saving"
+        )
+    action = required_string(payload, "action")
+    current = list(runtime.config.acp_agents)
+    if action == "delete":
+        raw_ids = payload.get("agent_ids")
+        if (
+            not isinstance(raw_ids, list)
+            or not raw_ids
+            or not all(isinstance(item, str) and item.strip() for item in raw_ids)
+        ):
+            raise ValueError("agent_ids must be a non-empty array of strings")
+        agent_ids = list(dict.fromkeys(item.strip() for item in raw_ids))
+        unknown = [
+            agent_id
+            for agent_id in agent_ids
+            if agent_id not in {agent.id for agent in current}
+        ]
+        if unknown:
+            raise HttpError(404, f"ACP agent not found: {', '.join(unknown)}")
+        selected = set(agent_ids)
+        proposed = tuple(agent for agent in current if agent.id not in selected)
+    elif action == "upsert":
+        raw_args = payload.get("args", [])
+        if not isinstance(raw_args, list) or not all(
+            isinstance(item, str) for item in raw_args
+        ):
+            raise ValueError("args must be an array of strings")
+        candidate = AcpAgent(
+            id=required_string(payload, "agent_id"),
+            title=required_string(payload, "title"),
+            command=required_string(payload, "command"),
+            args=tuple(raw_args),
+        )
+        candidate = apply_toml_config(
+            ToolConfig(),
+            {
+                "acp": {
+                    "agents": [
+                        {
+                            "id": candidate.id,
+                            "title": candidate.title,
+                            "command": candidate.command,
+                            "args": list(candidate.args),
+                        }
+                    ]
+                }
+            },
+        ).acp_agents[0]
+        original_id = str(payload.get("original_id") or "").strip()
+        existing_ids = {agent.id for agent in current}
+        if original_id:
+            if original_id not in existing_ids:
+                raise HttpError(404, f"ACP agent not found: {original_id}")
+            if candidate.id != original_id and candidate.id in existing_ids:
+                raise ValueError(f"duplicate acp agent id: {candidate.id}")
+            proposed = tuple(
+                candidate if agent.id == original_id else agent for agent in current
+            )
+        else:
+            if candidate.id in existing_ids:
+                raise ValueError(f"duplicate acp agent id: {candidate.id}")
+            proposed = (*current, candidate)
+    else:
+        raise ValueError("ACP agent action must be upsert or delete")
+    saved = write_workspace_acp_agents(store.paths.config_path, tuple(proposed))
+    runtime.set_config(replace(runtime.config, acp_agents=saved))
+    return workspace_config_payload(store, runtime)
+
+
 def mutate_harbor_dataset(
     store: ServeStateStore,
     runtime: ServeRuntime,
@@ -1316,9 +1632,15 @@ def mutate_harbor_dataset(
             expected_revision=expected_revision,
         )
     elif action == "register":
+        path = required_string(payload, "path")
         config = library.register_dataset(
-            dataset_id=required_string(payload, "dataset_id"),
-            path=required_string(payload, "path"),
+            dataset_id=unique_harbor_id_from_path(
+                path,
+                fallback="dataset",
+                existing_ids=(item.id for item in runtime.config.harbor_datasets),
+                base_dir=store.paths.config_path.parent,
+            ),
+            path=path,
             expected_revision=expected_revision,
         )
     elif action == "update":
@@ -1326,19 +1648,20 @@ def mutate_harbor_dataset(
             dataset_id=required_string(payload, "dataset_id"),
             new_id=required_string(payload, "new_id"),
             path=required_string(payload, "path"),
+            mount_ids=harbor_id_list_payload(payload, "mount_ids", allow_empty=True),
             expected_revision=expected_revision,
         )
-    elif action == "remove":
-        config = library.remove_dataset(
-            dataset_id=required_string(payload, "dataset_id"),
+    elif action == "unregister":
+        config = library.remove_datasets(
+            dataset_ids=dataset_ids_payload(payload),
             expected_revision=expected_revision,
         )
     else:
         raise HarborWorkspaceError(
-            "Dataset action must be create, register, update, or remove"
+            "Dataset action must be create, register, update, or unregister"
         )
     runtime.set_config(config)
-    return HarborWorkspace(store.paths.config_path, config).inventory()
+    return workspace_config_payload(store, runtime)
 
 
 def mutate_harbor_task(
@@ -1366,28 +1689,114 @@ def mutate_harbor_task(
             task=required_string(payload, "task"),
             new_directory=required_string(payload, "new_directory"),
         )
-    if action == "trash":
-        return library.trash_task(
-            **common,
-            task=required_string(payload, "task"),
-        )
-    if action == "restore":
-        raw_directory = payload.get("directory")
-        if raw_directory is not None and not isinstance(raw_directory, str):
-            raise HarborWorkspaceError("directory must be a string")
-        return library.restore_task(
+    if action == "rename_archived":
+        return library.rename_archived_task(
             **common,
             entry_id=required_string(payload, "entry_id"),
-            directory=raw_directory.strip() if raw_directory else None,
+            new_directory=required_string(payload, "new_directory"),
         )
-    if action == "purge":
-        return library.purge_task(
-            **common,
-            entry_id=required_string(payload, "entry_id"),
-        )
-    raise HarborWorkspaceError(
-        "Task action must be create, rename, trash, restore, or purge"
+    raise HarborWorkspaceError("Task action must be create, rename, or rename_archived")
+
+
+def harbor_task_items_payload(payload: dict[str, Any]) -> list[dict[str, str]]:
+    raw_items = payload.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        raise HttpError(400, "items must be a non-empty array")
+    items: list[dict[str, str]] = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            raise HttpError(400, "each Task item must be an object")
+        item = {
+            "dataset_id": required_string(raw, "dataset_id"),
+            "expected_revision": required_string(raw, "expected_revision"),
+        }
+        task = str(raw.get("task") or "").strip()
+        entry_id = str(raw.get("entry_id") or "").strip()
+        if bool(task) == bool(entry_id):
+            raise HttpError(400, "each Task item must identify task or entry_id")
+        if task:
+            item["task"] = task
+        else:
+            item["entry_id"] = entry_id
+        if raw.get("directory") is not None:
+            if not isinstance(raw["directory"], str):
+                raise HttpError(400, "directory must be a string")
+            item["directory"] = raw["directory"].strip()
+        items.append(item)
+    return items
+
+
+def mutate_harbor_task_state(
+    library: HarborWorkspace, item: dict[str, str], *, archived: bool
+) -> dict[str, Any]:
+    common = {
+        "dataset_id": item["dataset_id"],
+        "expected_revision": item["expected_revision"],
+    }
+    if archived:
+        task = item.get("task")
+        if not task:
+            raise HarborWorkspaceError("Only active Tasks can be archived")
+        result = library.trash_task(**common, task=task)
+        return {
+            "dataset_id": item["dataset_id"],
+            "task": task,
+            "entry_id": result["entry_id"],
+        }
+    entry_id = item.get("entry_id")
+    if not entry_id:
+        raise HarborWorkspaceError("Only archived Tasks can be restored")
+    result = library.restore_task(
+        **common,
+        entry_id=entry_id,
+        directory=item.get("directory") or None,
     )
+    return {
+        "dataset_id": item["dataset_id"],
+        "entry_id": entry_id,
+        "task": result["task"]["directory"],
+    }
+
+
+def delete_harbor_task(
+    library: HarborWorkspace, item: dict[str, str]
+) -> dict[str, Any]:
+    common = {
+        "dataset_id": item["dataset_id"],
+        "expected_revision": item["expected_revision"],
+    }
+    if item.get("task"):
+        return library.delete_task(**common, task=item["task"])
+    entry_id = item["entry_id"]
+    library.purge_task(**common, entry_id=entry_id)
+    return {"dataset_id": item["dataset_id"], "entry_id": entry_id}
+
+
+def dataset_ids_payload(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("dataset_ids")
+    if (
+        not isinstance(raw, list)
+        or not raw
+        or not all(isinstance(value, str) and value.strip() for value in raw)
+    ):
+        raise HttpError(400, "dataset_ids must be a non-empty array of strings")
+    return list(dict.fromkeys(value.strip() for value in raw))
+
+
+def harbor_id_list_payload(
+    payload: dict[str, Any], key: str, *, allow_empty: bool
+) -> list[str]:
+    raw = payload.get(key)
+    if not isinstance(raw, list) or not all(
+        isinstance(value, str) and value.strip() for value in raw
+    ):
+        raise HttpError(400, f"{key} must be an array of non-empty strings")
+    values = [value.strip() for value in raw]
+    if not allow_empty and not values:
+        raise HttpError(400, f"{key} must not be empty")
+    if len(set(values)) != len(values):
+        raise HttpError(400, f"{key} must not contain duplicates")
+    return values
 
 
 def update_harbor_mount_config(
@@ -1411,10 +1820,78 @@ def update_harbor_mount_config(
     WorkspaceSources(store, proposed_config).source_keys()
     saved_mounts = write_workspace_harbor_mounts(store.paths.config_path, mounts)
     runtime.set_config(replace(runtime.config, harbor_mounts=saved_mounts))
-    return {
-        "revision": config_revision(store.paths.config_path),
-        "harbor_mounts": [harbor_mount_payload(mount) for mount in saved_mounts],
-    }
+    return workspace_config_payload(store, runtime)
+
+
+def acp_prompt_blocks(
+    store: ServeStateStore,
+    runtime: ServeRuntime,
+    prompt: str,
+    raw_context: Any,
+) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    if raw_context is None:
+        return blocks
+    if not isinstance(raw_context, dict):
+        raise HttpError(400, "ACP context must be an object")
+    kind = required_string(raw_context, "kind")
+    if kind == "source":
+        source_key = required_string(raw_context, "source_key")
+        try:
+            context_payload: Any = runtime.detail(source_key).to_dict()
+        except ValueError as exc:
+            raise HttpError(400, str(exc)) from exc
+        reference = {
+            "kind": kind,
+            "source_key": source_key,
+            "step_id": raw_context.get("step_id"),
+        }
+        uri = f"peval://source/{source_key}"
+    elif kind == "dataset_task":
+        dataset_id = required_string(raw_context, "dataset_id")
+        task = required_string(raw_context, "task")
+        context_payload = harbor_workspace(store, runtime).task_detail(dataset_id, task)
+        reference = {"kind": kind, "dataset_id": dataset_id, "task": task}
+        uri = f"peval://dataset/{dataset_id}/{task}"
+    elif kind == "report":
+        report_id = required_string(raw_context, "report_id")
+        try:
+            report = runtime.workspace_reports.read(report_id)
+        except ValueError as exc:
+            raise HttpError(404, str(exc)) from exc
+        context_payload = {
+            "report_id": report.report_id,
+            "filename": report.filename,
+            "format": report.format,
+            "source_refs": list(report.source_refs),
+            "content": report.content.decode("utf-8", errors="replace"),
+        }
+        reference = {"kind": kind, "report_id": report_id}
+        uri = f"peval://report/{report_id}"
+    else:
+        raise HttpError(400, "ACP context kind must be source, dataset_task, or report")
+    serialized = json.dumps(
+        {"reference": reference, "value": context_payload},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    limit = max(1, runtime.config.max_content_chars)
+    mime_type = "application/json"
+    if len(serialized) > limit:
+        marker = "\n[peval context truncated]"
+        serialized = (serialized[: max(0, limit - len(marker))] + marker)[:limit]
+        mime_type = "text/plain"
+    blocks.append(
+        {
+            "type": "resource",
+            "resource": {
+                "uri": uri,
+                "mimeType": mime_type,
+                "text": serialized,
+            },
+        }
+    )
+    return blocks
 
 
 def harbor_mounts_from_payload(
@@ -1429,20 +1906,36 @@ def harbor_mounts_from_payload(
         raise HttpError(400, "Harbor mount action must be upsert or delete")
     original_id = str(payload.get("original_id") or "").strip()
     if action == "delete":
-        mount_id = original_id or required_string(payload, "mount_id")
-        if not any(mount.id == mount_id for mount in current):
-            raise HttpError(404, f"unknown Harbor mount: {mount_id}")
-        return tuple(mount for mount in current if mount.id != mount_id)
+        mount_ids = harbor_id_list_payload(payload, "mount_ids", allow_empty=False)
+        known_mount_ids = {mount.id for mount in current}
+        unknown_mount_ids = [
+            mount_id for mount_id in mount_ids if mount_id not in known_mount_ids
+        ]
+        if unknown_mount_ids:
+            raise HarborNotFoundError(
+                f"Harbor mount not found: {', '.join(unknown_mount_ids)}"
+            )
+        selected = set(mount_ids)
+        return tuple(mount for mount in current if mount.id not in selected)
 
-    mount_id = required_string(payload, "mount_id")
     jobs_path = required_string(payload, "jobs_path")
-    raw_dataset_ids = payload.get("dataset_ids", [])
-    if isinstance(raw_dataset_ids, list) and all(
-        isinstance(item, str) for item in raw_dataset_ids
-    ):
-        dataset_ids = [item.strip() for item in raw_dataset_ids if item.strip()]
+    if original_id:
+        mount_id = required_string(payload, "mount_id")
+        raw_dataset_ids = payload.get("dataset_ids", [])
+        if isinstance(raw_dataset_ids, list) and all(
+            isinstance(item, str) for item in raw_dataset_ids
+        ):
+            dataset_ids = [item.strip() for item in raw_dataset_ids if item.strip()]
+        else:
+            raise HttpError(400, "dataset_ids must be an array of strings")
     else:
-        raise HttpError(400, "dataset_ids must be an array of strings")
+        mount_id = unique_harbor_id_from_path(
+            jobs_path,
+            fallback="jobs",
+            existing_ids=(mount.id for mount in current),
+            base_dir=base_dir,
+        )
+        dataset_ids = []
 
     raw_mounts: list[dict[str, Any]] = []
     replaced = False

@@ -26,6 +26,7 @@ ASSET_BUNDLES = {
         "report_css/26-step-drawer.css",
         "report_css/28-workspace-reports.css",
         "report_css/30-workspace-views.css",
+        "report_css/32-acp-client.css",
     ],
 }
 

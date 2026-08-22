@@ -67,7 +67,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
             thread.start()
             port = server.server_port
             try:
-                status, _, html = request_text(port, "/sources")
+                status, _, html = request_text(port, "/config")
                 self.assertEqual(status, 200)
                 self.assertEqual(script_json(html, "peval-data")["trajectory"], [])
                 options = script_json(html, "peval-render-options")
@@ -494,7 +494,8 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertIn('<html lang="zh-CN">', html)
                 self.assertIn("<title>评测工作台</title>", html)
-                self.assertIn('<h1 id="harbor-workbench-title">数据集</h1>', html)
+                self.assertIn('aria-label="数据集"', html)
+                self.assertNotIn('id="harbor-workbench-title"', html)
 
                 status, _, body = request_json(
                     port,
@@ -570,7 +571,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 self.assertIn("[adapters.opencode]\n", config_text)
                 self.assertIn('default_db_path = "db/opencode.db"\n', config_text)
 
-                status, _, html = request_text(port, "/sources")
+                status, _, html = request_text(port, "/config")
                 self.assertEqual(status, 200)
                 self.assertIn(
                     f'<option value="opencode"  data-default-db="{expected}">opencode</option>',
@@ -593,7 +594,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                     (root / "peval.toml").read_text(encoding="utf-8"),
                 )
 
-                status, _, html = request_text(port, "/sources")
+                status, _, html = request_text(port, "/config")
                 self.assertEqual(status, 200)
                 self.assertNotIn(expected, html)
             finally:
@@ -662,10 +663,28 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/config/harbor-mount",
+                    "/api/config/harbor/mounts",
                     {
                         "action": "upsert",
                         "expected_revision": config_revision(root / "peval.toml"),
+                        "jobs_path": str(jobs),
+                    },
+                    origin=origin,
+                )
+                self.assertEqual(status, 200)
+                mount_revision = body["result"]["revision"]
+                mounts = body["result"]["mounts"]
+                self.assertEqual(mounts[0]["id"], "jobs")
+                self.assertEqual(mounts[0]["dataset_ids"], [])
+
+                status, _, body = request_json(
+                    port,
+                    "POST",
+                    "/api/config/harbor/mounts",
+                    {
+                        "action": "upsert",
+                        "expected_revision": mount_revision,
+                        "original_id": "jobs",
                         "mount_id": "pbench-jobs",
                         "jobs_path": str(jobs),
                         "dataset_ids": ["pbench"],
@@ -674,28 +693,27 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 mount_revision = body["result"]["revision"]
-                mounts = body["result"]["harbor_mounts"]
+                mounts = body["result"]["mounts"]
                 self.assertEqual(mounts[0]["id"], "pbench-jobs")
                 self.assertEqual(mounts[0]["dataset_ids"], ["pbench"])
-                self.assertEqual(len(body["sources"]), 1)
-                self.assertEqual(body["sources"][0]["kind"], "harbor-trial")
                 config_text = (root / "peval.toml").read_text(encoding="utf-8")
                 self.assertIn("[[harbor.mounts]]", config_text)
                 self.assertIn('id = "pbench-jobs"', config_text)
                 self.assertIn('dataset_ids = ["pbench"]', config_text)
                 self.assertIn("[adapters.opencode]", config_text)
 
-                status, _, html = request_text(port, "/sources")
+                status, _, html = request_text(port, "/config")
                 self.assertEqual(status, 200)
-                self.assertIn("data-harbor-mount-form", html)
-                self.assertIn('value="pbench-jobs"', html)
-                self.assertIn(str(dataset), html)
+                self.assertIn("data-harbor-mount-config", html)
+                self.assertIn("data-harbor-dataset-registry", html)
+                self.assertNotIn('value="pbench-jobs"', html)
+                self.assertNotIn(str(dataset), html)
 
                 before_invalid = config_text
                 status, _, rejected = request_json(
                     port,
                     "POST",
-                    "/api/config/harbor-mount",
+                    "/api/config/harbor/mounts",
                     {
                         "action": "upsert",
                         "expected_revision": mount_revision,
@@ -716,17 +734,16 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/config/harbor-mount",
+                    "/api/config/harbor/mounts",
                     {
                         "action": "delete",
-                        "original_id": "pbench-jobs",
+                        "mount_ids": ["pbench-jobs"],
                         "expected_revision": mount_revision,
                     },
                     origin=origin,
                 )
                 self.assertEqual(status, 200)
-                self.assertEqual(body["result"]["harbor_mounts"], [])
-                self.assertEqual(body["sources"], [])
+                self.assertEqual(body["result"]["mounts"], [])
                 self.assertNotIn(
                     "[[harbor.mounts]]",
                     (root / "peval.toml").read_text(encoding="utf-8"),

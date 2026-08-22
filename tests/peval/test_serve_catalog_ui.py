@@ -53,7 +53,6 @@ const result = vm.runInContext(`(async () => {
     if (target === "archived") return { generation: 1, page: 1, page_size: 100, total: 0, facets: {}, items: [] };
     return { generation: 1, page: 1, page_size: 100, total: 1, facets: {}, items: [active] };
   };
-  renderServeSources = () => renders.push("sources");
   renderComparison = () => renders.push("comparison");
   setWorkspaceWriteControlsDisabled = () => {};
   setServeStatus = () => {};
@@ -108,7 +107,7 @@ Promise.resolve(result).then(value => console.log(value)).catch(error => { conso
         self.assertEqual(len(catalog_requests), 2)
         self.assertIn("state=archived", catalog_requests[0])
         self.assertIn("state=active", catalog_requests[1])
-        self.assertEqual(result["renders"], ["sources", "comparison", "detail"] * 2)
+        self.assertEqual(result["renders"], ["comparison", "detail"] * 2)
         self.assertEqual(result["finalMode"], "all")
 
     def test_catalog_rows_default_detail_and_cross_page_selection(self) -> None:
@@ -156,16 +155,13 @@ const result = vm.runInContext(`(async () => {
   state.serveSources = state.catalogRows;
   state.view = { trajectory: [{ session_id: "failed", steps: [] }], trajectory_meta: [{ trial_key: "native-failed", steps: [] }] };
   state.rowSelection.add("cell-latest");
-  state.sourceSelection.add("cell-latest");
   const loads = [];
   loadServeSourceReport = async key => { loads.push(key); state.selectedSourceKey = key; };
   await ensureCatalogDetail(false);
   state.catalogRows = [normalizeCatalogRow({ source_key: "cell-page-two", trial_key: "native-two", trial_session_id: "two", status: "passed", readable: true })];
-  pruneSourceSelection();
   return JSON.stringify({
     defaultDetail: loads[0],
     selectedRows: Array.from(state.rowSelection),
-    selectedSources: Array.from(state.sourceSelection),
     normalizedTrialKey: reportRows()[0].trial_key,
     total: state.catalogPage.total
   });
@@ -184,7 +180,6 @@ Promise.resolve(result).then(value => console.log(value));
         result = json.loads(node.stdout)
         self.assertEqual(result["defaultDetail"], "cell-failed")
         self.assertEqual(result["selectedRows"], ["cell-latest"])
-        self.assertEqual(result["selectedSources"], ["cell-latest"])
         self.assertEqual(result["normalizedTrialKey"], "cell-page-two")
         self.assertEqual(result["total"], 2)
 
@@ -266,7 +261,6 @@ const result = vm.runInContext(`(async () => {
 
   const node = { dataset: { sourceKey: "source-node", stepId: "4" }, listeners: {}, addEventListener(type, handler) { this.listeners[type] = handler; } };
   bindServeSourceStateControls = () => {};
-  bindServeSelectionControls = () => {};
   bindTrajectoryControls({ querySelectorAll(selector) {
     if (selector === "[data-step-id]") return [node];
     return [];

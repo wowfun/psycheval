@@ -1,0 +1,84 @@
+  <section class="workspace-page configuration-page" data-config-page data-serve-only aria-label="__CONFIGURATION__">
+    <p class="serve-notice workspace-page-status" data-config-page-status aria-live="polite" hidden></p>
+    <main class="configuration-sections">
+      <section class="configuration-section" aria-labelledby="trajectory-ingestion-title">
+        <header class="configuration-section-head">
+          <div>
+            <h2 id="trajectory-ingestion-title">__TRAJECTORY_INGESTION__</h2>
+            <p class="copy">__TRAJECTORY_INGESTION_COPY__</p>
+          </div>
+          <div class="table-region-actions">
+            <button class="action-button" type="button" data-harbor-config-reload>__RELOAD__</button>
+            <button class="action-button" type="button" data-source-config-rescan>__RESCAN__</button>
+          </div>
+        </header>
+        <div class="trajectory-ingestion-forms" aria-label="__ADD_SOURCE__">__SOURCE_FORMS__</div>
+      </section>
+      <section class="configuration-section" aria-labelledby="acp-agents-title">
+        <header class="configuration-section-head">
+          <div>
+            <h2 id="acp-agents-title">__ACP_AGENTS__ <span data-acp-agent-count></span></h2>
+            <p class="copy">__ACP_AGENTS_COPY__</p>
+          </div>
+          <div class="table-region-actions">
+            <button class="action-button primary" type="button" data-acp-add-agent>__ADD_ACP_AGENT__</button>
+            <button class="action-button danger" type="button" data-acp-remove-agents disabled>__REMOVE_SELECTED_AGENTS__</button>
+          </div>
+        </header>
+        <div class="acp-config-trust-note">
+          <span>__LOCAL_PROCESS__</span>
+          <p>__ACP_AGENTS_TRUST_COPY__</p>
+        </div>
+        <div data-acp-agent-config></div>
+      </section>
+      <section class="configuration-section" aria-labelledby="prompt-assets-title">
+        <header class="configuration-section-head">
+          <div>
+            <h2 id="prompt-assets-title">__PROMPT_ASSETS__ <span data-prompt-asset-count></span></h2>
+            <p class="copy">__PROMPT_ASSETS_COPY__</p>
+          </div>
+          <div class="table-region-actions">
+            <button class="action-button" type="button" data-prompt-reset disabled>__RESTORE_DEFAULT__</button>
+            <button class="action-button primary" type="button" data-prompt-save disabled>__SAVE_PROMPT__</button>
+          </div>
+        </header>
+        <div class="prompt-config-workbench">
+          <nav class="prompt-config-list" data-prompt-config-list aria-label="__PROMPT_ASSETS__"></nav>
+          <section class="prompt-config-editor">
+            <div class="prompt-config-filebar">
+              <code data-prompt-filename>—</code>
+              <span data-prompt-origin></span>
+            </div>
+            <textarea data-prompt-content spellcheck="true" aria-label="__PROMPT_CONTENT__"></textarea>
+          </section>
+        </div>
+      </section>
+      <section class="configuration-section" aria-labelledby="dataset-registry-title">
+        <header class="configuration-section-head">
+          <div>
+            <h2 id="dataset-registry-title">__DATASET_REGISTRY__ <span data-harbor-dataset-count></span></h2>
+            <p class="copy">__DATASET_REGISTRY_COPY__</p>
+          </div>
+          <div class="table-region-actions">
+            <button class="action-button primary" type="button" data-harbor-add-dataset>__NEW_DATASET__</button>
+            <button class="action-button" type="button" data-harbor-register-dataset>__REGISTER_DATASET__</button>
+            <button class="action-button danger" type="button" data-harbor-unregister-datasets disabled>__UNREGISTER_SELECTED__</button>
+          </div>
+        </header>
+        <div data-harbor-dataset-registry></div>
+      </section>
+      <section class="configuration-section" aria-labelledby="harbor-mounts-title">
+        <header class="configuration-section-head">
+          <div>
+            <h2 id="harbor-mounts-title">__HARBOR_MOUNTS__ <span data-harbor-mount-count></span></h2>
+            <p class="copy">__HARBOR_MOUNTS_COPY__</p>
+          </div>
+          <div class="table-region-actions">
+            <button class="action-button primary" type="button" data-harbor-add-mount>__ADD_HARBOR_MOUNT__</button>
+            <button class="action-button danger" type="button" data-harbor-remove-mounts disabled>__REMOVE_SELECTED_MOUNTS__</button>
+          </div>
+        </header>
+        <div data-harbor-mount-config></div>
+      </section>
+    </main>
+  </section>

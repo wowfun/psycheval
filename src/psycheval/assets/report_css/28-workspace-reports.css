@@ -72,7 +72,6 @@
   background:var(--surface);
   box-shadow:0 26px 70px rgba(39,35,27,.28);
 }
-.report-manager-head,
 .report-reader-head {
   display:grid;
   grid-template-columns:minmax(0,1fr) auto;
@@ -128,6 +127,12 @@
 .report-manager-section-head span {
   color:var(--muted);
   font:700 12px/1.2 var(--mono);
+}
+.report-manager-section-actions {
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:8px;
 }
 .report-inventory {
   min-height:0;
