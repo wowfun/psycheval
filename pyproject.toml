@@ -1,13 +1,23 @@
 [project]
 name = "psycheval"
 version = "0.1.0"
-description = "Harbor-based agent evaluation extensions"
+description = "Agent evaluation, Harbor integration, and trajectory analysis tools"
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "harbor==0.21.0",
+    "markdown-it-py>=4.2,<5",
+    "pandas>=2.2",
+    "pathspec>=1.0,<2",
+    "python-dotenv>=1.2,<2",
+    "PyYAML>=6.0,<7",
+    "typer>=0.27,<1",
+    "XlsxWriter>=3.2,<4",
 ]
 
 [project.scripts]
+peval = "psycheval.cli:main"
 psycheval-psychevo-harness = "psycheval.harbor.psychevo_harness:main"
 
 [build-system]
@@ -16,6 +26,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "pyinstaller==6.22.2",
     "pytest>=8.4,<9",
     "ruff>=0.12,<1",
 ]
