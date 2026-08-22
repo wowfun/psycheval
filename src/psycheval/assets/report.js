@@ -51,6 +51,290 @@ function createReportApp({ platform: platform2, bootstrap: bootstrap2, modeRunti
   };
 }
 
+// web/src/modules/serve-effects.js
+function formPayload(form) {
+  const formData = new FormData(form);
+  const body = {};
+  for (const [key, value] of formData.entries()) {
+    const text = String(value || "").trim();
+    if (text) body[key] = text;
+  }
+  return body;
+}
+function bindLeaderboardSearchControls(target) {
+  if (!serveMode() || !target) return;
+  const input = target.querySelector("[data-leaderboard-search-input]");
+  if (input) {
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("input", (event) => {
+      event.stopPropagation();
+      state.search.query = String(input.value || "");
+      applyLeaderboardSearchMode();
+    });
+  }
+  const control = target.querySelector("[data-leaderboard-search-scope]");
+  if (control) {
+    control.addEventListener("click", (event) => event.stopPropagation());
+    control.addEventListener("change", (event) => {
+      event.stopPropagation();
+      state.search.scope = control.value === "all" ? "all" : "visible";
+      applyLeaderboardSearchMode();
+    });
+  }
+}
+function focusLeaderboardSearchInput() {
+  const apply = () => {
+    const input = document.querySelector("[data-leaderboard-search-input]");
+    if (!input) return;
+    input.focus();
+    const end = String(input.value || "").length;
+    if (typeof input.setSelectionRange === "function") input.setSelectionRange(end, end);
+  };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(apply);
+  else apply();
+}
+function existingSourceTagOptions() {
+  const tags = [];
+  const seen = /* @__PURE__ */ new Set();
+  const addTags = (value) => {
+    sourceTagsFromValue(value).forEach((tag) => {
+      if (seen.has(tag)) return;
+      seen.add(tag);
+      tags.push(tag);
+    });
+  };
+  listValue(state.serveSources).forEach((source) => addTags(source?.source_tags));
+  listValue(state.view?.trajectory_meta).forEach((meta) => addTags(meta?.source_tags));
+  Object.values(state.serveReportCache || {}).forEach((report) => {
+    listValue(report?.trajectory_meta).forEach((meta) => addTags(meta?.source_tags));
+  });
+  return tags;
+}
+function existingSourceCategoryOptions() {
+  const seen = /* @__PURE__ */ new Set();
+  return listValue(state.sourceCategoryOptions).map((value) => String(value || "").trim()).filter((value) => value && !seen.has(value) && seen.add(value));
+}
+async function commitSourceCellEdit(row, field, value) {
+  const sourceKey = row?.source_key;
+  if (!adminMode() || !sourceKey || !["alias", "category", "tags"].includes(field)) throw new Error(t("source_edit_unavailable", "Source editing is unavailable"));
+  const action = field;
+  const body = action === "category" ? { category: String(value || "").trim() } : {
+    report_source_state: currentServeSourceMode(),
+    [action]: action === "tags" ? listValue(value) : String(value || "").trim()
+  };
+  try {
+    const payload = await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}/${action}`, {
+      method: "POST",
+      body
+    });
+    const updated = listValue(payload?.sources).find((source) => source?.source_key === sourceKey);
+    if (updated) Object.assign(row, updated);
+    else if (action === "category") row.source_category = body.category || null;
+    await applyServeMutationPayload(payload, { preserveTrial: row?.trial_key || selectedKey(), selectedSourceKey: sourceKey });
+    if (action === "category") await refreshSourceCategoryOptions();
+    return { rowKey: sourceKey, source: updated || row };
+  } catch (error) {
+    setServeStatus(error.message || String(error), true);
+    throw error;
+  }
+}
+function selectedAdapterValue(form) {
+  return normalizeAdapterValue(new FormData(form).get("adapter"));
+}
+function normalizeAdapterValue(value) {
+  const text = String(value || "").trim();
+  return text && text.toLowerCase() !== "auto" ? text : void 0;
+}
+function setAdapterChoice(form, adapter) {
+  const value = String(adapter || "").trim();
+  if (!value) return;
+  const control = form.querySelector('[name="adapter"]');
+  if (!control) return;
+  if (control.tagName === "SELECT") {
+    if (Array.from(control.options || []).some((option) => option.value === value)) {
+      control.value = value;
+    }
+    return;
+  }
+  const radio = Array.from(form.querySelectorAll('[name="adapter"]')).find((input) => input.value === value);
+  if (radio) radio.checked = true;
+}
+function readableSourceKey(preferred = null, mode = currentServeSourceMode()) {
+  if (preferred) {
+    const match = readableServeSources(mode).find((source) => source?.source_key === preferred);
+    if (match) return match.source_key;
+  }
+  return readableServeSources(mode)[0]?.source_key || null;
+}
+function emptyServeReport() {
+  return {
+    schema_version: state.view?.schema_version || data()?.schema_version || 19,
+    includes: ["core"],
+    trajectory: [],
+    trajectory_meta: []
+  };
+}
+function reloadExpiredAdminSession(response) {
+  if (response?.status !== 403 || !adminMode() || !authenticationEnabled()) return false;
+  if (RENDER_OPTIONS?.serve_page === "config") window.location.assign("/");
+  else window.location.reload();
+  return true;
+}
+async function serveApi(path, options = {}) {
+  const headers = { ...options.headers || {} };
+  let body = options.body;
+  if (body !== void 0 && typeof body !== "string") {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify(body);
+  }
+  const response = await fetch(path, {
+    method: options.method || "GET",
+    headers,
+    body,
+    credentials: "same-origin"
+  });
+  const text = await response.text();
+  if (!response.ok) reloadExpiredAdminSession(response);
+  let payload = {};
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch (cause) {
+      const message = response.ok ? t("serve_invalid_json_response", "Server returned an invalid JSON response") : response.statusText || `HTTP ${response.status}`;
+      const error = new Error(message, { cause });
+      error.status = response.status;
+      throw error;
+    }
+  }
+  if (!response.ok) {
+    const error = new Error(payload?.error || response.statusText);
+    error.status = response.status;
+    throw error;
+  }
+  return payload;
+}
+function clearServeReportCacheExcept(mode) {
+  const keep = normalizeServeSourceMode(mode);
+  state.serveReportCache = Object.fromEntries(
+    Object.entries(state.serveReportCache || {}).filter(([key]) => normalizeServeSourceMode(key) === keep)
+  );
+}
+function reportHasTrialKey(report, trialKey) {
+  return Boolean(trialKey) && listValue(report?.trajectory_meta).some((meta) => meta?.trial_key === trialKey);
+}
+function setServeStatus(text, error = false) {
+  const node = document.querySelector("[data-source-status]");
+  if (!node) return;
+  node.textContent = text;
+  node.classList.toggle("loading", false);
+  node.classList.toggle("danger", Boolean(error));
+}
+function showServeNotice(text, error = false) {
+  const notice = document.querySelector("[data-config-page-status]");
+  if (!notice) return;
+  notice.textContent = text;
+  notice.classList.toggle("danger", Boolean(error));
+  notice.classList.toggle("loading", false);
+  notice.hidden = false;
+}
+function hideServeNotice() {
+  const notice = document.querySelector("[data-config-page-status]");
+  if (notice) notice.hidden = true;
+}
+
+// web/src/modules/source-state-controls.js
+function renderServeSourceStateControls(rows = leaderboardRows()) {
+  if (!serveMode()) return "";
+  const mode = currentServeSourceMode();
+  const allMode = mode === "all";
+  const archived = mode === "archived";
+  const toggleDisabled = allMode ? "disabled" : "";
+  const selectedCount = visibleSelectedSourceKeys(rows).length;
+  const actionLabel = archived ? t("activate_selected", "Activate selected") : t("archive_selected", "Archive selected");
+  const action = adminMode() ? `<button class="action-button primary" type="button" data-source-state-action ${selectedCount && !allMode ? "" : "disabled"}>${esc(allMode ? t("mixed_state_action_disabled", "Mixed view") : actionLabel)}</button>` : "";
+  const selected = new Set(visibleSelectedSourceKeys(rows));
+  const includesLinkedHarbor = rows.some((row) => selected.has(row?.source_key || row?.trial_key) && row?.kind === "harbor-trial");
+  const deleteAction = adminMode() ? `<button class="action-button danger" type="button" data-source-delete-action ${selectedCount && !includesLinkedHarbor ? "" : "disabled"} ${includesLinkedHarbor ? `title="${esc(t("serve_linked_harbor_delete_disabled", "Linked Harbor Trials cannot be deleted; archive them instead."))}"` : ""}>${esc(t("delete_selected", "Delete selected"))}</button>` : "";
+  return `<div class="source-state-controls" data-source-state-controls>
+    <label class="source-state-toggle">
+      <input type="checkbox" data-source-state-toggle ${archived || allMode ? "checked" : ""} ${toggleDisabled}>
+      <span>${esc(t("show_archived", "Show archived"))}</span>
+    </label>
+    ${action}${deleteAction}
+  </div>`;
+}
+function bindServeSourceStateControls(target) {
+  if (!serveMode() || !target) return;
+  target.querySelectorAll("[data-source-state-toggle]").forEach((input) => {
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("change", (event) => {
+      event.stopPropagation();
+      switchServeSourceMode(input.checked ? "archived" : "active");
+    });
+  });
+  target.querySelectorAll("[data-source-state-action]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      mutateVisibleServeSourceState();
+    });
+  });
+  target.querySelectorAll("[data-source-delete-action]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteVisibleServeSources();
+    });
+  });
+}
+async function mutateVisibleServeSourceState() {
+  if (!adminMode()) return;
+  const sourceKeys = visibleSelectedSourceKeys();
+  if (!sourceKeys.length) return;
+  const mode = currentServeSourceMode();
+  if (mode === "all") {
+    setServeStatus(t("mixed_state_action_disabled", "Mixed view"), true);
+    return;
+  }
+  const targetMode = mode === "archived" ? "active" : "archived";
+  try {
+    const payload = await serveApi("/api/sources/state", {
+      method: "POST",
+      body: {
+        source_keys: sourceKeys,
+        active: targetMode === "active",
+        report_source_state: mode
+      }
+    });
+    await applyServeSourceStateMutationPayload(payload, { sourceKeys, targetMode });
+  } catch (error) {
+    setServeStatus(error.message || String(error), true);
+  }
+}
+async function deleteVisibleServeSources() {
+  if (!adminMode()) return;
+  const sourceKeys = visibleSelectedSourceKeys();
+  if (!sourceKeys.length) return;
+  if (!window.confirm(t("serve_delete_selected_confirm", "Permanently delete the selected sources? This cannot be undone."))) return;
+  try {
+    const payload = await serveApi("/api/sources/delete", {
+      method: "POST",
+      body: { source_keys: sourceKeys }
+    });
+    await applyServeSourceStateMutationPayload(payload, { sourceKeys, targetMode: currentServeSourceMode() });
+  } catch (error) {
+    setServeStatus(error.message || String(error), true);
+  }
+}
+function firstReadableSourceKeyFrom(sourceKeys, sources, mode) {
+  const requested = new Set(listValue(sourceKeys).map((key) => String(key || "")).filter(Boolean));
+  return readableServeSourcesFrom(sources, mode).find((source) => requested.has(source.source_key))?.source_key || null;
+}
+function serveSourceModeStatusText(mode = currentServeSourceMode()) {
+  if (normalizeServeSourceMode(mode) === "all") {
+    return t("serve_all_sessions", "All sessions");
+  }
+  return normalizeServeSourceMode(mode) === "archived" ? t("serve_archived_snapshots", "Archived snapshots") : t("serve_active_snapshots", "Active snapshots");
+}
+
 // web/src/modules/analysis-metrics.js
 function infoGrid(items) {
   return `<div class="info-grid">${items.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("")}</div>`;
@@ -1574,9 +1858,13 @@ function stepTitle(step, index, stepDuration = null, durationRatio = null) {
   const head = duration ? `#${id} ${role}; ${duration}` : `#${id} ${role}`;
   return preview ? `${head}: ${preview}` : head;
 }
-function bindTrajectoryControls(target) {
+function bindTrajectoryControls(target, rows = leaderboardRows()) {
   bindServeSourceStateControls(target);
-  bindServeSelectionControls(target);
+  bindDataTableSelection(target, {
+    columns: [selectionColumn()],
+    rows,
+    onChange: () => renderComparisonPanels({ trace: false })
+  });
   target.querySelectorAll("[data-step-id]").forEach((node) => {
     node.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -2073,7 +2361,7 @@ function renderWorkspaceReportBindings() {
   }
   const sources = filteredWorkspaceReportSources();
   const selectedCount = state.reportManager.draftBindings.size;
-  const sourceRows2 = sources.length ? sources.map(renderWorkspaceReportBindingSource).join("") : `<p class="report-manager-empty">${esc(t("report_no_sessions", "No matching readable sessions"))}</p>`;
+  const sourceRows = sources.length ? sources.map(renderWorkspaceReportBindingSource).join("") : `<p class="report-manager-empty">${esc(t("report_no_sessions", "No matching readable sessions"))}</p>`;
   target.innerHTML = `
     <div class="report-binding-summary">
       <div>
@@ -2089,7 +2377,7 @@ function renderWorkspaceReportBindings() {
       <span>${esc(t("report_search_sessions", "Search active and archived sessions"))}</span>
       <input type="search" data-report-binding-search value="${esc(state.reportManager.search)}" placeholder="${esc(t("report_search_sessions", "Search active and archived sessions"))}">
     </label>
-    <div class="report-binding-list" data-report-binding-list data-table-id="report-bindings">${sourceRows2}</div>
+    <div class="report-binding-list" data-report-binding-list data-table-id="report-bindings">${sourceRows}</div>
     <div class="report-binding-footer">
       <span data-report-binding-selection-count>${esc(reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount }))}</span>
       <span class="catalog-page-controls">
@@ -2123,9 +2411,12 @@ function filteredWorkspaceReportSources() {
   if (!query) return readableWorkspaceReportSources();
   return readableWorkspaceReportSources().filter((source) => workspaceReportSourceSearchText(source).includes(query));
 }
+function workspaceReportSourceLabel(source) {
+  return String(source?.source_alias || "").trim() || source?.label || source?.source_key || "source";
+}
 function workspaceReportSourceSearchText(source) {
   return [
-    sourceDisplayLabel(source),
+    workspaceReportSourceLabel(source),
     source?.label,
     source?.source_key,
     source?.trial_session_id,
@@ -2144,7 +2435,7 @@ function renderWorkspaceReportBindingSource(source) {
   return `<div class="report-binding-row" data-report-binding-row data-table-row-key="${esc(sourceKey)}">
     <input type="checkbox" data-report-binding-key="${esc(sourceKey)}" ${checked ? "checked" : ""} aria-label="${esc(t("select_row", "Select row"))}: ${esc(session)}">
     <span class="report-binding-row-main">
-      <strong>${esc(sourceDisplayLabel(source))}</strong>
+      <strong>${esc(workspaceReportSourceLabel(source))}</strong>
       <code>${esc(session)}</code>
     </span>
     <span class="report-binding-category table-value-text table-cell-editable" data-report-binding-category data-table-column-key="source_category" data-value-type="text" tabindex="0" aria-keyshortcuts="Enter" title="${esc(category)}" aria-label="${esc(`${t("category", "Category")}: ${category}`)}">${renderReadOnlySourceCategory(source)}</span>
@@ -3035,7 +3326,7 @@ function viewSort(left, right) {
 }
 function createWorkspaceViewRepository({ workspaceId, storage, request }) {
   if (typeof request !== "function") throw repositoryError("Saved View request adapter is required.");
-  const storageKey = browserViewStorageKey(workspaceId);
+  const storageKey2 = browserViewStorageKey(workspaceId);
   let serverViews = [];
   let browserViews = [];
   let serverLoaded = false;
@@ -3046,7 +3337,7 @@ function createWorkspaceViewRepository({ workspaceId, storage, request }) {
     }
     let text;
     try {
-      text = storage.getItem(storageKey);
+      text = storage.getItem(storageKey2);
     } catch (error) {
       throw repositoryError(`Browser Saved Views could not be read: ${error?.message || error}`, error);
     }
@@ -3067,7 +3358,7 @@ function createWorkspaceViewRepository({ workspaceId, storage, request }) {
     }
     const normalized = normalizeBrowserViews(next);
     try {
-      storage.setItem(storageKey, JSON.stringify({ version: BROWSER_VIEW_VERSION, views: normalized }));
+      storage.setItem(storageKey2, JSON.stringify({ version: BROWSER_VIEW_VERSION, views: normalized }));
     } catch (error) {
       throw repositoryError(`Browser Saved Views could not be saved: ${error?.message || error}`, error);
     }
@@ -3152,8 +3443,8 @@ function createWorkspaceViewRepository({ workspaceId, storage, request }) {
     ]);
     return identified("browser", next);
   }
-  async function remove(ids) {
-    const unique = Array.from(new Set((Array.isArray(ids) ? ids : []).map(String)));
+  async function remove(ids2) {
+    const unique = Array.from(new Set((Array.isArray(ids2) ? ids2 : []).map(String)));
     const resolved = unique.map((id) => {
       const view = findVisible(id);
       if (!view) throw repositoryError(`Saved View is not available: ${id}`);
@@ -3171,11 +3462,11 @@ function createWorkspaceViewRepository({ workspaceId, storage, request }) {
     if (browserNames.size) persist(browserViews.filter((view) => !browserNames.has(view.name)));
     return { server: serverNames, browser: Array.from(browserNames), views: visibleViews() };
   }
-  function queryPayload(ids) {
+  function queryPayload(ids2) {
     const server = [];
     const browser = [];
     const seen = /* @__PURE__ */ new Set();
-    (Array.isArray(ids) ? ids : []).forEach((rawId) => {
+    (Array.isArray(ids2) ? ids2 : []).forEach((rawId) => {
       const id = String(rawId);
       if (seen.has(id)) return;
       seen.add(id);
@@ -3284,8 +3575,6 @@ function workspaceViewColumns() {
     selectionColumn({
       selectionKey: (view) => view?.id || "",
       selectionSet: () => state.workspaceViewSelection,
-      rowInputAttr: (id) => `data-view-select="${esc(id)}"`,
-      headerInputAttr: "data-view-select-visible",
       rowAriaLabel: (id) => workspaceViewMessage("select_view", "Select {name}", { name: workspaceViewForId(id)?.name || id })
     }),
     ...columns
@@ -3347,7 +3636,8 @@ function bindWorkspaceViewControls(target) {
     columns,
     rows,
     rowKey: (view) => view.id,
-    onChange: renderWorkspaceViewRail
+    onChange: renderWorkspaceViewRail,
+    onSelectionChange: renderWorkspaceViewRail
   });
   target.querySelectorAll("[data-view-save]").forEach((button) => {
     button.addEventListener("click", (event) => {
@@ -3386,24 +3676,6 @@ function bindWorkspaceViewControls(target) {
       event.preventDefault();
       event.stopPropagation();
       exportSelectedWorkspaceViews();
-    });
-  });
-  target.querySelectorAll("[data-view-select]").forEach((input) => {
-    input.addEventListener("click", (event) => event.stopPropagation());
-    input.addEventListener("change", () => {
-      const id = String(input.dataset.viewSelect || "");
-      if (input.checked) state.workspaceViewSelection.add(id);
-      else state.workspaceViewSelection.delete(id);
-      renderWorkspaceViewRail();
-    });
-  });
-  target.querySelectorAll("[data-view-select-visible]").forEach((input) => {
-    input.indeterminate = input.hasAttribute?.("data-partial") || false;
-    input.addEventListener("click", (event) => event.stopPropagation());
-    input.addEventListener("change", (event) => {
-      event.stopPropagation();
-      setVisibleSelection(workspaceViewRows(), workspaceViewColumns()[0], input.checked);
-      renderWorkspaceViewRail();
     });
   });
   target.querySelectorAll("[data-view-navigate]").forEach((cell) => {
@@ -3643,15 +3915,15 @@ async function refreshWorkspaceViews() {
   return state.workspaceViewsRefreshPromise;
 }
 function pruneWorkspaceViewState() {
-  const ids = new Set(workspaceViews().map((view) => view.id));
+  const ids2 = new Set(workspaceViews().map((view) => view.id));
   state.workspaceViewTableOpen = new Set(
-    Array.from(state.workspaceViewTableOpen).filter((id) => ids.has(id))
+    Array.from(state.workspaceViewTableOpen).filter((id) => ids2.has(id))
   );
   state.workspaceViewSelection = new Set(
-    Array.from(state.workspaceViewSelection).filter((id) => ids.has(id))
+    Array.from(state.workspaceViewSelection).filter((id) => ids2.has(id))
   );
   state.workspaceAppliedViewNames = new Set(
-    Array.from(state.workspaceAppliedViewNames).filter((id) => ids.has(id))
+    Array.from(state.workspaceAppliedViewNames).filter((id) => ids2.has(id))
   );
   state.catalogQuery.views = workspaceViewQueryPayload(
     Array.from(state.workspaceAppliedViewNames)
@@ -3987,20 +4259,20 @@ function replaceWorkspaceViewStateName(previousName, nextName) {
 }
 async function deleteSelectedWorkspaceViews() {
   const selectedIds = selectedWorkspaceViewIds();
-  const ids = adminMode() ? selectedIds : selectedIds.filter((id) => workspaceViewForId(id)?.origin === "browser");
-  if (!ids.length) return;
+  const ids2 = adminMode() ? selectedIds : selectedIds.filter((id) => workspaceViewForId(id)?.origin === "browser");
+  if (!ids2.length) return;
   const prompt = workspaceViewMessage(
     "view_delete_confirm",
     "Permanently delete {count} selected views?",
-    { count: ids.length }
+    { count: ids2.length }
   );
   if (typeof window.confirm === "function" && !window.confirm(prompt)) return;
-  const appliedChanged = ids.some((id) => state.workspaceAppliedViewNames.has(id));
+  const appliedChanged = ids2.some((id) => state.workspaceAppliedViewNames.has(id));
   try {
     const repository = workspaceViewRepository();
     if (!repository) return;
-    await repository.delete(ids);
-    ids.forEach((id) => {
+    await repository.delete(ids2);
+    ids2.forEach((id) => {
       state.workspaceViewSelection.delete(id);
       state.workspaceAppliedViewNames.delete(id);
       state.workspaceViewTableOpen.delete(id);
@@ -4098,10 +4370,10 @@ function selectedWorkspaceViewIds() {
 function selectedWorkspaceViewNames() {
   return selectedWorkspaceViewIds().map((id) => workspaceViewForId(id)?.name).filter(Boolean);
 }
-function workspaceViewQueryPayload(ids = Array.from(state.workspaceAppliedViewNames)) {
+function workspaceViewQueryPayload(ids2 = Array.from(state.workspaceAppliedViewNames)) {
   const repository = workspaceViewRepository();
-  if (repository?.ready()) return repository.queryPayload(ids);
-  const selected = workspaceViews().filter((view) => ids.includes(view.id));
+  if (repository?.ready()) return repository.queryPayload(ids2);
+  const selected = workspaceViews().filter((view) => ids2.includes(view.id));
   return {
     views: selected.length ? selected.filter((view) => view.origin === "server").map((view) => view.name) : listValue(state.catalogQuery?.views).map(String),
     browser_views: selected.filter((view) => view.origin === "browser").map((view) => ({ name: view.name, filters: workspaceViewFilterConfig(view.filters), group_by: view.group_by, notes: view.notes }))
@@ -4111,9 +4383,9 @@ function browserWorkspaceViewDefinitions() {
   return workspaceViews().filter((view) => view.origin === "browser").map((view) => ({ name: view.name, filters: workspaceViewFilterConfig(view.filters), group_by: view.group_by, notes: view.notes }));
 }
 function exportSelectedWorkspaceViews() {
-  const ids = selectedWorkspaceViewIds();
-  if (!serveMode() || !ids.length) return;
-  const payload = workspaceViewQueryPayload(ids);
+  const ids2 = selectedWorkspaceViewIds();
+  if (!serveMode() || !ids2.length) return;
+  const payload = workspaceViewQueryPayload(ids2);
   return serveDownload("summary_xlsx", {
     kind: "summary_xlsx",
     summary: { scope: "saved_views", ...payload }
@@ -4123,17 +4395,16 @@ function appliedWorkspaceViewNames() {
   return workspaceViewQueryPayload(Array.from(state.workspaceAppliedViewNames)).views;
 }
 async function applySelectedWorkspaceViews() {
-  const ids = selectedWorkspaceViewIds();
-  if (!ids.length || !serveMode()) return;
-  const payload = workspaceViewQueryPayload(ids);
+  const ids2 = selectedWorkspaceViewIds();
+  if (!ids2.length || !serveMode()) return;
+  const payload = workspaceViewQueryPayload(ids2);
   closeOpenSubmenus();
   state.rowSelection.clear();
-  state.sourceSelection.clear();
   state.selectedSourceKey = null;
   state.selectedArtifactRevision = null;
   state.selectedTrial = null;
   state.selectedStep = null;
-  state.workspaceAppliedViewNames = new Set(ids);
+  state.workspaceAppliedViewNames = new Set(ids2);
   state.search.query = "";
   state.search.scope = "all";
   state.search.normalSourceMode = "all";
@@ -4170,10 +4441,10 @@ async function applySelectedWorkspaceViews() {
   }, { force: true });
 }
 async function reloadAppliedWorkspaceViews() {
-  const ids = Array.from(state.workspaceAppliedViewNames);
-  const payload = workspaceViewQueryPayload(ids);
+  const ids2 = Array.from(state.workspaceAppliedViewNames);
+  const payload = workspaceViewQueryPayload(ids2);
   state.catalogQuery.views = payload.views;
-  if (!ids.length) return;
+  if (!ids2.length) return;
   await loadCatalogPage({ page: 1, views: payload.views }, { force: true });
 }
 async function clearWorkspaceViewConditions() {
@@ -4228,1771 +4499,6 @@ async function applyWorkspaceView(name) {
 }
 async function cancelWorkspaceViewApplication() {
   return clearWorkspaceViewConditions();
-}
-
-// web/src/modules/harbor-workbench.js
-var HARBOR_TABLE_ID = "harbor-datasets";
-var workbenchState = {
-  inventory: null,
-  datasetId: null,
-  taskName: null,
-  trashEntryId: null,
-  taskDetail: null,
-  filePath: null,
-  fileRevision: null,
-  savedText: "",
-  dirty: false,
-  showTrash: false,
-  search: "",
-  tableSnapshot: null,
-  taskRequestId: 0,
-  fileRequestId: 0
-};
-function workbenchRoot() {
-  return document.querySelector("[data-harbor-workbench]");
-}
-function selectedDataset() {
-  return listValue(workbenchState.inventory?.datasets).find((dataset) => dataset?.id === workbenchState.datasetId) || null;
-}
-function selectedTask() {
-  const dataset = selectedDataset();
-  return listValue(dataset?.tasks).find((task) => task?.directory === workbenchState.taskName) || null;
-}
-function selectedTrashEntry() {
-  const dataset = selectedDataset();
-  return listValue(dataset?.trash).find((entry) => entry?.entry_id === workbenchState.trashEntryId) || null;
-}
-function isHarborDirty() {
-  return Boolean(workbenchState.dirty);
-}
-function confirmDiscard() {
-  return !isHarborDirty() || window.confirm(t("harbor_discard_changes", "Discard unsaved file changes?"));
-}
-function harborMessage(key, fallback, values = {}) {
-  let message = String(t(key, fallback));
-  Object.entries(values).forEach(([name, value]) => {
-    message = message.replaceAll(`{${name}}`, String(value));
-  });
-  return message;
-}
-function overviewRowKey(row) {
-  if (row.kind === "trash") return `dataset:${row.dataset.id}|trash:${row.entry.entry_id}`;
-  return `dataset:${row.dataset.id}|task:${row.task?.directory || ""}`;
-}
-function overviewRows() {
-  return listValue(workbenchState.inventory?.datasets).flatMap((dataset) => {
-    if (workbenchState.showTrash) {
-      return listValue(dataset?.trash).map((entry) => ({ kind: "trash", dataset, entry, task: null }));
-    }
-    const tasks = listValue(dataset?.tasks);
-    if (!tasks.length) return [{ kind: "empty", dataset, task: null, entry: null }];
-    return tasks.map((task) => ({ kind: "task", dataset, task, entry: null }));
-  });
-}
-function rowTaskName(row) {
-  return row.kind === "trash" ? row.entry?.directory || row.entry?.entry_id || "" : row.task?.directory || "";
-}
-function rowPackage(row) {
-  return row.kind === "trash" ? row.entry?.package_name || "-" : row.task?.package_name || "-";
-}
-function rowStatus(row) {
-  if (row.kind === "empty") return t("harbor_empty_status", "empty");
-  const status = row.kind === "trash" ? "trash" : row.task?.status || "draft";
-  return t(`harbor_status_${status}`, status);
-}
-function rowStatusKey(row) {
-  return row.kind === "empty" ? "empty" : row.kind === "trash" ? "trash" : row.task?.status || "draft";
-}
-function rowDiagnostics(row) {
-  return listValue(row.task?.diagnostics).filter(Boolean).join(" · ");
-}
-function harborColumns() {
-  return [
-    { key: "dataset", label: t("harbor_dataset", "Dataset"), valueType: "identity", sortable: true, filterable: true, value: (row) => row.dataset?.id || "-" },
-    { key: "task", label: t("task", "Task"), valueType: "identity", sortable: true, filterable: true, value: (row) => rowTaskName(row) || "-" },
-    { key: "package", label: t("harbor_package", "Package"), valueType: "identity", sortable: true, filterable: true, value: (row) => rowPackage(row) },
-    {
-      key: "status",
-      label: t("status", "Status"),
-      valueType: "status",
-      sortable: true,
-      filterable: true,
-      value: rowStatus,
-      html: (row) => `<span class="harbor-status-rail ${esc(rowStatusKey(row))}">${esc(rowStatus(row))}</span>`
-    },
-    { key: "diagnostics", label: t("harbor_diagnostics", "Diagnostics"), valueType: "text", sortable: true, value: (row) => rowDiagnostics(row) || "-", fullText: rowDiagnostics }
-  ];
-}
-function rowSearchText(row) {
-  return [row.dataset?.id, rowTaskName(row), rowPackage(row), rowStatus(row), rowDiagnostics(row)].filter(Boolean).join(" ").toLowerCase();
-}
-function visibleOverviewRows() {
-  const columns = harborColumns();
-  const query = String(workbenchState.search || "").trim().toLowerCase();
-  const searched = query ? overviewRows().filter((row) => rowSearchText(row).includes(query)) : overviewRows();
-  return applyDataTableControls(HARBOR_TABLE_ID, searched, columns, searched);
-}
-function selectedOverviewKey() {
-  if (!workbenchState.datasetId) return "";
-  if (workbenchState.showTrash) {
-    return workbenchState.trashEntryId ? `dataset:${workbenchState.datasetId}|trash:${workbenchState.trashEntryId}` : "";
-  }
-  return `dataset:${workbenchState.datasetId}|task:${workbenchState.taskName || ""}`;
-}
-function setOverviewSelection(row) {
-  workbenchState.datasetId = row?.dataset?.id || null;
-  workbenchState.taskName = row?.kind === "task" ? row.task?.directory || null : null;
-  workbenchState.trashEntryId = row?.kind === "trash" ? row.entry?.entry_id || null : null;
-  workbenchState.taskDetail = null;
-  workbenchState.taskRequestId += 1;
-  clearEditor();
-}
-function reconcileOverviewSelection(rows) {
-  const currentKey = selectedOverviewKey();
-  const current = rows.find((row2) => overviewRowKey(row2) === currentKey) || null;
-  if (current) return { row: current, changed: false };
-  const row = rows[0] || null;
-  setOverviewSelection(row);
-  return { row, changed: true };
-}
-function renderHarborOverview(surface, rows) {
-  const container = surface.querySelector("[data-harbor-overview]");
-  if (!container) return;
-  const columns = harborColumns();
-  const selectedKey2 = selectedOverviewKey();
-  container.innerHTML = renderDataTable({
-    tableId: HARBOR_TABLE_ID,
-    columns,
-    rows,
-    rowKey: overviewRowKey,
-    tableClass: "harbor-overview-table",
-    shellClass: "harbor-overview-table-shell",
-    rowClass: (row) => `harbor-overview-row status-${rowStatusKey(row)} ${overviewRowKey(row) === selectedKey2 ? "selected-row" : ""}`,
-    rowAttrs: (row) => `data-harbor-overview-row tabindex="0" data-harbor-row-key="${esc(overviewRowKey(row))}"`,
-    emptyText: workbenchState.showTrash ? t("harbor_trash_empty", "Trash is empty") : t("harbor_dataset_empty", "No Datasets registered"),
-    filterOptionsRows: overviewRows()
-  });
-  bindDataTableControls(container, {
-    tableId: HARBOR_TABLE_ID,
-    columns,
-    rows,
-    rowKey: overviewRowKey,
-    onChange: () => refreshOverviewAfterControls({ restoreTable: true })
-  });
-  const byKey = new Map(rows.map((row) => [overviewRowKey(row), row]));
-  container.querySelectorAll("[data-harbor-overview-row]").forEach((node) => {
-    const select = () => selectOverviewRow(byKey.get(node.dataset.harborRowKey));
-    node.addEventListener("click", (event) => {
-      if (event.target?.closest?.("button,input,select,textarea,label,details")) return;
-      select();
-    });
-    node.addEventListener("keydown", (event) => {
-      if (!["Enter", " "].includes(event.key)) return;
-      event.preventDefault();
-      select();
-    });
-  });
-  const count = surface.querySelector("[data-harbor-overview-count]");
-  if (count) count.textContent = `${rows.length} / ${overviewRows().length}`;
-}
-function renderHarborWorkbench() {
-  const surface = workbenchRoot();
-  if (!surface) return { row: null, changed: false };
-  const rows = visibleOverviewRows();
-  const selection = reconcileOverviewSelection(rows);
-  renderHarborOverview(surface, rows);
-  renderContextControls(surface);
-  renderSelectedTaskHeading(surface);
-  renderFileTree(surface);
-  renderDiagnostics(surface);
-  workbenchState.tableSnapshot = cloneTableControls();
-  return selection;
-}
-function cloneTableControls() {
-  return JSON.parse(JSON.stringify(tableControls(HARBOR_TABLE_ID)));
-}
-function restoreTableControls() {
-  const controls = tableControls(HARBOR_TABLE_ID);
-  Object.keys(controls).forEach((key) => delete controls[key]);
-  Object.assign(controls, JSON.parse(JSON.stringify(workbenchState.tableSnapshot || {})));
-}
-function renderContextControls(surface) {
-  const dataset = selectedDataset();
-  const task = selectedTask();
-  const trash = selectedTrashEntry();
-  setDisabled(surface, "[data-harbor-edit-dataset]", !dataset);
-  setDisabled(surface, "[data-harbor-remove-dataset]", !dataset);
-  setDisabled(surface, "[data-harbor-create-task]", !dataset || workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-sync-manifest]", !dataset || workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-rename-task]", !task || workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-trash-task]", !task || workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-restore-task]", !trash || !workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-purge-task]", !trash || !workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-show-trash]", !listValue(workbenchState.inventory?.datasets).length);
-  surface.querySelector("[data-harbor-show-trash]")?.classList.toggle("active", workbenchState.showTrash);
-  surface.querySelectorAll("[data-harbor-live-action]").forEach((node) => {
-    node.hidden = workbenchState.showTrash;
-  });
-  surface.querySelectorAll("[data-harbor-trash-action]").forEach((node) => {
-    node.hidden = !workbenchState.showTrash;
-  });
-}
-function setDisabled(surface, selector, disabled) {
-  const control = surface.querySelector(selector);
-  if (control) control.disabled = Boolean(disabled);
-}
-function renderSelectedTaskHeading(surface) {
-  const title = surface.querySelector("[data-harbor-selected-title]");
-  const meta = surface.querySelector("[data-harbor-selected-meta]");
-  const task = selectedTask();
-  const trash = selectedTrashEntry();
-  if (title) title.textContent = task?.directory || trash?.directory || t("harbor_task_detail_empty", "Select a Task");
-  if (meta) {
-    meta.textContent = task ? `${workbenchState.datasetId} · ${task.package_name || "-"} · ${t(`harbor_status_${task.status || "draft"}`, task.status || "draft")}` : trash ? `${workbenchState.datasetId} · ${trash.package_name || "-"} · ${t("harbor_trash", "Trash")}` : "";
-  }
-}
-function renderFileTree(surface = workbenchRoot()) {
-  const container = surface?.querySelector?.("[data-harbor-file-tree]");
-  const actions = surface?.querySelector?.("[data-harbor-file-actions]");
-  if (!container) return;
-  container.replaceChildren();
-  const tree = listValue(workbenchState.taskDetail?.tree);
-  if (actions) actions.hidden = !adminMode() || !workbenchState.taskDetail || workbenchState.showTrash;
-  if (!tree.length) {
-    container.append(emptyNode(t("harbor_file_empty", "Select a Task to browse its files")));
-    return;
-  }
-  tree.forEach((item) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `harbor-file-row kind-${item.kind}`;
-    button.classList.toggle("selected", item.path === workbenchState.filePath);
-    button.style.setProperty("--depth", String(item.path.split("/").length - 1));
-    button.append(
-      textNode("span", item.kind === "directory" ? "▸" : "·"),
-      textNode("span", item.path.split("/").at(-1)),
-      textNode("small", item.kind === "file" ? formatBytes(item.size) : "")
-    );
-    if (item.kind === "file") button.addEventListener("click", () => openFile(item));
-    if (adminMode()) {
-      button.addEventListener("contextmenu", (event) => {
-        event.preventDefault();
-        fileActionMenu(item);
-      });
-    }
-    container.append(button);
-  });
-}
-function renderDiagnostics(surface = workbenchRoot()) {
-  const container = surface?.querySelector?.("[data-harbor-diagnostics]");
-  if (!container) return;
-  container.replaceChildren();
-  listValue(selectedTask()?.diagnostics).forEach((diagnostic) => container.append(textNode("p", diagnostic)));
-}
-async function selectOverviewRow(row) {
-  if (!row) return;
-  if (overviewRowKey(row) === selectedOverviewKey()) {
-    if (row.kind === "task" && !workbenchState.taskDetail) await loadSelectedTask();
-    return;
-  }
-  if (!confirmDiscard()) return;
-  setOverviewSelection(row);
-  renderHarborWorkbench();
-  if (row.kind === "task") await loadSelectedTask();
-}
-async function selectTask(taskName) {
-  const row = overviewRows().find((item) => item.kind === "task" && item.dataset?.id === workbenchState.datasetId && item.task?.directory === taskName);
-  if (!row) return;
-  if (overviewRowKey(row) !== selectedOverviewKey()) {
-    if (!confirmDiscard()) return;
-    setOverviewSelection(row);
-    renderHarborWorkbench();
-  }
-  await loadSelectedTask();
-}
-async function loadSelectedTask() {
-  const datasetId = workbenchState.datasetId;
-  const taskName = workbenchState.taskName;
-  if (!datasetId || !taskName || workbenchState.showTrash) return;
-  const requestId = workbenchState.taskRequestId + 1;
-  workbenchState.taskRequestId = requestId;
-  workbenchState.taskDetail = null;
-  clearEditor();
-  renderFileTree();
-  try {
-    const detail = await serveApi(`/api/harbor/task?dataset_id=${encodeURIComponent(datasetId)}&task=${encodeURIComponent(taskName)}`);
-    if (requestId !== workbenchState.taskRequestId || datasetId !== workbenchState.datasetId || taskName !== workbenchState.taskName) return;
-    workbenchState.taskDetail = detail;
-    renderHarborWorkbench();
-  } catch (error) {
-    setWorkbenchStatus(error.message || String(error), true);
-  }
-}
-async function refreshOverviewAfterControls(options = {}) {
-  const currentVisible = visibleOverviewRows().some((row) => overviewRowKey(row) === selectedOverviewKey());
-  if (!options.skipGuard && !currentVisible && !confirmDiscard()) {
-    if (options.restoreTable) {
-      restoreTableControls();
-      renderHarborWorkbench();
-    }
-    return;
-  }
-  const selection = renderHarborWorkbench();
-  if (selection.changed && selection.row?.kind === "task") await loadSelectedTask();
-}
-async function refreshHarborInventory(options = {}) {
-  if (!options.skipGuard && !confirmDiscard()) return null;
-  setWorkbenchStatus(t("serve_loading_sources", "Loading…"));
-  try {
-    const payload = await serveApi("/api/harbor/datasets");
-    workbenchState.inventory = payload;
-    const selection = renderHarborWorkbench();
-    if (selection.row?.kind === "task") await loadSelectedTask();
-    if (!options.quiet) setWorkbenchStatus("");
-    return payload;
-  } catch (error) {
-    setWorkbenchStatus(error.message || String(error), true);
-    return null;
-  }
-}
-async function initializeHarborWorkbench() {
-  bindHarborWorkbench();
-  return refreshHarborInventory({ skipGuard: true });
-}
-async function openHarborWorkbench() {
-  if (!workbenchRoot()) return false;
-  await initializeHarborWorkbench();
-  return true;
-}
-function closeHarborWorkbench() {
-  return false;
-}
-async function openFile(item) {
-  if (!confirmDiscard()) return;
-  const requestId = workbenchState.fileRequestId + 1;
-  workbenchState.fileRequestId = requestId;
-  const datasetId = workbenchState.datasetId;
-  const taskName = workbenchState.taskName;
-  if (!item.editable) {
-    renderFileMetadata(item);
-    renderFileTree();
-    return;
-  }
-  try {
-    const payload = await serveApi(`/api/harbor/files?dataset_id=${encodeURIComponent(datasetId)}&task=${encodeURIComponent(taskName)}&path=${encodeURIComponent(item.path)}`);
-    if (requestId !== workbenchState.fileRequestId || datasetId !== workbenchState.datasetId || taskName !== workbenchState.taskName) return;
-    workbenchState.filePath = item.path;
-    workbenchState.fileRevision = payload.revision || null;
-    workbenchState.savedText = payload.content;
-    workbenchState.dirty = false;
-    const editor = workbenchRoot()?.querySelector?.("[data-harbor-editor]");
-    if (editor) {
-      editor.disabled = false;
-      editor.readOnly = !adminMode();
-      editor.value = payload.content;
-      editor.focus();
-    }
-    const meta = workbenchRoot()?.querySelector?.("[data-harbor-editor-meta]");
-    if (meta) meta.textContent = `${formatBytes(item.size)} · ${t("harbor_text", "text")}`;
-    syncEditorControls();
-    renderFileTree();
-  } catch (error) {
-    setWorkbenchStatus(error.message || String(error), true);
-  }
-}
-function renderFileMetadata(item) {
-  clearEditor();
-  workbenchState.filePath = item.path;
-  const surface = workbenchRoot();
-  const path = surface?.querySelector?.("[data-harbor-editor-path]");
-  const meta = surface?.querySelector?.("[data-harbor-editor-meta]");
-  const download = surface?.querySelector?.("[data-harbor-download]");
-  if (path) path.textContent = item.path;
-  if (meta) meta.textContent = `${formatBytes(item.size)} · ${item.editable ? t("harbor_text", "text") : t("harbor_metadata_only", "metadata only")}`;
-  if (download) download.hidden = !adminMode() || !item.downloadable;
-}
-function clearEditor() {
-  workbenchState.fileRequestId += 1;
-  workbenchState.filePath = null;
-  workbenchState.fileRevision = null;
-  workbenchState.savedText = "";
-  workbenchState.dirty = false;
-  const surface = workbenchRoot();
-  const editor = surface?.querySelector?.("[data-harbor-editor]");
-  if (editor) {
-    editor.value = "";
-    editor.disabled = true;
-    editor.readOnly = !adminMode();
-  }
-  const path = surface?.querySelector?.("[data-harbor-editor-path]");
-  if (path) path.textContent = t("harbor_editor_empty", "Select a text file");
-  const meta = surface?.querySelector?.("[data-harbor-editor-meta]");
-  if (meta) meta.textContent = "";
-  const download = surface?.querySelector?.("[data-harbor-download]");
-  if (download) download.hidden = true;
-  syncEditorControls();
-}
-function syncEditorControls() {
-  const surface = workbenchRoot();
-  const save = surface?.querySelector?.("[data-harbor-save]");
-  if (save) save.disabled = !adminMode() || !workbenchState.dirty || !workbenchState.filePath;
-  const path = surface?.querySelector?.("[data-harbor-editor-path]");
-  if (path && workbenchState.filePath) path.textContent = `${workbenchState.filePath}${workbenchState.dirty ? " •" : ""}`;
-}
-async function saveFile() {
-  if (!adminMode() || !workbenchState.dirty || !workbenchState.filePath) return;
-  const editor = workbenchRoot()?.querySelector?.("[data-harbor-editor]");
-  const task = selectedTask();
-  if (!editor || !task) return;
-  await mutateFiles({ action: "save", path: workbenchState.filePath, content: editor.value, expected_revision: task.revision }, { reopen: workbenchState.filePath });
-}
-async function mutateFiles(body, options = {}) {
-  if (!adminMode()) return null;
-  try {
-    const payload = await serveApi("/api/harbor/files", {
-      method: "POST",
-      body: { ...body, dataset_id: workbenchState.datasetId, task: workbenchState.taskName }
-    });
-    workbenchState.taskDetail = payload.result;
-    workbenchState.dirty = false;
-    trackOperation(payload.operation);
-    await refreshHarborInventory({ quiet: true, skipGuard: true });
-    if (options.reopen) {
-      const item = listValue(workbenchState.taskDetail?.tree).find((value) => value.path === options.reopen);
-      if (item) await openFile(item);
-    }
-    return payload;
-  } catch (error) {
-    setWorkbenchStatus(error.message || String(error), true);
-    return null;
-  }
-}
-async function mutateTasks(body) {
-  if (!adminMode()) return null;
-  try {
-    const payload = await serveApi("/api/harbor/tasks", {
-      method: "POST",
-      body: { ...body, dataset_id: workbenchState.datasetId }
-    });
-    trackOperation(payload.operation);
-    clearEditor();
-    await refreshHarborInventory({ quiet: true, skipGuard: true });
-    return payload;
-  } catch (error) {
-    setWorkbenchStatus(error.message || String(error), true);
-    return null;
-  }
-}
-async function mutateDatasets(body, options = {}) {
-  if (!adminMode()) return null;
-  try {
-    const payload = await serveApi("/api/harbor/datasets", {
-      method: "POST",
-      body: { ...body, expected_revision: workbenchState.inventory?.revision }
-    });
-    if (payload.operation) trackOperation(payload.operation);
-    workbenchState.inventory = payload.result || workbenchState.inventory;
-    if (options.selectId) workbenchState.datasetId = options.selectId;
-    await refreshHarborInventory({ quiet: true, skipGuard: true });
-    return payload;
-  } catch (error) {
-    setWorkbenchStatus(error.message || String(error), true);
-    return null;
-  }
-}
-async function createDataset(register = false) {
-  if (!adminMode()) return;
-  const datasetId = window.prompt(t("harbor_dataset_id_prompt", "Dataset ID"));
-  if (!datasetId) return;
-  const path = window.prompt(register ? t("harbor_existing_dataset_path_prompt", "Existing Dataset path") : t("harbor_new_dataset_path_prompt", "New Dataset path"));
-  if (!path) return;
-  const body = { action: register ? "register" : "create", dataset_id: datasetId.trim(), path: path.trim() };
-  if (!register) {
-    const packageName = window.prompt(t("harbor_dataset_package_prompt", "Dataset package name (org/name)"), `local/${datasetId.trim()}`);
-    if (!packageName) return;
-    body.package_name = packageName.trim();
-  }
-  await mutateDatasets(body, { selectId: datasetId.trim() });
-}
-async function editDataset(dataset = selectedDataset()) {
-  if (!adminMode() || !dataset) return;
-  const newId = window.prompt(t("harbor_dataset_id_prompt", "Dataset ID"), dataset.id);
-  if (!newId) return;
-  const path = window.prompt(t("harbor_dataset_path_prompt", "Dataset path"), dataset.path);
-  if (!path) return;
-  await mutateDatasets({ action: "update", dataset_id: dataset.id, new_id: newId.trim(), path: path.trim() }, { selectId: newId.trim() });
-}
-async function removeDataset(dataset = selectedDataset()) {
-  if (!adminMode() || !dataset || !window.confirm(harborMessage(
-    "harbor_unregister_confirm",
-    "Unregister Dataset “{name}”? Files will not be deleted.",
-    { name: dataset.id }
-  ))) return;
-  await mutateDatasets({ action: "remove", dataset_id: dataset.id });
-}
-async function createTask() {
-  if (!adminMode()) return;
-  const dataset = selectedDataset();
-  if (!dataset) return;
-  const directory = window.prompt(t("harbor_task_directory_prompt", "Task directory"));
-  if (!directory) return;
-  const packageName = window.prompt(t("harbor_task_package_prompt", "Task package name (org/name)"), `local/${directory.trim()}`);
-  if (!packageName) return;
-  const rawSteps = window.prompt(t("harbor_step_count_prompt", "Step count (0 for single-step)"), "0");
-  if (rawSteps === null) return;
-  const steps = Number(rawSteps);
-  if (!Number.isInteger(steps) || steps < 0 || steps > 50) {
-    setWorkbenchStatus(t("harbor_steps_invalid", "Step count must be an integer from 0 to 50"), true);
-    return;
-  }
-  const result = await mutateTasks({ action: "create", directory: directory.trim(), package_name: packageName.trim(), steps, expected_revision: dataset.revision });
-  if (result) await selectTask(directory.trim());
-}
-async function renameTask(task = selectedTask()) {
-  if (!adminMode() || !task) return;
-  const newDirectory = window.prompt(t("harbor_task_directory_prompt", "Task directory"), task.directory);
-  if (!newDirectory || newDirectory.trim() === task.directory) return;
-  const result = await mutateTasks({ action: "rename", task: task.directory, new_directory: newDirectory.trim(), expected_revision: task.revision });
-  if (result) await selectTask(newDirectory.trim());
-}
-async function trashTask(task = selectedTask()) {
-  if (!adminMode() || !task || !window.confirm(harborMessage(
-    "harbor_trash_confirm",
-    "Move Task “{name}” to this Dataset's trash?",
-    { name: task.directory }
-  ))) return;
-  await mutateTasks({ action: "trash", task: task.directory, expected_revision: task.revision });
-}
-async function restoreTrash(entry = selectedTrashEntry()) {
-  if (!adminMode() || !entry) return;
-  const directory = window.prompt(t("harbor_restore_directory_prompt", "Restore directory"), entry.directory || "");
-  if (directory === null) return;
-  await mutateTasks({ action: "restore", entry_id: entry.entry_id, directory: directory.trim(), expected_revision: entry.revision });
-}
-async function purgeTrash(entry = selectedTrashEntry()) {
-  if (!adminMode() || !entry || !window.confirm(harborMessage(
-    "harbor_purge_confirm",
-    "Permanently delete “{name}”? This cannot be undone.",
-    { name: entry.directory || entry.entry_id }
-  ))) return;
-  await mutateTasks({ action: "purge", entry_id: entry.entry_id, expected_revision: entry.revision });
-}
-async function syncManifest() {
-  const dataset = selectedDataset();
-  if (!adminMode() || !dataset) return;
-  try {
-    const summary = await serveApi("/api/harbor/datasets", {
-      method: "POST",
-      body: { action: "sync_manifest", dataset_id: dataset.id, expected_revision: dataset.revision }
-    });
-    const datasets = listValue(workbenchState.inventory?.datasets).map((item) => item.id === summary.id ? summary : item);
-    workbenchState.inventory = { ...workbenchState.inventory, datasets };
-    renderHarborWorkbench();
-    setWorkbenchStatus(t("harbor_manifest_synced", "Manifest synced"));
-  } catch (error) {
-    setWorkbenchStatus(error.message || String(error), true);
-  }
-}
-async function createFile(kind) {
-  if (!adminMode()) return;
-  const task = selectedTask();
-  if (!task) return;
-  const path = window.prompt(kind === "directory" ? t("harbor_new_directory_path_prompt", "New directory path") : t("harbor_new_file_path_prompt", "New file path"));
-  if (!path) return;
-  await mutateFiles({ action: "create", kind, path: path.trim(), expected_revision: task.revision });
-}
-async function uploadFile(file) {
-  if (!adminMode()) return;
-  const task = selectedTask();
-  if (!task || !file) return;
-  if (Number(file.size) > 16 * 1024 * 1024) {
-    setWorkbenchStatus(t("harbor_upload_too_large", "Uploads are limited to 16 MiB"), true);
-    return;
-  }
-  const path = window.prompt(t("harbor_upload_path_prompt", "Upload path"), file.name);
-  if (!path) return;
-  const buffer = new Uint8Array(await file.arrayBuffer());
-  let binary = "";
-  for (let offset = 0; offset < buffer.length; offset += 32768) binary += String.fromCharCode(...buffer.subarray(offset, offset + 32768));
-  await mutateFiles({ action: "upload", path: path.trim(), content_base64: btoa(binary), expected_revision: task.revision });
-}
-async function fileActionMenu(item) {
-  if (!adminMode()) return;
-  const task = selectedTask();
-  if (!task) return;
-  const action = window.prompt(t("harbor_file_action_prompt", "File action: rename or delete"), "rename");
-  if (action === "rename") {
-    const newPath = window.prompt(t("harbor_new_path_prompt", "New path"), item.path);
-    if (!newPath || newPath === item.path) return;
-    await mutateFiles({ action: "rename", path: item.path, new_path: newPath.trim(), expected_revision: task.revision });
-  } else if (action === "delete" && window.confirm(harborMessage(
-    "harbor_delete_file_confirm",
-    "Permanently delete “{name}”?",
-    { name: item.path }
-  ))) {
-    await mutateFiles({ action: "delete", path: item.path, expected_revision: task.revision });
-  }
-}
-function downloadFile() {
-  if (!adminMode() || !workbenchState.filePath || !workbenchState.taskName || !workbenchState.datasetId) return;
-  window.location.assign(`/api/harbor/files?dataset_id=${encodeURIComponent(workbenchState.datasetId)}&task=${encodeURIComponent(workbenchState.taskName)}&path=${encodeURIComponent(workbenchState.filePath)}&download=1`);
-}
-function trackOperation(operation) {
-  const operationId = operation?.operation_id;
-  if (operationId) pollHarborOperation(operationId);
-}
-async function pollHarborOperation(operationId) {
-  if (!adminMode()) return;
-  try {
-    const operation = await serveApi(`/api/operations/${encodeURIComponent(operationId)}`);
-    const node = workbenchRoot()?.querySelector?.("[data-harbor-operation-status]");
-    if (node) node.textContent = `${operation.operation_type}: ${operation.completed}/${operation.total}`;
-    if (operation.state === "queued" || operation.state === "running") {
-      setTimeout(() => pollHarborOperation(operationId), 250);
-      return;
-    }
-    if (operation.state === "failed" || listValue(operation.failures).length) {
-      setWorkbenchStatus(operation.failures?.[0]?.error || t("harbor_reconcile_failed", "Catalog reconcile failed"), true);
-    } else {
-      await refreshHarborInventory({ quiet: true, skipGuard: true });
-    }
-  } catch (error) {
-    setWorkbenchStatus(error.message || String(error), true);
-  }
-}
-function setWorkbenchStatus(message, error = false) {
-  const node = workbenchRoot()?.querySelector?.("[data-harbor-workbench-status]");
-  if (!node) return;
-  node.textContent = message || "";
-  node.hidden = !message;
-  node.classList.toggle("danger", Boolean(error));
-}
-function bindHarborWorkbench() {
-  const surface = workbenchRoot();
-  if (!surface || surface.dataset.bound === "true") return;
-  surface.dataset.bound = "true";
-  surface.querySelector("[data-harbor-reload]")?.addEventListener("click", () => refreshHarborInventory());
-  surface.querySelector("[data-harbor-add-dataset]")?.addEventListener("click", () => createDataset(false));
-  surface.querySelector("[data-harbor-register-dataset]")?.addEventListener("click", () => createDataset(true));
-  surface.querySelector("[data-harbor-edit-dataset]")?.addEventListener("click", () => editDataset());
-  surface.querySelector("[data-harbor-remove-dataset]")?.addEventListener("click", () => removeDataset());
-  surface.querySelector("[data-harbor-create-task]")?.addEventListener("click", createTask);
-  surface.querySelector("[data-harbor-sync-manifest]")?.addEventListener("click", syncManifest);
-  surface.querySelector("[data-harbor-rename-task]")?.addEventListener("click", () => renameTask());
-  surface.querySelector("[data-harbor-trash-task]")?.addEventListener("click", () => trashTask());
-  surface.querySelector("[data-harbor-restore-task]")?.addEventListener("click", () => restoreTrash());
-  surface.querySelector("[data-harbor-purge-task]")?.addEventListener("click", () => purgeTrash());
-  surface.querySelector("[data-harbor-show-trash]")?.addEventListener("click", () => {
-    if (!confirmDiscard()) return;
-    workbenchState.showTrash = !workbenchState.showTrash;
-    setOverviewSelection(null);
-    renderHarborWorkbench();
-  });
-  surface.querySelector("[data-harbor-search]")?.addEventListener("input", (event) => {
-    const previous = workbenchState.search;
-    workbenchState.search = String(event.target.value || "");
-    const currentVisible = visibleOverviewRows().some((row) => overviewRowKey(row) === selectedOverviewKey());
-    if (!currentVisible && !confirmDiscard()) {
-      workbenchState.search = previous;
-      event.target.value = previous;
-      return;
-    }
-    refreshOverviewAfterControls({ skipGuard: true });
-  });
-  surface.querySelector("[data-harbor-new-file]")?.addEventListener("click", () => createFile("file"));
-  surface.querySelector("[data-harbor-new-directory]")?.addEventListener("click", () => createFile("directory"));
-  const upload = surface.querySelector("[data-harbor-upload-input]");
-  surface.querySelector("[data-harbor-upload]")?.addEventListener("click", () => upload?.click());
-  upload?.addEventListener("change", () => {
-    const file = upload.files?.[0];
-    upload.value = "";
-    if (file) uploadFile(file);
-  });
-  const editor = surface.querySelector("[data-harbor-editor]");
-  editor?.addEventListener("input", () => {
-    if (!adminMode()) return;
-    workbenchState.dirty = editor.value !== workbenchState.savedText;
-    syncEditorControls();
-  });
-  surface.querySelector("[data-harbor-save]")?.addEventListener("click", saveFile);
-  surface.querySelector("[data-harbor-download]")?.addEventListener("click", downloadFile);
-  document.addEventListener("keydown", (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && adminMode()) {
-      event.preventDefault();
-      saveFile();
-    }
-  });
-  window.addEventListener("beforeunload", (event) => {
-    if (!isHarborDirty()) return;
-    event.preventDefault();
-    event.returnValue = "";
-  });
-}
-function textNode(tag, value) {
-  const node = document.createElement(tag);
-  node.textContent = String(value ?? "");
-  return node;
-}
-function emptyNode(value) {
-  const node = textNode("p", value);
-  node.className = "copy harbor-empty";
-  return node;
-}
-function formatBytes(value) {
-  const bytes = Number(value || 0);
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
-// web/src/modules/serve-controls.js
-function bindGlobalControls() {
-  if (state.boundGlobalControls) return;
-  document.addEventListener("keydown", (event) => {
-    if (event.defaultPrevented) return;
-    if (event.key === "Escape" && closeAdminLogin()) {
-      return;
-    }
-    if (event.key === "Escape" && closeWorkspaceViewSaveDialog()) {
-      return;
-    }
-    if (event.key === "Escape" && closeWorkspaceReportReader()) {
-      return;
-    }
-    if (event.key !== "Escape" || !state.selectedStep) return;
-    state.selectedStep = null;
-    renderComparisonPanels();
-  });
-  document.addEventListener("click", (event) => {
-    closeOpenSubmenus(event.target?.closest?.(SUBMENU_DETAILS_SELECTOR) || null);
-  }, true);
-  document.addEventListener("click", (event) => {
-    const link = event.target?.closest?.(".workspace-nav-link[href]");
-    if (!link) return;
-    if (isHarborDirty() && !confirmDiscard()) {
-      event.preventDefault();
-      return;
-    }
-    if (workspaceReportBindingsChanged() && !window.confirm(t("report_discard_bindings", "Discard unsaved report binding changes?"))) {
-      event.preventDefault();
-    }
-  });
-  document.addEventListener("click", (event) => {
-    if (!state.selectedStep) return;
-    const target = event.target;
-    if (target?.closest?.("#step-drawer") || target?.closest?.("#workspace-report-reader") || target?.closest?.("[data-report-manager]") || target?.closest?.("[data-workspace-report-control]") || target?.closest?.("[data-source-manager]") || target?.closest?.("[data-harbor-workbench]") || target?.closest?.("[data-step]") || target?.closest?.("[data-step-action]") || target?.closest?.("[data-step-id]") || target?.closest?.("[data-timeline-step-id]") || target?.closest?.("[data-timeline-chart]")) return;
-    state.selectedStep = null;
-    renderComparisonPanels();
-  });
-  document.addEventListener("click", (event) => {
-    if (!adminMode()) return;
-    const editButton = event.target?.closest?.("[data-notes-edit]");
-    if (editButton) {
-      event.preventDefault();
-      beginNotesEdit(editButton.dataset.trialKey || selectedKey());
-      return;
-    }
-    const cancelButton = event.target?.closest?.("[data-notes-cancel]");
-    if (cancelButton) {
-      event.preventDefault();
-      cancelNotesEdit();
-      return;
-    }
-    const saveButton = event.target?.closest?.("[data-notes-save]");
-    if (saveButton) {
-      event.preventDefault();
-      saveSelectedNotes(saveButton);
-    }
-  });
-  window.addEventListener("resize", () => {
-    if (state.timelineChart) state.timelineChart.resize();
-  });
-  if (serveMode()) {
-    bindServeSourceControls();
-    bindWorkspaceViewDialog();
-  }
-  state.boundGlobalControls = true;
-}
-function bindServeSourceControls() {
-  bindAuthenticationControls();
-  bindWorkspaceReportGlobalControls();
-  bindHarborWorkbench();
-  document.querySelectorAll("[data-refresh-all]").forEach((button) => {
-    button.addEventListener("click", () => refreshServeReportFromServer({ refresh: true }));
-  });
-  document.querySelectorAll("[data-refresh-sources]").forEach((button) => {
-    button.addEventListener("click", () => refreshServeSourcesFromServer());
-  });
-  document.querySelectorAll("[data-source-bulk-state]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      mutateSelectedServeSourceState();
-    });
-  });
-  document.querySelectorAll("[data-source-bulk-delete]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      deleteSelectedServeSources();
-    });
-  });
-  document.querySelectorAll("[data-locale-select]").forEach((select) => {
-    select.addEventListener("change", (event) => {
-      changeServeLocale(event.target.value);
-    });
-  });
-  document.querySelectorAll("[data-source-add-form]").forEach((form) => {
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      submitServeSourceForm(form);
-    });
-  });
-  document.querySelectorAll("[data-path-picker]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      choosePathSourceFiles(button);
-    });
-  });
-  document.querySelectorAll("[data-db-inspect]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      inspectDbSessions(button.closest("[data-source-add-form]"));
-    });
-  });
-  document.querySelectorAll("[data-db-session-picker]").forEach((picker) => {
-    picker.addEventListener("change", (event) => {
-      if (event.target?.matches?.("[data-db-select-all]")) {
-        setDbSessionSelection(picker, event.target.checked);
-      }
-    });
-    picker.addEventListener("click", (event) => {
-      const button = event.target?.closest?.("[data-db-add-selected]");
-      if (!button) return;
-      event.preventDefault();
-      addSelectedDbSessions(button.closest("[data-source-add-form]"));
-    });
-  });
-  document.querySelectorAll("[data-harbor-mount-form]").forEach((form) => {
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      submitHarborMountForm(form);
-    });
-    form.querySelector("[data-harbor-mount-remove]")?.addEventListener("click", (event) => {
-      event.preventDefault();
-      removeHarborMount(form);
-    });
-  });
-  bindAdapterDefaultDbControls();
-  const sourceList = document.querySelector("[data-source-list]");
-  if (sourceList) {
-    sourceList.addEventListener("click", (event) => {
-      if (event.target?.closest?.("button,input,select,textarea,label")) return;
-      const row = event.target?.closest?.("[data-source-row]");
-      const sourceKey = row?.dataset?.sourceKey;
-      if (!sourceKey) return;
-      event.preventDefault();
-      selectServeSource(sourceKey);
-    });
-  }
-}
-function bindAuthenticationControls() {
-  document.querySelectorAll("[data-admin-login-open]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      openAdminLogin(button);
-    });
-  });
-  document.querySelectorAll("[data-admin-login-close]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      closeAdminLogin();
-    });
-  });
-  const dialog = document.querySelector("[data-admin-login-dialog]");
-  dialog?.addEventListener?.("click", (event) => {
-    if (event.target === dialog) closeAdminLogin();
-  });
-  dialog?.querySelector?.("[data-admin-login-form]")?.addEventListener("submit", submitAdminLogin);
-  document.querySelectorAll("[data-admin-logout]").forEach((button) => {
-    button.addEventListener("click", async (event) => {
-      event.preventDefault();
-      button.disabled = true;
-      try {
-        await serveApi("/api/auth/logout", { method: "POST", body: {} });
-        if (RENDER_OPTIONS?.serve_page === "sources") window.location.assign("/");
-        else window.location.reload();
-      } catch (error) {
-        button.disabled = false;
-        setServeStatus(error.message || String(error), true);
-      }
-    });
-  });
-}
-function openAdminLogin(opener = null) {
-  const dialog = document.querySelector("[data-admin-login-dialog]");
-  if (!dialog) return false;
-  const status = dialog.querySelector("[data-admin-login-status]");
-  if (status) {
-    status.hidden = true;
-    status.textContent = "";
-  }
-  openModalSurface(dialog, {
-    opener,
-    bodyClass: "admin-login-open",
-    focusTarget: dialog.querySelector('[name="password"]')
-  });
-  return true;
-}
-function closeAdminLogin(options = {}) {
-  return closeModalSurface(document.querySelector("[data-admin-login-dialog]"), options);
-}
-async function submitAdminLogin(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const password = String(new FormData(form).get("password") || "");
-  const status = form.querySelector("[data-admin-login-status]");
-  const submit = form.querySelector('[type="submit"]');
-  if (submit) submit.disabled = true;
-  try {
-    await serveApi("/api/auth/login", { method: "POST", body: { password } });
-    window.location.reload();
-  } catch (error) {
-    if (status) {
-      status.textContent = error.message || t("serve_login_failed", "Login failed");
-      status.classList.add("danger");
-      status.hidden = false;
-    }
-    if (submit) submit.disabled = false;
-    form.querySelector('[name="password"]')?.focus?.();
-  }
-}
-async function changeServeLocale(locale) {
-  if (!adminMode()) return;
-  try {
-    await serveApi("/api/config/locale", {
-      method: "POST",
-      body: { locale }
-    });
-    window.location.reload();
-  } catch (error) {
-    setServeStatus(error.message || String(error), true);
-  }
-}
-function bindAdapterDefaultDbControls() {
-  document.querySelectorAll('[data-source-add-form][data-source-kind="db"]').forEach((form) => {
-    const select = form.querySelector('[name="adapter"]');
-    const field = dbFieldFor(form);
-    const saveButton = form.querySelector("[data-adapter-default-db-save]");
-    const clearButton = form.querySelector("[data-adapter-default-db-clear]");
-    if (!select || !field || !saveButton || !clearButton) return;
-    select.addEventListener("change", () => {
-      applyDefaultDbToForm(form, { force: true });
-      syncAdapterDefaultDbControls(form);
-    });
-    field.addEventListener("input", () => syncAdapterDefaultDbControls(form));
-    saveButton.addEventListener("click", (event) => {
-      event.preventDefault();
-      saveAdapterDefaultDb(form, String(field.value || "").trim());
-    });
-    clearButton.addEventListener("click", (event) => {
-      event.preventDefault();
-      saveAdapterDefaultDb(form, "");
-    });
-    applyDefaultDbToForm(form);
-    syncAdapterDefaultDbControls(form);
-  });
-}
-function syncAdapterDefaultDbControls(form) {
-  const adapter = selectedAdapterValue(form);
-  const field = dbFieldFor(form);
-  const saveButton = form?.querySelector?.("[data-adapter-default-db-save]");
-  const clearButton = form?.querySelector?.("[data-adapter-default-db-clear]");
-  if (!field || !saveButton || !clearButton) return;
-  const path = String(field.value || "").trim();
-  const hasAdapter = Boolean(adapter);
-  const hasDefault = Boolean(adapter && adapterDefaults()[adapter]);
-  saveButton.disabled = !hasAdapter || !path;
-  clearButton.disabled = !hasAdapter || !hasDefault;
-  const adapterTitle = hasAdapter ? "" : t("serve_select_adapter_for_default_db", "Select a specific adapter to manage its default DB");
-  saveButton.title = adapterTitle || (!path ? t("serve_enter_db_for_default", "Enter a DB path to save as default") : "");
-  clearButton.title = adapterTitle;
-}
-function syncAllAdapterDefaultDbControls() {
-  document.querySelectorAll('[data-source-add-form][data-source-kind="db"]').forEach(syncAdapterDefaultDbControls);
-}
-async function saveAdapterDefaultDb(form, defaultDbPath) {
-  if (!adminMode()) return false;
-  const adapter = selectedAdapterValue(form);
-  if (!adapter) {
-    const message = t("serve_select_adapter_for_default_db", "Select a specific adapter to manage its default DB");
-    setServeStatus(message, true);
-    showServeNotice(message, true);
-    syncAdapterDefaultDbControls(form);
-    return false;
-  }
-  try {
-    const payload = await serveApi("/api/config/adapter-default-db", {
-      method: "POST",
-      body: {
-        adapter,
-        default_db_path: String(defaultDbPath || "").trim()
-      }
-    });
-    state.adapterDefaults = payload?.adapter_defaults && typeof payload.adapter_defaults === "object" ? { ...payload.adapter_defaults } : { ...adapterDefaults(), [adapter]: payload?.default_db_path || "" };
-    if (!payload?.default_db_path) delete state.adapterDefaults[adapter];
-    updateAdapterDefaultOptions();
-    applyUpdatedAdapterDefaultToDbForms(adapter);
-    syncAllAdapterDefaultDbControls();
-    const message = payload?.default_db_path ? t("serve_adapter_default_db_saved", "Adapter default DB saved") : t("serve_adapter_default_db_cleared", "Adapter default DB cleared");
-    setServeStatus(message);
-    showServeNotice(message);
-    return true;
-  } catch (error) {
-    setServeStatus(error.message || String(error), true);
-    showServeNotice(error.message || String(error), true);
-    syncAllAdapterDefaultDbControls();
-    return false;
-  }
-}
-function updateAdapterDefaultOptions() {
-  document.querySelectorAll('select[name="adapter"] option').forEach((option) => {
-    const defaultDb = adapterDefaults()[option.value] || "";
-    if (defaultDb) {
-      option.dataset.defaultDb = defaultDb;
-    } else {
-      delete option.dataset.defaultDb;
-    }
-  });
-}
-function applyUpdatedAdapterDefaultToDbForms(adapter) {
-  document.querySelectorAll('[data-source-add-form][data-source-kind="db"]').forEach((form) => {
-    const selected = selectedAdapterValue(form);
-    applyDefaultDbToForm(form, { force: Boolean(selected && selected === adapter) });
-    syncAdapterDefaultDbControls(form);
-  });
-}
-function dbFieldFor(form) {
-  return form?.querySelector?.('[name="db"]') || null;
-}
-function defaultDbForAdapter(form) {
-  const select = form?.querySelector?.('[name="adapter"]');
-  const value = selectedAdapterValue(form);
-  if (!select || !value) return "";
-  const selected = Array.from(select.options || []).find((option) => option.value === value);
-  return selected?.dataset?.defaultDb || adapterDefaults()[value] || "";
-}
-function applyDefaultDbToForm(form, options = {}) {
-  const field = dbFieldFor(form);
-  if (!field) return "";
-  const defaultDb = defaultDbForAdapter(form);
-  if (defaultDb && (options.force || !String(field.value || "").trim())) {
-    field.value = defaultDb;
-  }
-  return defaultDb;
-}
-
-// web/src/modules/source-manager.js
-var selectedSourceRows = /* @__PURE__ */ new Map();
-function closeServeSourceManager(options = {}) {
-  return false;
-}
-function renderServeSources() {
-  if (!serveMode()) return;
-  const sources = Array.isArray(state.sourceManagerRows) ? state.sourceManagerRows : [];
-  const managerStatus = state.sourceManagerStatus || { phase: "idle", message: "" };
-  syncServeLoadingStatus(state.serveSources);
-  renderSourceManagerStatus();
-  const list = document.querySelector("[data-source-list]");
-  if (list) {
-    if (managerStatus.phase === "loading") {
-      list.innerHTML = `<li class="source-row empty loading">${esc(managerStatus.message || t("loading", "Loading"))}</li>`;
-      syncSourceManagerBulkActions([]);
-      return;
-    }
-    if (!sources.length) {
-      state.sourceSelection.clear();
-      const message = managerStatus.phase === "error" ? managerStatus.message : t("serve_no_sources", "No sources loaded");
-      list.innerHTML = `<li class="source-row empty${managerStatus.phase === "error" ? " danger" : ""}">${esc(message)}</li>`;
-      syncSourceManagerBulkActions();
-      return;
-    }
-    pruneSourceSelection();
-    const rows = sourceRows();
-    const columns = sourceColumns();
-    list.innerHTML = `<li class="source-table-item">${renderDataTable({
-      tableId: "sources",
-      columns,
-      rows,
-      rowKey: (source) => source?.source_key,
-      tableClass: "source-table",
-      shellClass: "source-table-shell",
-      rowClass: (source) => ["source-table-row", source?.active === false ? "archived" : "", source?.last_status === "missing" ? "missing" : "", source?.source_key && source.source_key === state.selectedSourceKey ? "selected-row" : ""].filter(Boolean).join(" "),
-      rowAttrs: (source) => `data-source-row data-source-key="${esc(source?.source_key || "")}"`,
-      rowTitle: (source) => source?.source_key || source?.label || ""
-    })}</li>${renderSourceManagerPagination()}`;
-    bindDataTableControls(list, {
-      tableId: "sources",
-      columns,
-      rows,
-      rowKey: (source) => source?.source_key,
-      onChange: () => renderServeSources()
-    });
-    bindSourceSelectionControls(list);
-    bindSourceManagerPagination(list);
-    syncSourceManagerBulkActions(rows);
-  }
-}
-function renderSourceManagerStatus() {
-  const target = document.querySelector("[data-source-manager-status]");
-  if (!target) return;
-  const status = state.sourceManagerStatus || { phase: "idle", message: "" };
-  target.textContent = status.message || "";
-  target.classList.toggle("danger", status.phase === "error");
-  target.classList.toggle("loading", status.phase === "loading");
-  target.hidden = !status.message;
-}
-function syncServeLoadingStatus(sources = state.serveSources) {
-  const countNode = document.querySelector("[data-source-count]");
-  const statusNode = document.querySelector("[data-source-status]");
-  if (state.serveLoading) {
-    if (countNode) countNode.textContent = t("serve_loading_sources", "Loading sources");
-    if (statusNode) {
-      statusNode.textContent = t("serve_scanning_runs", "Scanning runs; sessions will appear when discovery finishes.");
-      statusNode.classList.toggle("danger", false);
-      statusNode.classList.toggle("loading", true);
-    }
-    return;
-  }
-  const list = Array.isArray(sources) ? sources : [];
-  if (countNode) {
-    const word = list.length === 1 ? t("serve_source_count", "source") : t("serve_sources_count", "sources");
-    countNode.textContent = `${list.length} ${word}`;
-  }
-  if (statusNode) statusNode.classList.toggle("loading", false);
-}
-function sourceColumns() {
-  return [
-    { key: "__source_select", valueType: "selection", sourceSelect: true, label: t("select_rows", "Select rows"), value: (source) => source?.source_key || "", html: renderSourceSelection },
-    { key: "label", label: t("source", "Source"), valueType: "identity", value: (source) => sourceDisplayLabel(source), html: renderServeSourceLabel, cellTitle: (source) => source?.label || "" },
-    { key: "last_turn_finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: (source) => source?.last_turn_finished_at_ms, format: fmtDate },
-    { key: "status", label: t("status", "status"), valueType: "status", value: (source) => sourceStatusText(source), html: renderServeSourceStatus },
-    { key: "alias", label: t("serve_source_alias", "Alias"), valueType: "text", value: (source) => String(source?.source_alias || "").trim() || "-", edit: { value: (source) => String(source?.source_alias || ""), commit: (source, value) => commitSourceCellEdit(source, "alias", value) } },
-    { key: "source_category", label: t("category", "Category"), valueType: "text", value: (source) => sourceCategoryValue(source), html: renderReadOnlySourceCategory, edit: { value: (source) => sourceCategoryEditValue(source), suggestions: existingSourceCategoryOptions, commit: (source, value) => commitSourceCellEdit(source, "category", value) } },
-    { key: "source_tags", label: t("tags", "Tags"), valueType: "list", value: (source) => sourceTagsValue(source), html: renderReadOnlySourceTags, edit: { value: (source) => sourceTagsEditValue(source), suggestions: existingSourceTagOptions, commit: (source, value) => commitSourceCellEdit(source, "tags", value) } }
-  ];
-}
-function sourceDisplayLabel(source) {
-  const label = source?.label || source?.source_key || "source";
-  const alias = String(source?.source_alias || "").trim();
-  return alias || label;
-}
-function sourceStatusText(source) {
-  const active = source?.active !== false;
-  const stateLabel = active ? t("serve_active", "active") : t("serve_archived", "archived");
-  return `${source?.kind || "source"} / ${source?.adapter || "-"} / ${source?.last_status || "-"} / ${stateLabel}`;
-}
-function renderServeSourceLabel(source) {
-  const key = source?.source_key || "";
-  const label = source?.label || key || "source";
-  const alias = String(source?.source_alias || "").trim();
-  const displayLabel = alias || label;
-  const origin = alias ? `<span class="source-origin">${esc(label)}</span>` : "";
-  const session = source?.trial_session_id || source?.session_id || "";
-  const sessionLine = session ? `<span>${esc(t("session", "Session"))}: <code>${esc(session)}</code></span>` : "";
-  return `<span class="source-label-stack"><strong>${esc(displayLabel)}</strong>${origin}${sessionLine}</span>`;
-}
-function renderServeSourceStatus(source) {
-  return `<span class="source-status-text">${esc(sourceStatusText(source))}</span>`;
-}
-function renderSourceSelectionHeader(rows) {
-  const visible = sourceVisibleKeys(rows);
-  const selected = visible.filter((key) => state.sourceSelection.has(key));
-  const checked = visible.length > 0 && selected.length === visible.length;
-  const partial = selected.length > 0 && selected.length < visible.length;
-  return `<th class="select-col table-value-selection" data-value-type="selection"><label class="select-box"><input type="checkbox" data-source-select-visible ${checked ? "checked" : ""} ${partial ? 'data-partial="true"' : ""} aria-label="${esc(t("select_visible_sources", "Select visible sources"))}"><span></span></label></th>`;
-}
-function renderSourceSelection(source) {
-  const key = source?.source_key || "";
-  const checked = key && state.sourceSelection.has(key);
-  return `<label class="select-box"><input type="checkbox" data-source-row-select="${esc(key)}" ${checked ? "checked" : ""} aria-label="${esc(t("select_source", "Select source"))}: ${esc(key)}"><span></span></label>`;
-}
-function renderServeSourceAliasCell(source) {
-  const alias = String(source?.source_alias || "").trim();
-  return alias ? esc(alias) : `<span class="muted">-</span>`;
-}
-async function choosePathSourceFiles(button) {
-  if (!adminMode()) return;
-  const form = button?.closest?.("[data-source-add-form]");
-  const field = form?.querySelector?.('[name="path"]');
-  if (!field) return;
-  try {
-    const payload = await serveApi("/api/path-picker", {
-      method: "POST",
-      body: { multiple: true }
-    });
-    const paths = Array.isArray(payload?.paths) ? payload.paths.map((path) => String(path || "").trim()).filter(Boolean) : [];
-    if (!paths.length) return;
-    field.value = paths.join("\n");
-    setServeStatus(t("serve_path_picker_selected", "Path selection updated"));
-  } catch (error) {
-    const message = error.message || String(error);
-    showServeNotice(message, true);
-    setServeStatus(message, true);
-  }
-}
-function sourceVisibleKeys(rows = sourceRows()) {
-  return Array.from(new Set(rows.map((source) => String(source?.source_key || "").trim()).filter(Boolean)));
-}
-function sourceSelectedRows(rows = sourceRows()) {
-  const selectedKeys = sourceSelectionKeys(rows);
-  const selected = new Set(selectedKeys);
-  for (const key of selectedSourceRows.keys()) {
-    if (!selected.has(key)) selectedSourceRows.delete(key);
-  }
-  rows.forEach((source) => {
-    if (source?.source_key && selected.has(source.source_key)) {
-      selectedSourceRows.set(source.source_key, source);
-    }
-  });
-  return selectedKeys.map((key) => selectedSourceRows.get(key)).filter(Boolean);
-}
-function sourceBulkStateTarget(rows = sourceRows()) {
-  const selected = sourceSelectedRows(rows);
-  if (!selected.length) return "archived";
-  return selected.every((source) => source?.active === false) ? "active" : "archived";
-}
-function syncSourceManagerBulkActions(rows = sourceRows()) {
-  const selected = sourceSelectionKeys(rows);
-  const includesLinkedHarbor = sourceSelectedRows(rows).some((source) => source?.kind === "harbor-trial");
-  const targetMode = sourceBulkStateTarget(rows);
-  const stateButton = document.querySelector("[data-source-bulk-state]");
-  const deleteButton = document.querySelector("[data-source-bulk-delete]");
-  if (stateButton) {
-    stateButton.disabled = selected.length < 1;
-    stateButton.dataset.sourceBulkState = targetMode;
-    stateButton.textContent = targetMode === "active" ? t("activate_selected", "Activate selected") : t("archive_selected", "Archive selected");
-  }
-  if (deleteButton) {
-    deleteButton.disabled = selected.length < 1 || includesLinkedHarbor;
-    deleteButton.title = includesLinkedHarbor ? t("serve_linked_harbor_delete_disabled", "Linked Harbor Trials cannot be deleted; archive them instead.") : "";
-  }
-}
-function bindSourceSelectionControls(root) {
-  if (!serveMode() || !root) return;
-  root.querySelectorAll("[data-source-select-visible]").forEach((input) => {
-    input.addEventListener("click", (event) => event.stopPropagation());
-    input.addEventListener("change", (event) => {
-      event.stopPropagation();
-      const keys = sourceVisibleKeys(sourceRows());
-      keys.forEach((key) => {
-        if (input.checked) state.sourceSelection.add(key);
-        else state.sourceSelection.delete(key);
-      });
-      renderServeSources();
-    });
-  });
-  root.querySelectorAll("[data-source-row-select]").forEach((input) => {
-    input.addEventListener("click", (event) => event.stopPropagation());
-    input.addEventListener("change", (event) => {
-      event.stopPropagation();
-      const key = String(input.dataset.sourceRowSelect || "").trim();
-      if (!key) return;
-      if (input.checked) state.sourceSelection.add(key);
-      else state.sourceSelection.delete(key);
-      renderServeSources();
-    });
-  });
-}
-async function submitServeSourceForm(form) {
-  if (!adminMode()) return;
-  if (form?.dataset?.sourceKind === "db") applyDefaultDbToForm(form);
-  const body = formPayload(form);
-  const kind = form.dataset.sourceKind;
-  if (!kind) return;
-  const sourceValue = String(body[kind] || "").trim();
-  if (!sourceValue) return;
-  try {
-    setServeStatus(t("serve_refresh", "Refresh"));
-    const payload = await serveApi("/api/sources", { method: "POST", body });
-    form.reset();
-    if (kind === "db") syncAdapterDefaultDbControls(form);
-    applyServeMutationPayload(payload);
-    showImportResultsSummary(payload);
-  } catch (error) {
-    showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
-    setServeStatus(error.message || String(error), true);
-  }
-}
-function showImportResultsSummary(payload) {
-  const results = Array.isArray(payload?.import_results) ? payload.import_results : [];
-  if (!results.length) return;
-  const imported = results.filter((result) => result?.status === "ok").length;
-  const failures = results.filter((result) => result?.status === "error");
-  const failed = failures.length;
-  const template = t("serve_import_summary", "Imported {imported}, failed {failed}");
-  let message = template.replace("{imported}", String(imported)).replace("{failed}", String(failed));
-  const firstError = String(failures[0]?.error || "").trim();
-  if (firstError) message = `${message}: ${firstError}`;
-  showServeNotice(message, failed > 0);
-  setServeStatus(message, failed > 0);
-}
-async function inspectDbSessions(form) {
-  if (!adminMode()) return;
-  if (!form) return;
-  applyDefaultDbToForm(form);
-  const body = formPayload(form);
-  const db = String(body.db || "").trim();
-  if (!db) return;
-  const picker = form.querySelector("[data-db-session-picker]");
-  try {
-    setServeStatus(t("serve_inspect_db", "Inspect DB"));
-    const payload = await serveApi("/api/db-sessions", {
-      method: "POST",
-      body: {
-        db,
-        adapter: selectedAdapterValue(form)
-      }
-    });
-    if (payload?.adapter) setAdapterChoice(form, payload.adapter);
-    syncAdapterDefaultDbControls(form);
-    renderDbSessionPicker(form, payload);
-    setServeStatus(t("serve_latest_snapshots", "Latest snapshots"));
-  } catch (error) {
-    if (picker) {
-      picker.hidden = false;
-      picker.innerHTML = `<p class="copy danger">${esc(error.message || String(error))}</p>`;
-    }
-    setServeStatus(error.message || String(error), true);
-  }
-}
-function renderDbSessionPicker(form, payload) {
-  const picker = form.querySelector("[data-db-session-picker]");
-  if (!picker) return;
-  const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
-  form.dataset.inspectedDb = payload?.db || "";
-  form.dataset.inspectedAdapter = payload?.adapter || "";
-  picker.hidden = false;
-  if (!sessions.length) {
-    picker.innerHTML = `<div class="db-picker-head"><strong>${esc(t("serve_db_sessions", "DB sessions"))}</strong><span>${esc(t("serve_no_sessions", "No sessions found"))}</span></div>`;
-    return;
-  }
-  const adapterLabel = payload?.inferred ? t("serve_adapter_inferred", "Adapter inferred") : t("serve_adapter_selected", "Adapter selected");
-  picker.innerHTML = `
-    <div class="db-picker-head">
-      <div><strong>${esc(t("serve_db_sessions", "DB sessions"))}</strong><span>${esc(adapterLabel)}: ${esc(payload?.adapter || "-")}</span></div>
-      <label class="db-select-all"><input type="checkbox" data-db-select-all> ${esc(t("serve_select_all_visible", "Select all visible"))}</label>
-    </div>
-    <div class="db-session-table-wrap">
-      <table class="data-table db-session-table">
-        <thead><tr><th ${tableValueAttributes("selection", t("select_rows", "Select rows"))}></th><th ${tableValueAttributes("number", "#")}>${tableCellContent("#")}</th><th ${tableValueAttributes("identity", t("session", "Session"))}>${tableCellContent(esc(t("session", "Session")))}</th><th ${tableValueAttributes("text", t("serve_session_name", "Name"))}>${tableCellContent(esc(t("serve_session_name", "Name")))}</th></tr></thead>
-        <tbody>${sessions.map(renderDbSessionRow).join("")}</tbody>
-      </table>
-    </div>
-    <div class="db-picker-actions">
-      <span data-db-selected-count>0 ${esc(t("serve_selected_count", "selected"))}</span>
-      <button class="action-button primary" type="button" data-db-add-selected disabled>${esc(t("serve_add_selected", "Add selected"))}</button>
-    </div>
-  `;
-  bindDbSessionSelectionCounters(picker);
-}
-function renderDbSessionRow(session) {
-  const sessionId = String(session?.session_id || "");
-  const index = String(session?.index || "");
-  const name = String(session?.name || "-");
-  return `<tr>
-    <td ${tableValueAttributes("selection", sessionId)}><input type="checkbox" data-db-session-checkbox value="${esc(sessionId)}" aria-label="${esc(sessionId)}"></td>
-    <td ${tableValueAttributes("number", index, "num")}>${tableCellContent(esc(index))}</td>
-    <td ${tableValueAttributes("identity", sessionId)}>${tableCellContent(`<code>${esc(sessionId)}</code>`)}</td>
-    <td ${tableValueAttributes("text", name)}>${tableCellContent(esc(name))}</td>
-  </tr>`;
-}
-function bindDbSessionSelectionCounters(picker) {
-  picker.querySelectorAll("[data-db-session-checkbox]").forEach((box) => {
-    box.addEventListener("change", () => updateDbSelectedCount(picker));
-  });
-  updateDbSelectedCount(picker);
-}
-function setDbSessionSelection(picker, checked) {
-  picker.querySelectorAll("[data-db-session-checkbox]").forEach((box) => {
-    box.checked = Boolean(checked);
-  });
-  updateDbSelectedCount(picker);
-}
-function selectedDbSessionIds(form) {
-  return Array.from(form.querySelectorAll("[data-db-session-checkbox]:checked")).map((box) => String(box.value || "").trim()).filter(Boolean);
-}
-function updateDbSelectedCount(picker) {
-  const count = picker.querySelectorAll("[data-db-session-checkbox]:checked").length;
-  const target = picker.querySelector("[data-db-selected-count]");
-  if (target) target.textContent = `${count} ${t("serve_selected_count", "selected")}`;
-  const addButton = picker.querySelector("[data-db-add-selected]");
-  if (addButton) addButton.disabled = count < 1;
-}
-async function addSelectedDbSessions(form) {
-  if (!adminMode()) return;
-  if (!form) return;
-  const sessionIds = selectedDbSessionIds(form);
-  if (!sessionIds.length) {
-    setServeStatus(t("serve_select_sessions", "Select sessions"), true);
-    return;
-  }
-  const body = formPayload(form);
-  try {
-    setServeStatus(t("serve_refresh", "Refresh"));
-    const payload = await serveApi("/api/sources", {
-      method: "POST",
-      body: {
-        db: form.dataset.inspectedDb || body.db,
-        adapter: form.dataset.inspectedAdapter || selectedAdapterValue(form),
-        session_ids: sessionIds,
-        alias: body.alias
-      }
-    });
-    form.reset();
-    syncAdapterDefaultDbControls(form);
-    const picker = form.querySelector("[data-db-session-picker]");
-    if (picker) {
-      picker.hidden = true;
-      picker.innerHTML = "";
-    }
-    delete form.dataset.inspectedDb;
-    delete form.dataset.inspectedAdapter;
-    applyServeMutationPayload(payload);
-  } catch (error) {
-    showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
-    setServeStatus(error.message || String(error), true);
-  }
-}
-function harborMountPayload(form) {
-  const formData = new FormData(form);
-  return {
-    action: "upsert",
-    expected_revision: String(formData.get("expected_revision") || "").trim(),
-    original_id: String(formData.get("original_id") || "").trim(),
-    mount_id: String(formData.get("mount_id") || "").trim(),
-    jobs_path: String(formData.get("jobs_path") || "").trim(),
-    dataset_ids: formData.getAll("dataset_ids").map((value) => String(value).trim()).filter(Boolean)
-  };
-}
-async function submitHarborMountForm(form) {
-  if (!adminMode()) return;
-  try {
-    setServeStatus(t("serve_save_harbor_mount", "Save mount"));
-    await serveApi("/api/config/harbor-mount", {
-      method: "POST",
-      body: harborMountPayload(form)
-    });
-    window.location.reload();
-  } catch (error) {
-    showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
-    setServeStatus(error.message || String(error), true);
-  }
-}
-async function removeHarborMount(form) {
-  if (!adminMode()) return;
-  const originalId = String(new FormData(form).get("original_id") || "").trim();
-  if (!originalId || !window.confirm(t("serve_remove_harbor_mount_confirm", "Remove this Harbor mount from peval configuration?"))) return;
-  try {
-    setServeStatus(t("serve_remove_harbor_mount", "Remove mount"));
-    await serveApi("/api/config/harbor-mount", {
-      method: "POST",
-      body: {
-        action: "delete",
-        original_id: originalId,
-        expected_revision: String(new FormData(form).get("expected_revision") || "").trim()
-      }
-    });
-    window.location.reload();
-  } catch (error) {
-    showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
-    setServeStatus(error.message || String(error), true);
-  }
-}
-
-// web/src/modules/serve-effects.js
-function formPayload(form) {
-  const formData = new FormData(form);
-  const body = {};
-  for (const [key, value] of formData.entries()) {
-    const text = String(value || "").trim();
-    if (text) body[key] = text;
-  }
-  return body;
-}
-async function mutateSelectedServeSourceState() {
-  if (!adminMode()) return;
-  const rows = sourceRows();
-  const sourceKeys = sourceSelectionKeys(rows);
-  if (!sourceKeys.length) return;
-  const targetMode = sourceBulkStateTarget(rows);
-  const reportMode = currentServeSourceMode() === "all" ? normalizeServeSourceMode(state.search?.normalSourceMode || "active") : currentServeSourceMode();
-  try {
-    const payload = await serveApi("/api/sources/state", {
-      method: "POST",
-      body: {
-        source_keys: sourceKeys,
-        active: targetMode === "active",
-        report_source_state: reportMode === "all" ? "active" : reportMode
-      }
-    });
-    state.sourceSelection.clear();
-    await applyServeSourceStateMutationPayload(payload, { sourceKeys, targetMode });
-  } catch (error) {
-    setServeStatus(error.message || String(error), true);
-  }
-}
-function bindLeaderboardSearchControls(target) {
-  if (!serveMode() || !target) return;
-  const input = target.querySelector("[data-leaderboard-search-input]");
-  if (input) {
-    input.addEventListener("click", (event) => event.stopPropagation());
-    input.addEventListener("input", (event) => {
-      event.stopPropagation();
-      state.search.query = String(input.value || "");
-      applyLeaderboardSearchMode();
-    });
-  }
-  const control = target.querySelector("[data-leaderboard-search-scope]");
-  if (control) {
-    control.addEventListener("click", (event) => event.stopPropagation());
-    control.addEventListener("change", (event) => {
-      event.stopPropagation();
-      state.search.scope = control.value === "all" ? "all" : "visible";
-      applyLeaderboardSearchMode();
-    });
-  }
-}
-function focusLeaderboardSearchInput() {
-  const apply = () => {
-    const input = document.querySelector("[data-leaderboard-search-input]");
-    if (!input) return;
-    input.focus();
-    const end = String(input.value || "").length;
-    if (typeof input.setSelectionRange === "function") input.setSelectionRange(end, end);
-  };
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(apply);
-  else apply();
-}
-function existingSourceTagOptions() {
-  const tags = [];
-  const seen = /* @__PURE__ */ new Set();
-  const addTags = (value) => {
-    sourceTagsFromValue(value).forEach((tag) => {
-      if (seen.has(tag)) return;
-      seen.add(tag);
-      tags.push(tag);
-    });
-  };
-  listValue(state.serveSources).forEach((source) => addTags(source?.source_tags));
-  listValue(state.view?.trajectory_meta).forEach((meta) => addTags(meta?.source_tags));
-  Object.values(state.serveReportCache || {}).forEach((report) => {
-    listValue(report?.trajectory_meta).forEach((meta) => addTags(meta?.source_tags));
-  });
-  return tags;
-}
-function existingSourceCategoryOptions() {
-  const seen = /* @__PURE__ */ new Set();
-  return listValue(state.sourceCategoryOptions).map((value) => String(value || "").trim()).filter((value) => value && !seen.has(value) && seen.add(value));
-}
-async function commitSourceCellEdit(row, field, value) {
-  const sourceKey = row?.source_key;
-  if (!adminMode() || !sourceKey || !["alias", "category", "tags"].includes(field)) throw new Error(t("source_edit_unavailable", "Source editing is unavailable"));
-  const action = field;
-  const body = action === "category" ? { category: String(value || "").trim() } : {
-    report_source_state: currentServeSourceMode(),
-    [action]: action === "tags" ? listValue(value) : String(value || "").trim()
-  };
-  try {
-    const payload = await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}/${action}`, {
-      method: "POST",
-      body
-    });
-    const updated = listValue(payload?.sources).find((source) => source?.source_key === sourceKey);
-    if (updated) Object.assign(row, updated);
-    else if (action === "category") row.source_category = body.category || null;
-    await applyServeMutationPayload(payload, { preserveTrial: row?.trial_key || selectedKey(), selectedSourceKey: sourceKey });
-    if (action === "category") await refreshSourceCategoryOptions();
-    return { rowKey: sourceKey, source: updated || row };
-  } catch (error) {
-    setServeStatus(error.message || String(error), true);
-    throw error;
-  }
-}
-function selectedAdapterValue(form) {
-  return normalizeAdapterValue(new FormData(form).get("adapter"));
-}
-function normalizeAdapterValue(value) {
-  const text = String(value || "").trim();
-  return text && text.toLowerCase() !== "auto" ? text : void 0;
-}
-function setAdapterChoice(form, adapter) {
-  const value = String(adapter || "").trim();
-  if (!value) return;
-  const control = form.querySelector('[name="adapter"]');
-  if (!control) return;
-  if (control.tagName === "SELECT") {
-    if (Array.from(control.options || []).some((option) => option.value === value)) {
-      control.value = value;
-    }
-    return;
-  }
-  const radio = Array.from(form.querySelectorAll('[name="adapter"]')).find((input) => input.value === value);
-  if (radio) radio.checked = true;
-}
-function readableSourceKey(preferred = null, mode = currentServeSourceMode()) {
-  if (preferred) {
-    const match = readableServeSources(mode).find((source) => source?.source_key === preferred);
-    if (match) return match.source_key;
-  }
-  return readableServeSources(mode)[0]?.source_key || null;
-}
-function emptyServeReport() {
-  return {
-    schema_version: state.view?.schema_version || data()?.schema_version || 19,
-    includes: ["core"],
-    trajectory: [],
-    trajectory_meta: []
-  };
-}
-function reloadExpiredAdminSession(response) {
-  if (response?.status !== 403 || !adminMode() || !authenticationEnabled()) return false;
-  if (RENDER_OPTIONS?.serve_page === "sources") window.location.assign("/");
-  else window.location.reload();
-  return true;
-}
-async function serveApi(path, options = {}) {
-  const headers = { ...options.headers || {} };
-  let body = options.body;
-  if (body !== void 0 && typeof body !== "string") {
-    headers["Content-Type"] = "application/json";
-    body = JSON.stringify(body);
-  }
-  const response = await fetch(path, {
-    method: options.method || "GET",
-    headers,
-    body,
-    credentials: "same-origin"
-  });
-  const text = await response.text();
-  if (!response.ok) reloadExpiredAdminSession(response);
-  let payload = {};
-  if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch (cause) {
-      const message = response.ok ? t("serve_invalid_json_response", "Server returned an invalid JSON response") : response.statusText || `HTTP ${response.status}`;
-      const error = new Error(message, { cause });
-      error.status = response.status;
-      throw error;
-    }
-  }
-  if (!response.ok) {
-    const error = new Error(payload?.error || response.statusText);
-    error.status = response.status;
-    throw error;
-  }
-  return payload;
-}
-function clearServeReportCacheExcept(mode) {
-  const keep = normalizeServeSourceMode(mode);
-  state.serveReportCache = Object.fromEntries(
-    Object.entries(state.serveReportCache || {}).filter(([key]) => normalizeServeSourceMode(key) === keep)
-  );
-}
-function reportHasTrialKey(report, trialKey) {
-  return Boolean(trialKey) && listValue(report?.trajectory_meta).some((meta) => meta?.trial_key === trialKey);
-}
-function setServeStatus(text, error = false) {
-  const node = document.querySelector("[data-source-status]");
-  if (!node) return;
-  node.textContent = text;
-  node.classList.toggle("loading", false);
-  node.classList.toggle("danger", Boolean(error));
-}
-function showServeNotice(text, error = false) {
-  const notice = document.querySelector("[data-source-manager-status]");
-  state.sourceManagerStatus = {
-    phase: error ? "error" : "ready",
-    message: String(text || "")
-  };
-  if (!notice) return;
-  notice.textContent = text;
-  notice.classList.toggle("danger", Boolean(error));
-  notice.classList.toggle("loading", false);
-  notice.hidden = false;
-}
-function hideServeNotice() {
-  state.sourceManagerStatus = { phase: "ready", message: "" };
-  const notice = document.querySelector("[data-source-manager-status]");
-  if (notice) notice.hidden = true;
-}
-
-// web/src/modules/source-state-controls.js
-function renderServeSourceStateControls(rows = leaderboardRows()) {
-  if (!serveMode()) return "";
-  const mode = currentServeSourceMode();
-  const allMode = mode === "all";
-  const archived = mode === "archived";
-  const toggleDisabled = allMode ? "disabled" : "";
-  const selectedCount = visibleSelectedSourceKeys(rows).length;
-  const actionLabel = archived ? t("activate_selected", "Activate selected") : t("archive_selected", "Archive selected");
-  const action = adminMode() ? `<button class="action-button primary" type="button" data-source-state-action ${selectedCount && !allMode ? "" : "disabled"}>${esc(allMode ? t("mixed_state_action_disabled", "Mixed view") : actionLabel)}</button>` : "";
-  return `<div class="source-state-controls" data-source-state-controls>
-    <label class="source-state-toggle">
-      <input type="checkbox" data-source-state-toggle ${archived || allMode ? "checked" : ""} ${toggleDisabled}>
-      <span>${esc(t("show_archived", "Show archived"))}</span>
-    </label>
-    ${action}
-  </div>`;
-}
-function bindServeSourceStateControls(target) {
-  if (!serveMode() || !target) return;
-  target.querySelectorAll("[data-source-state-toggle]").forEach((input) => {
-    input.addEventListener("click", (event) => event.stopPropagation());
-    input.addEventListener("change", (event) => {
-      event.stopPropagation();
-      switchServeSourceMode(input.checked ? "archived" : "active");
-    });
-  });
-  target.querySelectorAll("[data-source-state-action]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      mutateVisibleServeSourceState();
-    });
-  });
-}
-async function mutateVisibleServeSourceState() {
-  if (!adminMode()) return;
-  const sourceKeys = visibleSelectedSourceKeys();
-  if (!sourceKeys.length) return;
-  const mode = currentServeSourceMode();
-  if (mode === "all") {
-    setServeStatus(t("mixed_state_action_disabled", "Mixed view"), true);
-    return;
-  }
-  const targetMode = mode === "archived" ? "active" : "archived";
-  try {
-    const payload = await serveApi("/api/sources/state", {
-      method: "POST",
-      body: {
-        source_keys: sourceKeys,
-        active: targetMode === "active",
-        report_source_state: mode
-      }
-    });
-    await applyServeSourceStateMutationPayload(payload, { sourceKeys, targetMode });
-  } catch (error) {
-    setServeStatus(error.message || String(error), true);
-  }
-}
-function firstReadableSourceKeyFrom(sourceKeys, sources, mode) {
-  const requested = new Set(listValue(sourceKeys).map((key) => String(key || "")).filter(Boolean));
-  return readableServeSourcesFrom(sources, mode).find((source) => requested.has(source.source_key))?.source_key || null;
-}
-function serveSourceModeStatusText(mode = currentServeSourceMode()) {
-  if (normalizeServeSourceMode(mode) === "all") {
-    return t("serve_all_sessions", "All sessions");
-  }
-  return normalizeServeSourceMode(mode) === "archived" ? t("serve_archived_snapshots", "Archived snapshots") : t("serve_active_snapshots", "Active snapshots");
 }
 
 // web/src/modules/serve-catalog.js
@@ -6108,83 +4614,10 @@ function syncSelectionWithVisibleRows(rows) {
     state.selectedStep = null;
   }
 }
-function pruneSourceSelection() {
-  if (!serveMode()) return;
-}
-function sourceSelectionKeys() {
-  return Array.from(state.sourceSelection);
-}
-function sourceRows() {
-  return applyDataTableControls("sources", listValue(state.sourceManagerRows), sourceColumns());
-}
-function openServeSourceManager(opener = document.activeElement) {
-  if (!adminMode()) return false;
-  const manager = document.querySelector("[data-source-manager]");
-  if (!manager) return false;
-  state.sourceManagerStatus = {
-    phase: "loading",
-    message: t("loading", "Loading")
-  };
-  renderServeSources();
-  return loadSourceManagerPage();
-}
-async function loadSourceManagerPage(pageNumber = Number(state.sourceManagerPage?.page || 1)) {
-  if (typeof URLSearchParams !== "function" || typeof fetch !== "function") return;
-  state.sourceManagerStatus = {
-    phase: "loading",
-    message: t("loading", "Loading")
-  };
-  renderServeSources();
-  try {
-    const params = new URLSearchParams({
-      state: "all",
-      surface: "sources",
-      page: String(Math.max(1, pageNumber)),
-      page_size: "100",
-      sort: "last_turn_end",
-      direction: "desc"
-    });
-    const page = await serveApi(`/api/catalog?${params.toString()}`);
-    state.sourceManagerPage = page;
-    state.sourceManagerRows = listValue(page.items);
-    state.sourceManagerStatus = { phase: "ready", message: "" };
-    hideServeNotice();
-    renderServeSources();
-  } catch (error) {
-    const message = error.message || String(error);
-    state.sourceManagerStatus = { phase: "error", message };
-    renderServeSources();
-    setServeStatus(message, true);
-  }
-}
-function sourceManagerPageEnd() {
-  const page = Number(state.sourceManagerPage?.page || 1);
-  const size = Number(state.sourceManagerPage?.page_size || 100);
-  return Math.min(Number(state.sourceManagerPage?.total || 0), page * size);
-}
-function renderSourceManagerPagination() {
-  const page = Number(state.sourceManagerPage?.page || 1);
-  const size = Number(state.sourceManagerPage?.page_size || 100);
-  const total = Number(state.sourceManagerPage?.total || state.sourceManagerRows.length || 0);
-  const start = total ? (page - 1) * size + 1 : 0;
-  return `<li class="catalog-page-controls source-manager-page-controls">
-    <button type="button" class="action-button icon-only" data-source-page-prev aria-label="${esc(t("previous", "Previous"))}" ${page <= 1 ? "disabled" : ""}>‹</button>
-    <span>${esc(`${start}-${sourceManagerPageEnd()} / ${total}`)}</span>
-    <button type="button" class="action-button icon-only" data-source-page-next aria-label="${esc(t("next", "Next"))}" ${sourceManagerPageEnd() >= total ? "disabled" : ""}>›</button>
-    <span>${esc(String(t("selected_count", "{count} selected")).replace("{count}", String(state.sourceSelection.size)))}</span>
-    <button type="button" class="action-button" data-source-selection-clear ${state.sourceSelection.size ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button>
-  </li>`;
-}
-function bindSourceManagerPagination(root) {
-  root?.querySelector?.("[data-source-page-prev]")?.addEventListener?.("click", () => loadSourceManagerPage(Number(state.sourceManagerPage.page || 1) - 1));
-  root?.querySelector?.("[data-source-page-next]")?.addEventListener?.("click", () => loadSourceManagerPage(Number(state.sourceManagerPage.page || 1) + 1));
-  root?.querySelector?.("[data-source-selection-clear]")?.addEventListener?.("click", () => {
-    state.sourceSelection.clear();
-    renderServeSources();
-  });
-}
-function visibleSelectedSourceKeys() {
-  return Array.from(state.rowSelection);
+function visibleSelectedSourceKeys(rows = leaderboardRows()) {
+  return Array.from(new Set(
+    listValue(rows).map((row) => String(row?.source_key || row?.trial_key || "")).filter((key) => key && state.rowSelection.has(key))
+  ));
 }
 function filterOptions(column, rows) {
   if (!serveMode()) {
@@ -6369,7 +4802,6 @@ async function loadCatalogPage(changes = {}, options = {}) {
     state.catalogRows = listValue(page.items).filter((row) => row?.readable !== false).map(normalizeCatalogRow);
     state.serveLoading = Boolean(page.checking && !page.generation);
     if (page.generation && page.generation !== previousGeneration) await resolveCatalogSelections();
-    renderServeSources();
     renderComparison();
     setWorkspaceWriteControlsDisabled(Boolean(page.checking));
     if (page.checking) {
@@ -6398,15 +4830,12 @@ async function loadCatalogPage(changes = {}, options = {}) {
   }
 }
 async function resolveCatalogSelections() {
-  const selected = Array.from(new Set([...state.rowSelection, ...state.sourceSelection, state.selectedSourceKey].filter(Boolean)));
+  const selected = Array.from(new Set([...state.rowSelection, state.selectedSourceKey].filter(Boolean)));
   if (!selected.length) return;
   const payload = await serveApi("/api/catalog/resolve", { method: "POST", body: { source_keys: selected } });
   const present = new Set(listValue(payload?.source_keys));
   Array.from(state.rowSelection).forEach((key) => {
     if (!present.has(key)) state.rowSelection.delete(key);
-  });
-  Array.from(state.sourceSelection).forEach((key) => {
-    if (!present.has(key)) state.sourceSelection.delete(key);
   });
   if (state.selectedSourceKey && !present.has(state.selectedSourceKey)) {
     state.selectedSourceKey = null;
@@ -6497,35 +4926,36 @@ async function switchServeSourceMode(mode) {
   state.serveSourceMode = nextMode;
   state.selectedSourceKey = null;
   state.selectedArtifactRevision = null;
+  state.rowSelection.clear();
   await loadCatalogPage();
 }
-function applyServeMutationPayload(payload) {
+function applyServeMutationPayload(payload, options = {}) {
   hideServeNotice();
   if (payload?.operation_id) {
-    return pollCatalogOperation(payload.operation_id);
+    return pollCatalogOperation(payload.operation_id, options);
   }
-  return loadCatalogPage({}, { force: true }).then(() => {
-    const manager = document.querySelector("[data-source-manager]");
-    if (manager && !manager.hidden) return loadSourceManagerPage();
-  });
+  return loadCatalogPage({}, { force: true });
 }
-async function applyServeSourceStateMutationPayload(payload) {
-  applyServeMutationPayload(payload);
+async function applyServeSourceStateMutationPayload(payload, options = {}) {
+  return applyServeMutationPayload(payload, options);
 }
-async function pollCatalogOperation(operationId) {
+async function pollCatalogOperation(operationId, options = {}) {
   try {
     const operation = await serveApi(`/api/operations/${encodeURIComponent(operationId)}`);
     setServeStatus(`${operation.operation_type}: ${operation.completed}/${operation.total}`);
     setWorkspaceWriteControlsDisabled(operation.state === "queued" || operation.state === "running");
     if (operation.state === "queued" || operation.state === "running") {
-      setTimeout(() => pollCatalogOperation(operationId), 200);
+      setTimeout(() => pollCatalogOperation(operationId, options), 200);
       return;
     }
     setWorkspaceWriteControlsDisabled(false);
+    const selectedKeys = listValue(options.sourceKeys);
+    const successfulIndexes = new Set(listValue(operation.successes).map((item) => Number(item.index)));
+    selectedKeys.forEach((key, index) => {
+      if (successfulIndexes.has(index)) state.rowSelection.delete(key);
+    });
     await loadCatalogPage({}, { force: true });
     await refreshSourceCategoryOptions();
-    const manager = document.querySelector("[data-source-manager]");
-    if (manager && !manager.hidden) await loadSourceManagerPage();
     const failures = listValue(operation.failures);
     if (failures.length) setServeStatus(`${failures.length} operation item(s) failed: ${failures[0]?.error || "error"}`, true);
   } catch (error) {
@@ -6535,7 +4965,7 @@ async function pollCatalogOperation(operationId) {
 }
 function setWorkspaceWriteControlsDisabled(disabled) {
   state.workspaceWriteBusy = Boolean(disabled);
-  document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-bulk-state],[data-source-bulk-delete],[data-source-add-form] button[type=submit],[data-harbor-mount-form] button,[data-source-state-action]").forEach((control) => {
+  document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-add-form] button[type=submit],[data-harbor-add-mount],[data-harbor-remove-mounts],[data-source-state-action],[data-source-delete-action]").forEach((control) => {
     if (disabled) {
       if (!Object.prototype.hasOwnProperty.call(control.dataset, "busyPreviousDisabled")) {
         control.dataset.busyPreviousDisabled = control.disabled ? "true" : "false";
@@ -6550,7 +4980,6 @@ function setWorkspaceWriteControlsDisabled(disabled) {
     }
     control.removeAttribute("aria-busy");
   });
-  if (!disabled) syncSourceManagerBulkActions();
 }
 async function refreshServeSourcesFromServer() {
   if (!adminMode()) return;
@@ -6564,21 +4993,6 @@ async function refreshServeSourcesFromServer() {
 }
 async function refreshServeReportFromServer() {
   return refreshServeSourcesFromServer();
-}
-async function deleteSelectedServeSources() {
-  if (!adminMode()) return;
-  const sourceKeys = sourceSelectionKeys();
-  if (!sourceKeys.length) return;
-  if (!window.confirm(t("serve_delete_selected_confirm", "Delete selected sources from peval state?"))) return;
-  try {
-    state.sourceSelection.clear();
-    applyServeMutationPayload(await serveApi("/api/sources/delete", {
-      method: "POST",
-      body: { source_keys: sourceKeys }
-    }));
-  } catch (error) {
-    setServeStatus(error.message || String(error), true);
-  }
 }
 function exportCurrentScope(kind) {
   if (!serveMode()) return;
@@ -6680,38 +5094,6 @@ async function serveDownload(kind, body, requestedFilename = "") {
 }
 
 // web/src/modules/export.js
-function bindServeSelectionControls(target) {
-  if (!serveMode()) return;
-  target.querySelectorAll(".select-box").forEach((control) => {
-    control.addEventListener("click", (event) => event.stopPropagation());
-  });
-  target.querySelectorAll("[data-row-select]").forEach((input) => {
-    input.addEventListener("click", (event) => event.stopPropagation());
-    input.addEventListener("change", (event) => {
-      event.stopPropagation();
-      const key = input.dataset.rowSelect;
-      if (!key) return;
-      if (input.checked) state.rowSelection.add(key);
-      else state.rowSelection.delete(key);
-      renderComparisonPanels({ trace: false });
-    });
-  });
-  target.querySelectorAll("[data-select-visible]").forEach((input) => {
-    input.indeterminate = input.hasAttribute("data-partial");
-    input.addEventListener("click", (event) => event.stopPropagation());
-    input.addEventListener("change", (event) => {
-      event.stopPropagation();
-      const rows = leaderboardRows();
-      const visibleKeys = rows.map((row) => row.trial_key).filter(Boolean);
-      const allSelected = visibleKeys.length > 0 && visibleKeys.every((key) => state.rowSelection.has(key));
-      visibleKeys.forEach((key) => {
-        if (allSelected) state.rowSelection.delete(key);
-        else state.rowSelection.add(key);
-      });
-      renderComparisonPanels({ trace: false });
-    });
-  });
-}
 function bindServeExportControls(target) {
   if (!serveMode()) return;
   target.querySelectorAll("[data-export-kind]").forEach((button) => {
@@ -6751,14 +5133,17 @@ function exportScopeRows() {
   const selected = rows.filter((row) => state.rowSelection.has(row.trial_key));
   return selected.length ? selected : rows;
 }
-function xlsxTableRows(rows) {
-  const columns = leaderboardColumns();
+function xlsxTableRows(rows, columns) {
   return [
     columns.map((column) => column.label),
-    ...rows.map((row) => columns.map((column) => tableText(row, column)))
+    ...rows.map((row) => columns.map((column) => exportTableText(row, column)))
   ];
 }
-function xlsxBytesForRows(rows) {
+function exportTableText(row, column) {
+  const raw = column.value(row);
+  return column.format ? column.format(raw, row) : raw ?? "-";
+}
+function xlsxBytesForRows(rows, columns) {
   return zipFiles([
     {
       name: "[Content_Types].xml",
@@ -6778,7 +5163,7 @@ function xlsxBytesForRows(rows) {
     },
     {
       name: "xl/worksheets/sheet1.xml",
-      text: worksheetXml(xlsxTableRows(rows))
+      text: worksheetXml(xlsxTableRows(rows, columns))
     }
   ]);
 }
@@ -7069,8 +5454,6 @@ function selectionColumn(options = {}) {
     label: t("select_rows", "Select rows"),
     selectionKey: (row) => row?.trial_key || "",
     selectionSet: () => state.rowSelection,
-    rowInputAttr: (key) => `data-row-select="${esc(key)}"`,
-    headerInputAttr: "data-select-visible",
     rowAriaLabel: (key) => `${t("select_row_for_export", "Select row for export")}: ${key}`,
     ...options
   };
@@ -7429,7 +5812,6 @@ function renderDataTable({ tableId, columns, rows, rowKey = null, tableClass = "
 }
 function renderTableHeader(tableId, column, controls, rows = [], filterOptionsRows = rows) {
   if (column.select) return renderSelectionHeader(rows, column);
-  if (column.sourceSelect) return renderSourceSelectionHeader(rows);
   const catalogSort = serveMode() && tableId === "leaderboard";
   const active = catalogSort ? catalogSortKey(state.catalogQuery?.sort) === catalogSortKey(column.key) : controls.sort === column.key;
   const direction = catalogSort ? state.catalogQuery?.direction : controls.direction;
@@ -7454,6 +5836,7 @@ function selectionSetForColumn(column) {
   return value instanceof Set ? value : state.rowSelection;
 }
 function selectionKeyForRow(row, column) {
+  if (typeof column?.selectable === "function" && !column.selectable(row)) return "";
   const value = typeof column?.selectionKey === "function" ? column.selectionKey(row) : row?.trial_key;
   return String(value || "");
 }
@@ -7476,15 +5859,14 @@ function setVisibleSelection(rows, column, checked) {
 }
 function renderSelectionHeader(rows, column = selectionColumn()) {
   const selection = visibleSelectionState(rows, column);
-  const inputAttr = column.headerInputAttr || "data-select-visible";
-  return `<th class="select-col table-value-selection" data-value-type="selection"><label class="select-box"><input type="checkbox" ${inputAttr} ${selection.checked ? "checked" : ""} ${selection.partial ? 'data-partial="true"' : ""} aria-label="${esc(column.headerAriaLabel || t("select_visible_rows", "Select visible rows"))}"><span></span></label></th>`;
+  return `<th class="select-col table-value-selection" data-value-type="selection"><label class="select-box"><input type="checkbox" data-table-select-visible="${esc(column.key)}" ${selection.checked ? "checked" : ""} ${selection.partial ? 'data-partial="true"' : ""} ${selection.keys.length ? "" : "disabled"} aria-label="${esc(column.headerAriaLabel || t("select_visible_rows", "Select visible rows"))}"><span></span></label></th>`;
 }
 function renderDataSelection(row, column = selectionColumn()) {
   const key = selectionKeyForRow(row, column);
+  if (!key) return `<span class="select-box-placeholder" aria-hidden="true"></span>`;
   const checked = selectionSetForColumn(column).has(key);
-  const inputAttr = typeof column.rowInputAttr === "function" ? column.rowInputAttr(key, row) : `data-row-select="${esc(key)}"`;
   const ariaLabel = typeof column.rowAriaLabel === "function" ? column.rowAriaLabel(key, row) : `${t("select_row_for_export", "Select row for export")}: ${key}`;
-  return `<label class="select-box"><input type="checkbox" ${inputAttr} ${checked ? "checked" : ""} aria-label="${esc(ariaLabel)}"><span></span></label>`;
+  return `<label class="select-box"><input type="checkbox" data-table-row-select="${esc(key)}" data-table-selection-column="${esc(column.key)}" ${checked ? "checked" : ""} aria-label="${esc(ariaLabel)}"><span></span></label>`;
 }
 function renderRowSelection(row) {
   return renderDataSelection(row, selectionColumn());
@@ -7503,7 +5885,6 @@ function renderTableRow(row, columns, rows, options = {}) {
 }
 function renderDataCell(row, column, rows) {
   if (column.select) return `<td class="select-col table-value-selection" data-value-type="selection">${column.html ? column.html(row) : renderDataSelection(row, column)}</td>`;
-  if (column.sourceSelect) return `<td class="select-col table-value-selection" data-value-type="selection">${column.html(row)}</td>`;
   const className = typeof column.className === "function" ? column.className(row) : column.className;
   const valueType = tableValueType(column);
   const edit = resolveTableCellEdit(column, row);
@@ -7532,6 +5913,11 @@ function bindDataTableControls(root, options = {}) {
   const { tableId, columns = [], rows = [], rowKey = null } = config;
   if (!tableId) return;
   const rerender = typeof config.onChange === "function" ? config.onChange : (() => {
+  });
+  bindDataTableSelection(root, {
+    columns,
+    rows,
+    onChange: typeof config.onSelectionChange === "function" ? config.onSelectionChange : rerender
   });
   root.querySelectorAll("[data-table-sort]").forEach((button) => {
     button.addEventListener("click", (event) => {
@@ -7590,6 +5976,55 @@ function bindDataTableControls(root, options = {}) {
     });
   });
   bindDataTableEditors(root, { tableId, columns, rows, rowKey, onChange: rerender });
+}
+function bindDataTableSelection(root, { columns = [], rows = [], onChange = null } = {}) {
+  const selectionColumns = columns.filter((column) => column?.select);
+  if (!selectionColumns.length) return;
+  const byKey = new Map(selectionColumns.map((column) => [String(column.key), column]));
+  root.querySelectorAll("[data-table-row-select]").forEach((input) => {
+    input.closest("label")?.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("change", (event) => {
+      event.stopPropagation();
+      const column = byKey.get(String(input.dataset.tableSelectionColumn || ""));
+      const key = String(input.dataset.tableRowSelect || "");
+      if (!column || !key) return;
+      const selected = selectionSetForColumn(column);
+      if (input.checked) selected.add(key);
+      else selected.delete(key);
+      syncDataTableSelection(root, { columns, rows });
+      if (typeof onChange === "function") onChange();
+    });
+  });
+  root.querySelectorAll("[data-table-select-visible]").forEach((input) => {
+    input.indeterminate = input.hasAttribute("data-partial");
+    input.addEventListener("click", (event) => event.stopPropagation());
+    input.addEventListener("change", (event) => {
+      event.stopPropagation();
+      const column = byKey.get(String(input.dataset.tableSelectVisible || ""));
+      if (!column) return;
+      setVisibleSelection(rows, column, input.checked);
+      syncDataTableSelection(root, { columns, rows });
+      if (typeof onChange === "function") onChange();
+    });
+  });
+}
+function syncDataTableSelection(root, { columns = [], rows = [] } = {}) {
+  const selectionColumns = columns.filter((column) => column?.select);
+  const byKey = new Map(selectionColumns.map((column) => [String(column.key), column]));
+  root.querySelectorAll("[data-table-row-select]").forEach((input) => {
+    const column = byKey.get(String(input.dataset.tableSelectionColumn || ""));
+    const key = String(input.dataset.tableRowSelect || "");
+    if (column && key) input.checked = selectionSetForColumn(column).has(key);
+  });
+  root.querySelectorAll("[data-table-select-visible]").forEach((input) => {
+    const column = byKey.get(String(input.dataset.tableSelectVisible || ""));
+    if (!column) return;
+    const selection = visibleSelectionState(rows, column);
+    input.checked = selection.checked;
+    input.indeterminate = selection.partial;
+    input.toggleAttribute("data-partial", selection.partial);
+  });
 }
 function resolveTableCellEdit(column, row) {
   const source = typeof column?.edit === "function" ? column.edit(row) : column?.edit;
@@ -7688,7 +6123,7 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
   input.classList.add("table-cell-editor-control");
   input.setAttribute("aria-label", column.label || column.key);
   editor.appendChild(input);
-  if (valueType === "list") editor.appendChild(renderTableSuggestions(input, edit.suggestions, { multiple: true }));
+  if (valueType === "list") editor.appendChild(renderTableSuggestions(input, edit.suggestions, { multiple: true, allowCustom: edit.allowCustom }));
   else if (valueType === "scalar-list") {
     editor.appendChild(renderTableScalarListSuggestions(input, edit.suggestions, scalarListValues));
   } else if (valueType === "text" && normalizeTableListValue(edit.suggestions).length) {
@@ -7713,6 +6148,18 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
   };
   const save = async () => {
     if (finished || pending) return;
+    const editValue = valueType === "scalar-list" ? normalizeTableScalarListValue([...scalarListValues, input.value]) : normalizeTableEditValue(valueType, input.value);
+    if (edit.allowCustom === false) {
+      const allowed = new Set(normalizeTableListValue(edit.suggestions));
+      const values = Array.isArray(editValue) ? editValue : [editValue].filter(Boolean);
+      const unknown = values.filter((value) => !allowed.has(value));
+      if (unknown.length) {
+        status.textContent = `${t("choose_available_values", "Choose only available values")}: ${unknown.join(", ")}`;
+        status.classList.add("danger");
+        input.focus();
+        return;
+      }
+    }
     pending = true;
     editor.classList.add("pending");
     editor.setAttribute("aria-busy", "true");
@@ -7722,7 +6169,6 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
     });
     status.textContent = t("saving", "Saving...");
     try {
-      const editValue = valueType === "scalar-list" ? normalizeTableScalarListValue([...scalarListValues, input.value]) : normalizeTableEditValue(valueType, input.value);
       const result = await edit.commit(row, editValue);
       finished = true;
       if (typeof onChange === "function") await onChange();
@@ -7788,18 +6234,25 @@ function tableEnumEditor(options, currentValue) {
 }
 function renderTableSuggestions(input, suggestions, options = {}) {
   const multiple = Boolean(options.multiple);
+  const strict = options.allowCustom === false;
+  const candidates = normalizeTableListValue(suggestions);
+  const known = new Set(candidates);
   const list = document.createElement("div");
   list.className = "table-cell-editor-suggestions";
   list.setAttribute("aria-label", t("suggestions", "Suggestions"));
   const sync = () => {
-    const selected = multiple ? new Set(normalizeTableListValue(input.value)) : new Set([String(input.value || "").trim()].filter(Boolean));
+    const values = normalizeTableListValue(input.value);
+    const selected = multiple ? new Set(values) : new Set([String(input.value || "").trim()].filter(Boolean));
+    const active = multiple ? values.at(-1) || "" : String(input.value || "").trim();
+    const query = strict && active && !known.has(active) ? active.toLocaleLowerCase() : "";
     list.querySelectorAll("button").forEach((button) => {
-      const active = selected.has(button.dataset.tableSuggestion);
-      button.classList.toggle("selected", active);
-      button.setAttribute("aria-pressed", active ? "true" : "false");
+      const active2 = selected.has(button.dataset.tableSuggestion);
+      button.classList.toggle("selected", active2);
+      button.setAttribute("aria-pressed", active2 ? "true" : "false");
+      button.hidden = Boolean(query) && !active2 && !button.dataset.tableSuggestion.toLocaleLowerCase().includes(query);
     });
   };
-  normalizeTableListValue(suggestions).forEach((suggestion) => {
+  candidates.forEach((suggestion) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "source-tag-chip table-cell-editor-suggestion";
@@ -7811,10 +6264,13 @@ function renderTableSuggestions(input, suggestions, options = {}) {
       event.stopPropagation();
       if (multiple) {
         const values = normalizeTableListValue(input.value);
+        const active = values.at(-1) || "";
+        const replacing = strict && active && !known.has(active);
+        if (replacing) values.pop();
         const index = values.indexOf(suggestion);
-        if (index >= 0) values.splice(index, 1);
-        else values.push(suggestion);
-        input.value = values.join(", ");
+        if (index >= 0 && !replacing) values.splice(index, 1);
+        else if (index < 0) values.push(suggestion);
+        input.value = normalizeTableListValue(values).join(", ");
       } else {
         input.value = suggestion;
       }
@@ -7926,9 +6382,9 @@ function bindLeaderboardControls() {
     columns: displayLeaderboardColumns(rows),
     rows,
     rowKey: (row) => row.source_key || row.trial_key,
-    onChange: () => renderComparisonPanels()
+    onChange: () => renderComparisonPanels(),
+    onSelectionChange: () => renderComparisonPanels({ trace: false })
   });
-  bindServeSelectionControls(target);
   bindServeSourceStateControls(target);
   bindServeExportControls(target);
   bindLeaderboardSearchControls(target);
@@ -7936,6 +6392,2468 @@ function bindLeaderboardControls() {
   bindTrialSelection(target);
   bindLeaderboardCatalogControls(target);
   bindLeaderboardColumnControls(target);
+}
+
+// web/src/modules/configuration.js
+var harborConfigState = {
+  snapshot: null,
+  datasetSelection: /* @__PURE__ */ new Set(),
+  mountSelection: /* @__PURE__ */ new Set(),
+  acpSelection: /* @__PURE__ */ new Set(),
+  busy: false
+};
+var activeConfigurationOperations = /* @__PURE__ */ new Set();
+var configurationMutationBusy = false;
+var promptConfigState = {
+  prompts: [],
+  selectedId: "",
+  renderedId: "",
+  dirty: false
+};
+var dbSessionSelections = /* @__PURE__ */ new WeakMap();
+function setConfigurationStatus(message = "", error = false) {
+  const target = document.querySelector("[data-config-page-status]");
+  if (!target) return;
+  target.textContent = message;
+  target.classList.toggle("danger", Boolean(error));
+  target.hidden = !message;
+}
+async function initializeConfiguration() {
+  if (!adminMode()) return false;
+  bindConfigurationActions();
+  await refreshHarborConfig();
+  return true;
+}
+async function refreshHarborConfig() {
+  setConfigurationBusy(true);
+  setConfigurationStatus(t("loading", "Loading"));
+  try {
+    const [configPayload, promptPayload] = await Promise.all([
+      serveApi("/api/config"),
+      serveApi("/api/prompts")
+    ]);
+    harborConfigState.snapshot = configPayload;
+    promptConfigState.prompts = Array.isArray(promptPayload?.prompts) ? promptPayload.prompts : [];
+    if (!promptConfigState.prompts.some((prompt) => prompt.id === promptConfigState.selectedId)) {
+      promptConfigState.selectedId = promptConfigState.prompts[0]?.id || "";
+      promptConfigState.dirty = false;
+      promptConfigState.renderedId = "";
+    }
+    const knownDatasets = new Set((harborConfigState.snapshot?.datasets || []).map((dataset) => dataset.id));
+    Array.from(harborConfigState.datasetSelection).forEach((id) => {
+      if (!knownDatasets.has(id)) harborConfigState.datasetSelection.delete(id);
+    });
+    const knownMounts = new Set((harborConfigState.snapshot?.mounts || []).map((mount) => mount.id));
+    Array.from(harborConfigState.mountSelection).forEach((id) => {
+      if (!knownMounts.has(id)) harborConfigState.mountSelection.delete(id);
+    });
+    const knownAgents = new Set((harborConfigState.snapshot?.acp_agents || []).map((agent) => agent.id));
+    Array.from(harborConfigState.acpSelection).forEach((id) => {
+      if (!knownAgents.has(id)) harborConfigState.acpSelection.delete(id);
+    });
+    renderHarborConfiguration();
+    setConfigurationBusy(false);
+    setConfigurationStatus();
+  } catch (error) {
+    setConfigurationBusy(false);
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+async function refreshConfigurationAfterConflict(error, { discardPrompt = false } = {}) {
+  if (error?.status !== 409 || !/changed.*(?:refresh|reload) before saving/i.test(String(error?.message || ""))) return;
+  if (discardPrompt) {
+    promptConfigState.dirty = false;
+    promptConfigState.renderedId = "";
+  }
+  await refreshHarborConfig();
+}
+function datasetMounts(dataset) {
+  return (harborConfigState.snapshot?.mounts || []).filter((mount) => (mount.dataset_ids || []).includes(dataset.id)).map((mount) => mount.id);
+}
+function referenceListHtml(values) {
+  return values.length ? `<span class="source-tag-list">${values.map((value) => `<span class="source-tag-chip">${esc(value)}</span>`).join("")}</span>` : "-";
+}
+function harborDatasetColumns() {
+  return [
+    selectionColumn({
+      key: "__dataset_select",
+      selectionKey: (dataset) => dataset.id,
+      selectionSet: () => harborConfigState.datasetSelection,
+      rowAriaLabel: (id) => `${t("select_row", "Select row")}: ${id}`
+    }),
+    { key: "id", label: t("harbor_dataset", "Dataset"), valueType: "identity", sortable: true, value: (dataset) => dataset.id, edit: { value: (dataset) => dataset.id, commit: (dataset, value) => updateHarborDataset(dataset, { new_id: value }) } },
+    { key: "path", label: t("harbor_dataset_path", "Dataset path"), valueType: "path", value: (dataset) => dataset.path, edit: { value: (dataset) => dataset.path, commit: (dataset, value) => updateHarborDataset(dataset, { path: value }) } },
+    { key: "mounts", label: t("serve_harbor_mounts", "Harbor mounts"), valueType: "list", value: (dataset) => datasetMounts(dataset), format: (values) => values.join(", ") || "-", html: (dataset) => referenceListHtml(datasetMounts(dataset)), edit: { value: (dataset) => datasetMounts(dataset), suggestions: () => (harborConfigState.snapshot?.mounts || []).map((mount) => mount.id), allowCustom: false, commit: (dataset, value) => updateHarborDataset(dataset, { mount_ids: value }) } }
+  ];
+}
+function harborMountColumns() {
+  return [
+    selectionColumn({
+      key: "__mount_select",
+      selectionKey: (mount) => mount.id,
+      selectionSet: () => harborConfigState.mountSelection,
+      rowAriaLabel: (id) => `${t("select_row", "Select row")}: ${id}`
+    }),
+    { key: "id", label: t("serve_harbor_mount_id", "Mount ID"), valueType: "identity", sortable: true, value: (mount) => mount.id, edit: { value: (mount) => mount.id, commit: (mount, value) => updateHarborMount(mount, { mount_id: value }) } },
+    { key: "path", label: t("serve_harbor_jobs_path", "Jobs path"), valueType: "path", value: (mount) => mount.path, edit: { value: (mount) => mount.path, commit: (mount, value) => updateHarborMount(mount, { jobs_path: value }) } },
+    { key: "datasets", label: t("harbor_mount_datasets", "Datasets (in evidence lookup order)"), valueType: "list", value: (mount) => mount.dataset_ids || [], format: (values) => values.join(", ") || "-", html: (mount) => referenceListHtml(mount.dataset_ids || []), edit: { value: (mount) => mount.dataset_ids || [], suggestions: () => (harborConfigState.snapshot?.datasets || []).map((dataset) => dataset.id), allowCustom: false, commit: (mount, value) => updateHarborMount(mount, { dataset_ids: value }) } }
+  ];
+}
+function acpAgentColumns() {
+  return [
+    selectionColumn({
+      key: "__acp_agent_select",
+      selectionKey: (agent) => agent.id,
+      selectionSet: () => harborConfigState.acpSelection,
+      rowAriaLabel: (id) => `${t("select_row", "Select row")}: ${id}`
+    }),
+    { key: "id", label: t("acp_agent", "Agent"), valueType: "identity", sortable: true, value: (agent) => agent.id, edit: { value: (agent) => agent.id, commit: (agent, value) => updateAcpAgent(agent, { agent_id: value }) } },
+    { key: "title", label: t("name", "Name"), valueType: "text", value: (agent) => agent.title, edit: { value: (agent) => agent.title, commit: (agent, value) => updateAcpAgent(agent, { title: value }) } },
+    { key: "command", label: t("serve_acp_command", "Executable"), valueType: "path", value: (agent) => agent.command, edit: { value: (agent) => agent.command, commit: (agent, value) => updateAcpAgent(agent, { command: value }) } },
+    { key: "args", label: t("serve_acp_args", "Arguments (JSON)"), valueType: "text", value: (agent) => JSON.stringify(agent.args || []), edit: { value: (agent) => JSON.stringify(agent.args || []), commit: (agent, value) => updateAcpAgent(agent, { args: parseAcpArgs(value) }) } },
+    { key: "status", label: t("status", "Status"), valueType: "status", value: (agent) => agent.connected ? t("serve_acp_connected", "Connected") : t("serve_acp_idle", "Not connected"), html: (agent) => `<span class="acp-config-status${agent.connected ? " connected" : ""}">${esc(agent.connected ? t("serve_acp_connected", "Connected") : t("serve_acp_idle", "Not connected"))}</span>` }
+  ];
+}
+async function choosePathSourceFiles(button) {
+  if (!adminMode()) return;
+  const form = button?.closest?.("[data-source-add-form]");
+  const field = form?.querySelector?.('[name="path"]');
+  if (!field) return;
+  try {
+    const payload = await serveApi("/api/path-picker", {
+      method: "POST",
+      body: { multiple: true }
+    });
+    const paths = Array.isArray(payload?.paths) ? payload.paths.map((path) => String(path || "").trim()).filter(Boolean) : [];
+    if (!paths.length) return;
+    field.value = paths.join("\n");
+    setConfigurationStatus(t("serve_path_picker_selected", "Path selection updated"));
+  } catch (error) {
+    const message = error.message || String(error);
+    showServeNotice(message, true);
+    setConfigurationStatus(message, true);
+  }
+}
+function renderHarborConfiguration() {
+  renderAcpAgentConfiguration();
+  renderPromptConfiguration();
+  renderHarborDatasetRegistry();
+  renderHarborMountConfiguration();
+  syncConfigurationBusy();
+}
+function renderAcpAgentConfiguration() {
+  const root = document.querySelector("[data-acp-agent-config]");
+  if (!root) return;
+  const agents = harborConfigState.snapshot?.acp_agents || [];
+  const columns = acpAgentColumns();
+  const rows = applyDataTableControls("acp-agent-registry", agents, columns);
+  root.innerHTML = renderDataTable({
+    tableId: "acp-agent-registry",
+    columns,
+    rows,
+    rowKey: (agent) => agent.id,
+    emptyText: t("serve_acp_empty", "No ACP agents configured")
+  });
+  bindDataTableControls(root, {
+    tableId: "acp-agent-registry",
+    columns,
+    rows,
+    rowKey: (agent) => agent.id,
+    onChange: renderAcpAgentConfiguration,
+    onSelectionChange: renderAcpAgentConfiguration
+  });
+  const count = document.querySelector("[data-acp-agent-count]");
+  if (count) count.textContent = `${agents.length}`;
+  const remove = document.querySelector("[data-acp-remove-agents]");
+  if (remove) {
+    remove.disabled = harborConfigState.acpSelection.size < 1;
+    remove.textContent = harborConfigState.acpSelection.size ? `${t("serve_remove_selected_agents", "Remove selected")} (${harborConfigState.acpSelection.size})` : t("serve_remove_selected_agents", "Remove selected");
+  }
+}
+function selectedPromptAsset() {
+  return promptConfigState.prompts.find((prompt) => prompt.id === promptConfigState.selectedId) || null;
+}
+function renderPromptConfiguration() {
+  const list = document.querySelector("[data-prompt-config-list]");
+  const editor = document.querySelector("[data-prompt-content]");
+  if (!list || !editor) return;
+  list.innerHTML = promptConfigState.prompts.map((prompt2) => `
+    <button type="button" class="${prompt2.id === promptConfigState.selectedId ? "active" : ""}" data-prompt-select="${esc(prompt2.id)}" aria-pressed="${prompt2.id === promptConfigState.selectedId ? "true" : "false"}">
+      <strong>${esc(prompt2.title)}</strong><code>${esc(prompt2.filename)}</code>
+    </button>`).join("");
+  const prompt = selectedPromptAsset();
+  if (promptConfigState.renderedId !== prompt?.id || !promptConfigState.dirty) {
+    editor.value = prompt?.content || "";
+    promptConfigState.renderedId = prompt?.id || "";
+  }
+  editor.disabled = !prompt;
+  const filename = document.querySelector("[data-prompt-filename]");
+  if (filename) filename.textContent = prompt ? `prompts/${prompt.filename}` : "—";
+  const origin = document.querySelector("[data-prompt-origin]");
+  if (origin) origin.textContent = prompt?.customized ? t("serve_prompt_override", "Workspace override") : t("serve_prompt_default", "Repository default");
+  const count = document.querySelector("[data-prompt-asset-count]");
+  if (count) count.textContent = `${promptConfigState.prompts.length}`;
+  const save = document.querySelector("[data-prompt-save]");
+  if (save) save.disabled = !prompt || !promptConfigState.dirty || !String(editor.value || "").trim();
+  const reset = document.querySelector("[data-prompt-reset]");
+  if (reset) reset.disabled = !prompt?.customized;
+}
+function setConfigurationBusy(busy) {
+  configurationMutationBusy = Boolean(busy);
+  syncConfigurationBusyState();
+}
+function syncConfigurationBusyState() {
+  harborConfigState.busy = configurationMutationBusy || activeConfigurationOperations.size > 0;
+  syncConfigurationBusy();
+}
+function syncConfigurationBusy() {
+  const root = document.querySelector("[data-config-page]");
+  if (!root) return;
+  root.setAttribute("aria-busy", harborConfigState.busy ? "true" : "false");
+  root.querySelectorAll("button,input,select,textarea").forEach((control) => {
+    if (control.closest("[data-table-cell-editor]") && !harborConfigState.busy) return;
+    if (harborConfigState.busy) {
+      if (!Object.prototype.hasOwnProperty.call(control.dataset, "configPreviousDisabled")) {
+        control.dataset.configPreviousDisabled = control.disabled ? "true" : "false";
+      }
+      control.disabled = true;
+    } else if (Object.prototype.hasOwnProperty.call(control.dataset, "configPreviousDisabled")) {
+      control.disabled = control.dataset.configPreviousDisabled === "true";
+      delete control.dataset.configPreviousDisabled;
+    }
+  });
+}
+function renderHarborDatasetRegistry() {
+  const root = document.querySelector("[data-harbor-dataset-registry]");
+  if (!root) return;
+  const datasets = harborConfigState.snapshot?.datasets || [];
+  const columns = harborDatasetColumns();
+  const rows = applyDataTableControls("harbor-dataset-registry", datasets, columns);
+  root.innerHTML = renderDataTable({
+    tableId: "harbor-dataset-registry",
+    columns,
+    rows,
+    rowKey: (dataset) => dataset.id,
+    emptyText: t("harbor_dataset_empty", "No Datasets registered")
+  });
+  bindDataTableControls(root, {
+    tableId: "harbor-dataset-registry",
+    columns,
+    rows,
+    rowKey: (dataset) => dataset.id,
+    onChange: renderHarborDatasetRegistry,
+    onSelectionChange: renderHarborDatasetRegistry
+  });
+  const count = document.querySelector("[data-harbor-dataset-count]");
+  if (count) count.textContent = `${datasets.length}`;
+  const unregister = document.querySelector("[data-harbor-unregister-datasets]");
+  if (unregister) {
+    unregister.disabled = harborConfigState.datasetSelection.size < 1;
+    unregister.textContent = harborConfigState.datasetSelection.size ? `${t("harbor_unregister_selected", "Unregister selected")} (${harborConfigState.datasetSelection.size})` : t("harbor_unregister_selected", "Unregister selected");
+  }
+}
+function renderHarborMountConfiguration() {
+  const root = document.querySelector("[data-harbor-mount-config]");
+  if (!root) return;
+  const mounts = harborConfigState.snapshot?.mounts || [];
+  const columns = harborMountColumns();
+  const rows = applyDataTableControls("harbor-mount-registry", mounts, columns);
+  root.innerHTML = renderDataTable({
+    tableId: "harbor-mount-registry",
+    columns,
+    rows,
+    rowKey: (mount) => mount.id,
+    emptyText: t("harbor_mount_empty", "No Harbor mounts configured")
+  });
+  bindDataTableControls(root, {
+    tableId: "harbor-mount-registry",
+    columns,
+    rows,
+    rowKey: (mount) => mount.id,
+    onChange: renderHarborMountConfiguration,
+    onSelectionChange: renderHarborMountConfiguration
+  });
+  const count = document.querySelector("[data-harbor-mount-count]");
+  if (count) count.textContent = `${mounts.length}`;
+  const remove = document.querySelector("[data-harbor-remove-mounts]");
+  if (remove) {
+    remove.disabled = harborConfigState.mountSelection.size < 1;
+    remove.textContent = harborConfigState.mountSelection.size ? `${t("harbor_remove_selected_mounts", "Remove selected")} (${harborConfigState.mountSelection.size})` : t("harbor_remove_selected_mounts", "Remove selected");
+  }
+}
+function bindConfigurationActions() {
+  const root = document.querySelector("[data-config-page]");
+  if (!root || root.dataset.configBound === "true") return;
+  root.dataset.configBound = "true";
+  root.querySelector("[data-harbor-add-dataset]")?.addEventListener("click", () => createHarborDataset(false));
+  root.querySelector("[data-harbor-register-dataset]")?.addEventListener("click", () => createHarborDataset(true));
+  root.querySelector("[data-harbor-unregister-datasets]")?.addEventListener("click", unregisterSelectedHarborDatasets);
+  root.querySelector("[data-harbor-add-mount]")?.addEventListener("click", addHarborMount);
+  root.querySelector("[data-harbor-remove-mounts]")?.addEventListener("click", removeSelectedHarborMounts);
+  root.querySelector("[data-acp-add-agent]")?.addEventListener("click", addAcpAgent);
+  root.querySelector("[data-acp-remove-agents]")?.addEventListener("click", removeSelectedAcpAgents);
+  root.querySelector("[data-prompt-config-list]")?.addEventListener("click", selectPromptAsset);
+  root.querySelector("[data-prompt-content]")?.addEventListener("input", () => {
+    promptConfigState.dirty = true;
+    renderPromptConfiguration();
+  });
+  root.querySelector("[data-prompt-save]")?.addEventListener("click", savePromptAsset);
+  root.querySelector("[data-prompt-reset]")?.addEventListener("click", resetPromptAsset);
+  root.querySelector("[data-harbor-config-reload]")?.addEventListener("click", reloadConfiguration);
+  root.querySelector("[data-source-config-rescan]")?.addEventListener("click", rescanTrajectorySources);
+}
+async function reloadConfiguration() {
+  if (promptConfigState.dirty && !window.confirm(t("serve_prompt_discard_confirm", "Discard unsaved prompt changes?"))) return;
+  promptConfigState.dirty = false;
+  promptConfigState.renderedId = "";
+  await refreshHarborConfig();
+}
+function parseAcpArgs(value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(value || ""));
+  } catch {
+    throw new Error(t("serve_acp_args_invalid", "Arguments must be a JSON array of strings"));
+  }
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
+    throw new Error(t("serve_acp_args_invalid", "Arguments must be a JSON array of strings"));
+  }
+  return parsed;
+}
+async function mutateAcpAgents(body) {
+  setConfigurationBusy(true);
+  try {
+    harborConfigState.snapshot = await serveApi("/api/config/acp/agents", {
+      method: "POST",
+      body: { ...body, expected_revision: harborConfigState.snapshot?.revision }
+    });
+    setConfigurationBusy(false);
+    return harborConfigState.snapshot;
+  } catch (error) {
+    setConfigurationBusy(false);
+    await refreshConfigurationAfterConflict(error);
+    throw error;
+  }
+}
+async function addAcpAgent() {
+  if (!adminMode()) return;
+  const agentId = window.prompt(t("serve_acp_agent_id_prompt", "Agent ID"), "opencode");
+  if (!agentId) return;
+  const title = window.prompt(t("serve_acp_agent_title_prompt", "Agent display name"), agentId === "opencode" ? "OpenCode" : agentId);
+  if (!title) return;
+  const command = window.prompt(t("serve_acp_agent_command_prompt", "Executable or path"), agentId);
+  if (!command) return;
+  const rawArgs = window.prompt(t("serve_acp_agent_args_prompt", "Arguments as a JSON array"), agentId === "opencode" ? '["acp"]' : "[]");
+  if (rawArgs === null) return;
+  try {
+    setConfigurationStatus(t("saving", "Saving..."));
+    await mutateAcpAgents({ action: "upsert", agent_id: agentId.trim(), title: title.trim(), command: command.trim(), args: parseAcpArgs(rawArgs) });
+    renderAcpAgentConfiguration();
+    setConfigurationStatus();
+  } catch (error) {
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+async function updateAcpAgent(agent, changes) {
+  const next = {
+    agent_id: String(changes.agent_id ?? agent.id).trim(),
+    title: String(changes.title ?? agent.title).trim(),
+    command: String(changes.command ?? agent.command).trim(),
+    args: Array.isArray(changes.args) ? changes.args : agent.args || []
+  };
+  if (!next.agent_id || !next.title || !next.command) throw new Error(t("required", "Required"));
+  try {
+    await mutateAcpAgents({ action: "upsert", original_id: agent.id, ...next });
+    if (next.agent_id !== agent.id && harborConfigState.acpSelection.delete(agent.id)) harborConfigState.acpSelection.add(next.agent_id);
+    renderAcpAgentConfiguration();
+    return { rowKey: next.agent_id };
+  } catch (error) {
+    setConfigurationStatus(error.message || String(error), true);
+    throw error;
+  }
+}
+async function removeSelectedAcpAgents() {
+  const agentIds = Array.from(harborConfigState.acpSelection);
+  if (!agentIds.length || !window.confirm(t("serve_acp_remove_confirm", "Remove selected ACP agents? Connected processes will be stopped."))) return;
+  try {
+    setConfigurationStatus(t("saving", "Saving..."));
+    await mutateAcpAgents({ action: "delete", agent_ids: agentIds });
+    harborConfigState.acpSelection.clear();
+    renderAcpAgentConfiguration();
+    setConfigurationStatus();
+  } catch (error) {
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+function selectPromptAsset(event) {
+  const button = event.target.closest?.("[data-prompt-select]");
+  if (!button) return;
+  const nextId = String(button.dataset.promptSelect || "");
+  if (!nextId || nextId === promptConfigState.selectedId) return;
+  if (promptConfigState.dirty && !window.confirm(t("serve_prompt_discard_confirm", "Discard unsaved prompt changes?"))) return;
+  promptConfigState.selectedId = nextId;
+  promptConfigState.dirty = false;
+  promptConfigState.renderedId = "";
+  renderPromptConfiguration();
+}
+function replacePromptAsset(prompt) {
+  const index = promptConfigState.prompts.findIndex((item) => item.id === prompt.id);
+  if (index >= 0) promptConfigState.prompts[index] = prompt;
+}
+async function savePromptAsset() {
+  const prompt = selectedPromptAsset();
+  const content = document.querySelector("[data-prompt-content]")?.value || "";
+  if (!prompt || !String(content).trim()) return;
+  try {
+    setConfigurationBusy(true);
+    setConfigurationStatus(t("saving", "Saving..."));
+    const payload = await serveApi("/api/prompts", { method: "POST", body: { action: "save", prompt_id: prompt.id, content, expected_revision: prompt.revision } });
+    replacePromptAsset(payload.prompt);
+    promptConfigState.dirty = false;
+    setConfigurationBusy(false);
+    renderPromptConfiguration();
+    setConfigurationStatus();
+  } catch (error) {
+    setConfigurationBusy(false);
+    await refreshConfigurationAfterConflict(error, { discardPrompt: true });
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+async function resetPromptAsset() {
+  const prompt = selectedPromptAsset();
+  if (!prompt?.customized || !window.confirm(t("serve_prompt_reset_confirm", "Remove this workspace override and restore the repository default?"))) return;
+  try {
+    setConfigurationBusy(true);
+    const payload = await serveApi("/api/prompts", { method: "POST", body: { action: "reset", prompt_id: prompt.id, expected_revision: prompt.revision } });
+    replacePromptAsset(payload.prompt);
+    promptConfigState.dirty = false;
+    setConfigurationBusy(false);
+    renderPromptConfiguration();
+    setConfigurationStatus();
+  } catch (error) {
+    setConfigurationBusy(false);
+    await refreshConfigurationAfterConflict(error, { discardPrompt: true });
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+async function rescanTrajectorySources() {
+  try {
+    setConfigurationBusy(true);
+    setConfigurationStatus(t("serve_scanning_runs", "Checking runs"));
+    const operation = await serveApi("/api/sources/reload", { method: "POST", body: {} });
+    setConfigurationBusy(false);
+    await pollConfigurationOperation(operation.operation_id);
+  } catch (error) {
+    setConfigurationBusy(false);
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+async function pollConfigurationOperation(operationId) {
+  if (!operationId) return;
+  activeConfigurationOperations.add(operationId);
+  syncConfigurationBusyState();
+  try {
+    const operation = await serveApi(`/api/operations/${encodeURIComponent(operationId)}`);
+    setConfigurationStatus(`${operation.operation_type}: ${operation.completed}/${operation.total}`);
+    if (["queued", "running"].includes(operation.state)) {
+      setTimeout(() => pollConfigurationOperation(operationId), 250);
+      return;
+    }
+    const failures = Array.isArray(operation.failures) ? operation.failures : [];
+    activeConfigurationOperations.delete(operationId);
+    syncConfigurationBusyState();
+    if (!showImportResultsSummary(operation)) {
+      setConfigurationStatus(failures[0]?.error || "", failures.length > 0 || operation.state === "failed");
+    }
+  } catch (error) {
+    activeConfigurationOperations.delete(operationId);
+    syncConfigurationBusyState();
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+async function mutateHarborDataset(body) {
+  setConfigurationBusy(true);
+  try {
+    const payload = await serveApi("/api/config/harbor/datasets", {
+      method: "POST",
+      body: { ...body, expected_revision: harborConfigState.snapshot?.revision }
+    });
+    harborConfigState.snapshot = payload.result || harborConfigState.snapshot;
+    if (payload.operation?.operation_id) {
+      setConfigurationBusy(false);
+      pollConfigurationOperation(payload.operation.operation_id);
+    } else setConfigurationBusy(false);
+    return payload;
+  } catch (error) {
+    setConfigurationBusy(false);
+    await refreshConfigurationAfterConflict(error);
+    throw error;
+  }
+}
+async function updateHarborDataset(dataset, changes) {
+  const newId = String(changes.new_id ?? dataset.id).trim();
+  const path = String(changes.path ?? dataset.path).trim();
+  const mountIds = Array.isArray(changes.mount_ids) ? changes.mount_ids : datasetMounts(dataset);
+  if (!newId || !path) throw new Error(t("required", "Required"));
+  try {
+    await mutateHarborDataset({ action: "update", dataset_id: dataset.id, new_id: newId, path, mount_ids: mountIds });
+    if (newId !== dataset.id && harborConfigState.datasetSelection.delete(dataset.id)) harborConfigState.datasetSelection.add(newId);
+    renderHarborConfiguration();
+    return { rowKey: newId };
+  } catch (error) {
+    setConfigurationStatus(error.message || String(error), true);
+    throw error;
+  }
+}
+async function createHarborDataset(register = false) {
+  if (!adminMode()) return;
+  const datasetId = register ? "" : window.prompt(t("harbor_dataset_id_prompt", "Dataset ID"));
+  if (!register && !datasetId) return;
+  const path = window.prompt(register ? t("harbor_existing_dataset_path_prompt", "Existing Dataset directory") : t("harbor_dataset_path_prompt", "Dataset path"));
+  if (!path) return;
+  const body = register ? { action: "register", path } : { action: "create", dataset_id: datasetId, path };
+  if (!register) {
+    const packageName = window.prompt(t("harbor_dataset_package_prompt", "Dataset package name (org/name)"), datasetId);
+    if (!packageName) return;
+    body.package_name = packageName;
+    body.description = window.prompt(t("harbor_dataset_description_prompt", "Dataset description"), "") || "";
+  }
+  try {
+    setConfigurationStatus(t("saving", "Saving..."));
+    await mutateHarborDataset(body);
+    renderHarborConfiguration();
+    setConfigurationStatus();
+  } catch (error) {
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+async function unregisterSelectedHarborDatasets() {
+  const datasetIds = Array.from(harborConfigState.datasetSelection);
+  if (!datasetIds.length || !window.confirm(t("harbor_unregister_selected_confirm", "Unregister selected Datasets? Files will not be deleted."))) return;
+  try {
+    setConfigurationStatus(t("saving", "Saving..."));
+    await mutateHarborDataset({ action: "unregister", dataset_ids: datasetIds });
+    harborConfigState.datasetSelection.clear();
+    renderHarborConfiguration();
+    setConfigurationStatus();
+  } catch (error) {
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+async function submitServeSourceForm(form) {
+  if (!adminMode()) return;
+  if (form?.dataset?.sourceKind === "db") applyDefaultDbToForm(form);
+  const body = formPayload(form);
+  const kind = form.dataset.sourceKind;
+  if (!kind) return;
+  const sourceValue = String(body[kind] || "").trim();
+  if (!sourceValue) return;
+  try {
+    setConfigurationBusy(true);
+    setConfigurationStatus(t("serve_refresh", "Refresh"));
+    const payload = await serveApi("/api/sources", { method: "POST", body });
+    form.reset();
+    if (kind === "db") syncAdapterDefaultDbControls(form);
+    setConfigurationBusy(false);
+    if (payload?.operation_id) pollConfigurationOperation(payload.operation_id);
+    showImportResultsSummary(payload);
+  } catch (error) {
+    setConfigurationBusy(false);
+    showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+function showImportResultsSummary(payload) {
+  let results = Array.isArray(payload?.import_results) ? payload.import_results : Array.isArray(payload?.result?.import_results) ? payload.result.import_results : [];
+  if (!results.length && payload?.operation_type === "source-import") {
+    results = [
+      ...Array.isArray(payload?.successes) ? payload.successes : [],
+      ...Array.isArray(payload?.failures) ? payload.failures : []
+    ].sort((left, right) => Number(left?.index || 0) - Number(right?.index || 0));
+  }
+  if (!results.length) return false;
+  const imported = results.filter((result) => result?.status === "ok").length;
+  const failures = results.filter((result) => result?.status === "error");
+  const failed = failures.length;
+  const template = t("serve_import_summary", "Imported {imported}, failed {failed}");
+  let message = template.replace("{imported}", String(imported)).replace("{failed}", String(failed));
+  const firstError = String(failures[0]?.error || "").trim();
+  if (firstError) message = `${message}: ${firstError}`;
+  showServeNotice(message, failed > 0);
+  setConfigurationStatus(message, failed > 0);
+  return true;
+}
+async function inspectDbSessions(form) {
+  if (!adminMode()) return;
+  if (!form) return;
+  applyDefaultDbToForm(form);
+  const body = formPayload(form);
+  const db = String(body.db || "").trim();
+  if (!db) return;
+  const picker = form.querySelector("[data-db-session-picker]");
+  try {
+    setConfigurationStatus(t("serve_inspect_db", "Inspect DB"));
+    const payload = await serveApi("/api/db-sessions", {
+      method: "POST",
+      body: {
+        db,
+        adapter: selectedAdapterValue(form)
+      }
+    });
+    if (payload?.adapter) setAdapterChoice(form, payload.adapter);
+    syncAdapterDefaultDbControls(form);
+    renderDbSessionPicker(form, payload);
+    setConfigurationStatus(t("serve_latest_snapshots", "Latest snapshots"));
+  } catch (error) {
+    if (picker) {
+      picker.hidden = false;
+      picker.innerHTML = `<p class="copy danger">${esc(error.message || String(error))}</p>`;
+    }
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+function renderDbSessionPicker(form, payload) {
+  const picker = form.querySelector("[data-db-session-picker]");
+  if (!picker) return;
+  const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
+  const selection = /* @__PURE__ */ new Set();
+  dbSessionSelections.set(form, selection);
+  form.dataset.inspectedDb = payload?.db || "";
+  form.dataset.inspectedAdapter = payload?.adapter || "";
+  picker.hidden = false;
+  if (!sessions.length) {
+    picker.innerHTML = `<div class="db-picker-head"><strong>${esc(t("serve_db_sessions", "DB sessions"))}</strong><span>${esc(t("serve_no_sessions", "No sessions found"))}</span></div>`;
+    return;
+  }
+  const adapterLabel = payload?.inferred ? t("serve_adapter_inferred", "Adapter inferred") : t("serve_adapter_selected", "Adapter selected");
+  const columns = [
+    selectionColumn({
+      key: "__db_session_select",
+      selectionKey: (session) => String(session?.session_id || ""),
+      selectionSet: () => selection,
+      rowAriaLabel: (id) => `${t("select_row", "Select row")}: ${id}`
+    }),
+    { key: "index", label: "#", valueType: "number", numeric: true, value: (session) => session?.index ?? "-" },
+    { key: "session_id", label: t("session", "Session"), valueType: "identity", value: (session) => session?.session_id || "-", html: (session) => `<code>${esc(session?.session_id || "-")}</code>` },
+    { key: "name", label: t("serve_session_name", "Name"), valueType: "text", value: (session) => session?.name || "-" }
+  ];
+  picker.innerHTML = `
+    <div class="db-picker-head">
+      <div><strong>${esc(t("serve_db_sessions", "DB sessions"))}</strong><span>${esc(adapterLabel)}: ${esc(payload?.adapter || "-")}</span></div>
+      <div class="db-picker-actions">
+        <span data-db-selected-count>0 ${esc(t("serve_selected_count", "selected"))}</span>
+        <button class="action-button primary" type="button" data-db-add-selected disabled>${esc(t("serve_add_selected", "Add selected"))}</button>
+      </div>
+    </div>
+    <div class="db-session-table-wrap">${renderDataTable({
+    tableId: "db-sessions",
+    columns,
+    rows: sessions,
+    rowKey: (session) => session?.session_id || "",
+    tableClass: "db-session-table"
+  })}</div>
+  `;
+  bindDataTableSelection(picker, {
+    columns,
+    rows: sessions,
+    onChange: () => updateDbSelectedCount(picker, form)
+  });
+  updateDbSelectedCount(picker, form);
+}
+function selectedDbSessionIds(form) {
+  return Array.from(dbSessionSelections.get(form) || []);
+}
+function updateDbSelectedCount(picker, form = picker?.closest?.("[data-source-add-form]")) {
+  const count = dbSessionSelections.get(form)?.size || 0;
+  const target = picker.querySelector("[data-db-selected-count]");
+  if (target) target.textContent = `${count} ${t("serve_selected_count", "selected")}`;
+  const addButton = picker.querySelector("[data-db-add-selected]");
+  if (addButton) addButton.disabled = count < 1;
+}
+async function addSelectedDbSessions(form) {
+  if (!adminMode()) return;
+  if (!form) return;
+  const sessionIds = selectedDbSessionIds(form);
+  if (!sessionIds.length) {
+    setConfigurationStatus(t("serve_select_sessions", "Select sessions"), true);
+    return;
+  }
+  const body = formPayload(form);
+  try {
+    setConfigurationBusy(true);
+    setConfigurationStatus(t("serve_refresh", "Refresh"));
+    const payload = await serveApi("/api/sources", {
+      method: "POST",
+      body: {
+        db: form.dataset.inspectedDb || body.db,
+        adapter: form.dataset.inspectedAdapter || selectedAdapterValue(form),
+        session_ids: sessionIds,
+        alias: body.alias
+      }
+    });
+    form.reset();
+    syncAdapterDefaultDbControls(form);
+    const picker = form.querySelector("[data-db-session-picker]");
+    if (picker) {
+      picker.hidden = true;
+      picker.innerHTML = "";
+    }
+    dbSessionSelections.delete(form);
+    delete form.dataset.inspectedDb;
+    delete form.dataset.inspectedAdapter;
+    setConfigurationBusy(false);
+    if (payload?.operation_id) pollConfigurationOperation(payload.operation_id);
+  } catch (error) {
+    setConfigurationBusy(false);
+    showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+async function mutateHarborMount(body) {
+  if (!adminMode()) return;
+  setConfigurationBusy(true);
+  try {
+    const payload = await serveApi("/api/config/harbor/mounts", {
+      method: "POST",
+      body: { ...body, expected_revision: harborConfigState.snapshot?.revision }
+    });
+    harborConfigState.snapshot = payload.result || harborConfigState.snapshot;
+    if (payload.operation?.operation_id) {
+      setConfigurationBusy(false);
+      pollConfigurationOperation(payload.operation.operation_id);
+    } else setConfigurationBusy(false);
+    return payload;
+  } catch (error) {
+    setConfigurationBusy(false);
+    await refreshConfigurationAfterConflict(error);
+    throw error;
+  }
+}
+async function addHarborMount() {
+  if (!adminMode()) return;
+  const jobsPath = window.prompt(t("serve_harbor_jobs_path_prompt", "Jobs path"));
+  if (!jobsPath) return;
+  try {
+    setConfigurationStatus(t("saving", "Saving..."));
+    await mutateHarborMount({ action: "upsert", jobs_path: jobsPath });
+    renderHarborConfiguration();
+    setConfigurationStatus();
+  } catch (error) {
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+async function updateHarborMount(mount, changes) {
+  const mountId = String(changes.mount_id ?? mount.id).trim();
+  const jobsPath = String(changes.jobs_path ?? mount.path).trim();
+  const datasetIds = Array.isArray(changes.dataset_ids) ? changes.dataset_ids : mount.dataset_ids || [];
+  if (!mountId || !jobsPath) throw new Error(t("required", "Required"));
+  try {
+    await mutateHarborMount({
+      action: "upsert",
+      original_id: mount.id,
+      mount_id: mountId,
+      jobs_path: jobsPath,
+      dataset_ids: datasetIds
+    });
+    if (mountId !== mount.id && harborConfigState.mountSelection.delete(mount.id)) harborConfigState.mountSelection.add(mountId);
+    renderHarborConfiguration();
+    return { rowKey: mountId };
+  } catch (error) {
+    setConfigurationStatus(error.message || String(error), true);
+    throw error;
+  }
+}
+async function removeSelectedHarborMounts() {
+  const mountIds = Array.from(harborConfigState.mountSelection);
+  if (!mountIds.length || !window.confirm(t("harbor_remove_selected_mounts_confirm", "Remove selected Harbor mounts? Jobs files will not be deleted."))) return;
+  try {
+    setConfigurationStatus(t("saving", "Saving..."));
+    await mutateHarborMount({ action: "delete", mount_ids: mountIds });
+    harborConfigState.mountSelection.clear();
+    renderHarborConfiguration();
+    setConfigurationStatus();
+  } catch (error) {
+    setConfigurationStatus(error.message || String(error), true);
+  }
+}
+
+// web/src/modules/harbor-workbench.js
+var HARBOR_TABLE_ID = "harbor-datasets";
+var trackedWorkbenchOperations = /* @__PURE__ */ new Set();
+var workbenchMutationBusy = false;
+var workbenchState = {
+  inventory: null,
+  datasetId: null,
+  taskName: null,
+  trashEntryId: null,
+  taskDetail: null,
+  filePath: null,
+  fileRevision: null,
+  savedText: "",
+  dirty: false,
+  showTrash: false,
+  taskSelection: /* @__PURE__ */ new Set(),
+  busy: false,
+  search: "",
+  tableSnapshot: null,
+  taskRequestId: 0,
+  fileRequestId: 0
+};
+function workbenchRoot() {
+  return document.querySelector("[data-harbor-workbench]");
+}
+function selectedDataset() {
+  return listValue(workbenchState.inventory?.datasets).find((dataset) => dataset?.id === workbenchState.datasetId) || null;
+}
+function selectedTask() {
+  const dataset = selectedDataset();
+  return listValue(dataset?.tasks).find((task) => task?.directory === workbenchState.taskName) || null;
+}
+function selectedTrashEntry() {
+  const dataset = selectedDataset();
+  return listValue(dataset?.trash).find((entry) => entry?.entry_id === workbenchState.trashEntryId) || null;
+}
+function isHarborDirty() {
+  return Boolean(workbenchState.dirty);
+}
+function confirmDiscard() {
+  return !isHarborDirty() || window.confirm(t("harbor_discard_changes", "Discard unsaved file changes?"));
+}
+function harborMessage(key, fallback, values = {}) {
+  let message = String(t(key, fallback));
+  Object.entries(values).forEach(([name, value]) => {
+    message = message.replaceAll(`{${name}}`, String(value));
+  });
+  return message;
+}
+function overviewRowKey(row) {
+  if (row.kind === "trash") return `dataset:${row.dataset.id}|trash:${row.entry.entry_id}`;
+  return `dataset:${row.dataset.id}|task:${row.task?.directory || ""}`;
+}
+function overviewRows() {
+  return listValue(workbenchState.inventory?.datasets).flatMap((dataset) => {
+    if (workbenchState.showTrash) {
+      return listValue(dataset?.trash).map((entry) => ({ kind: "trash", dataset, entry, task: null }));
+    }
+    const tasks = listValue(dataset?.tasks);
+    if (!tasks.length) return [{ kind: "empty", dataset, task: null, entry: null }];
+    return tasks.map((task) => ({ kind: "task", dataset, task, entry: null }));
+  });
+}
+function rowTaskName(row) {
+  return row.kind === "trash" ? row.entry?.directory || row.entry?.entry_id || "" : row.task?.directory || "";
+}
+function rowPackage(row) {
+  return row.kind === "trash" ? row.entry?.package_name || "-" : row.task?.package_name || "-";
+}
+function rowStatus(row) {
+  if (row.kind === "empty") return t("harbor_empty_status", "empty");
+  const status = row.kind === "trash" ? "trash" : row.task?.status || "draft";
+  return t(`harbor_status_${status}`, status);
+}
+function rowStatusKey(row) {
+  return row.kind === "empty" ? "empty" : row.kind === "trash" ? "trash" : row.task?.status || "draft";
+}
+function rowDiagnostics(row) {
+  return listValue(row.task?.diagnostics).filter(Boolean).join(" · ");
+}
+function harborColumns() {
+  return [
+    ...adminMode() ? [selectionColumn({
+      key: "__task_select",
+      selectionKey: overviewRowKey,
+      selectionSet: () => workbenchState.taskSelection,
+      selectable: (row) => row.kind !== "empty",
+      rowAriaLabel: (_key, row) => `${t("select_row", "Select row")}: ${rowTaskName(row)}`
+    })] : [],
+    { key: "dataset", label: t("harbor_dataset", "Dataset"), valueType: "identity", sortable: true, filterable: true, value: (row) => row.dataset?.id || "-" },
+    {
+      key: "task",
+      label: t("task", "Task"),
+      valueType: "identity",
+      sortable: true,
+      filterable: true,
+      value: (row) => rowTaskName(row) || "-",
+      edit: (row) => adminMode() && row.kind !== "empty" ? {
+        value: rowTaskName(row),
+        commit: (_current, value) => renameOverviewTask(row, value)
+      } : null
+    },
+    { key: "package", label: t("harbor_package", "Package"), valueType: "identity", sortable: true, filterable: true, value: (row) => rowPackage(row) },
+    {
+      key: "status",
+      label: t("status", "Status"),
+      valueType: "status",
+      sortable: true,
+      filterable: true,
+      value: rowStatus,
+      html: (row) => `<span class="harbor-status-rail ${esc(rowStatusKey(row))}">${esc(rowStatus(row))}</span>`
+    },
+    { key: "diagnostics", label: t("harbor_diagnostics", "Diagnostics"), valueType: "text", sortable: true, value: (row) => rowDiagnostics(row) || "-", fullText: rowDiagnostics }
+  ];
+}
+function rowSearchText(row) {
+  return [row.dataset?.id, rowTaskName(row), rowPackage(row), rowStatus(row), rowDiagnostics(row)].filter(Boolean).join(" ").toLowerCase();
+}
+function visibleOverviewRows() {
+  const columns = harborColumns();
+  const query = String(workbenchState.search || "").trim().toLowerCase();
+  const searched = query ? overviewRows().filter((row) => rowSearchText(row).includes(query)) : overviewRows();
+  return applyDataTableControls(HARBOR_TABLE_ID, searched, columns, searched);
+}
+function selectedOverviewKey() {
+  if (!workbenchState.datasetId) return "";
+  if (workbenchState.showTrash) {
+    return workbenchState.trashEntryId ? `dataset:${workbenchState.datasetId}|trash:${workbenchState.trashEntryId}` : "";
+  }
+  return `dataset:${workbenchState.datasetId}|task:${workbenchState.taskName || ""}`;
+}
+function setOverviewSelection(row) {
+  workbenchState.datasetId = row?.dataset?.id || null;
+  workbenchState.taskName = row?.kind === "task" ? row.task?.directory || null : null;
+  workbenchState.trashEntryId = row?.kind === "trash" ? row.entry?.entry_id || null : null;
+  workbenchState.taskDetail = null;
+  workbenchState.taskRequestId += 1;
+  clearEditor();
+}
+function reconcileOverviewSelection(rows) {
+  const currentKey = selectedOverviewKey();
+  const current = rows.find((row2) => overviewRowKey(row2) === currentKey) || null;
+  if (current) return { row: current, changed: false };
+  const row = rows[0] || null;
+  setOverviewSelection(row);
+  return { row, changed: true };
+}
+function renderHarborOverview(surface, rows) {
+  const container = surface.querySelector("[data-harbor-overview]");
+  if (!container) return;
+  const columns = harborColumns();
+  const selectedKey2 = selectedOverviewKey();
+  container.innerHTML = renderDataTable({
+    tableId: HARBOR_TABLE_ID,
+    columns,
+    rows,
+    rowKey: overviewRowKey,
+    tableClass: "harbor-overview-table",
+    shellClass: "harbor-overview-table-shell",
+    rowClass: (row) => `harbor-overview-row status-${rowStatusKey(row)} ${overviewRowKey(row) === selectedKey2 ? "selected-row" : ""}`,
+    rowAttrs: (row) => `data-harbor-overview-row tabindex="0" data-harbor-row-key="${esc(overviewRowKey(row))}"`,
+    emptyText: workbenchState.showTrash ? t("harbor_trash_empty", "No archived Tasks") : t("harbor_dataset_empty", "No Datasets registered"),
+    filterOptionsRows: overviewRows()
+  });
+  bindDataTableControls(container, {
+    tableId: HARBOR_TABLE_ID,
+    columns,
+    rows,
+    rowKey: overviewRowKey,
+    onChange: () => refreshOverviewAfterControls({ restoreTable: true }),
+    onSelectionChange: renderHarborWorkbench
+  });
+  const byKey = new Map(rows.map((row) => [overviewRowKey(row), row]));
+  container.querySelectorAll("[data-harbor-overview-row]").forEach((node) => {
+    const select = () => selectOverviewRow(byKey.get(node.dataset.harborRowKey));
+    node.addEventListener("click", (event) => {
+      if (event.target?.closest?.("button,input,select,textarea,label,details")) return;
+      select();
+    });
+    node.addEventListener("keydown", (event) => {
+      if (!["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      select();
+    });
+  });
+  const count = surface.querySelector("[data-harbor-overview-count]");
+  if (count) count.textContent = `${rows.length} / ${overviewRows().length}`;
+}
+function renderHarborWorkbench() {
+  const surface = workbenchRoot();
+  if (!surface) return { row: null, changed: false };
+  const availableKeys = new Set(overviewRows().filter((row) => row.kind !== "empty").map(overviewRowKey));
+  Array.from(workbenchState.taskSelection).forEach((key) => {
+    if (!availableKeys.has(key)) workbenchState.taskSelection.delete(key);
+  });
+  const rows = visibleOverviewRows();
+  const selection = reconcileOverviewSelection(rows);
+  renderHarborOverview(surface, rows);
+  renderContextControls(surface);
+  renderSelectedTaskHeading(surface);
+  renderFileTree(surface);
+  renderDiagnostics(surface);
+  syncWorkbenchBusy(surface);
+  workbenchState.tableSnapshot = cloneTableControls();
+  return selection;
+}
+function cloneTableControls() {
+  return JSON.parse(JSON.stringify(tableControls(HARBOR_TABLE_ID)));
+}
+function restoreTableControls() {
+  const controls = tableControls(HARBOR_TABLE_ID);
+  Object.keys(controls).forEach((key) => delete controls[key]);
+  Object.assign(controls, JSON.parse(JSON.stringify(workbenchState.tableSnapshot || {})));
+}
+function renderContextControls(surface) {
+  const dataset = selectedDataset();
+  setDisabled(surface, "[data-harbor-create-task]", workbenchState.busy || !dataset || workbenchState.showTrash);
+  setDisabled(surface, "[data-harbor-sync-manifest]", workbenchState.busy || !dataset || workbenchState.showTrash);
+  setDisabled(surface, "[data-harbor-state-selected]", workbenchState.busy || workbenchState.taskSelection.size < 1);
+  setDisabled(surface, "[data-harbor-delete-selected]", workbenchState.busy || workbenchState.taskSelection.size < 1);
+  setDisabled(surface, "[data-harbor-show-trash]", workbenchState.busy || !listValue(workbenchState.inventory?.datasets).length);
+  surface.querySelector("[data-harbor-show-trash]")?.classList.toggle("active", workbenchState.showTrash);
+  const stateButton = surface.querySelector("[data-harbor-state-selected]");
+  if (stateButton) stateButton.textContent = workbenchState.showTrash ? t("restore_selected", "Restore selected") : t("archive_selected", "Archive selected");
+  const archivedToggle = surface.querySelector("[data-harbor-show-trash]");
+  if (archivedToggle) archivedToggle.setAttribute("aria-pressed", workbenchState.showTrash ? "true" : "false");
+}
+function setWorkbenchBusy(busy) {
+  workbenchMutationBusy = Boolean(busy);
+  syncWorkbenchBusyState();
+}
+function syncWorkbenchBusyState() {
+  workbenchState.busy = workbenchMutationBusy || trackedWorkbenchOperations.size > 0;
+  const surface = workbenchRoot();
+  if (!surface) return;
+  renderContextControls(surface);
+  syncWorkbenchBusy(surface);
+  syncEditorControls();
+}
+function syncWorkbenchBusy(surface = workbenchRoot()) {
+  if (!surface) return;
+  surface.setAttribute("aria-busy", workbenchState.busy ? "true" : "false");
+  surface.querySelectorAll("[data-table-row-select],[data-table-select-visible]").forEach((control) => {
+    control.disabled = workbenchState.busy;
+  });
+}
+function setDisabled(surface, selector, disabled) {
+  const control = surface.querySelector(selector);
+  if (control) control.disabled = Boolean(disabled);
+}
+function renderSelectedTaskHeading(surface) {
+  const title = surface.querySelector("[data-harbor-selected-title]");
+  const meta = surface.querySelector("[data-harbor-selected-meta]");
+  const task = selectedTask();
+  const trash = selectedTrashEntry();
+  if (title) title.textContent = task?.directory || trash?.directory || t("harbor_task_detail_empty", "Select a Task");
+  if (meta) {
+    meta.textContent = task ? `${workbenchState.datasetId} · ${task.package_name || "-"} · ${t(`harbor_status_${task.status || "draft"}`, task.status || "draft")}` : trash ? `${workbenchState.datasetId} · ${trash.package_name || "-"} · ${t("harbor_trash", "Archived")}` : "";
+  }
+}
+function renderFileTree(surface = workbenchRoot()) {
+  const container = surface?.querySelector?.("[data-harbor-file-tree]");
+  const actions = surface?.querySelector?.("[data-harbor-file-actions]");
+  if (!container) return;
+  container.replaceChildren();
+  const tree = listValue(workbenchState.taskDetail?.tree);
+  if (actions) actions.hidden = !adminMode() || !workbenchState.taskDetail || workbenchState.showTrash;
+  if (!tree.length) {
+    container.append(emptyNode(t("harbor_file_empty", "Select a Task to browse its files")));
+    return;
+  }
+  tree.forEach((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `harbor-file-row kind-${item.kind}`;
+    button.classList.toggle("selected", item.path === workbenchState.filePath);
+    button.style.setProperty("--depth", String(item.path.split("/").length - 1));
+    button.append(
+      textNode("span", item.kind === "directory" ? "▸" : "·"),
+      textNode("span", item.path.split("/").at(-1)),
+      textNode("small", item.kind === "file" ? formatBytes(item.size) : "")
+    );
+    if (item.kind === "file") button.addEventListener("click", () => openFile(item));
+    if (adminMode()) {
+      button.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        fileActionMenu(item);
+      });
+    }
+    container.append(button);
+  });
+}
+function renderDiagnostics(surface = workbenchRoot()) {
+  const container = surface?.querySelector?.("[data-harbor-diagnostics]");
+  if (!container) return;
+  container.replaceChildren();
+  listValue(selectedTask()?.diagnostics).forEach((diagnostic) => container.append(textNode("p", diagnostic)));
+}
+async function selectOverviewRow(row) {
+  if (!row) return;
+  if (overviewRowKey(row) === selectedOverviewKey()) {
+    if (row.kind === "task" && !workbenchState.taskDetail) await loadSelectedTask();
+    return;
+  }
+  if (!confirmDiscard()) return;
+  setOverviewSelection(row);
+  renderHarborWorkbench();
+  if (row.kind === "task") await loadSelectedTask();
+}
+async function selectTask(taskName) {
+  const row = overviewRows().find((item) => item.kind === "task" && item.dataset?.id === workbenchState.datasetId && item.task?.directory === taskName);
+  if (!row) return;
+  if (overviewRowKey(row) !== selectedOverviewKey()) {
+    if (!confirmDiscard()) return;
+    setOverviewSelection(row);
+    renderHarborWorkbench();
+  }
+  await loadSelectedTask();
+}
+async function loadSelectedTask() {
+  const datasetId = workbenchState.datasetId;
+  const taskName = workbenchState.taskName;
+  if (!datasetId || !taskName || workbenchState.showTrash) return;
+  const requestId = workbenchState.taskRequestId + 1;
+  workbenchState.taskRequestId = requestId;
+  workbenchState.taskDetail = null;
+  clearEditor();
+  renderFileTree();
+  try {
+    const detail = await serveApi(`/api/harbor/task?dataset_id=${encodeURIComponent(datasetId)}&task=${encodeURIComponent(taskName)}`);
+    if (requestId !== workbenchState.taskRequestId || datasetId !== workbenchState.datasetId || taskName !== workbenchState.taskName) return;
+    workbenchState.taskDetail = detail;
+    renderHarborWorkbench();
+  } catch (error) {
+    setWorkbenchStatus(error.message || String(error), true);
+  }
+}
+async function refreshOverviewAfterControls(options = {}) {
+  const currentVisible = visibleOverviewRows().some((row) => overviewRowKey(row) === selectedOverviewKey());
+  if (!options.skipGuard && !currentVisible && !confirmDiscard()) {
+    if (options.restoreTable) {
+      restoreTableControls();
+      renderHarborWorkbench();
+    }
+    return;
+  }
+  const selection = renderHarborWorkbench();
+  if (selection.changed && selection.row?.kind === "task") await loadSelectedTask();
+}
+async function refreshHarborInventory(options = {}) {
+  if (!options.skipGuard && !confirmDiscard()) return null;
+  setWorkbenchStatus(t("serve_loading_sources", "Loading…"));
+  try {
+    const payload = await serveApi("/api/harbor/datasets");
+    workbenchState.inventory = payload;
+    const selection = renderHarborWorkbench();
+    if (selection.row?.kind === "task") await loadSelectedTask();
+    if (!options.quiet) setWorkbenchStatus("");
+    return payload;
+  } catch (error) {
+    setWorkbenchStatus(error.message || String(error), true);
+    return null;
+  }
+}
+async function initializeHarborWorkbench() {
+  bindHarborWorkbench();
+  return refreshHarborInventory({ skipGuard: true });
+}
+async function openHarborWorkbench() {
+  if (!workbenchRoot()) return false;
+  await initializeHarborWorkbench();
+  return true;
+}
+function closeHarborWorkbench() {
+  return false;
+}
+async function openFile(item) {
+  if (!confirmDiscard()) return;
+  const requestId = workbenchState.fileRequestId + 1;
+  workbenchState.fileRequestId = requestId;
+  const datasetId = workbenchState.datasetId;
+  const taskName = workbenchState.taskName;
+  if (!item.editable) {
+    renderFileMetadata(item);
+    renderFileTree();
+    return;
+  }
+  try {
+    const payload = await serveApi(`/api/harbor/files?dataset_id=${encodeURIComponent(datasetId)}&task=${encodeURIComponent(taskName)}&path=${encodeURIComponent(item.path)}`);
+    if (requestId !== workbenchState.fileRequestId || datasetId !== workbenchState.datasetId || taskName !== workbenchState.taskName) return;
+    workbenchState.filePath = item.path;
+    workbenchState.fileRevision = payload.revision || null;
+    workbenchState.savedText = payload.content;
+    workbenchState.dirty = false;
+    const editor = workbenchRoot()?.querySelector?.("[data-harbor-editor]");
+    if (editor) {
+      editor.disabled = false;
+      editor.readOnly = !adminMode();
+      editor.value = payload.content;
+      editor.focus();
+    }
+    const meta = workbenchRoot()?.querySelector?.("[data-harbor-editor-meta]");
+    if (meta) meta.textContent = `${formatBytes(item.size)} · ${t("harbor_text", "text")}`;
+    syncEditorControls();
+    renderFileTree();
+  } catch (error) {
+    setWorkbenchStatus(error.message || String(error), true);
+  }
+}
+function renderFileMetadata(item) {
+  clearEditor();
+  workbenchState.filePath = item.path;
+  const surface = workbenchRoot();
+  const path = surface?.querySelector?.("[data-harbor-editor-path]");
+  const meta = surface?.querySelector?.("[data-harbor-editor-meta]");
+  const download = surface?.querySelector?.("[data-harbor-download]");
+  if (path) path.textContent = item.path;
+  if (meta) meta.textContent = `${formatBytes(item.size)} · ${item.editable ? t("harbor_text", "text") : t("harbor_metadata_only", "metadata only")}`;
+  if (download) download.hidden = !adminMode() || !item.downloadable;
+}
+function clearEditor() {
+  workbenchState.fileRequestId += 1;
+  workbenchState.filePath = null;
+  workbenchState.fileRevision = null;
+  workbenchState.savedText = "";
+  workbenchState.dirty = false;
+  const surface = workbenchRoot();
+  const editor = surface?.querySelector?.("[data-harbor-editor]");
+  if (editor) {
+    editor.value = "";
+    editor.disabled = true;
+    editor.readOnly = !adminMode();
+  }
+  const path = surface?.querySelector?.("[data-harbor-editor-path]");
+  if (path) path.textContent = t("harbor_editor_empty", "Select a text file");
+  const meta = surface?.querySelector?.("[data-harbor-editor-meta]");
+  if (meta) meta.textContent = "";
+  const download = surface?.querySelector?.("[data-harbor-download]");
+  if (download) download.hidden = true;
+  syncEditorControls();
+}
+function syncEditorControls() {
+  const surface = workbenchRoot();
+  const save = surface?.querySelector?.("[data-harbor-save]");
+  if (save) save.disabled = !adminMode() || workbenchState.busy || !workbenchState.dirty || !workbenchState.filePath;
+  const path = surface?.querySelector?.("[data-harbor-editor-path]");
+  if (path && workbenchState.filePath) path.textContent = `${workbenchState.filePath}${workbenchState.dirty ? " •" : ""}`;
+}
+async function saveFile() {
+  if (!adminMode() || !workbenchState.dirty || !workbenchState.filePath) return;
+  if (workbenchState.busy) {
+    setWorkbenchStatus(t("harbor_operation_in_progress", "Another Task operation is still running"), true);
+    return;
+  }
+  const editor = workbenchRoot()?.querySelector?.("[data-harbor-editor]");
+  const task = selectedTask();
+  if (!editor || !task) return;
+  await mutateFiles({ action: "save", path: workbenchState.filePath, content: editor.value, expected_revision: task.revision }, { reopen: workbenchState.filePath });
+}
+async function mutateFiles(body, options = {}) {
+  if (!adminMode() || workbenchState.busy) return null;
+  setWorkbenchBusy(true);
+  try {
+    const payload = await serveApi("/api/harbor/files", {
+      method: "POST",
+      body: { ...body, dataset_id: workbenchState.datasetId, task: workbenchState.taskName }
+    });
+    workbenchState.taskDetail = payload.result;
+    workbenchState.dirty = false;
+    trackOperation(payload.operation);
+    await refreshHarborInventory({ quiet: true, skipGuard: true });
+    if (options.reopen) {
+      const item = listValue(workbenchState.taskDetail?.tree).find((value) => value.path === options.reopen);
+      if (item) await openFile(item);
+    }
+    return payload;
+  } catch (error) {
+    setWorkbenchStatus(error.message || String(error), true);
+    return null;
+  } finally {
+    setWorkbenchBusy(false);
+  }
+}
+async function mutateTasks(body, datasetId = workbenchState.datasetId, options = {}) {
+  if (!adminMode() || workbenchState.busy) return null;
+  setWorkbenchBusy(true);
+  try {
+    const payload = await serveApi("/api/harbor/tasks", {
+      method: "POST",
+      body: { ...body, dataset_id: datasetId }
+    });
+    trackOperation(payload.operation);
+    clearEditor();
+    await refreshHarborInventory({ quiet: true, skipGuard: true });
+    return payload;
+  } catch (error) {
+    if (options.rethrow) throw error;
+    setWorkbenchStatus(error.message || String(error), true);
+    return null;
+  } finally {
+    setWorkbenchBusy(false);
+  }
+}
+async function createTask() {
+  if (!adminMode() || !confirmDiscard()) return;
+  const dataset = selectedDataset();
+  if (!dataset) return;
+  const directory = window.prompt(t("harbor_task_directory_prompt", "Task directory"));
+  if (!directory) return;
+  const packageName = window.prompt(t("harbor_task_package_prompt", "Task package name (org/name)"), `local/${directory.trim()}`);
+  if (!packageName) return;
+  const rawSteps = window.prompt(t("harbor_step_count_prompt", "Step count (0 for single-step)"), "0");
+  if (rawSteps === null) return;
+  const steps = Number(rawSteps);
+  if (!Number.isInteger(steps) || steps < 0 || steps > 50) {
+    setWorkbenchStatus(t("harbor_steps_invalid", "Step count must be an integer from 0 to 50"), true);
+    return;
+  }
+  const result = await mutateTasks({ action: "create", directory: directory.trim(), package_name: packageName.trim(), steps, expected_revision: dataset.revision });
+  if (result) await selectTask(directory.trim());
+}
+async function renameOverviewTask(row, value) {
+  if (workbenchState.busy) throw new Error(t("saving", "Saving..."));
+  const newDirectory = String(value || "").trim();
+  const oldKey = overviewRowKey(row);
+  if (!newDirectory) throw new Error(t("harbor_task_directory_required", "Task directory is required"));
+  if (newDirectory === rowTaskName(row)) return { rowKey: oldKey };
+  if (!confirmDiscard()) throw new Error(t("harbor_discard_changes", "Discard unsaved file changes?"));
+  const body = row.kind === "trash" ? { action: "rename_archived", entry_id: row.entry.entry_id, new_directory: newDirectory, expected_revision: row.entry.revision } : { action: "rename", task: row.task.directory, new_directory: newDirectory, expected_revision: row.task.revision };
+  const renamesOpenTask = row.kind === "task" && workbenchState.datasetId === row.dataset.id && workbenchState.taskName === row.task.directory;
+  if (renamesOpenTask) workbenchState.taskName = newDirectory;
+  let payload;
+  try {
+    payload = await mutateTasks(body, row.dataset.id, { rethrow: true });
+  } catch (error) {
+    if (renamesOpenTask && workbenchState.taskName === newDirectory) {
+      workbenchState.taskName = row.task.directory;
+    }
+    throw error;
+  }
+  if (!payload) {
+    if (renamesOpenTask && workbenchState.taskName === newDirectory) {
+      workbenchState.taskName = row.task.directory;
+    }
+    throw new Error(t("harbor_task_rename_failed", "Task rename failed"));
+  }
+  const newKey = row.kind === "trash" ? oldKey : `dataset:${row.dataset.id}|task:${newDirectory}`;
+  if (workbenchState.taskSelection.delete(oldKey)) workbenchState.taskSelection.add(newKey);
+  return { rowKey: newKey };
+}
+function selectedTaskRows() {
+  const selected = workbenchState.taskSelection;
+  return overviewRows().filter((row) => selected.has(overviewRowKey(row)) && row.kind !== "empty");
+}
+function taskOperationItem(row) {
+  return row.kind === "trash" ? { dataset_id: row.dataset.id, entry_id: row.entry.entry_id, directory: row.entry.directory || "", expected_revision: row.entry.revision } : { dataset_id: row.dataset.id, task: row.task.directory, expected_revision: row.task.revision };
+}
+async function mutateSelectedTaskState() {
+  if (!adminMode() || !confirmDiscard()) return;
+  const rows = selectedTaskRows();
+  if (!rows.length) return;
+  setWorkbenchBusy(true);
+  try {
+    const operation = await serveApi("/api/harbor/tasks/state", {
+      method: "POST",
+      body: { archived: !workbenchState.showTrash, items: rows.map(taskOperationItem) }
+    });
+    trackOperation(operation, { selectedRows: rows });
+    setWorkbenchBusy(false);
+  } catch (error) {
+    setWorkbenchBusy(false);
+    setWorkbenchStatus(error.message || String(error), true);
+  }
+}
+async function deleteSelectedTasks() {
+  if (!adminMode() || !confirmDiscard()) return;
+  const rows = selectedTaskRows();
+  if (!rows.length || !window.confirm(t("harbor_delete_selected_confirm", "Permanently delete selected Tasks? This cannot be undone."))) return;
+  setWorkbenchBusy(true);
+  try {
+    const operation = await serveApi("/api/harbor/tasks/delete", {
+      method: "POST",
+      body: { items: rows.map(taskOperationItem) }
+    });
+    trackOperation(operation, { selectedRows: rows });
+    setWorkbenchBusy(false);
+  } catch (error) {
+    setWorkbenchBusy(false);
+    setWorkbenchStatus(error.message || String(error), true);
+  }
+}
+async function syncManifest() {
+  const dataset = selectedDataset();
+  if (!adminMode() || !dataset) return;
+  setWorkbenchBusy(true);
+  try {
+    const summary = await serveApi("/api/harbor/tasks/manifest", {
+      method: "POST",
+      body: { dataset_id: dataset.id, expected_revision: dataset.revision }
+    });
+    const datasets = listValue(workbenchState.inventory?.datasets).map((item) => item.id === summary.id ? summary : item);
+    workbenchState.inventory = { ...workbenchState.inventory, datasets };
+    renderHarborWorkbench();
+    setWorkbenchStatus(t("harbor_manifest_synced", "Manifest synced"));
+  } catch (error) {
+    setWorkbenchStatus(error.message || String(error), true);
+  } finally {
+    setWorkbenchBusy(false);
+  }
+}
+async function createFile(kind) {
+  if (!adminMode()) return;
+  const task = selectedTask();
+  if (!task) return;
+  const path = window.prompt(kind === "directory" ? t("harbor_new_directory_path_prompt", "New directory path") : t("harbor_new_file_path_prompt", "New file path"));
+  if (!path) return;
+  await mutateFiles({ action: "create", kind, path: path.trim(), expected_revision: task.revision });
+}
+async function uploadFile(file) {
+  if (!adminMode()) return;
+  const task = selectedTask();
+  if (!task || !file) return;
+  if (Number(file.size) > 16 * 1024 * 1024) {
+    setWorkbenchStatus(t("harbor_upload_too_large", "Uploads are limited to 16 MiB"), true);
+    return;
+  }
+  const path = window.prompt(t("harbor_upload_path_prompt", "Upload path"), file.name);
+  if (!path) return;
+  const buffer = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (let offset = 0; offset < buffer.length; offset += 32768) binary += String.fromCharCode(...buffer.subarray(offset, offset + 32768));
+  await mutateFiles({ action: "upload", path: path.trim(), content_base64: btoa(binary), expected_revision: task.revision });
+}
+async function fileActionMenu(item) {
+  if (!adminMode()) return;
+  const task = selectedTask();
+  if (!task) return;
+  const action = window.prompt(t("harbor_file_action_prompt", "File action: rename or delete"), "rename");
+  if (action === "rename") {
+    const newPath = window.prompt(t("harbor_new_path_prompt", "New path"), item.path);
+    if (!newPath || newPath === item.path) return;
+    await mutateFiles({ action: "rename", path: item.path, new_path: newPath.trim(), expected_revision: task.revision });
+  } else if (action === "delete" && window.confirm(harborMessage(
+    "harbor_delete_file_confirm",
+    "Permanently delete “{name}”?",
+    { name: item.path }
+  ))) {
+    await mutateFiles({ action: "delete", path: item.path, expected_revision: task.revision });
+  }
+}
+function downloadFile() {
+  if (!adminMode() || !workbenchState.filePath || !workbenchState.taskName || !workbenchState.datasetId) return;
+  window.location.assign(`/api/harbor/files?dataset_id=${encodeURIComponent(workbenchState.datasetId)}&task=${encodeURIComponent(workbenchState.taskName)}&path=${encodeURIComponent(workbenchState.filePath)}&download=1`);
+}
+function trackOperation(operation, options = {}) {
+  const operationId = operation?.operation_id;
+  if (operationId) {
+    trackedWorkbenchOperations.add(operationId);
+    syncWorkbenchBusyState();
+    pollHarborOperation(operationId, options);
+  }
+}
+async function pollHarborOperation(operationId, options = {}) {
+  if (!adminMode()) return;
+  try {
+    const operation = await serveApi(`/api/operations/${encodeURIComponent(operationId)}`);
+    const node = workbenchRoot()?.querySelector?.("[data-harbor-operation-status]");
+    if (node) node.textContent = `${operation.operation_type}: ${operation.completed}/${operation.total}`;
+    if (operation.state === "queued" || operation.state === "running") {
+      setTimeout(() => pollHarborOperation(operationId, options), 250);
+      return;
+    }
+    trackedWorkbenchOperations.delete(operationId);
+    syncWorkbenchBusyState();
+    if (options.selectedRows) {
+      const successfulIndexes = new Set(listValue(operation.successes).map((item) => Number(item.index)));
+      options.selectedRows.forEach((row, index) => {
+        if (successfulIndexes.has(index)) workbenchState.taskSelection.delete(overviewRowKey(row));
+      });
+    }
+    await refreshHarborInventory({ quiet: true, skipGuard: true });
+    const failures = listValue(operation.failures);
+    if (operation.state === "failed" || failures.length) {
+      setWorkbenchStatus(failures[0]?.error || t("harbor_reconcile_failed", "Catalog reconcile failed"), true);
+    } else setWorkbenchStatus("");
+  } catch (error) {
+    trackedWorkbenchOperations.delete(operationId);
+    syncWorkbenchBusyState();
+    setWorkbenchStatus(error.message || String(error), true);
+  }
+}
+function setWorkbenchStatus(message, error = false) {
+  const node = workbenchRoot()?.querySelector?.("[data-harbor-workbench-status]");
+  if (!node) return;
+  node.textContent = message || "";
+  node.hidden = !message;
+  node.classList.toggle("danger", Boolean(error));
+}
+function bindHarborWorkbench() {
+  const surface = workbenchRoot();
+  if (!surface || surface.dataset.bound === "true") return;
+  surface.dataset.bound = "true";
+  surface.querySelector("[data-harbor-reload]")?.addEventListener("click", () => refreshHarborInventory());
+  surface.querySelector("[data-harbor-create-task]")?.addEventListener("click", createTask);
+  surface.querySelector("[data-harbor-sync-manifest]")?.addEventListener("click", syncManifest);
+  surface.querySelector("[data-harbor-state-selected]")?.addEventListener("click", mutateSelectedTaskState);
+  surface.querySelector("[data-harbor-delete-selected]")?.addEventListener("click", deleteSelectedTasks);
+  surface.querySelector("[data-harbor-show-trash]")?.addEventListener("click", () => {
+    if (!confirmDiscard()) return;
+    workbenchState.showTrash = !workbenchState.showTrash;
+    workbenchState.taskSelection.clear();
+    setOverviewSelection(null);
+    renderHarborWorkbench();
+  });
+  surface.querySelector("[data-harbor-search]")?.addEventListener("input", (event) => {
+    const previous = workbenchState.search;
+    workbenchState.search = String(event.target.value || "");
+    const currentVisible = visibleOverviewRows().some((row) => overviewRowKey(row) === selectedOverviewKey());
+    if (!currentVisible && !confirmDiscard()) {
+      workbenchState.search = previous;
+      event.target.value = previous;
+      return;
+    }
+    refreshOverviewAfterControls({ skipGuard: true });
+  });
+  surface.querySelector("[data-harbor-new-file]")?.addEventListener("click", () => createFile("file"));
+  surface.querySelector("[data-harbor-new-directory]")?.addEventListener("click", () => createFile("directory"));
+  const upload = surface.querySelector("[data-harbor-upload-input]");
+  surface.querySelector("[data-harbor-upload]")?.addEventListener("click", () => upload?.click());
+  upload?.addEventListener("change", () => {
+    const file = upload.files?.[0];
+    upload.value = "";
+    if (file) uploadFile(file);
+  });
+  const editor = surface.querySelector("[data-harbor-editor]");
+  editor?.addEventListener("input", () => {
+    if (!adminMode()) return;
+    workbenchState.dirty = editor.value !== workbenchState.savedText;
+    syncEditorControls();
+  });
+  surface.querySelector("[data-harbor-save]")?.addEventListener("click", saveFile);
+  surface.querySelector("[data-harbor-download]")?.addEventListener("click", downloadFile);
+  document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && adminMode()) {
+      event.preventDefault();
+      saveFile();
+    }
+  });
+  window.addEventListener("beforeunload", (event) => {
+    if (!isHarborDirty()) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
+}
+function textNode(tag, value) {
+  const node = document.createElement(tag);
+  node.textContent = String(value ?? "");
+  return node;
+}
+function emptyNode(value) {
+  const node = textNode("p", value);
+  node.className = "copy harbor-empty";
+  return node;
+}
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+// web/src/modules/acp-client.js
+var acpState = {
+  initialized: false,
+  agents: [],
+  sessions: [],
+  agentId: "",
+  sessionId: "",
+  revision: 0,
+  events: [],
+  context: null,
+  contextCandidate: null,
+  prompts: [],
+  promptAssetId: "",
+  polling: false,
+  pollGeneration: 0,
+  opener: null
+};
+function drawer() {
+  return document.querySelector("[data-acp-drawer]");
+}
+function storageKey() {
+  return `peval:${RENDER_OPTIONS?.workspace_id || "default"}:acp-client`;
+}
+async function initializeAcp() {
+  if (acpState.initialized || !adminMode() || !drawer()) return;
+  acpState.initialized = true;
+  restoreUiState();
+  bindControls();
+  try {
+    const [payload, promptPayload] = await Promise.all([
+      serveApi("/api/acp/agents"),
+      serveApi("/api/prompts")
+    ]);
+    acpState.agents = listValue(payload?.agents);
+    acpState.prompts = listValue(promptPayload?.prompts);
+    if (!acpState.prompts.some((prompt) => prompt.id === acpState.promptAssetId)) {
+      acpState.promptAssetId = acpState.prompts[0]?.id || "";
+    }
+    if (!acpState.agents.some((agent) => agent.id === acpState.agentId)) {
+      acpState.agentId = acpState.agents[0]?.id || "";
+    }
+    renderAgentControls();
+    renderPromptAssets();
+    if (selectedAgent()?.connected) await refreshSessions(false);
+    if (readSavedUi().open && acpState.agents.length) openAcpDrawer(document.querySelector("[data-acp-open]"));
+  } catch (error) {
+    showNotice(error.message || String(error), true);
+  }
+}
+function bindControls() {
+  document.querySelectorAll("[data-acp-open]").forEach((button) => button.addEventListener("click", () => openAcpDrawer(button)));
+  document.querySelectorAll("[data-acp-close]").forEach((button) => button.addEventListener("click", () => closeAcpDrawer()));
+  document.querySelector("[data-acp-backdrop]")?.addEventListener("click", () => closeAcpDrawer());
+  document.querySelector("[data-acp-agent]")?.addEventListener("change", async (event) => {
+    acpState.agentId = String(event.target.value || "");
+    acpState.sessionId = "";
+    acpState.revision = 0;
+    acpState.events = [];
+    stopPolling();
+    renderAgentControls();
+    if (selectedAgent()?.connected) await refreshSessions(false);
+    persistUiState();
+  });
+  document.querySelector("[data-acp-connect]")?.addEventListener("click", toggleConnection);
+  document.querySelector("[data-acp-new-session]")?.addEventListener("click", createSession);
+  document.querySelector("[data-acp-session-close]")?.addEventListener("click", closeSession);
+  document.querySelector("[data-acp-session]")?.addEventListener("change", (event) => selectSession(String(event.target.value || ""), { resume: true }));
+  document.querySelector("[data-acp-context-capture]")?.addEventListener("click", captureContext);
+  document.querySelector("[data-acp-prompt-asset]")?.addEventListener("change", (event) => {
+    acpState.promptAssetId = String(event.target.value || "");
+    renderPromptAssets();
+  });
+  document.querySelector("[data-acp-use-prompt]")?.addEventListener("click", usePromptAsset);
+  document.querySelector("[data-acp-composer]")?.addEventListener("submit", sendPrompt);
+  document.querySelector("[data-acp-stop]")?.addEventListener("click", cancelPrompt);
+  document.querySelector("[data-acp-prompt]")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      document.querySelector("[data-acp-composer]")?.requestSubmit?.();
+    }
+  });
+  document.querySelector("[data-acp-events]")?.addEventListener("click", handleEventAction);
+  document.querySelector("[data-acp-session-options]")?.addEventListener("change", handleSessionOption);
+}
+function openAcpDrawer(opener = null) {
+  const panel = drawer();
+  if (!panel || !adminMode()) return false;
+  acpState.contextCandidate = currentContext();
+  closeWorkspaceReportReader({ restoreFocus: false });
+  if (state.selectedStep) {
+    state.selectedStep = null;
+    renderComparisonPanels();
+  }
+  acpState.opener = opener || document.activeElement;
+  panel.hidden = false;
+  const backdrop = document.querySelector("[data-acp-backdrop]");
+  if (backdrop) backdrop.hidden = false;
+  document.body.classList.add("acp-drawer-open");
+  document.querySelector("[data-acp-open]")?.setAttribute("aria-expanded", "true");
+  persistUiState({ open: true });
+  panel.querySelector("[data-acp-prompt]")?.focus?.();
+  startPolling();
+  return true;
+}
+function closeAcpDrawer(options = {}) {
+  const panel = drawer();
+  if (!panel || panel.hidden) return false;
+  panel.hidden = true;
+  const backdrop = document.querySelector("[data-acp-backdrop]");
+  if (backdrop) backdrop.hidden = true;
+  document.body.classList.remove("acp-drawer-open");
+  document.querySelector("[data-acp-open]")?.setAttribute("aria-expanded", "false");
+  stopPolling();
+  persistUiState({ open: false });
+  if (options.restoreFocus !== false) acpState.opener?.focus?.();
+  acpState.opener = null;
+  return true;
+}
+async function toggleConnection(event) {
+  const button = event.currentTarget;
+  const agent = selectedAgent();
+  if (!agent) return;
+  button.disabled = true;
+  showNotice(agent.connected ? t("acp_disconnecting", "Disconnecting…") : t("acp_connecting", "Starting local agent…"));
+  try {
+    const payload = await serveApi(agent.connected ? "/api/acp/disconnect" : "/api/acp/connect", {
+      method: "POST",
+      body: { agent_id: agent.id }
+    });
+    replaceAgent(payload);
+    if (payload.connected) await refreshSessions(true);
+    else {
+      acpState.sessions = [];
+      selectSession("");
+    }
+    showNotice(payload.connected ? t("acp_connected", "Local agent connected") : t("acp_disconnected", "Local agent disconnected"));
+  } catch (error) {
+    showNotice(error.message || String(error), true);
+  } finally {
+    button.disabled = false;
+    renderAgentControls();
+  }
+}
+async function refreshSessions(refresh = true) {
+  if (!acpState.agentId) return;
+  const query = new URLSearchParams({ agent_id: acpState.agentId, refresh: refresh ? "1" : "0" });
+  const payload = await serveApi(`/api/acp/sessions?${query}`);
+  acpState.sessions = listValue(payload?.sessions);
+  if (!acpState.sessions.some((session) => session.session_id === acpState.sessionId)) {
+    acpState.sessionId = acpState.sessions.find((session) => !session.closed)?.session_id || "";
+    acpState.revision = 0;
+    acpState.events = [];
+  }
+  renderSessionControls();
+  persistUiState();
+  if (acpState.sessionId && selectedSession()?.loaded === false) {
+    await resumeSession(acpState.sessionId);
+  }
+  startPolling();
+}
+async function createSession() {
+  if (!selectedAgent()?.connected) return;
+  setBusy(true);
+  try {
+    const session = await serveApi("/api/acp/sessions", {
+      method: "POST",
+      body: { agent_id: acpState.agentId }
+    });
+    upsertSession(session);
+    selectSession(session.session_id);
+    showNotice(t("acp_session_created", "Session ready"));
+  } catch (error) {
+    showNotice(error.message || String(error), true);
+  } finally {
+    setBusy(false);
+  }
+}
+async function closeSession() {
+  const session = selectedSession();
+  if (!session || session.active_prompt) return;
+  try {
+    const updated = await serveApi("/api/acp/close", {
+      method: "POST",
+      body: ids()
+    });
+    upsertSession(updated);
+    renderSessionControls();
+  } catch (error) {
+    showNotice(error.message || String(error), true);
+  }
+}
+function selectSession(sessionId, options = {}) {
+  stopPolling();
+  acpState.sessionId = sessionId;
+  acpState.revision = 0;
+  acpState.events = [];
+  renderSessionControls();
+  renderEvents();
+  persistUiState();
+  if (options.resume && selectedSession()?.loaded === false) {
+    resumeSession(sessionId);
+  } else startPolling();
+}
+async function resumeSession(sessionId) {
+  if (!sessionId) return;
+  setBusy(true);
+  try {
+    const session = await serveApi("/api/acp/sessions", {
+      method: "POST",
+      body: { agent_id: acpState.agentId, resume_session_id: sessionId }
+    });
+    upsertSession(session);
+    renderSessionControls();
+  } catch (error) {
+    showNotice(error.message || String(error), true);
+  } finally {
+    setBusy(false);
+    startPolling();
+  }
+}
+async function sendPrompt(event) {
+  event.preventDefault();
+  const textarea = document.querySelector("[data-acp-prompt]");
+  const prompt = String(textarea?.value || "").trim();
+  const session = selectedSession();
+  if (!prompt || !session || session.active_prompt) return;
+  try {
+    const updated = await serveApi("/api/acp/prompt", {
+      method: "POST",
+      body: { ...ids(), prompt, ...acpState.context ? { context: acpState.context.value } : {} }
+    });
+    if (textarea) textarea.value = "";
+    upsertSession(updated);
+    renderSessionControls();
+    startPolling();
+  } catch (error) {
+    showNotice(error.message || String(error), true);
+  }
+}
+async function cancelPrompt() {
+  try {
+    const updated = await serveApi("/api/acp/cancel", { method: "POST", body: ids() });
+    upsertSession(updated);
+    renderSessionControls();
+  } catch (error) {
+    showNotice(error.message || String(error), true);
+  }
+}
+function captureContext() {
+  const next = acpState.contextCandidate || currentContext();
+  if (!next) {
+    showNotice(t("acp_context_unavailable", "Select an evaluation item first"), true);
+    return;
+  }
+  acpState.context = next;
+  const suggestedPromptId = { source: "failure-diagnosis", dataset_task: "task-audit", report: "report-review" }[next.value?.kind];
+  if (suggestedPromptId && acpState.prompts.some((prompt) => prompt.id === suggestedPromptId)) {
+    acpState.promptAssetId = suggestedPromptId;
+    renderPromptAssets();
+  }
+  renderContext();
+  showNotice(t("acp_context_attached", "Current evaluation context attached"));
+}
+function renderPromptAssets() {
+  const select = document.querySelector("[data-acp-prompt-asset]");
+  if (select) {
+    select.innerHTML = `<option value="">${esc(t("acp_prompt_custom", "Custom prompt"))}</option>${acpState.prompts.map((prompt) => `<option value="${esc(prompt.id)}" ${prompt.id === acpState.promptAssetId ? "selected" : ""}>${esc(prompt.title)}</option>`).join("")}`;
+  }
+  const use = document.querySelector("[data-acp-use-prompt]");
+  if (use) use.disabled = !acpState.prompts.some((prompt) => prompt.id === acpState.promptAssetId);
+}
+function usePromptAsset() {
+  const prompt = acpState.prompts.find((item) => item.id === acpState.promptAssetId);
+  const textarea = document.querySelector("[data-acp-prompt]");
+  if (!prompt || !textarea) return;
+  textarea.value = prompt.content || "";
+  textarea.focus?.();
+}
+function currentContext() {
+  const page = RENDER_OPTIONS?.serve_page;
+  if (page === "home" && state.selectedSourceKey) {
+    const stepId = state.selectedStep?.stepId;
+    return {
+      label: stepId ? `${state.selectedSourceKey} · ${t("step", "Step")} ${stepId}` : state.selectedSourceKey,
+      value: { kind: "source", source_key: state.selectedSourceKey, ...stepId ? { step_id: stepId } : {} }
+    };
+  }
+  if (page === "datasets" && workbenchState.datasetId && workbenchState.taskName) {
+    return {
+      label: `${workbenchState.datasetId} / ${workbenchState.taskName}`,
+      value: { kind: "dataset_task", dataset_id: workbenchState.datasetId, task: workbenchState.taskName }
+    };
+  }
+  if (page === "reports") {
+    const reportId = state.reportReader.openId || state.reportManager.selectedId;
+    const report = listValue(state.workspaceReports).find((item) => item.report_id === reportId);
+    if (reportId) return { label: report?.filename || reportId, value: { kind: "report", report_id: reportId } };
+  }
+  return null;
+}
+function startPolling() {
+  if (acpState.polling || drawer()?.hidden || !acpState.agentId || !acpState.sessionId) return;
+  acpState.polling = true;
+  const generation = ++acpState.pollGeneration;
+  pollEvents(generation);
+}
+function stopPolling() {
+  acpState.polling = false;
+  acpState.pollGeneration += 1;
+}
+async function pollEvents(generation) {
+  let failures = 0;
+  while (acpState.polling && generation === acpState.pollGeneration) {
+    const query = new URLSearchParams({
+      agent_id: acpState.agentId,
+      session_id: acpState.sessionId,
+      after: String(acpState.revision),
+      wait: "20"
+    });
+    try {
+      const payload = await serveApi(`/api/acp/events?${query}`);
+      if (!acpState.polling || generation !== acpState.pollGeneration) return;
+      const incoming = listValue(payload?.events);
+      const nextEvents = payload?.reset ? incoming : mergeByRevision(acpState.events, incoming);
+      const eventsChanged = JSON.stringify(nextEvents) !== JSON.stringify(acpState.events);
+      const revision = Number(payload?.revision);
+      if (Number.isFinite(revision)) acpState.revision = revision;
+      const sessionChanged = payload?.session && JSON.stringify(payload.session) !== JSON.stringify(selectedSession());
+      acpState.events = nextEvents;
+      if (sessionChanged) upsertSession(payload.session);
+      if (sessionChanged) renderSessionControls();
+      if (eventsChanged) renderEvents();
+      failures = 0;
+    } catch (error) {
+      if (generation !== acpState.pollGeneration) return;
+      if (error?.status === 404) {
+        stopPolling();
+        acpState.sessionId = "";
+        acpState.revision = 0;
+        acpState.events = [];
+        renderSessionControls();
+        renderEvents();
+        persistUiState();
+        try {
+          await refreshSessions(false);
+        } catch (refreshError) {
+          showNotice(refreshError.message || String(refreshError), true);
+        }
+        return;
+      }
+      showNotice(error.message || String(error), true);
+      failures += 1;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(250 * 2 ** (failures - 1), 5e3)));
+    }
+  }
+}
+function mergeByRevision(existing, incoming) {
+  const values = new Map(existing.map((event) => [Number(event.revision), event]));
+  incoming.forEach((event) => values.set(Number(event.revision), event));
+  return Array.from(values.values()).sort((left, right) => Number(left.revision) - Number(right.revision));
+}
+function renderEvents() {
+  const target = document.querySelector("[data-acp-events]");
+  if (!target) return;
+  if (!acpState.events.length) {
+    target.innerHTML = `<div class="acp-empty">${esc(t("acp_empty_session", "This session is quiet. Send a prompt to start."))}</div>`;
+    return;
+  }
+  target.innerHTML = collapseChunks(acpState.events).map(renderEvent).join("");
+  target.querySelectorAll(".acp-message-body[data-markdown]").forEach((node) => {
+    node.innerHTML = renderMarkdown(node.dataset.markdown || "");
+  });
+  target.scrollTop = target.scrollHeight;
+}
+function collapseChunks(events) {
+  const collapsed = [];
+  events.forEach((event) => {
+    const previous = collapsed[collapsed.length - 1];
+    if (previous && ["message", "thought"].includes(event.type) && previous.type === event.type) {
+      previous.text = `${previous.text || ""}${event.text || ""}`;
+      previous.revision = event.revision;
+    } else collapsed.push({ ...event });
+  });
+  return collapsed;
+}
+function renderEvent(event) {
+  const type = String(event.type || "unknown");
+  const label = eventLabel(type);
+  let body = "";
+  if (["message", "user_message"].includes(type)) {
+    body = `<div class="acp-message-body note-body" data-markdown="${esc(event.text || "")}"></div>`;
+  } else if (type === "thought") {
+    body = `<details><summary>${esc(t("acp_show_thought", "Agent reasoning"))}</summary><div class="acp-message-body note-body" data-markdown="${esc(event.text || "")}"></div></details>`;
+  } else if (type === "tool") {
+    body = `<div class="acp-tool-head"><strong>${esc(event.title || event.kind || t("tool_calls", "Tool call"))}</strong><span>${esc(event.status || "pending")}</span></div>${renderJsonDetails(event.raw_input || event.content || event.raw_output)}`;
+  } else if (type === "permission") {
+    const permissionResult = latestPermissionResult(event.request_id);
+    const options = listValue(event.options);
+    const selectedOption = options.find((option) => String(option.optionId ?? option.id ?? "") === String(permissionResult?.option_id ?? ""));
+    const requestIdAttributes = `data-acp-permission="${esc(event.request_id)}" data-acp-request-id-type="${esc(typeof event.request_id)}"`;
+    const answered = permissionResult ? " disabled" : "";
+    const resultSummary = permissionResult ? `<p class="acp-permission-result">${esc(permissionResult.cancelled ? t("cancel", "Cancel") : selectedOption?.name || selectedOption?.label || permissionResult.option_id || t("complete", "Complete"))}</p>` : "";
+    body = `<strong>${esc(t("acp_permission_required", "Permission required"))}</strong>${renderJsonDetails(event.tool_call)}<div class="acp-permission-options">${options.map((option) => `<button class="action-button compact" type="button" ${requestIdAttributes} data-option-id="${esc(option.optionId || option.id || "")}"${answered}>${esc(option.name || option.label || option.optionId || option.id || t("allow", "Allow"))}</button>`).join("")}<button class="action-button compact danger" type="button" ${requestIdAttributes} data-cancelled="true"${answered}>${esc(t("cancel", "Cancel"))}</button></div>${resultSummary}`;
+  } else if (type === "plan") {
+    body = `<ol class="acp-plan">${listValue(event.entries).map((entry) => `<li data-status="${esc(entry.status || "pending")}"><span>${esc(entry.content || entry.title || "")}</span><small>${esc(entry.status || "pending")}</small></li>`).join("")}</ol>`;
+  } else if (type === "error") {
+    body = `<p class="danger">${esc(event.message || t("error", "Error"))}</p>`;
+  } else if (["status", "session", "prompt_complete", "mode", "config", "usage", "permission_result"].includes(type)) {
+    body = `<p>${esc(event.status || event.stop_reason || event.mode_id || t("acp_event_recorded", "Event recorded"))}</p>`;
+  } else if (type === "commands") {
+    body = `<div class="acp-command-list">${listValue(event.commands).map((command) => `<code>/${esc(command.name || command.command || "")}</code>`).join("")}</div>`;
+  } else {
+    body = renderJsonDetails(event.payload || event.result || event);
+  }
+  return `<article class="acp-event acp-event-${esc(type)}"><span class="acp-event-node" aria-hidden="true"></span><header><span>${esc(label)}</span><code>#${esc(event.revision || "")}</code></header><div class="acp-event-body">${body}</div></article>`;
+}
+function latestPermissionResult(requestId) {
+  return [...acpState.events].reverse().find((event) => event.type === "permission_result" && typeof event.request_id === typeof requestId && event.request_id === requestId);
+}
+function renderJsonDetails(value) {
+  if (value === null || value === void 0 || value === "") return "";
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  return `<details class="acp-payload"><summary>${esc(t("details", "Details"))}</summary><pre>${esc(text)}</pre></details>`;
+}
+function eventLabel(type) {
+  return {
+    message: t("agent", "Agent"),
+    user_message: t("you", "You"),
+    thought: t("analysis", "Analysis"),
+    tool: t("tool_calls", "Tool call"),
+    permission: t("acp_permission", "Permission"),
+    plan: t("acp_plan", "Plan"),
+    error: t("error", "Error"),
+    prompt_complete: t("complete", "Complete"),
+    session: t("session", "Session")
+  }[type] || type.replaceAll("_", " ");
+}
+async function handleEventAction(event) {
+  const button = event.target?.closest?.("[data-acp-permission]");
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await serveApi("/api/acp/permission", {
+      method: "POST",
+      body: {
+        ...ids(),
+        request_id: button.dataset.acpRequestIdType === "string" ? String(button.dataset.acpPermission) : numericId(button.dataset.acpPermission),
+        ...button.dataset.optionId ? { option_id: button.dataset.optionId } : {},
+        cancelled: button.dataset.cancelled === "true"
+      }
+    });
+  } catch (error) {
+    button.disabled = false;
+    showNotice(error.message || String(error), true);
+  }
+}
+async function handleSessionOption(event) {
+  const control = event.target;
+  try {
+    if (control.matches("[data-acp-mode]")) {
+      const payload = await serveApi("/api/acp/session-mode", { method: "POST", body: { ...ids(), mode_id: control.value } });
+      upsertSession(payload.session);
+    } else if (control.matches("[data-acp-config]")) {
+      const payload = await serveApi("/api/acp/session-config", { method: "POST", body: { ...ids(), option_id: control.dataset.acpConfig, value: control.value } });
+      upsertSession(payload.session);
+    }
+  } catch (error) {
+    showNotice(error.message || String(error), true);
+  }
+}
+function renderAgentControls() {
+  const select = document.querySelector("[data-acp-agent]");
+  if (select) {
+    select.innerHTML = acpState.agents.length ? acpState.agents.map((agent2) => `<option value="${esc(agent2.id)}" ${agent2.id === acpState.agentId ? "selected" : ""}>${esc(agent2.title)}</option>`).join("") : `<option value="">${esc(t("acp_no_agents", "No agents configured"))}</option>`;
+    select.disabled = !acpState.agents.length;
+  }
+  const agent = selectedAgent();
+  const connect = document.querySelector("[data-acp-connect]");
+  if (connect) {
+    connect.textContent = agent?.connected ? t("acp_disconnect", "Disconnect") : t("acp_connect", "Connect");
+    connect.disabled = !agent;
+  }
+  const protocol = document.querySelector("[data-acp-protocol]");
+  if (protocol) {
+    protocol.textContent = agent?.connected ? `ACP v${agent.protocol_version}` : "ACP · —";
+    protocol.classList.toggle("connected", Boolean(agent?.connected));
+  }
+  renderSessionControls();
+}
+function renderSessionControls() {
+  const select = document.querySelector("[data-acp-session]");
+  if (select) {
+    select.innerHTML = `<option value="">${esc(t("acp_no_session", "No session yet"))}</option>${acpState.sessions.map((session2) => `<option value="${esc(session2.session_id)}" ${session2.session_id === acpState.sessionId ? "selected" : ""}>${esc(session2.title || shortId(session2.session_id))}${session2.closed ? ` · ${esc(t("closed", "closed"))}` : ""}</option>`).join("")}`;
+    select.disabled = !selectedAgent()?.connected;
+  }
+  const session = selectedSession();
+  const create = document.querySelector("[data-acp-new-session]");
+  if (create) create.disabled = !selectedAgent()?.connected;
+  const close = document.querySelector("[data-acp-session-close]");
+  if (close) close.disabled = !session || session.closed || session.active_prompt;
+  const prompt = document.querySelector("[data-acp-prompt]");
+  const send = document.querySelector("[data-acp-send]");
+  if (prompt) prompt.disabled = !session || session.closed;
+  if (send) send.disabled = !session || session.closed || session.active_prompt;
+  const stop = document.querySelector("[data-acp-stop]");
+  if (stop) stop.hidden = !session?.active_prompt;
+  const usage = document.querySelector("[data-acp-usage]");
+  if (usage) usage.textContent = usageText(session?.usage);
+  renderSessionOptions(session);
+}
+function renderSessionOptions(session) {
+  const target = document.querySelector("[data-acp-session-options]");
+  if (!target) return;
+  const modes = listValue(session?.modes?.availableModes);
+  const options = listValue(session?.config_options);
+  target.hidden = !modes.length && !options.length;
+  target.innerHTML = [
+    modes.length ? `<label><span>${esc(t("acp_mode", "Mode"))}</span><select data-acp-mode>${modes.map((mode) => `<option value="${esc(mode.id)}" ${mode.id === session.current_mode ? "selected" : ""}>${esc(mode.name || mode.id)}</option>`).join("")}</select></label>` : "",
+    ...options.map((option) => renderConfigOption(option))
+  ].join("");
+}
+function renderConfigOption(option) {
+  const id = option.id || option.configId || "";
+  const values = listValue(option.options);
+  if (!id || !values.length) return "";
+  return `<label><span>${esc(option.name || id)}</span><select data-acp-config="${esc(id)}">${values.map((value) => `<option value="${esc(value.value ?? value.id ?? "")}" ${(value.value ?? value.id) === option.currentValue ? "selected" : ""}>${esc(value.name || value.label || value.value || value.id || "")}</option>`).join("")}</select></label>`;
+}
+function renderContext() {
+  const label = document.querySelector("[data-acp-context-label]");
+  if (label) label.textContent = acpState.context?.label || t("acp_context_none", "No evaluation context attached");
+  document.querySelector("[data-acp-context-chip]")?.classList.toggle("attached", Boolean(acpState.context));
+  const button = document.querySelector("[data-acp-context-capture]");
+  if (button) button.textContent = acpState.context ? t("acp_replace_context", "Replace context") : t("acp_attach_context", "Attach current context");
+}
+function selectedAgent() {
+  return acpState.agents.find((agent) => agent.id === acpState.agentId) || null;
+}
+function selectedSession() {
+  return acpState.sessions.find((session) => session.session_id === acpState.sessionId) || null;
+}
+function ids() {
+  return { agent_id: acpState.agentId, session_id: acpState.sessionId };
+}
+function replaceAgent(agent) {
+  acpState.agents = acpState.agents.map((item) => item.id === agent.id ? agent : item);
+}
+function upsertSession(session) {
+  if (!session?.session_id) return;
+  const index = acpState.sessions.findIndex((item) => item.session_id === session.session_id);
+  if (index >= 0) acpState.sessions[index] = session;
+  else acpState.sessions.push(session);
+}
+function shortId(value) {
+  const text = String(value || "");
+  return text.length > 22 ? `${text.slice(0, 10)}…${text.slice(-8)}` : text;
+}
+function numericId(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && String(number) === String(value) ? number : String(value);
+}
+function usageText(usage) {
+  if (!usage || typeof usage !== "object") return "";
+  const used = usage.used ?? usage.tokens ?? usage.totalTokens;
+  const size = usage.size ?? usage.contextWindow;
+  return used === void 0 ? "" : `${Number(used).toLocaleString()}${size ? ` / ${Number(size).toLocaleString()}` : ""} tok`;
+}
+function setBusy(busy) {
+  document.querySelectorAll("[data-acp-new-session],[data-acp-session-close]").forEach((button) => {
+    button.disabled = busy;
+  });
+}
+function showNotice(message, error = false) {
+  const node = document.querySelector("[data-acp-notice]");
+  if (!node) return;
+  node.textContent = message;
+  node.classList.toggle("danger", error);
+  node.hidden = !message;
+}
+function readSavedUi() {
+  try {
+    return JSON.parse(window.localStorage.getItem(storageKey()) || "{}");
+  } catch {
+    return {};
+  }
+}
+function restoreUiState() {
+  const saved = readSavedUi();
+  acpState.agentId = typeof saved.agent_id === "string" ? saved.agent_id : "";
+  acpState.sessionId = typeof saved.session_id === "string" ? saved.session_id : "";
+}
+function persistUiState(extra = {}) {
+  try {
+    window.localStorage.setItem(storageKey(), JSON.stringify({ ...readSavedUi(), agent_id: acpState.agentId, session_id: acpState.sessionId, ...extra }));
+  } catch {
+  }
+}
+
+// web/src/modules/serve-controls.js
+function bindGlobalControls() {
+  if (state.boundGlobalControls) return;
+  document.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+    if (event.key === "Escape" && closeAcpDrawer()) {
+      return;
+    }
+    if (event.key === "Escape" && closeAdminLogin()) {
+      return;
+    }
+    if (event.key === "Escape" && closeWorkspaceViewSaveDialog()) {
+      return;
+    }
+    if (event.key === "Escape" && closeWorkspaceReportReader()) {
+      return;
+    }
+    if (event.key !== "Escape" || !state.selectedStep) return;
+    state.selectedStep = null;
+    renderComparisonPanels();
+  });
+  document.addEventListener("click", (event) => {
+    closeOpenSubmenus(event.target?.closest?.(SUBMENU_DETAILS_SELECTOR) || null);
+  }, true);
+  document.addEventListener("click", (event) => {
+    const link = event.target?.closest?.(".workspace-nav-link[href]");
+    if (!link) return;
+    if (isHarborDirty() && !confirmDiscard()) {
+      event.preventDefault();
+      return;
+    }
+    if (workspaceReportBindingsChanged() && !window.confirm(t("report_discard_bindings", "Discard unsaved report binding changes?"))) {
+      event.preventDefault();
+    }
+  });
+  document.addEventListener("click", (event) => {
+    if (!state.selectedStep) return;
+    const target = event.target;
+    if (target?.closest?.("#step-drawer") || target?.closest?.("#workspace-report-reader") || target?.closest?.("[data-report-manager]") || target?.closest?.("[data-workspace-report-control]") || target?.closest?.("[data-config-page]") || target?.closest?.("[data-harbor-workbench]") || target?.closest?.("[data-step]") || target?.closest?.("[data-step-action]") || target?.closest?.("[data-step-id]") || target?.closest?.("[data-timeline-step-id]") || target?.closest?.("[data-timeline-chart]")) return;
+    state.selectedStep = null;
+    renderComparisonPanels();
+  });
+  document.addEventListener("click", (event) => {
+    if (!adminMode()) return;
+    const editButton = event.target?.closest?.("[data-notes-edit]");
+    if (editButton) {
+      event.preventDefault();
+      beginNotesEdit(editButton.dataset.trialKey || selectedKey());
+      return;
+    }
+    const cancelButton = event.target?.closest?.("[data-notes-cancel]");
+    if (cancelButton) {
+      event.preventDefault();
+      cancelNotesEdit();
+      return;
+    }
+    const saveButton = event.target?.closest?.("[data-notes-save]");
+    if (saveButton) {
+      event.preventDefault();
+      saveSelectedNotes(saveButton);
+    }
+  });
+  window.addEventListener("resize", () => {
+    if (state.timelineChart) state.timelineChart.resize();
+  });
+  if (serveMode()) {
+    bindServeSourceControls();
+    bindWorkspaceViewDialog();
+  }
+  state.boundGlobalControls = true;
+}
+function bindServeSourceControls() {
+  initializeAcp();
+  bindAuthenticationControls();
+  bindWorkspaceReportGlobalControls();
+  bindHarborWorkbench();
+  document.querySelectorAll("[data-refresh-all]").forEach((button) => {
+    button.addEventListener("click", () => refreshServeReportFromServer({ refresh: true }));
+  });
+  document.querySelectorAll("[data-refresh-sources]").forEach((button) => {
+    button.addEventListener("click", () => refreshServeSourcesFromServer());
+  });
+  document.querySelectorAll("[data-locale-select]").forEach((select) => {
+    select.addEventListener("change", (event) => {
+      changeServeLocale(event.target.value);
+    });
+  });
+  document.querySelectorAll("[data-source-add-form]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitServeSourceForm(form);
+    });
+  });
+  document.querySelectorAll("[data-path-picker]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      choosePathSourceFiles(button);
+    });
+  });
+  document.querySelectorAll("[data-db-inspect]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      inspectDbSessions(button.closest("[data-source-add-form]"));
+    });
+  });
+  document.querySelectorAll("[data-db-session-picker]").forEach((picker) => {
+    picker.addEventListener("click", (event) => {
+      const button = event.target?.closest?.("[data-db-add-selected]");
+      if (!button) return;
+      event.preventDefault();
+      addSelectedDbSessions(button.closest("[data-source-add-form]"));
+    });
+  });
+  bindAdapterDefaultDbControls();
+}
+function bindAuthenticationControls() {
+  document.querySelectorAll("[data-admin-login-open]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      openAdminLogin(button);
+    });
+  });
+  document.querySelectorAll("[data-admin-login-close]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      closeAdminLogin();
+    });
+  });
+  const dialog = document.querySelector("[data-admin-login-dialog]");
+  dialog?.addEventListener?.("click", (event) => {
+    if (event.target === dialog) closeAdminLogin();
+  });
+  dialog?.querySelector?.("[data-admin-login-form]")?.addEventListener("submit", submitAdminLogin);
+  document.querySelectorAll("[data-admin-logout]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      button.disabled = true;
+      try {
+        await serveApi("/api/auth/logout", { method: "POST", body: {} });
+        if (RENDER_OPTIONS?.serve_page === "config") window.location.assign("/");
+        else window.location.reload();
+      } catch (error) {
+        button.disabled = false;
+        setServeStatus(error.message || String(error), true);
+      }
+    });
+  });
+}
+function openAdminLogin(opener = null) {
+  const dialog = document.querySelector("[data-admin-login-dialog]");
+  if (!dialog) return false;
+  const status = dialog.querySelector("[data-admin-login-status]");
+  if (status) {
+    status.hidden = true;
+    status.textContent = "";
+  }
+  openModalSurface(dialog, {
+    opener,
+    bodyClass: "admin-login-open",
+    focusTarget: dialog.querySelector('[name="password"]')
+  });
+  return true;
+}
+function closeAdminLogin(options = {}) {
+  return closeModalSurface(document.querySelector("[data-admin-login-dialog]"), options);
+}
+async function submitAdminLogin(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const password = String(new FormData(form).get("password") || "");
+  const status = form.querySelector("[data-admin-login-status]");
+  const submit = form.querySelector('[type="submit"]');
+  if (submit) submit.disabled = true;
+  try {
+    await serveApi("/api/auth/login", { method: "POST", body: { password } });
+    window.location.reload();
+  } catch (error) {
+    if (status) {
+      status.textContent = error.message || t("serve_login_failed", "Login failed");
+      status.classList.add("danger");
+      status.hidden = false;
+    }
+    if (submit) submit.disabled = false;
+    form.querySelector('[name="password"]')?.focus?.();
+  }
+}
+async function changeServeLocale(locale) {
+  if (!adminMode()) return;
+  try {
+    await serveApi("/api/config/locale", {
+      method: "POST",
+      body: { locale }
+    });
+    window.location.reload();
+  } catch (error) {
+    setServeStatus(error.message || String(error), true);
+  }
+}
+function bindAdapterDefaultDbControls() {
+  document.querySelectorAll('[data-source-add-form][data-source-kind="db"]').forEach((form) => {
+    const select = form.querySelector('[name="adapter"]');
+    const field = dbFieldFor(form);
+    const saveButton = form.querySelector("[data-adapter-default-db-save]");
+    const clearButton = form.querySelector("[data-adapter-default-db-clear]");
+    if (!select || !field || !saveButton || !clearButton) return;
+    select.addEventListener("change", () => {
+      applyDefaultDbToForm(form, { force: true });
+      syncAdapterDefaultDbControls(form);
+    });
+    field.addEventListener("input", () => syncAdapterDefaultDbControls(form));
+    saveButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      saveAdapterDefaultDb(form, String(field.value || "").trim());
+    });
+    clearButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      saveAdapterDefaultDb(form, "");
+    });
+    applyDefaultDbToForm(form);
+    syncAdapterDefaultDbControls(form);
+  });
+}
+function syncAdapterDefaultDbControls(form) {
+  const adapter = selectedAdapterValue(form);
+  const field = dbFieldFor(form);
+  const saveButton = form?.querySelector?.("[data-adapter-default-db-save]");
+  const clearButton = form?.querySelector?.("[data-adapter-default-db-clear]");
+  if (!field || !saveButton || !clearButton) return;
+  const path = String(field.value || "").trim();
+  const hasAdapter = Boolean(adapter);
+  const hasDefault = Boolean(adapter && adapterDefaults()[adapter]);
+  saveButton.disabled = !hasAdapter || !path;
+  clearButton.disabled = !hasAdapter || !hasDefault;
+  const adapterTitle = hasAdapter ? "" : t("serve_select_adapter_for_default_db", "Select a specific adapter to manage its default DB");
+  saveButton.title = adapterTitle || (!path ? t("serve_enter_db_for_default", "Enter a DB path to save as default") : "");
+  clearButton.title = adapterTitle;
+}
+function syncAllAdapterDefaultDbControls() {
+  document.querySelectorAll('[data-source-add-form][data-source-kind="db"]').forEach(syncAdapterDefaultDbControls);
+}
+async function saveAdapterDefaultDb(form, defaultDbPath) {
+  if (!adminMode()) return false;
+  const adapter = selectedAdapterValue(form);
+  if (!adapter) {
+    const message = t("serve_select_adapter_for_default_db", "Select a specific adapter to manage its default DB");
+    setServeStatus(message, true);
+    showServeNotice(message, true);
+    syncAdapterDefaultDbControls(form);
+    return false;
+  }
+  try {
+    const payload = await serveApi("/api/config/adapter-default-db", {
+      method: "POST",
+      body: {
+        adapter,
+        default_db_path: String(defaultDbPath || "").trim()
+      }
+    });
+    state.adapterDefaults = payload?.adapter_defaults && typeof payload.adapter_defaults === "object" ? { ...payload.adapter_defaults } : { ...adapterDefaults(), [adapter]: payload?.default_db_path || "" };
+    if (!payload?.default_db_path) delete state.adapterDefaults[adapter];
+    updateAdapterDefaultOptions();
+    applyUpdatedAdapterDefaultToDbForms(adapter);
+    syncAllAdapterDefaultDbControls();
+    const message = payload?.default_db_path ? t("serve_adapter_default_db_saved", "Adapter default DB saved") : t("serve_adapter_default_db_cleared", "Adapter default DB cleared");
+    setServeStatus(message);
+    showServeNotice(message);
+    return true;
+  } catch (error) {
+    setServeStatus(error.message || String(error), true);
+    showServeNotice(error.message || String(error), true);
+    syncAllAdapterDefaultDbControls();
+    return false;
+  }
+}
+function updateAdapterDefaultOptions() {
+  document.querySelectorAll('select[name="adapter"] option').forEach((option) => {
+    const defaultDb = adapterDefaults()[option.value] || "";
+    if (defaultDb) {
+      option.dataset.defaultDb = defaultDb;
+    } else {
+      delete option.dataset.defaultDb;
+    }
+  });
+}
+function applyUpdatedAdapterDefaultToDbForms(adapter) {
+  document.querySelectorAll('[data-source-add-form][data-source-kind="db"]').forEach((form) => {
+    const selected = selectedAdapterValue(form);
+    applyDefaultDbToForm(form, { force: Boolean(selected && selected === adapter) });
+    syncAdapterDefaultDbControls(form);
+  });
+}
+function dbFieldFor(form) {
+  return form?.querySelector?.('[name="db"]') || null;
+}
+function defaultDbForAdapter(form) {
+  const select = form?.querySelector?.('[name="adapter"]');
+  const value = selectedAdapterValue(form);
+  if (!select || !value) return "";
+  const selected = Array.from(select.options || []).find((option) => option.value === value);
+  return selected?.dataset?.defaultDb || adapterDefaults()[value] || "";
+}
+function applyDefaultDbToForm(form, options = {}) {
+  const field = dbFieldFor(form);
+  if (!field) return "";
+  const defaultDb = defaultDbForAdapter(form);
+  if (defaultDb && (options.force || !String(field.value || "").trim())) {
+    field.value = defaultDb;
+  }
+  return defaultDb;
 }
 
 // web/src/modules/runtime.js
@@ -8022,7 +8940,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-var state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: /* @__PURE__ */ new Set(), sourceSelection: /* @__PURE__ */ new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceManagerRows: [], sourceManagerStatus: { phase: "idle", message: "" }, sourceManagerPage: { page: 1, page_size: 100, total: 0 }, sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: /* @__PURE__ */ new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables).map((name) => `server:${name}`) : []), workspaceViewSelection: /* @__PURE__ */ new Set(), workspaceAppliedViewNames: /* @__PURE__ */ new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
+var state = { view: null, selectedTrial: null, selectedStep: null, rowSelection: /* @__PURE__ */ new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: Array.isArray(RENDER_OPTIONS?.sources) ? RENDER_OPTIONS.sources : [], sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: Array.isArray(RENDER_OPTIONS?.reports) ? RENDER_OPTIONS.reports : [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: /* @__PURE__ */ new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.views) : [], workspaceViewSummaries: workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.view_summaries) : [], workspaceViewsLoaded: workspaceSnapshotMode(), workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(workspaceSnapshotMode() ? listValue(WORKSPACE_SNAPSHOT?.presentation?.open_view_tables).map((name) => `server:${name}`) : []), workspaceViewSelection: /* @__PURE__ */ new Set(), workspaceAppliedViewNames: /* @__PURE__ */ new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: workspaceSnapshotMode() ? WORKSPACE_SNAPSHOT?.presentation?.selected_source_key || null : null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";
@@ -8123,7 +9041,6 @@ function render(view) {
     state.selectedTrial = (firstFailed || reportRows()[0])?.trial_key || view.trajectory_meta?.[0]?.trial_key || null;
   }
   if (serveMode()) syncSelectedSourceFromView();
-  if (serveMode()) renderServeSources();
   bindGlobalControls();
   renderReportNotes(view.annotations?.report_notes || []);
   renderComparison();
@@ -8454,7 +9371,7 @@ function startServePage(page, report) {
   bindGlobalControls();
   if (page === "datasets") return initializeHarborWorkbench();
   if (page === "reports") return initializeWorkspaceReportPage();
-  if (page === "sources") return loadSourceManagerPage();
+  if (page === "config") return initializeConfiguration();
   return void 0;
 }
 var modeRuntime = createModeRuntime(bootstrap, {
