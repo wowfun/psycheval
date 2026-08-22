@@ -1,8 +1,10 @@
 import { adminMode, esc, listValue, t } from "./runtime.js";
-import { applyDataTableControls, bindDataTableControls, renderDataTable, tableControls } from "./data-tables.js";
+import { applyDataTableControls, bindDataTableControls, renderDataTable, selectionColumn, tableControls } from "./data-tables.js";
 import { serveApi } from "./serve-effects.js";
 
 const HARBOR_TABLE_ID = "harbor-datasets";
+const trackedWorkbenchOperations = new Set();
+let workbenchMutationBusy = false;
 
 const workbenchState = {
   inventory: null,
@@ -15,6 +17,8 @@ const workbenchState = {
   savedText: "",
   dirty: false,
   showTrash: false,
+  taskSelection: new Set(),
+  busy: false,
   search: "",
   tableSnapshot: null,
   taskRequestId: 0,
@@ -98,8 +102,26 @@ function rowDiagnostics(row) {
 
 function harborColumns() {
   return [
+    ...(adminMode() ? [selectionColumn({
+      key: "__task_select",
+      selectionKey: overviewRowKey,
+      selectionSet: () => workbenchState.taskSelection,
+      selectable: row => row.kind !== "empty",
+      rowAriaLabel: (_key, row) => `${t("select_row", "Select row")}: ${rowTaskName(row)}`,
+    })] : []),
     { key: "dataset", label: t("harbor_dataset", "Dataset"), valueType: "identity", sortable: true, filterable: true, value: row => row.dataset?.id || "-" },
-    { key: "task", label: t("task", "Task"), valueType: "identity", sortable: true, filterable: true, value: row => rowTaskName(row) || "-" },
+    {
+      key: "task",
+      label: t("task", "Task"),
+      valueType: "identity",
+      sortable: true,
+      filterable: true,
+      value: row => rowTaskName(row) || "-",
+      edit: row => adminMode() && row.kind !== "empty" ? {
+        value: rowTaskName(row),
+        commit: (_current, value) => renameOverviewTask(row, value),
+      } : null,
+    },
     { key: "package", label: t("harbor_package", "Package"), valueType: "identity", sortable: true, filterable: true, value: row => rowPackage(row) },
     {
       key: "status",
@@ -168,7 +190,7 @@ function renderHarborOverview(surface, rows) {
     shellClass: "harbor-overview-table-shell",
     rowClass: row => `harbor-overview-row status-${rowStatusKey(row)} ${overviewRowKey(row) === selectedKey ? "selected-row" : ""}`,
     rowAttrs: row => `data-harbor-overview-row tabindex="0" data-harbor-row-key="${esc(overviewRowKey(row))}"`,
-    emptyText: workbenchState.showTrash ? t("harbor_trash_empty", "Trash is empty") : t("harbor_dataset_empty", "No Datasets registered"),
+    emptyText: workbenchState.showTrash ? t("harbor_trash_empty", "No archived Tasks") : t("harbor_dataset_empty", "No Datasets registered"),
     filterOptionsRows: overviewRows(),
   });
   bindDataTableControls(container, {
@@ -177,6 +199,7 @@ function renderHarborOverview(surface, rows) {
     rows,
     rowKey: overviewRowKey,
     onChange: () => refreshOverviewAfterControls({ restoreTable: true }),
+    onSelectionChange: renderHarborWorkbench,
   });
   const byKey = new Map(rows.map(row => [overviewRowKey(row), row]));
   container.querySelectorAll("[data-harbor-overview-row]").forEach(node => {
@@ -198,6 +221,10 @@ function renderHarborOverview(surface, rows) {
 function renderHarborWorkbench() {
   const surface = workbenchRoot();
   if (!surface) return { row: null, changed: false };
+  const availableKeys = new Set(overviewRows().filter(row => row.kind !== "empty").map(overviewRowKey));
+  Array.from(workbenchState.taskSelection).forEach(key => {
+    if (!availableKeys.has(key)) workbenchState.taskSelection.delete(key);
+  });
   const rows = visibleOverviewRows();
   const selection = reconcileOverviewSelection(rows);
   renderHarborOverview(surface, rows);
@@ -205,6 +232,7 @@ function renderHarborWorkbench() {
   renderSelectedTaskHeading(surface);
   renderFileTree(surface);
   renderDiagnostics(surface);
+  syncWorkbenchBusy(surface);
   workbenchState.tableSnapshot = cloneTableControls();
   return selection;
 }
@@ -221,20 +249,40 @@ function restoreTableControls() {
 
 function renderContextControls(surface) {
   const dataset = selectedDataset();
-  const task = selectedTask();
-  const trash = selectedTrashEntry();
-  setDisabled(surface, "[data-harbor-edit-dataset]", !dataset);
-  setDisabled(surface, "[data-harbor-remove-dataset]", !dataset);
-  setDisabled(surface, "[data-harbor-create-task]", !dataset || workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-sync-manifest]", !dataset || workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-rename-task]", !task || workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-trash-task]", !task || workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-restore-task]", !trash || !workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-purge-task]", !trash || !workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-show-trash]", !listValue(workbenchState.inventory?.datasets).length);
+  setDisabled(surface, "[data-harbor-create-task]", workbenchState.busy || !dataset || workbenchState.showTrash);
+  setDisabled(surface, "[data-harbor-sync-manifest]", workbenchState.busy || !dataset || workbenchState.showTrash);
+  setDisabled(surface, "[data-harbor-state-selected]", workbenchState.busy || workbenchState.taskSelection.size < 1);
+  setDisabled(surface, "[data-harbor-delete-selected]", workbenchState.busy || workbenchState.taskSelection.size < 1);
+  setDisabled(surface, "[data-harbor-show-trash]", workbenchState.busy || !listValue(workbenchState.inventory?.datasets).length);
   surface.querySelector("[data-harbor-show-trash]")?.classList.toggle("active", workbenchState.showTrash);
-  surface.querySelectorAll("[data-harbor-live-action]").forEach(node => { node.hidden = workbenchState.showTrash; });
-  surface.querySelectorAll("[data-harbor-trash-action]").forEach(node => { node.hidden = !workbenchState.showTrash; });
+  const stateButton = surface.querySelector("[data-harbor-state-selected]");
+  if (stateButton) stateButton.textContent = workbenchState.showTrash
+    ? t("restore_selected", "Restore selected")
+    : t("archive_selected", "Archive selected");
+  const archivedToggle = surface.querySelector("[data-harbor-show-trash]");
+  if (archivedToggle) archivedToggle.setAttribute("aria-pressed", workbenchState.showTrash ? "true" : "false");
+}
+
+function setWorkbenchBusy(busy) {
+  workbenchMutationBusy = Boolean(busy);
+  syncWorkbenchBusyState();
+}
+
+function syncWorkbenchBusyState() {
+  workbenchState.busy = workbenchMutationBusy || trackedWorkbenchOperations.size > 0;
+  const surface = workbenchRoot();
+  if (!surface) return;
+  renderContextControls(surface);
+  syncWorkbenchBusy(surface);
+  syncEditorControls();
+}
+
+function syncWorkbenchBusy(surface = workbenchRoot()) {
+  if (!surface) return;
+  surface.setAttribute("aria-busy", workbenchState.busy ? "true" : "false");
+  surface.querySelectorAll("[data-table-row-select],[data-table-select-visible]").forEach(control => {
+    control.disabled = workbenchState.busy;
+  });
 }
 
 function setDisabled(surface, selector, disabled) {
@@ -252,7 +300,7 @@ function renderSelectedTaskHeading(surface) {
     meta.textContent = task
       ? `${workbenchState.datasetId} · ${task.package_name || "-"} · ${t(`harbor_status_${task.status || "draft"}`, task.status || "draft")}`
       : trash
-        ? `${workbenchState.datasetId} · ${trash.package_name || "-"} · ${t("harbor_trash", "Trash")}`
+        ? `${workbenchState.datasetId} · ${trash.package_name || "-"} · ${t("harbor_trash", "Archived")}`
         : "";
   }
 }
@@ -458,13 +506,17 @@ function clearEditor() {
 function syncEditorControls() {
   const surface = workbenchRoot();
   const save = surface?.querySelector?.("[data-harbor-save]");
-  if (save) save.disabled = !adminMode() || !workbenchState.dirty || !workbenchState.filePath;
+  if (save) save.disabled = !adminMode() || workbenchState.busy || !workbenchState.dirty || !workbenchState.filePath;
   const path = surface?.querySelector?.("[data-harbor-editor-path]");
   if (path && workbenchState.filePath) path.textContent = `${workbenchState.filePath}${workbenchState.dirty ? " •" : ""}`;
 }
 
 async function saveFile() {
   if (!adminMode() || !workbenchState.dirty || !workbenchState.filePath) return;
+  if (workbenchState.busy) {
+    setWorkbenchStatus(t("harbor_operation_in_progress", "Another Task operation is still running"), true);
+    return;
+  }
   const editor = workbenchRoot()?.querySelector?.("[data-harbor-editor]");
   const task = selectedTask();
   if (!editor || !task) return;
@@ -472,7 +524,8 @@ async function saveFile() {
 }
 
 async function mutateFiles(body, options = {}) {
-  if (!adminMode()) return null;
+  if (!adminMode() || workbenchState.busy) return null;
+  setWorkbenchBusy(true);
   try {
     const payload = await serveApi("/api/harbor/files", {
       method: "POST",
@@ -490,81 +543,34 @@ async function mutateFiles(body, options = {}) {
   } catch (error) {
     setWorkbenchStatus(error.message || String(error), true);
     return null;
+  } finally {
+    setWorkbenchBusy(false);
   }
 }
 
-async function mutateTasks(body) {
-  if (!adminMode()) return null;
+async function mutateTasks(body, datasetId = workbenchState.datasetId, options = {}) {
+  if (!adminMode() || workbenchState.busy) return null;
+  setWorkbenchBusy(true);
   try {
     const payload = await serveApi("/api/harbor/tasks", {
       method: "POST",
-      body: { ...body, dataset_id: workbenchState.datasetId },
+      body: { ...body, dataset_id: datasetId },
     });
     trackOperation(payload.operation);
     clearEditor();
     await refreshHarborInventory({ quiet: true, skipGuard: true });
     return payload;
   } catch (error) {
+    if (options.rethrow) throw error;
     setWorkbenchStatus(error.message || String(error), true);
     return null;
+  } finally {
+    setWorkbenchBusy(false);
   }
-}
-
-async function mutateDatasets(body, options = {}) {
-  if (!adminMode()) return null;
-  try {
-    const payload = await serveApi("/api/harbor/datasets", {
-      method: "POST",
-      body: { ...body, expected_revision: workbenchState.inventory?.revision },
-    });
-    if (payload.operation) trackOperation(payload.operation);
-    workbenchState.inventory = payload.result || workbenchState.inventory;
-    if (options.selectId) workbenchState.datasetId = options.selectId;
-    await refreshHarborInventory({ quiet: true, skipGuard: true });
-    return payload;
-  } catch (error) {
-    setWorkbenchStatus(error.message || String(error), true);
-    return null;
-  }
-}
-
-async function createDataset(register = false) {
-  if (!adminMode()) return;
-  const datasetId = window.prompt(t("harbor_dataset_id_prompt", "Dataset ID"));
-  if (!datasetId) return;
-  const path = window.prompt(register
-    ? t("harbor_existing_dataset_path_prompt", "Existing Dataset path")
-    : t("harbor_new_dataset_path_prompt", "New Dataset path"));
-  if (!path) return;
-  const body = { action: register ? "register" : "create", dataset_id: datasetId.trim(), path: path.trim() };
-  if (!register) {
-    const packageName = window.prompt(t("harbor_dataset_package_prompt", "Dataset package name (org/name)"), `local/${datasetId.trim()}`);
-    if (!packageName) return;
-    body.package_name = packageName.trim();
-  }
-  await mutateDatasets(body, { selectId: datasetId.trim() });
-}
-
-async function editDataset(dataset = selectedDataset()) {
-  if (!adminMode() || !dataset) return;
-  const newId = window.prompt(t("harbor_dataset_id_prompt", "Dataset ID"), dataset.id);
-  if (!newId) return;
-  const path = window.prompt(t("harbor_dataset_path_prompt", "Dataset path"), dataset.path);
-  if (!path) return;
-  await mutateDatasets({ action: "update", dataset_id: dataset.id, new_id: newId.trim(), path: path.trim() }, { selectId: newId.trim() });
-}
-
-async function removeDataset(dataset = selectedDataset()) {
-  if (!adminMode() || !dataset || !window.confirm(harborMessage(
-    "harbor_unregister_confirm",
-    "Unregister Dataset “{name}”? Files will not be deleted.",
-    { name: dataset.id },
-  ))) return;
-  await mutateDatasets({ action: "remove", dataset_id: dataset.id });
 }
 
 async function createTask() {
-  if (!adminMode()) return;
+  if (!adminMode() || !confirmDiscard()) return;
   const dataset = selectedDataset();
   if (!dataset) return;
   const directory = window.prompt(t("harbor_task_directory_prompt", "Task directory"));
@@ -582,46 +588,97 @@ async function createTask() {
   if (result) await selectTask(directory.trim());
 }
 
-async function renameTask(task = selectedTask()) {
-  if (!adminMode() || !task) return;
-  const newDirectory = window.prompt(t("harbor_task_directory_prompt", "Task directory"), task.directory);
-  if (!newDirectory || newDirectory.trim() === task.directory) return;
-  const result = await mutateTasks({ action: "rename", task: task.directory, new_directory: newDirectory.trim(), expected_revision: task.revision });
-  if (result) await selectTask(newDirectory.trim());
+async function renameOverviewTask(row, value) {
+  if (workbenchState.busy) throw new Error(t("saving", "Saving..."));
+  const newDirectory = String(value || "").trim();
+  const oldKey = overviewRowKey(row);
+  if (!newDirectory) throw new Error(t("harbor_task_directory_required", "Task directory is required"));
+  if (newDirectory === rowTaskName(row)) return { rowKey: oldKey };
+  if (!confirmDiscard()) throw new Error(t("harbor_discard_changes", "Discard unsaved file changes?"));
+  const body = row.kind === "trash"
+    ? { action: "rename_archived", entry_id: row.entry.entry_id, new_directory: newDirectory, expected_revision: row.entry.revision }
+    : { action: "rename", task: row.task.directory, new_directory: newDirectory, expected_revision: row.task.revision };
+  const renamesOpenTask = row.kind === "task"
+    && workbenchState.datasetId === row.dataset.id
+    && workbenchState.taskName === row.task.directory;
+  if (renamesOpenTask) workbenchState.taskName = newDirectory;
+  let payload;
+  try {
+    payload = await mutateTasks(body, row.dataset.id, { rethrow: true });
+  } catch (error) {
+    if (renamesOpenTask && workbenchState.taskName === newDirectory) {
+      workbenchState.taskName = row.task.directory;
+    }
+    throw error;
+  }
+  if (!payload) {
+    if (renamesOpenTask && workbenchState.taskName === newDirectory) {
+      workbenchState.taskName = row.task.directory;
+    }
+    throw new Error(t("harbor_task_rename_failed", "Task rename failed"));
+  }
+  const newKey = row.kind === "trash"
+    ? oldKey
+    : `dataset:${row.dataset.id}|task:${newDirectory}`;
+  if (workbenchState.taskSelection.delete(oldKey)) workbenchState.taskSelection.add(newKey);
+  return { rowKey: newKey };
 }
 
-async function trashTask(task = selectedTask()) {
-  if (!adminMode() || !task || !window.confirm(harborMessage(
-    "harbor_trash_confirm",
-    "Move Task “{name}” to this Dataset's trash?",
-    { name: task.directory },
-  ))) return;
-  await mutateTasks({ action: "trash", task: task.directory, expected_revision: task.revision });
+function selectedTaskRows() {
+  const selected = workbenchState.taskSelection;
+  return overviewRows().filter(row => selected.has(overviewRowKey(row)) && row.kind !== "empty");
 }
 
-async function restoreTrash(entry = selectedTrashEntry()) {
-  if (!adminMode() || !entry) return;
-  const directory = window.prompt(t("harbor_restore_directory_prompt", "Restore directory"), entry.directory || "");
-  if (directory === null) return;
-  await mutateTasks({ action: "restore", entry_id: entry.entry_id, directory: directory.trim(), expected_revision: entry.revision });
+function taskOperationItem(row) {
+  return row.kind === "trash"
+    ? { dataset_id: row.dataset.id, entry_id: row.entry.entry_id, directory: row.entry.directory || "", expected_revision: row.entry.revision }
+    : { dataset_id: row.dataset.id, task: row.task.directory, expected_revision: row.task.revision };
 }
 
-async function purgeTrash(entry = selectedTrashEntry()) {
-  if (!adminMode() || !entry || !window.confirm(harborMessage(
-    "harbor_purge_confirm",
-    "Permanently delete “{name}”? This cannot be undone.",
-    { name: entry.directory || entry.entry_id },
-  ))) return;
-  await mutateTasks({ action: "purge", entry_id: entry.entry_id, expected_revision: entry.revision });
+async function mutateSelectedTaskState() {
+  if (!adminMode() || !confirmDiscard()) return;
+  const rows = selectedTaskRows();
+  if (!rows.length) return;
+  setWorkbenchBusy(true);
+  try {
+    const operation = await serveApi("/api/harbor/tasks/state", {
+      method: "POST",
+      body: { archived: !workbenchState.showTrash, items: rows.map(taskOperationItem) },
+    });
+    trackOperation(operation, { selectedRows: rows });
+    setWorkbenchBusy(false);
+  } catch (error) {
+    setWorkbenchBusy(false);
+    setWorkbenchStatus(error.message || String(error), true);
+  }
+}
+
+async function deleteSelectedTasks() {
+  if (!adminMode() || !confirmDiscard()) return;
+  const rows = selectedTaskRows();
+  if (!rows.length || !window.confirm(t("harbor_delete_selected_confirm", "Permanently delete selected Tasks? This cannot be undone."))) return;
+  setWorkbenchBusy(true);
+  try {
+    const operation = await serveApi("/api/harbor/tasks/delete", {
+      method: "POST",
+      body: { items: rows.map(taskOperationItem) },
+    });
+    trackOperation(operation, { selectedRows: rows });
+    setWorkbenchBusy(false);
+  } catch (error) {
+    setWorkbenchBusy(false);
+    setWorkbenchStatus(error.message || String(error), true);
+  }
 }
 
 async function syncManifest() {
   const dataset = selectedDataset();
   if (!adminMode() || !dataset) return;
+  setWorkbenchBusy(true);
   try {
-    const summary = await serveApi("/api/harbor/datasets", {
+    const summary = await serveApi("/api/harbor/tasks/manifest", {
       method: "POST",
-      body: { action: "sync_manifest", dataset_id: dataset.id, expected_revision: dataset.revision },
+      body: { dataset_id: dataset.id, expected_revision: dataset.revision },
     });
     const datasets = listValue(workbenchState.inventory?.datasets).map(item => item.id === summary.id ? summary : item);
     workbenchState.inventory = { ...workbenchState.inventory, datasets };
@@ -629,6 +686,8 @@ async function syncManifest() {
     setWorkbenchStatus(t("harbor_manifest_synced", "Manifest synced"));
   } catch (error) {
     setWorkbenchStatus(error.message || String(error), true);
+  } finally {
+    setWorkbenchBusy(false);
   }
 }
 
@@ -682,27 +741,41 @@ function downloadFile() {
   window.location.assign(`/api/harbor/files?dataset_id=${encodeURIComponent(workbenchState.datasetId)}&task=${encodeURIComponent(workbenchState.taskName)}&path=${encodeURIComponent(workbenchState.filePath)}&download=1`);
 }
 
-function trackOperation(operation) {
+function trackOperation(operation, options = {}) {
   const operationId = operation?.operation_id;
-  if (operationId) pollHarborOperation(operationId);
+  if (operationId) {
+    trackedWorkbenchOperations.add(operationId);
+    syncWorkbenchBusyState();
+    pollHarborOperation(operationId, options);
+  }
 }
 
-async function pollHarborOperation(operationId) {
+async function pollHarborOperation(operationId, options = {}) {
   if (!adminMode()) return;
   try {
     const operation = await serveApi(`/api/operations/${encodeURIComponent(operationId)}`);
     const node = workbenchRoot()?.querySelector?.("[data-harbor-operation-status]");
     if (node) node.textContent = `${operation.operation_type}: ${operation.completed}/${operation.total}`;
     if (operation.state === "queued" || operation.state === "running") {
-      setTimeout(() => pollHarborOperation(operationId), 250);
+      setTimeout(() => pollHarborOperation(operationId, options), 250);
       return;
     }
-    if (operation.state === "failed" || listValue(operation.failures).length) {
-      setWorkbenchStatus(operation.failures?.[0]?.error || t("harbor_reconcile_failed", "Catalog reconcile failed"), true);
-    } else {
-      await refreshHarborInventory({ quiet: true, skipGuard: true });
+    trackedWorkbenchOperations.delete(operationId);
+    syncWorkbenchBusyState();
+    if (options.selectedRows) {
+      const successfulIndexes = new Set(listValue(operation.successes).map(item => Number(item.index)));
+      options.selectedRows.forEach((row, index) => {
+        if (successfulIndexes.has(index)) workbenchState.taskSelection.delete(overviewRowKey(row));
+      });
     }
+    await refreshHarborInventory({ quiet: true, skipGuard: true });
+    const failures = listValue(operation.failures);
+    if (operation.state === "failed" || failures.length) {
+      setWorkbenchStatus(failures[0]?.error || t("harbor_reconcile_failed", "Catalog reconcile failed"), true);
+    } else setWorkbenchStatus("");
   } catch (error) {
+    trackedWorkbenchOperations.delete(operationId);
+    syncWorkbenchBusyState();
     setWorkbenchStatus(error.message || String(error), true);
   }
 }
@@ -720,19 +793,14 @@ function bindHarborWorkbench() {
   if (!surface || surface.dataset.bound === "true") return;
   surface.dataset.bound = "true";
   surface.querySelector("[data-harbor-reload]")?.addEventListener("click", () => refreshHarborInventory());
-  surface.querySelector("[data-harbor-add-dataset]")?.addEventListener("click", () => createDataset(false));
-  surface.querySelector("[data-harbor-register-dataset]")?.addEventListener("click", () => createDataset(true));
-  surface.querySelector("[data-harbor-edit-dataset]")?.addEventListener("click", () => editDataset());
-  surface.querySelector("[data-harbor-remove-dataset]")?.addEventListener("click", () => removeDataset());
   surface.querySelector("[data-harbor-create-task]")?.addEventListener("click", createTask);
   surface.querySelector("[data-harbor-sync-manifest]")?.addEventListener("click", syncManifest);
-  surface.querySelector("[data-harbor-rename-task]")?.addEventListener("click", () => renameTask());
-  surface.querySelector("[data-harbor-trash-task]")?.addEventListener("click", () => trashTask());
-  surface.querySelector("[data-harbor-restore-task]")?.addEventListener("click", () => restoreTrash());
-  surface.querySelector("[data-harbor-purge-task]")?.addEventListener("click", () => purgeTrash());
+  surface.querySelector("[data-harbor-state-selected]")?.addEventListener("click", mutateSelectedTaskState);
+  surface.querySelector("[data-harbor-delete-selected]")?.addEventListener("click", deleteSelectedTasks);
   surface.querySelector("[data-harbor-show-trash]")?.addEventListener("click", () => {
     if (!confirmDiscard()) return;
     workbenchState.showTrash = !workbenchState.showTrash;
+    workbenchState.taskSelection.clear();
     setOverviewSelection(null);
     renderHarborWorkbench();
   });
@@ -806,16 +874,16 @@ export {
   harborColumns,
   initializeHarborWorkbench,
   isHarborDirty,
+  mutateSelectedTaskState,
+  deleteSelectedTasks,
   openHarborWorkbench,
   overviewRows,
-  purgeTrash,
   refreshHarborInventory,
-  renameTask,
   renderHarborWorkbench,
-  restoreTrash,
   saveFile,
+  setWorkbenchBusy,
+  selectedTaskRows,
   selectOverviewRow,
-  trashTask,
   uploadFile,
   visibleOverviewRows,
   workbenchState,

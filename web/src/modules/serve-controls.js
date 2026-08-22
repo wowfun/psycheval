@@ -1,17 +1,21 @@
 import { RENDER_OPTIONS, SUBMENU_DETAILS_SELECTOR, adapterDefaults, adminMode, closeOpenSubmenus, renderComparisonPanels, selectedKey, serveMode, state, t } from "./runtime.js";
-import { addSelectedDbSessions, choosePathSourceFiles, inspectDbSessions, removeHarborMount, setDbSessionSelection, submitHarborMountForm, submitServeSourceForm } from "./source-manager.js";
-import { mutateSelectedServeSourceState, selectedAdapterValue, serveApi, setServeStatus, showServeNotice } from "./serve-effects.js";
-import { deleteSelectedServeSources, refreshServeReportFromServer, refreshServeSourcesFromServer, selectServeSource } from "./serve-catalog.js";
+import { addSelectedDbSessions, choosePathSourceFiles, inspectDbSessions, submitServeSourceForm } from "./configuration.js";
+import { selectedAdapterValue, serveApi, setServeStatus, showServeNotice } from "./serve-effects.js";
+import { refreshServeReportFromServer, refreshServeSourcesFromServer } from "./serve-catalog.js";
 import { bindWorkspaceReportGlobalControls, closeWorkspaceReportReader, workspaceReportBindingsChanged } from "./workspace-reports.js";
 import { bindWorkspaceViewDialog, closeWorkspaceViewSaveDialog } from "./workspace-views.js";
 import { beginNotesEdit, cancelNotesEdit, saveSelectedNotes } from "./analysis-notes.js";
 import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
 import { bindHarborWorkbench, confirmDiscard, isHarborDirty } from "./harbor-workbench.js";
+import { closeAcpDrawer, initializeAcp } from "./acp-client.js";
 
 function bindGlobalControls() {
   if (state.boundGlobalControls) return;
   document.addEventListener("keydown", event => {
     if (event.defaultPrevented) return;
+    if (event.key === "Escape" && closeAcpDrawer()) {
+      return;
+    }
     if (event.key === "Escape" && closeAdminLogin()) {
       return;
     }
@@ -42,7 +46,7 @@ function bindGlobalControls() {
   document.addEventListener("click", event => {
     if (!state.selectedStep) return;
     const target = event.target;
-    if (target?.closest?.("#step-drawer") || target?.closest?.("#workspace-report-reader") || target?.closest?.("[data-report-manager]") || target?.closest?.("[data-workspace-report-control]") || target?.closest?.("[data-source-manager]") || target?.closest?.("[data-harbor-workbench]") || target?.closest?.("[data-step]") || target?.closest?.("[data-step-action]") || target?.closest?.("[data-step-id]") || target?.closest?.("[data-timeline-step-id]") || target?.closest?.("[data-timeline-chart]")) return;
+    if (target?.closest?.("#step-drawer") || target?.closest?.("#workspace-report-reader") || target?.closest?.("[data-report-manager]") || target?.closest?.("[data-workspace-report-control]") || target?.closest?.("[data-config-page]") || target?.closest?.("[data-harbor-workbench]") || target?.closest?.("[data-step]") || target?.closest?.("[data-step-action]") || target?.closest?.("[data-step-id]") || target?.closest?.("[data-timeline-step-id]") || target?.closest?.("[data-timeline-chart]")) return;
     state.selectedStep = null;
     renderComparisonPanels();
   });
@@ -76,6 +80,7 @@ function bindGlobalControls() {
   state.boundGlobalControls = true;
 }
 function bindServeSourceControls() {
+  initializeAcp();
   bindAuthenticationControls();
   bindWorkspaceReportGlobalControls();
   bindHarborWorkbench();
@@ -84,18 +89,6 @@ function bindServeSourceControls() {
   });
   document.querySelectorAll("[data-refresh-sources]").forEach(button => {
     button.addEventListener("click", () => refreshServeSourcesFromServer());
-  });
-  document.querySelectorAll("[data-source-bulk-state]").forEach(button => {
-    button.addEventListener("click", event => {
-      event.preventDefault();
-      mutateSelectedServeSourceState();
-    });
-  });
-  document.querySelectorAll("[data-source-bulk-delete]").forEach(button => {
-    button.addEventListener("click", event => {
-      event.preventDefault();
-      deleteSelectedServeSources();
-    });
   });
   document.querySelectorAll("[data-locale-select]").forEach(select => {
     select.addEventListener("change", event => {
@@ -121,11 +114,6 @@ function bindServeSourceControls() {
     });
   });
   document.querySelectorAll("[data-db-session-picker]").forEach(picker => {
-    picker.addEventListener("change", event => {
-      if (event.target?.matches?.("[data-db-select-all]")) {
-        setDbSessionSelection(picker, event.target.checked);
-      }
-    });
     picker.addEventListener("click", event => {
       const button = event.target?.closest?.("[data-db-add-selected]");
       if (!button) return;
@@ -133,28 +121,7 @@ function bindServeSourceControls() {
       addSelectedDbSessions(button.closest("[data-source-add-form]"));
     });
   });
-  document.querySelectorAll("[data-harbor-mount-form]").forEach(form => {
-    form.addEventListener("submit", event => {
-      event.preventDefault();
-      submitHarborMountForm(form);
-    });
-    form.querySelector("[data-harbor-mount-remove]")?.addEventListener("click", event => {
-      event.preventDefault();
-      removeHarborMount(form);
-    });
-  });
   bindAdapterDefaultDbControls();
-  const sourceList = document.querySelector("[data-source-list]");
-  if (sourceList) {
-    sourceList.addEventListener("click", event => {
-      if (event.target?.closest?.("button,input,select,textarea,label")) return;
-      const row = event.target?.closest?.("[data-source-row]");
-      const sourceKey = row?.dataset?.sourceKey;
-      if (!sourceKey) return;
-      event.preventDefault();
-      selectServeSource(sourceKey);
-    });
-  }
 }
 function bindAuthenticationControls() {
   document.querySelectorAll("[data-admin-login-open]").forEach(button => {
@@ -180,7 +147,7 @@ function bindAuthenticationControls() {
       button.disabled = true;
       try {
         await serveApi("/api/auth/logout", { method: "POST", body: {} });
-        if (RENDER_OPTIONS?.serve_page === "sources") window.location.assign("/");
+        if (RENDER_OPTIONS?.serve_page === "config") window.location.assign("/");
         else window.location.reload();
       } catch (error) {
         button.disabled = false;

@@ -1,6 +1,5 @@
 import { RENDER_OPTIONS, adminMode, authenticationEnabled, currentServeSourceMode, data, listValue, normalizeServeSourceMode, readableServeSources, selectedKey, serveMode, sourceTagsFromValue, state, t } from "./runtime.js";
-import { sourceBulkStateTarget } from "./source-manager.js";
-import { applyLeaderboardSearchMode, applyServeMutationPayload, applyServeSourceStateMutationPayload, refreshSourceCategoryOptions, sourceRows, sourceSelectionKeys } from "./serve-catalog.js";
+import { applyLeaderboardSearchMode, applyServeMutationPayload, refreshSourceCategoryOptions } from "./serve-catalog.js";
 
 function formPayload(form) {
   const formData = new FormData(form);
@@ -10,30 +9,6 @@ function formPayload(form) {
     if (text) body[key] = text;
   }
   return body;
-}
-async function mutateSelectedServeSourceState() {
-  if (!adminMode()) return;
-  const rows = sourceRows();
-  const sourceKeys = sourceSelectionKeys(rows);
-  if (!sourceKeys.length) return;
-  const targetMode = sourceBulkStateTarget(rows);
-  const reportMode = currentServeSourceMode() === "all"
-    ? normalizeServeSourceMode(state.search?.normalSourceMode || "active")
-    : currentServeSourceMode();
-  try {
-    const payload = await serveApi("/api/sources/state", {
-      method: "POST",
-      body: {
-        source_keys: sourceKeys,
-        active: targetMode === "active",
-        report_source_state: reportMode === "all" ? "active" : reportMode
-      }
-    });
-    state.sourceSelection.clear();
-    await applyServeSourceStateMutationPayload(payload, { sourceKeys, targetMode });
-  } catch (error) {
-    setServeStatus(error.message || String(error), true);
-  }
 }
 function bindLeaderboardSearchControls(target) {
   if (!serveMode() || !target) return;
@@ -154,7 +129,7 @@ function emptyServeReport() {
 }
 function reloadExpiredAdminSession(response) {
   if (response?.status !== 403 || !adminMode() || !authenticationEnabled()) return false;
-  if (RENDER_OPTIONS?.serve_page === "sources") window.location.assign("/");
+  if (RENDER_OPTIONS?.serve_page === "config") window.location.assign("/");
   else window.location.reload();
   return true;
 }
@@ -210,11 +185,7 @@ function setServeStatus(text, error = false) {
   node.classList.toggle("danger", Boolean(error));
 }
 function showServeNotice(text, error = false) {
-  const notice = document.querySelector("[data-source-manager-status]");
-  state.sourceManagerStatus = {
-    phase: error ? "error" : "ready",
-    message: String(text || ""),
-  };
+  const notice = document.querySelector("[data-config-page-status]");
   if (!notice) return;
   notice.textContent = text;
   notice.classList.toggle("danger", Boolean(error));
@@ -222,8 +193,7 @@ function showServeNotice(text, error = false) {
   notice.hidden = false;
 }
 function hideServeNotice() {
-  state.sourceManagerStatus = { phase: "ready", message: "" };
-  const notice = document.querySelector("[data-source-manager-status]");
+  const notice = document.querySelector("[data-config-page-status]");
   if (notice) notice.hidden = true;
 }
 export {
@@ -236,7 +206,6 @@ export {
   focusLeaderboardSearchInput,
   formPayload,
   hideServeNotice,
-  mutateSelectedServeSourceState,
   normalizeAdapterValue,
   readableSourceKey,
   reloadExpiredAdminSession,

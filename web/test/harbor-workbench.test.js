@@ -11,17 +11,11 @@ const browser = installBrowserDom(`
   <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","sources":[]}</script>
   <section data-harbor-workbench>
       <button data-harbor-reload>Reload</button>
-      <button data-harbor-add-dataset>New Dataset</button>
-      <button data-harbor-register-dataset>Register</button>
-      <button data-harbor-edit-dataset>Edit Dataset</button>
-      <button data-harbor-remove-dataset>Remove Dataset</button>
       <button data-harbor-create-task>New Task</button>
       <button data-harbor-sync-manifest>Sync</button>
-      <button data-harbor-rename-task>Rename Task</button>
-      <button data-harbor-trash-task>Trash Task</button>
-      <button data-harbor-restore-task hidden>Restore</button>
-      <button data-harbor-purge-task hidden>Purge</button>
-      <button data-harbor-show-trash>Trash</button>
+      <button data-harbor-state-selected>Archive selected</button>
+      <button data-harbor-delete-selected>Delete selected</button>
+      <button data-harbor-show-trash>Show archived</button>
       <p data-harbor-workbench-status hidden></p>
       <span data-harbor-operation-status></span>
       <input data-harbor-search type="search">
@@ -178,7 +172,7 @@ test("Dataset overview renders status rails and saves text explicitly", async ()
   }
 });
 
-test("dirty guard protects navigation and Trash is a separate overview", async () => {
+test("dirty guard protects navigation and Archived is a separate overview", async () => {
   const surface = document.querySelector("[data-harbor-workbench]");
   harbor.workbenchState.inventory = inventory;
   harbor.workbenchState.datasetId = "pbench";
@@ -294,6 +288,109 @@ test("the latest overlapping file selection owns the editor", async () => {
   }
 });
 
+test("renaming the open Task keeps the renamed Task selected", async () => {
+  const previousFetch = globalThis.fetch;
+  const renamedInventory = {
+    ...inventory,
+    datasets: [{
+      ...inventory.datasets[0],
+      tasks: [task("valid-task", "valid", "task-r1"), task("renamed-task", "draft", "renamed-r1")],
+    }],
+  };
+  globalThis.fetch = async (path, options = {}) => {
+    const requestPath = String(path);
+    const method = options.method || "GET";
+    let payload;
+    if (requestPath === "/api/harbor/tasks" && method === "POST") payload = { result: { task: task("renamed-task", "draft", "renamed-r1") } };
+    else if (requestPath === "/api/harbor/datasets") payload = renamedInventory;
+    else if (requestPath.startsWith("/api/harbor/task?")) {
+      const taskName = new URL(requestPath, "http://localhost").searchParams.get("task");
+      payload = { dataset_id: "pbench", task: task(taskName, taskName === "valid-task" ? "valid" : "draft"), tree: [] };
+    } else throw new Error(`unexpected request: ${requestPath}`);
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => JSON.stringify(payload),
+    };
+  };
+  try {
+    harbor.workbenchState.inventory = inventory;
+    harbor.workbenchState.datasetId = "pbench";
+    harbor.workbenchState.taskName = "draft-task";
+    harbor.workbenchState.taskDetail = { dataset_id: "pbench", task: task("draft-task", "draft"), tree: [] };
+    harbor.workbenchState.showTrash = false;
+    harbor.workbenchState.search = "";
+    harbor.workbenchState.dirty = false;
+    harbor.workbenchState.busy = false;
+    harbor.renderHarborWorkbench();
+
+    const row = Array.from(document.querySelectorAll("[data-harbor-overview-row]"))
+      .find(node => node.textContent.includes("draft-task"));
+    const taskCell = row.querySelector('[data-table-column-key="task"]');
+    taskCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    const input = taskCell.querySelector(".table-cell-editor-control");
+    input.value = "renamed-task";
+    input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+    await tick();
+
+    assert.equal(harbor.workbenchState.taskName, "renamed-task");
+    assert.equal(document.querySelector("[data-harbor-selected-title]").textContent, "renamed-task");
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("a pending file save rejects an overlapping save", async () => {
+  const previousFetch = globalThis.fetch;
+  const pendingSaves = [];
+  let saveRequests = 0;
+  globalThis.fetch = async (path, options = {}) => {
+    const requestPath = String(path);
+    if (requestPath === "/api/harbor/files" && options.method === "POST") {
+      saveRequests += 1;
+      return new Promise(resolve => pendingSaves.push(() => resolve({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () => JSON.stringify({ result: detail }),
+      })));
+    }
+    if (requestPath === "/api/harbor/datasets") {
+      return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(inventory) };
+    }
+    if (requestPath.startsWith("/api/harbor/task?")) {
+      return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(detail) };
+    }
+    throw new Error(`unexpected request: ${requestPath}`);
+  };
+  try {
+    harbor.workbenchState.inventory = inventory;
+    harbor.workbenchState.datasetId = "pbench";
+    harbor.workbenchState.taskName = "valid-task";
+    harbor.workbenchState.taskDetail = detail;
+    harbor.workbenchState.filePath = "instruction.md";
+    harbor.workbenchState.savedText = "Original";
+    harbor.workbenchState.dirty = true;
+    harbor.workbenchState.busy = false;
+    const editor = document.querySelector("[data-harbor-editor]");
+    editor.disabled = false;
+    editor.value = "Changed";
+
+    const first = harbor.saveFile();
+    const second = harbor.saveFile();
+    await tick();
+    assert.equal(saveRequests, 1);
+    pendingSaves[0]();
+    await Promise.all([first, second]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    harbor.workbenchState.busy = false;
+  }
+});
+
 test("cross-field search coordinates selection and keeps empty Datasets visible", () => {
   harbor.workbenchState.inventory = {
     revision: "config-r2",
@@ -329,6 +426,117 @@ test("cross-field search coordinates selection and keeps empty Datasets visible"
   assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 0);
   assert.equal(harbor.workbenchState.datasetId, null);
   assert.equal(document.querySelectorAll(".harbor-file-row").length, 0);
+});
+
+test("Task batches span Datasets, restore edited archive names, and retain only failures", async () => {
+  const previousFetch = globalThis.fetch;
+  const first = task("first", "valid", "first-r1");
+  const second = task("second", "valid", "second-r1");
+  const multiInventory = {
+    revision: "config-r3",
+    datasets: [
+      { id: "one", revision: "one-r1", tasks: [first], trash: [] },
+      { id: "two", revision: "two-r1", tasks: [second], trash: [] },
+    ],
+  };
+  const calls = [];
+  let operation = {
+    operation_id: "archive-op",
+    operation_type: "harbor-task-archive",
+    state: "completed",
+    completed: 2,
+    total: 2,
+    successes: [{ index: 0, status: "ok" }],
+    failures: [{ index: 1, status: "error", error: "second failed" }],
+  };
+  globalThis.fetch = async (path, options = {}) => {
+    const requestPath = String(path);
+    const method = options.method || "GET";
+    const body = options.body ? JSON.parse(String(options.body)) : null;
+    calls.push({ path: requestPath, method, body });
+    let payload;
+    if (requestPath === "/api/harbor/tasks/state") payload = { operation_id: operation.operation_id };
+    else if (requestPath === "/api/harbor/tasks/delete") payload = { operation_id: operation.operation_id };
+    else if (requestPath.startsWith("/api/operations/")) payload = operation;
+    else if (requestPath === "/api/harbor/datasets") payload = harbor.workbenchState.inventory;
+    else if (requestPath.startsWith("/api/harbor/task?")) {
+      const url = new URL(requestPath, "http://localhost");
+      const datasetId = url.searchParams.get("dataset_id");
+      const taskName = url.searchParams.get("task");
+      payload = { dataset_id: datasetId, task: task(taskName, "valid"), tree: [] };
+    } else throw new Error(`unexpected request: ${requestPath}`);
+    return {
+      ok: true,
+      status: method === "POST" ? 202 : 200,
+      statusText: "OK",
+      text: async () => JSON.stringify(payload),
+    };
+  };
+
+  try {
+    harbor.workbenchState.inventory = multiInventory;
+    harbor.workbenchState.datasetId = "one";
+    harbor.workbenchState.taskName = "first";
+    harbor.workbenchState.showTrash = false;
+    harbor.workbenchState.search = "";
+    harbor.workbenchState.dirty = false;
+    harbor.workbenchState.busy = false;
+    harbor.workbenchState.taskSelection = new Set([
+      "dataset:one|task:first",
+      "dataset:two|task:second",
+    ]);
+    harbor.renderHarborWorkbench();
+    await harbor.mutateSelectedTaskState();
+    await tick();
+    await tick();
+
+    const archive = calls.find(call => call.path === "/api/harbor/tasks/state" && call.method === "POST");
+    assert.deepEqual(archive.body, {
+      archived: true,
+      items: [
+        { dataset_id: "one", task: "first", expected_revision: "first-r1" },
+        { dataset_id: "two", task: "second", expected_revision: "second-r1" },
+      ],
+    });
+    assert.deepEqual(Array.from(harbor.workbenchState.taskSelection), ["dataset:two|task:second"]);
+    assert.match(document.querySelector("[data-harbor-workbench-status]").textContent, /second failed/);
+    assert.equal(harbor.workbenchState.busy, false);
+
+    const archivedEntry = {
+      entry_id: "archive-1",
+      directory: "restore-as-this",
+      package_name: "local/old",
+      status: "trash",
+      revision: "archive-r1",
+    };
+    harbor.workbenchState.inventory = {
+      revision: "config-r4",
+      datasets: [{ id: "one", revision: "one-r2", tasks: [], trash: [archivedEntry] }],
+    };
+    harbor.workbenchState.showTrash = true;
+    harbor.workbenchState.taskSelection = new Set(["dataset:one|trash:archive-1"]);
+    harbor.workbenchState.busy = false;
+    operation = { ...operation, operation_id: "restore-op", operation_type: "harbor-task-restore", total: 1, completed: 1, successes: [{ index: 0, status: "ok" }], failures: [] };
+    calls.length = 0;
+    harbor.renderHarborWorkbench();
+    await harbor.mutateSelectedTaskState();
+    await tick();
+
+    const restore = calls.find(call => call.path === "/api/harbor/tasks/state" && call.method === "POST");
+    assert.deepEqual(restore.body, {
+      archived: false,
+      items: [{
+        dataset_id: "one",
+        entry_id: "archive-1",
+        directory: "restore-as-this",
+        expected_revision: "archive-r1",
+      }],
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+    harbor.workbenchState.busy = false;
+    harbor.workbenchState.taskSelection.clear();
+  }
 });
 
 test("invalid step counts and oversized uploads stop before request or file read", async () => {

@@ -54,7 +54,7 @@ const runtime = await import("../src/modules/runtime.js");
 const tables = await import("../src/modules/data-tables.js");
 const notes = await import("../src/modules/analysis-notes.js");
 const sourceState = await import("../src/modules/source-state-controls.js");
-const sourceManager = await import("../src/modules/source-manager.js");
+const configuration = await import("../src/modules/configuration.js");
 const catalog = await import("../src/modules/serve-catalog.js");
 const effects = await import("../src/modules/serve-effects.js");
 const reports = await import("../src/modules/workspace-reports.js");
@@ -210,17 +210,13 @@ test("guest administrator action functions issue no requests when invoked direct
   const dbForm = document.createElement("form");
   dbForm.dataset.sourceKind = "db";
   dbForm.innerHTML = '<input name="db" value="/tmp/source.db">';
-  const harborForm = document.createElement("form");
-  harborForm.innerHTML = '<input name="mount_id" value="private"><input name="jobs_path" value="/tmp/jobs">';
-  runtime.state.sourceManagerRows = [{ source_key: "source", kind: "json" }];
-  runtime.state.sourceSelection = new Set(["source"]);
   try {
     await catalog.refreshServeSourcesFromServer();
-    await catalog.deleteSelectedServeSources();
     await controls.changeServeLocale("zh-CN");
-    await sourceManager.submitServeSourceForm(sourceForm);
-    await sourceManager.inspectDbSessions(dbForm);
-    await sourceManager.submitHarborMountForm(harborForm);
+    await configuration.submitServeSourceForm(sourceForm);
+    await configuration.inspectDbSessions(dbForm);
+    await configuration.addHarborMount();
+    await configuration.removeSelectedHarborMounts();
     await harbor.saveFile();
     const task = { directory: "private-task", revision: "task-r1" };
     const trash = { entry_id: "trash-1", directory: "private-task", revision: "trash-r1" };
@@ -229,6 +225,10 @@ test("guest administrator action functions issue no requests when invoked direct
     };
     harbor.workbenchState.datasetId = "private";
     harbor.workbenchState.taskName = "private-task";
+    harbor.workbenchState.taskSelection = new Set([
+      "dataset:private|task:private-task",
+      "dataset:private|trash:trash-1",
+    ]);
     let prompts = 0;
     let confirms = 0;
     let fileReads = 0;
@@ -240,10 +240,6 @@ test("guest administrator action functions issue no requests when invoked direct
       confirms += 1;
       return true;
     };
-    await harbor.renameTask(task);
-    await harbor.trashTask(task);
-    await harbor.restoreTrash(trash);
-    await harbor.purgeTrash(trash);
     await harbor.createFile("file");
     await harbor.uploadFile({
       name: "private.bin",
@@ -254,6 +250,8 @@ test("guest administrator action functions issue no requests when invoked direct
       },
     });
     await harbor.fileActionMenu({ path: "private.txt" });
+    await harbor.mutateSelectedTaskState();
+    await harbor.deleteSelectedTasks();
     assert.equal(requests, 0);
     assert.equal(prompts, 0);
     assert.equal(confirms, 0);
@@ -265,8 +263,7 @@ test("guest administrator action functions issue no requests when invoked direct
     harbor.workbenchState.inventory = null;
     harbor.workbenchState.datasetId = null;
     harbor.workbenchState.taskName = null;
-    runtime.state.sourceManagerRows = [];
-    runtime.state.sourceSelection.clear();
+    harbor.workbenchState.taskSelection.clear();
   }
 });
 

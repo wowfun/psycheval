@@ -2,7 +2,6 @@ import { WORKSPACE_SNAPSHOT, adminMode, applySessionSearch, esc, hasMetricValue,
 import { applyDataTableControls, currentLeaderboardColumnLayout, filterValues, leaderboardColumns, renderLeaderboardColumnControls, renderLeaderboardExportControls, tableControls } from "./data-tables.js";
 import { downloadBlob, firstUserStepSelection } from "./export.js";
 import { renderServeSourceStateControls, serveSourceModeStatusText } from "./source-state-controls.js";
-import { renderServeSources, sourceColumns, syncSourceManagerBulkActions } from "./source-manager.js";
 import { emptyServeReport, hideServeNotice, reloadExpiredAdminSession, serveApi, setServeStatus } from "./serve-effects.js";
 import { refreshWorkspaceReports, renderAttachWorkspaceReportAction } from "./workspace-reports.js";
 import { browserWorkspaceViewDefinitions, clearWorkspaceViewConditions, refreshWorkspaceViews, workspaceViewQueryPayload, workspaceViewRows, workspaceViews } from "./workspace-views.js";
@@ -137,91 +136,12 @@ function syncSelectionWithVisibleRows(rows) {
   }
 }
 
-function pruneSourceSelection() {
-  if (!serveMode()) return;
-}
-
-function sourceSelectionKeys() {
-  return Array.from(state.sourceSelection);
-}
-
-function sourceRows() {
-  return applyDataTableControls("sources", listValue(state.sourceManagerRows), sourceColumns());
-}
-
-function openServeSourceManager(opener = document.activeElement) {
-  if (!adminMode()) return false;
-  const manager = document.querySelector("[data-source-manager]");
-  if (!manager) return false;
-  state.sourceManagerStatus = {
-    phase: "loading",
-    message: t("loading", "Loading"),
-  };
-  renderServeSources();
-  return loadSourceManagerPage();
-}
-
-async function loadSourceManagerPage(pageNumber = Number(state.sourceManagerPage?.page || 1)) {
-  if (typeof URLSearchParams !== "function" || typeof fetch !== "function") return;
-  state.sourceManagerStatus = {
-    phase: "loading",
-    message: t("loading", "Loading"),
-  };
-  renderServeSources();
-  try {
-    const params = new URLSearchParams({
-      state: "all",
-      surface: "sources",
-      page: String(Math.max(1, pageNumber)),
-      page_size: "100",
-      sort: "last_turn_end",
-      direction: "desc"
-    });
-    const page = await serveApi(`/api/catalog?${params.toString()}`);
-    state.sourceManagerPage = page;
-    state.sourceManagerRows = listValue(page.items);
-    state.sourceManagerStatus = { phase: "ready", message: "" };
-    hideServeNotice();
-    renderServeSources();
-  } catch (error) {
-    const message = error.message || String(error);
-    state.sourceManagerStatus = { phase: "error", message };
-    renderServeSources();
-    setServeStatus(message, true);
-  }
-}
-
-function sourceManagerPageEnd() {
-  const page = Number(state.sourceManagerPage?.page || 1);
-  const size = Number(state.sourceManagerPage?.page_size || 100);
-  return Math.min(Number(state.sourceManagerPage?.total || 0), page * size);
-}
-
-function renderSourceManagerPagination() {
-  const page = Number(state.sourceManagerPage?.page || 1);
-  const size = Number(state.sourceManagerPage?.page_size || 100);
-  const total = Number(state.sourceManagerPage?.total || state.sourceManagerRows.length || 0);
-  const start = total ? (page - 1) * size + 1 : 0;
-  return `<li class="catalog-page-controls source-manager-page-controls">
-    <button type="button" class="action-button icon-only" data-source-page-prev aria-label="${esc(t("previous", "Previous"))}" ${page <= 1 ? "disabled" : ""}>‹</button>
-    <span>${esc(`${start}-${sourceManagerPageEnd()} / ${total}`)}</span>
-    <button type="button" class="action-button icon-only" data-source-page-next aria-label="${esc(t("next", "Next"))}" ${sourceManagerPageEnd() >= total ? "disabled" : ""}>›</button>
-    <span>${esc(String(t("selected_count", "{count} selected")).replace("{count}", String(state.sourceSelection.size)))}</span>
-    <button type="button" class="action-button" data-source-selection-clear ${state.sourceSelection.size ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button>
-  </li>`;
-}
-
-function bindSourceManagerPagination(root) {
-  root?.querySelector?.("[data-source-page-prev]")?.addEventListener?.("click", () => loadSourceManagerPage(Number(state.sourceManagerPage.page || 1) - 1));
-  root?.querySelector?.("[data-source-page-next]")?.addEventListener?.("click", () => loadSourceManagerPage(Number(state.sourceManagerPage.page || 1) + 1));
-  root?.querySelector?.("[data-source-selection-clear]")?.addEventListener?.("click", () => {
-    state.sourceSelection.clear();
-    renderServeSources();
-  });
-}
-
-function visibleSelectedSourceKeys() {
-  return Array.from(state.rowSelection);
+function visibleSelectedSourceKeys(rows = leaderboardRows()) {
+  return Array.from(new Set(
+    listValue(rows)
+      .map(row => String(row?.source_key || row?.trial_key || ""))
+      .filter(key => key && state.rowSelection.has(key)),
+  ));
 }
 
 function filterOptions(column, rows) {
@@ -440,7 +360,6 @@ async function loadCatalogPage(changes = {}, options = {}) {
     state.catalogRows = listValue(page.items).filter(row => row?.readable !== false).map(normalizeCatalogRow);
     state.serveLoading = Boolean(page.checking && !page.generation);
     if (page.generation && page.generation !== previousGeneration) await resolveCatalogSelections();
-    renderServeSources();
     renderComparison();
     setWorkspaceWriteControlsDisabled(Boolean(page.checking));
     if (page.checking) {
@@ -473,12 +392,11 @@ async function loadCatalogPage(changes = {}, options = {}) {
 }
 
 async function resolveCatalogSelections() {
-  const selected = Array.from(new Set([...state.rowSelection, ...state.sourceSelection, state.selectedSourceKey].filter(Boolean)));
+  const selected = Array.from(new Set([...state.rowSelection, state.selectedSourceKey].filter(Boolean)));
   if (!selected.length) return;
   const payload = await serveApi("/api/catalog/resolve", { method: "POST", body: { source_keys: selected } });
   const present = new Set(listValue(payload?.source_keys));
   Array.from(state.rowSelection).forEach(key => { if (!present.has(key)) state.rowSelection.delete(key); });
-  Array.from(state.sourceSelection).forEach(key => { if (!present.has(key)) state.sourceSelection.delete(key); });
   if (state.selectedSourceKey && !present.has(state.selectedSourceKey)) {
     state.selectedSourceKey = null;
     state.selectedArtifactRevision = null;
@@ -581,38 +499,39 @@ async function switchServeSourceMode(mode) {
   state.serveSourceMode = nextMode;
   state.selectedSourceKey = null;
   state.selectedArtifactRevision = null;
+  state.rowSelection.clear();
   await loadCatalogPage();
 }
 
-function applyServeMutationPayload(payload) {
+function applyServeMutationPayload(payload, options = {}) {
   hideServeNotice();
   if (payload?.operation_id) {
-    return pollCatalogOperation(payload.operation_id);
+    return pollCatalogOperation(payload.operation_id, options);
   }
-  return loadCatalogPage({}, { force: true }).then(() => {
-    const manager = document.querySelector("[data-source-manager]");
-    if (manager && !manager.hidden) return loadSourceManagerPage();
-  });
+  return loadCatalogPage({}, { force: true });
 }
 
-async function applyServeSourceStateMutationPayload(payload) {
-  applyServeMutationPayload(payload);
+async function applyServeSourceStateMutationPayload(payload, options = {}) {
+  return applyServeMutationPayload(payload, options);
 }
 
-async function pollCatalogOperation(operationId) {
+async function pollCatalogOperation(operationId, options = {}) {
   try {
     const operation = await serveApi(`/api/operations/${encodeURIComponent(operationId)}`);
     setServeStatus(`${operation.operation_type}: ${operation.completed}/${operation.total}`);
     setWorkspaceWriteControlsDisabled(operation.state === "queued" || operation.state === "running");
     if (operation.state === "queued" || operation.state === "running") {
-      setTimeout(() => pollCatalogOperation(operationId), 200);
+      setTimeout(() => pollCatalogOperation(operationId, options), 200);
       return;
     }
     setWorkspaceWriteControlsDisabled(false);
+    const selectedKeys = listValue(options.sourceKeys);
+    const successfulIndexes = new Set(listValue(operation.successes).map(item => Number(item.index)));
+    selectedKeys.forEach((key, index) => {
+      if (successfulIndexes.has(index)) state.rowSelection.delete(key);
+    });
     await loadCatalogPage({}, { force: true });
     await refreshSourceCategoryOptions();
-    const manager = document.querySelector("[data-source-manager]");
-    if (manager && !manager.hidden) await loadSourceManagerPage();
     const failures = listValue(operation.failures);
     if (failures.length) setServeStatus(`${failures.length} operation item(s) failed: ${failures[0]?.error || "error"}`, true);
   } catch (error) {
@@ -623,7 +542,7 @@ async function pollCatalogOperation(operationId) {
 
 function setWorkspaceWriteControlsDisabled(disabled) {
   state.workspaceWriteBusy = Boolean(disabled);
-  document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-bulk-state],[data-source-bulk-delete],[data-source-add-form] button[type=submit],[data-harbor-mount-form] button,[data-source-state-action]").forEach(control => {
+  document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-add-form] button[type=submit],[data-harbor-add-mount],[data-harbor-remove-mounts],[data-source-state-action],[data-source-delete-action]").forEach(control => {
     if (disabled) {
       if (!Object.prototype.hasOwnProperty.call(control.dataset, "busyPreviousDisabled")) {
         control.dataset.busyPreviousDisabled = control.disabled ? "true" : "false";
@@ -638,7 +557,6 @@ function setWorkspaceWriteControlsDisabled(disabled) {
     }
     control.removeAttribute("aria-busy");
   });
-  if (!disabled) syncSourceManagerBulkActions();
 }
 
 async function refreshServeSourcesFromServer() {
@@ -654,22 +572,6 @@ async function refreshServeSourcesFromServer() {
 
 async function refreshServeReportFromServer() {
   return refreshServeSourcesFromServer();
-}
-
-async function deleteSelectedServeSources() {
-  if (!adminMode()) return;
-  const sourceKeys = sourceSelectionKeys();
-  if (!sourceKeys.length) return;
-  if (!window.confirm(t("serve_delete_selected_confirm", "Delete selected sources from peval state?"))) return;
-  try {
-    state.sourceSelection.clear();
-    applyServeMutationPayload(await serveApi("/api/sources/delete", {
-      method: "POST",
-      body: { source_keys: sourceKeys }
-    }));
-  } catch (error) {
-    setServeStatus(error.message || String(error), true);
-  }
 }
 
 function exportCurrentScope(kind) {
@@ -782,14 +684,12 @@ export {
   applyServeMutationPayload,
   applyServeSourceStateMutationPayload,
   bindLeaderboardCatalogControls,
-  bindSourceManagerPagination,
   catalogPageEnd,
   catalogPageLabel,
   catalogQueryString,
   catalogRowForSourceKey,
   catalogSortKey,
   catalogStepOutline,
-  deleteSelectedServeSources,
   detailStepSelection,
   ensureCatalogDetail,
   exportCurrentScope,
@@ -800,18 +700,14 @@ export {
   loadServeWorkspace,
   loadCatalogPage,
   loadServeSourceReport,
-  loadSourceManagerPage,
   loadedServeDetailIsCurrent,
   metaFor,
   normalizeCatalogRow,
-  openServeSourceManager,
   pollCatalogOperation,
-  pruneSourceSelection,
   refreshServeReportFromServer,
   refreshServeSourcesFromServer,
   renderLeaderboardPanelControls,
   renderLeaderboardSearchControls,
-  renderSourceManagerPagination,
   reportRows,
   requestCatalogFacets,
   requestCatalogSort,
@@ -825,9 +721,6 @@ export {
   sourceForTrialIndex,
   sourceForTrialKey,
   sourceKeyForTrialKey,
-  sourceManagerPageEnd,
-  sourceRows,
-  sourceSelectionKeys,
   switchServeSourceMode,
   syncSelectionWithVisibleRows,
   trajectoryFor,

@@ -1,39 +1,5 @@
 import { listValue, lower, renderComparisonPanels, serveMode, state } from "./runtime.js";
-import { leaderboardColumns, tableText } from "./data-tables.js";
 import { exportCurrentScope, leaderboardRows, selectServeDetail, sourceKeyForTrialKey } from "./serve-catalog.js";
-
-function bindServeSelectionControls(target) {
-  if (!serveMode()) return;
-  target.querySelectorAll(".select-box").forEach(control => {
-    control.addEventListener("click", event => event.stopPropagation());
-  });
-  target.querySelectorAll("[data-row-select]").forEach(input => {
-    input.addEventListener("click", event => event.stopPropagation());
-    input.addEventListener("change", event => {
-      event.stopPropagation();
-      const key = input.dataset.rowSelect;
-      if (!key) return;
-      if (input.checked) state.rowSelection.add(key);
-      else state.rowSelection.delete(key);
-      renderComparisonPanels({ trace: false });
-    });
-  });
-  target.querySelectorAll("[data-select-visible]").forEach(input => {
-    input.indeterminate = input.hasAttribute("data-partial");
-    input.addEventListener("click", event => event.stopPropagation());
-    input.addEventListener("change", event => {
-      event.stopPropagation();
-      const rows = leaderboardRows();
-      const visibleKeys = rows.map(row => row.trial_key).filter(Boolean);
-      const allSelected = visibleKeys.length > 0 && visibleKeys.every(key => state.rowSelection.has(key));
-      visibleKeys.forEach(key => {
-        if (allSelected) state.rowSelection.delete(key);
-        else state.rowSelection.add(key);
-      });
-      renderComparisonPanels({ trace: false });
-    });
-  });
-}
 function bindServeExportControls(target) {
   if (!serveMode()) return;
   target.querySelectorAll("[data-export-kind]").forEach(button => {
@@ -73,14 +39,17 @@ function exportScopeRows() {
   const selected = rows.filter(row => state.rowSelection.has(row.trial_key));
   return selected.length ? selected : rows;
 }
-function xlsxTableRows(rows) {
-  const columns = leaderboardColumns();
+function xlsxTableRows(rows, columns) {
   return [
     columns.map(column => column.label),
-    ...rows.map(row => columns.map(column => tableText(row, column)))
+    ...rows.map(row => columns.map(column => exportTableText(row, column)))
   ];
 }
-function xlsxBytesForRows(rows) {
+function exportTableText(row, column) {
+  const raw = column.value(row);
+  return column.format ? column.format(raw, row) : (raw ?? "-");
+}
+function xlsxBytesForRows(rows, columns) {
   return zipFiles([
     {
       name: "[Content_Types].xml",
@@ -100,7 +69,7 @@ function xlsxBytesForRows(rows) {
     },
     {
       name: "xl/worksheets/sheet1.xml",
-      text: worksheetXml(xlsxTableRows(rows))
+      text: worksheetXml(xlsxTableRows(rows, columns))
     }
   ]);
 }
@@ -269,7 +238,6 @@ function downloadBlob(filename, mime, blob) {
 export {
   CRC32_TABLE,
   bindServeExportControls,
-  bindServeSelectionControls,
   bindTrialSelection,
   concatBytes,
   crc32,

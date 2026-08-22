@@ -1,6 +1,5 @@
 import { $, esc, finalMetricsFor, fmtCost, fmtDate, fmtMs, fmtNum, fmtScore, hasMetricValue, listValue, lower, renderComparisonPanels, selectedKey, serveMode, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, statusLabel, t } from "./runtime.js";
-import { agentNameFor, renderRowSelection } from "./data-tables.js";
-import { bindServeSelectionControls } from "./export.js";
+import { agentNameFor, bindDataTableSelection, renderRowSelection, selectionColumn } from "./data-tables.js";
 import { bindServeSourceStateControls, renderServeSourceStateControls } from "./source-state-controls.js";
 import { catalogStepOutline, leaderboardRows, metaFor, selectServeDetail, trajectoryFor } from "./serve-catalog.js";
 import { closeWorkspaceReportReader } from "./workspace-reports.js";
@@ -83,9 +82,13 @@ function stepTitle(step, index, stepDuration = null, durationRatio = null) {
   const head = duration ? `#${id} ${role}; ${duration}` : `#${id} ${role}`;
   return preview ? `${head}: ${preview}` : head;
 }
-function bindTrajectoryControls(target) {
+function bindTrajectoryControls(target, rows = leaderboardRows()) {
   bindServeSourceStateControls(target);
-  bindServeSelectionControls(target);
+  bindDataTableSelection(target, {
+    columns: [selectionColumn()],
+    rows,
+    onChange: () => renderComparisonPanels({ trace: false }),
+  });
   target.querySelectorAll("[data-step-id]").forEach(node => {
     node.addEventListener("click", event => {
       event.stopPropagation();

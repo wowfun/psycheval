@@ -17,7 +17,6 @@ const browser = installBrowserDom(`
 
 const tables = await import("../src/modules/data-tables.js");
 const runtime = await import("../src/modules/runtime.js");
-const sourceManager = await import("../src/modules/source-manager.js");
 const views = await import("../src/modules/workspace-views.js");
 const summaries = await import("../src/modules/leaderboard-summary.js");
 const selected = await import("../src/modules/analysis-selected.js");
@@ -238,7 +237,65 @@ test("value types drive cell metadata, truncation classes, sorting, and read-onl
   );
 });
 
-function mountEditor(valueType, { value = "draft", options, suggestions, commit }) {
+test("selection columns own visible select-all, placeholders, indeterminate state, and event isolation", () => {
+  const root = document.querySelector("#table-root");
+  const rows = [
+    { id: "a", name: "Alpha", selectable: true },
+    { id: "empty", name: "Empty Dataset", selectable: false },
+    { id: "b", name: "Beta", selectable: true },
+  ];
+  const selection = new Set(["a", "off-page"]);
+  const columns = [
+    tables.selectionColumn({
+      key: "__test_select",
+      selectionKey: row => row.id,
+      selectionSet: () => selection,
+      selectable: row => row.selectable,
+    }),
+    { key: "name", label: "Name", valueType: "text", value: row => row.name },
+  ];
+  let changes = 0;
+  let rowClicks = 0;
+  const bind = visibleRows => {
+    root.innerHTML = tables.renderDataTable({
+      tableId: "selection-test",
+      columns,
+      rows: visibleRows,
+      rowKey: row => row.id,
+    });
+    root.querySelectorAll("tr[data-table-row-key]").forEach(row => {
+      row.addEventListener("click", () => { rowClicks += 1; });
+    });
+    tables.bindDataTableControls(root, {
+      tableId: "selection-test",
+      columns,
+      rows: visibleRows,
+      rowKey: row => row.id,
+      onSelectionChange: () => { changes += 1; },
+    });
+  };
+
+  bind(rows);
+  const header = root.querySelector("[data-table-select-visible]");
+  assert.equal(header.indeterminate, true);
+  assert.equal(root.querySelectorAll("[data-table-row-select]").length, 2);
+  assert.equal(root.querySelectorAll(".select-box-placeholder").length, 1);
+
+  root.querySelector('[data-table-row-select="b"]').closest("label").click();
+  assert.deepEqual(Array.from(selection), ["a", "off-page", "b"]);
+  assert.equal(rowClicks, 0);
+  assert.equal(changes, 1);
+
+  bind(rows.slice(1));
+  const filteredHeader = root.querySelector("[data-table-select-visible]");
+  assert.equal(filteredHeader.checked, true);
+  filteredHeader.click();
+  assert.deepEqual(Array.from(selection), ["a", "off-page"]);
+  assert.equal(rowClicks, 0);
+  assert.equal(changes, 2);
+});
+
+function mountEditor(valueType, { value = "draft", options, suggestions, allowCustom, commit }) {
   const root = document.querySelector("#table-root");
   const row = { id: `row-${valueType}`, value };
   const columns = [{
@@ -246,7 +303,7 @@ function mountEditor(valueType, { value = "draft", options, suggestions, commit 
     label: valueType,
     valueType,
     value: item => Array.isArray(item.value) ? item.value.join(", ") : item.value,
-    edit: { value: item => item.value, options, suggestions, commit },
+    edit: { value: item => item.value, options, suggestions, allowCustom, commit },
   }];
   const render = () => {
     root.innerHTML = tables.renderDataTable({ tableId: `edit-${valueType}`, columns, rows: [row], rowKey: item => item.id });
@@ -327,6 +384,44 @@ test("list suggestions normalize values and editor events do not select the row"
   assert.equal(rowClicks, 0);
 });
 
+test("strict list suggestions complete known values and reject unknown values", async () => {
+  const commits = [];
+  let mounted = mountEditor("list", {
+    value: ["alpha"],
+    suggestions: ["alpha", "beta", "gamma"],
+    allowCustom: false,
+    commit: async (_row, value) => commits.push(value),
+  });
+  mounted.input.value = "alpha, be";
+  mounted.input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.equal(mounted.cell.querySelector('[data-table-suggestion="alpha"]').hidden, false);
+  assert.equal(mounted.cell.querySelector('[data-table-suggestion="beta"]').hidden, false);
+  assert.equal(mounted.cell.querySelector('[data-table-suggestion="gamma"]').hidden, true);
+
+  mounted.input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await tick();
+  assert.deepEqual(commits, []);
+  assert.match(mounted.cell.querySelector(".table-cell-editor-status").textContent, /available/i);
+  assert.equal(document.activeElement, mounted.input);
+
+  mounted.cell.querySelector('[data-table-suggestion="beta"]').click();
+  assert.equal(mounted.input.value, "alpha, beta");
+  mounted.input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await tick();
+  assert.deepEqual(commits, [["alpha", "beta"]]);
+
+  mounted = mountEditor("list", {
+    value: ["alpha"],
+    suggestions: ["alpha", "beta"],
+    allowCustom: false,
+    commit: async (_row, value) => commits.push(value),
+  });
+  mounted.input.value = "";
+  mounted.input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await tick();
+  assert.deepEqual(commits, [["alpha", "beta"], []]);
+});
+
 test("scalar suggestions replace the value while custom text and blank clears remain valid", async () => {
   const commits = [];
   let mounted = mountEditor("text", {
@@ -402,7 +497,7 @@ test("saved views close and reopen without losing independent scroll state", asy
   await tick();
 });
 
-test("source and saved-view adapters keep persistence behind the shared edit seam", async () => {
+test("Leaderboard and saved-view adapters keep persistence behind the shared edit seam", async () => {
   const calls = [];
   const originalFetch = globalThis.fetch;
   const response = payload => ({
@@ -428,30 +523,22 @@ test("source and saved-view adapters keep persistence behind the shared edit sea
   window.fetch = globalThis.fetch;
 
   const leaderboardColumns = tables.leaderboardColumns();
-  const managerColumns = sourceManager.sourceColumns();
   const leaderboardTags = leaderboardColumns.find(column => column.key === "source_tags");
-  const managerTags = managerColumns.find(column => column.key === "source_tags");
   const leaderboardCategory = leaderboardColumns.find(column => column.key === "source_category");
-  const managerCategory = managerColumns.find(column => column.key === "source_category");
   assert.deepEqual(leaderboardColumns.slice(0, 2).map(column => column.key), ["source_category", "source_tags"]);
-  assert.equal(managerColumns.indexOf(managerCategory) + 1, managerColumns.indexOf(managerTags));
   assert.equal(leaderboardCategory.valueType, "text");
-  assert.equal(managerCategory.valueType, "text");
   assert.equal(leaderboardTags.valueType, "list");
-  assert.equal(managerTags.valueType, "list");
   assert.equal(typeof leaderboardCategory.edit.commit, "function");
-  assert.equal(typeof managerCategory.edit.commit, "function");
   assert.equal(typeof leaderboardTags.edit.commit, "function");
-  assert.equal(typeof managerTags.edit.commit, "function");
-  await managerTags.edit.commit({ source_key: "source-1", trial_key: "trial-1" }, ["green", "blue"]);
+  await leaderboardTags.edit.commit({ source_key: "source-1", trial_key: "trial-1" }, ["green", "blue"]);
   assert.deepEqual(calls[0], {
     path: "/api/sources/source-1/tags",
     method: "POST",
     body: { report_source_state: "active", tags: ["green", "blue"] },
   });
   runtime.state.sourceCategoryOptions = ["Evaluation", "Regression"];
-  assert.deepEqual(managerCategory.edit.suggestions(), ["Evaluation", "Regression"]);
-  await managerCategory.edit.commit({ source_key: "source-1", trial_key: "trial-1" }, "  Evaluation  ");
+  assert.deepEqual(leaderboardCategory.edit.suggestions(), ["Evaluation", "Regression"]);
+  await leaderboardCategory.edit.commit({ source_key: "source-1", trial_key: "trial-1" }, "  Evaluation  ");
   assert.deepEqual(calls.find(call => call.path === "/api/sources/source-1/category"), {
     path: "/api/sources/source-1/category",
     method: "POST",

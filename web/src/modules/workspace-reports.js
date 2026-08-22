@@ -1,7 +1,6 @@
 import { $, adminMode, esc, listValue, lower, readableServeSources, renderComparisonPanels, renderReadOnlySourceCategory, renderReadOnlySourceTags, serveMode, sourceCategoryEditValue, sourceCategoryFor, sourceCategoryValue, sourceTagsFor, state, t, workspaceDisplayMode, workspaceSnapshotMode } from "./runtime.js";
 import { bindDataTableEditors } from "./data-tables.js";
 import { renderStepDrawer } from "./trajectory-trace.js";
-import { sourceDisplayLabel } from "./source-manager.js";
 import { commitSourceCellEdit, existingSourceCategoryOptions, serveApi, setServeStatus } from "./serve-effects.js";
 import { leaderboardRows, visibleSelectedSourceKeys } from "./serve-catalog.js";
 import { focusSoon } from "./modal-surfaces.js";
@@ -406,9 +405,16 @@ function filteredWorkspaceReportSources() {
   return readableWorkspaceReportSources().filter(source => workspaceReportSourceSearchText(source).includes(query));
 }
 
+function workspaceReportSourceLabel(source) {
+  return String(source?.source_alias || "").trim()
+    || source?.label
+    || source?.source_key
+    || "source";
+}
+
 function workspaceReportSourceSearchText(source) {
   return [
-    sourceDisplayLabel(source),
+    workspaceReportSourceLabel(source),
     source?.label,
     source?.source_key,
     source?.trial_session_id,
@@ -428,7 +434,7 @@ function renderWorkspaceReportBindingSource(source) {
   return `<div class="report-binding-row" data-report-binding-row data-table-row-key="${esc(sourceKey)}">
     <input type="checkbox" data-report-binding-key="${esc(sourceKey)}" ${checked ? "checked" : ""} aria-label="${esc(t("select_row", "Select row"))}: ${esc(session)}">
     <span class="report-binding-row-main">
-      <strong>${esc(sourceDisplayLabel(source))}</strong>
+      <strong>${esc(workspaceReportSourceLabel(source))}</strong>
       <code>${esc(session)}</code>
     </span>
     <span class="report-binding-category table-value-text table-cell-editable" data-report-binding-category data-table-column-key="source_category" data-value-type="text" tabindex="0" aria-keyshortcuts="Enter" title="${esc(category)}" aria-label="${esc(`${t("category", "Category")}: ${category}`)}">${renderReadOnlySourceCategory(source)}</span>

@@ -10,21 +10,21 @@ const browser = installBrowserDom(`
   <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","authentication_enabled":true,"sources":[]}</script>
   <strong data-source-count></strong>
   <span data-source-status></span>
-  <div data-source-manager hidden><section aria-modal="true"><button data-source-manager-close>Close</button><p data-source-manager-status hidden></p><ul data-source-list></ul></section></div>
+  <div data-config-page hidden></div>
   <div data-report-manager hidden><section aria-modal="true"><button data-report-manager-close>Close</button><p data-report-manager-status hidden></p><div data-report-inventory></div><span data-report-count></span><div data-report-bindings></div></section></div>
   <aside id="workspace-report-reader" hidden></aside>
   <div data-view-save-dialog hidden><section aria-modal="true"><button data-view-save-cancel>Cancel</button></section></div>
   <button data-refresh-all>Refresh</button>
-  <button data-source-bulk-state disabled>Archive</button>
-  <button data-source-bulk-delete disabled>Delete</button>
+  <button data-source-delete-action disabled>Delete</button>
+  <button data-harbor-add-mount>Add mount</button>
   <main id="comparison"></main>
   <section id="leaderboard"></section>
 `);
 
 const runtime = await import("../src/modules/runtime.js");
 const tables = await import("../src/modules/data-tables.js");
-const sourceManager = await import("../src/modules/source-manager.js");
-const serveEffects = await import("../src/modules/serve-effects.js");
+const configuration = await import("../src/modules/configuration.js");
+const sourceStateControls = await import("../src/modules/source-state-controls.js");
 const catalog = await import("../src/modules/serve-catalog.js");
 const leaderboardSummary = await import("../src/modules/leaderboard-summary.js");
 const modals = await import("../src/modules/modal-surfaces.js");
@@ -178,123 +178,647 @@ test("Saved View Category groups preserve a literal overall category", () => {
   assert.equal(views.workspaceViewGroupLabel(group, "overall"), "Overall");
 });
 
-test("Source Manager renders its own page instead of the Leaderboard page", () => {
-  runtime.state.serveSources = [];
-  runtime.state.sourceManagerRows = [{
-    source_key: "source-one",
-    label: "runs/source-one",
-    active: true,
-    readable: true,
-  }];
-  runtime.state.sourceManagerStatus = { phase: "ready", message: "" };
-  sourceManager.renderServeSources();
-
-  assert.match(document.querySelector("[data-source-list]").textContent, /runs\/source-one/);
-  assert.doesNotMatch(document.querySelector("[data-source-list]").textContent, /No sources loaded/);
-
-  runtime.state.sourceManagerStatus = { phase: "loading", message: "Loading" };
-  sourceManager.renderServeSources();
-  assert.match(document.querySelector("[data-source-list]").textContent, /Loading/);
-
-  runtime.state.sourceManagerRows = [];
-  runtime.state.sourceManagerStatus = { phase: "error", message: "Catalog failed" };
-  sourceManager.renderServeSources();
-  assert.match(document.querySelector("[data-source-list]").textContent, /Catalog failed/);
-});
-
-test("Source Manager derives a cross-page batch state from every selected source", async () => {
+test("Configuration loads workspace configuration and prompt assets without a source catalog page", async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
-  globalThis.fetch = async (path, options = {}) => {
-    requests.push({ path: String(path), body: JSON.parse(String(options.body || "{}")) });
+  const root = document.querySelector("[data-config-page]");
+  root.hidden = false;
+  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-config-reload></button><button data-harbor-add-dataset></button><button data-harbor-register-dataset></button><button data-harbor-unregister-datasets></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><div data-harbor-mount-config></div>';
+  delete root.dataset.configBound;
+  globalThis.fetch = async path => {
+    requests.push(String(path));
     return {
       ok: true,
       statusText: "OK",
-      text: async () => "{",
+      text: async () => JSON.stringify({ revision: "r1", datasets: [{ id: "tasks", path: "/workspace/tasks" }], mounts: [] }),
     };
   };
-
   try {
-    runtime.state.sourceSelection.clear();
-    runtime.state.sourceManagerStatus = { phase: "ready", message: "" };
-    runtime.state.sourceManagerRows = [{
-      source_key: "archived-on-page-one",
-      label: "Archived on page one",
-      active: false,
-      readable: true,
-    }];
-    runtime.state.sourceSelection.add("archived-on-page-one");
-    sourceManager.renderServeSources();
-    assert.equal(
-      document.querySelector("[data-source-bulk-state]").dataset.sourceBulkState,
-      "active",
-    );
-
-    runtime.state.sourceManagerRows = [{
-      source_key: "active-on-page-two",
-      label: "Active on page two",
-      active: true,
-      readable: true,
-    }];
-    sourceManager.renderServeSources();
-
-    const stateButton = document.querySelector("[data-source-bulk-state]");
-    assert.equal(stateButton.textContent, "Activate selected");
-    assert.equal(stateButton.dataset.sourceBulkState, "active");
-    await serveEffects.mutateSelectedServeSourceState();
-    assert.deepEqual(requests, [{
-      path: "/api/sources/state",
-      body: {
-        source_keys: ["archived-on-page-one"],
-        active: true,
-        report_source_state: "active",
-      },
-    }]);
+    await configuration.initializeConfiguration();
+    assert.deepEqual(requests, ["/api/config", "/api/prompts"]);
+    assert.match(root.querySelector("[data-harbor-dataset-registry]").textContent, /tasks/);
+    assert.equal(root.querySelector("[data-source-list]"), null);
   } finally {
     globalThis.fetch = previousFetch;
-    runtime.state.sourceSelection.clear();
-    runtime.state.sourceManagerRows = [];
-    runtime.state.sourceManagerStatus = { phase: "ready", message: "" };
-    sourceManager.renderServeSources();
+    root.hidden = true;
   }
 });
 
-test("Source Manager disables deletion when the selection includes a linked Harbor Trial", () => {
-  runtime.state.sourceSelection.clear();
-  runtime.state.sourceManagerStatus = { phase: "ready", message: "" };
-  runtime.state.sourceManagerRows = [{
+test("Configuration adds ACP agents and saves same-name prompt overrides", async () => {
+  const requests = [];
+  const answers = ["opencode", "OpenCode", "opencode", '["acp"]'];
+  const previousFetch = globalThis.fetch;
+  const previousPrompt = window.prompt;
+  const root = document.querySelector("[data-config-page]");
+  root.hidden = false;
+  root.innerHTML = `
+    <p data-config-page-status hidden></p>
+    <button data-harbor-config-reload></button>
+    <button data-acp-add-agent></button><button data-acp-remove-agents></button>
+    <span data-acp-agent-count></span><div data-acp-agent-config></div>
+    <button data-prompt-save disabled></button><button data-prompt-reset disabled></button>
+    <span data-prompt-asset-count></span><nav data-prompt-config-list></nav>
+    <code data-prompt-filename></code><span data-prompt-origin></span><textarea data-prompt-content></textarea>
+    <div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div>
+    <div data-harbor-mount-count></div><div data-harbor-mount-config></div>`;
+  delete root.dataset.configBound;
+  let snapshot = { revision: "r1", datasets: [], mounts: [], acp_agents: [] };
+  let prompt = { id: "failure-diagnosis", filename: "failure-diagnosis.md", title: "Failure diagnosis", content: "# Failure diagnosis\n\nDefault.", customized: false, revision: "p1" };
+  globalThis.fetch = async (path, options = {}) => {
+    const request = { path: String(path), method: options.method || "GET", body: options.body ? JSON.parse(String(options.body)) : null };
+    requests.push(request);
+    let payload;
+    if (request.path === "/api/config/acp/agents") {
+      snapshot = { ...snapshot, revision: "r2", acp_agents: [{ id: "opencode", title: "OpenCode", command: "opencode", args: ["acp"], connected: false }] };
+      payload = snapshot;
+    } else if (request.path === "/api/prompts" && request.method === "POST") {
+      prompt = { ...prompt, content: request.body.content, customized: true, revision: "p2" };
+      payload = { prompt };
+    } else if (request.path === "/api/prompts") {
+      payload = { prompts: [prompt] };
+    } else {
+      payload = snapshot;
+    }
+    return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(payload) };
+  };
+  window.prompt = () => answers.shift();
+
+  try {
+    await configuration.initializeConfiguration();
+    root.querySelector("[data-acp-add-agent]").click();
+    await tick();
+    await tick();
+    assert.deepEqual(requests.find(request => request.path === "/api/config/acp/agents").body, {
+      action: "upsert",
+      agent_id: "opencode",
+      title: "OpenCode",
+      command: "opencode",
+      args: ["acp"],
+      expected_revision: "r1",
+    });
+    assert.match(root.querySelector("[data-acp-agent-config]").textContent, /opencode/);
+
+    const editor = root.querySelector("[data-prompt-content]");
+    editor.value = "# Team diagnosis\n\nInspect evidence.";
+    editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(root.querySelector("[data-prompt-save]").disabled, false);
+    root.querySelector("[data-prompt-save]").click();
+    await tick();
+    await tick();
+    const save = requests.find(request => request.path === "/api/prompts" && request.method === "POST");
+    assert.deepEqual(save.body, {
+      action: "save",
+      prompt_id: "failure-diagnosis",
+      content: "# Team diagnosis\n\nInspect evidence.",
+      expected_revision: "p1",
+    });
+    assert.match(root.querySelector("[data-prompt-origin]").textContent, /Workspace override/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    window.prompt = previousPrompt;
+    configuration.harborConfigState.busy = false;
+    configuration.harborConfigState.acpSelection.clear();
+    configuration.promptConfigState.dirty = false;
+    root.hidden = true;
+  }
+});
+
+test("Configuration reloads the current prompt after a revision conflict", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  const root = document.querySelector("[data-config-page]");
+  root.hidden = false;
+  root.innerHTML = `
+    <p data-config-page-status hidden></p><button data-harbor-config-reload></button>
+    <button data-prompt-save disabled></button><button data-prompt-reset disabled></button>
+    <span data-prompt-asset-count></span><nav data-prompt-config-list></nav>
+    <code data-prompt-filename></code><span data-prompt-origin></span><textarea data-prompt-content></textarea>
+    <div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div>
+    <div data-harbor-mount-count></div><div data-harbor-mount-config></div>`;
+  delete root.dataset.configBound;
+  let conflicted = false;
+  globalThis.fetch = async (path, options = {}) => {
+    const request = { path: String(path), method: options.method || "GET" };
+    requests.push(request);
+    if (request.path === "/api/prompts" && request.method === "POST") {
+      conflicted = true;
+      return { ok: false, status: 409, statusText: "Conflict", text: async () => JSON.stringify({ error: "Workspace prompt changed; refresh before saving" }) };
+    }
+    if (request.path === "/api/prompts") {
+      const prompt = conflicted
+        ? { id: "failure-diagnosis", filename: "failure-diagnosis.md", title: "Teammate edit", content: "# Teammate edit\n", customized: true, revision: "p2" }
+        : { id: "failure-diagnosis", filename: "failure-diagnosis.md", title: "Failure diagnosis", content: "# Default\n", customized: false, revision: "p1" };
+      return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify({ prompts: [prompt] }) };
+    }
+    return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify({ revision: conflicted ? "r2" : "r1", datasets: [], mounts: [], acp_agents: [] }) };
+  };
+
+  try {
+    await configuration.initializeConfiguration();
+    const editor = root.querySelector("[data-prompt-content]");
+    editor.value = "# My stale edit\n";
+    editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+    root.querySelector("[data-prompt-save]").click();
+    await tick();
+    await tick();
+    await tick();
+
+    assert.equal(requests.filter(request => request.path === "/api/config").length, 2);
+    assert.equal(requests.filter(request => request.path === "/api/prompts" && request.method === "GET").length, 2);
+    assert.equal(configuration.promptConfigState.prompts[0].revision, "p2");
+    assert.equal(editor.value, "# Teammate edit\n");
+    assert.match(root.querySelector("[data-config-page-status]").textContent, /refresh before saving/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    configuration.harborConfigState.busy = false;
+    configuration.promptConfigState.dirty = false;
+    root.hidden = true;
+  }
+});
+
+test("Configuration registers Dataset and Jobs roots from path-only actions", async () => {
+  const requests = [];
+  const prompts = [];
+  const previousFetch = globalThis.fetch;
+  const previousPrompt = window.prompt;
+  const root = document.querySelector("[data-config-page]");
+  root.hidden = false;
+  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-config-reload></button><button data-harbor-add-dataset></button><button data-harbor-register-dataset></button><button data-harbor-unregister-datasets></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><button data-harbor-add-mount></button><button data-harbor-remove-mounts></button><div data-harbor-mount-count></div><div data-harbor-mount-config></div>';
+  delete root.dataset.configBound;
+  let snapshot = { revision: "r1", datasets: [], mounts: [] };
+  globalThis.fetch = async (path, options = {}) => {
+    const request = {
+      path: String(path),
+      method: options.method || "GET",
+      body: options.body ? JSON.parse(String(options.body)) : null,
+    };
+    requests.push(request);
+    if (request.path === "/api/config/harbor/datasets") {
+      snapshot = { revision: "r2", datasets: [{ id: "tasks", path: "/workspace/tasks" }], mounts: [] };
+      return { ok: true, statusText: "OK", text: async () => JSON.stringify({ result: snapshot }) };
+    }
+    if (request.path === "/api/config/harbor/mounts") {
+      snapshot = { revision: "r3", datasets: snapshot.datasets, mounts: [{ id: "jobs", path: "/workspace/jobs", dataset_ids: [] }] };
+      return { ok: true, statusText: "OK", text: async () => JSON.stringify({ result: snapshot }) };
+    }
+    return { ok: true, statusText: "OK", text: async () => JSON.stringify(snapshot) };
+  };
+  window.prompt = message => {
+    prompts.push(message);
+    return prompts.length === 1 ? "/workspace/tasks" : "/workspace/jobs";
+  };
+
+  try {
+    await configuration.initializeConfiguration();
+    assert.equal(root.querySelector("[data-harbor-mount-form]"), null);
+
+    root.querySelector("[data-harbor-register-dataset]").click();
+    await tick();
+    await tick();
+
+    assert.equal(prompts.length, 1);
+    assert.deepEqual(
+      requests.find(request => request.path === "/api/config/harbor/datasets").body,
+      {
+        action: "register",
+        path: "/workspace/tasks",
+        expected_revision: "r1",
+      },
+    );
+    assert.equal(
+      root.querySelector('[data-table-column-key="path"]').dataset.valueType,
+      "path",
+    );
+
+    root.querySelector("[data-harbor-add-mount]").click();
+    await tick();
+    await tick();
+    const mountRequests = requests.filter(
+      request => request.path === "/api/config/harbor/mounts",
+    );
+    assert.deepEqual(
+      mountRequests.at(-1).body,
+      {
+        action: "upsert",
+        expected_revision: "r2",
+        jobs_path: "/workspace/jobs",
+      },
+    );
+    assert.equal(prompts.length, 2);
+    assert.equal(root.querySelector("[data-harbor-mount-count]").textContent, "1");
+    assert.match(root.querySelector("[data-harbor-mount-config]").textContent, /jobs/);
+    assert.equal(root.querySelector("[data-harbor-mount-form]"), null);
+  } finally {
+    globalThis.fetch = previousFetch;
+    window.prompt = previousPrompt;
+    configuration.harborConfigState.busy = false;
+    root.hidden = true;
+  }
+});
+
+test("Configuration edits Dataset cells and atomically unregisters the selected registrations", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  const previousConfirm = window.confirm;
+  const root = document.querySelector("[data-config-page]");
+  root.hidden = false;
+  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-config-reload></button><button data-harbor-add-dataset></button><button data-harbor-register-dataset></button><button data-harbor-unregister-datasets></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><div data-harbor-mount-config></div>';
+  delete root.dataset.configBound;
+  let snapshot = { revision: "r1", datasets: [{ id: "tasks", path: "/workspace/tasks" }], mounts: [] };
+  globalThis.fetch = async (path, options = {}) => {
+    const request = {
+      path: String(path),
+      method: options.method || "GET",
+      body: options.body ? JSON.parse(String(options.body)) : null,
+    };
+    requests.push(request);
+    let payload = snapshot;
+    if (request.path === "/api/config/harbor/datasets" && request.body.action === "update") {
+      snapshot = { revision: "r2", datasets: [{ id: "renamed", path: "/workspace/tasks" }], mounts: [] };
+      payload = { result: snapshot, operation: { operation_id: "config-op" } };
+    } else if (request.path === "/api/config/harbor/datasets" && request.body.action === "unregister") {
+      snapshot = { revision: "r3", datasets: [], mounts: [] };
+      payload = { result: snapshot, operation: { operation_id: "config-op" } };
+    } else if (request.path === "/api/operations/config-op") {
+      payload = { operation_id: "config-op", operation_type: "harbor-dataset-config", state: "completed", completed: 1, total: 1, successes: [{ index: 0 }], failures: [] };
+    }
+    return {
+      ok: true,
+      statusText: "OK",
+      text: async () => JSON.stringify(payload),
+    };
+  };
+  window.confirm = () => true;
+
+  try {
+    await configuration.initializeConfiguration();
+    const idCell = root.querySelector('[data-table-column-key="id"]');
+    idCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    const editor = idCell.querySelector("[data-table-cell-editor] input");
+    editor.value = "renamed";
+    editor.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+    assert.match(root.querySelector("[data-harbor-dataset-registry]").textContent, /renamed/);
+
+    root.querySelector('[data-table-row-select="renamed"]').click();
+    root.querySelector("[data-harbor-unregister-datasets]").click();
+    await tick();
+    await tick();
+
+    const mutations = requests.filter(request => request.path === "/api/config/harbor/datasets");
+    assert.deepEqual(mutations.map(request => request.body), [
+      {
+        action: "update",
+        dataset_id: "tasks",
+        new_id: "renamed",
+        path: "/workspace/tasks",
+        mount_ids: [],
+        expected_revision: "r1",
+      },
+      {
+        action: "unregister",
+        dataset_ids: ["renamed"],
+        expected_revision: "r2",
+      },
+    ]);
+    assert.equal(root.querySelectorAll("[data-table-row-select]").length, 0);
+    assert.equal(configuration.harborConfigState.datasetSelection.size, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    window.confirm = previousConfirm;
+    configuration.harborConfigState.busy = false;
+    configuration.harborConfigState.datasetSelection.clear();
+    root.hidden = true;
+  }
+});
+
+test("Configuration edits reciprocal Harbor associations and batch removes mounts", async () => {
+  const requests = [];
+  const previousFetch = globalThis.fetch;
+  const previousConfirm = window.confirm;
+  const root = document.querySelector("[data-config-page]");
+  root.hidden = false;
+  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-config-reload></button><button data-harbor-add-dataset></button><button data-harbor-register-dataset></button><button data-harbor-unregister-datasets></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><button data-harbor-add-mount></button><button data-harbor-remove-mounts></button><div data-harbor-mount-count></div><div data-harbor-mount-config></div>';
+  delete root.dataset.configBound;
+  let revision = 1;
+  let snapshot = {
+    revision: "r1",
+    datasets: [
+      { id: "tasks", path: "/workspace/tasks" },
+      { id: "other", path: "/workspace/other" },
+    ],
+    mounts: [
+      { id: "one", path: "/workspace/jobs-one", dataset_ids: ["other"] },
+      { id: "two", path: "/workspace/jobs-two", dataset_ids: ["tasks", "other"] },
+    ],
+  };
+  globalThis.fetch = async (path, options = {}) => {
+    const request = {
+      path: String(path),
+      method: options.method || "GET",
+      body: options.body ? JSON.parse(String(options.body)) : null,
+    };
+    requests.push(request);
+    if (request.path === "/api/config/harbor/datasets") {
+      snapshot = {
+        ...snapshot,
+        revision: `r${++revision}`,
+        mounts: [
+          { ...snapshot.mounts[0], dataset_ids: ["other", "tasks"] },
+          snapshot.mounts[1],
+        ],
+      };
+      return { ok: true, statusText: "OK", text: async () => JSON.stringify({ result: snapshot }) };
+    }
+    if (request.path === "/api/config/harbor/mounts") {
+      if (request.body.action === "delete") {
+        const removed = new Set(request.body.mount_ids);
+        snapshot = { ...snapshot, revision: `r${++revision}`, mounts: snapshot.mounts.filter(mount => !removed.has(mount.id)) };
+      } else {
+        snapshot = {
+          ...snapshot,
+          revision: `r${++revision}`,
+          mounts: snapshot.mounts.map(mount => mount.id === request.body.original_id ? {
+            id: request.body.mount_id,
+            path: request.body.jobs_path,
+            dataset_ids: request.body.dataset_ids,
+          } : mount),
+        };
+      }
+      return { ok: true, statusText: "OK", text: async () => JSON.stringify({ result: snapshot }) };
+    }
+    return { ok: true, statusText: "OK", text: async () => JSON.stringify(snapshot) };
+  };
+  window.confirm = () => true;
+
+  try {
+    await configuration.initializeConfiguration();
+    assert.equal(root.querySelector("[data-harbor-mount-count]").textContent, "2");
+
+    const mountsCell = root.querySelector('[data-table-id="harbor-dataset-registry"] [data-table-row-key="tasks"] [data-table-column-key="mounts"]');
+    mountsCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    assert.deepEqual(
+      Array.from(mountsCell.querySelectorAll("[data-table-suggestion]")).map(button => button.textContent),
+      ["one", "two"],
+    );
+    mountsCell.querySelector('[data-table-suggestion="one"]').click();
+    mountsCell.querySelector("input").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+    assert.deepEqual(
+      requests.find(request => request.path === "/api/config/harbor/datasets").body,
+      {
+        action: "update",
+        dataset_id: "tasks",
+        new_id: "tasks",
+        path: "/workspace/tasks",
+        mount_ids: ["two", "one"],
+        expected_revision: "r1",
+      },
+    );
+
+    const datasetsCell = root.querySelector('[data-table-id="harbor-mount-registry"] [data-table-row-key="one"] [data-table-column-key="datasets"]');
+    datasetsCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    datasetsCell.querySelector('[data-table-suggestion="other"]').click();
+    datasetsCell.querySelector("input").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+
+    let idCell = root.querySelector('[data-table-id="harbor-mount-registry"] [data-table-row-key="one"] [data-table-column-key="id"]');
+    idCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    idCell.querySelector("input").value = "uno";
+    idCell.querySelector("input").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+    assert.equal(document.activeElement.dataset.tableColumnKey, "id");
+    assert.equal(document.activeElement.closest("tr").dataset.tableRowKey, "uno");
+
+    const pathCell = root.querySelector('[data-table-id="harbor-mount-registry"] [data-table-row-key="uno"] [data-table-column-key="path"]');
+    pathCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    pathCell.querySelector("input").value = "/workspace/jobs-renamed";
+    pathCell.querySelector("input").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    await tick();
+
+    root.querySelector('[data-table-id="harbor-mount-registry"] [data-table-row-select="uno"]').click();
+    root.querySelector('[data-table-id="harbor-mount-registry"] [data-table-row-select="two"]').click();
+    root.querySelector("[data-harbor-remove-mounts]").click();
+    await tick();
+    await tick();
+
+    const mountRequests = requests.filter(request => request.path === "/api/config/harbor/mounts");
+    assert.deepEqual(mountRequests.map(request => request.body), [
+      { action: "upsert", original_id: "one", mount_id: "one", jobs_path: "/workspace/jobs-one", dataset_ids: ["tasks"], expected_revision: "r2" },
+      { action: "upsert", original_id: "one", mount_id: "uno", jobs_path: "/workspace/jobs-one", dataset_ids: ["tasks"], expected_revision: "r3" },
+      { action: "upsert", original_id: "uno", mount_id: "uno", jobs_path: "/workspace/jobs-renamed", dataset_ids: ["tasks"], expected_revision: "r4" },
+      { action: "delete", mount_ids: ["uno", "two"], expected_revision: "r5" },
+    ]);
+    assert.equal(root.querySelectorAll('[data-table-id="harbor-mount-registry"] [data-table-row-select]').length, 0);
+    assert.equal(configuration.harborConfigState.mountSelection.size, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    window.confirm = previousConfirm;
+    configuration.harborConfigState.datasetSelection.clear();
+    configuration.harborConfigState.mountSelection.clear();
+    configuration.harborConfigState.busy = false;
+    root.hidden = true;
+  }
+});
+
+test("DB session picker reuses the shared visible-selection behavior", () => {
+  const form = document.createElement("form");
+  form.dataset.sourceAddForm = "";
+  form.innerHTML = '<div data-db-session-picker></div>';
+  document.body.append(form);
+  try {
+    configuration.renderDbSessionPicker(form, {
+      adapter: "psychevo",
+      db: "/tmp/sessions.db",
+      sessions: [
+        { index: 1, session_id: "session-a", name: "Alpha" },
+        { index: 2, session_id: "session-b", name: "Beta" },
+      ],
+    });
+    const picker = form.querySelector("[data-db-session-picker]");
+    const rows = picker.querySelectorAll("[data-table-row-select]");
+    const header = picker.querySelector("[data-table-select-visible]");
+    rows[0].click();
+    assert.deepEqual(configuration.selectedDbSessionIds(form), ["session-a"]);
+    assert.equal(header.indeterminate, true);
+    assert.equal(picker.querySelector("[data-db-selected-count]").textContent, "1 selected");
+    header.click();
+    assert.deepEqual(configuration.selectedDbSessionIds(form).sort(), ["session-a", "session-b"]);
+    assert.equal(Array.from(rows).every(row => row.checked), true);
+    assert.equal(header.indeterminate, false);
+  } finally {
+    form.remove();
+  }
+});
+
+test("Leaderboard disables permanent deletion for a selected linked Harbor Trial", () => {
+  runtime.state.rowSelection.clear();
+  runtime.state.rowSelection.add("linked-harbor");
+  const host = document.createElement("div");
+  host.innerHTML = sourceStateControls.renderServeSourceStateControls([{
     source_key: "linked-harbor",
     kind: "harbor-trial",
-    label: "jobs/job/trial",
-    active: true,
-    readable: true,
-  }];
-  runtime.state.sourceSelection.add("linked-harbor");
-  sourceManager.renderServeSources();
-
-  const deleteButton = document.querySelector("[data-source-bulk-delete]");
+  }]);
+  const deleteButton = host.querySelector("[data-source-delete-action]");
   assert.equal(deleteButton.disabled, true);
   assert.match(deleteButton.title, /cannot be deleted/);
+  runtime.state.rowSelection.clear();
+});
 
-  runtime.state.sourceSelection.clear();
-  runtime.state.sourceManagerRows = [];
-  sourceManager.renderServeSources();
+test("Leaderboard bulk actions include only selected rows on the visible page", () => {
+  runtime.state.rowSelection.clear();
+  runtime.state.rowSelection.add("visible-source");
+  runtime.state.rowSelection.add("hidden-source");
+  try {
+    assert.deepEqual(catalog.visibleSelectedSourceKeys([
+      { source_key: "visible-source" },
+      { source_key: "unselected-source" },
+    ]), ["visible-source"]);
+  } finally {
+    runtime.state.rowSelection.clear();
+  }
 });
 
 test("workspace busy state disables and restores controls", () => {
   const refresh = document.querySelector("[data-refresh-all]");
-  const bulk = document.querySelector("[data-source-bulk-state]");
+  const deleteAction = document.querySelector("[data-source-delete-action]");
+  const mountAction = document.querySelector("[data-harbor-add-mount]");
   refresh.disabled = false;
-  bulk.disabled = true;
+  deleteAction.disabled = true;
+  mountAction.disabled = false;
 
   catalog.setWorkspaceWriteControlsDisabled(true);
   assert.equal(refresh.disabled, true);
   assert.equal(refresh.getAttribute("aria-busy"), "true");
+  assert.equal(deleteAction.disabled, true);
+  assert.equal(deleteAction.getAttribute("aria-busy"), "true");
+  assert.equal(mountAction.disabled, true);
+  assert.equal(mountAction.getAttribute("aria-busy"), "true");
 
   catalog.setWorkspaceWriteControlsDisabled(false);
   assert.equal(refresh.disabled, false);
   assert.equal(refresh.hasAttribute("aria-busy"), false);
-  assert.equal(bulk.disabled, true);
+  assert.equal(deleteAction.disabled, true);
+  assert.equal(deleteAction.hasAttribute("aria-busy"), false);
+  assert.equal(mountAction.disabled, false);
+  assert.equal(mountAction.hasAttribute("aria-busy"), false);
+});
+
+test("Configuration reports nested and background source import results", async () => {
+  const previousFetch = globalThis.fetch;
+  const root = document.querySelector("[data-config-page]");
+  root.hidden = false;
+  root.innerHTML = '<p data-config-page-status hidden></p>';
+
+  try {
+    configuration.showImportResultsSummary({
+      result: {
+        import_results: [
+          { status: "ok", source_keys: ["source-a"] },
+          { status: "error", error: "nested failure" },
+        ],
+      },
+    });
+    assert.equal(root.querySelector("[data-config-page-status]").textContent, "Imported 1, failed 1: nested failure");
+
+    const form = document.createElement("form");
+    form.dataset.sourceKind = "path";
+    form.innerHTML = '<textarea name="path">one.jsonl\nmissing.jsonl</textarea>';
+    root.append(form);
+    globalThis.fetch = async path => ({
+      ok: true,
+      status: String(path) === "/api/sources" ? 202 : 200,
+      statusText: "OK",
+      text: async () => JSON.stringify(String(path) === "/api/sources"
+        ? { operation_id: "import-op", operation_type: "source-import", state: "queued", completed: 0, total: 2, successes: [], failures: [] }
+        : {
+            operation_id: "import-op",
+            operation_type: "source-import",
+            state: "completed",
+            completed: 2,
+            total: 2,
+            successes: [{ index: 0, status: "ok", path: "one.jsonl", source_keys: ["source-a"] }],
+            failures: [{ index: 1, status: "error", error: "missing.jsonl was not found", item: { path: "missing.jsonl" } }],
+          }),
+    });
+    await configuration.submitServeSourceForm(form);
+    await tick();
+    await tick();
+    assert.equal(root.querySelector("[data-config-page-status]").textContent, "Imported 1, failed 1: missing.jsonl was not found");
+  } finally {
+    globalThis.fetch = previousFetch;
+    configuration.harborConfigState.busy = false;
+    root.hidden = true;
+  }
+});
+
+test("one completed Configuration operation does not clear another operation's busy state", async () => {
+  const previousFetch = globalThis.fetch;
+  const root = document.querySelector("[data-config-page]");
+  root.hidden = false;
+  root.innerHTML = '<p data-config-page-status hidden></p><button type="button">Action</button>';
+  const firstForm = document.createElement("form");
+  firstForm.dataset.sourceKind = "path";
+  firstForm.innerHTML = '<input name="path" value="first.jsonl">';
+  const secondForm = document.createElement("form");
+  secondForm.dataset.sourceKind = "path";
+  secondForm.innerHTML = '<input name="path" value="second.jsonl">';
+  document.body.append(firstForm, secondForm);
+  let resolveFirstOperation;
+  globalThis.fetch = async (path, options = {}) => {
+    const requestPath = String(path);
+    if (requestPath === "/api/sources") {
+      const body = JSON.parse(String(options.body));
+      const operationId = body.path.startsWith("first") ? "first-op" : "second-op";
+      return {
+        ok: true,
+        status: 202,
+        statusText: "Accepted",
+        text: async () => JSON.stringify({ operation_id: operationId }),
+      };
+    }
+    if (requestPath === "/api/operations/first-op") {
+      return new Promise(resolve => { resolveFirstOperation = resolve; });
+    }
+    if (requestPath === "/api/operations/second-op") {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () => JSON.stringify({ operation_id: "second-op", operation_type: "source-import", state: "completed", completed: 1, total: 1, successes: [], failures: [] }),
+      };
+    }
+    throw new Error(`unexpected request: ${requestPath}`);
+  };
+  try {
+    await configuration.submitServeSourceForm(firstForm);
+    await tick();
+    assert.equal(configuration.harborConfigState.busy, true);
+
+    await configuration.submitServeSourceForm(secondForm);
+    await tick();
+    assert.equal(configuration.harborConfigState.busy, true);
+
+    resolveFirstOperation({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      text: async () => JSON.stringify({ operation_id: "first-op", operation_type: "source-import", state: "completed", completed: 1, total: 1, successes: [], failures: [] }),
+    });
+    await tick();
+    assert.equal(configuration.harborConfigState.busy, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    configuration.harborConfigState.busy = false;
+    firstForm.remove();
+    secondForm.remove();
+    root.hidden = true;
+  }
 });
 
 test("Category filters are multi-select while editor suggestions come from an independent all-workspace facet", async () => {

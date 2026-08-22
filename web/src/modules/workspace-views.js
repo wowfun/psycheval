@@ -1,5 +1,5 @@
 import { $, RENDER_OPTIONS, adminMode, closeOpenSubmenus, esc, fmtNum, listValue, normalizeServeSourceMode, serveMode, state, statusLabel, t, workspaceDisplayMode, workspaceSnapshotMode } from "./runtime.js";
-import { applyDataTableControls, bindDataTableControls, renderDataTable, selectionColumn, setVisibleSelection, tableCellContent, tableControls, tableValueAttributes } from "./data-tables.js";
+import { applyDataTableControls, bindDataTableControls, renderDataTable, selectionColumn, tableCellContent, tableControls, tableValueAttributes } from "./data-tables.js";
 import { leaderboardSummaryDefinitions, leaderboardSummaryGroupHeading, leaderboardSummaryGroupUnit, leaderboardSummaryStatistics, leaderboardSummaryValue, renderLeaderboardSummary, summaryNumber } from "./leaderboard-summary.js";
 import { serveApi, setServeStatus } from "./serve-effects.js";
 import { leaderboardRows, loadCatalogPage, serveDownload } from "./serve-catalog.js";
@@ -99,8 +99,6 @@ function workspaceViewColumns() {
     selectionColumn({
       selectionKey: view => view?.id || "",
       selectionSet: () => state.workspaceViewSelection,
-      rowInputAttr: id => `data-view-select="${esc(id)}"`,
-      headerInputAttr: "data-view-select-visible",
       rowAriaLabel: id => workspaceViewMessage("select_view", "Select {name}", { name: workspaceViewForId(id)?.name || id }),
     }),
     ...columns,
@@ -176,6 +174,7 @@ function bindWorkspaceViewControls(target) {
     rows,
     rowKey: view => view.id,
     onChange: renderWorkspaceViewRail,
+    onSelectionChange: renderWorkspaceViewRail,
   });
   target.querySelectorAll("[data-view-save]").forEach(button => {
     button.addEventListener("click", event => {
@@ -214,24 +213,6 @@ function bindWorkspaceViewControls(target) {
       event.preventDefault();
       event.stopPropagation();
       exportSelectedWorkspaceViews();
-    });
-  });
-  target.querySelectorAll("[data-view-select]").forEach(input => {
-    input.addEventListener("click", event => event.stopPropagation());
-    input.addEventListener("change", () => {
-      const id = String(input.dataset.viewSelect || "");
-      if (input.checked) state.workspaceViewSelection.add(id);
-      else state.workspaceViewSelection.delete(id);
-      renderWorkspaceViewRail();
-    });
-  });
-  target.querySelectorAll("[data-view-select-visible]").forEach(input => {
-    input.indeterminate = input.hasAttribute?.("data-partial") || false;
-    input.addEventListener("click", event => event.stopPropagation());
-    input.addEventListener("change", event => {
-      event.stopPropagation();
-      setVisibleSelection(workspaceViewRows(), workspaceViewColumns()[0], input.checked);
-      renderWorkspaceViewRail();
     });
   });
   target.querySelectorAll("[data-view-navigate]").forEach(cell => {
@@ -1015,7 +996,6 @@ async function applySelectedWorkspaceViews() {
   const payload = workspaceViewQueryPayload(ids);
   closeOpenSubmenus();
   state.rowSelection.clear();
-  state.sourceSelection.clear();
   state.selectedSourceKey = null;
   state.selectedArtifactRevision = null;
   state.selectedTrial = null;
