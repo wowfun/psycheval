@@ -1,0 +1,24 @@
+{
+  "pairs": [
+    {
+      "source": "docs/user/peval/index.md",
+      "translation": "docs/i18n/zh-CN/user/peval/index.md",
+      "source_sha256": "1701b579909052c7846b4667d09a0490d67f1cf083615ece1ee9dc9eb6938c1d"
+    },
+    {
+      "source": "docs/user/peval/inputs-and-adapters.md",
+      "translation": "docs/i18n/zh-CN/user/peval/inputs-and-adapters.md",
+      "source_sha256": "054014e3787ab22049e660470957071c2c04e503c7592eb0a5675a6305f22733"
+    },
+    {
+      "source": "docs/user/peval/reports.md",
+      "translation": "docs/i18n/zh-CN/user/peval/reports.md",
+      "source_sha256": "64ce4cef4b612b7d87e71b29502a835493b56c713bf29f85428d1b4728c649d3"
+    },
+    {
+      "source": "docs/user/peval/workspace.md",
+      "translation": "docs/i18n/zh-CN/user/peval/workspace.md",
+      "source_sha256": "20ab2ee93795318afceec11e9aaf533be520da90be30dc1dcc92e1482ae779c9"
+    }
+  ]
+}

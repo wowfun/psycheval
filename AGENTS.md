@@ -1,24 +1,16 @@
-- Specs first: before implementing code, always READ/UPDATE/CREATE `specs/<topic>/spec.md`.
-  - Each stable rule should have a single best-fit spec as its source of truth.
-  - Keep DRY and avoid restating anything that is already self-explanatory.
-  - Other specs should link to that source or quote only the minimum needed context.
-  - Updates should modify the source of truth rather than independently editing downstream specs.
-- Pre-release, backward compatibility is not required; use a first-principles approach and avoid unnecessary technical debt.
-- The product experience MUST minimize cognitive load by omitting anything that does not clarify intent, enable action, or add incremental value, unless required for correctness, safety, or explicit user confirmation.
-- After implementation lands, update `CHANGELOG.md`.
+- Read [the architecture](docs/architecture.md) before changing product seams or
+  repository layout, and read the nearest subtree `AGENTS.md` before editing.
+- This is a pre-release project without compatibility promises. Update affected
+  paths, entry points, fixtures, tests, and docs together instead of adding shims.
+- Give each current fact one owner and link to it elsewhere. Do not maintain
+  navigation indexes or duplicate machine-exact source and test contracts.
+- Follow [documentation ownership](docs/AGENTS.md) for docs changes.
+- Preserve evidence provenance, unrelated worktree changes, and user-authored
+  workspaces; derived reports and catalogs must not rewrite their sources.
 
 ## Tests
-- After code changes, run the relevant validation path.
-- For code logic changes, prefer adding or updating the closest meaningful test. If no narrow test exists, fall back to higher-level validation.
-- Narrow validation is not permission to ignore plausibly related failures; fix them or report them explicitly.
-- If a test file is created or changed, run that test and iterate until it passes.
-- Documentation-only or changelog-only changes do not require code tests unless executable examples, generated artifacts, or validation instructions changed.
-- Default validation must use deterministic local harnesses and fake or test providers.
-- Real provider, API-key, or live-service validation is opt-in only.
-- Keep tests isolated from real user config, credentials, environment, temp state, global mocks, timers, sockets, and persistent host state; restore or clean up any such state touched by a test.
-- Avoid brittle change-detector tests over volatile inventories, generated lists, workflow text, or model and provider catalogs.
-- Prefer behavior and invariant assertions with structured comparisons over field-by-field checks or string-grep checks.
-- Update snapshots, baselines, inventories, ignore lists, or expected-failure records only for intentional behavior changes or with explicit approval; treat those diffs as review material.
-- Do not rerun the exact same validation only for formality; report the validation most relevant to the changed surface.
-- Do not run multiple broad test commands concurrently in the same worktree unless the test infrastructure explicitly supports isolation.
-- If validation cannot be run, report the attempted validation path and the blocker.
+
+- Add or update the closest deterministic behavior or invariant test.
+- Select checks from [the testing guide](docs/testing.md); never use real
+  credentials, profile databases, provider state, or user workspaces by default.
+- Leave exhaustive platform matrices to CI and report only platforms exercised.

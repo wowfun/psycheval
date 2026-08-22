@@ -1,51 +1,34 @@
-# psycheval
+# Psycheval
 
-Harbor-based Agent evaluation, maintained PBench Tasks, and trajectory analysis.
+Psycheval runs Harbor-compatible evaluations, converts Agent sessions to ATIF,
+and inspects evaluation workspaces. Its installed CLI is named `peval`; that is
+a short command name, not a Python package namespace.
 
-## Projects
+## Install
 
-- **Psycheval** is the root Python package. It provides Harbor host execution,
-  external Agent harnesses, Psychevo trajectory conversion, and evidence-based
-  verification.
-- **PBench** is maintained under the local `datasets/pbench-v1.0` and
-  `datasets/pbench-v1.0-plus` Datasets.
-- **peval-py** is an independent CLI under `tools/peval-py` for converting,
-  inspecting, and comparing retained trajectories.
+Psycheval requires Python 3.12 or newer.
+Install the checkout as an editable tool before running the examples:
 
-## Start
-
-Install Psycheval and its pinned Harbor runtime:
-
-```bash
-uv sync
+```console
+uv tool install -e .
 ```
 
-Validate the installed Harbor integration without provider credentials or live
-Web access:
+The distribution also installs `psycheval-psychevo-harness` for Harbor's
+Psychevo integration.
 
-```bash
-uv run pytest tests/harbor/test_cross_platform_trial.py
+## Quick start
+
+Initialize a workspace and inspect the command tree:
+
+```console
+peval init
+peval --help
+peval view trajectory --help
+peval view tr -p <harbor-trial-dir>
 ```
-
-Run PBench with a real compatible Agent:
-
-```bash
-uv run harbor run \
-  -p datasets/pbench-v1.0 \
-  --env psycheval.harbor.environment:HostEnvironment \
-  --environment-kwarg allow_host_execution=true \
-  [AGENT OPTIONS]
-```
-
-HostEnvironment executes trusted code directly on a native Linux or Windows
-host and is not a sandbox. PBench remains Linux-targeted and does not claim
-Harbor Windows container support. Repository tests use synthetic trajectories
-only to validate framework integration; they are not Agent capability results.
 
 ## Documentation
 
-- [Documentation index](docs/README.md)
-- [Psycheval and Harbor](docs/psycheval/README.md)
-- [PBench Dataset](docs/pbench/README.md)
-- [peval-py](docs/peval-py/README.md)
-- [Specifications](specs/README.md)
+Start with the [architecture](docs/architecture.md). Use the
+[`peval` guide](docs/user/peval/index.md) for CLI workflows and the
+[development guide](docs/development.md) when changing the repository.
