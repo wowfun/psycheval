@@ -8,7 +8,7 @@ psycheval
 ├── cli                 -> installed as `peval`
 ├── adapters, ATIF      -> retained-session conversion
 ├── report, workspace   -> derived views and user overlays
-├── serve, state        -> local evaluation workspace
+├── serve, state        -> local evaluation workspace and ACP client runtime
 ├── assets              -> committed Web bundle
 └── harbor              -> Harbor 0.21 adapters, harness, host, verifier
 ```
@@ -28,6 +28,13 @@ The CLI and Harbor adapter share formats and one `peval.toml`, but not parser
 ownership: the CLI reads workspace, adapter, Dataset, and mount fields; Harbor
 reads only `[harbor.host]`. Child harnesses receive a generated `peval.json`, not
 the user TOML.
+
+The serve-owned ACP seam launches only administrator-configured local child
+processes and projects their JSON-RPC session events into browser UI state. It
+does not enter the retained-session conversion, report, workspace overlay, or
+Harbor evidence paths. ACP conversations remain Agent-owned runtime state; an
+explicit, bounded context attachment reads from those existing authorities
+without transferring write ownership to the ACP client.
 
 ## Repository topology
 

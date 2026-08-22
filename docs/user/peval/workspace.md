@@ -33,10 +33,64 @@ path = "../datasets/pbench-v1.0"
 id = "nightly"
 path = "../jobs"
 dataset_ids = ["pbench"]
+
+[[acp.agents]]
+id = "opencode"
+title = "OpenCode"
+command = "opencode"
+args = ["acp"]
 ```
 
 Configuration ownership and path semantics live in the
 [workspace reference](../../reference/workspace.md).
+
+The administrator-only **Configuration** page (`/config`) is the UI for
+trajectory ingestion, ACP Agents, prompt assets, Dataset registration, and
+Harbor mounts. ACP entries are edited as direct executable-and-argument arrays;
+changes apply immediately, and changing or removing a connected Agent stops its
+process. Repository Markdown files provide the default prompts. Editing one in
+the page writes a same-name override to the workspace `prompts/` directory;
+**Restore default** removes that override. Dataset IDs and paths are edited
+directly in the registry table. Registering an existing Dataset
+requires only its path; adding a Jobs mount likewise requires only the Jobs path.
+Each generated ID uses the directory basename when it is path-safe and unique,
+or a random path-safe ID when the basename is invalid or already used. A new
+mount starts without Dataset associations. Both registries use editable tables:
+double-click a Mount ID, Jobs path, or ordered Datasets cell to edit it, or edit
+a Dataset's Harbor mounts cell to change membership. Association editors
+complete only registered IDs; adding a Dataset from the Dataset table appends it
+to each selected Mount's evidence lookup order. Selected Mounts can be removed
+as one atomic operation without deleting Jobs files. Unregistering a Dataset
+likewise leaves its files in place and is rejected while a mount still references
+it. Handwritten `peval.toml` entries still require explicit IDs.
+
+The **Datasets** page manages Tasks only. Double-click a Task cell to rename it,
+select rows to archive, restore, or permanently delete them, and use **Sync
+manifest** only when `dataset.toml` should be updated. The **Leaderboard** owns
+the corresponding trajectory lifecycle, including archived views and permanent
+source deletion.
+
+## Local ACP assistant
+
+After adding an allowlisted Agent such as OpenCode in Configuration, use **ACP
+client** in the administrator header. Connect the Agent, create or
+resume a session, and optionally attach the source, Task, or report that was
+selected when the drawer opened. The attachment is captured only when you click
+the context button; later page selection changes do not silently replace it.
+The composer can load any configured Markdown prompt asset; attaching a source,
+Task, or report selects the corresponding suggested asset without sending it.
+
+Provision the Agent outside Psycheval first—for OpenCode, use `opencode auth
+login` in a terminal when its provider needs authentication. The panel shows
+messages, plans, tool progress, permission requests, modes, and usage, and lets
+separate sessions run concurrently while rejecting overlapping prompts within
+one session. Closing `peval serve` terminates its child Agents. Conversations
+stay in Agent/process state and are never imported as evaluation evidence.
+
+ACP Agents inherit the serve process environment and OS permissions. Only
+configure executables you trust, and do not treat a permission card in the
+drawer as a filesystem or process sandbox. The exact access and persistence
+rules are in the [workspace reference](../../reference/workspace.md).
 
 ## Serve access
 
