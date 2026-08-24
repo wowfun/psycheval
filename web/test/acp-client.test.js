@@ -63,11 +63,11 @@ const browser = installBrowserDom(`
   <script type="application/json" id="peval-token-estimates">{}</script>
   <script type="application/json" id="peval-i18n">{}</script>
   <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","serve_page":"home","workspace_id":"workspace-test","sources":[]}</script>
-  <button data-acp-open>ACP client</button>
+  <button data-acp-open>Copilot</button>
   <div data-acp-backdrop hidden></div>
   <aside data-acp-drawer hidden>
     <button data-acp-close>Close</button>
-    <select data-acp-agent></select><button data-acp-connect>Connect</button><span data-acp-protocol></span>
+    <select data-acp-agent></select><button data-acp-connect>Connect</button><a href="/config#acp-agents-title" data-acp-configure hidden>Configure agents</a><span data-acp-protocol></span>
     <select data-acp-session></select><button data-acp-new-session>New</button><button data-acp-session-close>×</button>
     <div data-acp-context-chip><span data-acp-context-label></span></div><button data-acp-context-capture>Attach</button>
     <p data-acp-notice hidden></p><div data-acp-events></div><div data-acp-session-options hidden></div>
@@ -88,6 +88,8 @@ test("ACP drawer preserves explicit context, renders protocol events, and restor
   runtime.state.selectedStep = { trialKey: "trial-7", stepId: "4" };
   const opener = document.querySelector("[data-acp-open]");
   await acp.initializeAcp();
+  assert.equal(document.querySelector("[data-acp-connect]").hidden, false);
+  assert.equal(document.querySelector("[data-acp-configure]").hidden, true);
   opener.focus();
   acp.openAcpDrawer(opener);
   document.querySelector("[data-acp-context-capture]").click();

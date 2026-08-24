@@ -21,7 +21,7 @@
             <p class="copy">__ACP_AGENTS_COPY__</p>
           </div>
           <div class="table-region-actions">
-            <button class="action-button primary" type="button" data-acp-add-agent>__ADD_ACP_AGENT__</button>
+            <button class="action-button primary" type="button" data-acp-agent-form-open>__ADD_ACP_AGENT__</button>
             <button class="action-button danger" type="button" data-acp-remove-agents disabled>__REMOVE_SELECTED_AGENTS__</button>
           </div>
         </header>
@@ -30,6 +30,39 @@
           <p>__ACP_AGENTS_TRUST_COPY__</p>
         </div>
         <div data-acp-agent-config></div>
+        <div class="acp-agent-form-panel" data-acp-agent-form-panel hidden
+          role="dialog" aria-modal="true" aria-labelledby="acp-agent-form-title">
+          <form class="source-form acp-agent-form acp-agent-form-dialog" data-acp-agent-form>
+            <header class="acp-agent-template-head">
+              <div>
+                <p class="eyebrow">__ACP_OPENCODE_TEMPLATE__</p>
+                <h3 id="acp-agent-form-title">__ADD_ACP_AGENT__</h3>
+                <p>__ACP_OPENCODE_TEMPLATE_COPY__</p>
+              </div>
+              <code>opencode acp</code>
+            </header>
+            <p class="acp-agent-form-status" data-acp-agent-form-status
+              aria-live="polite" hidden></p>
+            <div class="acp-agent-form-fields">
+              <label>__ACP_AGENT_ID__
+                <input name="agent_id" value="opencode" autocomplete="off" spellcheck="false" required>
+              </label>
+              <label>__ACP_AGENT_TITLE__
+                <input name="title" value="OpenCode" autocomplete="off" required>
+              </label>
+              <label>__ACP_COMMAND__
+                <input name="command" value="opencode" autocomplete="off" spellcheck="false" required>
+              </label>
+              <label>__ACP_ARGS__
+                <input name="args" value="[&quot;acp&quot;]" autocomplete="off" spellcheck="false" required>
+              </label>
+            </div>
+            <div class="source-form-actions">
+              <button type="button" class="action-button" data-acp-agent-form-cancel>__CANCEL__</button>
+              <button type="submit" class="action-button primary">__ADD_ACP_AGENT__</button>
+            </div>
+          </form>
+        </div>
       </section>
       <section class="configuration-section" aria-labelledby="prompt-assets-title">
         <header class="configuration-section-head">

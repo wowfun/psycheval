@@ -114,7 +114,18 @@ def render_serve_configuration_page(
             "ACP_AGENTS_COPY": escape(messages["serve_acp_agents_copy"]),
             "ACP_AGENTS_TRUST_COPY": escape(messages["serve_acp_agents_trust_copy"]),
             "LOCAL_PROCESS": escape(messages["serve_local_process"]),
+            "ACP_OPENCODE_TEMPLATE": escape(
+                messages["serve_acp_opencode_template"]
+            ),
+            "ACP_OPENCODE_TEMPLATE_COPY": escape(
+                messages["serve_acp_opencode_template_copy"]
+            ),
+            "ACP_AGENT_ID": escape(messages["serve_acp_agent_id"]),
+            "ACP_AGENT_TITLE": escape(messages["serve_acp_agent_title"]),
+            "ACP_COMMAND": escape(messages["serve_acp_command"]),
+            "ACP_ARGS": escape(messages["serve_acp_args"]),
             "ADD_ACP_AGENT": escape(messages["serve_add_acp_agent"]),
+            "CANCEL": escape(messages["cancel"]),
             "REMOVE_SELECTED_AGENTS": escape(messages["serve_remove_selected_agents"]),
             "PROMPT_ASSETS": escape(messages["serve_prompt_assets"]),
             "PROMPT_ASSETS_COPY": escape(messages["serve_prompt_assets_copy"]),
@@ -225,7 +236,6 @@ def render_acp_drawer(messages: dict[str, str]) -> str:
       <div>
         <p class="eyebrow">{escape(messages["acp_client"])}</p>
         <h2 id="acp-drawer-title">{escape(messages["acp_assistant"])}</h2>
-        <p class="copy">{escape(messages["acp_assistant_copy"])}</p>
       </div>
       <button class="action-button compact" type="button" data-acp-close
         aria-label="{escape(messages["close"])}">{escape(messages["close"])}</button>
@@ -235,6 +245,8 @@ def render_acp_drawer(messages: dict[str, str]) -> str:
         <select data-acp-agent></select>
       </label>
       <button class="action-button" type="button" data-acp-connect>{escape(messages["acp_connect"])}</button>
+      <a class="action-button acp-configure" href="/config#acp-agents-title"
+        data-acp-configure hidden>{escape(messages["acp_configure_agents"])}</a>
       <span class="acp-protocol" data-acp-protocol>ACP · —</span>
       <label class="acp-session-control"><span>{escape(messages["acp_session"])}</span>
         <select data-acp-session><option value="">{escape(messages["acp_no_session"])}</option></select>

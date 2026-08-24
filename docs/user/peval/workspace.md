@@ -46,11 +46,12 @@ Configuration ownership and path semantics live in the
 
 The administrator-only **Configuration** page (`/config`) is the UI for
 trajectory ingestion, ACP Agents, prompt assets, Dataset registration, and
-Harbor mounts. ACP entries are edited as direct executable-and-argument arrays;
-changes apply immediately, and changing or removing a connected Agent stops its
-process. Repository Markdown files provide the default prompts. Editing one in
-the page writes a same-name override to the workspace `prompts/` directory;
-**Restore default** removes that override. Dataset IDs and paths are edited
+Harbor mounts. **Add ACP agent** opens a form panel seeded with an OpenCode
+template; configured entries remain editable as direct executable-and-argument
+arrays. Changes apply immediately, and changing or removing a connected Agent
+stops its process. Repository Markdown files provide the default prompts.
+Editing one in the page writes a same-name override to the workspace `prompts/`
+directory; **Restore default** removes that override. Dataset IDs and paths are edited
 directly in the registry table. Registering an existing Dataset
 requires only its path; adding a Jobs mount likewise requires only the Jobs path.
 Each generated ID uses the directory basename when it is path-safe and unique,
@@ -70,13 +71,15 @@ manifest** only when `dataset.toml` should be updated. The **Leaderboard** owns
 the corresponding trajectory lifecycle, including archived views and permanent
 source deletion.
 
-## Local ACP assistant
+## Psycheval Copilot
 
-After adding an allowlisted Agent such as OpenCode in Configuration, use **ACP
-client** in the administrator header. Connect the Agent, create or
+After adding an allowlisted Agent such as OpenCode in Configuration, use
+**Copilot** in the administrator header. Connect the Agent, create or
 resume a session, and optionally attach the source, Task, or report that was
 selected when the drawer opened. The attachment is captured only when you click
 the context button; later page selection changes do not silently replace it.
+When no Agent is configured, the connection control links directly to the ACP
+Agent form in **Configuration**.
 The composer can load any configured Markdown prompt asset; attaching a source,
 Task, or report selects the corresponding suggested asset without sending it.
 

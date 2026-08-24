@@ -507,9 +507,12 @@ function renderAgentControls() {
   const agent = selectedAgent();
   const connect = document.querySelector("[data-acp-connect]");
   if (connect) {
+    connect.hidden = !agent;
     connect.textContent = agent?.connected ? t("acp_disconnect", "Disconnect") : t("acp_connect", "Connect");
     connect.disabled = !agent;
   }
+  const configure = document.querySelector("[data-acp-configure]");
+  if (configure) configure.hidden = Boolean(agent);
   const protocol = document.querySelector("[data-acp-protocol]");
   if (protocol) {
     protocol.textContent = agent?.connected ? `ACP v${agent.protocol_version}` : "ACP · —";

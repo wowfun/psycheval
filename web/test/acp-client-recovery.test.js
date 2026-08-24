@@ -33,7 +33,7 @@ const browser = installBrowserDom(`
   <script type="application/json" id="peval-token-estimates">{}</script>
   <script type="application/json" id="peval-i18n">{}</script>
   <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","serve_page":"home","workspace_id":"recovery-test","sources":[]}</script>
-  <button data-acp-open>ACP client</button>
+  <button data-acp-open>Copilot</button>
   <div data-acp-backdrop hidden></div>
   <aside data-acp-drawer hidden>
     <button data-acp-close>Close</button>

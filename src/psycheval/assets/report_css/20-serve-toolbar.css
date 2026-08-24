@@ -204,6 +204,7 @@
   align-items:stretch;
   gap:2px;
   overflow-x:auto;
+  overflow-y:hidden;
   scrollbar-width:thin;
 }
 .workspace-nav-link {

@@ -6418,6 +6418,13 @@ function setConfigurationStatus(message = "", error = false) {
   target.classList.toggle("danger", Boolean(error));
   target.hidden = !message;
 }
+function setAcpAgentFormStatus(message = "", error = false) {
+  const target = document.querySelector("[data-acp-agent-form-status]");
+  if (!target) return;
+  target.textContent = message;
+  target.classList.toggle("danger", Boolean(error));
+  target.hidden = !message;
+}
 async function initializeConfiguration() {
   if (!adminMode()) return false;
   bindConfigurationActions();
@@ -6690,7 +6697,18 @@ function bindConfigurationActions() {
   root.querySelector("[data-harbor-unregister-datasets]")?.addEventListener("click", unregisterSelectedHarborDatasets);
   root.querySelector("[data-harbor-add-mount]")?.addEventListener("click", addHarborMount);
   root.querySelector("[data-harbor-remove-mounts]")?.addEventListener("click", removeSelectedHarborMounts);
-  root.querySelector("[data-acp-add-agent]")?.addEventListener("click", addAcpAgent);
+  root.querySelector("[data-acp-agent-form-open]")?.addEventListener("click", openAcpAgentForm);
+  root.querySelector("[data-acp-agent-form]")?.addEventListener("submit", addAcpAgent);
+  root.querySelector("[data-acp-agent-form-cancel]")?.addEventListener("click", () => closeAcpAgentForm());
+  const acpAgentPanel = root.querySelector("[data-acp-agent-form-panel]");
+  acpAgentPanel?.addEventListener("click", (event) => {
+    if (event.target === acpAgentPanel) closeAcpAgentForm();
+  });
+  acpAgentPanel?.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    closeAcpAgentForm();
+  });
   root.querySelector("[data-acp-remove-agents]")?.addEventListener("click", removeSelectedAcpAgents);
   root.querySelector("[data-prompt-config-list]")?.addEventListener("click", selectPromptAsset);
   root.querySelector("[data-prompt-content]")?.addEventListener("input", () => {
@@ -6701,6 +6719,24 @@ function bindConfigurationActions() {
   root.querySelector("[data-prompt-reset]")?.addEventListener("click", resetPromptAsset);
   root.querySelector("[data-harbor-config-reload]")?.addEventListener("click", reloadConfiguration);
   root.querySelector("[data-source-config-rescan]")?.addEventListener("click", rescanTrajectorySources);
+}
+function openAcpAgentForm(event) {
+  if (!adminMode()) return false;
+  const panel = document.querySelector("[data-acp-agent-form-panel]");
+  const form = panel?.querySelector("[data-acp-agent-form]");
+  form?.reset?.();
+  setAcpAgentFormStatus();
+  return openModalSurface(panel, {
+    opener: event?.currentTarget,
+    bodyClass: "acp-agent-form-open",
+    focusTarget: panel?.querySelector('[name="agent_id"]')
+  });
+}
+function closeAcpAgentForm(options = {}) {
+  return closeModalSurface(
+    document.querySelector("[data-acp-agent-form-panel]"),
+    options
+  );
 }
 async function reloadConfiguration() {
   if (promptConfigState.dirty && !window.confirm(t("serve_prompt_discard_confirm", "Discard unsaved prompt changes?"))) return;
@@ -6735,23 +6771,25 @@ async function mutateAcpAgents(body) {
     throw error;
   }
 }
-async function addAcpAgent() {
+async function addAcpAgent(event) {
+  event.preventDefault();
   if (!adminMode()) return;
-  const agentId = window.prompt(t("serve_acp_agent_id_prompt", "Agent ID"), "opencode");
-  if (!agentId) return;
-  const title = window.prompt(t("serve_acp_agent_title_prompt", "Agent display name"), agentId === "opencode" ? "OpenCode" : agentId);
-  if (!title) return;
-  const command = window.prompt(t("serve_acp_agent_command_prompt", "Executable or path"), agentId);
-  if (!command) return;
-  const rawArgs = window.prompt(t("serve_acp_agent_args_prompt", "Arguments as a JSON array"), agentId === "opencode" ? '["acp"]' : "[]");
-  if (rawArgs === null) return;
+  const fields = formPayload(event.currentTarget);
+  const agentId = String(fields.agent_id || "").trim();
+  const title = String(fields.title || "").trim();
+  const command = String(fields.command || "").trim();
+  if (!agentId || !title || !command) {
+    setAcpAgentFormStatus(t("required", "Required"), true);
+    return;
+  }
   try {
-    setConfigurationStatus(t("saving", "Saving..."));
-    await mutateAcpAgents({ action: "upsert", agent_id: agentId.trim(), title: title.trim(), command: command.trim(), args: parseAcpArgs(rawArgs) });
+    setAcpAgentFormStatus(t("saving", "Saving..."));
+    await mutateAcpAgents({ action: "upsert", agent_id: agentId, title, command, args: parseAcpArgs(fields.args) });
     renderAcpAgentConfiguration();
-    setConfigurationStatus();
+    setAcpAgentFormStatus();
+    closeAcpAgentForm();
   } catch (error) {
-    setConfigurationStatus(error.message || String(error), true);
+    setAcpAgentFormStatus(error.message || String(error), true);
   }
 }
 async function updateAcpAgent(agent, changes) {
@@ -8427,9 +8465,12 @@ function renderAgentControls() {
   const agent = selectedAgent();
   const connect = document.querySelector("[data-acp-connect]");
   if (connect) {
+    connect.hidden = !agent;
     connect.textContent = agent?.connected ? t("acp_disconnect", "Disconnect") : t("acp_connect", "Connect");
     connect.disabled = !agent;
   }
+  const configure = document.querySelector("[data-acp-configure]");
+  if (configure) configure.hidden = Boolean(agent);
   const protocol = document.querySelector("[data-acp-protocol]");
   if (protocol) {
     protocol.textContent = agent?.connected ? `ACP v${agent.protocol_version}` : "ACP · —";

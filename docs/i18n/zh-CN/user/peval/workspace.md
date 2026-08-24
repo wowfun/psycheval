@@ -45,8 +45,9 @@ args = ["acp"]
 [workspace reference](../../../../reference/workspace.md) 负责。
 
 仅管理员可访问的**配置**页（`/config`）统一管理轨迹接入、ACP Agent、提示词
-资产、Dataset 注册与 Harbor 挂载。ACP 表格直接编辑可执行文件与参数数组；保存
-后立即生效，修改或移除已连接的 Agent 会停止对应进程。仓库 Markdown 文件提供
+资产、Dataset 注册与 Harbor 挂载。点击**添加 ACP Agent**会打开预填 OpenCode
+模板的表单面板；已有配置仍可直接编辑可执行文件与参数数组。保存后立即生效，
+修改或移除已连接的 Agent 会停止对应进程。仓库 Markdown 文件提供
 默认提示词；在配置页编辑后，会在工作区 `prompts/` 目录写入同名覆盖文件；点击
 **恢复默认**会移除该覆盖。Dataset ID 与路径可直接在注册表格中编辑。注册已有 Dataset 时
 只需输入路径，添加 Jobs 挂载时也只需输入 Jobs 路径。目录 basename 合法且未
@@ -62,12 +63,13 @@ Dataset，操作会被拒绝。手写 `peval.toml` 时仍需显式填写 ID。
 永久删除；只有明确点击**同步 manifest** 时才会更新 `dataset.toml`。
 **Leaderboard** 负责对应的轨迹生命周期，包括已归档视图与来源永久删除。
 
-## 本地 ACP 助手
+## Psycheval Copilot
 
-在配置页按上例把 OpenCode 等 Agent 加入白名单后，点击管理员页头中的 **ACP
-客户端**。连接 Agent，新建或恢复会话；还可以附加打开抽屉时选中的
+在配置页按上例把 OpenCode 等 Agent 加入白名单后，点击管理员页头中的
+**Copilot**。连接 Agent，新建或恢复会话；还可以附加打开抽屉时选中的
 来源、Task 或报告。只有点击上下文按钮时才会捕获附件，之后页面选择变化不会
 静默替换它。
+未配置 Agent 时，连接控件会直接跳转到**配置**页中的 ACP Agent 表单。
 输入区可以载入任一已配置的 Markdown 提示词资产；附加来源、Task 或报告时只会
 选中对应的建议资产，不会自动发送。
 

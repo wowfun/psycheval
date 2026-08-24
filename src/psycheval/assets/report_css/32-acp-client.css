@@ -104,6 +104,9 @@
   border-color:color-mix(in oklch,var(--pass),var(--rule) 42%);
   color:var(--pass);
 }
+.acp-configure {
+  text-decoration:none;
+}
 .acp-session-control {
   grid-column:1;
 }
@@ -422,7 +425,8 @@
     align-self:start;
     margin-top:25px;
   }
-  .acp-controls>[data-acp-connect] {
+  .acp-controls>[data-acp-connect],
+  .acp-controls>[data-acp-configure] {
     grid-column:1 / -1;
   }
   .acp-session-control {

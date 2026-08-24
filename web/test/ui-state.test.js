@@ -206,15 +206,25 @@ test("Configuration loads workspace configuration and prompt assets without a so
 
 test("Configuration adds ACP agents and saves same-name prompt overrides", async () => {
   const requests = [];
-  const answers = ["opencode", "OpenCode", "opencode", '["acp"]'];
   const previousFetch = globalThis.fetch;
-  const previousPrompt = window.prompt;
   const root = document.querySelector("[data-config-page]");
   root.hidden = false;
   root.innerHTML = `
     <p data-config-page-status hidden></p>
     <button data-harbor-config-reload></button>
-    <button data-acp-add-agent></button><button data-acp-remove-agents></button>
+    <button data-acp-agent-form-open>Add ACP agent</button>
+    <div data-acp-agent-form-panel hidden role="dialog" aria-modal="true">
+      <form data-acp-agent-form>
+        <p data-acp-agent-form-status hidden></p>
+        <input name="agent_id" value="opencode" required>
+        <input name="title" value="OpenCode" required>
+        <input name="command" value="opencode" required>
+        <input name="args" value='["acp"]' required>
+        <button type="button" data-acp-agent-form-cancel>Cancel</button>
+        <button type="submit">Add ACP agent</button>
+      </form>
+    </div>
+    <button data-acp-remove-agents></button>
     <span data-acp-agent-count></span><div data-acp-agent-config></div>
     <button data-prompt-save disabled></button><button data-prompt-reset disabled></button>
     <span data-prompt-asset-count></span><nav data-prompt-config-list></nav>
@@ -241,11 +251,31 @@ test("Configuration adds ACP agents and saves same-name prompt overrides", async
     }
     return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(payload) };
   };
-  window.prompt = () => answers.shift();
 
   try {
     await configuration.initializeConfiguration();
-    root.querySelector("[data-acp-add-agent]").click();
+    const panel = root.querySelector("[data-acp-agent-form-panel]");
+    const open = root.querySelector("[data-acp-agent-form-open]");
+    assert.equal(panel.hidden, true);
+    open.click();
+    assert.equal(panel.hidden, false);
+    assert.equal(document.activeElement, root.querySelector('[name="agent_id"]'));
+    root.querySelector('[name="agent_id"]').value = "unfinished";
+    root.querySelector("[data-acp-agent-form-cancel]").click();
+    assert.equal(panel.hidden, true);
+    assert.equal(document.activeElement, open);
+    open.click();
+    assert.equal(root.querySelector('[name="agent_id"]').value, "opencode");
+    root.querySelector('[name="agent_id"]').dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    assert.equal(panel.hidden, true);
+    open.click();
+    root.querySelector('[name="args"]').value = "acp";
+    root.querySelector("[data-acp-agent-form]").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await tick();
+    assert.equal(panel.hidden, false);
+    assert.match(root.querySelector("[data-acp-agent-form-status]").textContent, /JSON array/);
+    root.querySelector('[name="args"]').value = '["acp"]';
+    root.querySelector("[data-acp-agent-form]").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
     await tick();
     await tick();
     assert.deepEqual(requests.find(request => request.path === "/api/config/acp/agents").body, {
@@ -256,6 +286,8 @@ test("Configuration adds ACP agents and saves same-name prompt overrides", async
       args: ["acp"],
       expected_revision: "r1",
     });
+    assert.equal(panel.hidden, true);
+    assert.equal(document.activeElement, open);
     assert.match(root.querySelector("[data-acp-agent-config]").textContent, /opencode/);
 
     const editor = root.querySelector("[data-prompt-content]");
@@ -275,7 +307,6 @@ test("Configuration adds ACP agents and saves same-name prompt overrides", async
     assert.match(root.querySelector("[data-prompt-origin]").textContent, /Workspace override/);
   } finally {
     globalThis.fetch = previousFetch;
-    window.prompt = previousPrompt;
     configuration.harborConfigState.busy = false;
     configuration.harborConfigState.acpSelection.clear();
     configuration.promptConfigState.dirty = false;

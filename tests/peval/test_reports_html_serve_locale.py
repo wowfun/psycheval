@@ -97,6 +97,100 @@ class PevalReportHtmlServeLocaleTests(unittest.TestCase):
         for locale in ("en", "zh-CN"):
             self.assertTrue(retired.isdisjoint(messages_for(locale)))
 
+    def test_workspace_copilot_uses_product_name_without_header_description(self) -> None:
+        report = {
+            "schema_version": 19,
+            "trajectory": [],
+            "trajectory_meta": [],
+        }
+
+        for locale in ("en", "zh-CN"):
+            with self.subTest(locale=locale):
+                messages = messages_for(locale)
+                html = render_serve_html(report, locale=locale, role="admin")
+
+                self.assertEqual(messages["acp_client"], "Copilot")
+                self.assertEqual(messages["acp_assistant"], "Psycheval Copilot")
+                self.assertNotIn("acp_assistant_copy", messages)
+                self.assertIn('<p class="eyebrow">Copilot</p>', html)
+                self.assertIn(
+                    '<h2 id="acp-drawer-title">Psycheval Copilot</h2>', html
+                )
+                drawer_header = re.search(
+                    r'<header class="acp-drawer-head">(.*?)</header>',
+                    html,
+                    re.DOTALL,
+                )
+                self.assertIsNotNone(drawer_header)
+                self.assertNotIn('<p class="copy">', drawer_header.group(1))
+
+    def test_workspace_copilot_empty_state_links_to_agent_configuration(self) -> None:
+        report = {
+            "schema_version": 19,
+            "trajectory": [],
+            "trajectory_meta": [],
+        }
+        labels = {"en": "Configure agents", "zh-CN": "配置 Agent"}
+
+        for locale, label in labels.items():
+            with self.subTest(locale=locale):
+                html = render_serve_html(report, locale=locale, role="admin")
+                self.assertEqual(
+                    messages_for(locale)["acp_configure_agents"], label
+                )
+                compact_html = re.sub(r"\s+", " ", html)
+                self.assertIn(
+                    'class="action-button acp-configure" '
+                    'href="/config#acp-agents-title" data-acp-configure hidden>'
+                    f"{label}</a>",
+                    compact_html,
+                )
+
+    def test_workspace_navigation_suppresses_incidental_vertical_overflow(self) -> None:
+        css = load_asset_text("report.css")
+        rule = re.search(r"\.workspace-nav\s*\{([^}]*)\}", css)
+
+        self.assertIsNotNone(rule)
+        declarations = {
+            name.strip(): value.strip()
+            for declaration in rule.group(1).split(";")
+            if ":" in declaration
+            for name, value in [declaration.split(":", 1)]
+        }
+        self.assertEqual(declarations.get("overflow-x"), "auto")
+        self.assertEqual(declarations.get("overflow-y"), "hidden")
+
+    def test_acp_agent_configuration_uses_a_hidden_opencode_form_panel(self) -> None:
+        html = render_serve_html(
+            {
+                "schema_version": 19,
+                "trajectory": [],
+                "trajectory_meta": [],
+            },
+            serve_page="config",
+        )
+
+        self.assertIn('type="button" data-acp-agent-form-open', html)
+        self.assertIn(
+            'class="acp-agent-form-panel" data-acp-agent-form-panel hidden '
+            'role="dialog" aria-modal="true"',
+            re.sub(r"\s+", " ", html),
+        )
+        self.assertIn(
+            '<form class="source-form acp-agent-form acp-agent-form-dialog" '
+            'data-acp-agent-form>',
+            re.sub(r"\s+", " ", html),
+        )
+        self.assertIn('name="agent_id" value="opencode"', html)
+        self.assertIn('name="title" value="OpenCode"', html)
+        self.assertIn('name="command" value="opencode"', html)
+        self.assertIn('name="args" value="[&quot;acp&quot;]"', html)
+        self.assertIn("data-acp-agent-form-status", html)
+        self.assertIn('type="submit" class="action-button primary"', html)
+        self.assertIn("data-acp-agent-form-cancel", html)
+        self.assertNotIn("serve_acp_agent_id_prompt", messages_for("en"))
+        self.assertNotIn("serve_acp_agent_id_prompt", messages_for("zh-CN"))
+
     def test_leaderboard_scrolls_with_the_main_analysis_content(self) -> None:
         html = render_serve_html(
             {

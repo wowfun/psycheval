@@ -56,6 +56,80 @@
   color:var(--muted);
   font-size:13px;
 }
+.acp-agent-form-open {
+  overflow:hidden;
+}
+.acp-agent-form-panel[hidden] {
+  display:none;
+}
+.acp-agent-form-panel {
+  position:fixed;
+  inset:0;
+  z-index:90;
+  display:grid;
+  place-items:center;
+  padding:14px;
+  background:rgba(39,35,27,.38);
+}
+.acp-agent-form-dialog {
+  width:min(680px,calc(100vw - 28px));
+  max-height:calc(100vh - 28px);
+  max-height:calc(100dvh - 28px);
+  gap:14px;
+  overflow:auto;
+  background:var(--surface);
+  padding:16px;
+  box-shadow:0 26px 70px rgba(39,35,27,.28);
+}
+.acp-agent-template-head {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:16px;
+}
+.acp-agent-template-head>div {
+  display:grid;
+  gap:4px;
+}
+.acp-agent-template-head .eyebrow {
+  margin:0;
+}
+.acp-agent-template-head h3 {
+  font:800 20px/1.15 var(--sans);
+}
+.acp-agent-template-head p {
+  margin:0;
+  color:var(--muted);
+  font-size:13px;
+}
+.acp-agent-template-head code {
+  flex:0 0 auto;
+  border:1px solid color-mix(in oklch,var(--focus),var(--rule) 58%);
+  border-radius:999px;
+  background:color-mix(in oklch,var(--focus),var(--surface) 93%);
+  color:var(--focus);
+  padding:5px 9px;
+  font:700 12px/1.2 var(--mono);
+}
+.acp-agent-form-status {
+  margin:0;
+  border:1px solid var(--rule);
+  border-radius:6px;
+  background:var(--surface-2);
+  color:var(--ink);
+  padding:9px 10px;
+  font:700 12px/1.35 var(--mono);
+}
+.acp-agent-form-status.danger {
+  border-color:#ef4444;
+  background:#fef2f2;
+  color:#991b1b;
+}
+.acp-agent-form-fields {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;
+}
 .acp-config-status {
   display:inline-flex;
   align-items:center;
@@ -302,4 +376,6 @@
   .db-path-control { grid-template-columns:1fr; }
   .db-default-actions { grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:none; }
   .prompt-config-filebar { align-items:flex-start; flex-direction:column; }
+  .acp-agent-template-head { flex-direction:column; }
+  .acp-agent-form-fields { grid-template-columns:1fr; }
 }
