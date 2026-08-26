@@ -13,3 +13,9 @@ test("the Task browser uses wide columns, narrow container stacking, and the mob
   assert.match(css, /@media\(max-width:720px\)[\s\S]*\.detail-sidebar\s*\{[^}]*bottom:0[^}]*width:100%/s);
   assert.match(css, /@media\(max-width:720px\)[\s\S]*\.detail-sidebar-resize\s*\{\s*display:none/s);
 });
+
+test("the desktop sidebar exposes its resize handle and budgets about eight file rows", () => {
+  assert.match(css, /\.detail-sidebar\s*\{[^}]*overflow:visible/s);
+  assert.match(css, /\.detail-sidebar-panel\s*\{[^}]*overflow:hidden/s);
+  assert.match(css, /\.detail-sidebar-body\.has-task\s*\{[^}]*grid-template-rows:minmax\(260px,min\(360px,48dvh\)\) minmax\(0,1fr\)/s);
+});

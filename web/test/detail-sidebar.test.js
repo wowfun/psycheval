@@ -110,6 +110,37 @@ test("closing the sidebar preserves the selected Trial and non-Harbor rows show 
   assert.equal(runtime.state.detailSidebar.open, false);
 });
 
+test("a Harbor trial with no configured Task keeps Steps and omits the Task browser", async () => {
+  let fetched = false;
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    fetched = true;
+    throw new Error("must not fetch");
+  };
+  try {
+    const report = harborReport();
+    report.trajectory_meta[0].task_metadata = {
+      status: "not_configured",
+      live: true,
+    };
+    runtime.state.view = report;
+    runtime.state.selectedTrial = "trial-one";
+    runtime.state.selectedStep = null;
+    runtime.state.detailSidebar.open = true;
+
+    runtime.renderComparisonPanels();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const sidebar = document.querySelector("#detail-sidebar");
+    assert.equal(sidebar.hidden, false);
+    assert.equal(sidebar.querySelector("[data-detail-sidebar-task]"), null);
+    assert.equal(sidebar.querySelectorAll("[data-detail-sidebar-steps] .step").length, 2);
+    assert.equal(fetched, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("a resolved Harbor identity without a safe Task ref stays unavailable without fetching", async () => {
   let fetched = false;
   const previousFetch = globalThis.fetch;

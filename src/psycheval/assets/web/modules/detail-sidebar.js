@@ -111,6 +111,7 @@ function renderDetailSidebar() {
 function renderDetailSidebarTask(trial) {
   if (trial?.adapter !== "harbor" || !trial?.task_name) return "";
   const metadata = trial.task_metadata && typeof trial.task_metadata === "object" ? trial.task_metadata : {};
+  if (metadata.status === "not_configured") return "";
   return `<section class="detail-sidebar-task" data-detail-sidebar-task aria-labelledby="detail-sidebar-task-title">
     <div class="detail-sidebar-section-head"><div><p class="eyebrow">${esc(t("task", "Task"))}</p><h3 id="detail-sidebar-task-title">${esc(metadata.name || trial.task_name)}</h3></div><span class="chip">${esc(metadata.status || "-")}</span></div>
     <div class="harbor-task-browser detail-sidebar-task-browser" data-detail-sidebar-task-browser>

@@ -72,8 +72,6 @@ def is_harbor_trial_dir(path: Path) -> bool:
         return False
     if path.parent.name == "steps":
         return False
-    if (path / "agent" / "trajectory_meta.json").is_file():
-        return False
     for filename, identity_keys in (
         ("config.json", {"trial_name", "job_id", "task"}),
         ("lock.json", {"task", "agent", "environment", "verifier"}),

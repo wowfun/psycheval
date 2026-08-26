@@ -9,6 +9,7 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
+from psycheval._harbor_trials import is_harbor_trial_dir
 from psycheval.analysis import import_analysis_artifacts
 from psycheval.atif import convert_db
 from psycheval.config import (
@@ -118,6 +119,16 @@ def completed_result(*, reward: float = 0.75) -> dict[str, object]:
 
 
 class HarborTrialTests(unittest.TestCase):
+    def test_trial_identity_wins_over_agent_trajectory_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            trial = Path(tmp) / "jobs" / "job-a" / "trial-a"
+            write_trial(trial)
+            (trial / "agent" / "trajectory_meta.json").write_text(
+                "{}", encoding="utf-8"
+            )
+
+            self.assertTrue(is_harbor_trial_dir(trial))
+
     def test_generated_harbor_ids_are_bounded_and_retry_random_collisions(
         self,
     ) -> None:

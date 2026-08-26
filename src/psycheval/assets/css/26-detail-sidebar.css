@@ -9,7 +9,7 @@
   height:100vh;
   height:100dvh;
   z-index:40;
-  overflow:hidden;
+  overflow:visible;
   border-left:1px solid var(--rule);
   background:var(--surface);
   box-shadow:-18px 0 42px rgba(39,35,27,.18);
@@ -20,6 +20,8 @@
   height:100%;
   display:grid;
   grid-template-rows:auto minmax(0,1fr);
+  overflow:hidden;
+  border-radius:inherit;
 }
 .detail-sidebar-head {
   display:grid;
@@ -44,7 +46,7 @@
   overflow:hidden;
 }
 .detail-sidebar-body.has-task {
-  grid-template-rows:minmax(260px,48%) minmax(0,1fr);
+  grid-template-rows:minmax(260px,min(360px,48dvh)) minmax(0,1fr);
 }
 .detail-sidebar-task {
   min-height:0;
