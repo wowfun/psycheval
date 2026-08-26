@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
+from importlib.resources import files
+from pathlib import Path, PurePosixPath
 from urllib.request import urlopen
 
 from psycheval.serve.errors import HttpError
@@ -8,6 +9,7 @@ from psycheval.state import ServeStateStore
 
 ECHARTS_VERSION = "6.0.0"
 ECHARTS_ASSET_PATH = f"/assets/echarts/{ECHARTS_VERSION}/echarts.min.js"
+PEVAL_WEB_ASSET_PREFIX = "/assets/peval/"
 ECHARTS_CDN_URL = (
     f"https://cdn.jsdelivr.net/npm/echarts@{ECHARTS_VERSION}/dist/echarts.min.js"
 )
@@ -28,6 +30,25 @@ def cached_echarts_asset(store: ServeStateStore) -> bytes:
     tmp_path.write_bytes(data)
     tmp_path.replace(path)
     return data
+
+
+def packaged_web_asset(path: str) -> bytes:
+    if not path.startswith(PEVAL_WEB_ASSET_PREFIX):
+        raise HttpError(404, "browser module does not exist")
+    relative = path.removeprefix(PEVAL_WEB_ASSET_PREFIX)
+    candidate = PurePosixPath(relative)
+    if (
+        not relative
+        or candidate.is_absolute()
+        or candidate.suffix != ".js"
+        or "\\" in relative
+        or any(part in {"", ".", ".."} for part in candidate.parts)
+    ):
+        raise HttpError(404, "browser module does not exist")
+    resource = files("psycheval.assets").joinpath("web", *candidate.parts)
+    if not resource.is_file():
+        raise HttpError(404, "browser module does not exist")
+    return resource.read_bytes()
 
 
 def echarts_cache_path(store: ServeStateStore) -> Path:

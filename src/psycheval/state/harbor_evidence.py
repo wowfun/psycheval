@@ -145,7 +145,6 @@ def _read_once(
         recorded_digest_source=recorded_digest_source,
     )
     task_keywords = tuple(_string_list(task_metadata.get("keywords")))
-
     job_name = optional_str(job_config.get("job_name")) or job_dir.name
     trial_name = (
         optional_str(result.get("trial_name"))

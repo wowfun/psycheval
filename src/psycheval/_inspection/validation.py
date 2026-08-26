@@ -15,19 +15,7 @@ def resolve_inspect_output(args: CliArgs) -> str | None:
 
 def validate_inspect_args(args: CliArgs) -> None:
     validate_inspect_raw_only_args(args)
-    if getattr(args, "format", None) == "html":
-        raise ValueError(
-            "view tr inspect mode supports only JSON output; use -m raw for HTML reports"
-        )
-    output = getattr(args, "output", None)
-    if (
-        output
-        and output is not DEFAULT_OUTPUT
-        and Path(str(output)).suffix.lower() == ".html"
-    ):
-        raise ValueError(
-            "view tr inspect mode writes JSON; use -m raw for HTML reports"
-        )
+    reject_html_output(args)
     parse_step_selectors(getattr(args, "steps", None) or [])
 
 
@@ -62,6 +50,19 @@ def validate_raw_args(args: CliArgs) -> None:
         raise ValueError(
             "inspect-only option(s) cannot be used with -m raw: "
             + ", ".join(f"--{name.replace('_', '-')}" for name in used)
+        )
+    reject_html_output(args)
+
+
+def reject_html_output(args: CliArgs) -> None:
+    output = getattr(args, "output", None)
+    if (
+        output
+        and output is not DEFAULT_OUTPUT
+        and Path(str(output)).suffix.lower() == ".html"
+    ):
+        raise ValueError(
+            "HTML report output is not supported; use JSON output or peval serve"
         )
 
 

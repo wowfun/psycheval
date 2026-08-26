@@ -4,8 +4,6 @@ import test from "node:test";
 import { installBrowserDom } from "./support/browser.js";
 
 const browser = installBrowserDom(`
-  <script type="application/json" id="peval-data">{}</script>
-  <script type="application/json" id="peval-token-estimates">{}</script>
   <script type="application/json" id="peval-i18n">{}</script>
   <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","authentication_enabled":true,"sources":[]}</script>
   <strong data-source-count></strong>
@@ -21,15 +19,15 @@ const browser = installBrowserDom(`
   <section id="leaderboard"></section>
 `);
 
-const runtime = await import("../src/modules/runtime.js");
-const tables = await import("../src/modules/data-tables.js");
-const configuration = await import("../src/modules/configuration.js");
-const sourceStateControls = await import("../src/modules/source-state-controls.js");
-const catalog = await import("../src/modules/serve-catalog.js");
-const leaderboardSummary = await import("../src/modules/leaderboard-summary.js");
-const modals = await import("../src/modules/modal-surfaces.js");
-const reports = await import("../src/modules/workspace-reports.js");
-const views = await import("../src/modules/workspace-views.js");
+const runtime = await import("../../src/psycheval/assets/web/modules/runtime.js");
+const tables = await import("../../src/psycheval/assets/web/modules/data-tables.js");
+const configuration = await import("../../src/psycheval/assets/web/modules/configuration.js");
+const sourceStateControls = await import("../../src/psycheval/assets/web/modules/source-state-controls.js");
+const catalog = await import("../../src/psycheval/assets/web/modules/serve-catalog.js");
+const leaderboardSummary = await import("../../src/psycheval/assets/web/modules/leaderboard-summary.js");
+const modals = await import("../../src/psycheval/assets/web/modules/modal-surfaces.js");
+const reports = await import("../../src/psycheval/assets/web/modules/workspace-reports.js");
+const views = await import("../../src/psycheval/assets/web/modules/workspace-views.js");
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());
@@ -1403,35 +1401,4 @@ test("HTML report previews fit an 1180px design viewport into the reader pane", 
   assert.equal(frame.style.height, "1400px");
   assert.equal(frame.style.transform, "scale(0.5)");
   reports.closeWorkspaceReportReader({ restoreFocus: false });
-});
-
-test("workspace snapshot report previews fail closed for malformed or oversized data", () => {
-  const previousMode = runtime.RENDER_OPTIONS.mode;
-  runtime.RENDER_OPTIONS.mode = "workspace_snapshot";
-  runtime.state.workspaceReports = [{
-    report_id: "20260719-140000-000000",
-    filename: "broken-report.html",
-    format: "html",
-    source_keys: [],
-    preview_base64: "%%%not-base64%%%",
-  }];
-  try {
-    assert.doesNotThrow(() => {
-      reports.openWorkspaceReportReader("20260719-140000-000000");
-    });
-    const reader = document.querySelector("#workspace-report-reader");
-    assert.match(reader.textContent, /invalid/i);
-    assert.equal(reader.querySelector("[data-report-reader-frame]"), null);
-
-    const reportLimit = 20 * 1024 * 1024;
-    const oversizedBase64 = "A".repeat(Math.ceil((reportLimit + 1) / 3) * 4);
-    assert.throws(
-      () => reports.workspaceSnapshotReportPreviewUrl({ preview_base64: oversizedBase64 }),
-      /20 MiB/i,
-    );
-  } finally {
-    reports.closeWorkspaceReportReader({ restoreFocus: false });
-    runtime.state.workspaceReports = [];
-    runtime.RENDER_OPTIONS.mode = previousMode;
-  }
 });

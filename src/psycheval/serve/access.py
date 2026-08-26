@@ -12,7 +12,7 @@ from threading import Lock
 
 from dotenv import dotenv_values
 
-from psycheval.serve.assets import ECHARTS_ASSET_PATH
+from psycheval.serve.assets import ECHARTS_ASSET_PATH, PEVAL_WEB_ASSET_PREFIX
 
 ADMIN_PASSWORD_ENV = "PEVAL_ADMIN_PASSWORD"
 ADMIN_ROLE = "admin"
@@ -232,6 +232,8 @@ class ServeAccess:
 def _guest_route(method: str, path: str) -> bool:
     normalized_method = method.upper()
     if normalized_method == "GET":
+        if path.startswith(PEVAL_WEB_ASSET_PREFIX):
+            return True
         if path in {
             "/",
             "/datasets",

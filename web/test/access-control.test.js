@@ -4,8 +4,6 @@ import test from "node:test";
 import { installBrowserDom } from "./support/browser.js";
 
 const browser = installBrowserDom(`
-  <script type="application/json" id="peval-data">{}</script>
-  <script type="application/json" id="peval-token-estimates">{}</script>
   <script type="application/json" id="peval-i18n">{}</script>
   <script type="application/json" id="peval-render-options">{"mode":"serve","role":"guest","authentication_enabled":true,"sources":[]}</script>
   <button data-admin-login-open>Login</button>
@@ -50,17 +48,17 @@ const browser = installBrowserDom(`
   </div>
 `);
 
-const runtime = await import("../src/modules/runtime.js");
-const tables = await import("../src/modules/data-tables.js");
-const notes = await import("../src/modules/analysis-notes.js");
-const sourceState = await import("../src/modules/source-state-controls.js");
-const configuration = await import("../src/modules/configuration.js");
-const catalog = await import("../src/modules/serve-catalog.js");
-const effects = await import("../src/modules/serve-effects.js");
-const reports = await import("../src/modules/workspace-reports.js");
-const views = await import("../src/modules/workspace-views.js");
-const controls = await import("../src/modules/serve-controls.js");
-const harbor = await import("../src/modules/harbor-workbench.js");
+const runtime = await import("../../src/psycheval/assets/web/modules/runtime.js");
+const tables = await import("../../src/psycheval/assets/web/modules/data-tables.js");
+const notes = await import("../../src/psycheval/assets/web/modules/analysis-notes.js");
+const sourceState = await import("../../src/psycheval/assets/web/modules/source-state-controls.js");
+const configuration = await import("../../src/psycheval/assets/web/modules/configuration.js");
+const catalog = await import("../../src/psycheval/assets/web/modules/serve-catalog.js");
+const effects = await import("../../src/psycheval/assets/web/modules/serve-effects.js");
+const reports = await import("../../src/psycheval/assets/web/modules/workspace-reports.js");
+const views = await import("../../src/psycheval/assets/web/modules/workspace-views.js");
+const controls = await import("../../src/psycheval/assets/web/modules/serve-controls.js");
+const harbor = await import("../../src/psycheval/assets/web/modules/harbor-workbench.js");
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());

@@ -31,13 +31,17 @@ from psycheval.serve.access import (
     ServeAccess,
 )
 from psycheval.serve.acp import AcpError
-from psycheval.serve.assets import ECHARTS_ASSET_PATH, cached_echarts_asset
+from psycheval.serve.assets import (
+    ECHARTS_ASSET_PATH,
+    PEVAL_WEB_ASSET_PREFIX,
+    cached_echarts_asset,
+    packaged_web_asset,
+)
 from psycheval.serve.constants import MAX_JSON_BODY_BYTES
 from psycheval.serve.errors import HttpError
 from psycheval.serve.exports import (
     build_serve_export,
     build_summary_serve_export,
-    build_workspace_snapshot_export,
 )
 from psycheval.serve.harbor_workspace import (
     HarborConflictError,
@@ -60,7 +64,6 @@ from psycheval.serve.payloads import (
     source_keys_payload,
     summary_export_payload,
     tags_payload,
-    workspace_snapshot_export_payload,
 )
 from psycheval.serve.prompt_assets import PromptAssetConflict
 from psycheval.serve.runtime import ServeRuntime
@@ -153,9 +156,7 @@ def make_handler(
                 if serve_page is not None:
                     self.write_html(
                         render_serve_html(
-                            runtime.shell_report(),
                             locale=runtime.config.locale,
-                            reports=[],
                             adapter_defaults=(
                                 runtime.config.adapter_default_db_paths
                                 if self._serve_role == ADMIN_ROLE
@@ -182,6 +183,9 @@ def make_handler(
                     return
                 if path == ECHARTS_ASSET_PATH:
                     self.write_js(cached_echarts_asset(store))
+                    return
+                if path.startswith(PEVAL_WEB_ASSET_PREFIX):
+                    self.write_js(packaged_web_asset(path), cache_control="no-store")
                     return
                 if path == "/api/acp/agents":
                     self.write_json(runtime.acp.agents())
@@ -288,32 +292,19 @@ def make_handler(
                     )
                     return
                 if path == "/api/harbor/files":
-                    download = single_query_value(parsed_url.query, "download") == "1"
-                    if download and self._serve_role != ADMIN_ROLE:
-                        raise HttpError(403, "administrator access required")
+                    if "download" in parse_qs(parsed_url.query, keep_blank_values=True):
+                        raise HttpError(400, "Task file downloads are not supported")
                     file_payload = harbor_workspace(store, runtime).read_file(
                         required_query_value(parsed_url.query, "dataset_id"),
                         required_query_value(parsed_url.query, "task"),
                         required_query_value(parsed_url.query, "path"),
-                        download=download,
                     )
-                    if isinstance(file_payload.get("content"), bytes):
-                        self._response_headers["ETag"] = f'"{file_payload["revision"]}"'
-                        self._response_headers["X-Peval-Task-Revision"] = str(
-                            file_payload["task_revision"]
+                    self.write_json(
+                        project_harbor_text_file(
+                            file_payload,
+                            self._serve_role,
                         )
-                        self.write_download(
-                            file_payload["content"],
-                            "application/octet-stream",
-                            str(file_payload["name"]),
-                        )
-                    else:
-                        self.write_json(
-                            project_harbor_text_file(
-                                file_payload,
-                                self._serve_role,
-                            )
-                        )
+                    )
                     return
                 if path == "/api/reports":
                     self.write_json({"reports": runtime.workspace_report_catalog()})
@@ -790,45 +781,6 @@ def make_handler(
                             export.filename,
                         )
                         return
-                    if export_kind.strip().lower() == "workspace_html":
-                        snapshot_request = workspace_snapshot_export_payload(payload)
-                        try:
-                            query_browser_views = runtime.validated_browser_views(
-                                snapshot_request.query_browser_views
-                            )
-                            browser_views = runtime.validated_browser_views(
-                                snapshot_request.browser_views
-                            )
-                            export = build_workspace_snapshot_export(
-                                runtime.catalog,
-                                store,
-                                runtime.workspace_views,
-                                runtime.workspace_reports,
-                                runtime.config,
-                                query=snapshot_request.query,
-                                query_view_names=snapshot_request.view_names,
-                                query_browser_views=query_browser_views,
-                                browser_views=browser_views,
-                                selected_source_keys=(
-                                    snapshot_request.selected_source_keys
-                                ),
-                                presentation=snapshot_request.presentation,
-                                echarts_js=cached_echarts_asset(store),
-                                audience=self._serve_role,
-                            )
-                            runtime.ensure_browser_view_names_available(
-                                [*query_browser_views, *browser_views]
-                            )
-                        except WorkspaceViewConflict as exc:
-                            raise HttpError(409, str(exc)) from exc
-                        except ValueError as exc:
-                            raise HttpError(400, str(exc)) from exc
-                        self.write_download(
-                            export.content,
-                            export.content_type,
-                            export.filename,
-                        )
-                        return
                     raw_export_query = payload.get("query")
                     export_query = catalog_query_payload(raw_export_query)
                     view_names = catalog_view_names_payload(raw_export_query)
@@ -1214,10 +1166,16 @@ def make_handler(
             self.end_headers()
             self.wfile.write(data)
 
-        def write_js(self, data: bytes, status: int = 200) -> None:
+        def write_js(
+            self,
+            data: bytes,
+            status: int = 200,
+            *,
+            cache_control: str = "public, max-age=31536000, immutable",
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", "application/javascript; charset=utf-8")
-            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            self.send_header("Cache-Control", cache_control)
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.write_pending_headers()

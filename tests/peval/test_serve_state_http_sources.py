@@ -9,7 +9,6 @@ from tests.peval.serve_state_support import (
     HttpError,
     LocalHTTPServer,
     Path,
-    ServeRuntime,
     ToolConfig,
     cached_echarts_asset,
     echarts_cache_path,
@@ -17,16 +16,11 @@ from tests.peval.serve_state_support import (
     json,
     make_handler,
     open_workspace_state,
-    parse_adapter_assignments,
     patch,
     peval_workspace,
-    report_js_comparison_state,
     request_bytes,
     request_json,
     request_text,
-    sample_report,
-    script_json,
-    serve_args,
     shutil,
     tempfile,
     threading,
@@ -36,83 +30,6 @@ from tests.peval.serve_state_support import (
 
 
 class PevalServeStateHttpSourceTests(unittest.TestCase):
-    @unittest.skip("superseded by stale-while-revalidate catalog coverage")
-    def test_http_sources_returns_loading_shell_until_initial_load_finishes(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = peval_workspace(Path(tmp))
-            source = root / "common_session.jsonl"
-            shutil.copy(FIXTURES / "common_session.jsonl", source)
-            config = ToolConfig(adapter="opencode")
-            store = open_workspace_state(str(root))
-            original_sync = store.sync_artifact_sources
-            release_sync = threading.Event()
-
-            def slow_sync(sync_config):
-                release_sync.wait(timeout=5)
-                return original_sync(sync_config)
-
-            store.sync_artifact_sources = slow_sync
-            runtime = ServeRuntime(store, config)
-            runtime.start_initial_load(
-                serve_args(path=[str(source)]),
-                parse_adapter_assignments(["opencode"], config.adapter),
-            )
-            server = LocalHTTPServer(
-                ("127.0.0.1", 0),
-                make_handler(runtime),
-            )
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            port = server.server_port
-            try:
-                status, _, html = request_text(port, "/config")
-                self.assertEqual(status, 200)
-                self.assertEqual(script_json(html, "peval-data")["trajectory"], [])
-                options = script_json(html, "peval-render-options")
-                self.assertTrue(options["loading"])
-                self.assertEqual(options["sources"], [])
-                self.assertIn(">Loading sources</strong>", html)
-                self.assertIn(
-                    ">Scanning runs; sessions will appear when discovery finishes.</span>",
-                    html,
-                )
-                self.assertIn(
-                    '<li class="source-row empty loading">'
-                    "Scanning runs; sessions will appear when discovery finishes.</li>",
-                    html,
-                )
-                self.assertNotIn(">0 sources</strong>", html)
-
-                status, _, body_bytes = request_bytes(port, "/api/sources")
-                self.assertEqual(status, 200)
-                body = json.loads(body_bytes.decode("utf-8"))
-                self.assertTrue(body["loading"])
-                self.assertEqual(body["sources"], [])
-                self.assertEqual(body["report"]["trajectory"], [])
-
-                release_sync.set()
-                runtime.wait_until_ready(timeout=5)
-
-                status, _, body_bytes = request_bytes(port, "/api/sources")
-                self.assertEqual(status, 200)
-                body = json.loads(body_bytes.decode("utf-8"))
-                self.assertFalse(body["loading"])
-                self.assertEqual(len(body["sources"]), 1)
-                self.assertEqual(len(body["report"]["trajectory"]), 1)
-                self.assertEqual(
-                    body["report"]["trajectory"][0]["session_id"],
-                    "common_session",
-                )
-            finally:
-                release_sync.set()
-                server.shutdown()
-                server.server_close()
-                thread.join(timeout=5)
-                runtime.wait_until_ready(timeout=5)
-                store.close()
-
     def test_http_upload_endpoint_is_removed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_workspace(Path(tmp))
@@ -799,19 +716,6 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 }
                 self.assertTrue(artifact_dirs[source_keys[0]].is_dir())
                 self.assertTrue(artifact_dirs[source_keys[1]].is_dir())
-                status, _, html = request_text(port, "/")
-                self.assertEqual(status, 200)
-                embedded = script_json(html, "peval-data")
-                options = script_json(html, "peval-render-options")
-                self.assertEqual(len(embedded["trajectory"]), 2)
-                comparison = report_js_comparison_state(
-                    embedded,
-                    sources=options["sources"],
-                )
-                self.assertEqual(comparison["reportRows"], 2)
-                self.assertTrue(comparison["hasLeaderboard"])
-                self.assertTrue(comparison["hasSummary"])
-                self.assertTrue(comparison["hasOverview"])
                 status, _, body = request_json(
                     port,
                     "POST",
@@ -1262,77 +1166,6 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                         if source["source_key"] == source_keys[2]
                     )["active"]
                 )
-            finally:
-                server.shutdown()
-                server.server_close()
-                thread.join(timeout=5)
-                store.close()
-
-    @unittest.skip("superseded by catalog reload and detail invalidation coverage")
-    def test_http_reload_discovers_cells_and_missing_report_is_clear(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = peval_workspace(Path(tmp))
-            config = ToolConfig(adapter="opencode")
-            report = sample_report(config)
-            store = open_workspace_state(str(root))
-            source_key = store.ingest_report_snapshot(
-                report,
-                "saved-report.json",
-                config,
-                materialize_annotations=True,
-            )[0]
-            source = store.source_payload()[0]
-            artifact_dir = root / source["artifact_dir"]
-            server = LocalHTTPServer(
-                ("127.0.0.1", 0),
-                make_handler(store, config),
-            )
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            port = server.server_port
-            origin = f"http://127.0.0.1:{port}"
-            try:
-                status, _, body = request_json(
-                    port,
-                    "POST",
-                    "/api/sources/reload",
-                    {},
-                    origin=origin,
-                )
-                self.assertEqual(status, 200)
-                self.assertEqual(len(body["sources"]), 1)
-                self.assertEqual(body["sources"][0]["source_key"], source_key)
-                self.assertEqual(body["sources"][0]["kind"], "trial-artifact")
-
-                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                conn.request("GET", f"/api/report?source_key={source_key}")
-                response = conn.getresponse()
-                payload = json.loads(response.read().decode("utf-8"))
-                conn.close()
-                self.assertEqual(response.status, 200)
-                self.assertEqual(len(payload["trajectory"]), 1)
-
-                status, _, _ = request_json(
-                    port,
-                    "POST",
-                    f"/api/sources/{source_key}/alias",
-                    {"alias": "Missing source"},
-                    origin=origin,
-                )
-                self.assertEqual(status, 200)
-                shutil.rmtree(artifact_dir / "agent")
-                status, _, html = request_text(port, "/")
-                self.assertEqual(status, 200)
-                options = script_json(html, "peval-render-options")
-                self.assertEqual(options["sources"][0]["last_status"], "missing")
-
-                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-                conn.request("GET", f"/api/report?source_key={source_key}")
-                response = conn.getresponse()
-                missing = json.loads(response.read().decode("utf-8"))
-                conn.close()
-                self.assertEqual(response.status, 400)
-                self.assertIn("Trial cell artifacts not found", missing["error"])
             finally:
                 server.shutdown()
                 server.server_close()

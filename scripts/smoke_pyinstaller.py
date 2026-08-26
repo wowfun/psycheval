@@ -72,6 +72,17 @@ def request_json(
     return response.status, result
 
 
+def request_bytes(base_url: str, path: str) -> tuple[int, dict[str, str], bytes]:
+    parsed = urlsplit(base_url)
+    connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=10)
+    connection.request("GET", path)
+    response = connection.getresponse()
+    body = response.read()
+    headers = {key.lower(): value for key, value in response.getheaders()}
+    connection.close()
+    return response.status, headers, body
+
+
 def expect_status(
     response: tuple[int, dict[str, Any]], expected: int, action: str
 ) -> dict[str, Any]:
@@ -164,16 +175,21 @@ def smoke_workbench(
     )
     try:
         base_url = wait_serve_url(process)
+        status, headers, module = request_bytes(base_url, "/assets/peval/main.js")
+        if status != 200 or not module.strip():
+            raise RuntimeError("frozen peval omitted the browser ESM entrypoint")
+        if headers.get("content-type") != "application/javascript; charset=utf-8":
+            raise RuntimeError("frozen peval served the browser module with wrong MIME")
         inventory = expect_status(
-            request_json(base_url, "GET", "/api/harbor/datasets"),
+            request_json(base_url, "GET", "/api/config/harbor"),
             200,
-            "Dataset inventory",
+            "Harbor configuration",
         )
         created_dataset = expect_status(
             request_json(
                 base_url,
                 "POST",
-                "/api/harbor/datasets",
+                "/api/config/harbor/datasets",
                 {
                     "action": "create",
                     "dataset_id": "smoke",
@@ -186,7 +202,12 @@ def smoke_workbench(
             "Dataset scaffold",
         )
         wait_operation(base_url, created_dataset)
-        dataset = created_dataset["result"]["datasets"][0]
+        task_inventory = expect_status(
+            request_json(base_url, "GET", "/api/harbor/datasets"),
+            200,
+            "Dataset workbench inventory",
+        )
+        dataset = task_inventory["datasets"][0]
         created_task = expect_status(
             request_json(
                 base_url,
@@ -265,7 +286,7 @@ def main() -> int:
                 env=env,
             )
         )
-        report = tmp / "report.html"
+        report = tmp / "report.json"
         run(
             [
                 str(executable),
@@ -277,16 +298,14 @@ def main() -> int:
                 "psychevo",
                 "-p",
                 str(FIXTURE),
-                "-f",
-                "html",
                 "-o",
                 str(report),
             ],
             cwd=tmp,
             env=env,
         )
-        if 'id="peval-data"' not in report.read_text(encoding="utf-8"):
-            raise RuntimeError("frozen peval report omitted runtime data")
+        if not json.loads(report.read_text(encoding="utf-8"))["trajectory"]:
+            raise RuntimeError("frozen peval JSON report omitted trajectories")
         smoke_workbench(executable, cwd=tmp, workspace=tmp / "workspace", env=env)
 
     print("PyInstaller peval smoke passed")

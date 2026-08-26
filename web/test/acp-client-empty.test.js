@@ -10,8 +10,6 @@ const jsonResponse = payload => ({
   text: async () => JSON.stringify(payload),
 });
 const browser = installBrowserDom(`
-  <script type="application/json" id="peval-data">{}</script>
-  <script type="application/json" id="peval-token-estimates">{}</script>
   <script type="application/json" id="peval-i18n">{}</script>
   <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","serve_page":"home","workspace_id":"empty-agent-test","sources":[]}</script>
   <button data-acp-open>Copilot</button>
@@ -28,14 +26,14 @@ const browser = installBrowserDom(`
     <form data-acp-composer><select data-acp-prompt-asset></select><button data-acp-use-prompt type="button">Use</button><textarea data-acp-prompt></textarea><span data-acp-usage></span><button data-acp-stop type="button">Stop</button><button data-acp-send>Send</button></form>
   </aside>
   <aside id="workspace-report-reader" hidden></aside>
-  <main id="comparison"></main><section id="trace"></section><aside id="step-drawer"></aside>
+  <main id="comparison"></main><section id="trace"></section><aside id="detail-sidebar"></aside>
 `, {
   fetch: async path => jsonResponse(String(path) === "/api/acp/agents"
     ? { agents: [] }
     : { prompts: [] }),
 });
 
-const acp = await import("../src/modules/acp-client.js");
+const acp = await import("../../src/psycheval/assets/web/modules/acp-client.js");
 
 test.after(() => browser.cleanup());
 

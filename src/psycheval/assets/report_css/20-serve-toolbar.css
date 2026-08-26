@@ -24,13 +24,6 @@
   margin:6px 0;
   text-align:left;
 }
-.workspace-snapshot-header {
-  grid-template-columns:minmax(0,1fr) minmax(16rem,42ch) minmax(0,1fr);
-  align-items:center;
-}
-.workspace-snapshot-header>.workspace-description {
-  grid-column:2;
-}
 .serve-page-home .workspace-description {
   margin:0 0 14px auto;
   text-align:right;

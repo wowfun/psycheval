@@ -6,7 +6,6 @@ from typing import Any, Callable, Sequence
 
 from psycheval.config import ToolConfig
 from psycheval.inputs import AdapterAssignments
-from psycheval.report import empty_report
 from psycheval.serve.acp import AcpManager
 from psycheval.serve.prompt_assets import PromptAssetLibrary
 from psycheval.serve.sources import load_serve_inputs
@@ -354,9 +353,6 @@ class ServeRuntime:
 
     def workspace_report_catalog(self) -> list[dict[str, Any]]:
         return self.workspace_reports.catalog()
-
-    def shell_report(self) -> dict[str, Any]:
-        return empty_report("serve")
 
     def empty_envelope(
         self,

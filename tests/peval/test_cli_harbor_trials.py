@@ -46,8 +46,6 @@ class PevalCliHarborTrialTests(unittest.TestCase):
                     "raw",
                     "-p",
                     str(trial),
-                    "-f",
-                    "json",
                     "-o",
                     str(report_path),
                 ]
@@ -145,7 +143,7 @@ class PevalCliHarborTrialTests(unittest.TestCase):
 
             result, stdout, stderr = run_cli(["view", "tr", "-p", str(trial)])
             raw_result, _, raw_stderr = run_cli(
-                ["view", "tr", "-m", "raw", "-p", str(trial), "-f", "json"]
+                ["view", "tr", "-m", "raw", "-p", str(trial)]
             )
 
             self.assertEqual((result, stderr), (0, ""))
@@ -224,8 +222,6 @@ class PevalCliHarborTrialTests(unittest.TestCase):
                     "raw",
                     "-p",
                     str(trial),
-                    "-f",
-                    "json",
                     "-o",
                     str(report_path),
                 ]

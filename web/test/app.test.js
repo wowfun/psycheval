@@ -1,27 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createReportApp } from "../src/app/report-app.js";
-import { createModeRuntime } from "../src/app/mode-runtime.js";
+import {
+  createWorkspaceApp,
+  startWorkspacePage,
+} from "../../src/psycheval/assets/web/app/workspace-app.js";
 
-test("report app owns an idempotent start and destroy lifecycle", async () => {
+test("workspace app owns an idempotent start and destroy lifecycle", async () => {
   const calls = [];
-  const app = createReportApp({
+  const app = createWorkspaceApp({
     platform: {
-      document: {},
-      window: globalThis,
       destroy: () => calls.push("platform:destroy"),
     },
-    bootstrap: {
-      report: {},
-      renderOptions: { mode: "report" },
-      workspaceSnapshot: null,
-    },
-    modeRuntime: {
-      kind: "report",
-      start: () => calls.push("mode:start"),
-      destroy: () => calls.push("mode:destroy"),
-    },
+    startPage: () => calls.push("page:start"),
   });
 
   await app.start();
@@ -29,57 +20,26 @@ test("report app owns an idempotent start and destroy lifecycle", async () => {
   app.destroy();
   app.destroy();
 
-  assert.deepEqual(calls, ["mode:start", "mode:destroy", "platform:destroy"]);
+  assert.deepEqual(calls, ["page:start", "platform:destroy"]);
 });
 
-test("mode runtime selects one explicit browser mode", () => {
-  const calls = [];
-  const runtime = createModeRuntime({
-    report: { rows: [] },
-    renderOptions: { mode: "workspace_snapshot" },
-    workspaceSnapshot: {},
-  }, {
-    renderReport: report => calls.push(["render", report]),
-    renderWorkspaceViewRail: () => calls.push(["rail"]),
-  });
+test("workspace startup dispatches only the selected Live page", async () => {
+  for (const page of ["home", "datasets", "reports", "config"]) {
+    const calls = [];
+    const controllers = {
+      renderHome: () => calls.push("render:home"),
+      loadHome: () => calls.push("load:home"),
+      bindGlobalControls: () => calls.push("bind:global"),
+      startDatasets: () => calls.push("start:datasets"),
+      startReports: () => calls.push("start:reports"),
+      startConfig: () => calls.push("start:config"),
+    };
 
-  runtime.start();
+    await startWorkspacePage(page, controllers);
 
-  assert.equal(runtime.kind, "workspace_snapshot");
-  assert.deepEqual(calls, [["render", { rows: [] }], ["rail"]]);
-});
-
-test("serve mode renders its shell before loading workspace catalogs", async () => {
-  const calls = [];
-  const runtime = createModeRuntime({
-    report: { rows: [] },
-    renderOptions: { mode: "serve" },
-    workspaceSnapshot: null,
-  }, {
-    renderReport: report => calls.push(["render", report]),
-    renderWorkspaceViewRail: () => calls.push(["rail"]),
-    loadServeWorkspace: async () => calls.push(["load-serve-workspace"]),
-  });
-
-  await runtime.start();
-
-  assert.deepEqual(calls, [["render", { rows: [] }], ["load-serve-workspace"]]);
-});
-
-test("serve management pages start only their page controller", async () => {
-  const calls = [];
-  const runtime = createModeRuntime({
-    report: { rows: [] },
-    renderOptions: { mode: "serve", serve_page: "datasets" },
-    workspaceSnapshot: null,
-  }, {
-    renderReport: report => calls.push(["render", report]),
-    renderWorkspaceViewRail: () => calls.push(["rail"]),
-    loadServeWorkspace: async () => calls.push(["load-serve-workspace"]),
-    startServePage: async (page, report) => calls.push(["start-page", page, report]),
-  });
-
-  await runtime.start();
-
-  assert.deepEqual(calls, [["start-page", "datasets", { rows: [] }]]);
+    assert.deepEqual(
+      calls,
+      page === "home" ? ["render:home", "load:home"] : ["bind:global", `start:${page}`],
+    );
+  }
 });

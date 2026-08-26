@@ -47,8 +47,6 @@ class PevalCliInputAnalysisTests(unittest.TestCase):
                         str(FIXTURES / "common_session.jsonl"),
                         "--agent-name",
                         "agent-a",
-                        "-f",
-                        "json",
                         "-o",
                         str(out_path),
                     ]
@@ -158,8 +156,6 @@ class PevalCliInputAnalysisTests(unittest.TestCase):
                     str(FIXTURES / "common_session.jsonl"),
                     "--agent-name",
                     "agent-a",
-                    "-f",
-                    "json",
                     "-o",
                     str(out_path),
                 ]

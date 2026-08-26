@@ -49,6 +49,7 @@ class ServeGuestVisibilityTests(unittest.TestCase):
                     "path": "/srv/harbor/tasks/task-a",
                     "diagnostic": "invalid /srv/harbor/tasks/task-a/task.toml",
                     "description": "Published task description",
+                    "task_ref": {"dataset_id": "tasks", "task": "task-a"},
                 },
                 "harbor_provenance": {
                     "regrade": {
@@ -132,6 +133,7 @@ class ServeGuestVisibilityTests(unittest.TestCase):
                         "path": r"C:\Harbor\Tasks\task-a",
                         "diagnostic": "private diagnostic",
                         "description": "Public description",
+                        "task_ref": {"dataset_id": "tasks", "task": "task-a"},
                     },
                     "harbor_provenance": {
                         "regrade": {
@@ -187,7 +189,10 @@ class ServeGuestVisibilityTests(unittest.TestCase):
         )
         self.assertEqual(
             guest["trajectory_meta"][0]["task_metadata"],
-            {"description": "Public description"},
+            {
+                "description": "Public description",
+                "task_ref": {"dataset_id": "tasks", "task": "task-a"},
+            },
         )
         self.assertEqual(
             guest["trajectory_meta"][0]["harbor_provenance"]["regrade"],

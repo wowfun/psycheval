@@ -3,14 +3,11 @@ from __future__ import annotations
 import io
 import json
 import zipfile
-from base64 import b64encode
 from dataclasses import dataclass, replace
 from html import escape
 from typing import Any
 
 from psycheval.config import ToolConfig
-from psycheval.html import render_workspace_snapshot_html
-from psycheval.serve.payloads import WorkspaceSnapshotPresentation
 from psycheval.serve.summary_xlsx import (
     EXCEL_CONTENT_TYPE,
     SummaryWorksheet,
@@ -18,11 +15,6 @@ from psycheval.serve.summary_xlsx import (
 )
 from psycheval.serve.visibility import project_catalog_rows, project_report
 from psycheval.state import CatalogQuery, ServeStateStore, WorkspaceCatalog
-from psycheval.workspace_reports import (
-    WorkspaceReportLibrary,
-    render_workspace_report_preview,
-)
-from psycheval.workspace_views import WorkspaceView, WorkspaceViewLibrary
 
 MAX_REPORT_EXPORT_CELLS = 100
 MAX_REPORT_EXPORT_INPUT_BYTES = 50 * 1024 * 1024
@@ -102,149 +94,6 @@ def build_serve_export(
         content=(json.dumps(report, ensure_ascii=False, indent=2) + "\n").encode(
             "utf-8"
         ),
-    )
-
-
-def build_workspace_snapshot_export(
-    catalog: WorkspaceCatalog,
-    store: ServeStateStore,
-    workspace_views: WorkspaceViewLibrary,
-    workspace_reports: WorkspaceReportLibrary,
-    config: ToolConfig,
-    *,
-    query: CatalogQuery,
-    query_view_names: tuple[str, ...],
-    query_browser_views: tuple[WorkspaceView, ...] = (),
-    browser_views: tuple[WorkspaceView, ...] = (),
-    selected_source_keys: tuple[str, ...],
-    presentation: WorkspaceSnapshotPresentation,
-    echarts_js: bytes,
-    audience: str = "admin",
-) -> ServeExport:
-    with catalog.read_snapshot_rows(
-        query,
-        any_queries=lambda: (
-            [workspace_views.get(name).filters for name in query_view_names]
-            + [view.filters for view in query_browser_views]
-        ),
-        selected_source_keys=selected_source_keys,
-    ) as (generation, rows):
-        available_views = {
-            view.name: view for view in [*workspace_views.list(), *browser_views]
-        }
-        try:
-            visible_views = [
-                available_views[name] for name in presentation.visible_view_names
-            ]
-        except KeyError as exc:
-            raise ValueError(f"saved view does not exist: {exc.args[0]}") from exc
-        if not rows:
-            if selected_source_keys:
-                raise ValueError("selected sources do not match the current query")
-            raise ValueError("workspace snapshot query matched no sources")
-        if len(rows) > MAX_REPORT_EXPORT_CELLS:
-            raise ValueError(
-                f"workspace snapshot is limited to {MAX_REPORT_EXPORT_CELLS} cells"
-            )
-        report = store.report_for_rows(rows, config)
-        metas = list(report.get("trajectory_meta") or [])
-        source_trial_keys = {
-            str(row.get("source_key")): str(meta.get("trial_key"))
-            for row, meta in zip(rows, metas, strict=True)
-        }
-        catalog_rows = [
-            {**row, "report_trial_key": source_trial_keys[str(row.get("source_key"))]}
-            for row in rows
-        ]
-
-        report_payloads: list[dict[str, Any]] = []
-        report_input_bytes = 0
-        for metadata in workspace_reports.catalog(source_rows=rows):
-            if not metadata.get("source_keys"):
-                continue
-            attachment = workspace_reports.read(str(metadata["report_id"]))
-            report_input_bytes += len(attachment.content)
-            report_payloads.append(
-                {
-                    **metadata,
-                    "preview_base64": b64encode(
-                        render_workspace_report_preview(attachment)
-                    ).decode("ascii"),
-                }
-            )
-
-        input_bytes = sum(int(row.get("input_bytes") or 0) for row in rows)
-        if input_bytes + report_input_bytes > MAX_REPORT_EXPORT_INPUT_BYTES:
-            raise ValueError(
-                "workspace snapshot trajectory/meta and report input exceeds 50 MiB"
-            )
-
-        summary_payload = catalog.summarize_saved_views(
-            [(view.name, view.filters, view.group_by) for view in visible_views]
-        )
-        final_keys = [str(row.get("source_key")) for row in rows]
-        selected_source_key = presentation.selected_source_key
-        if selected_source_key not in set(final_keys):
-            selected_source_key = final_keys[0]
-        selected_trial_key = source_trial_keys[selected_source_key]
-        selected_index = next(
-            index
-            for index, meta in enumerate(metas)
-            if str(meta.get("trial_key")) == selected_trial_key
-        )
-        selected_step_id = presentation.selected_step_id
-        valid_step_ids = {
-            str(step.get("step_id"))
-            for step in list(report.get("trajectory") or [])[selected_index].get(
-                "steps", []
-            )
-            if step.get("step_id") is not None
-        }
-        if selected_step_id not in valid_step_ids:
-            selected_step_id = None
-        visible_names = [view.name for view in visible_views]
-        snapshot = {
-            "generation": generation,
-            "catalog_rows": project_catalog_rows(catalog_rows, audience),
-            "source_trial_keys": source_trial_keys,
-            "presentation": {
-                "summary_group_by": presentation.summary_group_by,
-                "summary_statistic": presentation.summary_statistic,
-                "summary_table_open": presentation.summary_table_open,
-                "selected_source_key": selected_source_key,
-                "selected_step_id": selected_step_id,
-                "leaderboard_columns": presentation.leaderboard_columns,
-                "visible_view_names": visible_names,
-                "workspace_view_filters": {
-                    key: list(values)
-                    for key, values in presentation.workspace_view_filters.items()
-                },
-                "open_view_tables": [
-                    name
-                    for name in presentation.open_view_tables
-                    if name in set(visible_names)
-                ],
-            },
-            "views": [view.to_dict() for view in visible_views],
-            "view_summaries": summary_payload["views"],
-            "reports": report_payloads,
-        }
-        if config.description:
-            snapshot["workspace_description"] = config.description
-        try:
-            echarts_text = echarts_js.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError("cached ECharts asset must be UTF-8 JavaScript") from exc
-        content = render_workspace_snapshot_html(
-            project_report(report) if audience != "admin" else report,
-            snapshot,
-            config.locale,
-            echarts_text,
-        ).encode("utf-8")
-    return ServeExport(
-        filename="peval-workspace-snapshot.html",
-        content_type="text/html; charset=utf-8",
-        content=content,
     )
 
 

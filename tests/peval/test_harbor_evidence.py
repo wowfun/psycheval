@@ -369,6 +369,9 @@ class HarborEvidenceTests(unittest.TestCase):
             jobs = root / "jobs"
             task = root / "dataset" / "task"
             write_task(task, "org/task")
+            (task / "instruction.md").write_text(
+                "Collect instructionneedle evidence.\n", encoding="utf-8"
+            )
             trial = jobs / "job" / "trial"
             write_evidence_trial(
                 trial,
@@ -402,6 +405,7 @@ class HarborEvidenceTests(unittest.TestCase):
                 catalog.reconcile()
                 first = catalog.query(CatalogQuery()).items[0].to_dict()
                 self.assertEqual(first["score"], 0)
+                self.assertNotIn("task_ref", first["task_metadata"])
                 self.assertEqual(first["display_alias"], "org/task")
                 self.assertEqual(first["display_tags"], ["web-agent", "web-search"])
                 self.assertEqual(first["model_provider"], "provider")
@@ -427,6 +431,10 @@ class HarborEvidenceTests(unittest.TestCase):
                 self.assertEqual(
                     catalog.query(CatalogQuery(search="web-search")).total, 1
                 )
+                self.assertEqual(
+                    catalog.query(CatalogQuery(search="instructionneedle")).total,
+                    0,
+                )
                 detail = catalog.load_detail(first["source_key"]).report
                 meta = detail["trajectory_meta"][0]
                 self.assertEqual(meta["data_ref"]["result_id"], "result-id")
@@ -437,6 +445,24 @@ class HarborEvidenceTests(unittest.TestCase):
                 self.assertEqual(
                     meta["task_metadata"]["description"], "Live description"
                 )
+                self.assertEqual(
+                    meta["task_metadata"]["task_ref"],
+                    {"dataset_id": "tasks", "task": "task"},
+                )
+                unlinked_catalog = WorkspaceCatalog(
+                    store,
+                    ToolConfig(
+                        workspace_root=str(workspace),
+                        harbor_datasets=config.harbor_datasets,
+                        harbor_mounts=(
+                            HarborMount(id="jobs", path=str(jobs), dataset_ids=()),
+                        ),
+                    ),
+                )
+                unlinked_meta = unlinked_catalog.load_detail(
+                    first["source_key"]
+                ).report["trajectory_meta"][0]
+                self.assertNotIn("task_ref", unlinked_meta["task_metadata"])
                 self.assertTrue(
                     {"environment", "kwargs", "command"}.isdisjoint(meta["data_ref"])
                 )
@@ -450,6 +476,8 @@ class HarborEvidenceTests(unittest.TestCase):
                 )
                 exported_report = json.loads(json_export.content)
                 exported_meta = exported_report["trajectory_meta"][0]
+                self.assertNotIn("task_ref", exported_meta["task_metadata"])
+                self.assertNotIn("instruction_markdown", exported_meta["task_metadata"])
                 self.assertEqual(exported_meta["task_name"], "org/task")
                 self.assertEqual(exported_meta["display_alias"], "org/task")
                 self.assertEqual(
@@ -482,6 +510,7 @@ class HarborEvidenceTests(unittest.TestCase):
                     "Live Task Metadata",
                 ):
                     self.assertIn(heading, workbook_xml)
+                self.assertNotIn("task_ref", workbook_xml)
                 summaries = catalog.summarize_saved_views(
                     [
                         ("Task", CatalogQuery(), "task"),

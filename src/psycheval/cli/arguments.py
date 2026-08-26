@@ -20,7 +20,6 @@ class CliArgs:
     model: str | None = None
     no_redact: bool = False
     mode: str = "inspect"
-    format: str | None = None
     list_sessions: bool = False
     list_interactive: bool = False
     note: tuple[str, ...] = ()

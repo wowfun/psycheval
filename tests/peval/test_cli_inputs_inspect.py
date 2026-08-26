@@ -356,7 +356,26 @@ class PevalCliInputInspectTests(unittest.TestCase):
                 ]
             )
         self.assertNotEqual(html_result, 0)
-        self.assertIn("supports only JSON", stderr.getvalue())
+        self.assertIn("No such option: -f", stderr.getvalue())
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            html_path_result = main(
+                [
+                    "view",
+                    "tr",
+                    "-m",
+                    "raw",
+                    "-a",
+                    "opencode",
+                    "-p",
+                    str(FIXTURES / "common_session.jsonl"),
+                    "-o",
+                    "report.html",
+                ]
+            )
+        self.assertNotEqual(html_path_result, 0)
+        self.assertIn("HTML report output is not supported", stderr.getvalue())
 
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
@@ -472,6 +491,37 @@ class PevalCliInputInspectTests(unittest.TestCase):
         self.assertIn("--agent-name", stderr.getvalue())
         self.assertIn("--model", stderr.getvalue())
         self.assertIn("--no-redact", stderr.getvalue())
+
+    def test_cli_view_raw_bare_output_is_timestamped_json(self) -> None:
+        from psycheval.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stdout = io.StringIO()
+            with contextlib.chdir(root), contextlib.redirect_stdout(stdout):
+                result = main(
+                    [
+                        "view",
+                        "tr",
+                        "-m",
+                        "raw",
+                        "-a",
+                        "opencode",
+                        "-p",
+                        str(FIXTURES / "common_session.jsonl"),
+                        "-o",
+                    ]
+                )
+
+            self.assertEqual(result, 0)
+            output = written_report_path(stdout.getvalue(), root)
+            self.assertRegex(
+                output.name,
+                r"^report-opencode-common_session-\d{8}-\d{6}-\d{6}\.json$",
+            )
+            self.assertTrue(
+                json.loads(output.read_text(encoding="utf-8"))["trajectory"]
+            )
 
     def test_cli_view_inspect_reads_report_and_meta_json_directly(self) -> None:
         from psycheval.cli import main

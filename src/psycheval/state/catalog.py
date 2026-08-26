@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -27,6 +29,7 @@ CATALOG_SCHEMA_VERSION = 14
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 CATALOG_RELATIVE_PATH = Path(".cache/peval/serve-catalog.sqlite3")
+TASK_DIRECTORY_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$")
 
 
 class CatalogBusyError(RuntimeError):
@@ -479,7 +482,9 @@ class WorkspaceCatalog:
         if not bool(record["readable"]):
             raise ValueError(f"source is not readable: {source_key}")
         row = json.loads(str(record["row_json"]))
-        report = self.store.report_for_rows([row], self.config)
+        report = _report_with_live_task_ref(
+            self.store.report_for_rows([row], self.config), self.config
+        )
         return DetailEnvelope(
             generation=generation,
             artifact_revision=str(record["artifact_revision"]),
@@ -1359,6 +1364,64 @@ def _saved_view_percentile(ordered: list[float], percentile: int) -> float:
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 
+def _report_with_live_task_ref(
+    report: dict[str, Any], config: ToolConfig
+) -> dict[str, Any]:
+    metas = report.get("trajectory_meta")
+    if not isinstance(metas, list):
+        return report
+    projected = list(metas)
+    changed = False
+    for index, original in enumerate(metas):
+        if not isinstance(original, dict) or original.get("adapter") != "harbor":
+            continue
+        task_ref = _live_task_ref(original, config)
+        if task_ref is None:
+            continue
+        metadata = original.get("task_metadata")
+        if not isinstance(metadata, dict):
+            continue
+        copy = dict(original)
+        copy["task_metadata"] = {**metadata, "task_ref": task_ref}
+        projected[index] = copy
+        changed = True
+    if not changed:
+        return report
+    return {**report, "trajectory_meta": projected}
+
+
+def _live_task_ref(meta: dict[str, Any], config: ToolConfig) -> dict[str, str] | None:
+    metadata = meta.get("task_metadata")
+    provenance = meta.get("harbor_provenance")
+    if not isinstance(metadata, dict) or not isinstance(provenance, dict):
+        return None
+    if metadata.get("status") not in {"resolved", "digest_mismatch"}:
+        return None
+    task_path_value = metadata.get("path")
+    mount_id = provenance.get("mount_id")
+    if not isinstance(task_path_value, str) or not isinstance(mount_id, str):
+        return None
+    mount = next((item for item in config.harbor_mounts if item.id == mount_id), None)
+    if mount is None:
+        return None
+    task_path = Path(os.path.abspath(Path(task_path_value).expanduser()))
+    task_name = task_path.name
+    if not TASK_DIRECTORY_RE.fullmatch(task_name):
+        return None
+    datasets = {item.id: item for item in config.harbor_datasets}
+    matches = []
+    for dataset_id in mount.dataset_ids:
+        dataset = datasets.get(dataset_id)
+        if dataset is None:
+            continue
+        root = Path(os.path.abspath(Path(dataset.path).expanduser()))
+        if task_path.parent == root:
+            matches.append(dataset_id)
+    if len(matches) != 1:
+        return None
+    return {"dataset_id": matches[0], "task": task_name}
+
+
 def _catalog_summary(
     trajectory: dict[str, Any], meta: dict[str, Any], analysis_count: int
 ) -> dict[str, Any]:
@@ -1397,9 +1460,29 @@ def _catalog_summary(
         "task_keywords": meta.get("task_keywords") or [],
         "rewards": meta.get("rewards") or {},
         "harbor_provenance": meta.get("harbor_provenance") or {},
-        "task_metadata": meta.get("task_metadata") or {},
+        "task_metadata": _catalog_task_metadata(meta.get("task_metadata")),
         **inference_row_metrics(metrics),
     }
+
+
+def _catalog_task_metadata(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    fields = {
+        "description",
+        "diagnostic",
+        "digest_comparison",
+        "digest_matches",
+        "keywords",
+        "live",
+        "live_digest",
+        "name",
+        "path",
+        "requested_name",
+        "status",
+        "version",
+    }
+    return {key: item for key, item in value.items() if key in fields}
 
 
 def _summary_metrics(

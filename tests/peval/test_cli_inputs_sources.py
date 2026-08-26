@@ -82,8 +82,6 @@ label_prefix = "configured"
                         str(first),
                         "-p",
                         str(second),
-                        "-f",
-                        "json",
                         "-o",
                         str(view_out),
                     ]
@@ -111,8 +109,6 @@ label_prefix = "configured"
                             str(db_path),
                             "-s",
                             "db-a",
-                            "-f",
-                            "json",
                             "-o",
                             str(tmp_path / "db-report.json"),
                         ]
@@ -157,8 +153,6 @@ label_prefix = "selected"
                         str(FIXTURES / "common_session.jsonl"),
                         "-p",
                         str(custom_path),
-                        "-f",
-                        "json",
                         "-o",
                         str(out_path),
                     ]
@@ -254,8 +248,6 @@ label_prefix = "selected"
                     str(hermes_path),
                     "-p",
                     str(psychevo_path),
-                    "-f",
-                    "json",
                     "-o",
                     str(inferred_path_report),
                 ]
@@ -278,8 +270,6 @@ label_prefix = "selected"
                     "opencode",
                     "-p",
                     str(hermes_path),
-                    "-f",
-                    "json",
                     "-o",
                     str(explicit_report),
                 ]
@@ -305,8 +295,6 @@ label_prefix = "selected"
                     "d1=hermes-old",
                     "-s",
                     "d2=db-a",
-                    "-f",
-                    "json",
                     "-o",
                     str(inferred_db_report),
                 ]
@@ -356,8 +344,6 @@ label_prefix = "selected"
                     "d1=hermes-old",
                     "-s",
                     "d2=ses-old",
-                    "-f",
-                    "json",
                     "-o",
                     str(multi_db_out),
                 ]
@@ -387,8 +373,6 @@ label_prefix = "selected"
                     str(FIXTURES / "common_session.jsonl"),
                     "-d",
                     str(opencode_db),
-                    "-f",
-                    "json",
                     "-o",
                     str(mixed_out),
                 ]
@@ -474,8 +458,6 @@ label_prefix = "selected"
                     str(hermes_db),
                     "-s",
                     "#2",
-                    "-f",
-                    "json",
                     "-o",
                     str(index_report),
                 ]
@@ -495,8 +477,6 @@ label_prefix = "selected"
                     str(hermes_db),
                     "-s",
                     "1",
-                    "-f",
-                    "json",
                     "-o",
                     str(id_first_report),
                 ]
@@ -524,8 +504,6 @@ label_prefix = "selected"
                     "d1=#2",
                     "-s",
                     "d2=#2",
-                    "-f",
-                    "json",
                     "-o",
                     str(multi_report),
                 ]
@@ -563,8 +541,6 @@ label_prefix = "selected"
                         "-d",
                         str(hermes_db),
                         "-li",
-                        "-f",
-                        "json",
                         "-o",
                         str(interactive_report),
                     ]
@@ -592,8 +568,6 @@ label_prefix = "selected"
                         "-d",
                         str(hermes_db),
                         "-li",
-                        "-f",
-                        "json",
                         "-o",
                         str(all_report),
                     ]
@@ -617,8 +591,6 @@ label_prefix = "selected"
                         "-d",
                         str(hermes_db),
                         "--list-interactive",
-                        "-f",
-                        "json",
                         "-o",
                         str(blank_report),
                     ]
@@ -666,8 +638,6 @@ label_prefix = "selected"
                     "raw",
                     "-p",
                     str(atif_path),
-                    "-f",
-                    "json",
                     "-o",
                     str(out_path),
                 ]
@@ -692,8 +662,6 @@ label_prefix = "selected"
                     str(missing_adapter_config),
                     "-p",
                     str(atif_path),
-                    "-f",
-                    "json",
                     "-o",
                     str(out_path),
                 ]
@@ -741,8 +709,6 @@ label_prefix = "selected"
                     "0=DB report",
                     "--note",
                     "2=DB B",
-                    "-f",
-                    "json",
                     "-o",
                     str(out_path),
                 ],
@@ -812,8 +778,6 @@ default_db_path = "state.db"
                     "@psychevo",
                     "-s",
                     "db-a",
-                    "-f",
-                    "json",
                     "-o",
                     str(out_path),
                 ]

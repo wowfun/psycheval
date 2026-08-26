@@ -26,7 +26,6 @@ from psycheval.config import apply_overrides as apply_overrides
 from psycheval.config import config_for_adapter as config_for_adapter
 from psycheval.config import load_config as load_config
 from psycheval.html import load_asset_text as load_asset_text
-from psycheval.html import render_html as render_html
 from psycheval.html import render_serve_html as render_serve_html
 from psycheval.inputs import LoadedInputs as LoadedInputs
 from psycheval.inputs import LoadedSession as LoadedSession

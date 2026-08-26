@@ -5,41 +5,18 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+ASSETS_ROOT = ROOT / "src/psycheval/assets"
 WHEEL_REQUIRED = {
-    "psycheval/assets/__init__.py",
-    "psycheval/assets/report.css",
-    "psycheval/assets/report.html",
-    "psycheval/assets/report.js",
-    "psycheval/assets/report_css/00-base.css",
-    "psycheval/assets/report_css/05-data-table.css",
-    "psycheval/assets/report_css/06-leaderboard-summary.css",
-    "psycheval/assets/report_css/08-trajectory.css",
-    "psycheval/assets/report_css/10-trace.css",
-    "psycheval/assets/report_css/12-steps.css",
-    "psycheval/assets/report_css/14-analysis.css",
-    "psycheval/assets/report_css/16-timeline.css",
-    "psycheval/assets/report_css/20-serve-toolbar.css",
-    "psycheval/assets/report_css/22-source-forms.css",
-    "psycheval/assets/report_css/23-harbor-workbench.css",
-    "psycheval/assets/report_css/24-source-list-export.css",
-    "psycheval/assets/report_css/26-step-drawer.css",
-    "psycheval/assets/report_css/28-workspace-reports.css",
-    "psycheval/assets/report_css/30-workspace-views.css",
-    "psycheval/assets/report_css/32-acp-client.css",
-    "psycheval/assets/serve_harbor_datasets.html",
-    "psycheval/assets/serve_report_manager.html",
-    "psycheval/assets/serve_configuration.html",
-    "psycheval/assets/prompt_assets/evaluation-review.md",
-    "psycheval/assets/prompt_assets/failure-diagnosis.md",
-    "psycheval/assets/prompt_assets/task-audit.md",
-    "psycheval/assets/prompt_assets/report-review.md",
+    f"psycheval/assets/{path.relative_to(ASSETS_ROOT).as_posix()}"
+    for path in ASSETS_ROOT.rglob("*")
+    if path.is_file() and "__pycache__" not in path.parts
 }
 SDIST_REQUIRED = {
     "package.json",
     "package-lock.json",
-    "web/src/main.js",
-    "web/src/app/report-app.js",
 } | {f"src/{name}" for name in WHEEL_REQUIRED}
+FORBIDDEN_BUNDLE = "psycheval/assets/report.js"
 
 
 def _failures(
@@ -47,11 +24,15 @@ def _failures(
     *,
     required: set[str],
     forbidden_parts: set[str],
+    forbidden_names: set[str] = frozenset(),
+    forbidden_prefixes: tuple[str, ...] = (),
 ) -> list[str]:
     failures = [f"missing {name}" for name in sorted(required - names)]
     for name in sorted(names):
         parts = set(Path(name).parts)
         if parts & forbidden_parts:
+            failures.append(f"forbidden path {name}")
+        if name in forbidden_names or name.startswith(forbidden_prefixes):
             failures.append(f"forbidden path {name}")
     return failures
 
@@ -64,11 +45,11 @@ def check_wheel(path: Path) -> list[str]:
         required=WHEEL_REQUIRED,
         forbidden_parts={
             "peval",
-            "web",
             "node_modules",
             "package.json",
             "package-lock.json",
         },
+        forbidden_names={FORBIDDEN_BUNDLE},
     )
 
 
@@ -80,6 +61,8 @@ def check_sdist(path: Path) -> list[str]:
         names,
         required=SDIST_REQUIRED,
         forbidden_parts={"node_modules"},
+        forbidden_names={f"src/{FORBIDDEN_BUNDLE}"},
+        forbidden_prefixes=("web/src/",),
     )
 
 

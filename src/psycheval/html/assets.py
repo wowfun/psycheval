@@ -23,7 +23,7 @@ ASSET_BUNDLES = {
         "report_css/22-source-forms.css",
         "report_css/23-harbor-workbench.css",
         "report_css/24-source-list-export.css",
-        "report_css/26-step-drawer.css",
+        "report_css/26-detail-sidebar.css",
         "report_css/28-workspace-reports.css",
         "report_css/30-workspace-views.css",
         "report_css/32-acp-client.css",
@@ -31,15 +31,13 @@ ASSET_BUNDLES = {
 }
 
 
-def render_echarts_script(mode: str) -> str:
+def render_echarts_script() -> str:
     cdn = escape(ECHARTS_CDN_SRC)
-    if mode == "serve":
-        local = escape(ECHARTS_LOCAL_SRC)
-        return (
-            f'<script src="{local}" '
-            f"onerror=\"this.onerror=null;this.src='{cdn}'\"></script>"
-        )
-    return f'<script src="{cdn}"></script>'
+    local = escape(ECHARTS_LOCAL_SRC)
+    return (
+        f'<script src="{local}" '
+        f"onerror=\"this.onerror=null;this.src='{cdn}'\"></script>"
+    )
 
 
 def load_asset_text(name: str) -> str:

@@ -14,20 +14,6 @@ DEFAULT_OUTPUT = object()
 FILENAME_PART_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
-def resolve_report_format(args: CliArgs) -> str:
-    if getattr(args, "format", None):
-        return args.format
-    if args.output is DEFAULT_OUTPUT:
-        return "html"
-    if args.output:
-        suffix = Path(args.output).suffix.lower()
-        if suffix == ".html":
-            return "html"
-        if suffix == ".json":
-            return "json"
-    return "json"
-
-
 def resolve_export_output(
     args: CliArgs,
     trajectory: dict[str, Any],
@@ -40,7 +26,6 @@ def resolve_export_output(
 
 def resolve_report_output(
     args: CliArgs,
-    fmt: str,
     report: dict[str, Any],
     config: ToolConfig,
     *,
@@ -52,7 +37,7 @@ def resolve_report_output(
         if len(trajectories) > 1:
             return default_multi_output_name(
                 "report",
-                fmt,
+                "json",
                 len(trajectories),
                 adapter,
                 timestamped=timestamped,
@@ -60,7 +45,7 @@ def resolve_report_output(
         trajectory = trajectories[0] if trajectories else {}
         return default_output_name(
             "report",
-            fmt,
+            "json",
             trajectory,
             config,
             adapter=adapter,

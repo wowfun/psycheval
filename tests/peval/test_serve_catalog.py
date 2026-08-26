@@ -15,12 +15,9 @@ from unittest.mock import patch
 
 from psycheval.config import ToolConfig
 from psycheval.serve.exports import (
-    MAX_REPORT_EXPORT_CELLS,
     MAX_REPORT_EXPORT_INPUT_BYTES,
     build_serve_export,
-    build_workspace_snapshot_export,
 )
-from psycheval.serve.payloads import WorkspaceSnapshotPresentation
 from psycheval.state import (
     CatalogBusyError,
     CatalogQuery,
@@ -31,8 +28,6 @@ from psycheval.state.catalog import (
     CATALOG_SCHEMA_VERSION,
     _count_matching_source_refs,
 )
-from psycheval.workspace_reports import WorkspaceReportLibrary
-from psycheval.workspace_views import WorkspaceViewLibrary
 from tests.peval.cli_inputs_support import write_trial_cell_artifacts
 
 
@@ -280,106 +275,6 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 self.assertIn("reconcile failed", failed.failures[0]["error"])
             finally:
                 store.close()
-
-    def test_workspace_snapshot_limits_include_unique_bound_report_content(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            self.write_cell(root, 1)
-            store, catalog = self.catalog(root)
-            catalog.reconcile()
-            rows = [item.to_dict() for item in catalog.query(CatalogQuery()).items]
-            reports = WorkspaceReportLibrary(root, catalog.binding_rows)
-            report_path = root / "bound.md"
-            report_path.write_text("# Bound\n\n" + ("x" * 128), encoding="utf-8")
-            reports.import_file(report_path, [rows[0]["source_key"]])
-            views = WorkspaceViewLibrary(root)
-            presentation = WorkspaceSnapshotPresentation(
-                summary_group_by="agent",
-                summary_statistic="mean",
-                summary_table_open=False,
-                selected_source_key=None,
-                selected_step_id=None,
-                leaderboard_columns={
-                    "version": 1,
-                    "order": [],
-                    "visibility": {},
-                },
-                visible_view_names=(),
-                workspace_view_filters={
-                    "categories": (),
-                    "tags": (),
-                    "models": (),
-                    "group_by": (),
-                },
-                open_view_tables=(),
-            )
-            import psycheval.serve.exports as export_module
-
-            self.assertEqual(MAX_REPORT_EXPORT_CELLS, 100)
-            with patch.object(export_module, "MAX_REPORT_EXPORT_CELLS", 0):
-                with self.assertRaisesRegex(ValueError, "limited to 0 cells"):
-                    build_workspace_snapshot_export(
-                        catalog,
-                        store,
-                        views,
-                        reports,
-                        catalog.config,
-                        query=CatalogQuery(),
-                        query_view_names=(),
-                        selected_source_keys=(),
-                        presentation=presentation,
-                        echarts_js=b"window.echarts={};",
-                    )
-
-            row_bytes = int(rows[0].get("input_bytes") or 0)
-            report_bytes = report_path.stat().st_size
-            with patch.object(
-                export_module,
-                "MAX_REPORT_EXPORT_INPUT_BYTES",
-                row_bytes + report_bytes - 1,
-            ):
-                with self.assertRaisesRegex(ValueError, "report input exceeds"):
-                    build_workspace_snapshot_export(
-                        catalog,
-                        store,
-                        views,
-                        reports,
-                        catalog.config,
-                        query=CatalogQuery(),
-                        query_view_names=(),
-                        selected_source_keys=(),
-                        presentation=presentation,
-                        echarts_js=b"window.echarts={};",
-                    )
-
-            snapshot = build_workspace_snapshot_export(
-                catalog,
-                store,
-                views,
-                reports,
-                ToolConfig(
-                    workspace_root=str(root),
-                    description="**Nightly** workspace",
-                ),
-                query=CatalogQuery(),
-                query_view_names=(),
-                selected_source_keys=(),
-                presentation=presentation,
-                echarts_js=b"window.echarts={};",
-            )
-            snapshot_html = snapshot.content.decode("utf-8")
-            self.assertIn(
-                'class="workspace-description note-body" '
-                "data-workspace-description hidden",
-                snapshot_html,
-            )
-            self.assertIn(
-                '"workspace_description": "**Nightly** workspace"', snapshot_html
-            )
-            self.assertEqual(MAX_REPORT_EXPORT_INPUT_BYTES, 50 * 1024 * 1024)
-            store.close()
 
     def catalog(
         self, root: Path, *, slug: str = "default"

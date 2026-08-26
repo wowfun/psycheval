@@ -18,15 +18,10 @@ from psycheval.config import (
     load_config,
     unique_harbor_id_from_path,
 )
-from psycheval.serve.exports import (
-    build_serve_export,
-    build_workspace_snapshot_export,
-)
-from psycheval.serve.payloads import WorkspaceSnapshotPresentation
+from psycheval.serve.exports import build_serve_export
 from psycheval.state import CatalogQuery, WorkspaceCatalog, open_workspace_state
 from psycheval.state.workspace_harbor import _telemetry_aligns
 from psycheval.workspace_reports import WorkspaceReportLibrary
-from psycheval.workspace_views import WorkspaceViewLibrary
 from tests.peval.peval_test_support import (
     create_messages_db,
     create_opencode_event_timing_db,
@@ -1034,37 +1029,6 @@ class HarborTrialTests(unittest.TestCase):
                     analysis["markdown_reports"],
                 )
 
-                snapshot = build_workspace_snapshot_export(
-                    catalog,
-                    store,
-                    WorkspaceViewLibrary(workspace),
-                    WorkspaceReportLibrary(workspace, catalog.binding_rows),
-                    config,
-                    query=CatalogQuery(),
-                    query_view_names=(),
-                    selected_source_keys=(),
-                    presentation=WorkspaceSnapshotPresentation(
-                        summary_group_by="agent",
-                        summary_statistic="mean",
-                        summary_table_open=False,
-                        selected_source_key=row["source_key"],
-                        selected_step_id=None,
-                        leaderboard_columns={
-                            "version": 1,
-                            "order": [],
-                            "visibility": {},
-                        },
-                        visible_view_names=(),
-                        workspace_view_filters={},
-                        open_view_tables=(),
-                    ),
-                    echarts_js=b"window.echarts={};",
-                )
-                snapshot_html = snapshot.content.decode("utf-8")
-                self.assertLess(
-                    snapshot_html.index("# Harbor review"),
-                    snapshot_html.index("# Workspace review"),
-                )
                 after = {
                     path.relative_to(trial).as_posix(): path.read_bytes()
                     for path in trial.rglob("*")

@@ -27,6 +27,7 @@ from psycheval.serve import (
     make_handler,
 )
 from psycheval.serve.harbor_workspace import (
+    TEXT_EDIT_LIMIT,
     HarborConflictError,
     HarborNotFoundError,
     HarborSizeError,
@@ -356,6 +357,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 expected_revision=dataset["revision"],
             )
             self.assertEqual(detail["task"]["status"], "valid")
+            self.assertEqual(detail["default_file_path"], "instruction.md")
             manifest = DatasetManifest.from_toml_file(root / "dataset" / "dataset.toml")
             self.assertEqual(manifest.tasks, [], "Task creation must not sync manifest")
 
@@ -678,6 +680,66 @@ class HarborWorkspaceTests(unittest.TestCase):
             self.assertEqual(
                 list((root / "dataset").glob(".peval-staging-*")),
                 [],
+            )
+
+    def test_task_detail_selects_only_the_configured_default_instruction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "dataset"
+            dataset.mkdir()
+            single = dataset / "single"
+            single.mkdir()
+            (single / "task.toml").write_text(
+                'schema_version = "1.4"\n[task]\nname = "local/single"\n',
+                encoding="utf-8",
+            )
+            (single / "instruction.md").write_text("Single\n", encoding="utf-8")
+            multi = dataset / "multi"
+            (multi / "steps" / "zeta").mkdir(parents=True)
+            (multi / "steps" / "alpha").mkdir(parents=True)
+            (multi / "task.toml").write_text(
+                'schema_version = "1.4"\n'
+                '[[steps]]\nname = "zeta"\n'
+                '[[steps]]\nname = "alpha"\n',
+                encoding="utf-8",
+            )
+            (multi / "instruction.md").write_text(
+                "Do not fall back\n", encoding="utf-8"
+            )
+            (multi / "steps" / "zeta" / "instruction.md").write_text(
+                "First configured\n", encoding="utf-8"
+            )
+            (multi / "steps" / "alpha" / "instruction.md").write_text(
+                "Second configured\n", encoding="utf-8"
+            )
+            library = HarborWorkspace(
+                root / "peval.toml",
+                ToolConfig(
+                    workspace_root=str(root),
+                    harbor_datasets=(HarborDataset("tasks", str(dataset)),),
+                ),
+            )
+
+            self.assertEqual(
+                library.task_detail("tasks", "single")["default_file_path"],
+                "instruction.md",
+            )
+            self.assertEqual(
+                library.task_detail("tasks", "multi")["default_file_path"],
+                "steps/zeta/instruction.md",
+            )
+
+            (multi / "steps" / "zeta" / "instruction.md").unlink()
+            self.assertIsNone(
+                library.task_detail("tasks", "multi")["default_file_path"]
+            )
+            (single / "instruction.md").write_bytes(b"\xff")
+            self.assertIsNone(
+                library.task_detail("tasks", "single")["default_file_path"]
+            )
+            (single / "instruction.md").write_bytes(b"x" * (TEXT_EDIT_LIMIT + 1))
+            self.assertIsNone(
+                library.task_detail("tasks", "single")["default_file_path"]
             )
 
     def test_register_dataset_http_validates_roots_without_parsing_manifest(
@@ -1160,25 +1222,20 @@ class HarborWorkspaceTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertIn("content", text)
 
-                status, headers, content = self._request_bytes(
+                status, _headers, content = self._request_bytes(
                     server,
                     "/api/harbor/files?dataset_id=tasks&task=hello&"
                     "path=instruction.md&download=1",
                 )
-                self.assertEqual(status, 200)
-                self.assertEqual(content, text["content"].encode("utf-8"))
-                self.assertEqual(headers["content-type"], "application/octet-stream")
-                self.assertIn("attachment", headers["content-disposition"])
-                self.assertIn("etag", headers)
-                self.assertIn("x-peval-task-revision", headers)
-
-                status, _headers, unsafe_download = self._request_bytes(
+                self.assertEqual(status, 400)
+                self.assertIn(b"not supported", content)
+                status, _headers, content = self._request_bytes(
                     server,
                     "/api/harbor/files?dataset_id=tasks&task=hello&"
-                    "path=../secret&download=1",
+                    "path=instruction.md&download=",
                 )
                 self.assertEqual(status, 400)
-                self.assertNotIn(str(root).encode(), unsafe_download)
+                self.assertIn(b"not supported", content)
 
                 status, conflict = self._request(
                     server,
@@ -1518,6 +1575,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 paths = {item["path"]: item for item in detail["tree"]}
+                self.assertEqual(detail["default_file_path"], "instruction.md")
                 self.assertIn("solution/solve.sh", paths)
                 self.assertIn("tests/test.sh", paths)
                 self.assertFalse(paths["binary.bin"]["editable"])
@@ -1541,7 +1599,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                     "/api/harbor/files?dataset_id=tasks&task=hello&path="
                     "solution/solve.sh&download=1",
                 )
-                self.assertEqual(status, 403, blocked)
+                self.assertEqual(status, 400, blocked)
                 status, blocked = self._request(
                     server,
                     "POST",

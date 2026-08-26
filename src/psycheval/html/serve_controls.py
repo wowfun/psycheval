@@ -56,7 +56,7 @@ def render_serve_header(
         )
         language = ""
     return f"""
-  <header class="workspace-header" data-serve-only>
+  <header class="workspace-header">
     <div class="workspace-header-left">
       <a class="workspace-brand" href="/">__TITLE__</a>
       <nav class="workspace-nav" aria-label="{escape(messages["workspace_navigation"])}">
@@ -83,8 +83,8 @@ def render_serve_home() -> str:
       </div>
     </main>
     <div class="workspace-side-region" id="workspace-side-region">
-      <aside class="workspace-views" id="workspace-views" hidden data-serve-only></aside>
-      <aside class="step-drawer" id="step-drawer" hidden></aside>
+      <aside class="workspace-views" id="workspace-views" hidden></aside>
+      <aside class="detail-sidebar" id="detail-sidebar" hidden></aside>
     </div>
   </div>"""
 
@@ -114,9 +114,7 @@ def render_serve_configuration_page(
             "ACP_AGENTS_COPY": escape(messages["serve_acp_agents_copy"]),
             "ACP_AGENTS_TRUST_COPY": escape(messages["serve_acp_agents_trust_copy"]),
             "LOCAL_PROCESS": escape(messages["serve_local_process"]),
-            "ACP_OPENCODE_TEMPLATE": escape(
-                messages["serve_acp_opencode_template"]
-            ),
+            "ACP_OPENCODE_TEMPLATE": escape(messages["serve_acp_opencode_template"]),
             "ACP_OPENCODE_TEMPLATE_COPY": escape(
                 messages["serve_acp_opencode_template_copy"]
             ),
@@ -178,7 +176,7 @@ def render_view_save_dialog(messages: dict[str, str], *, role: str = "admin") ->
         <input type="hidden" name="view_location" value="browser">
         <p class="copy view-save-location-copy">{escape(messages["view_guest_local_copy"])}</p>"""
     return f"""
-  <div class="view-save-backdrop" data-view-save-dialog hidden data-serve-only>
+  <div class="view-save-backdrop" data-view-save-dialog hidden>
     <section class="view-save-dialog" role="dialog" aria-modal="true" aria-labelledby="view-save-title">
       <header class="view-save-head">
         <h2 id="view-save-title">{save_view}</h2>
@@ -219,8 +217,7 @@ def render_serve_overlays(
         parts.append(render_view_save_dialog(messages, role=role))
     if page in {"home", "reports"}:
         parts.append(
-            '<aside class="report-reader" id="workspace-report-reader" '
-            "hidden data-serve-only></aside>"
+            '<aside class="report-reader" id="workspace-report-reader" hidden></aside>'
         )
     if role == "admin":
         parts.append(render_acp_drawer(messages))
@@ -229,8 +226,8 @@ def render_serve_overlays(
 
 def render_acp_drawer(messages: dict[str, str]) -> str:
     return f"""
-  <div class="acp-backdrop" data-acp-backdrop hidden data-serve-only></div>
-  <aside class="acp-drawer" data-acp-drawer hidden data-serve-only role="dialog"
+  <div class="acp-backdrop" data-acp-backdrop hidden></div>
+  <aside class="acp-drawer" data-acp-drawer hidden role="dialog"
     aria-modal="true" aria-labelledby="acp-drawer-title">
     <header class="acp-drawer-head">
       <div>
@@ -289,7 +286,7 @@ def render_auth_dialog(messages: dict[str, str]) -> str:
     close = escape(messages["close"])
     admin_password = escape(messages["serve_admin_password"])
     return f"""
-  <div class="auth-backdrop" data-admin-login-dialog hidden data-serve-only>
+  <div class="auth-backdrop" data-admin-login-dialog hidden>
     <section class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-login-title">
       <header class="configuration-page-head">
         <div>
@@ -414,7 +411,6 @@ def render_harbor_dataset_page(messages: dict[str, str], *, role: str = "admin")
           </div>"""
         admin_editor_actions = f"""
             <div class="harbor-editor-actions">
-              <button class="action-button compact" type="button" data-harbor-download hidden>{escape(messages["harbor_download"])}</button>
               <button class="action-button primary compact" type="button" data-harbor-save disabled>{escape(messages["save"])}</button>
             </div>"""
     return replace_template_tokens(

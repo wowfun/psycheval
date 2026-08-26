@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { aggregateInferenceRows, inferenceRowMetrics } from "../src/modules/inference-metrics.js";
+import { aggregateInferenceRows, inferenceRowMetrics } from "../../src/psycheval/assets/web/modules/inference-metrics.js";
 
 test("derives trial inference values from sufficient statistics", () => {
   const row = inferenceRowMetrics({

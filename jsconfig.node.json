@@ -11,5 +11,5 @@
     "strict": false,
     "skipLibCheck": true
   },
-  "include": ["web/scripts/**/*.mjs", "web/test/**/*.js"]
+  "include": ["src/psycheval/assets/web/**/*.js", "web/test/**/*.js"]
 }

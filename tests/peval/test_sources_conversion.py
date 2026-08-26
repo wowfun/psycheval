@@ -13,7 +13,6 @@ from psycheval.atif import (
     validate_atif_trajectory,
 )
 from psycheval.config import ToolConfig
-from psycheval.html import render_html
 from psycheval.report import build_report
 from psycheval.sources import (
     ACCOUNTING_COLUMNS,
@@ -1139,10 +1138,6 @@ class PevalSourceConversionTests(unittest.TestCase):
         self.assertEqual(step_meta[1]["tool_calls"][0]["execution_duration_ms"], 125)
         self.assertEqual(step_meta[1]["tool_calls"][1]["execution_duration_ms"], 100)
         self.assertEqual(step_meta[2]["tool_calls"][0]["execution_duration_ms"], 100)
-        html = render_html(report)
-        self.assertIn("tool-error-chip", html)
-        self.assertIn("exec_command", html)
-        self.assertIn("tool success / total", html)
 
     def test_malformed_jsonl_reports_line_number(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

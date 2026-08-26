@@ -37,29 +37,6 @@ class SummaryExportPayload:
     browser_views: tuple[WorkspaceView, ...] = ()
 
 
-@dataclass(frozen=True)
-class WorkspaceSnapshotPresentation:
-    summary_group_by: str
-    summary_statistic: str
-    summary_table_open: bool
-    selected_source_key: str | None
-    selected_step_id: str | None
-    leaderboard_columns: dict[str, Any]
-    visible_view_names: tuple[str, ...]
-    workspace_view_filters: dict[str, tuple[str, ...]]
-    open_view_tables: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class WorkspaceSnapshotExportPayload:
-    query: CatalogQuery
-    view_names: tuple[str, ...]
-    query_browser_views: tuple[WorkspaceView, ...]
-    browser_views: tuple[WorkspaceView, ...]
-    selected_source_keys: tuple[str, ...]
-    presentation: WorkspaceSnapshotPresentation
-
-
 def catalog_post_query_payload(
     value: Any,
 ) -> tuple[CatalogQuery, tuple[str, ...], Any]:
@@ -121,131 +98,6 @@ def catalog_post_query_payload(
     )
 
 
-def workspace_snapshot_export_payload(payload: Any) -> WorkspaceSnapshotExportPayload:
-    if not isinstance(payload, dict):
-        raise HttpError(400, "export payload must be an object")
-    required_fields = {"kind", "query", "selected_source_keys", "presentation"}
-    if not required_fields.issubset(payload) or not set(payload).issubset(
-        required_fields | {"browser_views"}
-    ):
-        raise HttpError(
-            400,
-            "workspace snapshot fields must be kind, query, selected_source_keys, and presentation",
-        )
-    query, view_names, query_browser_views = _strict_catalog_query_payload(
-        payload.get("query")
-    )
-    browser_views = _browser_views(payload.get("browser_views", []))
-
-    selected = tuple(
-        _string_array(payload.get("selected_source_keys"), "selected_source_keys")
-    )
-
-    presentation_value = payload.get("presentation")
-    if not isinstance(presentation_value, dict):
-        raise HttpError(400, "presentation must be an object")
-    presentation_fields = {
-        "summary_group_by",
-        "summary_statistic",
-        "summary_table_open",
-        "selected_source_key",
-        "selected_step_id",
-        "leaderboard_columns",
-        "visible_view_names",
-        "workspace_view_filters",
-        "open_view_tables",
-    }
-    if set(presentation_value) != presentation_fields:
-        raise HttpError(400, "workspace snapshot presentation fields are invalid")
-    group_by = presentation_value.get("summary_group_by")
-    statistic = presentation_value.get("summary_statistic")
-    if group_by not in SUMMARY_GROUP_BY_VALUES:
-        raise HttpError(
-            400,
-            "summary_group_by must be overall, agent, model, category, task, job, or provider",
-        )
-    if statistic not in SUMMARY_STATISTIC_VALUES:
-        raise HttpError(
-            400,
-            "summary_statistic must be mean, min, q1, p50, q3, p95, or max",
-        )
-    table_open = presentation_value.get("summary_table_open")
-    if not isinstance(table_open, bool):
-        raise HttpError(400, "summary_table_open must be true or false")
-    selected_source_key = _nullable_text(
-        presentation_value.get("selected_source_key"), "selected_source_key"
-    )
-    raw_step_id = presentation_value.get("selected_step_id")
-    if raw_step_id is not None and not isinstance(raw_step_id, (str, int)):
-        raise HttpError(400, "selected_step_id must be a string, integer, or null")
-    leaderboard_columns = _leaderboard_columns(
-        presentation_value.get("leaderboard_columns")
-    )
-    filters = presentation_value.get("workspace_view_filters")
-    required_filter_fields = {
-        "categories",
-        "tags",
-        "models",
-        "group_by",
-    }
-    optional_filter_fields = {"tasks", "jobs", "providers"}
-    if (
-        not isinstance(filters, dict)
-        or not required_filter_fields.issubset(filters)
-        or not set(filters).issubset(required_filter_fields | optional_filter_fields)
-    ):
-        raise HttpError(
-            400,
-            "workspace_view_filters fields are invalid",
-        )
-    filter_values = {
-        key: tuple(_string_array(filters.get(key, []), f"workspace_view_filters {key}"))
-        for key in (
-            "categories",
-            "tags",
-            "models",
-            "tasks",
-            "jobs",
-            "providers",
-            "group_by",
-        )
-    }
-    invalid_groups = [
-        value
-        for value in filter_values["group_by"]
-        if value not in SUMMARY_GROUP_BY_VALUES
-    ]
-    if invalid_groups:
-        raise HttpError(400, "workspace_view_filters group_by values are invalid")
-    presentation = WorkspaceSnapshotPresentation(
-        summary_group_by=group_by,
-        summary_statistic=statistic,
-        summary_table_open=table_open,
-        selected_source_key=selected_source_key,
-        selected_step_id=None if raw_step_id is None else str(raw_step_id),
-        leaderboard_columns=leaderboard_columns,
-        visible_view_names=tuple(
-            _string_array(
-                presentation_value.get("visible_view_names"), "visible_view_names"
-            )
-        ),
-        workspace_view_filters=filter_values,
-        open_view_tables=tuple(
-            _string_array(
-                presentation_value.get("open_view_tables"), "open_view_tables"
-            )
-        ),
-    )
-    return WorkspaceSnapshotExportPayload(
-        query=query,
-        view_names=view_names,
-        query_browser_views=query_browser_views,
-        browser_views=browser_views,
-        selected_source_keys=selected,
-        presentation=presentation,
-    )
-
-
 def _strict_catalog_query_payload(
     query_value: object,
 ) -> tuple[CatalogQuery, tuple[str, ...], tuple[WorkspaceView, ...]]:
@@ -302,25 +154,6 @@ def _browser_views(value: Any) -> tuple[WorkspaceView, ...]:
         raise HttpError(400, str(exc)) from exc
 
 
-def _leaderboard_columns(value: object) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != {"version", "order", "visibility"}:
-        raise HttpError(400, "leaderboard_columns fields are invalid")
-    if value.get("version") != 1:
-        raise HttpError(400, "leaderboard_columns version must be 1")
-    order = _string_array(value.get("order"), "leaderboard_columns order")
-    visibility = value.get("visibility")
-    if not isinstance(visibility, dict) or any(
-        not isinstance(key, str) or mode not in {"show", "hide"}
-        for key, mode in visibility.items()
-    ):
-        raise HttpError(400, "leaderboard_columns visibility is invalid")
-    return {
-        "version": 1,
-        "order": order,
-        "visibility": dict(visibility),
-    }
-
-
 def _string_array(value: Any, field: str) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise HttpError(400, f"{field} must be a string array")
@@ -338,12 +171,6 @@ def _required_text(value: Any, field: str) -> str:
     if not text:
         raise HttpError(400, f"{field} must be a non-empty string")
     return text
-
-
-def _nullable_text(value: Any, field: str) -> str | None:
-    if value is None:
-        return None
-    return _required_text(value, field)
 
 
 def summary_export_payload(value: Any) -> SummaryExportPayload:

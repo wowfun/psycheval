@@ -131,6 +131,11 @@ def project_harbor_task(payload: dict[str, Any], role: str) -> dict[str, Any]:
         "tree": [_project_harbor_file(item) for item in tree if isinstance(item, dict)]
         if isinstance(tree, list)
         else [],
+        "default_file_path": (
+            str(payload["default_file_path"])
+            if payload.get("default_file_path") is not None
+            else None
+        ),
     }
 
 
@@ -164,7 +169,9 @@ def project_report(report: dict[str, Any]) -> dict[str, Any]:
                 meta["data_ref"] = _project_data_ref(data_ref)
             task_metadata = original_meta.get("task_metadata")
             if isinstance(task_metadata, dict):
-                meta["task_metadata"] = _project_task_metadata(task_metadata)
+                meta["task_metadata"] = _project_task_metadata(
+                    task_metadata, include_task_ref=True
+                )
             harbor_provenance = original_meta.get("harbor_provenance")
             if isinstance(harbor_provenance, dict):
                 meta["harbor_provenance"] = _project_harbor_provenance(
@@ -283,10 +290,24 @@ def _project_harbor_provenance(value: dict[str, Any]) -> dict[str, Any]:
     return projected
 
 
-def _project_task_metadata(value: dict[str, Any]) -> dict[str, Any]:
-    return {
+def _project_task_metadata(
+    value: dict[str, Any], *, include_task_ref: bool = False
+) -> dict[str, Any]:
+    projected = {
         key: item for key, item in value.items() if key in TASK_METADATA_PUBLIC_FIELDS
     }
+    task_ref = value.get("task_ref")
+    if include_task_ref and isinstance(task_ref, dict):
+        dataset_id = task_ref.get("dataset_id")
+        task = task_ref.get("task")
+        if (
+            isinstance(dataset_id, str)
+            and dataset_id
+            and isinstance(task, str)
+            and task
+        ):
+            projected["task_ref"] = {"dataset_id": dataset_id, "task": task}
+    return projected
 
 
 def _project_data_ref(value: dict[str, Any]) -> dict[str, Any]:

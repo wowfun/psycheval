@@ -23,51 +23,6 @@ from tests.peval.cli_inputs_support import write_trial_cell_artifacts
 
 class ServeAccessHttpTests(unittest.TestCase):
     @staticmethod
-    def workspace_snapshot_payload(source_key: str) -> dict:
-        return {
-            "kind": "workspace_html",
-            "query": {
-                "state": "active",
-                "search": "",
-                "sort": "last_turn_end",
-                "direction": "desc",
-                "categories": [],
-                "tags": [],
-                "agents": [],
-                "models": [],
-                "tasks": [],
-                "jobs": [],
-                "providers": [],
-                "results": [],
-                "views": [],
-            },
-            "selected_source_keys": [source_key],
-            "presentation": {
-                "summary_group_by": "agent",
-                "summary_statistic": "mean",
-                "summary_table_open": False,
-                "selected_source_key": source_key,
-                "selected_step_id": None,
-                "leaderboard_columns": {
-                    "version": 1,
-                    "order": [],
-                    "visibility": {},
-                },
-                "visible_view_names": [],
-                "workspace_view_filters": {
-                    "categories": [],
-                    "tags": [],
-                    "models": [],
-                    "tasks": [],
-                    "jobs": [],
-                    "providers": [],
-                    "group_by": [],
-                },
-                "open_view_tables": [],
-            },
-        }
-
-    @staticmethod
     def script_json(content: bytes, element_id: str) -> dict:
         match = re.search(
             rb'<script type="application/json" id="'
@@ -187,6 +142,26 @@ class ServeAccessHttpTests(unittest.TestCase):
                 self.assertNotIn("load_error", guest_options)
                 self.assertEqual(guest_options["workspace_id"], runtime.workspace_id)
                 self.assertNotIn(str(root), json.dumps(guest_options))
+
+                for asset_path in (
+                    "/assets/peval/main.js",
+                    "/assets/peval/modules/runtime.js",
+                ):
+                    status, headers, asset = self.request(server, "GET", asset_path)
+                    self.assertEqual(status, 200, asset[:200])
+                    self.assertEqual(
+                        headers["content-type"],
+                        "application/javascript; charset=utf-8",
+                    )
+                    self.assertEqual(headers["cache-control"], "no-store")
+                    self.assertTrue(asset.strip())
+                for rejected_path in (
+                    "/assets/peval/../report.js",
+                    "/assets/peval/report.css",
+                    "/assets/peval/missing.js",
+                ):
+                    status, _headers, _body = self.request(server, "GET", rejected_path)
+                    self.assertEqual(status, 404)
 
                 status, _headers, body = self.request(server, "GET", "/api/catalog")
                 self.assertEqual(status, 200)
@@ -556,7 +531,7 @@ class ServeAccessHttpTests(unittest.TestCase):
             finally:
                 self.stop(store, server, thread)
 
-    def test_guest_json_xlsx_and_snapshot_exports_use_the_same_projection(self) -> None:
+    def test_guest_json_and_xlsx_exports_use_the_same_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cell = root / "runs/default/psychevo/session/trial"
@@ -595,10 +570,6 @@ class ServeAccessHttpTests(unittest.TestCase):
                 }
             )
             meta_path.write_text(json.dumps(meta), encoding="utf-8")
-            echarts_path = root / ".cache/echarts/6.0.0/echarts.min.js"
-            echarts_path.parent.mkdir(parents=True, exist_ok=True)
-            echarts_path.write_bytes(b"window.echarts={};")
-
             store, runtime, server, thread = self.running_server(root)
             source_key = runtime.catalog.query(CatalogQuery()).items[0].source_key
             try:
@@ -657,36 +628,6 @@ class ServeAccessHttpTests(unittest.TestCase):
                 self.assertNotIn(r"\\server\private", worksheet)
                 self.assertIn("Published task description", worksheet)
                 self.assertIn("original-trial", worksheet)
-
-                status, _headers, snapshot_body = self.request(
-                    server,
-                    "POST",
-                    "/api/exports",
-                    self.workspace_snapshot_payload(source_key),
-                )
-                self.assertEqual(status, 200, snapshot_body[:200])
-                snapshot = self.script_json(snapshot_body, "peval-workspace-snapshot")
-                snapshot_report = self.script_json(snapshot_body, "peval-data")
-                snapshot_row = snapshot["catalog_rows"][0]
-                for field in (
-                    "artifact_dir",
-                    "db_path",
-                    "input_path",
-                    "last_error",
-                    "path",
-                    "source_ref",
-                ):
-                    self.assertNotIn(field, snapshot_row)
-                self.assertEqual(
-                    snapshot_row["task_metadata"],
-                    {"description": "Published task description"},
-                )
-                self.assertEqual(
-                    snapshot_report["trajectory_meta"][0]["data_ref"],
-                    {"label": "trial.json"},
-                )
-                self.assertNotIn("/srv/future/", json.dumps(snapshot))
-                self.assertNotIn("/srv/future/", json.dumps(snapshot_report))
 
                 status, headers, login_body = self.request(
                     server,

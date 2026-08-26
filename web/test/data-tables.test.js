@@ -4,8 +4,6 @@ import test from "node:test";
 import { installBrowserDom } from "./support/browser.js";
 
 const browser = installBrowserDom(`
-  <script type="application/json" id="peval-data">{}</script>
-  <script type="application/json" id="peval-token-estimates">{}</script>
   <script type="application/json" id="peval-i18n">{}</script>
   <script type="application/json" id="peval-render-options">{"mode":"serve","sources":[]}</script>
   <div id="table-root"></div>
@@ -15,17 +13,54 @@ const browser = installBrowserDom(`
   <aside id="workspace-views" hidden></aside>
 `);
 
-const tables = await import("../src/modules/data-tables.js");
-const runtime = await import("../src/modules/runtime.js");
-const views = await import("../src/modules/workspace-views.js");
-const summaries = await import("../src/modules/leaderboard-summary.js");
-const selected = await import("../src/modules/analysis-selected.js");
-const analysisRendering = await import("../src/modules/analysis-rendering.js");
-const catalog = await import("../src/modules/serve-catalog.js");
+const tables = await import("../../src/psycheval/assets/web/modules/data-tables.js");
+const runtime = await import("../../src/psycheval/assets/web/modules/runtime.js");
+const views = await import("../../src/psycheval/assets/web/modules/workspace-views.js");
+const summaries = await import("../../src/psycheval/assets/web/modules/leaderboard-summary.js");
+const selected = await import("../../src/psycheval/assets/web/modules/analysis-selected.js");
+const timeline = await import("../../src/psycheval/assets/web/modules/timeline-table.js");
+const analysisRendering = await import("../../src/psycheval/assets/web/modules/analysis-rendering.js");
+const catalog = await import("../../src/psycheval/assets/web/modules/serve-catalog.js");
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());
+
+test("absolute timestamps render as UTC across Leaderboard, Harbor evidence, and timeline", () => {
+  const previousTimezone = process.env.TZ;
+  process.env.TZ = "Asia/Shanghai";
+  try {
+    const instant = Date.parse("2026-08-12T00:00:02Z");
+    const finishedAt = tables.leaderboardColumns().find(column => column.key === "finished_at_ms");
+    assert.equal(tables.tableText({ finished_at_ms: instant }, finishedAt), "2026-08-12T00:00:02.000Z");
+
+    const evidence = selected.renderHarborEvidence({
+      harbor_provenance: { result_id: "result-1" },
+      evaluation: {
+        phase_timing: {
+          agent_execution: {
+            started_at: "2026-08-12T08:00:02+08:00",
+            finished_at: "2026-08-12T00:00:08Z",
+            duration_ms: 6_000,
+          },
+          verifier: {
+            started_at: "not-a-timestamp",
+            finished_at: null,
+          },
+        },
+      },
+    });
+    assert.match(evidence, /6\.0s · 2026-08-12T00:00:02\.000Z → 2026-08-12T00:00:08\.000Z/);
+    assert.match(evidence, /not-a-timestamp → -/);
+
+    const start = timeline.timelineDetailColumns({ active_total_ms: 1 })
+      .find(column => column.key === "wall_start_ms");
+    assert.equal(tables.tableText({ wall_start_ms: instant }, start), "00:00:02.000Z");
+  } finally {
+    if (previousTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTimezone;
+  }
+});
 
 test("#Analysis counts Harbor and workspace origins without double-counting overlay files", () => {
   const previousView = runtime.state.view;

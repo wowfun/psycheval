@@ -8,6 +8,7 @@ import sys
 import sysconfig
 import tempfile
 from importlib.metadata import distribution
+from importlib.resources import files
 from pathlib import Path
 
 try:
@@ -133,7 +134,7 @@ def main() -> int:
         assert payload["schema_version"] == "ATIF-v1.7"
         assert payload["steps"]
 
-        report = tmp / "report.html"
+        report = tmp / "report.json"
         run(
             [
                 str(peval),
@@ -145,17 +146,17 @@ def main() -> int:
                 "psychevo",
                 "-p",
                 str(FIXTURE),
-                "-f",
-                "html",
                 "-o",
                 str(report),
             ],
             cwd=tmp,
             env=env,
         )
-        html = report.read_text(encoding="utf-8")
-        assert 'id="peval-data"' in html
-        assert 'id="peval-render-options"' in html
+        assert json.loads(report.read_text(encoding="utf-8"))["trajectory"]
+        web_assets = files("psycheval.assets").joinpath("web")
+        assert web_assets.joinpath("main.js").is_file()
+        assert web_assets.joinpath("modules", "runtime.js").is_file()
+        assert not files("psycheval.assets").joinpath("report.js").is_file()
 
     print("isolated psycheval wheel smoke passed")
     return 0

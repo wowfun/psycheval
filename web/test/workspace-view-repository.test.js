@@ -5,7 +5,7 @@ import {
   BROWSER_VIEW_LIMIT,
   browserViewStorageKey,
   createWorkspaceViewRepository,
-} from "../src/modules/workspace-view-repository.js";
+} from "../../src/psycheval/assets/web/modules/workspace-view-repository.js";
 
 function memoryStorage(initial = {}) {
   const entries = new Map(Object.entries(initial));

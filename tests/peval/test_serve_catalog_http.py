@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import base64
 import http.client
 import json
-import re
 import tempfile
 import threading
 import time
@@ -20,7 +18,6 @@ from psycheval.serve import (
     ServeRuntime,
     make_handler,
 )
-from psycheval.serve.errors import HttpError
 from psycheval.serve.handler import catalog_query
 from psycheval.state import CatalogQuery, open_workspace_state
 from tests.peval.cli_inputs_support import write_trial_cell_artifacts
@@ -44,59 +41,6 @@ class ServeCatalogHttpTests(unittest.TestCase):
         )
         self.assertEqual(query.jobs, ("opencode-real",))
         self.assertEqual(query.providers, ("xiaomi-token-plan-cn",))
-
-    @staticmethod
-    def workspace_snapshot_payload(**overrides):
-        payload = {
-            "kind": "workspace_html",
-            "query": {
-                "state": "active",
-                "search": "",
-                "sort": "last_turn_end",
-                "direction": "desc",
-                "categories": [],
-                "tags": [],
-                "agents": [],
-                "models": [],
-                "results": [],
-                "views": [],
-            },
-            "selected_source_keys": [],
-            "presentation": {
-                "summary_group_by": "agent",
-                "summary_statistic": "mean",
-                "summary_table_open": False,
-                "selected_source_key": None,
-                "selected_step_id": None,
-                "leaderboard_columns": {
-                    "version": 1,
-                    "order": [],
-                    "visibility": {},
-                },
-                "visible_view_names": [],
-                "workspace_view_filters": {
-                    "categories": [],
-                    "tags": [],
-                    "models": [],
-                    "group_by": [],
-                },
-                "open_view_tables": [],
-            },
-        }
-        for key, value in overrides.items():
-            payload[key] = value
-        return payload
-
-    @staticmethod
-    def snapshot_projection(content: bytes) -> dict:
-        match = re.search(
-            rb'<script type="application/json" id="peval-workspace-snapshot">(.*?)</script>',
-            content,
-            re.DOTALL,
-        )
-        if match is None:
-            raise AssertionError("workspace snapshot projection script is missing")
-        return json.loads(match.group(1))
 
     def running_server(self, root: Path, *, access: ServeAccess | None = None):
         (root / "peval.toml").write_text(
@@ -270,208 +214,6 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     )
                 self.assertEqual(status, 500)
                 self.assertEqual(json.loads(body)["error"], "internal server error")
-            finally:
-                self.stop(store, server, thread)
-
-    def test_workspace_snapshot_export_is_full_query_offline_and_read_only(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            for index in range(2):
-                cell = root / f"runs/default/psychevo/s{index}/cell-{index}"
-                write_trial_cell_artifacts(
-                    cell,
-                    session_id=f"session-{index}",
-                    trial_key="duplicate-trial",
-                )
-                meta_path = cell / "agent/trajectory_meta.json"
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                meta["finished_at_ms"] = 1_000 + index
-                meta_path.write_text(json.dumps(meta), encoding="utf-8")
-                state_path = cell / ".peval/state.json"
-                state_path.parent.mkdir(parents=True, exist_ok=True)
-                state_path.write_text(
-                    json.dumps(
-                        {
-                            "active": True,
-                            "source_category": (
-                                "daily-category" if index == 1 else "other-category"
-                            ),
-                            "source_tags": ["daily" if index == 1 else "other"],
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-            store, runtime, server, thread = self.running_server(root)
-            try:
-                rows = [
-                    item.to_dict()
-                    for item in runtime.catalog.query(CatalogQuery()).items
-                ]
-                source_keys = [row["source_key"] for row in rows]
-                runtime.workspace_views.save(
-                    name="Daily",
-                    filters={"tags": ["daily"]},
-                    group_by="agent",
-                    notes="# Daily\n\nKeep <script>alert(1)</script> escaped.",
-                    overwrite=False,
-                )
-                markdown_path = root / "analysis.md"
-                markdown_path.write_text(
-                    "# Safe\n\n<script>alert(1)</script>", encoding="utf-8"
-                )
-                runtime.workspace_reports.import_file(markdown_path, [source_keys[0]])
-                html_path = root / "analysis.html"
-                html_path.write_text(
-                    "<!doctype html><script>window.rawReport=true</script>",
-                    encoding="utf-8",
-                )
-                runtime.workspace_reports.import_file(html_path, [source_keys[0]])
-                echarts = b"window.__PEVAL_ECHARTS_OFFLINE__=true;"
-                echarts_path = root / ".cache/echarts/6.0.0/echarts.min.js"
-                echarts_path.parent.mkdir(parents=True, exist_ok=True)
-                echarts_path.write_bytes(echarts)
-
-                payload = self.workspace_snapshot_payload()
-                payload["presentation"].update(
-                    {
-                        "selected_source_key": source_keys[0],
-                        "selected_step_id": "1",
-                        "leaderboard_columns": {
-                            "version": 1,
-                            "order": ["cache_hit_rate", "session_id"],
-                            "visibility": {"cache_hit_rate": "show"},
-                        },
-                        "visible_view_names": ["Daily"],
-                        "workspace_view_filters": {
-                            "categories": ["daily-category"],
-                            "tags": ["daily"],
-                            "models": [],
-                            "group_by": ["agent"],
-                        },
-                        "open_view_tables": ["Daily"],
-                    }
-                )
-                status, headers, body = self.request(
-                    server, "POST", "/api/exports", payload
-                )
-                self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
-                self.assertEqual(headers["content-type"], "text/html; charset=utf-8")
-                self.assertIn(
-                    "peval-workspace-snapshot.html", headers["content-disposition"]
-                )
-                self.assertIn(echarts, body)
-                self.assertNotIn(b"cdn.jsdelivr.net/npm/echarts", body)
-                self.assertIn(b'class="serve-mode workspace-snapshot-mode"', body)
-                initial_markup = re.sub(
-                    rb"<script(?:\s[^>]*)?>.*?</script>", b"", body, flags=re.DOTALL
-                )
-                self.assertNotIn(b"data-source-manager-open", initial_markup)
-                self.assertNotIn(b"data-report-manager-open", initial_markup)
-                self.assertNotIn(b"data-view-save-dialog", initial_markup)
-                projection = self.snapshot_projection(body)
-                self.assertEqual(
-                    [row["trial_session_id"] for row in projection["catalog_rows"]],
-                    ["session-1", "session-0"],
-                )
-                self.assertEqual(
-                    [row["source_category"] for row in projection["catalog_rows"]],
-                    ["daily-category", "other-category"],
-                )
-                self.assertEqual(len(set(projection["source_trial_keys"].values())), 2)
-                self.assertEqual(
-                    [view["name"] for view in projection["views"]], ["Daily"]
-                )
-                self.assertEqual(projection["view_summaries"][0]["matched_count"], 1)
-                self.assertEqual(
-                    projection["presentation"]["workspace_view_filters"]["categories"],
-                    ["daily-category"],
-                )
-                self.assertEqual(
-                    projection["presentation"]["leaderboard_columns"],
-                    {
-                        "version": 1,
-                        "order": ["cache_hit_rate", "session_id"],
-                        "visibility": {"cache_hit_rate": "show"},
-                    },
-                )
-                self.assertEqual(len(projection["reports"]), 2)
-                previews = {
-                    report["format"]: base64.b64decode(report["preview_base64"])
-                    for report in projection["reports"]
-                }
-                self.assertIn(
-                    b"&lt;script&gt;alert(1)&lt;/script&gt;", previews["markdown"]
-                )
-                self.assertEqual(
-                    previews["html"],
-                    b"<!doctype html><script>window.rawReport=true</script>",
-                )
-
-                selected_payload = self.workspace_snapshot_payload(
-                    selected_source_keys=[source_keys[1]]
-                )
-                status, _headers, selected_body = self.request(
-                    server, "POST", "/api/exports", selected_payload
-                )
-                self.assertEqual(status, 200)
-                self.assertEqual(
-                    [
-                        row["source_key"]
-                        for row in self.snapshot_projection(selected_body)[
-                            "catalog_rows"
-                        ]
-                    ],
-                    [source_keys[1]],
-                )
-
-                unknown_payload = self.workspace_snapshot_payload(
-                    selected_source_keys=["unknown-source"]
-                )
-                status, _headers, error = self.request(
-                    server, "POST", "/api/exports", unknown_payload
-                )
-                self.assertEqual(status, 400)
-                self.assertIn("unknown source", json.loads(error)["error"])
-
-                empty_payload = self.workspace_snapshot_payload()
-                empty_payload["query"]["search"] = "definitely-no-match"
-                status, _headers, error = self.request(
-                    server, "POST", "/api/exports", empty_payload
-                )
-                self.assertEqual(status, 400)
-                self.assertIn("matched no sources", json.loads(error)["error"])
-
-                invalid_payload = self.workspace_snapshot_payload()
-                del invalid_payload["presentation"]["open_view_tables"]
-                status, _headers, error = self.request(
-                    server, "POST", "/api/exports", invalid_payload
-                )
-                self.assertEqual(status, 400)
-                self.assertIn("presentation fields", json.loads(error)["error"])
-
-                with patch(
-                    "psycheval.serve.handler.cached_echarts_asset",
-                    side_effect=HttpError(502, "failed to cache ECharts: unavailable"),
-                ):
-                    status, _headers, error = self.request(
-                        server,
-                        "POST",
-                        "/api/exports",
-                        self.workspace_snapshot_payload(),
-                    )
-                self.assertEqual(status, 502)
-                self.assertIn("failed to cache ECharts", json.loads(error)["error"])
-
-                status, _headers, error = self.request(
-                    server,
-                    "POST",
-                    "/api/exports",
-                    {"kind": "html", "source_keys": [source_keys[0]]},
-                )
-                self.assertEqual(status, 400)
-                self.assertIn("xlsx or json", json.loads(error)["error"])
             finally:
                 self.stop(store, server, thread)
 
@@ -951,7 +693,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
             finally:
                 self.stop(store, server, thread)
 
-    def test_browser_views_flow_through_table_summary_and_snapshot_exports(
+    def test_browser_views_flow_through_table_and_summary_exports(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1056,25 +798,6 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertIn('name="Passed"', workbook)
                 self.assertIn('name="Failed locally"', workbook)
                 self.assertIn("local export note", strings)
-
-                echarts_path = root / ".cache/echarts/6.0.0/echarts.min.js"
-                echarts_path.parent.mkdir(parents=True, exist_ok=True)
-                echarts_path.write_text("window.echarts={};", encoding="utf-8")
-                snapshot = self.workspace_snapshot_payload(browser_views=[local])
-                snapshot["query"] = {**query, "views": [], "browser_views": [local]}
-                snapshot["presentation"]["visible_view_names"] = ["Failed locally"]
-                snapshot["presentation"]["open_view_tables"] = ["Failed locally"]
-                status, _headers, body = self.request(
-                    server, "POST", "/api/exports", snapshot
-                )
-                self.assertEqual(status, 200, body[:200])
-                projection = self.snapshot_projection(body)
-                self.assertEqual(
-                    [row["trial_session_id"] for row in projection["catalog_rows"]],
-                    ["s1"],
-                )
-                self.assertEqual(projection["views"], [local])
-                self.assertEqual(projection["view_summaries"][0]["matched_count"], 1)
             finally:
                 self.stop(store, server, thread)
 
@@ -1157,37 +880,6 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 with zipfile.ZipFile(BytesIO(body)) as archive:
                     sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
                 self.assertEqual(sheet.count("<row "), 4)
-
-                echarts_path = root / ".cache/echarts/6.0.0/echarts.min.js"
-                echarts_path.parent.mkdir(parents=True, exist_ok=True)
-                echarts_path.write_text("window.echarts={};", encoding="utf-8")
-                snapshot_payload = self.workspace_snapshot_payload()
-                snapshot_payload["query"].update(
-                    {
-                        "state": "all",
-                        "sort": "session",
-                        "direction": "asc",
-                        "views": ["Passed", "Failed"],
-                    }
-                )
-                status, _headers, body = self.request(
-                    server, "POST", "/api/exports", snapshot_payload
-                )
-                self.assertEqual(status, 200)
-                self.assertEqual(
-                    [
-                        row["trial_session_id"]
-                        for row in self.snapshot_projection(body)["catalog_rows"]
-                    ],
-                    ["s0", "s1", "s2"],
-                )
-
-                snapshot_payload["query"]["views"] = ["Missing"]
-                status, _headers, body = self.request(
-                    server, "POST", "/api/exports", snapshot_payload
-                )
-                self.assertEqual(status, 400)
-                self.assertIn("does not exist", json.loads(body)["error"])
 
                 status, _headers, body = self.request(
                     server, "GET", "/api/catalog?view=Missing"
@@ -1370,6 +1062,15 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     "POST",
                     "/api/exports",
                     {"kind": "html", "source_keys": [items[1].source_key]},
+                )
+                self.assertEqual(status, 400)
+                self.assertIn("xlsx or json", json.loads(body)["error"])
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/exports",
+                    {"kind": "workspace_html", "source_keys": [items[1].source_key]},
                 )
                 self.assertEqual(status, 400)
                 self.assertIn("xlsx or json", json.loads(body)["error"])

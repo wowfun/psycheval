@@ -29,7 +29,6 @@ from psycheval.config import (
 
 TEXT_EDIT_LIMIT = 2 * 1024 * 1024
 UPLOAD_LIMIT = 16 * 1024 * 1024
-DOWNLOAD_LIMIT = 20 * 1024 * 1024
 TRASH_DIRNAME = ".peval-trash"
 TRASH_METADATA = "metadata.json"
 TASK_DIR_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$")
@@ -426,31 +425,25 @@ class HarborWorkspace:
             ),
             self._task_summary(task_dir),
         )
+        tree = self._file_tree(task_dir)
         return {
             "dataset_id": dataset_id,
             "task": summary,
-            "tree": self._file_tree(task_dir),
+            "tree": tree,
+            "default_file_path": _default_task_file_path(task_dir, tree),
         }
 
     def read_file(
-        self, dataset_id: str, task: str, relative_path: str, *, download: bool
+        self, dataset_id: str, task: str, relative_path: str
     ) -> dict[str, Any]:
         task_dir = self._task_path(self._dataset_root(self._dataset(dataset_id)), task)
         path = self._safe_task_file(task_dir, relative_path, must_exist=True)
-        limit = DOWNLOAD_LIMIT if download else TEXT_EDIT_LIMIT
-        content = _read_regular_file(path, limit=limit)
+        content = _read_regular_file(path, limit=TEXT_EDIT_LIMIT)
         revision = _file_revision(content)
-        if download:
-            return {
-                "name": re.sub(r"[^A-Za-z0-9._-]", "_", path.name) or "download.bin",
-                "content": content,
-                "revision": revision,
-                "task_revision": _directory_revision(task_dir),
-            }
         try:
             text = content.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise HarborWorkspaceError("Binary files must be downloaded") from exc
+            raise HarborWorkspaceError("Task file is not UTF-8 text") from exc
         return {
             "path": relative_path,
             "content": text,
@@ -662,7 +655,6 @@ class HarborWorkspace:
             }
             if stat.S_ISREG(value.st_mode):
                 item["editable"] = value.st_size <= TEXT_EDIT_LIMIT and _is_utf8(path)
-                item["downloadable"] = value.st_size <= DOWNLOAD_LIMIT
             result.append(item)
         return result
 
@@ -1028,6 +1020,29 @@ def _is_utf8(path: Path) -> bool:
         return True
     except (OSError, UnicodeDecodeError, HarborWorkspaceError):
         return False
+
+
+def _default_task_file_path(task_dir: Path, tree: list[dict[str, Any]]) -> str | None:
+    relative = "instruction.md"
+    try:
+        config_text = _read_regular_file(
+            task_dir / "task.toml", limit=TEXT_EDIT_LIMIT
+        ).decode("utf-8")
+        config = TaskConfig.model_validate_toml(config_text)
+        if config.steps:
+            relative = f"steps/{config.steps[0].name}/instruction.md"
+    except (OSError, UnicodeDecodeError, HarborWorkspaceError, ValueError):
+        pass
+    return (
+        relative
+        if any(
+            item.get("path") == relative
+            and item.get("kind") == "file"
+            and item.get("editable") is True
+            for item in tree
+        )
+        else None
+    )
 
 
 def _file_revision(content: bytes) -> str:

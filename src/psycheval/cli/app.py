@@ -16,7 +16,7 @@ APP_HELP = (
 INSPECT_EPILOG = """\
 Inspect mode emits a compact fixed JSON digest for triage. Use --steps for
 selected step evidence, --max-content-chars to bound previews, or -m raw for
-the full peval-compatible JSON or HTML report.
+the full peval-compatible JSON report.
 """
 OUTPUT_DEFAULT_MARKER = "\0peval-default-output"
 _NEGATIVE_NUMBER = re.compile(r"-\d+(?:\.\d+)?")
@@ -26,11 +26,6 @@ _T = TypeVar("_T")
 class ViewMode(str, Enum):
     inspect = "inspect"
     raw = "raw"
-
-
-class ReportFormat(str, Enum):
-    json = "json"
-    html = "html"
 
 
 def make_app(*, help: str, add_completion: bool = False) -> typer.Typer:
@@ -221,7 +216,7 @@ def init_command(
     "trajectory",
     help=(
         "Inspect retained agent trajectories by default. Use -m raw only when "
-        "a full peval-compatible JSON or HTML report is needed."
+        "a full peval-compatible JSON report is needed."
     ),
     short_help="View one or more retained agent trajectories",
     epilog=INSPECT_EPILOG,
@@ -259,14 +254,6 @@ def view_trajectory(
             help="View mode: inspect emits bounded JSON; raw emits a full report",
         ),
     ] = ViewMode.inspect,
-    report_format: Annotated[
-        ReportFormat | None,
-        typer.Option(
-            "-f",
-            "--format",
-            help="Report format; defaults from output suffix, bare -o uses html",
-        ),
-    ] = None,
     list_sessions: Annotated[
         bool,
         typer.Option("-l", "--list", help="List DB sessions and exit"),
@@ -340,7 +327,6 @@ def view_trajectory(
             no_redact=no_redact,
             root=root,
             mode=mode.value,
-            format=report_format.value if report_format is not None else None,
             list_sessions=list_sessions,
             list_interactive=list_interactive,
             note=many(note) or (),

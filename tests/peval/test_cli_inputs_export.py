@@ -49,8 +49,6 @@ class PevalCliInputsExportTests(unittest.TestCase):
                     "1=CLI path alias",
                     "--source-alias",
                     "2=CLI DB alias",
-                    "-f",
-                    "json",
                     "-o",
                     str(out_path),
                 ]
@@ -104,8 +102,6 @@ class PevalCliInputsExportTests(unittest.TestCase):
                     str(FIXTURES / "psychevo_session.jsonl"),
                     "-n",
                     "1=First session note",
-                    "-f",
-                    "json",
                     "-o",
                     str(out_path),
                 ],
@@ -149,6 +145,8 @@ class PevalCliInputsExportTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertNotIn("--input-table", result.stdout)
             self.assertNotIn("-i,", result.stdout)
+            if verb == "view":
+                self.assertNotIn("--format", result.stdout)
 
         serve_help = subprocess.run(
             [command, "serve", "--help"],

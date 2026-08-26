@@ -23,7 +23,6 @@ CODE_SUFFIXES = {
     ".ts",
     ".tsx",
 }
-GENERATED_CODE = {Path("src/psycheval/assets/report.js")}
 
 
 def test_authored_code_files_stay_below_semantic_split_threshold() -> None:
@@ -34,7 +33,6 @@ def test_authored_code_files_stay_below_semantic_split_threshold() -> None:
             if (
                 not path.is_file()
                 or path.suffix not in CODE_SUFFIXES
-                or relative in GENERATED_CODE
                 or "node_modules" in relative.parts
                 or "__pycache__" in relative.parts
             ):

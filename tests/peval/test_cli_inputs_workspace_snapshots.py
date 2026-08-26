@@ -56,8 +56,6 @@ default_db_path = "state.db"
                         "@psychevo",
                         "-s",
                         "db-a",
-                        "-f",
-                        "json",
                         "-o",
                         str(view_out),
                     ]
@@ -180,8 +178,6 @@ default_db_path = "state.db"
                         "raw",
                         "-p",
                         str(cell_dir),
-                        "-f",
-                        "json",
                         "-o",
                         str(raw_out),
                     ]
@@ -281,8 +277,6 @@ default_db_path = "state.db"
                         "raw",
                         "-p",
                         str(cell_dir),
-                        "-f",
-                        "json",
                         "-o",
                         str(raw_out),
                     ]
@@ -507,8 +501,6 @@ default_db_path = "state.db"
                         "raw",
                         "-p",
                         "C:/Users/kevin/workspace/runs/default/psychevo/windows-artifact/session_t001",
-                        "-f",
-                        "json",
                         "-o",
                         str(raw_out),
                     ]

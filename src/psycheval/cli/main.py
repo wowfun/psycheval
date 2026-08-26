@@ -15,15 +15,12 @@ from psycheval.cli.workspace import (
     workspace_root_for_args,
 )
 from psycheval.config import apply_overrides, config_for_adapter, load_config
-from psycheval.html import render_html
 from psycheval.inputs import load_inputs, parse_adapter_assignments
 from psycheval.outputs import (
     announce_written,
     resolve_export_output,
-    resolve_report_format,
     resolve_report_output,
     write_json,
-    write_text,
 )
 from psycheval.pipeline import (
     build_report_from_loaded_inputs,
@@ -131,14 +128,8 @@ def run_cli_args(args: CliArgs) -> int:
             config,
             getattr(args, "note", None) or [],
         )
-        fmt = resolve_report_format(args)
-        output = resolve_report_output(args, fmt, report, config, timestamped=True)
-        if fmt == "json":
-            written = write_json(report, output)
-        elif fmt == "html":
-            written = write_text(render_html(report, locale=config.locale), output)
-        else:
-            raise ValueError(f"unsupported report format: {fmt}")
+        output = resolve_report_output(args, report, config, timestamped=True)
+        written = write_json(report, output)
         if args.command == "view":
             announce_written(written)
         return 0

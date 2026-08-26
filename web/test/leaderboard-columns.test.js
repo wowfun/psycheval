@@ -9,7 +9,7 @@ import {
   presenceForColumns,
   resolveColumns,
   saveColumnLayout,
-} from "../src/modules/leaderboard-columns.js";
+} from "../../src/psycheval/assets/web/modules/leaderboard-columns.js";
 
 const columns = [
   { key: "session", value: row => row.session },
