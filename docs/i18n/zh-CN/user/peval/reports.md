@@ -3,7 +3,7 @@
 [English](../../../../user/peval/reports.md)
 
 可用 `--steps`、`--tool-call` 或 `--source` 缩小证据范围；需要完整 JSON
-或自包含 HTML 时使用 `-m raw`。
+报告时使用 `-m raw`，需要浏览器展示时使用 `peval serve`。
 
 ```console
 peval view tr -m raw \

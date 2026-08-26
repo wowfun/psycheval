@@ -3,7 +3,7 @@
 [简体中文](../../i18n/zh-CN/user/peval/reports.md)
 
 Use `--steps`, `--tool-call`, or `--source` to narrow evidence. Add `-m raw`
-when you need a complete JSON or self-contained HTML report.
+when you need a complete JSON report. Use `peval serve` for browser presentation.
 
 ```console
 peval view tr -m raw \

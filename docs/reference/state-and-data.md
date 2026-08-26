@@ -8,7 +8,7 @@ rebuildable projections.
 | Task, Job, Trial, result, reward, artifacts | Harbor files | Read-only to the CLI |
 | Portable steps, calls, observations, timestamps, usage | ATIF trajectory | Strictly validate before writing |
 | Aliases, state, notes, analysis, report bindings | Workspace overlay | Explicit user mutation |
-| Reports, catalog rows, summaries, bundles | Derived data | Rebuildable from authorities |
+| Catalog rows, summaries, JSON/XLSX exports | Derived data | Rebuildable from authorities |
 
 ## Trajectories and sidecars
 
@@ -22,6 +22,14 @@ blocks, stable session identity, and explicit unknowns. It never invents a call
 from prose. Existing ATIF imports are validated without repair. A Harbor
 ATIF-v1.x artifact is exposed as v1.7 only when changing the schema label alone
 passes the current strict validator; the compatibility view is not persisted.
+Derived browser views render absolute timestamps as UTC without rewriting the
+underlying ATIF, Harbor, or catalog values.
+Live Harbor Task text is read on demand through the bounded Workspace Task file
+interface. Task text is not copied into reports, catalog summaries, search
+documents, or exports; live detail may expose only a safe Dataset/Task reference.
+The Workspace is the only browser presentation surface. It fetches derived data
+through local HTTP interfaces and does not serialize that state into offline HTML
+reports or Workspace snapshots.
 
 ## Telemetry
 

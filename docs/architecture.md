@@ -9,7 +9,7 @@ psycheval
 ├── adapters, ATIF      -> retained-session conversion
 ├── report, workspace   -> derived views and user overlays
 ├── serve, state        -> local evaluation workspace and ACP client runtime
-├── assets              -> committed Web bundle
+├── assets              -> authored Web modules, templates, and styles
 └── harbor              -> Harbor 0.21 adapters, harness, host, verifier
 ```
 
@@ -41,8 +41,9 @@ without transferring write ownership to the ACP client.
 - `src/psycheval/` contains runtime code; Harbor adapters live in its `harbor/`
   subtree.
 - `tests/harbor/` and `tests/peval/` are collected by the root pytest project.
-- `web/` is the private browser source graph; its committed bundle is written
-  to `src/psycheval/assets/`.
+- `src/psycheval/assets/web/` is the browser module graph distributed with the
+  package and served directly by the local workspace. `web/` owns its Node test
+  harness.
 - `datasets/` contains maintained Harbor Datasets; `examples/` contains
   authoring examples, not maintained evaluation members.
 - `skills/peval/` consumes the public command.

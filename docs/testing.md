@@ -15,7 +15,7 @@ git diff --check
 ```
 
 Pytest covers Harbor integration and all `peval` CLI behavior in one collection.
-Node `check` runs type checking, committed-bundle freshness, and browser tests.
+Node `check` runs type checking and browser tests against the authored ESM graph.
 Tests isolate HOME/XDG state, config, sockets, timers, and environment secrets.
 Focused success is not a release claim unless the expected test inventory is
 visible.

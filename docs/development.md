@@ -8,9 +8,9 @@ npm ci
 ```
 
 Python runtime code lives under `src/psycheval`; all Python behavior tests live
-under `tests` and use normal package imports. Browser source lives under `web`.
-After changing it, run `npm run build` and commit the updated
-`src/psycheval/assets/report.js`.
+under `tests` and use normal package imports. Browser modules live under
+`src/psycheval/assets/web`, ship as authored ESM, and are exercised by the Node
+tests under `web` without a generated bundle.
 
 Keep Harbor-specific adapters at the pinned public `0.21.0` seams under
 `psycheval.harbor`; package-wide CLI, trajectory, report, and workspace code

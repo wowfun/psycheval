@@ -50,15 +50,10 @@ MultiStep phase. Use `--source` for the latter.
 
 ## Complete Reports
 
-Use a complete report only when the analysis needs full retained content or a
-static artifact:
+Use a complete JSON report only when the analysis needs full retained content:
 
 ```console
-peval view tr -m raw -p <trial-dir> -f json -o <report.json>
-```
-
-```console
-peval view tr -m raw -p <trial-dir> -f html -o <report.html>
+peval view tr -m raw -p <trial-dir> -o <report.json>
 ```
 
 Do not use complete report mode when any selected Harbor source reports
