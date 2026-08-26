@@ -175,11 +175,26 @@ def smoke_workbench(
     )
     try:
         base_url = wait_serve_url(process)
+        status, _headers, shell = request_bytes(base_url, "/")
+        if status != 200 or b"/assets/peval/workspace.css" not in shell:
+            raise RuntimeError("frozen peval omitted the external Workspace stylesheet")
         status, headers, module = request_bytes(base_url, "/assets/peval/main.js")
         if status != 200 or not module.strip():
             raise RuntimeError("frozen peval omitted the browser ESM entrypoint")
         if headers.get("content-type") != "application/javascript; charset=utf-8":
             raise RuntimeError("frozen peval served the browser module with wrong MIME")
+        status, headers, stylesheet = request_bytes(
+            base_url, "/assets/peval/workspace.css"
+        )
+        if status != 200 or not stylesheet.strip():
+            raise RuntimeError("frozen peval omitted the Workspace stylesheet")
+        if headers.get("content-type") != "text/css; charset=utf-8":
+            raise RuntimeError(
+                "frozen peval served the Workspace stylesheet with wrong MIME"
+            )
+        status, _headers, _body = request_bytes(base_url, "/assets/peval/report.css")
+        if status != 404:
+            raise RuntimeError("frozen peval retained the old report.css route")
         inventory = expect_status(
             request_json(base_url, "GET", "/api/config/harbor"),
             200,

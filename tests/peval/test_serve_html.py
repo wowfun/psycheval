@@ -4,9 +4,12 @@ import json
 import re
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from psycheval.html import render_serve_html
+from psycheval.html.assets import WORKSPACE_STYLESHEET_PARTS, load_workspace_stylesheet
 from psycheval.i18n import messages_for
+from psycheval.serve.assets import workspace_stylesheet_asset
 
 
 def literal_translation_keys(source: str) -> set[str]:
@@ -51,6 +54,11 @@ class PevalServeHtmlTests(unittest.TestCase):
         html = render_serve_html(workspace_id="workspace-one", role="guest")
 
         self.assertIn(
+            '<link rel="stylesheet" href="/assets/peval/workspace.css">', html
+        )
+        self.assertNotIn("<style", html)
+        self.assertNotIn("__CSS__", html)
+        self.assertIn(
             '<script type="module" src="/assets/peval/main.js"></script>', html
         )
         self.assertNotIn('id="peval-data"', html)
@@ -69,6 +77,34 @@ class PevalServeHtmlTests(unittest.TestCase):
                 "serve_page": "home",
             },
         )
+
+    def test_workspace_stylesheet_preserves_fragment_order(self) -> None:
+        asset_root = Path(__file__).resolve().parents[2] / "src/psycheval/assets"
+        expected = "\n".join(
+            (asset_root / path).read_text(encoding="utf-8")
+            for path in WORKSPACE_STYLESHEET_PARTS
+        )
+
+        self.assertEqual(load_workspace_stylesheet(), expected)
+        self.assertFalse((asset_root / "report.css").exists())
+        self.assertFalse((asset_root / "report.html").exists())
+        self.assertFalse((asset_root / "report_css").exists())
+
+    def test_workspace_stylesheet_asset_is_composed_only_once(self) -> None:
+        cache_clear = getattr(workspace_stylesheet_asset, "cache_clear", lambda: None)
+        cache_clear()
+        try:
+            with patch(
+                "psycheval.serve.assets.load_workspace_stylesheet",
+                return_value="body { color: black; }",
+            ) as load:
+                first = workspace_stylesheet_asset()
+                second = workspace_stylesheet_asset()
+
+            self.assertEqual(first, second)
+            load.assert_called_once_with()
+        finally:
+            cache_clear()
 
     def test_all_live_pages_render_their_owned_shell(self) -> None:
         expected = {

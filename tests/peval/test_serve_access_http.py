@@ -65,6 +65,7 @@ class ServeAccessHttpTests(unittest.TestCase):
         *,
         cookie: str | None = None,
         origin: str | None = None,
+        request_headers: dict[str, str] | None = None,
     ) -> tuple[int, dict[str, str], bytes]:
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         headers: dict[str, str] = {}
@@ -77,6 +78,7 @@ class ServeAccessHttpTests(unittest.TestCase):
             )
         if cookie:
             headers["Cookie"] = cookie
+        headers.update(request_headers or {})
         connection = http.client.HTTPConnection(
             "127.0.0.1", server.server_port, timeout=5
         )
@@ -155,6 +157,26 @@ class ServeAccessHttpTests(unittest.TestCase):
                     )
                     self.assertEqual(headers["cache-control"], "no-store")
                     self.assertTrue(asset.strip())
+                status, headers, stylesheet = self.request(
+                    server, "GET", "/assets/peval/workspace.css"
+                )
+                self.assertEqual(status, 200, stylesheet[:200])
+                self.assertEqual(headers["content-type"], "text/css; charset=utf-8")
+                self.assertEqual(headers["cache-control"], "no-cache")
+                self.assertEqual(headers["x-content-type-options"], "nosniff")
+                self.assertRegex(headers["etag"], r'^"[0-9a-f]{64}"$')
+                self.assertTrue(stylesheet.strip())
+                status, cached_headers, cached_stylesheet = self.request(
+                    server,
+                    "GET",
+                    "/assets/peval/workspace.css",
+                    request_headers={"If-None-Match": headers["etag"]},
+                )
+                self.assertEqual(status, 304)
+                self.assertEqual(cached_headers["etag"], headers["etag"])
+                self.assertEqual(cached_headers["cache-control"], "no-cache")
+                self.assertNotIn("content-length", cached_headers)
+                self.assertEqual(cached_stylesheet, b"")
                 for rejected_path in (
                     "/assets/peval/../report.js",
                     "/assets/peval/report.css",

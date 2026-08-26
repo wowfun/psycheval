@@ -34,8 +34,10 @@ from psycheval.serve.acp import AcpError
 from psycheval.serve.assets import (
     ECHARTS_ASSET_PATH,
     PEVAL_WEB_ASSET_PREFIX,
+    WORKSPACE_STYLESHEET_PATH,
     cached_echarts_asset,
     packaged_web_asset,
+    workspace_stylesheet_asset,
 )
 from psycheval.serve.constants import MAX_JSON_BODY_BYTES
 from psycheval.serve.errors import HttpError
@@ -183,6 +185,10 @@ def make_handler(
                     return
                 if path == ECHARTS_ASSET_PATH:
                     self.write_js(cached_echarts_asset(store))
+                    return
+                if path == WORKSPACE_STYLESHEET_PATH:
+                    data, etag = workspace_stylesheet_asset()
+                    self.write_workspace_css(data, etag)
                     return
                 if path.startswith(PEVAL_WEB_ASSET_PREFIX):
                     self.write_js(packaged_web_asset(path), cache_control="no-store")
@@ -1182,6 +1188,21 @@ def make_handler(
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+
+        def write_workspace_css(self, data: bytes, etag: str) -> None:
+            not_modified = self.headers.get("If-None-Match") == etag
+            self.send_response(304 if not_modified else 200)
+            self.send_header("Content-Type", "text/css; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("ETag", etag)
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.write_pending_headers()
+            if not not_modified:
+                self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            if not not_modified:
+                self.wfile.write(data)
 
         def write_download(
             self,

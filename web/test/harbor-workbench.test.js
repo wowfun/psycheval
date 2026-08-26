@@ -50,7 +50,7 @@ test("workbench page fills its content when its status notice is hidden", () => 
     "20-serve-toolbar.css",
     "23-harbor-workbench.css",
   ].map(name => readFileSync(
-    new URL(`../../src/psycheval/assets/report_css/${name}`, import.meta.url),
+    new URL(`../../src/psycheval/assets/css/${name}`, import.meta.url),
     "utf8",
   )).join("\n");
   const workbench = document.createElement("section");

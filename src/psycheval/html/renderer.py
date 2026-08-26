@@ -44,7 +44,7 @@ def render_serve_html(
     if load_error:
         render_options["load_error"] = load_error
 
-    payload = load_asset_text("report.html")
+    payload = load_asset_text("workspace.html")
     payload = payload.replace("__LANG__", escape(normalized_locale))
     payload = payload.replace(
         "__BODY_CLASS__", escape(f"serve-mode serve-page-{normalized_page}")
@@ -82,7 +82,6 @@ def render_serve_html(
         "__ECHARTS_SCRIPT__",
         render_echarts_script() if normalized_page == "home" else "",
     )
-    payload = payload.replace("__CSS__", load_asset_text("report.css"))
     payload = payload.replace(
         "__I18N__",
         safe_json_for_script(json.dumps(messages, ensure_ascii=False)),

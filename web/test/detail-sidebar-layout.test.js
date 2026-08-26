@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const css = readFileSync(
-  new URL("../../src/psycheval/assets/report_css/26-detail-sidebar.css", import.meta.url),
+  new URL("../../src/psycheval/assets/css/26-detail-sidebar.css", import.meta.url),
   "utf8",
 );
 

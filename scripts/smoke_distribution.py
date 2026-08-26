@@ -153,10 +153,16 @@ def main() -> int:
             env=env,
         )
         assert json.loads(report.read_text(encoding="utf-8"))["trajectory"]
-        web_assets = files("psycheval.assets").joinpath("web")
+        assets = files("psycheval.assets")
+        web_assets = assets.joinpath("web")
         assert web_assets.joinpath("main.js").is_file()
         assert web_assets.joinpath("modules", "runtime.js").is_file()
-        assert not files("psycheval.assets").joinpath("report.js").is_file()
+        assert assets.joinpath("workspace.html").is_file()
+        assert assets.joinpath("css", "00-base.css").is_file()
+        assert not assets.joinpath("report.js").is_file()
+        assert not assets.joinpath("report.html").is_file()
+        assert not assets.joinpath("report.css").is_file()
+        assert not assets.joinpath("report_css").is_dir()
 
     print("isolated psycheval wheel smoke passed")
     return 0

@@ -9,26 +9,24 @@ ECHARTS_LOCAL_SRC = f"/assets/echarts/{ECHARTS_VERSION}/echarts.min.js"
 ECHARTS_CDN_SRC = (
     f"https://cdn.jsdelivr.net/npm/echarts@{ECHARTS_VERSION}/dist/echarts.min.js"
 )
-ASSET_BUNDLES = {
-    "report.css": [
-        "report_css/00-base.css",
-        "report_css/05-data-table.css",
-        "report_css/06-leaderboard-summary.css",
-        "report_css/08-trajectory.css",
-        "report_css/10-trace.css",
-        "report_css/12-steps.css",
-        "report_css/14-analysis.css",
-        "report_css/16-timeline.css",
-        "report_css/20-serve-toolbar.css",
-        "report_css/22-source-forms.css",
-        "report_css/23-harbor-workbench.css",
-        "report_css/24-source-list-export.css",
-        "report_css/26-detail-sidebar.css",
-        "report_css/28-workspace-reports.css",
-        "report_css/30-workspace-views.css",
-        "report_css/32-acp-client.css",
-    ],
-}
+WORKSPACE_STYLESHEET_PARTS = (
+    "css/00-base.css",
+    "css/05-data-table.css",
+    "css/06-leaderboard-summary.css",
+    "css/08-trajectory.css",
+    "css/10-trace.css",
+    "css/12-steps.css",
+    "css/14-analysis.css",
+    "css/16-timeline.css",
+    "css/20-serve-toolbar.css",
+    "css/22-source-forms.css",
+    "css/23-harbor-workbench.css",
+    "css/24-source-list-export.css",
+    "css/26-detail-sidebar.css",
+    "css/28-workspace-reports.css",
+    "css/30-workspace-views.css",
+    "css/32-acp-client.css",
+)
 
 
 def render_echarts_script() -> str:
@@ -41,9 +39,11 @@ def render_echarts_script() -> str:
 
 
 def load_asset_text(name: str) -> str:
-    if name in ASSET_BUNDLES:
-        return "\n".join(load_asset_text(part) for part in ASSET_BUNDLES[name])
     return files(ASSET_PACKAGE).joinpath(name).read_text(encoding="utf-8")
+
+
+def load_workspace_stylesheet() -> str:
+    return "\n".join(load_asset_text(part) for part in WORKSPACE_STYLESHEET_PARTS)
 
 
 def replace_template_tokens(template: str, values: dict[str, str]) -> str:

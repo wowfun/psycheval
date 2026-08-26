@@ -17,6 +17,11 @@ SDIST_REQUIRED = {
     "package-lock.json",
 } | {f"src/{name}" for name in WHEEL_REQUIRED}
 FORBIDDEN_BUNDLE = "psycheval/assets/report.js"
+LEGACY_WORKSPACE_ASSETS = {
+    "psycheval/assets/report.css",
+    "psycheval/assets/report.html",
+}
+LEGACY_WORKSPACE_PREFIX = "psycheval/assets/report_css/"
 
 
 def _failures(
@@ -49,7 +54,8 @@ def check_wheel(path: Path) -> list[str]:
             "package.json",
             "package-lock.json",
         },
-        forbidden_names={FORBIDDEN_BUNDLE},
+        forbidden_names={FORBIDDEN_BUNDLE, *LEGACY_WORKSPACE_ASSETS},
+        forbidden_prefixes=(LEGACY_WORKSPACE_PREFIX,),
     )
 
 
@@ -61,8 +67,11 @@ def check_sdist(path: Path) -> list[str]:
         names,
         required=SDIST_REQUIRED,
         forbidden_parts={"node_modules"},
-        forbidden_names={f"src/{FORBIDDEN_BUNDLE}"},
-        forbidden_prefixes=("web/src/",),
+        forbidden_names={
+            f"src/{FORBIDDEN_BUNDLE}",
+            *(f"src/{name}" for name in LEGACY_WORKSPACE_ASSETS),
+        },
+        forbidden_prefixes=("web/src/", f"src/{LEGACY_WORKSPACE_PREFIX}"),
     )
 
 

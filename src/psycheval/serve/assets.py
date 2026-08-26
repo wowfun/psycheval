@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+from functools import lru_cache
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
 from urllib.request import urlopen
 
+from psycheval.html.assets import load_workspace_stylesheet
 from psycheval.serve.errors import HttpError
 from psycheval.state import ServeStateStore
 
 ECHARTS_VERSION = "6.0.0"
 ECHARTS_ASSET_PATH = f"/assets/echarts/{ECHARTS_VERSION}/echarts.min.js"
 PEVAL_WEB_ASSET_PREFIX = "/assets/peval/"
+WORKSPACE_STYLESHEET_PATH = "/assets/peval/workspace.css"
 ECHARTS_CDN_URL = (
     f"https://cdn.jsdelivr.net/npm/echarts@{ECHARTS_VERSION}/dist/echarts.min.js"
 )
@@ -49,6 +53,13 @@ def packaged_web_asset(path: str) -> bytes:
     if not resource.is_file():
         raise HttpError(404, "browser module does not exist")
     return resource.read_bytes()
+
+
+@lru_cache(maxsize=1)
+def workspace_stylesheet_asset() -> tuple[bytes, str]:
+    data = load_workspace_stylesheet().encode("utf-8")
+    digest = hashlib.sha256(data).hexdigest()
+    return data, f'"{digest}"'
 
 
 def echarts_cache_path(store: ServeStateStore) -> Path:
