@@ -62,6 +62,68 @@ test("absolute timestamps render as UTC across Leaderboard, Harbor evidence, and
   }
 });
 
+test("Leaderboard renders the complete-query summary returned by the server", () => {
+  const definitions = summaries.leaderboardSummaryDefinitions();
+  assert.deepEqual(definitions.map(definition => definition.key), [
+    "score",
+    "duration_ms",
+    "ttft_ms",
+    "tps",
+    "tokens",
+    "cache_hit_rate",
+    "turns",
+    "model_duration_ms",
+    "total_tool_calls",
+    "tool_error_rate",
+  ]);
+
+  const previousGroupBy = runtime.state.leaderboardSummaryGroupBy;
+  const previousTableOpen = runtime.state.leaderboardSummaryTableOpen;
+  const previousSummary = runtime.state.leaderboardSummary;
+  const previousTotal = runtime.state.catalogPage.total;
+  try {
+    runtime.state.leaderboardSummaryGroupBy = "agent";
+    runtime.state.leaderboardSummaryTableOpen = true;
+    runtime.state.catalogPage.total = 125;
+    runtime.state.leaderboardSummary = {
+      generation: 7,
+      summary: {
+        matched_count: 125,
+        groups: [{
+          key: "agent-a",
+          label: "agent-a",
+          count: 125,
+          metrics: definitions.map(definition => ({
+            key: definition.key,
+            type: definition.type,
+            count: definition.key === "ttft_ms" ? 125 : 0,
+            mean: definition.key === "ttft_ms" ? 500 : null,
+            distribution: definition.key === "ttft_ms"
+              ? { min: 100, q1: 200, p50: 400, q3: 700, p95: 900, max: 900 }
+              : null,
+          })),
+        }],
+      },
+    };
+    runtime.state.leaderboardSummaryLoading = false;
+    runtime.state.leaderboardSummaryError = null;
+    summaries.renderLeaderboardSummary();
+    const target = document.querySelector("#leaderboard-summary");
+    assert.match(target.textContent, /125 matching Trials across all pages/);
+    assert.match(target.querySelector('[data-summary-metric="ttft_ms"]').textContent, /0\.5s/);
+    assert.equal(target.querySelector(".inference-overview"), null);
+    for (const key of ["ttft_ms", "tps", "cache_hit_rate"]) {
+      assert.ok(target.querySelector(`[data-summary-metric="${key}"]`));
+      assert.ok(target.querySelector(`[data-summary-chart="${key}"]`));
+    }
+  } finally {
+    runtime.state.leaderboardSummaryGroupBy = previousGroupBy;
+    runtime.state.leaderboardSummaryTableOpen = previousTableOpen;
+    runtime.state.leaderboardSummary = previousSummary;
+    runtime.state.catalogPage.total = previousTotal;
+  }
+});
+
 test("#Analysis counts Harbor and workspace origins without double-counting overlay files", () => {
   const previousView = runtime.state.view;
   try {
@@ -138,7 +200,10 @@ test("Harbor Task display merges derived evidence without changing editable over
     tables.tableText({ ...row, score: null, rewards: { accuracy: 1, safety: 0 } }, columns.find(column => column.key === "reward")),
     "2 dims",
   );
-  assert.equal(summaries.leaderboardSummaryGroups([row], "task")[0].label, row.task_name);
+  assert.equal(
+    summaries.leaderboardSummaryDefinitions().find(definition => definition.key === "score").label,
+    "Reward",
+  );
 
   const evidence = selected.renderHarborEvidence({
     ...row,

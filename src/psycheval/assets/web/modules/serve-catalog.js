@@ -286,6 +286,162 @@ function catalogSortKey(key) {
   })[key] || key || "last_turn_end";
 }
 
+function leaderboardSummaryQueryPayload(groupBy = state.leaderboardSummaryGroupBy) {
+  const query = state.catalogQuery || {};
+  const applied = workspaceViewQueryPayload();
+  return {
+    state: normalizeServeSourceMode(query.state),
+    search: String(query.search || ""),
+    categories: listValue(query.categories),
+    tags: listValue(query.tags),
+    agents: listValue(query.agents),
+    models: listValue(query.models),
+    tasks: listValue(query.tasks),
+    jobs: listValue(query.jobs),
+    providers: listValue(query.providers),
+    results: listValue(query.results),
+    views: listValue(applied.views),
+    browser_views: listValue(applied.browser_views),
+    group_by: groupBy,
+  };
+}
+
+function normalizedSummaryValue(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map(normalizedSummaryValue)
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  }
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value).sort().map(key => [key, normalizedSummaryValue(value[key])]),
+  );
+}
+
+function leaderboardSummaryScopeKey(payload = leaderboardSummaryQueryPayload()) {
+  const appliedIds = state.workspaceAppliedViewNames;
+  const serverViews = workspaceViews()
+    .filter(view => view.origin === "server" && appliedIds.has(view.id))
+    .map(view => ({ name: view.name, filters: view.filters }));
+  return JSON.stringify(normalizedSummaryValue({ payload, server_views: serverViews }));
+}
+
+function leaderboardSummaryCacheKey(payload, generation) {
+  return JSON.stringify({
+    generation: Number(generation || 0),
+    scope: JSON.parse(leaderboardSummaryScopeKey(payload)),
+  });
+}
+
+const LEADERBOARD_SUMMARY_CACHE_ENTRY_LIMIT = 50;
+const LEADERBOARD_SUMMARY_CACHE_BYTE_LIMIT = 8 * 1024 * 1024;
+
+function cacheLeaderboardSummary(key, response) {
+  const text = JSON.stringify(response);
+  const byteSize = typeof TextEncoder === "function"
+    ? new TextEncoder().encode(text).byteLength
+    : text.length * 2;
+  if (byteSize > LEADERBOARD_SUMMARY_CACHE_BYTE_LIMIT) return;
+  state.leaderboardSummaryCache.delete(key);
+  let cachedBytes = Array.from(state.leaderboardSummaryCache.values())
+    .reduce((total, entry) => total + Number(entry?.byteSize || 0), 0);
+  while (state.leaderboardSummaryCache.size && (
+    state.leaderboardSummaryCache.size >= LEADERBOARD_SUMMARY_CACHE_ENTRY_LIMIT
+    || cachedBytes + byteSize > LEADERBOARD_SUMMARY_CACHE_BYTE_LIMIT
+  )) {
+    const oldestKey = state.leaderboardSummaryCache.keys().next().value;
+    const oldest = state.leaderboardSummaryCache.get(oldestKey);
+    cachedBytes -= Number(oldest?.byteSize || 0);
+    state.leaderboardSummaryCache.delete(oldestKey);
+  }
+  state.leaderboardSummaryCache.set(key, { response, byteSize });
+}
+
+function prepareLeaderboardSummaryScope(payload = leaderboardSummaryQueryPayload()) {
+  const scopeKey = leaderboardSummaryScopeKey(payload);
+  if (scopeKey === state.leaderboardSummaryScopeKey) return false;
+  state.leaderboardSummaryRequestVersion += 1;
+  state.leaderboardSummaryScopeKey = scopeKey;
+  state.leaderboardSummaryRequestKey = null;
+  state.leaderboardSummaryRequestPromise = null;
+  state.leaderboardSummary = null;
+  state.leaderboardSummaryError = null;
+  state.leaderboardSummaryLoading = true;
+  return true;
+}
+
+function renderCatalogComparison() {
+  if (document.getElementById("comparison")) renderComparison();
+}
+
+async function loadLeaderboardSummary() {
+  const payload = leaderboardSummaryQueryPayload();
+  prepareLeaderboardSummaryScope(payload);
+  const expectedGeneration = Number(state.catalogPage?.generation || 0);
+  const key = leaderboardSummaryCacheKey(payload, expectedGeneration);
+  const cached = state.leaderboardSummaryCache.get(key);
+  if (cached) {
+    state.leaderboardSummaryCache.delete(key);
+    state.leaderboardSummaryCache.set(key, cached);
+    state.leaderboardSummary = cached.response;
+    state.leaderboardSummaryError = null;
+    state.leaderboardSummaryLoading = false;
+    return cached.response;
+  }
+  if (
+    state.leaderboardSummaryLoading
+    && state.leaderboardSummaryRequestKey === key
+    && state.leaderboardSummaryRequestPromise
+  ) return state.leaderboardSummaryRequestPromise;
+
+  const revision = state.leaderboardSummaryRequestVersion + 1;
+  state.leaderboardSummaryRequestVersion = revision;
+  state.leaderboardSummaryRequestKey = key;
+  state.leaderboardSummary = null;
+  state.leaderboardSummaryError = null;
+  state.leaderboardSummaryLoading = true;
+  const request = (async () => {
+    try {
+      const response = await serveApi("/api/catalog/summary", {
+        method: "POST",
+        body: payload,
+      });
+      const currentPayload = leaderboardSummaryQueryPayload();
+      const currentKey = leaderboardSummaryCacheKey(
+        currentPayload,
+        state.catalogPage?.generation,
+      );
+      if (
+        revision !== state.leaderboardSummaryRequestVersion
+        || key !== currentKey
+      ) return null;
+      if (Number(response?.generation || 0) !== expectedGeneration) {
+        state.leaderboardSummaryError = "Catalog generation changed while loading the summary";
+        setTimeout(() => loadCatalogPage({}, { force: true }), 0);
+        return null;
+      }
+      cacheLeaderboardSummary(key, response);
+      state.leaderboardSummary = response;
+      state.leaderboardSummaryError = null;
+      return response;
+    } catch (error) {
+      if (revision === state.leaderboardSummaryRequestVersion) {
+        state.leaderboardSummary = null;
+        state.leaderboardSummaryError = error?.message || String(error);
+      }
+      return null;
+    } finally {
+      if (revision === state.leaderboardSummaryRequestVersion) {
+        state.leaderboardSummaryLoading = false;
+        state.leaderboardSummaryRequestKey = null;
+        state.leaderboardSummaryRequestPromise = null;
+      }
+    }
+  })();
+  state.leaderboardSummaryRequestPromise = request;
+  return request;
+}
+
 async function loadCatalogPage(changes = {}, options = {}) {
   if (state.catalogLoading) {
     if (options.force) {
@@ -303,6 +459,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
     const previousGeneration = Number(state.catalogPage?.generation || 0);
     const applied = workspaceViewQueryPayload();
     state.catalogQuery.views = applied.views;
+    if (prepareLeaderboardSummaryScope()) renderCatalogComparison();
     const page = applied.browser_views.length
       ? await serveApi("/api/catalog/query", {
         method: "POST",
@@ -331,7 +488,11 @@ async function loadCatalogPage(changes = {}, options = {}) {
     state.catalogRows = listValue(page.items).filter(row => row?.readable !== false).map(normalizeCatalogRow);
     state.serveLoading = Boolean(page.checking && !page.generation);
     if (page.generation && page.generation !== previousGeneration) await resolveCatalogSelections();
-    renderComparison();
+    const summaryRequest = document.getElementById("comparison")
+      ? loadLeaderboardSummary()
+      : Promise.resolve(null);
+    void summaryRequest.then(renderCatalogComparison);
+    renderCatalogComparison();
     setWorkspaceWriteControlsDisabled(Boolean(page.checking));
     if (page.checking) {
       setServeStatus(t("serve_scanning_runs", "Checking runs"));
@@ -341,10 +502,10 @@ async function loadCatalogPage(changes = {}, options = {}) {
       if (wasChecking) await refreshSourceCategoryOptions();
     }
     await ensureCatalogDetail(previousGeneration !== Number(page.generation || 0));
-    if (typeof refreshWorkspaceViews === "function" && (
+    if (
       !state.workspaceViewsLoaded
       || (workspaceViews().length >= 1 && Number(state.workspaceViewSummaryGeneration) !== Number(page.generation || 0))
-    )) refreshWorkspaceViews();
+    ) refreshWorkspaceViews();
   } catch (error) {
     if (error?.status === 409 && state.workspaceAppliedViewNames.size) {
       const appliedCount = state.workspaceAppliedViewNames.size;
@@ -356,6 +517,10 @@ async function loadCatalogPage(changes = {}, options = {}) {
         }, 0);
       }
     }
+    state.leaderboardSummary = null;
+    state.leaderboardSummaryLoading = false;
+    state.leaderboardSummaryError = error?.message || String(error);
+    renderCatalogComparison();
     setServeStatus(error.message || String(error), true);
   } finally {
     state.catalogLoading = false;
@@ -573,15 +738,13 @@ function exportCurrentScope(kind) {
 }
 
 function exportLeaderboardSummary() {
-  const sourceKeys = leaderboardRows().map(row => row?.source_key).filter(Boolean);
-  if (!sourceKeys.length) return;
-  const applied = workspaceViewQueryPayload();
+  if (!Number(state.catalogPage?.total || 0)) return;
+  const { group_by: _groupBy, ...query } = leaderboardSummaryQueryPayload();
   return serveDownload("summary_xlsx", {
     kind: "summary_xlsx",
     summary: {
       scope: "leaderboard",
-      source_keys: sourceKeys,
-      query: { ...state.catalogQuery, ...applied, page: undefined, page_size: undefined },
+      query,
       group_by: state.leaderboardSummaryGroupBy,
       statistic: state.leaderboardSummaryStatistic
     }
@@ -629,6 +792,7 @@ export {
   leaderboardRows,
   loadServeWorkspace,
   loadCatalogPage,
+  loadLeaderboardSummary,
   loadServeSourceReport,
   loadedServeDetailIsCurrent,
   metaFor,

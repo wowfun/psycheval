@@ -2,7 +2,7 @@ import { $, RENDER_OPTIONS, adminMode, closeOpenSubmenus, esc, fmtNum, listValue
 import { applyDataTableControls, bindDataTableControls, renderDataTable, selectionColumn, tableCellContent, tableControls, tableValueAttributes } from "./data-tables.js";
 import { leaderboardSummaryDefinitions, leaderboardSummaryGroupHeading, leaderboardSummaryGroupUnit, leaderboardSummaryStatistics, leaderboardSummaryValue, renderLeaderboardSummary, summaryNumber } from "./leaderboard-summary.js";
 import { serveApi, setServeStatus } from "./serve-effects.js";
-import { leaderboardRows, loadCatalogPage, serveDownload } from "./serve-catalog.js";
+import { loadCatalogPage, serveDownload } from "./serve-catalog.js";
 import { closeModalSurface, focusSoon, openModalSurface } from "./modal-surfaces.js";
 import { renderMarkdown } from "./markdown.js";
 import { createWorkspaceViewRepository } from "./workspace-view-repository.js";
@@ -424,7 +424,7 @@ async function refreshWorkspaceViews() {
         state.workspaceViewSummaryGeneration = generation;
         pruneWorkspaceViewState();
         renderWorkspaceViewRail();
-        if ($("leaderboard-summary")) renderLeaderboardSummary(leaderboardRows());
+        if ($("leaderboard-summary")) renderLeaderboardSummary();
         if (Array.from(appliedBefore).some(id => !state.workspaceAppliedViewNames.has(id))) {
           if (state.workspaceAppliedViewNames.size) await reloadAppliedWorkspaceViews();
           else await clearWorkspaceViewConditions();
@@ -520,7 +520,7 @@ function closeWorkspaceViewRail() {
   captureWorkspaceViewScrollState();
   state.workspaceViewsClosed = true;
   renderWorkspaceViewRail();
-  renderLeaderboardSummary(leaderboardRows());
+  renderLeaderboardSummary();
   focusSoon(document.querySelector?.("[data-workspace-views-open]"));
 }
 
@@ -528,7 +528,7 @@ function openWorkspaceViewRail() {
   if (!workspaceViews().length) return;
   state.workspaceViewsClosed = false;
   renderWorkspaceViewRail();
-  renderLeaderboardSummary(leaderboardRows());
+  renderLeaderboardSummary();
   restoreWorkspaceViewScrollState();
   focusSoon(document.querySelector?.("[data-workspace-views-close]"));
 }

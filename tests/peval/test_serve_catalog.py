@@ -26,7 +26,10 @@ from psycheval.state import (
 )
 from psycheval.state.catalog import (
     CATALOG_SCHEMA_VERSION,
+    SUMMARY_GROUP_LIMIT,
+    CatalogSummaryCapacityError,
     _count_matching_source_refs,
+    _summary_rows,
 )
 from tests.peval.cli_inputs_support import write_trial_cell_artifacts
 
@@ -97,7 +100,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
         self.assertEqual(len(selects), 1)
         connection.close()
 
-    def test_inference_summary_and_presence_cover_the_full_filtered_query(self) -> None:
+    def test_metric_presence_covers_the_full_filtered_query(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             first = self.write_cell(root, 1)
@@ -114,7 +117,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
             )
             self.write_inference_metrics(
                 second,
-                ttft_sum=900,
+                ttft_sum=1800,
                 ttft_count=9,
                 decode_ms=900,
                 decode_tokens=45,
@@ -134,14 +137,20 @@ class WorkspaceCatalogTests(unittest.TestCase):
             self.assertEqual(len(page.items), 1)
             self.assertEqual(loads.call_count, 1)
             self.assertFalse(hasattr(page, "matched_source_keys"))
-            self.assertEqual(page.inference_summary["matched_trials"], 3)
-            self.assertEqual(page.inference_summary["ttft"]["value_ms"], 100)
-            self.assertEqual(page.inference_summary["ttft"]["covered_trials"], 2)
-            self.assertEqual(page.inference_summary["tps"]["value"], 55)
-            self.assertEqual(page.inference_summary["cache_hit_rate"]["value"], 0.18)
+            self.assertFalse(hasattr(page, "inference_summary"))
             self.assertEqual(page.column_presence["ttft_ms"], 2)
             self.assertEqual(page.column_presence["tps"], 2)
             self.assertEqual(page.column_presence["cache_hit_rate"], 2)
+            summary = catalog.summarize_saved_views(
+                [("all", CatalogQuery(), "overall")]
+            )["views"][0]
+            metrics = {
+                metric["key"]: metric for metric in summary["groups"][0]["metrics"]
+            }
+            self.assertEqual(metrics["ttft_ms"]["count"], 2)
+            self.assertEqual(metrics["ttft_ms"]["mean"], 150)
+            self.assertEqual(metrics["tps"]["mean"], 75)
+            self.assertEqual(metrics["cache_hit_rate"]["mean"], 0.5)
             linked = catalog.query(
                 CatalogQuery(page_size=1),
                 include_facets=False,
@@ -586,6 +595,16 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 63,
             )
             self.assertEqual(catalog.query(CatalogQuery(tags=("even",))).total, 63)
+            summary = catalog.summarize_query(
+                CatalogQuery(),
+                name="Leaderboard Summary",
+                group_by="category",
+            )["summary"]
+            self.assertEqual(summary["matched_count"], 125)
+            self.assertEqual(
+                {group["key"]: group["count"] for group in summary["groups"]},
+                {None: 62, "even-category": 63},
+            )
             self.assertEqual(
                 next(
                     item["count"]
@@ -601,6 +620,149 @@ class WorkspaceCatalogTests(unittest.TestCase):
             ]
             self.assertEqual(catalog.resolve_keys(selected), selected[:2])
             store.close()
+
+    def test_query_summary_is_memoized_until_the_catalog_generation_changes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_cell(root, 1)
+            store, catalog = self.catalog(root)
+            try:
+                catalog.reconcile()
+                with patch(
+                    "psycheval.state.catalog._summary_rows",
+                    wraps=_summary_rows,
+                ) as summary_rows:
+                    first = catalog.summarize_query(
+                        CatalogQuery(), name="Leaderboard Summary", group_by="agent"
+                    )
+                    second = catalog.summarize_query(
+                        CatalogQuery(page=2, sort="session", direction="asc"),
+                        name="Leaderboard Summary",
+                        group_by="agent",
+                    )
+                    self.assertEqual(first, second)
+                    self.assertEqual(summary_rows.call_count, 1)
+
+                    catalog.reconcile()
+                    third = catalog.summarize_query(
+                        CatalogQuery(), name="Leaderboard Summary", group_by="agent"
+                    )
+                    self.assertNotEqual(first["generation"], third["generation"])
+                    self.assertEqual(summary_rows.call_count, 2)
+            finally:
+                store.close()
+
+    def test_query_summary_larger_than_the_byte_budget_is_not_cached(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_cell(root, 1)
+            store, catalog = self.catalog(root)
+            try:
+                catalog.reconcile()
+                with (
+                    patch(
+                        "psycheval.state.catalog.SUMMARY_CACHE_BYTE_LIMIT",
+                        1,
+                    ),
+                    patch(
+                        "psycheval.state.catalog._summary_rows",
+                        wraps=_summary_rows,
+                    ) as summary_rows,
+                ):
+                    first = catalog.summarize_query(
+                        CatalogQuery(), name="Leaderboard Summary", group_by="overall"
+                    )
+                    second = catalog.summarize_query(
+                        CatalogQuery(), name="Leaderboard Summary", group_by="overall"
+                    )
+
+                self.assertEqual(first, second)
+                self.assertEqual(summary_rows.call_count, 2)
+                self.assertEqual(catalog._query_summary_cache_bytes, 0)
+                self.assertFalse(catalog._query_summary_cache)
+            finally:
+                store.close()
+
+    def test_query_summary_generation_and_rows_share_one_sqlite_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_cell(root, 1)
+            store, catalog = self.catalog(root)
+            try:
+                first_generation = catalog.reconcile()
+                self.write_cell(root, 2)
+                reconciled = False
+
+                def reconcile_before_rows(connection, where, parameters):
+                    nonlocal reconciled
+                    if not reconciled:
+                        reconciled = True
+                        self.assertEqual(catalog.reconcile(), first_generation + 1)
+                    return _summary_rows(connection, where, parameters)
+
+                with patch(
+                    "psycheval.state.catalog._summary_rows",
+                    side_effect=reconcile_before_rows,
+                ):
+                    payload = catalog.summarize_query(
+                        CatalogQuery(), name="Leaderboard Summary", group_by="overall"
+                    )
+
+                self.assertEqual(payload["generation"], first_generation)
+                self.assertEqual(payload["summary"]["matched_count"], 1)
+                self.assertEqual(catalog.generation, first_generation + 1)
+            finally:
+                store.close()
+
+    def test_query_summary_rejects_group_cardinality_above_the_renderable_limit(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_cell(root, 1)
+            store, catalog = self.catalog(root)
+            try:
+                catalog.reconcile()
+                rows = (
+                    {
+                        "job_name": f"job-{index}",
+                        "duration_ms": index,
+                    }
+                    for index in range(SUMMARY_GROUP_LIMIT + 1)
+                )
+                with (
+                    patch(
+                        "psycheval.state.catalog._summary_rows",
+                        return_value=rows,
+                    ),
+                    self.assertRaisesRegex(
+                        CatalogSummaryCapacityError,
+                        rf"at most {SUMMARY_GROUP_LIMIT} groups",
+                    ),
+                ):
+                    catalog.summarize_query(
+                        CatalogQuery(), name="Leaderboard Summary", group_by="job"
+                    )
+
+                rows = (
+                    {"job_name": f"job-{index}", "duration_ms": index}
+                    for index in range(SUMMARY_GROUP_LIMIT + 1)
+                )
+                with patch(
+                    "psycheval.state.catalog._summary_rows",
+                    return_value=rows,
+                ):
+                    overall = catalog.summarize_query(
+                        CatalogQuery(), name="Leaderboard Summary", group_by="overall"
+                    )
+                self.assertEqual(
+                    overall["summary"]["matched_count"], SUMMARY_GROUP_LIMIT + 1
+                )
+                self.assertEqual(len(overall["summary"]["groups"]), 1)
+            finally:
+                store.close()
 
     def test_facets_cover_complete_readable_current_source_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -739,13 +901,17 @@ class WorkspaceCatalogTests(unittest.TestCase):
             try:
                 catalog.reconcile()
                 self.assertEqual(len(catalog.query(CatalogQuery()).items), 100)
-                payload = catalog.summarize_saved_views(
-                    [
-                        ("all", CatalogQuery(), "overall"),
-                        ("even", CatalogQuery(tags=("even",)), "model"),
-                        ("category", CatalogQuery(), "category"),
-                    ]
-                )
+                with patch(
+                    "psycheval.state.catalog.json.loads", wraps=json.loads
+                ) as loads:
+                    payload = catalog.summarize_saved_views(
+                        [
+                            ("all", CatalogQuery(), "overall"),
+                            ("even", CatalogQuery(tags=("even",)), "model"),
+                            ("category", CatalogQuery(), "category"),
+                        ]
+                    )
+                loads.assert_not_called()
                 all_view, even_view, category_view = payload["views"]
                 self.assertEqual(all_view["matched_count"], 125)
                 self.assertEqual(all_view["groups"][0]["count"], 125)
@@ -865,6 +1031,19 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 )
             self.assertIn("category", columns)
             self.assertIn("cells_category", indexes)
+            self.assertTrue(
+                {
+                    "ttft_ms_sum",
+                    "ttft_sample_count",
+                    "decode_duration_ms",
+                    "decode_token_count",
+                    "decode_sample_count",
+                    "cache_prompt_tokens",
+                    "cache_read_tokens",
+                    "cache_sample_count",
+                }.isdisjoint(columns),
+                columns,
+            )
             cache_path.write_bytes(b"not sqlite")
             rebuilt = WorkspaceCatalog(catalog.store, catalog.config)
             self.assertFalse(rebuilt.has_generation)

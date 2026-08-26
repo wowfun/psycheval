@@ -1,66 +1,75 @@
-import { $, esc, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, state, t } from "./runtime.js";
-import { agentNameFor, rowToolErrorRate, tableCellContent, tableValueAttributes } from "./data-tables.js";
-import { exportLeaderboardSummary, leaderboardRows } from "./serve-catalog.js";
+import { $, esc, fmtMs, fmtNum, fmtPct, hasMetricValue, listValue, state, t } from "./runtime.js";
+import { tableCellContent, tableValueAttributes } from "./data-tables.js";
+import { exportLeaderboardSummary, loadLeaderboardSummary } from "./serve-catalog.js";
 import { bindWorkspaceViewControls, renderWorkspaceViewControls } from "./workspace-views.js";
-import { aggregateInferenceRows } from "./inference-metrics.js";
 
-function renderLeaderboardSummary(rows = leaderboardRows()) {
+function renderLeaderboardSummary() {
   const target = $("leaderboard-summary");
   if (!target) return;
-  const visibleRows = Array.isArray(rows) ? rows : [];
-  if (!visibleRows.length) {
-    target.innerHTML = `
-      <div class="panel-head leaderboard-summary-head">
-        <div><h2 id="leaderboard-summary-title">${esc(t("leaderboard_summary", "Leaderboard Summary"))}</h2></div>
-        ${renderLeaderboardSummaryActions()}
+  const summary = state.leaderboardSummary?.summary || null;
+  const matchedCount = Number(summary?.matched_count ?? state.catalogPage?.total ?? 0);
+  const initialChecking = Boolean(
+    state.leaderboardSummary?.checking
+    && !Number(state.leaderboardSummary?.generation || 0),
+  );
+  const heading = `
+    <div class="panel-head leaderboard-summary-head">
+      <div>
+        <h2 id="leaderboard-summary-title">${esc(t("leaderboard_summary", "Leaderboard Summary"))}</h2>
+        ${initialChecking ? "" : `<p>${esc(leaderboardSummaryScopeText(matchedCount))}</p>`}
       </div>
-      <p class="leaderboard-summary-empty">${esc(t("leaderboard_summary_empty", "No visible rows to summarize."))}</p>
+      ${renderLeaderboardSummaryActions()}
+    </div>`;
+  if (state.leaderboardSummaryLoading || state.leaderboardSummary?.checking) {
+    target.innerHTML = `
+      ${heading}
+      <p class="leaderboard-summary-empty" aria-live="polite">${esc(t("leaderboard_summary_loading", "Calculating the complete-query summary…"))}</p>
+    `;
+    bindLeaderboardSummaryControls(target);
+    return;
+  }
+  if (state.leaderboardSummaryError) {
+    const detail = String(state.leaderboardSummaryError);
+    target.innerHTML = `
+      ${heading}
+      <p class="leaderboard-summary-empty" role="alert">${esc(t("leaderboard_summary_error", "The complete-query summary is unavailable."))} ${esc(detail)}</p>
+    `;
+    bindLeaderboardSummaryControls(target);
+    return;
+  }
+  if (!summary || matchedCount < 1) {
+    target.innerHTML = `
+      ${heading}
+      <p class="leaderboard-summary-empty">${esc(t("leaderboard_summary_empty", "No Trials match the current conditions."))}</p>
     `;
     bindLeaderboardSummaryControls(target);
     return;
   }
 
-  const groups = leaderboardSummaryGroups(visibleRows, state.leaderboardSummaryGroupBy);
+  const groups = listValue(summary.groups).map(group => ({
+    ...group,
+    label: state.leaderboardSummaryGroupBy === "overall" && group?.key === "overall"
+      ? t("summary_overall", "Overall")
+      : String(group?.label ?? "-"),
+  }));
   target.innerHTML = `
-    <div class="panel-head leaderboard-summary-head">
-      <div>
-        <h2 id="leaderboard-summary-title">${esc(t("leaderboard_summary", "Leaderboard Summary"))}</h2>
-        <p>${esc(t("leaderboard_summary_hint", "Compare one statistic at a time; expand the table for the full distribution."))}</p>
-      </div>
-      ${renderLeaderboardSummaryActions()}
-    </div>
-    ${renderInferenceOverview(visibleRows)}
+    ${heading}
     ${renderLeaderboardSummaryTableDisclosure(groups)}
     ${state.leaderboardSummaryGroupBy === "overall" ? "" : renderLeaderboardSummaryCharts(groups)}
   `;
   bindLeaderboardSummaryControls(target);
 }
 
-function renderInferenceOverview(rows) {
-  const summary = state.catalogPage?.inference_summary
-    ? state.catalogPage.inference_summary
-    : aggregateInferenceRows(rows);
-  const matched = Number(summary?.matched_trials || 0);
-  const items = [
-    { key: "ttft", label: t("avg_ttft", "Avg TTFT"), value: fmtTtft(summary?.ttft?.value_ms), covered: summary?.ttft?.covered_trials },
-    { key: "tps", label: t("decode_tps", "Decode TPS"), value: fmtTps(summary?.tps?.value), covered: summary?.tps?.covered_trials },
-    { key: "cache", label: t("cache_hit", "Cache Hit"), value: fmtPct(summary?.cache_hit_rate?.value), covered: summary?.cache_hit_rate?.covered_trials },
-  ];
-  return `<section class="inference-overview" aria-label="${esc(t("inference_overview", "Inference overview"))}">
-    ${items.map(item => {
-      const coverage = String(t("metric_coverage", "{covered}/{matched} trials"))
-        .replace("{covered}", String(Number(item.covered || 0)))
-        .replace("{matched}", String(matched));
-      return `<div class="inference-overview-item" data-inference-summary="${esc(item.key)}"><span>${esc(item.label)}</span><strong>${esc(item.value)}</strong><small>${esc(coverage)}</small></div>`;
-    }).join("")}
-  </section>`;
+function leaderboardSummaryScopeText(count) {
+  return t(
+    "leaderboard_summary_scope",
+    "{count} matching Trials across all pages.",
+  ).replace("{count}", fmtNum(count));
 }
 
 function renderLeaderboardSummaryActions() {
-  const workspaceControls = typeof renderWorkspaceViewControls === "function"
-    ? renderWorkspaceViewControls()
-    : "";
-  const exportControl = `<button type="button" class="action-button leaderboard-summary-export" data-summary-export-xlsx ${leaderboardRows().length ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>`;
+  const workspaceControls = renderWorkspaceViewControls();
+  const exportControl = `<button type="button" class="action-button leaderboard-summary-export" data-summary-export-xlsx ${Number(state.catalogPage?.total || 0) ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>`;
   return `<div class="leaderboard-summary-actions">${renderLeaderboardSummaryGroupControl()}${workspaceControls}${exportControl}</div>`;
 }
 
@@ -84,80 +93,19 @@ function leaderboardSummaryGroupButton(value, label) {
   return `<button type="button" class="leaderboard-summary-segment${active ? " active" : ""}" data-summary-group-by="${esc(value)}" aria-pressed="${active}">${esc(label)}</button>`;
 }
 
-function leaderboardSummaryGroups(rows = leaderboardRows(), groupBy = state.leaderboardSummaryGroupBy) {
-  const visibleRows = Array.isArray(rows) ? rows : [];
-  if (groupBy === "overall") {
-    return [{ key: "overall", label: t("summary_overall", "Overall"), rows: visibleRows, metrics: leaderboardSummaryRows(visibleRows) }];
-  }
-  const grouped = new Map();
-  visibleRows.forEach(row => {
-    const field = ({ category: "source_category", model: "model", task: "task_name", job: "job_name", provider: "model_provider" })[groupBy];
-    const raw = field ? String(row?.[field] || "").trim() : String(agentNameFor(row) || "").trim();
-    const key = raw || null;
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key).push(row);
-  });
-  return Array.from(grouped, ([key, groupRows]) => ({
-    key,
-    label: key === null ? "-" : key,
-    rows: groupRows,
-    metrics: leaderboardSummaryRows(groupRows),
-  })).sort((left, right) => (
-    left.label.localeCompare(right.label, undefined, { numeric: true })
-    || (left.key === null ? -1 : right.key === null ? 1 : 0)
-  ));
-}
-
-function leaderboardSummaryRows(rows = leaderboardRows()) {
-  const visibleRows = Array.isArray(rows) ? rows : [];
-  return leaderboardSummaryDefinitions().map(definition => {
-    const values = visibleRows
-      .map(row => summaryNumber(definition.value(row)))
-      .filter(value => value !== null);
-    const total = values.reduce((sum, value) => sum + value, 0);
-    return {
-      key: definition.key,
-      label: definition.label,
-      type: definition.type,
-      count: values.length,
-      mean: values.length ? total / values.length : null,
-      distribution: leaderboardSummaryDistribution(values),
-    };
-  });
-}
-
 function leaderboardSummaryDefinitions() {
   return [
-    { key: "score", label: t("reward", "Reward"), type: "number", value: row => row?.score },
-    { key: "duration_ms", label: t("duration", "Active Duration"), type: "duration", value: row => row?.duration_ms },
-    { key: "tokens", label: t("tokens", "Tokens"), type: "number", value: row => row?.tokens },
-    { key: "turns", label: t("turns", "Turns"), type: "number", value: row => row?.turns },
-    { key: "model_duration_ms", label: t("model_call_duration", "Model call duration"), type: "duration", value: row => modelDurationForRow(row) },
-    { key: "total_tool_calls", label: t("tool_calls", "Tool Calls"), type: "number", value: row => row?.total_tool_calls },
-    { key: "tool_error_rate", label: t("tool_error_rate", "Tool Error Rate"), type: "percent", value: row => rowToolErrorRate(row) },
+    { key: "score", label: t("reward", "Reward"), type: "number" },
+    { key: "duration_ms", label: t("duration", "Active Duration"), type: "duration" },
+    { key: "ttft_ms", label: t("avg_ttft", "Avg TTFT"), type: "duration" },
+    { key: "tps", label: t("decode_tps", "Decode TPS"), type: "number" },
+    { key: "tokens", label: t("tokens", "Tokens"), type: "number" },
+    { key: "cache_hit_rate", label: t("cache_hit", "Cache Hit"), type: "percent" },
+    { key: "turns", label: t("turns", "Turns"), type: "number" },
+    { key: "model_duration_ms", label: t("model_call_duration", "Model call duration"), type: "duration" },
+    { key: "total_tool_calls", label: t("tool_calls", "Tool Calls"), type: "number" },
+    { key: "tool_error_rate", label: t("tool_error_rate", "Tool Error Rate"), type: "percent" },
   ];
-}
-
-function modelDurationForRow(row) {
-  if (hasMetricValue(row?.model_duration_ms)) return Number(row.model_duration_ms);
-  const metas = listValue(state.view?.trajectory_meta);
-  const index = metas.findIndex(meta => meta?.trial_key === row?.trial_key);
-  if (index < 0) return null;
-  const trajectory = listValue(state.view?.trajectory)[index] || {};
-  const trajectorySteps = listValue(trajectory.steps);
-  const metaSteps = listValue(metas[index]?.steps);
-  let total = 0;
-  let count = 0;
-  metaSteps.forEach((step, stepIndex) => {
-    if (!step || typeof step !== "object") return;
-    const source = lower(trajectorySteps[stepIndex]?.source);
-    if (source !== "agent" && source !== "assistant") return;
-    const duration = summaryNumber(step.duration_ms);
-    if (duration === null) return;
-    total += duration;
-    count += 1;
-  });
-  return count ? total : null;
 }
 
 function renderLeaderboardSummaryTableDisclosure(groups) {
@@ -192,7 +140,7 @@ function renderLeaderboardSummaryMetricGroup(definition, groups, statistics) {
     const row = group.metrics.find(metric => metric.key === definition.key);
     return `<tr data-summary-metric="${esc(definition.key)}"${index === 0 ? " data-summary-group-start" : ""}>
       ${index === 0 ? `<th ${tableValueAttributes("identity", definition.label, "summary-metric-cell")} scope="rowgroup" rowspan="${groups.length}">${tableCellContent(esc(definition.label))}</th>` : ""}
-      <th ${tableValueAttributes("identity", group.label, "summary-group-cell")} scope="row">${tableCellContent(`<strong>${esc(group.label)}</strong><span>n=${fmtNum(group.rows.length)}</span>`)}</th>
+      <th ${tableValueAttributes("identity", group.label, "summary-group-cell")} scope="row">${tableCellContent(`<strong>${esc(group.label)}</strong><span>n=${fmtNum(group.count)}</span>`)}</th>
       <td ${tableValueAttributes("number", fmtNum(row?.count), "num")}>${tableCellContent(fmtNum(row?.count))}</td>
       ${statistics.map(statistic => { const value = leaderboardSummaryValue(row, statistic.value(row)); return `<td ${tableValueAttributes("number", value, `num${state.leaderboardSummaryStatistic === statistic.key ? " summary-selected-stat" : ""}`)} data-summary-stat="${esc(statistic.key)}">${tableCellContent(esc(value))}</td>`; }).join("")}
     </tr>`;
@@ -284,13 +232,16 @@ function bindLeaderboardSummaryControls(target) {
       exportLeaderboardSummary();
     });
   });
-  if (typeof bindWorkspaceViewControls === "function") bindWorkspaceViewControls(target);
+  bindWorkspaceViewControls(target);
 }
 
-function setLeaderboardSummaryGroupBy(value) {
+async function setLeaderboardSummaryGroupBy(value) {
   if (!["overall", "agent", "model", "category", "task", "job", "provider"].includes(value)) return;
   state.leaderboardSummaryGroupBy = value;
-  renderLeaderboardSummary(leaderboardRows());
+  const request = loadLeaderboardSummary();
+  renderLeaderboardSummary();
+  await request;
+  renderLeaderboardSummary();
 }
 
 function leaderboardSummaryGroupHeading(groupBy = state.leaderboardSummaryGroupBy) {
@@ -315,35 +266,13 @@ function leaderboardSummaryGroupUnit(groupBy = state.leaderboardSummaryGroupBy) 
 
 function toggleLeaderboardSummaryTable() {
   state.leaderboardSummaryTableOpen = !state.leaderboardSummaryTableOpen;
-  renderLeaderboardSummary(leaderboardRows());
+  renderLeaderboardSummary();
 }
 
 function setLeaderboardSummaryStatistic(value) {
   if (!leaderboardSummaryStatistics().some(statistic => statistic.key === value)) return;
   state.leaderboardSummaryStatistic = value;
-  renderLeaderboardSummary(leaderboardRows());
-}
-
-function leaderboardSummaryDistribution(values) {
-  if (!values.length) return null;
-  const ordered = [...values].sort((left, right) => left - right);
-  return {
-    min: ordered[0],
-    q1: leaderboardSummaryPercentile(ordered, 25),
-    p50: leaderboardSummaryPercentile(ordered, 50),
-    q3: leaderboardSummaryPercentile(ordered, 75),
-    p95: leaderboardSummaryPercentile(ordered, 95),
-    max: ordered[ordered.length - 1],
-  };
-}
-
-function leaderboardSummaryPercentile(ordered, percentile) {
-  if (ordered.length === 1) return ordered[0];
-  const position = (ordered.length - 1) * (percentile / 100);
-  const lowerIndex = Math.floor(position);
-  const upperIndex = Math.ceil(position);
-  if (lowerIndex === upperIndex) return ordered[lowerIndex];
-  return ordered[lowerIndex] + (ordered[upperIndex] - ordered[lowerIndex]) * (position - lowerIndex);
+  renderLeaderboardSummary();
 }
 
 function leaderboardSummaryValue(row, value) {
@@ -361,16 +290,11 @@ function summaryNumber(value) {
 export {
   bindLeaderboardSummaryControls,
   leaderboardSummaryDefinitions,
-  leaderboardSummaryDistribution,
   leaderboardSummaryGroupButton,
   leaderboardSummaryGroupHeading,
-  leaderboardSummaryGroups,
   leaderboardSummaryGroupUnit,
-  leaderboardSummaryPercentile,
-  leaderboardSummaryRows,
   leaderboardSummaryStatistics,
   leaderboardSummaryValue,
-  modelDurationForRow,
   renderLeaderboardSummary,
   renderLeaderboardSummaryActions,
   renderLeaderboardSummaryChart,
@@ -383,6 +307,7 @@ export {
   selectedLeaderboardSummaryStatistic,
   setLeaderboardSummaryGroupBy,
   setLeaderboardSummaryStatistic,
+  leaderboardSummaryScopeText,
   summaryNumber,
   toggleLeaderboardSummaryTable,
 };

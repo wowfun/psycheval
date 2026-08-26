@@ -258,6 +258,7 @@ def _guest_route(method: str, path: str) -> bool:
             "/api/auth/logout",
             "/api/catalog/resolve",
             "/api/catalog/query",
+            "/api/catalog/summary",
             "/api/exports",
             "/api/views/summary",
         }

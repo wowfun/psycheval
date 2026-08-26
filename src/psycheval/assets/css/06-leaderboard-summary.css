@@ -15,43 +15,6 @@
   color:var(--muted);
   font:12px/1.45 var(--mono);
 }
-.inference-overview {
-  display:grid;
-  grid-template-columns:repeat(3,minmax(0,1fr));
-  gap:1px;
-  margin:0 0 14px;
-  overflow:hidden;
-  border:1px solid var(--rule);
-  border-radius:var(--radius);
-  background:var(--rule);
-}
-.inference-overview-item {
-  display:grid;
-  grid-template-columns:minmax(0,1fr) auto;
-  align-items:baseline;
-  gap:5px 12px;
-  min-width:0;
-  padding:11px 12px;
-  background:var(--surface);
-}
-.inference-overview-item span {
-  color:var(--muted);
-  font:700 12px/1.2 var(--mono);
-  letter-spacing:.06em;
-  text-transform:uppercase;
-}
-.inference-overview-item strong {
-  font:800 18px/1 var(--mono);
-  white-space:nowrap;
-}
-.inference-overview-item small {
-  grid-column:1/-1;
-  color:var(--muted);
-  font:12px/1.2 var(--mono);
-}
-@media (max-width:700px) {
-  .inference-overview { grid-template-columns:1fr; }
-}
 .leaderboard-summary-control {
   display:grid;
   justify-items:end;

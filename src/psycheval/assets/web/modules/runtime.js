@@ -68,6 +68,14 @@ const state = { view: null, selectedTrial: null, selectedStep: null, detailSideb
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";
+state.leaderboardSummary = null;
+state.leaderboardSummaryLoading = false;
+state.leaderboardSummaryError = null;
+state.leaderboardSummaryScopeKey = null;
+state.leaderboardSummaryRequestKey = null;
+state.leaderboardSummaryRequestVersion = 0;
+state.leaderboardSummaryRequestPromise = null;
+state.leaderboardSummaryCache = new Map();
 const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.column-control";
 const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.column-control[open]";
 function closeOpenSubmenus(except = null) {
@@ -171,7 +179,7 @@ function renderComparison() {
   if (!rows.length) {
     if (leaderboardRegion) leaderboardRegion.innerHTML = "";
     $("comparison").innerHTML = `<section class="leaderboard-summary panel" aria-labelledby="leaderboard-summary-title" id="leaderboard-summary"></section>`;
-    renderLeaderboardSummary([]);
+    renderLeaderboardSummary();
     return;
   }
   if (leaderboardRegion) leaderboardRegion.innerHTML = `<section class="leaderboard panel" aria-labelledby="leaderboard-title" id="leaderboard"></section>`;
@@ -389,7 +397,7 @@ function renderComparisonPanels(
   const rows = leaderboardRows();
   syncSelectionWithVisibleRows(rows);
   renderLeaderboard(rows);
-  if ($("leaderboard-summary")) renderLeaderboardSummary(rows);
+  if ($("leaderboard-summary")) renderLeaderboardSummary();
   renderTrajectoryOverview(rows);
   restoreComparisonScrollState(scrollState);
   bindComparisonScrollSync();

@@ -19,8 +19,32 @@ from psycheval.serve import (
     make_handler,
 )
 from psycheval.serve.handler import catalog_query
-from psycheval.state import CatalogQuery, open_workspace_state
+from psycheval.state import (
+    CatalogQuery,
+    CatalogSummaryCapacityError,
+    open_workspace_state,
+)
 from tests.peval.cli_inputs_support import write_trial_cell_artifacts
+
+
+def leaderboard_summary_query(**changes) -> dict:
+    payload = {
+        "state": "active",
+        "search": "",
+        "categories": [],
+        "tags": [],
+        "agents": [],
+        "models": [],
+        "tasks": [],
+        "jobs": [],
+        "providers": [],
+        "results": [],
+        "views": [],
+        "browser_views": [],
+        "group_by": "overall",
+    }
+    payload.update(changes)
+    return payload
 
 
 class ServeCatalogHttpTests(unittest.TestCase):
@@ -1077,6 +1101,193 @@ class ServeCatalogHttpTests(unittest.TestCase):
             finally:
                 self.stop(store, server, thread)
 
+    def test_leaderboard_summary_and_export_cover_all_125_matching_trials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index in range(125):
+                cell = root / f"runs/default/psychevo/s{index:03d}/t{index:03d}"
+                write_trial_cell_artifacts(
+                    cell,
+                    session_id=f"s{index:03d}",
+                    trial_key=f"t{index:03d}",
+                )
+                meta_path = cell / "agent" / "trajectory_meta.json"
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                meta["status"] = "failed" if index % 10 == 0 else "passed"
+                meta["duration_ms"] = index
+                meta_path.write_text(json.dumps(meta), encoding="utf-8")
+                if index % 2 == 0:
+                    state_path = cell / ".peval/state.json"
+                    state_path.parent.mkdir(parents=True, exist_ok=True)
+                    state_path.write_text(
+                        json.dumps(
+                            {"source_category": "even", "source_tags": ["even"]}
+                        ),
+                        encoding="utf-8",
+                    )
+            store, runtime, server, thread = self.running_server(root)
+            runtime.workspace_views.save(
+                name="Passed",
+                filters={"results": ["passed"]},
+                group_by="overall",
+                notes="",
+            )
+            browser_view = {
+                "name": "Failed local",
+                "filters": {"results": ["failed"]},
+                "group_by": "overall",
+                "notes": "",
+            }
+            try:
+                page_query = {
+                    **leaderboard_summary_query(
+                        views=["Passed"], browser_views=[browser_view]
+                    ),
+                    "page": 1,
+                    "page_size": 100,
+                    "sort": "session",
+                    "direction": "asc",
+                }
+                page_query.pop("group_by")
+                status, _headers, body = self.request(
+                    server, "POST", "/api/catalog/query", page_query
+                )
+                self.assertEqual(status, 200, body)
+                page = json.loads(body)
+                self.assertEqual(page["total"], 125)
+                self.assertEqual(len(page["items"]), 100)
+
+                summary_query = leaderboard_summary_query(
+                    views=["Passed"], browser_views=[browser_view]
+                )
+                status, _headers, body = self.request(
+                    server, "POST", "/api/catalog/summary", summary_query
+                )
+                self.assertEqual(status, 200, body)
+                payload = json.loads(body)
+                self.assertEqual(payload["generation"], page["generation"])
+                self.assertEqual(payload["summary"]["matched_count"], 125)
+                self.assertEqual(payload["summary"]["groups"][0]["count"], 125)
+                duration = payload["summary"]["groups"][0]["metrics"][0]
+                self.assertEqual(duration["count"], 125)
+                self.assertEqual(duration["mean"], 62)
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/catalog/summary",
+                    leaderboard_summary_query(group_by="category"),
+                )
+                self.assertEqual(status, 200, body)
+                groups = json.loads(body)["summary"]["groups"]
+                self.assertEqual(
+                    {group["key"]: group["count"] for group in groups},
+                    {None: 62, "even": 63},
+                )
+
+                for forbidden in (
+                    "page",
+                    "page_size",
+                    "sort",
+                    "direction",
+                    "source_keys",
+                ):
+                    status, _headers, _body = self.request(
+                        server,
+                        "POST",
+                        "/api/catalog/summary",
+                        {**summary_query, forbidden: 1},
+                    )
+                    self.assertEqual(status, 400, forbidden)
+                status, _headers, _body = self.request(
+                    server,
+                    "POST",
+                    "/api/catalog/summary",
+                    {**summary_query, "group_by": "session"},
+                )
+                self.assertEqual(status, 400)
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/catalog/summary",
+                    leaderboard_summary_query(views=["Missing"]),
+                )
+                self.assertEqual(status, 400)
+                self.assertIn("does not exist", json.loads(body)["error"])
+
+                export_query = dict(summary_query)
+                export_query.pop("group_by")
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/exports",
+                    {
+                        "kind": "summary_xlsx",
+                        "summary": {
+                            "scope": "leaderboard",
+                            "query": export_query,
+                            "group_by": "overall",
+                            "statistic": "mean",
+                        },
+                    },
+                )
+                self.assertEqual(status, 200, body[:200])
+                with zipfile.ZipFile(BytesIO(body)) as archive:
+                    sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                    strings = archive.read("xl/sharedStrings.xml").decode("utf-8")
+                self.assertIn("Complete Leaderboard query", strings)
+                self.assertIn("<v>125</v>", sheet)
+            finally:
+                self.stop(store, server, thread)
+
+    def test_oversized_grouped_summary_and_export_return_413(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_trial_cell_artifacts(
+                root / "runs/default/psychevo/session/trial",
+                session_id="session",
+                trial_key="trial",
+            )
+            store, runtime, server, thread = self.running_server(root)
+            error = CatalogSummaryCapacityError(
+                "grouped summaries support at most 1000 groups"
+            )
+            try:
+                with patch.object(
+                    runtime.catalog,
+                    "summarize_query",
+                    side_effect=error,
+                ):
+                    status, _headers, body = self.request(
+                        server,
+                        "POST",
+                        "/api/catalog/summary",
+                        leaderboard_summary_query(group_by="job"),
+                    )
+                    self.assertEqual(status, 413, body)
+                    self.assertIn("at most 1000 groups", json.loads(body)["error"])
+
+                    query = leaderboard_summary_query()
+                    query.pop("group_by")
+                    status, _headers, body = self.request(
+                        server,
+                        "POST",
+                        "/api/exports",
+                        {
+                            "kind": "summary_xlsx",
+                            "summary": {
+                                "scope": "leaderboard",
+                                "query": query,
+                                "group_by": "job",
+                                "statistic": "mean",
+                            },
+                        },
+                    )
+                    self.assertEqual(status, 413, body)
+                    self.assertIn("at most 1000 groups", json.loads(body)["error"])
+            finally:
+                self.stop(store, server, thread)
+
     def test_server_exports_leaderboard_and_saved_view_summary_workbooks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1116,21 +1327,10 @@ class ServeCatalogHttpTests(unittest.TestCase):
                         "kind": "summary_xlsx",
                         "summary": {
                             "scope": "leaderboard",
-                            "source_keys": [
-                                items[0].source_key,
-                                items[1].source_key,
-                            ],
                             "query": {
-                                "state": "active",
-                                "search": "",
-                                "sort": "last_turn_end",
-                                "direction": "desc",
-                                "categories": [],
-                                "tags": [],
-                                "agents": [],
-                                "models": [],
-                                "results": [],
-                                "views": [],
+                                key: value
+                                for key, value in leaderboard_summary_query().items()
+                                if key != "group_by"
                             },
                             "group_by": "category",
                             "statistic": "max",
@@ -1154,7 +1354,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     ),
                     10,
                 )
-                self.assertIn("Current visible Leaderboard page", strings)
+                self.assertIn("Complete Leaderboard query", strings)
                 self.assertIn("Category", strings)
                 self.assertIn("Regression", strings)
                 self.assertIn("<t>-</t>", strings)
@@ -1167,18 +1367,10 @@ class ServeCatalogHttpTests(unittest.TestCase):
                         "kind": "summary_xlsx",
                         "summary": {
                             "scope": "leaderboard",
-                            "source_keys": [items[0].source_key],
                             "query": {
-                                "state": "active",
-                                "search": "",
-                                "sort": "last_turn_end",
-                                "direction": "desc",
-                                "categories": [],
-                                "tags": [],
-                                "agents": [],
-                                "models": [],
-                                "results": [],
-                                "views": [],
+                                key: value
+                                for key, value in leaderboard_summary_query().items()
+                                if key != "group_by"
                             },
                             "group_by": "agent",
                             "statistic": "mean",
@@ -1188,8 +1380,10 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 with zipfile.ZipFile(BytesIO(body)) as archive:
                     strings = archive.read("xl/sharedStrings.xml").decode("utf-8")
-                self.assertIn("Complete query", strings)
-                self.assertIn("0/2 trials", strings)
+                self.assertIn("Complete Leaderboard query", strings)
+                self.assertIn("Avg TTFT", strings)
+                self.assertIn("Decode TPS", strings)
+                self.assertIn("Cache Hit", strings)
 
                 status, headers, body = self.request(
                     server,
@@ -1231,18 +1425,13 @@ class ServeCatalogHttpTests(unittest.TestCase):
                         "kind": "summary_xlsx",
                         "summary": {
                             "scope": "leaderboard",
-                            "source_keys": ["missing"],
                             "query": {
-                                "state": "active",
-                                "search": "",
-                                "sort": "last_turn_end",
-                                "direction": "desc",
-                                "categories": [],
-                                "tags": [],
-                                "agents": [],
-                                "models": [],
-                                "results": [],
-                                "views": [],
+                                **{
+                                    key: value
+                                    for key, value in leaderboard_summary_query().items()
+                                    if key != "group_by"
+                                },
+                                "views": ["Missing"],
                             },
                             "group_by": "agent",
                             "statistic": "mean",
@@ -1250,7 +1439,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("unknown source", json.loads(body)["error"])
+                self.assertIn("does not exist", json.loads(body)["error"])
 
                 status, _headers, body = self.request(
                     server,
@@ -1263,6 +1452,39 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 400)
                 self.assertIn("does not exist", json.loads(body)["error"])
+            finally:
+                self.stop(store, server, thread)
+
+    def test_leaderboard_summary_export_rejects_an_invalid_catalog_generation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store, runtime, server, thread = self.running_server(root)
+            try:
+                with runtime.catalog._connect() as connection:
+                    runtime.catalog._set_meta(connection, "valid_generation", "0")
+                    connection.commit()
+                query = leaderboard_summary_query()
+                query.pop("group_by")
+
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/exports",
+                    {
+                        "kind": "summary_xlsx",
+                        "summary": {
+                            "scope": "leaderboard",
+                            "query": query,
+                            "group_by": "overall",
+                            "statistic": "mean",
+                        },
+                    },
+                )
+
+                self.assertEqual(status, 400, body[:200])
+                self.assertIn("no valid generation", json.loads(body)["error"])
             finally:
                 self.stop(store, server, thread)
 

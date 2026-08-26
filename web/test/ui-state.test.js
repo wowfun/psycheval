@@ -923,6 +923,20 @@ test("Category suggestions refresh when the initial catalog scan completes", asy
   };
   globalThis.fetch = async path => {
     const request = new URL(String(path), "http://localhost");
+    if (request.pathname === "/api/catalog/summary") {
+      const generation = catalogPageRequests === 1 ? 0 : 1;
+      return response({
+        generation,
+        checking: generation === 0,
+        stale: generation === 0,
+        summary: {
+          name: "Leaderboard Summary",
+          group_by: "agent",
+          matched_count: 0,
+          groups: [],
+        },
+      });
+    }
     const suggestions = request.searchParams.get("page_size") === "1";
     if (suggestions) {
       suggestionRequests += 1;
@@ -992,15 +1006,47 @@ test("Category suggestions refresh when the initial catalog scan completes", asy
   }
 });
 
-test("Category grouping keeps missing values separate from a literal dash category", () => {
-  const groups = leaderboardSummary.leaderboardSummaryGroups([
-    { source_category: null },
-    { source_category: "-" },
-  ], "category");
-  assert.deepEqual(
-    groups.map(group => [group.key, group.label, group.rows.length]),
-    [[null, "-", 1], ["-", "-", 1]],
-  );
+test("Category summary preserves server groups for missing and literal dash values", () => {
+  document.getElementById("leaderboard-summary")?.remove();
+  const target = document.createElement("section");
+  target.id = "leaderboard-summary";
+  document.body.append(target);
+  const previous = {
+    summary: runtime.state.leaderboardSummary,
+    groupBy: runtime.state.leaderboardSummaryGroupBy,
+    tableOpen: runtime.state.leaderboardSummaryTableOpen,
+    total: runtime.state.catalogPage.total,
+  };
+  try {
+    runtime.state.catalogPage.total = 2;
+    runtime.state.leaderboardSummaryGroupBy = "category";
+    runtime.state.leaderboardSummaryTableOpen = true;
+    runtime.state.leaderboardSummaryLoading = false;
+    runtime.state.leaderboardSummaryError = null;
+    runtime.state.leaderboardSummary = {
+      generation: 1,
+      summary: {
+        matched_count: 2,
+        groups: [
+          { key: null, label: "-", count: 1, metrics: [] },
+          { key: "-", label: "-", count: 1, metrics: [] },
+        ],
+      },
+    };
+    leaderboardSummary.renderLeaderboardSummary();
+    const rows = target.querySelectorAll('[data-summary-metric="score"]');
+    assert.equal(rows.length, 2);
+    assert.deepEqual(
+      Array.from(rows, row => row.querySelector(".summary-group-cell").textContent.trim()),
+      ["-n=1", "-n=1"],
+    );
+  } finally {
+    runtime.state.leaderboardSummary = previous.summary;
+    runtime.state.leaderboardSummaryGroupBy = previous.groupBy;
+    runtime.state.leaderboardSummaryTableOpen = previous.tableOpen;
+    runtime.state.catalogPage.total = previous.total;
+    target.remove();
+  }
 });
 
 test("remaining dialog surfaces are mutually exclusive and restore focus", () => {

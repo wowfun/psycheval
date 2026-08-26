@@ -40,6 +40,16 @@ cache-read measurements over inclusive prompt tokens. Missing evidence is
 unknown, numeric zero remains a value, and Agent or wall duration is not
 relabelled as model timing.
 
+Leaderboard summaries cover every Trial matched by the current source state,
+search, facets, and applied Saved Views, including browser-local Saved Views.
+Pagination, sorting, and row selection do not change that scope. Leaderboard and
+Saved View grouped summaries treat each measured Trial as one observation for
+Count, Mean, and percentile statistics. Unknown Trial values are excluded while
+an explicit numeric zero remains part of the distribution. Grouped summaries
+remain exact and are never truncated or approximated; a query whose distinct
+group count exceeds the service capacity is rejected so the user can refine the
+scope or select an overall summary.
+
 An explicit trajectory value wins over aligned supplemental Trial telemetry.
 Optional telemetry failure does not invalidate a readable trajectory. Multiple
 reward dimensions without an explicit or unambiguous scalar are not averaged

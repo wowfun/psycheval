@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Iterable, Mapping
+from typing import Mapping
 
 MODEL_INFERENCE_KEY = "model_inference"
 
@@ -64,84 +64,6 @@ def inference_row_metrics(final_metrics: object) -> dict[str, int | float | None
         else None
     )
     return values
-
-
-def aggregate_inference_rows(
-    rows: Iterable[Mapping[str, Any]],
-) -> dict[str, Any]:
-    """Aggregate Trial sufficient statistics with ratio-of-sums semantics."""
-
-    values = list(rows)
-    ttft_sum, ttft_count, ttft_covered = _sum_pair(
-        values, "ttft_ms_sum", "ttft_sample_count", positive_denominator=True
-    )
-    decode_tokens, decode_ms, tps_covered = _sum_pair(
-        values,
-        "decode_token_count",
-        "decode_duration_ms",
-        positive_denominator=True,
-        sample_count_key="decode_sample_count",
-    )
-    cache_read, cache_prompt, cache_covered = _sum_pair(
-        values,
-        "cache_read_tokens",
-        "cache_prompt_tokens",
-        positive_denominator=True,
-        sample_count_key="cache_sample_count",
-        numerator_bounded=True,
-    )
-    return {
-        "matched_trials": len(values),
-        "ttft": {
-            "value_ms": ttft_sum / ttft_count if ttft_count > 0 else None,
-            "covered_trials": ttft_covered,
-            "sample_count": ttft_count,
-            "ttft_ms_sum": ttft_sum,
-        },
-        "tps": {
-            "value": 1000 * decode_tokens / decode_ms if decode_ms > 0 else None,
-            "covered_trials": tps_covered,
-            "decode_token_count": decode_tokens,
-            "decode_duration_ms": decode_ms,
-        },
-        "cache_hit_rate": {
-            "value": cache_read / cache_prompt if cache_prompt > 0 else None,
-            "covered_trials": cache_covered,
-            "cache_read_tokens": cache_read,
-            "cache_prompt_tokens": cache_prompt,
-        },
-    }
-
-
-def _sum_pair(
-    rows: list[Mapping[str, Any]],
-    numerator_key: str,
-    denominator_key: str,
-    *,
-    positive_denominator: bool,
-    sample_count_key: str | None = None,
-    numerator_bounded: bool = False,
-) -> tuple[float, float, int]:
-    numerator = 0.0
-    denominator = 0.0
-    covered = 0
-    for row in rows:
-        left = _number(row.get(numerator_key))
-        right = _number(row.get(denominator_key))
-        if left is None or right is None:
-            continue
-        if positive_denominator and right <= 0:
-            continue
-        if sample_count_key is not None:
-            sample_count = _number(row.get(sample_count_key))
-            if sample_count is None or sample_count <= 0:
-                continue
-        if numerator_bounded and left > right:
-            continue
-        numerator += left
-        denominator += right
-        covered += 1
-    return numerator, denominator, covered
 
 
 def _number(value: object) -> int | float | None:

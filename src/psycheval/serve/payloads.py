@@ -28,13 +28,38 @@ SUMMARY_STATISTIC_VALUES = frozenset({"mean", "min", "q1", "p50", "q3", "p95", "
 @dataclass(frozen=True)
 class SummaryExportPayload:
     scope: str
-    source_keys: tuple[str, ...] = ()
+    query: CatalogQuery | None = None
+    query_views: tuple[str, ...] = ()
     views: tuple[str, ...] = ()
     group_by: str = "agent"
     statistic: str = "mean"
-    query: CatalogQuery | None = None
-    view_names: tuple[str, ...] = ()
     browser_views: tuple[WorkspaceView, ...] = ()
+
+
+@dataclass(frozen=True)
+class CatalogSummaryPayload:
+    query: CatalogQuery
+    views: tuple[str, ...]
+    browser_views: tuple[WorkspaceView, ...]
+    group_by: str
+
+
+_CATALOG_SUMMARY_QUERY_FIELDS = frozenset(
+    {
+        "state",
+        "search",
+        "categories",
+        "tags",
+        "agents",
+        "models",
+        "tasks",
+        "jobs",
+        "providers",
+        "results",
+        "views",
+        "browser_views",
+    }
+)
 
 
 def catalog_post_query_payload(
@@ -98,27 +123,12 @@ def catalog_post_query_payload(
     )
 
 
-def _strict_catalog_query_payload(
+def _strict_catalog_summary_query_payload(
     query_value: object,
 ) -> tuple[CatalogQuery, tuple[str, ...], tuple[WorkspaceView, ...]]:
     if not isinstance(query_value, dict):
         raise HttpError(400, "query must be an object")
-    required_query_fields = {
-        "state",
-        "search",
-        "sort",
-        "direction",
-        "categories",
-        "tags",
-        "agents",
-        "models",
-        "results",
-        "views",
-    }
-    optional_query_fields = {"tasks", "jobs", "providers", "browser_views"}
-    if not required_query_fields.issubset(query_value) or not set(query_value).issubset(
-        required_query_fields | optional_query_fields
-    ):
+    if set(query_value) != _CATALOG_SUMMARY_QUERY_FIELDS:
         raise HttpError(400, "catalog query fields are invalid")
     try:
         query = CatalogQuery(
@@ -126,8 +136,6 @@ def _strict_catalog_query_payload(
             page=1,
             page_size=100,
             search=_string_value(query_value.get("search"), "query search"),
-            sort=_required_text(query_value.get("sort"), "query sort"),
-            direction=_required_text(query_value.get("direction"), "query direction"),
             categories=tuple(
                 _string_array(query_value.get("categories"), "query categories")
             ),
@@ -135,16 +143,34 @@ def _strict_catalog_query_payload(
             agents=tuple(_string_array(query_value.get("agents"), "query agents")),
             models=tuple(_string_array(query_value.get("models"), "query models")),
             results=tuple(_string_array(query_value.get("results"), "query results")),
-            tasks=tuple(_string_array(query_value.get("tasks", []), "query tasks")),
-            jobs=tuple(_string_array(query_value.get("jobs", []), "query jobs")),
+            tasks=tuple(_string_array(query_value.get("tasks"), "query tasks")),
+            jobs=tuple(_string_array(query_value.get("jobs"), "query jobs")),
             providers=tuple(
-                _string_array(query_value.get("providers", []), "query providers")
+                _string_array(query_value.get("providers"), "query providers")
             ),
         ).normalized()
     except ValueError as exc:
         raise HttpError(400, str(exc)) from exc
     view_names = tuple(_string_array(query_value.get("views"), "query views"))
-    return query, view_names, _browser_views(query_value.get("browser_views", []))
+    return query, view_names, _browser_views(query_value.get("browser_views"))
+
+
+def catalog_summary_payload(value: Any) -> CatalogSummaryPayload:
+    if not isinstance(value, dict):
+        raise HttpError(400, "catalog summary must be an object")
+    if set(value) != _CATALOG_SUMMARY_QUERY_FIELDS | {"group_by"}:
+        raise HttpError(400, "catalog summary fields are invalid")
+    group_by = value.get("group_by")
+    _validate_summary_group_by(group_by)
+    query, views, browser_views = _strict_catalog_summary_query_payload(
+        {key: value[key] for key in _CATALOG_SUMMARY_QUERY_FIELDS}
+    )
+    return CatalogSummaryPayload(
+        query=query,
+        views=views,
+        browser_views=browser_views,
+        group_by=group_by,
+    )
 
 
 def _browser_views(value: Any) -> tuple[WorkspaceView, ...]:
@@ -178,36 +204,29 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
         raise HttpError(400, "summary must be an object")
     scope = value.get("scope")
     if scope == "leaderboard":
-        expected = {"scope", "source_keys", "query", "group_by", "statistic"}
+        expected = {"scope", "query", "group_by", "statistic"}
         if set(value) != expected:
             raise HttpError(
                 400,
-                "leaderboard summary fields must be scope, source_keys, query, group_by, and statistic",
+                "leaderboard summary fields must be scope, query, group_by, and statistic",
             )
         group_by = value.get("group_by")
         statistic = value.get("statistic")
-        if group_by not in SUMMARY_GROUP_BY_VALUES:
-            raise HttpError(
-                400,
-                "group_by must be overall, agent, model, category, task, job, or provider",
-            )
-        if statistic not in SUMMARY_STATISTIC_VALUES:
+        _validate_summary_group_by(group_by)
+        if not isinstance(statistic, str) or statistic not in SUMMARY_STATISTIC_VALUES:
             raise HttpError(
                 400,
                 "statistic must be mean, min, q1, p50, q3, p95, or max",
             )
-        query, view_names, browser_views = _strict_catalog_query_payload(
+        query, query_views, browser_views = _strict_catalog_summary_query_payload(
             value.get("query")
         )
         return SummaryExportPayload(
             scope=scope,
-            source_keys=tuple(
-                _ordered_string_values(value.get("source_keys"), "source_keys")
-            ),
+            query=query,
+            query_views=query_views,
             group_by=group_by,
             statistic=statistic,
-            query=query,
-            view_names=view_names,
             browser_views=browser_views,
         )
     if scope == "saved_views":
@@ -230,6 +249,14 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
             browser_views=browser_views,
         )
     raise HttpError(400, "summary scope must be leaderboard or saved_views")
+
+
+def _validate_summary_group_by(value: object) -> None:
+    if not isinstance(value, str) or value not in SUMMARY_GROUP_BY_VALUES:
+        raise HttpError(
+            400,
+            "group_by must be overall, agent, model, category, task, job, or provider",
+        )
 
 
 def _ordered_string_values(

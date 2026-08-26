@@ -58,6 +58,7 @@ from psycheval.serve.payloads import (
     adapter_default_db_payload,
     alias_payload,
     catalog_post_query_payload,
+    catalog_summary_payload,
     category_payload,
     markdown_payload,
     required_bool,
@@ -78,7 +79,12 @@ from psycheval.serve.visibility import (
     project_harbor_task,
     project_harbor_text_file,
 )
-from psycheval.state import CatalogBusyError, CatalogQuery, ServeStateStore
+from psycheval.state import (
+    CatalogBusyError,
+    CatalogQuery,
+    CatalogSummaryCapacityError,
+    ServeStateStore,
+)
 from psycheval.state.workspace_sources import WorkspaceSources, is_harbor_source
 from psycheval.workspace_reports import (
     WorkspaceReportNotFound,
@@ -319,7 +325,10 @@ def make_handler(
                     self.write_json({"views": runtime.workspace_view_catalog()})
                     return
                 if path == "/api/views/summary":
-                    self.write_json(runtime.workspace_view_summaries())
+                    try:
+                        self.write_json(runtime.workspace_view_summaries())
+                    except CatalogSummaryCapacityError as exc:
+                        raise HttpError(413, str(exc)) from exc
                     return
                 operation_id = operation_status_path(path)
                 if operation_id is not None:
@@ -533,6 +542,27 @@ def make_handler(
                         project_catalog_payload(page.to_dict(), self._serve_role)
                     )
                     return
+                if path == "/api/catalog/summary":
+                    summary_request = catalog_summary_payload(payload)
+                    try:
+                        browser_views = runtime.validated_browser_views(
+                            summary_request.browser_views
+                        )
+                        summary = runtime.leaderboard_summary(
+                            summary_request.query,
+                            view_names=summary_request.views,
+                            browser_views=browser_views,
+                            group_by=summary_request.group_by,
+                        )
+                        runtime.ensure_browser_view_names_available(browser_views)
+                    except WorkspaceViewConflict as exc:
+                        raise HttpError(409, str(exc)) from exc
+                    except CatalogSummaryCapacityError as exc:
+                        raise HttpError(413, str(exc)) from exc
+                    except (WorkspaceViewNotFound, ValueError) as exc:
+                        raise HttpError(400, str(exc)) from exc
+                    self.write_json(summary)
+                    return
                 if path == "/api/config/acp/agents":
                     runtime.ensure_ready()
                     self.require_workspace_writable()
@@ -662,7 +692,10 @@ def make_handler(
                         raise HttpError(409, str(exc)) from exc
                     except ValueError as exc:
                         raise HttpError(400, str(exc)) from exc
-                    result = runtime.browser_view_summaries(views)
+                    try:
+                        result = runtime.browser_view_summaries(views)
+                    except CatalogSummaryCapacityError as exc:
+                        raise HttpError(413, str(exc)) from exc
                     try:
                         runtime.ensure_browser_view_names_available(views)
                     except WorkspaceViewConflict as exc:
@@ -755,9 +788,8 @@ def make_handler(
                                 )
                                 sheets = [
                                     runtime.leaderboard_summary_worksheet(
-                                        summary_request.source_keys,
-                                        query=summary_request.query,
-                                        view_names=summary_request.view_names,
+                                        summary_request.query,
+                                        view_names=summary_request.query_views,
                                         browser_views=browser_views,
                                         group_by=summary_request.group_by,
                                         statistic=summary_request.statistic,
@@ -779,6 +811,8 @@ def make_handler(
                             runtime.ensure_browser_view_names_available(browser_views)
                         except WorkspaceViewConflict as exc:
                             raise HttpError(409, str(exc)) from exc
+                        except CatalogSummaryCapacityError as exc:
+                            raise HttpError(413, str(exc)) from exc
                         except ValueError as exc:
                             raise HttpError(400, str(exc)) from exc
                         self.write_download(

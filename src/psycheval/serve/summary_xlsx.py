@@ -34,7 +34,6 @@ class SummaryWorksheet:
     groups: Sequence[Mapping[str, Any]]
     statistic: str = "mean"
     metadata: Sequence[tuple[str, str | int]] = ()
-    inference_summary: Mapping[str, Any] | None = None
 
 
 def summary_workbook(
@@ -108,8 +107,6 @@ def _write_summary_sheet(
     worksheet.write_string(0, 0, sheet.name, formats["title"])
     metadata_row = 2
     metadata = [*sheet.metadata]
-    if sheet.inference_summary is not None:
-        metadata.extend(_inference_overview_metadata(sheet.inference_summary, messages))
     for label, value in metadata:
         chunks = _excel_string_chunks(str(value))
         for chunk_index, chunk in enumerate(chunks):
@@ -259,57 +256,6 @@ def _write_summary_sheet(
             chart,
             {"x_offset": 4, "y_offset": 4},
         )
-
-
-def _inference_overview_metadata(
-    summary: Mapping[str, Any],
-    messages: Mapping[str, str],
-) -> list[tuple[str, str]]:
-    matched = int(summary.get("matched_trials") or 0)
-    coverage_template = str(
-        messages.get("metric_coverage", "{covered}/{matched} trials")
-    )
-
-    def metric(
-        key: str,
-        value_key: str,
-        *,
-        suffix: str = "",
-        percent: bool = False,
-    ) -> str:
-        payload = summary.get(key)
-        values = payload if isinstance(payload, Mapping) else {}
-        value = values.get(value_key)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            displayed = float(value) * 100 if percent else float(value)
-            value_text = f"{displayed:.2f}".rstrip("0").rstrip(".")
-            if suffix:
-                value_text = f"{value_text}{suffix}"
-        else:
-            value_text = "-"
-        coverage = coverage_template.replace(
-            "{covered}", str(int(values.get("covered_trials") or 0))
-        ).replace("{matched}", str(matched))
-        return f"{value_text} · {coverage}"
-
-    return [
-        (
-            str(messages.get("inference_overview", "Inference overview")),
-            str(messages.get("complete_query", "Complete query")),
-        ),
-        (
-            str(messages.get("avg_ttft", "Avg TTFT")),
-            metric("ttft", "value_ms", suffix=" ms"),
-        ),
-        (
-            str(messages.get("decode_tps", "Decode TPS")),
-            metric("tps", "value"),
-        ),
-        (
-            str(messages.get("cache_hit", "Cache Hit")),
-            metric("cache_hit_rate", "value", suffix="%", percent=True),
-        ),
-    ]
 
 
 def _excel_string_chunks(value: str) -> list[str]:

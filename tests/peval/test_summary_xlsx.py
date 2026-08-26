@@ -37,7 +37,10 @@ def summary_groups() -> list[dict]:
             "count": 1,
             "metrics": [
                 metric("duration_ms", "duration", 1_000),
+                metric("ttft_ms", "duration", 250),
+                metric("tps", "number", 40),
                 metric("tokens", "number", 0),
+                metric("cache_hit_rate", "percent", 0.25),
                 metric("turns", "number", None),
                 metric("model_duration_ms", "duration", 500),
                 metric("total_tool_calls", "number", 2),
@@ -49,47 +52,36 @@ def summary_groups() -> list[dict]:
 
 class SummaryXlsxTests(unittest.TestCase):
     def test_payload_validation_is_strict_and_ordered_deduplicated(self) -> None:
+        query = {
+            "state": "all",
+            "search": "needle",
+            "categories": [],
+            "tags": [],
+            "agents": [],
+            "models": [],
+            "tasks": [],
+            "jobs": [],
+            "providers": [],
+            "results": [],
+            "views": ["B", "A", "B"],
+            "browser_views": [],
+        }
         request = summary_export_payload(
             {
                 "scope": "leaderboard",
-                "source_keys": ["b", "a", "b"],
-                "query": {
-                    "state": "active",
-                    "search": "regression",
-                    "sort": "last_turn_end",
-                    "direction": "desc",
-                    "categories": [],
-                    "tags": [],
-                    "agents": [],
-                    "models": [],
-                    "results": [],
-                    "views": ["Saved A"],
-                },
+                "query": query,
                 "group_by": "model",
                 "statistic": "p95",
             }
         )
-        self.assertEqual(request.source_keys, ("b", "a"))
-        self.assertEqual(request.query.search, "regression")
-        self.assertEqual(request.view_names, ("Saved A",))
+        self.assertEqual(request.query.search, "needle")
+        self.assertEqual(request.query_views, ("B", "A"))
         self.assertEqual(request.group_by, "model")
         self.assertEqual(request.statistic, "p95")
         category_request = summary_export_payload(
             {
                 "scope": "leaderboard",
-                "source_keys": ["a"],
-                "query": {
-                    "state": "active",
-                    "search": "",
-                    "sort": "last_turn_end",
-                    "direction": "desc",
-                    "categories": [],
-                    "tags": [],
-                    "agents": [],
-                    "models": [],
-                    "results": [],
-                    "views": [],
-                },
+                "query": query,
                 "group_by": "category",
                 "statistic": "mean",
             }
@@ -102,15 +94,33 @@ class SummaryXlsxTests(unittest.TestCase):
         for invalid in (
             {
                 "scope": "leaderboard",
-                "source_keys": [],
+                "query": {**query, "page": 1},
                 "group_by": "agent",
                 "statistic": "mean",
             },
             {
                 "scope": "leaderboard",
-                "source_keys": ["a"],
+                "query": query,
                 "group_by": "agent",
                 "statistic": "median",
+            },
+            {
+                "scope": "leaderboard",
+                "query": query,
+                "group_by": ["agent"],
+                "statistic": "mean",
+            },
+            {
+                "scope": "leaderboard",
+                "query": query,
+                "group_by": "agent",
+                "statistic": ["mean"],
+            },
+            {
+                "scope": "leaderboard",
+                "query": {key: value for key, value in query.items() if key != "tags"},
+                "group_by": "agent",
+                "statistic": "mean",
             },
             {"scope": "saved_views", "views": ["a"], "extra": True},
         ):
@@ -158,6 +168,9 @@ class SummaryXlsxTests(unittest.TestCase):
         self.assertIn("https://example.invalid", shared_strings)
         self.assertIn("tail", shared_strings)
         self.assertIn("Long Notes (cont.)", shared_strings)
+        self.assertIn("Avg TTFT", shared_strings)
+        self.assertIn("Decode TPS", shared_strings)
+        self.assertIn("Cache Hit", shared_strings)
         self.assertNotIn("<f>", first_sheet)
         self.assertIn("1.157407407407407E-05", first_sheet)
         self.assertRegex(first_sheet, r"<v>0</v>")

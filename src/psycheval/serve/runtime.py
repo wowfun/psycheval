@@ -197,6 +197,21 @@ class ServeRuntime:
             ],
         }
 
+    def leaderboard_summary(
+        self,
+        query: CatalogQuery,
+        *,
+        view_names: Sequence[str] = (),
+        browser_views: Sequence[WorkspaceView] = (),
+        group_by: str,
+    ) -> dict[str, Any]:
+        return self.catalog.summarize_query(
+            query,
+            any_queries=self.workspace_view_queries(view_names, browser_views),
+            name="Leaderboard Summary",
+            group_by=group_by,
+        )
+
     def workspace_view_catalog(self) -> list[dict[str, Any]]:
         return [view.to_dict() for view in self.workspace_views.list()]
 
@@ -215,23 +230,21 @@ class ServeRuntime:
 
     def leaderboard_summary_worksheet(
         self,
-        source_keys: Sequence[str],
-        *,
         query: CatalogQuery,
+        *,
         view_names: Sequence[str] = (),
         browser_views: Sequence[WorkspaceView] = (),
         group_by: str,
         statistic: str,
     ) -> SummaryWorksheet:
-        payload = self.catalog.summarize_source_keys(
-            source_keys,
-            name="Leaderboard Summary",
+        payload = self.leaderboard_summary(
+            query,
+            view_names=view_names,
+            browser_views=browser_views,
             group_by=group_by,
-            inference_query=query,
-            inference_any_queries=self.workspace_view_queries(
-                view_names, browser_views
-            ),
         )
+        if not int(payload["generation"]):
+            raise ValueError("serve catalog has no valid generation")
         summary = payload["summary"]
         return SummaryWorksheet(
             name="Leaderboard Summary",
@@ -239,9 +252,8 @@ class ServeRuntime:
             matched_count=int(summary["matched_count"]),
             groups=summary["groups"],
             statistic=statistic,
-            inference_summary=payload["inference_summary"],
             metadata=(
-                ("Scope", "Current visible Leaderboard page"),
+                ("Scope", "Complete Leaderboard query"),
                 ("Group", group_by),
                 ("Match count", int(summary["matched_count"])),
                 ("Chart statistic", statistic),

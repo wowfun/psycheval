@@ -498,6 +498,37 @@ class ServeAccessHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200, body)
                 self.assertEqual(json.loads(body)["total"], 1)
+                summary_query = {
+                    "state": "active",
+                    "search": "",
+                    "categories": [],
+                    "tags": [],
+                    "agents": [],
+                    "models": [],
+                    "tasks": [],
+                    "jobs": [],
+                    "providers": [],
+                    "results": [],
+                    "views": [],
+                    "browser_views": [browser_view],
+                    "group_by": "overall",
+                }
+                status, _headers, body = self.request(
+                    server,
+                    "POST",
+                    "/api/catalog/summary",
+                    summary_query,
+                )
+                self.assertEqual(status, 200, body)
+                self.assertEqual(json.loads(body)["summary"]["matched_count"], 1)
+                status, _headers, _body = self.request(
+                    server,
+                    "POST",
+                    "/api/catalog/summary",
+                    summary_query,
+                    origin="http://attacker.invalid",
+                )
+                self.assertEqual(status, 403)
                 status, _headers, body = self.request(
                     server,
                     "POST",
@@ -523,21 +554,10 @@ class ServeAccessHttpTests(unittest.TestCase):
                         "kind": "summary_xlsx",
                         "summary": {
                             "scope": "leaderboard",
-                            "source_keys": [source_key],
                             "query": {
-                                "state": "active",
-                                "search": "",
-                                "sort": "last_turn_end",
-                                "direction": "desc",
-                                "categories": [],
-                                "tags": [],
-                                "agents": [],
-                                "models": [],
-                                "tasks": [],
-                                "jobs": [],
-                                "providers": [],
-                                "results": [],
-                                "views": [],
+                                key: value
+                                for key, value in summary_query.items()
+                                if key != "group_by"
                             },
                             "group_by": "agent",
                             "statistic": "mean",
