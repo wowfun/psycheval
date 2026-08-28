@@ -67,7 +67,7 @@ test("the selected Harbor trial renders the shared read-only browser at its curr
   runtime.state.view = harborReport();
   runtime.state.selectedTrial = "trial-one";
   runtime.state.selectedStep = null;
-  runtime.state.detailSidebar = { open: true, opener: null, preferredWidth: null };
+  runtime.state.detailSidebar = { open: true, pendingOpener: null, pendingOpenerSelector: null };
 
   runtime.renderComparisonPanels();
   await new Promise(resolve => setTimeout(resolve, 0));

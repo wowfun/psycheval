@@ -17,8 +17,6 @@ const reportStore = {
   },
   reader: {
     openId: null,
-    opener: null,
-    width: null,
     objectUrl: null,
     previewObserver: null,
   },

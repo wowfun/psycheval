@@ -617,6 +617,12 @@ test("saved views close and reopen without losing independent scroll state", asy
   runtime.state.workspaceViewsClosed = false;
   views.renderWorkspaceViewRail();
 
+  const resize = document.querySelector("#workspace-views [data-sidebar-resize]");
+  assert.ok(resize);
+  assert.equal(resize.getAttribute("role"), "separator");
+  assert.equal(resize.getAttribute("aria-label"), "Resize Saved Views sidebar");
+  assert.match(document.documentElement.style.getPropertyValue("--workspace-views-width"), /^\d+px$/);
+
   const analysis = document.querySelector("[data-workspace-main-scroll]");
   const index = document.querySelector("#workspace-views .workspace-view-index-shell .table-wrap");
   const cards = document.querySelector("#workspace-views [data-workspace-view-list]");
@@ -624,7 +630,7 @@ test("saved views close and reopen without losing independent scroll state", asy
   index.scrollTop = 17;
   index.scrollLeft = 9;
   cards.scrollTop = 23;
-  document.querySelector("[data-workspace-views-close]").click();
+  document.querySelector("#workspace-views [data-sidebar-close]").click();
 
   assert.equal(runtime.state.workspaceViewsClosed, true);
   assert.equal(document.querySelector("#workspace-views").hidden, true);
@@ -638,8 +644,8 @@ test("saved views close and reopen without losing independent scroll state", asy
   assert.equal(document.body.classList.contains("workspace-views-open"), true);
   assert.equal(document.querySelector("#workspace-views .workspace-view-index-shell .table-wrap").scrollTop, 17);
   assert.equal(document.querySelector("#workspace-views [data-workspace-view-list]").scrollTop, 23);
-  assert.equal(document.activeElement, document.querySelector("[data-workspace-views-close]"));
-  await tick();
+  await new Promise(resolve => window.requestAnimationFrame(resolve));
+  assert.equal(document.activeElement, document.querySelector("#workspace-views [data-sidebar-close]"));
 });
 
 test("Leaderboard and saved-view adapters keep persistence behind the shared edit seam", async () => {

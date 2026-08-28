@@ -163,38 +163,6 @@
 .detail-sidebar .rail-time {
   justify-content:flex-start;
 }
-.detail-sidebar-resize {
-  position:absolute;
-  top:0;
-  bottom:0;
-  left:-7px;
-  z-index:3;
-  width:14px;
-  cursor:col-resize;
-  touch-action:none;
-}
-.detail-sidebar-resize::after {
-  position:absolute;
-  top:50%;
-  left:6px;
-  width:2px;
-  height:56px;
-  border-radius:999px;
-  background:var(--focus);
-  content:"";
-  opacity:0;
-  transform:translateY(-50%);
-  transition:opacity 120ms ease;
-}
-.detail-sidebar:hover .detail-sidebar-resize::after,
-.detail-sidebar-resize:focus-visible::after,
-.detail-sidebar-resizing .detail-sidebar-resize::after {
-  opacity:.82;
-}
-.detail-sidebar-resize:focus-visible {
-  outline:2px solid color-mix(in oklch,var(--focus),transparent 32%);
-  outline-offset:2px;
-}
 @media(max-width:720px) {
   .workspace {
     padding:14px;
@@ -254,7 +222,7 @@
   .detail-sidebar-body.has-task {
     grid-template-rows:minmax(260px,48%) minmax(0,1fr);
   }
-  .detail-sidebar-resize {
+  .detail-sidebar>.sidebar-resize {
     display:none;
   }
   .detail-sidebar .step-row {

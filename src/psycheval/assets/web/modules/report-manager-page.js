@@ -9,10 +9,22 @@ import {
   reportStore,
   syncReportDraft,
 } from "./report-store.js";
+import { createReportSidebarAdapter } from "./report-sidebar.js";
 import { adminMode, esc, listValue, t } from "./shared.js";
 
 let boundUnload = false;
 let loadGeneration = 0;
+let reportPreviewController = null;
+
+function reportPreviewSurface() {
+  if (!reportPreviewController) {
+    reportPreviewController = createReportSidebarAdapter({
+      ownerId: "reports-page-preview",
+      onRequestClose: options => closeReportPreview({ restoreFocus: options.restoreFocus }),
+    });
+  }
+  return reportPreviewController;
+}
 
 async function initializeReportManagerPage() {
   bindReportManagerPage();
@@ -80,7 +92,7 @@ function bindReportManagerPage() {
     if (closeReportPreview()) event.preventDefault();
   });
   window.addEventListener("peval:workspace-navigate", () => {
-    closeReportPreview();
+    closeReportPreview({ restoreFocus: false });
   });
   if (!boundUnload) {
     boundUnload = true;
@@ -217,7 +229,9 @@ function bindRenderedControls(root) {
     void deleteReport(event.currentTarget?.getAttribute?.("data-report-page-delete"));
   });
   root.querySelector("[data-report-page-preview]")?.addEventListener("click", event => {
-    openReportPreview(event.currentTarget?.getAttribute?.("data-report-page-preview"));
+    openReportPreview(event.currentTarget?.getAttribute?.("data-report-page-preview"), {
+      opener: event.currentTarget,
+    });
   });
 }
 
@@ -312,31 +326,30 @@ async function deleteReport(reportId) {
   }
 }
 
-function openReportPreview(reportId) {
+function openReportPreview(reportId, options = {}) {
   const report = reportForId(reportId);
   const target = document.getElementById("workspace-report-reader");
   if (!report || !target) return false;
-  target.innerHTML = `<div class="report-reader-panel" role="dialog" aria-modal="false">
+  const content = `<div class="report-reader-panel" role="dialog" aria-modal="false">
     <header class="report-reader-head"><div><h2>${esc(report.filename)}</h2></div><div class="report-reader-actions">
       <a class="action-button compact" href="/api/reports/${encodeURIComponent(report.report_id)}/reader" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>
-      <button class="action-button compact" type="button" data-report-page-preview-close>${esc(t("close", "Close"))}</button>
+      <button class="action-button compact" type="button" data-sidebar-close>${esc(t("close", "Close"))}</button>
     </div></header>
     <div class="report-reader-frame-viewport"><iframe class="report-reader-frame" src="/api/reports/${encodeURIComponent(report.report_id)}/preview" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>
   </div>`;
-  target.removeAttribute("hidden");
-  document.body.classList.add("report-reader-open");
-  target.querySelector("[data-report-page-preview-close]")?.addEventListener("click", () => {
-    closeReportPreview();
+  return reportPreviewSurface().open({
+    render: () => { target.innerHTML = content; },
+    opener: options.opener || document.activeElement || null,
+    openerSelector: "[data-report-page-preview]",
+    focusTarget: () => target.querySelector("[data-sidebar-close]"),
   });
-  return true;
 }
 
-function closeReportPreview() {
+function closeReportPreview(options = {}) {
   const target = document.getElementById("workspace-report-reader");
   if (!target || target.hidden) return false;
-  target.setAttribute("hidden", "");
+  if (!reportPreviewSurface().close({ restoreFocus: options.restoreFocus })) return false;
   target.replaceChildren();
-  document.body.classList.remove("report-reader-open");
   return true;
 }
 

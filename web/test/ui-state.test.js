@@ -1238,6 +1238,12 @@ test("HTML report previews fit an 1180px design viewport into the reader pane", 
   }];
   reports.openWorkspaceReportReader("20260719-130000-000000");
   const reader = document.querySelector("#workspace-report-reader");
+  const resize = reader.querySelector("[data-sidebar-resize]");
+  assert.ok(resize);
+  assert.equal(resize.getAttribute("role"), "separator");
+  assert.equal(resize.getAttribute("aria-label"), "Resize report reader");
+  assert.equal(reader.dataset.sidebarSide, "left");
+  assert.match(document.documentElement.style.getPropertyValue("--report-reader-width"), /^\d+px$/);
   const viewport = reader.querySelector("[data-report-reader-viewport]");
   Object.defineProperties(viewport, {
     clientWidth: { configurable: true, value: 590 },

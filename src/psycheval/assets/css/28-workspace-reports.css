@@ -1,12 +1,6 @@
 :root {
   --report-reader-width:min(720px,44vw);
   --report-reader-min-width:360px;
-  --report-reader-gap:24px;
-}
-.report-reader-open .workspace {
-  max-width:calc(100vw - var(--report-reader-width) - var(--report-reader-gap));
-  margin-left:calc(var(--report-reader-width) + var(--report-reader-gap));
-  margin-right:0;
 }
 .report-cell {
   position:relative;
@@ -373,41 +367,12 @@
   background:var(--surface);
   transform-origin:top left;
 }
-.report-reader-resize {
-  position:absolute;
-  top:0;
-  right:-7px;
-  bottom:0;
-  z-index:2;
-  width:14px;
-  cursor:col-resize;
-  touch-action:none;
-}
-.report-reader-resize::after {
-  position:absolute;
-  top:50%;
-  left:6px;
-  width:2px;
-  height:48px;
-  border-radius:999px;
-  background:var(--focus);
-  content:"";
-  opacity:0;
-  transform:translateY(-50%);
-  transition:opacity 120ms ease;
-}
-.report-reader:hover .report-reader-resize::after,
-.report-reader-resize:focus-visible::after,
-.report-reader-resizing .report-reader-resize::after {
-  opacity:.8;
-}
 .report-cell button:focus-visible,
 .report-cell-select:focus-visible,
 .report-manager-backdrop button:focus-visible,
 .report-manager-backdrop input:focus-visible,
 .report-reader button:focus-visible,
-.report-reader a:focus-visible,
-.report-reader-resize:focus-visible {
+.report-reader a:focus-visible {
   outline:2px solid color-mix(in oklch,var(--focus),transparent 32%);
   outline-offset:2px;
 }
@@ -466,7 +431,7 @@
     box-shadow:0 -18px 42px rgba(39,35,27,.20);
     overflow:hidden;
   }
-  .report-reader-resize {
+  .report-reader>.sidebar-resize {
     display:none;
   }
   .report-reader-head {

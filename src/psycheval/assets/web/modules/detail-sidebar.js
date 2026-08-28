@@ -1,18 +1,38 @@
 import { $, RENDER_OPTIONS, esc, listValue, renderComparisonPanels, state, t } from "./runtime.js";
 import { stepTimingStats } from "./analysis-metrics.js";
 import { bindStepToggle, renderStep, renderStepsHeader } from "./steps.js";
-import { closeWorkspaceReportReader } from "./workspace-reports.js";
 import { createTaskBrowser } from "./harbor-task-browser.js";
 import { serveApi } from "./serve-effects.js";
+import { createSidebarController } from "./sidebar.js";
 
-const DETAIL_SIDEBAR_MIN_WIDTH = 360;
-const DETAIL_SIDEBAR_MIN_WORKSPACE_WIDTH = 360;
-const DETAIL_SIDEBAR_KEYBOARD_STEP = 24;
-const DETAIL_SIDEBAR_STORAGE_VERSION = 1;
+let detailSidebarController = null;
+
+function detailSidebarSurface() {
+  if (!detailSidebarController) {
+    detailSidebarController = createSidebarController({
+      id: "trial-detail",
+      side: "right",
+      root: () => $("detail-sidebar"),
+      bodyClass: "detail-sidebar-open",
+      cssVariable: "--detail-sidebar-width",
+      workspaceId: RENDER_OPTIONS?.workspace_id || "default",
+      minWidth: 360,
+      minWorkspaceWidth: 360,
+      defaultWidth: width => Math.min(760, Math.max(620, width * 0.44)),
+      resizeLabel: t("detail_sidebar_resize", "Resize detail sidebar"),
+      onRequestClose: options => closeDetailSidebar({
+        restoreFocus: options.restoreFocus,
+        render: options.reason === "dismiss",
+      }),
+      onResize: () => state.timelineChart?.resize?.(),
+    });
+  }
+  return detailSidebarController;
+}
 
 function detailSidebarState() {
   if (!state.detailSidebar) {
-    state.detailSidebar = { open: false, opener: null, openerSelector: null, preferredWidth: null };
+    state.detailSidebar = { open: false, pendingOpener: null, pendingOpenerSelector: null };
   }
   return state.detailSidebar;
 }
@@ -20,8 +40,8 @@ function detailSidebarState() {
 function openDetailSidebar(options = {}) {
   const sidebar = detailSidebarState();
   sidebar.open = true;
-  sidebar.opener = options.opener || document.activeElement || null;
-  sidebar.openerSelector = options.openerSelector || null;
+  sidebar.pendingOpener = options.opener || document.activeElement || null;
+  sidebar.pendingOpenerSelector = options.openerSelector || null;
   if (options.trialKey) state.selectedTrial = options.trialKey;
   if (options.stepId !== null && options.stepId !== undefined) {
     state.selectedStep = { trialKey: state.selectedTrial, stepId: String(options.stepId) };
@@ -33,22 +53,15 @@ function openDetailSidebar(options = {}) {
 function closeDetailSidebar(options = {}) {
   const sidebar = detailSidebarState();
   const target = $("detail-sidebar");
+  const surface = detailSidebarSurface();
   if (!sidebar.open && (!target || target.hidden)) return false;
-  const opener = sidebar.opener;
-  const openerSelector = sidebar.openerSelector;
   sidebar.open = false;
-  sidebar.opener = null;
-  sidebar.openerSelector = null;
+  sidebar.pendingOpener = null;
+  sidebar.pendingOpenerSelector = null;
   state.selectedStep = null;
   sidebar.taskBrowser?.clear();
-  setDetailSidebarOpen(false);
+  surface.close({ restoreFocus: options.restoreFocus });
   if (options.render !== false) renderComparisonPanels();
-  if (options.restoreFocus !== false) {
-    requestAnimationFrame(() => {
-      const current = opener?.isConnected ? opener : openerSelector ? document.querySelector(openerSelector) : null;
-      current?.focus?.();
-    });
-  }
   return true;
 }
 
@@ -65,7 +78,7 @@ function renderDetailSidebar() {
       sidebar.open = false;
       state.selectedStep = null;
     }
-    setDetailSidebarOpen(false);
+    detailSidebarSurface().close({ restoreFocus: false });
     sidebar.taskBrowser?.clear();
     target.hidden = true;
     target.innerHTML = "";
@@ -80,14 +93,11 @@ function renderDetailSidebar() {
   }
   const timingStats = stepTimingStats(trial);
   const task = renderDetailSidebarTask(trial);
-  setDetailSidebarOpen(true);
-  target.hidden = false;
   target.innerHTML = `
-    <div class="detail-sidebar-resize" data-detail-sidebar-resize role="separator" aria-orientation="vertical" tabindex="0" aria-label="${esc(t("detail_sidebar_resize", "Resize detail sidebar"))}"></div>
     <div class="detail-sidebar-panel" role="complementary" aria-labelledby="detail-sidebar-title">
       <div class="detail-sidebar-head">
         <div><p class="eyebrow">${esc(t("selected_trial_details", "Selected trial details"))}</p><h2 id="detail-sidebar-title">${esc(trial.trial_key || "-")}</h2></div>
-        <button class="action-button compact" type="button" data-detail-sidebar-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
+        <button class="action-button compact" type="button" data-sidebar-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
       </div>
       <div class="detail-sidebar-body${task ? " has-task" : ""}">
         ${task}
@@ -98,12 +108,15 @@ function renderDetailSidebar() {
       </div>
     </div>
   `;
-  target.querySelector("[data-detail-sidebar-close]")?.addEventListener("click", event => {
-    event.stopPropagation();
-    closeDetailSidebar();
+  detailSidebarSurface().open({
+    ...((sidebar.pendingOpener || sidebar.pendingOpenerSelector) ? {
+      opener: sidebar.pendingOpener,
+      openerSelector: sidebar.pendingOpenerSelector,
+    } : {}),
   });
+  sidebar.pendingOpener = null;
+  sidebar.pendingOpenerSelector = null;
   bindStepToggle(target, "[data-detail-sidebar-step-list]");
-  bindDetailSidebarResize(target);
   bindDetailSidebarTaskBrowser(target, trial);
   focusSelectedStep(target, selectedStepId);
 }
@@ -166,142 +179,10 @@ function focusSelectedStep(target, stepId) {
   });
 }
 
-function setDetailSidebarOpen(open) {
-  if (open) closeWorkspaceReportReader({ restoreFocus: false });
-  document.body.classList.toggle("detail-sidebar-open", Boolean(open));
-}
-
-function bindDetailSidebarResize(target = $("detail-sidebar")) {
-  const handle = target?.querySelector?.("[data-detail-sidebar-resize]");
-  if (!handle) return;
-  restoreDetailSidebarWidth();
-  applyDetailSidebarWidth(target);
-  handle.addEventListener("pointerdown", event => {
-    if (event.button !== undefined && event.button !== 0) return;
-    event.preventDefault();
-    const pointerId = event.pointerId;
-    document.body.classList.add("detail-sidebar-resizing");
-    handle.setPointerCapture?.(pointerId);
-    const resize = moveEvent => {
-      if (pointerId !== undefined && moveEvent.pointerId !== undefined && moveEvent.pointerId !== pointerId) return;
-      setDetailSidebarWidth(detailSidebarViewportWidth() - Number(moveEvent.clientX || 0), target);
-    };
-    const finish = finishEvent => {
-      if (pointerId !== undefined && finishEvent.pointerId !== undefined && finishEvent.pointerId !== pointerId) return;
-      document.body.classList.remove("detail-sidebar-resizing");
-      handle.releasePointerCapture?.(pointerId);
-      document.removeEventListener("pointermove", resize);
-      document.removeEventListener("pointerup", finish);
-      document.removeEventListener("pointercancel", finish);
-    };
-    document.addEventListener("pointermove", resize);
-    document.addEventListener("pointerup", finish);
-    document.addEventListener("pointercancel", finish);
-  });
-  handle.addEventListener("keydown", event => {
-    const direction = event.key === "ArrowLeft" ? 1 : event.key === "ArrowRight" ? -1 : 0;
-    if (!direction) return;
-    event.preventDefault();
-    const amount = event.shiftKey ? DETAIL_SIDEBAR_KEYBOARD_STEP * 3 : DETAIL_SIDEBAR_KEYBOARD_STEP;
-    setDetailSidebarWidth(currentDetailSidebarWidth(target) + direction * amount, target);
-  });
-  if (!state.detailSidebar.resizeBound) {
-    window.addEventListener("resize", () => applyDetailSidebarWidth($("detail-sidebar")));
-    state.detailSidebar.resizeBound = true;
-  }
-}
-
-function detailSidebarStorageKey(workspaceId = null) {
-  return `peval.detail-sidebar-width.v${DETAIL_SIDEBAR_STORAGE_VERSION}.${String(workspaceId || "default")}`;
-}
-
-function restoreDetailSidebarWidth() {
-  if (state.detailSidebar.preferredWidth !== null) return;
-  try {
-    const value = Number(window.localStorage?.getItem(detailSidebarStorageKey(stateWorkspaceId())));
-    if (Number.isFinite(value) && value > 0) state.detailSidebar.preferredWidth = value;
-  } catch {
-    // Browser storage is optional presentation state.
-  }
-}
-
-function saveDetailSidebarWidth(width) {
-  try {
-    window.localStorage?.setItem(detailSidebarStorageKey(stateWorkspaceId()), String(Math.round(width)));
-  } catch {
-    // Browser storage is optional presentation state.
-  }
-}
-
-function stateWorkspaceId() {
-  return RENDER_OPTIONS?.workspace_id || "default";
-}
-
-function detailSidebarViewportWidth() {
-  const documentWidth = Number(document.documentElement?.clientWidth || 0);
-  const windowWidth = Number(window.innerWidth || 0);
-  return documentWidth || windowWidth || 1180;
-}
-
-function detailSidebarMaximumWidth() {
-  return Math.max(DETAIL_SIDEBAR_MIN_WIDTH, detailSidebarViewportWidth() - DETAIL_SIDEBAR_MIN_WORKSPACE_WIDTH);
-}
-
-function defaultDetailSidebarWidth() {
-  const preferred = detailSidebarViewportWidth() * 0.44;
-  return Math.min(760, Math.max(620, preferred));
-}
-
-function currentDetailSidebarWidth(target = $("detail-sidebar")) {
-  const preferred = Number(state.detailSidebar.preferredWidth);
-  if (Number.isFinite(preferred) && preferred > 0) {
-    return clampDetailSidebarWidth(preferred);
-  }
-  const measured = Number(target?.getBoundingClientRect?.().width || 0);
-  if (Number.isFinite(measured) && measured > 0) return clampDetailSidebarWidth(measured);
-  return clampDetailSidebarWidth(defaultDetailSidebarWidth());
-}
-
-function clampDetailSidebarWidth(width) {
-  const numeric = Number(width);
-  const fallback = defaultDetailSidebarWidth();
-  return Math.round(Math.min(detailSidebarMaximumWidth(), Math.max(DETAIL_SIDEBAR_MIN_WIDTH, Number.isFinite(numeric) ? numeric : fallback)));
-}
-
-function setDetailSidebarWidth(width, target = $("detail-sidebar")) {
-  const next = clampDetailSidebarWidth(width);
-  state.detailSidebar.preferredWidth = next;
-  saveDetailSidebarWidth(next);
-  applyDetailSidebarWidth(target, next);
-  return next;
-}
-
-function applyDetailSidebarWidth(target = $("detail-sidebar"), width = currentDetailSidebarWidth(target)) {
-  const effective = clampDetailSidebarWidth(width);
-  document.documentElement?.style?.setProperty("--detail-sidebar-width", `${effective}px`);
-  const handle = target?.querySelector?.("[data-detail-sidebar-resize]");
-  if (handle) {
-    handle.setAttribute("aria-valuemin", String(DETAIL_SIDEBAR_MIN_WIDTH));
-    handle.setAttribute("aria-valuemax", String(detailSidebarMaximumWidth()));
-    handle.setAttribute("aria-valuenow", String(effective));
-  }
-  state.timelineChart?.resize?.();
-  return effective;
-}
-
 export {
-  DETAIL_SIDEBAR_KEYBOARD_STEP,
-  DETAIL_SIDEBAR_MIN_WIDTH,
-  DETAIL_SIDEBAR_MIN_WORKSPACE_WIDTH,
-  applyDetailSidebarWidth,
-  bindDetailSidebarResize,
-  currentDetailSidebarWidth,
-  detailSidebarStorageKey,
   closeDetailSidebar,
   detailSidebarState,
   openDetailSidebar,
   renderDetailSidebar,
   renderDetailSidebarTask,
-  setDetailSidebarWidth,
-  setDetailSidebarOpen,
 };

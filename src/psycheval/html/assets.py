@@ -16,6 +16,7 @@ WORKSPACE_STYLESHEET_PARTS = (
     "css/22-source-forms.css",
     "css/23-harbor-workbench.css",
     "css/24-source-list-export.css",
+    "css/25-sidebar.css",
     "css/26-detail-sidebar.css",
     "css/28-workspace-reports.css",
     "css/30-workspace-views.css",

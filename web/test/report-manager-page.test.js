@@ -110,15 +110,30 @@ test("Reports page persists an empty binding set through its owned API path", as
   assert.equal(reportStore.manager.dirty, false);
 });
 
-test("Reports preview closes on Escape and Workspace navigation", () => {
-  assert.equal(managerPage.openReportPreview("report-1"), true);
+test("Reports preview shares resize, focus, Escape, and navigation behavior", async () => {
+  managerPage.renderReportManagerPage();
+  const opener = document.querySelector("[data-report-page-preview]");
+  assert.equal(managerPage.openReportPreview("report-1", { opener }), true);
   const preview = document.getElementById("workspace-report-reader");
+  const resize = preview.querySelector("[data-sidebar-resize]");
+  assert.ok(resize);
+  assert.equal(resize.getAttribute("aria-label"), "Resize report reader");
+  assert.equal(document.body.classList.contains("workspace-sidebar-left-open"), true);
+  assert.match(document.documentElement.style.getPropertyValue("--workspace-left-sidebar-width"), /^\d+px$/);
+  await new Promise(resolve => window.requestAnimationFrame(resolve));
+  assert.equal(document.activeElement, preview.querySelector("[data-sidebar-close]"));
   document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await new Promise(resolve => window.requestAnimationFrame(resolve));
   assert.equal(preview.hidden, true);
   assert.equal(document.body.classList.contains("report-reader-open"), false);
+  assert.equal(document.body.classList.contains("workspace-sidebar-left-open"), false);
+  assert.equal(document.activeElement, opener);
 
-  assert.equal(managerPage.openReportPreview("report-1"), true);
+  assert.equal(managerPage.openReportPreview("report-1", { opener }), true);
+  const search = document.querySelector("[data-report-page-search]");
+  search.focus();
   window.dispatchEvent(new window.CustomEvent("peval:workspace-navigate"));
   assert.equal(preview.hidden, true);
   assert.equal(document.body.classList.contains("report-reader-open"), false);
+  assert.equal(document.activeElement, search);
 });

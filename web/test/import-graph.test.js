@@ -52,6 +52,8 @@ test("lightweight shared seams do not import the Home runtime", () => {
     "modules/http.js",
     "modules/data-tables.js",
     "modules/report-store.js",
+    "modules/report-sidebar.js",
+    "modules/sidebar.js",
   ]) {
     assert.equal(staticGraph(module).has("modules/runtime.js"), false, module);
   }

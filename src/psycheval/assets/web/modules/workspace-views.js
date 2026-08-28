@@ -3,11 +3,37 @@ import { applyDataTableControls, bindDataTableControls, renderDataTable, selecti
 import { leaderboardSummaryGroupHeading, leaderboardSummaryGroupUnit, leaderboardSummaryStatistics, leaderboardSummaryValue, renderLeaderboardSummary, summaryNumber, visibleLeaderboardSummaryDefinitions } from "./leaderboard-summary.js";
 import { serveApi, setServeStatus } from "./serve-effects.js";
 import { loadCatalogPage, serveDownload } from "./serve-catalog.js";
-import { closeModalSurface, focusSoon, openModalSurface } from "./modal-surfaces.js";
+import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
 import { renderMarkdown } from "./markdown.js";
+import { createSidebarController } from "./sidebar.js";
 import { createWorkspaceViewRepository } from "./workspace-view-repository.js";
 
 let liveWorkspaceViewRepository = null;
+let workspaceViewController = null;
+let workspaceViewOpenOptions = null;
+
+function workspaceViewSurface() {
+  if (!workspaceViewController) {
+    workspaceViewController = createSidebarController({
+      id: "workspace-views",
+      side: "right",
+      root: () => $("workspace-views"),
+      bodyClass: "workspace-views-open",
+      cssVariable: "--workspace-views-width",
+      workspaceId: RENDER_OPTIONS?.workspace_id || "default",
+      minWidth: 360,
+      minWorkspaceWidth: 360,
+      defaultWidth: width => Math.min(760, Math.max(620, width * 0.44)),
+      resizeLabel: t("workspace_views_resize", "Resize Saved Views sidebar"),
+      onRequestClose: options => closeWorkspaceViewRail({
+        restoreFocus: options.restoreFocus,
+        render: options.reason === "dismiss",
+      }),
+      onResize: () => state.timelineChart?.resize?.(),
+    });
+  }
+  return workspaceViewController;
+}
 
 function browserStorageAdapter() {
   try {
@@ -179,16 +205,10 @@ function bindWorkspaceViewControls(target) {
       openWorkspaceViewSaveDialog(button);
     });
   });
-  target.querySelectorAll("[data-workspace-views-close]").forEach(button => {
-    button.addEventListener("click", event => {
-      event.preventDefault();
-      closeWorkspaceViewRail();
-    });
-  });
   target.querySelectorAll("[data-workspace-views-open]").forEach(button => {
     button.addEventListener("click", event => {
       event.preventDefault();
-      openWorkspaceViewRail();
+      openWorkspaceViewRail(button);
     });
   });
   target.querySelectorAll("[data-view-apply-selected]").forEach(button => {
@@ -471,20 +491,31 @@ function pruneWorkspaceViewState() {
 function renderWorkspaceViewRail() {
   const target = $("workspace-views");
   if (!target) return;
+  const surface = workspaceViewSurface();
   captureWorkspaceViewScrollState();
   const allViews = workspaceViews();
   const views = workspaceViewRows();
   if (!allViews.length) state.workspaceViewsClosed = false;
   const visible = allViews.length >= 1 && !state.workspaceViewsClosed;
-  target.hidden = !visible;
-  document.body?.classList?.toggle("workspace-views-open", visible);
   if (!visible) {
+    surface.close({ restoreFocus: false });
     target.innerHTML = "";
     return;
   }
-  target.innerHTML = `<div class="workspace-views-head"><div><h2>${esc(t("saved_views", "Saved views"))}</h2><p>${esc(t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p></div><button type="button" class="action-button compact" data-workspace-views-close>${esc(t("close", "Close"))}</button></div>
+  target.innerHTML = `<div class="workspace-views-panel">
+    <div class="workspace-views-head"><div><h2>${esc(t("saved_views", "Saved views"))}</h2><p>${esc(t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p></div><button type="button" class="action-button compact" data-sidebar-close>${esc(t("close", "Close"))}</button></div>
     ${renderWorkspaceViewIndex(views, allViews)}
-    <div class="workspace-view-list" data-workspace-view-list>${views.map(renderWorkspaceViewCard).join("")}</div>`;
+    <div class="workspace-view-list" data-workspace-view-list>${views.map(renderWorkspaceViewCard).join("")}</div>
+  </div>`;
+  const pending = workspaceViewOpenOptions;
+  surface.open({
+    openerSelector: "[data-workspace-views-open]",
+    ...(pending ? {
+      opener: pending.opener,
+      focusTarget: target.querySelector("[data-sidebar-close]"),
+    } : {}),
+  });
+  workspaceViewOpenOptions = null;
   bindWorkspaceViewControls(target);
   restoreWorkspaceViewScrollState();
 }
@@ -515,22 +546,29 @@ function restoreWorkspaceViewScrollState() {
   if (cards) cards.scrollTop = scroll.cardsTop || 0;
 }
 
-function closeWorkspaceViewRail() {
-  if (!workspaceViews().length) return;
+function closeWorkspaceViewRail(options = {}) {
+  const surface = workspaceViewSurface();
+  const target = $("workspace-views");
+  if (!target || target.hidden) return false;
   captureWorkspaceViewScrollState();
   state.workspaceViewsClosed = true;
-  renderWorkspaceViewRail();
-  renderLeaderboardSummary();
-  focusSoon(document.querySelector?.("[data-workspace-views-open]"));
+  workspaceViewOpenOptions = null;
+  surface.close({ restoreFocus: options.restoreFocus });
+  if (options.render !== false) {
+    renderWorkspaceViewRail();
+    renderLeaderboardSummary();
+  }
+  return true;
 }
 
-function openWorkspaceViewRail() {
-  if (!workspaceViews().length) return;
+function openWorkspaceViewRail(opener = null) {
+  if (!workspaceViews().length) return false;
   state.workspaceViewsClosed = false;
+  workspaceViewOpenOptions = { opener: opener || document.activeElement || null };
   renderWorkspaceViewRail();
   renderLeaderboardSummary();
   restoreWorkspaceViewScrollState();
-  focusSoon(document.querySelector?.("[data-workspace-views-close]"));
+  return true;
 }
 
 function renderWorkspaceViewIndex(views = workspaceViewRows(), allViews = workspaceViews()) {

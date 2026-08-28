@@ -1,10 +1,9 @@
 // @ts-check
 
 import { beginNotesEdit, cancelNotesEdit, saveSelectedNotes } from "./analysis-notes.js";
-import { closeDetailSidebar } from "./detail-sidebar.js";
 import { refreshServeReportFromServer, refreshServeSourcesFromServer } from "./serve-catalog.js";
 import { SUBMENU_DETAILS_SELECTOR, closeOpenSubmenus, selectedKey, state } from "./runtime.js";
-import { closeWorkspaceReportReader } from "./workspace-reports.js";
+import { closeAllSidebars, closeTopmostSidebar } from "./sidebar.js";
 import { bindWorkspaceViewDialog, closeWorkspaceViewSaveDialog } from "./workspace-views.js";
 
 let bound = false;
@@ -14,9 +13,10 @@ function bindHomeControls() {
   bound = true;
   document.addEventListener("keydown", event => {
     if (event.defaultPrevented || event.key !== "Escape") return;
-    if (closeWorkspaceViewSaveDialog()) return;
-    if (closeWorkspaceReportReader()) return;
-    closeDetailSidebar();
+    if (closeWorkspaceViewSaveDialog() || closeTopmostSidebar()) event.preventDefault();
+  });
+  window.addEventListener("peval:workspace-navigate", () => {
+    closeAllSidebars({ reason: "navigate", restoreFocus: false });
   });
   document.addEventListener("click", event => {
     closeOpenSubmenus(/** @type {Element | null} */ (event.target)?.closest?.(SUBMENU_DETAILS_SELECTOR) || null);

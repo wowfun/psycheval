@@ -36,18 +36,20 @@ function renderOpenSidebar() {
   runtime.state.selectedTrial = "trial-one";
   runtime.state.detailSidebar.open = true;
   sidebarModule.renderDetailSidebar();
-  return document.querySelector("[data-detail-sidebar-resize]");
+  return document.querySelector("#detail-sidebar [data-sidebar-resize]");
 }
 
-test("the detail sidebar resizes from its left edge with pointer and keyboard input", () => {
+test("the Trial detail adapter mounts a right-side controller with usable width semantics", () => {
   const handle = renderOpenSidebar();
   let capturedPointer = null;
   let releasedPointer = null;
   handle.setPointerCapture = pointerId => { capturedPointer = pointerId; };
   handle.releasePointerCapture = pointerId => { releasedPointer = pointerId; };
   assert.equal(handle.getAttribute("role"), "separator");
+  assert.equal(handle.getAttribute("aria-label"), "Resize detail sidebar");
   assert.equal(handle.getAttribute("aria-valuemin"), "360");
   assert.equal(handle.getAttribute("aria-valuemax"), "840");
+  assert.equal(document.querySelector("#detail-sidebar").dataset.sidebarSide, "right");
 
   handle.dispatchEvent(pointerEvent("pointerdown", { button: 0, pointerId: 7, clientX: 580 }));
   document.dispatchEvent(pointerEvent("pointermove", { pointerId: 7, clientX: 300 }));
@@ -56,34 +58,11 @@ test("the detail sidebar resizes from its left edge with pointer and keyboard in
   assert.equal(capturedPointer, 7);
   assert.equal(releasedPointer, 7);
   assert.equal(document.documentElement.style.getPropertyValue("--detail-sidebar-width"), "840px");
-  assert.equal(window.localStorage.getItem("peval.detail-sidebar-width.v1.workspace-one"), "840");
+  assert.equal(window.localStorage.getItem("peval.sidebar-width.v1.workspace-one.trial-detail"), "840");
 
   handle.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
   assert.equal(document.documentElement.style.getPropertyValue("--detail-sidebar-width"), "816px");
   handle.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowLeft", shiftKey: true, bubbles: true }));
   assert.equal(document.documentElement.style.getPropertyValue("--detail-sidebar-width"), "840px");
-});
-
-test("invalid or differently scoped Workspace widths fall back to the current default", () => {
-  window.localStorage.setItem("peval.detail-sidebar-width.v1.workspace-one", "broken");
-  window.localStorage.setItem("peval.detail-sidebar-width.v1.workspace-two", "720");
-  runtime.state.detailSidebar.preferredWidth = null;
-
-  renderOpenSidebar();
-
-  assert.equal(document.documentElement.style.getPropertyValue("--detail-sidebar-width"), "620px");
-  assert.equal(window.localStorage.getItem("peval.detail-sidebar-width.v1.workspace-two"), "720");
-});
-
-test("viewport clamping preserves the Workspace width preference", () => {
-  window.localStorage.setItem("peval.detail-sidebar-width.v1.workspace-one", "760");
-  runtime.state.detailSidebar.preferredWidth = null;
-  renderOpenSidebar();
-  Object.defineProperty(document.documentElement, "clientWidth", { configurable: true, value: 700 });
-  window.innerWidth = 700;
-
-  window.dispatchEvent(new window.Event("resize"));
-
-  assert.equal(document.documentElement.style.getPropertyValue("--detail-sidebar-width"), "360px");
-  assert.equal(window.localStorage.getItem("peval.detail-sidebar-width.v1.workspace-one"), "760");
+  assert.equal(handle.getAttribute("aria-valuenow"), "840");
 });

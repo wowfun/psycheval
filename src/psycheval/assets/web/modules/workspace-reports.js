@@ -1,9 +1,8 @@
 import { $, adminMode, esc, listValue, renderComparisonPanels, state, t } from "./runtime.js";
-import { closeDetailSidebar, renderDetailSidebar } from "./detail-sidebar.js";
 import { serveApi, setServeStatus } from "./serve-effects.js";
 import { leaderboardRows, visibleSelectedSourceKeys } from "./serve-catalog.js";
-import { focusSoon } from "./modal-surfaces.js";
 import { applyReportCatalog, normalizedReports, reportForId, reportStore } from "./report-store.js";
+import { createReportSidebarAdapter } from "./report-sidebar.js";
 
 function reportMessage(key, fallback, values = {}) {
   let message = String(t(key, fallback));
@@ -13,10 +12,22 @@ function reportMessage(key, fallback, values = {}) {
   return message;
 }
 
-const REPORT_READER_MIN_WIDTH = 360;
-const REPORT_READER_MIN_WORKSPACE_WIDTH = 360;
-const REPORT_READER_KEYBOARD_STEP = 24;
 const REPORT_READER_PREVIEW_WIDTH = 1180;
+let reportReaderController = null;
+
+function reportReaderSurface() {
+  if (!reportReaderController) {
+    reportReaderController = createReportSidebarAdapter({
+      ownerId: "home-report-reader",
+      onRequestClose: options => closeWorkspaceReportReader({ restoreFocus: options.restoreFocus }),
+      onResize: () => {
+        fitWorkspaceReportReaderPreview();
+        state.timelineChart?.resize?.();
+      },
+    });
+  }
+  return reportReaderController;
+}
 
 function workspaceReportPreviewPath(report) {
   return `/api/reports/${encodeURIComponent(report.report_id)}/preview`;
@@ -161,14 +172,11 @@ function openWorkspaceReportReader(reportId, options = {}) {
   const report = workspaceReportForId(reportId);
   if (!report) return false;
   state.reportReader.openId = report.report_id;
-  state.reportReader.opener = options.opener || document.activeElement || null;
-  closeDetailSidebar({ restoreFocus: false, render: false });
-  renderDetailSidebar();
-  renderWorkspaceReportReader();
+  renderWorkspaceReportReader({ opener: options.opener || document.activeElement || null });
   return true;
 }
 
-function renderWorkspaceReportReader() {
+function renderWorkspaceReportReader(options = {}) {
   const target = $("workspace-report-reader");
   const report = workspaceReportForId(state.reportReader.openId);
   if (!target || !report) return;
@@ -177,7 +185,7 @@ function renderWorkspaceReportReader() {
   const openTab = `<a class="action-button compact report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>`;
   const fitAttribute = report.format === "html" ? " data-report-preview-fit" : "";
   const preview = `<iframe class="report-reader-frame" data-report-reader-frame src="${esc(previewUrl)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>`;
-  target.innerHTML = `<div class="report-reader-panel" role="dialog" aria-modal="false" aria-labelledby="report-reader-title">
+  const content = `<div class="report-reader-panel" role="dialog" aria-modal="false" aria-labelledby="report-reader-title">
     <header class="report-reader-head">
       <div>
         <p class="eyebrow">${esc(t("report_reader_label", "Report preview"))}</p>
@@ -186,19 +194,22 @@ function renderWorkspaceReportReader() {
       </div>
       <div class="report-reader-actions">
         ${openTab}
-        <button class="action-button compact" type="button" data-report-reader-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
+        <button class="action-button compact" type="button" data-sidebar-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
       </div>
     </header>
     <div class="report-reader-frame-viewport" data-report-reader-viewport${fitAttribute}>
       ${preview}
     </div>
-  </div>
-  <div class="report-reader-resize" data-report-reader-resize role="separator" aria-orientation="vertical" tabindex="0" aria-label="${esc(t("report_resize", "Resize report reader"))}"></div>`;
-  target.hidden = false;
-  document.body.classList.add("report-reader-open");
-  bindWorkspaceReportReaderControls(target);
+  </div>`;
+  const explicitOpen = Object.hasOwn(options, "opener");
+  reportReaderSurface().open({
+    render: () => { target.innerHTML = content; },
+    ...(explicitOpen ? {
+      opener: options.opener,
+      focusTarget: () => target.querySelector("[data-sidebar-close]"),
+    } : {}),
+  });
   observeWorkspaceReportReaderPreview(target);
-  focusSoon(target.querySelector?.("[data-report-reader-close]"));
 }
 
 function reportReaderPreviewGeometry(viewportWidth, viewportHeight) {
@@ -243,113 +254,24 @@ function observeWorkspaceReportReaderPreview(target = $("workspace-report-reader
 }
 
 
-function bindWorkspaceReportReaderControls(target) {
-  target.querySelectorAll?.("[data-report-reader-close]").forEach(button => {
-    button.addEventListener("click", () => closeWorkspaceReportReader());
-  });
-  const resizeHandle = target.querySelector?.("[data-report-reader-resize]");
-  if (!resizeHandle) return;
-  syncWorkspaceReportReaderResizeHandle(target);
-  resizeHandle.addEventListener("pointerdown", event => {
-    if (event.button !== undefined && event.button !== 0) return;
-    event.preventDefault();
-    const pointerId = event.pointerId;
-    document.body.classList.add("report-reader-resizing");
-    resizeHandle.setPointerCapture?.(pointerId);
-    const resize = moveEvent => {
-      if (pointerId !== undefined && moveEvent.pointerId !== undefined && moveEvent.pointerId !== pointerId) return;
-      setWorkspaceReportReaderWidth(moveEvent.clientX, target);
-    };
-    const finish = finishEvent => {
-      if (pointerId !== undefined && finishEvent.pointerId !== undefined && finishEvent.pointerId !== pointerId) return;
-      document.body.classList.remove("report-reader-resizing");
-      resizeHandle.releasePointerCapture?.(pointerId);
-      document.removeEventListener("pointermove", resize);
-      document.removeEventListener("pointerup", finish);
-      document.removeEventListener("pointercancel", finish);
-    };
-    document.addEventListener("pointermove", resize);
-    document.addEventListener("pointerup", finish);
-    document.addEventListener("pointercancel", finish);
-  });
-  resizeHandle.addEventListener("keydown", event => {
-    const direction = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
-    if (!direction) return;
-    event.preventDefault();
-    const step = event.shiftKey ? REPORT_READER_KEYBOARD_STEP * 3 : REPORT_READER_KEYBOARD_STEP;
-    setWorkspaceReportReaderWidth(currentWorkspaceReportReaderWidth(target) + direction * step, target);
-  });
-}
-
-function reportReaderViewportWidth() {
-  const documentWidth = Number(document.documentElement?.clientWidth || 0);
-  const windowWidth = Number(window.innerWidth || 0);
-  return documentWidth || windowWidth || 1180;
-}
-
-function reportReaderMaximumWidth() {
-  return Math.max(REPORT_READER_MIN_WIDTH, reportReaderViewportWidth() - REPORT_READER_MIN_WORKSPACE_WIDTH);
-}
-
-function currentWorkspaceReportReaderWidth(target = $("workspace-report-reader")) {
-  const remembered = Number(state.reportReader.width);
-  if (Number.isFinite(remembered) && remembered > 0) return remembered;
-  const measured = Number(target?.getBoundingClientRect?.().width || 0);
-  if (Number.isFinite(measured) && measured > 0) return measured;
-  return Math.min(720, Math.round(reportReaderViewportWidth() * 0.44));
-}
-
-function setWorkspaceReportReaderWidth(width, target = $("workspace-report-reader")) {
-  const maximum = reportReaderMaximumWidth();
-  const numeric = Number(width);
-  const next = Math.round(Math.min(maximum, Math.max(REPORT_READER_MIN_WIDTH, Number.isFinite(numeric) ? numeric : currentWorkspaceReportReaderWidth(target))));
-  state.reportReader.width = next;
-  document.documentElement?.style?.setProperty("--report-reader-width", `${next}px`);
-  syncWorkspaceReportReaderResizeHandle(target, next);
-  fitWorkspaceReportReaderPreview(target);
-  state.timelineChart?.resize?.();
-  return next;
-}
-
-function syncWorkspaceReportReaderResizeHandle(target = $("workspace-report-reader"), width = currentWorkspaceReportReaderWidth(target)) {
-  const handle = target?.querySelector?.("[data-report-reader-resize]");
-  if (!handle) return;
-  const maximum = reportReaderMaximumWidth();
-  const current = Math.round(Math.min(maximum, Math.max(REPORT_READER_MIN_WIDTH, Number(width))));
-  handle.setAttribute?.("aria-valuemin", String(REPORT_READER_MIN_WIDTH));
-  handle.setAttribute?.("aria-valuemax", String(maximum));
-  handle.setAttribute?.("aria-valuenow", String(current));
-}
-
 function closeWorkspaceReportReader(options = {}) {
   const target = $("workspace-report-reader");
-  if (!state.reportReader.openId && (!target || target.hidden)) return false;
+  const surface = reportReaderSurface();
+  if (!state.reportReader.openId || !target || target.hidden) return false;
   disconnectWorkspaceReportPreviewObserver();
-  if (target) {
-    target.hidden = true;
-    target.innerHTML = "";
-  }
-  document.body.classList.remove("report-reader-open");
-  const opener = state.reportReader.opener;
+  if (!surface.close({ restoreFocus: options.restoreFocus })) return false;
+  target.innerHTML = "";
   state.reportReader.openId = null;
-  state.reportReader.opener = null;
-  if (options.restoreFocus !== false) focusSoon(opener);
   return true;
 }
 
 export {
-  REPORT_READER_KEYBOARD_STEP,
-  REPORT_READER_MIN_WIDTH,
-  REPORT_READER_MIN_WORKSPACE_WIDTH,
   REPORT_READER_PREVIEW_WIDTH,
   applyWorkspaceReportCatalog,
   attachWorkspaceReport,
   bindWorkspaceReportLeaderboardControls,
-  bindWorkspaceReportReaderControls,
   closeWorkspaceReportReader,
-  currentWorkspaceReportReaderWidth,
   fitWorkspaceReportReaderPreview,
-  focusSoon,
   normalizedWorkspaceReports,
   openWorkspaceReportReader,
   refreshWorkspaceReports,
@@ -357,12 +279,8 @@ export {
   renderWorkspaceReportCell,
   renderWorkspaceReportReader,
   reportMessage,
-  reportReaderMaximumWidth,
   reportReaderPreviewGeometry,
-  reportReaderViewportWidth,
   reportsForSourceKey,
-  setWorkspaceReportReaderWidth,
-  syncWorkspaceReportReaderResizeHandle,
   workspaceReportForId,
   workspaceReportLeaderboardColumn,
   workspaceReportOpenPath,
