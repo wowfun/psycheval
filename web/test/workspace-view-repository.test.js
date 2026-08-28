@@ -27,7 +27,7 @@ function view(name, overrides = {}) {
 
 test("browser views are versioned, workspace-scoped, and survive repository recreation", async () => {
   const storage = memoryStorage();
-  const request = async () => ({ views: [] });
+  const request = async () => [];
   const first = createWorkspaceViewRepository({ workspaceId: "workspace-a", storage, request });
   await first.refresh();
   await first.save(view("Local"), { location: "browser" });
@@ -51,7 +51,7 @@ test("server views hide exact-name browser views without deleting them", async (
   const repository = createWorkspaceViewRepository({
     workspaceId: "workspace-a",
     storage,
-    request: async () => ({ views: serverViews }),
+    request: async () => serverViews,
   });
 
   assert.deepEqual((await repository.refresh()).map(item => item.id), ["server:Shared", "browser:Visible"]);
@@ -69,7 +69,7 @@ test("query payload keeps server names separate from normalized browser definiti
   const repository = createWorkspaceViewRepository({
     workspaceId: "workspace-a",
     storage,
-    request: async () => ({ views: [view("Server")] }),
+    request: async () => [view("Server")],
   });
   await repository.refresh();
   await repository.save(view("Browser", { filters: { state: "all", tags: ["a", "a"] }, notes: "memo" }), { location: "browser" });
@@ -91,7 +91,7 @@ test("storage failures never leave a successful in-memory mutation", async () =>
   const repository = createWorkspaceViewRepository({
     workspaceId: "workspace-a",
     storage,
-    request: async () => ({ views: [] }),
+    request: async () => [],
   });
   await repository.refresh();
 
@@ -109,14 +109,14 @@ test("browser limits and corrupt storage fail explicitly", async () => {
     storage: memoryStorage({
       [browserViewStorageKey("workspace-a")]: JSON.stringify({ version: 1, views: tooMany }),
     }),
-    request: async () => ({ views: [] }),
+    request: async () => [],
   });
   await assert.rejects(invalid.refresh(), /at most 100/);
 
   const corrupt = createWorkspaceViewRepository({
     workspaceId: "workspace-b",
     storage: memoryStorage({ [browserViewStorageKey("workspace-b")]: "not-json" }),
-    request: async () => ({ views: [] }),
+    request: async () => [],
   });
   await assert.rejects(corrupt.refresh(), /could not be read/);
   await assert.rejects(
@@ -125,7 +125,7 @@ test("browser limits and corrupt storage fail explicitly", async () => {
   );
 });
 
-test("delete commits server changes before browser changes", async () => {
+test("delete sends one atomic server batch before committing browser changes", async () => {
   const calls = [];
   const storage = memoryStorage();
   const repository = createWorkspaceViewRepository({
@@ -133,15 +133,26 @@ test("delete commits server changes before browser changes", async () => {
     storage,
     request: async (path, options = {}) => {
       calls.push([path, options.body]);
-      if (path === "/api/views") return { views: [view("Server")] };
-      if (path === "/api/views/delete") throw new Error("server failed");
+      if (path === "/api/views") return [view("Server A"), view("Server B")];
+      if (path === "/api/view-deletion-operations") {
+        return { id: "delete-op", kind: "view-delete", state: "queued", completed: 0, total: 1, successes: [], failures: [] };
+      }
+      if (path === "/api/operations/delete-op") {
+        return { id: "delete-op", kind: "view-delete", state: "failed", completed: 1, total: 1, successes: [], failures: [{ index: 0, error: "batch failed" }] };
+      }
       return {};
     },
   });
   await repository.refresh();
   await repository.save(view("Browser"), { location: "browser" });
 
-  await assert.rejects(repository.delete(["server:Server", "browser:Browser"]), /server failed/);
-  assert.deepEqual(repository.list().map(item => item.id), ["browser:Browser", "server:Server"]);
-  assert.deepEqual(calls.at(-1), ["/api/views/delete", { names: ["Server"] }]);
+  await assert.rejects(
+    repository.delete(["server:Server A", "server:Server B", "browser:Browser"]),
+    /batch failed/,
+  );
+  assert.deepEqual(repository.list().map(item => item.id), ["browser:Browser", "server:Server A", "server:Server B"]);
+  assert.deepEqual(calls.slice(-2), [
+    ["/api/view-deletion-operations", { names: ["Server A", "Server B"] }],
+    ["/api/operations/delete-op", undefined],
+  ]);
 });

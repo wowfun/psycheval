@@ -1,4 +1,4 @@
-import { esc, t } from "./runtime.js";
+import { esc, t } from "./shared.js";
 
 function renderManualNote(row) {
   const sourcePath = row?.source_ref?.relative_path;

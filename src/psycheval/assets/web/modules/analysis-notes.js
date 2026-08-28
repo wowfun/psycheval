@@ -58,12 +58,12 @@ async function saveSelectedNotes(button) {
   state.notesEditor = { trialKey, markdown, error: "", saving: true };
   renderTrace();
   try {
-    const payload = await serveApi(`/api/sources/${encodeURIComponent(source.source_key)}/notes`, {
-      method: "POST",
-      body: { markdown }
+    await serveApi(`/api/sources/${encodeURIComponent(source.source_key)}`, {
+      method: "PATCH",
+      body: { notes: markdown }
     });
     state.notesEditor = null;
-    applyServeMutationPayload(payload, { preserveTrial: trialKey });
+    applyServeMutationPayload({}, { preserveTrial: trialKey });
   } catch (error) {
     const message = `${t("notes_save_failed", "Save notes failed")}: ${error.message || String(error)}`;
     state.notesEditor = { trialKey, markdown, error: message, saving: false };

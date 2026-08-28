@@ -1,10 +1,84 @@
-import { $, RENDER_OPTIONS, adminMode, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, noteSnippetFor, notesFor, notesPlainText, renderComparisonPanels, renderNotesCell, renderReadOnlySourceCategory, renderReadOnlySourceTags, renderTaskAlias, sessionAliasValue, sourceCategoryEditValue, sourceCategoryFor, sourceCategoryValue, sourceIdentityFor, sourceTagsEditValue, sourceTagsFor, sourceTagsValue, state, statusLabel, t } from "./runtime.js";
-import { bindServeExportControls, bindTrialSelection } from "./export.js";
-import { bindServeSourceStateControls } from "./source-state-controls.js";
-import { bindLeaderboardSearchControls, commitSourceCellEdit, existingSourceCategoryOptions, existingSourceTagOptions } from "./serve-effects.js";
-import { bindLeaderboardCatalogControls, catalogSortKey, filterOptions, leaderboardRows, renderLeaderboardPanelControls, renderLeaderboardSearchControls, reportRows, requestCatalogFacets, requestCatalogSort, rowAnalysisCount } from "./serve-catalog.js";
-import { bindWorkspaceReportLeaderboardControls, workspaceReportLeaderboardColumn } from "./workspace-reports.js";
+import { $, RENDER_OPTIONS, adminMode, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, statusLabel, t } from "./shared.js";
 import { columnVisibleForLayout, loadColumnLayout, moveColumn, normalizeColumnLayout, presenceForColumns, resolveColumns, saveColumnLayout } from "./leaderboard-columns.js";
+
+let state = { tables: {}, rowSelection: new Set(), catalogPage: {}, catalogQuery: {} };
+let noteSnippetFor = () => "";
+let notesFor = () => [];
+let notesPlainText = () => "";
+let renderComparisonPanels = () => {};
+let renderNotesCell = () => "";
+let renderReadOnlySourceCategory = () => "";
+let renderReadOnlySourceTags = () => "";
+let renderTaskAlias = () => "";
+let sessionAliasValue = row => row?.session_id || "-";
+let sourceCategoryEditValue = () => "";
+let sourceCategoryFor = () => "";
+let sourceCategoryValue = () => "";
+let sourceIdentityFor = row => row?.session_id || "-";
+let sourceTagsEditValue = () => [];
+let sourceTagsFor = () => [];
+let sourceTagsValue = () => [];
+let bindServeExportControls = () => {};
+let bindTrialSelection = () => {};
+let bindServeSourceStateControls = () => {};
+let bindLeaderboardSearchControls = () => {};
+let commitSourceCellEdit = () => Promise.resolve();
+let existingSourceCategoryOptions = () => [];
+let existingSourceTagOptions = () => [];
+let bindLeaderboardCatalogControls = () => {};
+let catalogSortKey = value => value;
+let filterOptions = () => [];
+let leaderboardRows = () => [];
+let renderLeaderboardPanelControls = () => "";
+let renderLeaderboardSearchControls = () => "";
+let reportRows = () => [];
+let requestCatalogFacets = () => undefined;
+let requestCatalogSort = () => undefined;
+let rowAnalysisCount = () => 0;
+let bindWorkspaceReportLeaderboardControls = () => {};
+let workspaceReportLeaderboardColumn = () => ({ key: "workspace_reports", label: "Reports", value: () => "-" });
+
+function configureLeaderboardDataTables(dependencies) {
+  if (dependencies.state) state = dependencies.state;
+  for (const [name, value] of Object.entries(dependencies)) {
+    if (name === "state" || typeof value !== "function") continue;
+    if (name === "noteSnippetFor") noteSnippetFor = value;
+    else if (name === "notesFor") notesFor = value;
+    else if (name === "notesPlainText") notesPlainText = value;
+    else if (name === "renderComparisonPanels") renderComparisonPanels = value;
+    else if (name === "renderNotesCell") renderNotesCell = value;
+    else if (name === "renderReadOnlySourceCategory") renderReadOnlySourceCategory = value;
+    else if (name === "renderReadOnlySourceTags") renderReadOnlySourceTags = value;
+    else if (name === "renderTaskAlias") renderTaskAlias = value;
+    else if (name === "sessionAliasValue") sessionAliasValue = value;
+    else if (name === "sourceCategoryEditValue") sourceCategoryEditValue = value;
+    else if (name === "sourceCategoryFor") sourceCategoryFor = value;
+    else if (name === "sourceCategoryValue") sourceCategoryValue = value;
+    else if (name === "sourceIdentityFor") sourceIdentityFor = value;
+    else if (name === "sourceTagsEditValue") sourceTagsEditValue = value;
+    else if (name === "sourceTagsFor") sourceTagsFor = value;
+    else if (name === "sourceTagsValue") sourceTagsValue = value;
+    else if (name === "bindServeExportControls") bindServeExportControls = value;
+    else if (name === "bindTrialSelection") bindTrialSelection = value;
+    else if (name === "bindServeSourceStateControls") bindServeSourceStateControls = value;
+    else if (name === "bindLeaderboardSearchControls") bindLeaderboardSearchControls = value;
+    else if (name === "commitSourceCellEdit") commitSourceCellEdit = value;
+    else if (name === "existingSourceCategoryOptions") existingSourceCategoryOptions = value;
+    else if (name === "existingSourceTagOptions") existingSourceTagOptions = value;
+    else if (name === "bindLeaderboardCatalogControls") bindLeaderboardCatalogControls = value;
+    else if (name === "catalogSortKey") catalogSortKey = value;
+    else if (name === "filterOptions") filterOptions = value;
+    else if (name === "leaderboardRows") leaderboardRows = value;
+    else if (name === "renderLeaderboardPanelControls") renderLeaderboardPanelControls = value;
+    else if (name === "renderLeaderboardSearchControls") renderLeaderboardSearchControls = value;
+    else if (name === "reportRows") reportRows = value;
+    else if (name === "requestCatalogFacets") requestCatalogFacets = value;
+    else if (name === "requestCatalogSort") requestCatalogSort = value;
+    else if (name === "rowAnalysisCount") rowAnalysisCount = value;
+    else if (name === "bindWorkspaceReportLeaderboardControls") bindWorkspaceReportLeaderboardControls = value;
+    else if (name === "workspaceReportLeaderboardColumn") workspaceReportLeaderboardColumn = value;
+  }
+}
 
 function selectionColumn(options = {}) {
   return {
@@ -970,6 +1044,7 @@ export {
   bindLeaderboardColumnControls,
   clearFilter,
   compareTableValues,
+  configureLeaderboardDataTables,
   currentLeaderboardColumnLayout,
   dataTableFilterDraftValues,
   dataTableFilterMenu,

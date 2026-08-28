@@ -1,37 +1,25 @@
 import { createBrowserPlatform } from "./app/browser-platform.js";
-import { createWorkspaceApp, startWorkspacePage } from "./app/workspace-app.js";
-import { RENDER_OPTIONS, render } from "./modules/runtime.js";
-import { loadServeWorkspace } from "./modules/serve-catalog.js";
-import { bindGlobalControls } from "./modules/serve-controls.js";
-import { initializeHarborWorkbench } from "./modules/harbor-workbench.js";
-import { initializeWorkspaceReportPage } from "./modules/workspace-reports.js";
-import { initializeConfiguration } from "./modules/configuration.js";
+import { RENDER_OPTIONS } from "./app/render-options.js";
+import { createWorkspaceApp } from "./app/workspace-app.js";
+import { setWorkspaceApp, setWorkspaceSnapshotProvider } from "./app/workspace-runtime.js";
 
 "peval-entrypoint";
-const platform = createBrowserPlatform(globalThis);
 
-function renderHome() {
-    render({
-      schema_version: 19,
-      includes: ["core"],
-      trajectory: [],
-      trajectory_meta: [],
-      annotations: { notes: [], analysis: [], report_notes: [] },
-    });
-}
+const pageLoaders = {
+  home: context => import("./pages/home-page.js").then(module => module.createHomePage(context)),
+  datasets: context => import("./pages/datasets-page.js").then(module => module.createDatasetsPage(context)),
+  reports: context => import("./pages/reports-page.js").then(module => module.createReportsPage(context)),
+  config: context => import("./pages/config-page.js").then(module => module.createConfigPage(context)),
+};
 
 const app = createWorkspaceApp({
-  platform,
-  startPage: () => startWorkspacePage(
-    String(RENDER_OPTIONS.serve_page || "home"),
-    {
-      renderHome,
-      loadHome: loadServeWorkspace,
-      bindGlobalControls,
-      startDatasets: initializeHarborWorkbench,
-      startReports: initializeWorkspaceReportPage,
-      startConfig: initializeConfiguration,
-    },
-  ),
+  platform: createBrowserPlatform(window),
+  initialPage: String(RENDER_OPTIONS.initial_page || "home"),
+  pageLoaders,
+  publishSnapshot: setWorkspaceSnapshotProvider,
 });
-app.start();
+setWorkspaceApp(app);
+void import("./modules/global-shell.js")
+  .then(module => module.initializeGlobalShell())
+  .catch(error => globalThis.console?.error("Workspace shell failed to initialize", error));
+void app.start();

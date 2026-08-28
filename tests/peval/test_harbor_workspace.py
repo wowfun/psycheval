@@ -8,7 +8,6 @@ import threading
 import time
 import unittest
 from base64 import b64encode
-from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,10 +20,8 @@ from psycheval.config import (
     apply_toml_config,
 )
 from psycheval.serve import (
-    LocalHTTPServer,
     ServeAccess,
     ServeRuntime,
-    make_handler,
 )
 from psycheval.serve.harbor_workspace import (
     TEXT_EDIT_LIMIT,
@@ -38,6 +35,7 @@ from psycheval.serve.harbor_workspace import (
 )
 from psycheval.state import open_workspace_state
 from psycheval.state.harbor_evidence import read_harbor_task_index
+from tests.peval.asgi_server import LocalHTTPServer, make_handler
 
 
 class HarborWorkspaceTests(unittest.TestCase):
@@ -47,6 +45,8 @@ class HarborWorkspaceTests(unittest.TestCase):
         method: str,
         path: str,
         payload: dict[str, object] | None = None,
+        *,
+        request_headers: dict[str, str] | None = None,
     ) -> tuple[int, dict[str, object]]:
         raw = json.dumps(payload).encode("utf-8") if payload is not None else None
         headers = (
@@ -57,6 +57,7 @@ class HarborWorkspaceTests(unittest.TestCase):
             if raw is not None
             else {}
         )
+        headers.update(request_headers or {})
         connection = http.client.HTTPConnection(
             "127.0.0.1", server.server_port, timeout=5
         )
@@ -67,9 +68,13 @@ class HarborWorkspaceTests(unittest.TestCase):
         return response.status, body
 
     def _wait_operation(
-        self, server: LocalHTTPServer, operation: dict[str, object]
+        self,
+        server: LocalHTTPServer,
+        operation: dict[str, object],
+        *,
+        expected_state: str = "succeeded",
     ) -> dict[str, object]:
-        operation_id = str(operation["operation_id"])
+        operation_id = str(operation.get("id") or operation.get("operation_id"))
         deadline = time.monotonic() + 5
         last_body: dict[str, object] = {}
         while time.monotonic() < deadline:
@@ -79,7 +84,7 @@ class HarborWorkspaceTests(unittest.TestCase):
             last_body = body
             self.assertEqual(status, 200)
             if body["state"] not in {"queued", "running"}:
-                self.assertEqual(body["state"], "completed", body)
+                self.assertEqual(body["state"], expected_state, body)
                 return body
             time.sleep(0.01)
         self.fail(f"Harbor reconcile operation did not complete: {last_body}")
@@ -97,6 +102,12 @@ class HarborWorkspaceTests(unittest.TestCase):
         content = response.read()
         connection.close()
         return response.status, headers, content
+
+    def _get_json(
+        self, server: LocalHTTPServer, path: str
+    ) -> tuple[int, dict[str, str], dict[str, object]]:
+        status, headers, content = self._request_bytes(server, path)
+        return status, headers, json.loads(content)
 
     def test_dataset_registry_rejects_legacy_duplicate_and_unknown_references(
         self,
@@ -122,7 +133,9 @@ class HarborWorkspaceTests(unittest.TestCase):
                 },
             )
             self.assertEqual(config.harbor_mounts[0].dataset_ids, ("other", "pbench"))
-            with self.assertRaisesRegex(ValueError, "task_paths.*no longer"):
+            with self.assertRaisesRegex(
+                ValueError, "harbor.mounts.0.task_paths: unknown configuration field"
+            ):
                 apply_toml_config(
                     ToolConfig(),
                     {
@@ -179,10 +192,9 @@ class HarborWorkspaceTests(unittest.TestCase):
 
             jobs = root / "jobs"
             jobs.mkdir()
-            mounted = replace(
-                config,
+            mounted = config.validated_update(
                 harbor_mounts=(
-                    HarborMount("jobs", str(jobs), dataset_ids=("pbench",)),
+                    HarborMount(id="jobs", path=str(jobs), dataset_ids=("pbench",)),
                 ),
             )
             config = HarborWorkspace(config_path, mounted).update_dataset(
@@ -201,7 +213,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                     expected_revision=config_revision(config_path),
                 )
 
-            unreferenced_config = replace(config, harbor_mounts=())
+            unreferenced_config = config.validated_update(harbor_mounts=())
             unreferenced = HarborWorkspace(
                 config_path, unreferenced_config
             ).remove_dataset(
@@ -230,16 +242,24 @@ class HarborWorkspaceTests(unittest.TestCase):
             config = ToolConfig(
                 workspace_root=str(root),
                 harbor_datasets=(
-                    HarborDataset("alpha", str(root / "alpha")),
-                    HarborDataset("pbench", str(root / "pbench")),
-                    HarborDataset("beta", str(root / "beta")),
+                    HarborDataset(id="alpha", path=str(root / "alpha")),
+                    HarborDataset(id="pbench", path=str(root / "pbench")),
+                    HarborDataset(id="beta", path=str(root / "beta")),
                 ),
                 harbor_mounts=(
                     HarborMount(
-                        "one", str(root / "jobs-one"), ("alpha", "pbench", "beta")
+                        id="one",
+                        path=str(root / "jobs-one"),
+                        dataset_ids=("alpha", "pbench", "beta"),
                     ),
-                    HarborMount("two", str(root / "jobs-two"), ("alpha",)),
-                    HarborMount("three", str(root / "jobs-three"), ("pbench", "alpha")),
+                    HarborMount(
+                        id="two", path=str(root / "jobs-two"), dataset_ids=("alpha",)
+                    ),
+                    HarborMount(
+                        id="three",
+                        path=str(root / "jobs-three"),
+                        dataset_ids=("pbench", "alpha"),
+                    ),
                 ),
             )
 
@@ -292,7 +312,9 @@ class HarborWorkspaceTests(unittest.TestCase):
                 config_path,
                 ToolConfig(
                     workspace_root=str(root),
-                    harbor_datasets=(HarborDataset("unrelated", str(unrelated)),),
+                    harbor_datasets=(
+                        HarborDataset(id="unrelated", path=str(unrelated)),
+                    ),
                 ),
             )
             inventory = configured.inventory()["datasets"][0]
@@ -317,11 +339,13 @@ class HarborWorkspaceTests(unittest.TestCase):
             config = ToolConfig(
                 workspace_root=str(root),
                 harbor_datasets=(
-                    HarborDataset("one", str(root / "one")),
-                    HarborDataset("two", str(root / "two")),
+                    HarborDataset(id="one", path=str(root / "one")),
+                    HarborDataset(id="two", path=str(root / "two")),
                 ),
                 harbor_mounts=(
-                    HarborMount("jobs", str(root / "jobs"), dataset_ids=("two",)),
+                    HarborMount(
+                        id="jobs", path=str(root / "jobs"), dataset_ids=("two",)
+                    ),
                 ),
             )
             before = config_path.read_bytes()
@@ -566,7 +590,7 @@ class HarborWorkspaceTests(unittest.TestCase):
             )
             config = ToolConfig(
                 workspace_root=str(root),
-                harbor_datasets=(HarborDataset("tasks", str(dataset_root)),),
+                harbor_datasets=(HarborDataset(id="tasks", path=str(dataset_root)),),
             )
             library = HarborWorkspace(config_path, config)
             dataset = library.inventory()["datasets"][0]
@@ -716,7 +740,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 root / "peval.toml",
                 ToolConfig(
                     workspace_root=str(root),
-                    harbor_datasets=(HarborDataset("tasks", str(dataset)),),
+                    harbor_datasets=(HarborDataset(id="tasks", path=str(dataset)),),
                 ),
             )
 
@@ -763,27 +787,28 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, legacy = self._request(
                     server, "POST", "/api/harbor/datasets", {}
                 )
-                self.assertEqual(status, 404, legacy)
+                self.assertEqual(status, 422, legacy)
                 status, legacy = self._request(
                     server, "POST", "/api/config/harbor-mount", {}
                 )
                 self.assertEqual(status, 404, legacy)
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                status, headers, inventory = self._get_json(
+                    server, "/api/harbor/datasets"
+                )
                 self.assertEqual(status, 200)
                 status, registered = self._request(
                     server,
                     "POST",
-                    "/api/config/harbor/datasets",
-                    {
-                        "action": "register",
-                        "path": str(existing),
-                        "expected_revision": inventory["revision"],
-                    },
+                    "/api/harbor/datasets",
+                    {"source": "existing", "path": str(existing)},
+                    request_headers={"If-Match": headers["etag"]},
                 )
                 self.assertEqual(status, 202, registered)
-                self._wait_operation(server, registered["operation"])
+                self._wait_operation(server, registered)
 
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                status, headers, inventory = self._get_json(
+                    server, "/api/harbor/datasets"
+                )
                 self.assertEqual(status, 200)
                 self.assertEqual(
                     [item["id"] for item in inventory["datasets"]], ["existing"]
@@ -791,24 +816,18 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, duplicate = self._request(
                     server,
                     "POST",
-                    "/api/config/harbor/datasets",
-                    {
-                        "action": "register",
-                        "path": str(existing),
-                        "expected_revision": inventory["revision"],
-                    },
+                    "/api/harbor/datasets",
+                    {"source": "existing", "path": str(existing)},
+                    request_headers={"If-Match": headers["etag"]},
                 )
                 self.assertEqual(status, 409, duplicate)
 
                 status, missing = self._request(
                     server,
                     "POST",
-                    "/api/config/harbor/datasets",
-                    {
-                        "action": "register",
-                        "path": str(root / "missing"),
-                        "expected_revision": inventory["revision"],
-                    },
+                    "/api/harbor/datasets",
+                    {"source": "existing", "path": str(root / "missing")},
+                    request_headers={"If-Match": headers["etag"]},
                 )
                 self.assertEqual(status, 404, missing)
 
@@ -821,33 +840,32 @@ class HarborWorkspaceTests(unittest.TestCase):
                     status, symlinked = self._request(
                         server,
                         "POST",
-                        "/api/config/harbor/datasets",
-                        {
-                            "action": "register",
-                            "path": str(linked),
-                            "expected_revision": inventory["revision"],
-                        },
+                        "/api/harbor/datasets",
+                        {"source": "existing", "path": str(linked)},
+                        request_headers={"If-Match": headers["etag"]},
                     )
                     self.assertEqual(status, 400, symlinked)
-                    self.assertIn("symbolic link", symlinked["error"])
+                    self.assertIn("symbolic link", symlinked["detail"])
 
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                status, headers, inventory = self._get_json(
+                    server, "/api/harbor/datasets"
+                )
                 status, updated = self._request(
                     server,
-                    "POST",
-                    "/api/config/harbor/datasets",
+                    "PATCH",
+                    "/api/harbor/datasets/existing",
                     {
-                        "action": "update",
-                        "dataset_id": "existing",
                         "new_id": "renamed",
                         "path": str(existing),
                         "mount_ids": [],
-                        "expected_revision": inventory["revision"],
                     },
+                    request_headers={"If-Match": headers["etag"]},
                 )
                 self.assertEqual(status, 202, updated)
-                self._wait_operation(server, updated["operation"])
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                self._wait_operation(server, updated)
+                status, headers, inventory = self._get_json(
+                    server, "/api/harbor/datasets"
+                )
                 self.assertEqual(
                     [item["id"] for item in inventory["datasets"]], ["renamed"]
                 )
@@ -855,16 +873,15 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, removed = self._request(
                     server,
                     "POST",
-                    "/api/config/harbor/datasets",
-                    {
-                        "action": "unregister",
-                        "dataset_ids": ["renamed"],
-                        "expected_revision": inventory["revision"],
-                    },
+                    "/api/harbor/dataset-unregistration-operations",
+                    {"dataset_ids": ["renamed"]},
+                    request_headers={"If-Match": headers["etag"]},
                 )
                 self.assertEqual(status, 202, removed)
-                self._wait_operation(server, removed["operation"])
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                self._wait_operation(server, removed)
+                status, _headers, inventory = self._get_json(
+                    server, "/api/harbor/datasets"
+                )
                 self.assertEqual(inventory["datasets"], [])
                 self.assertTrue(existing.is_dir(), "unregister must preserve files")
             finally:
@@ -885,27 +902,26 @@ class HarborWorkspaceTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                status, headers, inventory = self._get_json(
+                    server, "/api/harbor/datasets"
+                )
                 self.assertEqual(status, 200)
                 status, registered = self._request(
                     server,
                     "POST",
-                    "/api/config/harbor/datasets",
-                    {
-                        "action": "register",
-                        "path": str(dataset),
-                        "expected_revision": inventory["revision"],
-                    },
+                    "/api/harbor/datasets",
+                    {"source": "existing", "path": str(dataset)},
+                    request_headers={"If-Match": headers["etag"]},
                 )
                 self.assertEqual(status, 202, registered)
-                self._wait_operation(server, registered["operation"])
+                self._wait_operation(server, registered)
 
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
-                self.assertEqual(status, 200)
-                self.assertEqual(
-                    inventory["datasets"],
-                    [{"id": "pbench-v1.0", "path": str(dataset)}],
+                status, _headers, inventory = self._get_json(
+                    server, "/api/harbor/datasets"
                 )
+                self.assertEqual(status, 200)
+                self.assertEqual(inventory["datasets"][0]["id"], "pbench-v1.0")
+                self.assertEqual(inventory["datasets"][0]["path"], str(dataset))
             finally:
                 server.shutdown()
                 server.server_close()
@@ -936,24 +952,23 @@ class HarborWorkspaceTests(unittest.TestCase):
                     side_effect=["abc123", "def456"],
                 ):
                     for path in paths:
-                        status, inventory = self._request(
-                            server, "GET", "/api/config/harbor"
+                        status, headers, inventory = self._get_json(
+                            server, "/api/harbor/datasets"
                         )
                         self.assertEqual(status, 200)
                         status, registered = self._request(
                             server,
                             "POST",
-                            "/api/config/harbor/datasets",
-                            {
-                                "action": "register",
-                                "path": str(path),
-                                "expected_revision": inventory["revision"],
-                            },
+                            "/api/harbor/datasets",
+                            {"source": "existing", "path": str(path)},
+                            request_headers={"If-Match": headers["etag"]},
                         )
                         self.assertEqual(status, 202, registered)
-                        self._wait_operation(server, registered["operation"])
+                        self._wait_operation(server, registered)
 
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                status, _headers, inventory = self._get_json(
+                    server, "/api/harbor/datasets"
+                )
                 self.assertEqual(status, 200)
                 self.assertEqual(
                     [item["id"] for item in inventory["datasets"]],
@@ -979,21 +994,23 @@ class HarborWorkspaceTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                status, headers, inventory = self._get_json(
+                    server, "/api/harbor/mounts"
+                )
                 self.assertEqual(status, 200)
+                self.assertEqual(inventory, [])
                 status, mounted = self._request(
                     server,
                     "POST",
-                    "/api/config/harbor/mounts",
-                    {
-                        "action": "upsert",
-                        "jobs_path": str(jobs),
-                        "expected_revision": inventory["revision"],
-                    },
+                    "/api/harbor/mounts",
+                    {"path": str(jobs)},
+                    request_headers={"If-Match": headers["etag"]},
                 )
-                self.assertEqual(status, 200, mounted)
+                self.assertEqual(status, 202, mounted)
+                self._wait_operation(server, mounted)
+                status, _headers, mounts = self._get_json(server, "/api/harbor/mounts")
                 self.assertEqual(
-                    mounted["result"]["mounts"],
+                    mounts,
                     [
                         {
                             "id": "nightly-jobs",
@@ -1026,10 +1043,10 @@ class HarborWorkspaceTests(unittest.TestCase):
             )
             config = ToolConfig(
                 workspace_root=str(root),
-                harbor_datasets=(HarborDataset("tasks", str(dataset)),),
+                harbor_datasets=(HarborDataset(id="tasks", path=str(dataset)),),
                 harbor_mounts=(
-                    HarborMount("one", str(jobs_one), ("tasks",)),
-                    HarborMount("two", str(jobs_two), ()),
+                    HarborMount(id="one", path=str(jobs_one), dataset_ids=("tasks",)),
+                    HarborMount(id="two", path=str(jobs_two), dataset_ids=()),
                 ),
             )
             store = open_workspace_state(str(root))
@@ -1038,43 +1055,46 @@ class HarborWorkspaceTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                status, headers, inventory = self._get_json(
+                    server, "/api/harbor/datasets"
+                )
                 self.assertEqual(status, 200)
                 status, updated = self._request(
                     server,
-                    "POST",
-                    "/api/config/harbor/datasets",
+                    "PATCH",
+                    "/api/harbor/datasets/tasks",
                     {
-                        "action": "update",
-                        "dataset_id": "tasks",
                         "new_id": "tasks",
                         "path": str(dataset),
                         "mount_ids": ["two"],
-                        "expected_revision": inventory["revision"],
                     },
+                    request_headers={"If-Match": headers["etag"]},
                 )
                 self.assertEqual(status, 202, updated)
+                self._wait_operation(server, updated)
+                status, headers, _updated_inventory = self._get_json(
+                    server, "/api/harbor/datasets"
+                )
+                mount_status, _mount_headers, mounts = self._get_json(
+                    server, "/api/harbor/mounts"
+                )
+                self.assertEqual(mount_status, 200)
                 self.assertEqual(
-                    [mount["dataset_ids"] for mount in updated["result"]["mounts"]],
+                    [mount["dataset_ids"] for mount in mounts],
                     [[], ["tasks"]],
                 )
-                self._wait_operation(server, updated["operation"])
 
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
-                self.assertEqual(status, 200)
                 before = config_path.read_bytes()
                 status, rejected = self._request(
                     server,
-                    "POST",
-                    "/api/config/harbor/datasets",
+                    "PATCH",
+                    "/api/harbor/datasets/tasks",
                     {
-                        "action": "update",
-                        "dataset_id": "tasks",
                         "new_id": "tasks",
                         "path": str(dataset),
                         "mount_ids": ["missing"],
-                        "expected_revision": inventory["revision"],
                     },
+                    request_headers={"If-Match": headers["etag"]},
                 )
                 self.assertEqual(status, 404, rejected)
                 self.assertEqual(config_path.read_bytes(), before)
@@ -1100,8 +1120,8 @@ class HarborWorkspaceTests(unittest.TestCase):
             config = ToolConfig(
                 workspace_root=str(root),
                 harbor_mounts=(
-                    HarborMount("one", str(jobs_one)),
-                    HarborMount("two", str(jobs_two)),
+                    HarborMount(id="one", path=str(jobs_one)),
+                    HarborMount(id="two", path=str(jobs_two)),
                 ),
             )
             store = open_workspace_state(str(root))
@@ -1110,18 +1130,18 @@ class HarborWorkspaceTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
+                status, headers, inventory = self._get_json(
+                    server, "/api/harbor/mounts"
+                )
                 self.assertEqual(status, 200)
+                self.assertEqual([item["id"] for item in inventory], ["one", "two"])
                 before = config_path.read_bytes()
                 status, rejected = self._request(
                     server,
                     "POST",
-                    "/api/config/harbor/mounts",
-                    {
-                        "action": "delete",
-                        "mount_ids": ["one", "missing"],
-                        "expected_revision": inventory["revision"],
-                    },
+                    "/api/harbor/mount-deletion-operations",
+                    {"mount_ids": ["one", "missing"]},
+                    request_headers={"If-Match": headers["etag"]},
                 )
                 self.assertEqual(status, 404, rejected)
                 self.assertEqual(config_path.read_bytes(), before)
@@ -1129,15 +1149,14 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, removed = self._request(
                     server,
                     "POST",
-                    "/api/config/harbor/mounts",
-                    {
-                        "action": "delete",
-                        "mount_ids": ["one", "two"],
-                        "expected_revision": inventory["revision"],
-                    },
+                    "/api/harbor/mount-deletion-operations",
+                    {"mount_ids": ["one", "two"]},
+                    request_headers={"If-Match": headers["etag"]},
                 )
-                self.assertEqual(status, 200, removed)
-                self.assertEqual(removed["result"]["mounts"], [])
+                self.assertEqual(status, 202, removed)
+                self._wait_operation(server, removed)
+                status, _headers, mounts = self._get_json(server, "/api/harbor/mounts")
+                self.assertEqual(mounts, [])
                 self.assertTrue(jobs_one.is_dir())
                 self.assertTrue(jobs_two.is_dir())
             finally:
@@ -1156,23 +1175,24 @@ class HarborWorkspaceTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                status, inventory = self._request(server, "GET", "/api/config/harbor")
-                self.assertEqual(status, 200)
+                status, headers, inventory = self._get_json(
+                    server, "/api/harbor/datasets"
+                )
                 self.assertEqual(status, 200)
                 status, created = self._request(
                     server,
                     "POST",
-                    "/api/config/harbor/datasets",
+                    "/api/harbor/datasets",
                     {
-                        "action": "create",
-                        "dataset_id": "tasks",
+                        "source": "new",
+                        "id": "tasks",
                         "path": "dataset",
                         "package_name": "local/tasks",
-                        "expected_revision": inventory["revision"],
                     },
+                    request_headers={"If-Match": headers["etag"]},
                 )
                 self.assertEqual(status, 202, created)
-                self._wait_operation(server, created["operation"])
+                self._wait_operation(server, created)
 
                 status, inventory = self._request(server, "GET", "/api/harbor/datasets")
                 self.assertEqual(status, 200)
@@ -1180,29 +1200,39 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, created_task = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks",
+                    "/api/harbor/datasets/tasks/tasks",
                     {
-                        "action": "create",
-                        "dataset_id": "tasks",
                         "directory": "hello",
                         "package_name": "local/hello",
                         "steps": 0,
-                        "expected_revision": dataset["revision"],
                     },
+                    request_headers={"If-Match": f'"{dataset["revision"]}"'},
                 )
                 self.assertEqual(status, 202, created_task)
-                self._wait_operation(server, created_task["operation"])
+                self._wait_operation(server, created_task)
 
                 status, inventory = self._request(server, "GET", "/api/harbor/datasets")
                 dataset = inventory["datasets"][0]
+                self.assertTrue(runtime.catalog._writer_lock.acquire(blocking=False))
+                try:
+                    status, blocked = self._request(
+                        server,
+                        "PUT",
+                        "/api/harbor/datasets/tasks/manifest",
+                        {},
+                        request_headers={"If-Match": f'"{dataset["revision"]}"'},
+                    )
+                finally:
+                    runtime.catalog._writer_lock.release()
+                self.assertEqual(status, 409, blocked)
+                self.assertIn("writer operation", blocked["detail"])
+
                 status, synchronized = self._request(
                     server,
-                    "POST",
-                    "/api/harbor/tasks/manifest",
-                    {
-                        "dataset_id": "tasks",
-                        "expected_revision": dataset["revision"],
-                    },
+                    "PUT",
+                    "/api/harbor/datasets/tasks/manifest",
+                    {},
+                    request_headers={"If-Match": f'"{dataset["revision"]}"'},
                 )
                 self.assertEqual(status, 200, synchronized)
                 self.assertNotIn("manifest_status", synchronized)
@@ -1210,101 +1240,91 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, detail = self._request(
                     server,
                     "GET",
-                    "/api/harbor/task?dataset_id=tasks&task=hello",
+                    "/api/harbor/datasets/tasks/tasks/hello",
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(detail["task"]["status"], "valid")
                 status, text = self._request(
                     server,
                     "GET",
-                    "/api/harbor/files?dataset_id=tasks&task=hello&path=instruction.md",
+                    "/api/harbor/datasets/tasks/tasks/hello/files/instruction.md",
                 )
                 self.assertEqual(status, 200)
                 self.assertIn("content", text)
 
                 status, _headers, content = self._request_bytes(
                     server,
-                    "/api/harbor/files?dataset_id=tasks&task=hello&"
-                    "path=instruction.md&download=1",
+                    "/api/harbor/datasets/tasks/tasks/hello/files/"
+                    "instruction.md?download=1",
                 )
                 self.assertEqual(status, 400)
-                self.assertIn(b"not supported", content)
+                self.assertNotIn("content-disposition", _headers)
                 status, _headers, content = self._request_bytes(
                     server,
-                    "/api/harbor/files?dataset_id=tasks&task=hello&"
-                    "path=instruction.md&download=",
+                    "/api/harbor/datasets/tasks/tasks/hello/files/"
+                    "instruction.md?download=",
                 )
                 self.assertEqual(status, 400)
-                self.assertIn(b"not supported", content)
+                self.assertNotIn("content-disposition", _headers)
 
                 status, conflict = self._request(
                     server,
-                    "POST",
-                    "/api/harbor/files",
-                    {
-                        "action": "save",
-                        "dataset_id": "tasks",
-                        "task": "hello",
-                        "path": "instruction.md",
-                        "content": "changed\n",
-                        "expected_revision": "stale",
-                    },
+                    "PUT",
+                    "/api/harbor/datasets/tasks/tasks/hello/files/instruction.md",
+                    {"content": "changed\n"},
+                    request_headers={"If-Match": '"stale"'},
                 )
-                self.assertEqual(status, 409)
-                self.assertIn("refresh", conflict["error"])
+                self.assertEqual(status, 412)
+                self.assertIn("refresh", conflict["detail"])
 
                 with patch("psycheval.serve.harbor_workspace.UPLOAD_LIMIT", 2):
                     status, oversized = self._request(
                         server,
                         "POST",
-                        "/api/harbor/files",
+                        "/api/harbor/datasets/tasks/tasks/hello/files",
                         {
-                            "action": "upload",
-                            "dataset_id": "tasks",
-                            "task": "hello",
+                            "kind": "upload",
                             "path": "large.bin",
-                            "content_base64": b64encode(b"abc").decode("ascii"),
-                            "expected_revision": detail["task"]["revision"],
+                            "content": b64encode(b"abc").decode("ascii"),
                         },
+                        request_headers={"If-Match": f'"{detail["task"]["revision"]}"'},
                     )
                 self.assertEqual(status, 413, oversized)
 
                 status, unsafe = self._request(
                     server,
                     "GET",
-                    "/api/harbor/files?dataset_id=tasks&task=hello&path=../secret",
+                    "/api/harbor/datasets/tasks/tasks/hello/files/%2E%2E%2Fsecret",
                 )
                 self.assertEqual(status, 400)
-                self.assertNotIn(str(root), unsafe["error"])
+                self.assertNotIn(str(root), unsafe["detail"])
 
                 status, renamed = self._request(
                     server,
-                    "POST",
-                    "/api/harbor/tasks",
-                    {
-                        "action": "rename",
-                        "dataset_id": "tasks",
-                        "task": "hello",
-                        "new_directory": "renamed",
-                        "expected_revision": detail["task"]["revision"],
-                    },
+                    "PATCH",
+                    "/api/harbor/datasets/tasks/tasks/hello",
+                    {"new_directory": "renamed"},
+                    request_headers={"If-Match": f'"{detail["task"]["revision"]}"'},
                 )
                 self.assertEqual(status, 202, renamed)
-                self._wait_operation(server, renamed["operation"])
-                renamed_task = renamed["result"]["task"]
+                self._wait_operation(server, renamed)
+                status, renamed_detail = self._request(
+                    server, "GET", "/api/harbor/datasets/tasks/tasks/renamed"
+                )
+                renamed_task = renamed_detail["task"]
                 self.assertEqual(renamed_task["directory"], "renamed")
 
                 status, trashed = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks/state",
+                    "/api/harbor/task-state-operations",
                     {
                         "archived": True,
                         "items": [
                             {
                                 "dataset_id": "tasks",
                                 "task": "renamed",
-                                "expected_revision": renamed_task["revision"],
+                                "etag": f'"{renamed_task["revision"]}"',
                             }
                         ],
                     },
@@ -1318,7 +1338,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, restored = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks/state",
+                    "/api/harbor/task-state-operations",
                     {
                         "archived": False,
                         "items": [
@@ -1326,7 +1346,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                                 "dataset_id": "tasks",
                                 "entry_id": archived["entry_id"],
                                 "directory": "restored",
-                                "expected_revision": archived["revision"],
+                                "etag": f'"{archived["revision"]}"',
                             }
                         ],
                     },
@@ -1340,14 +1360,14 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, trashed_again = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks/state",
+                    "/api/harbor/task-state-operations",
                     {
                         "archived": True,
                         "items": [
                             {
                                 "dataset_id": "tasks",
                                 "task": "restored",
-                                "expected_revision": restored_task["revision"],
+                                "etag": f'"{restored_task["revision"]}"',
                             }
                         ],
                     },
@@ -1361,13 +1381,13 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, purged = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks/delete",
+                    "/api/harbor/task-deletion-operations",
                     {
                         "items": [
                             {
                                 "dataset_id": "tasks",
                                 "entry_id": archived_again["entry_id"],
-                                "expected_revision": archived_again["revision"],
+                                "etag": f'"{archived_again["revision"]}"',
                             }
                         ],
                     },
@@ -1380,30 +1400,28 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, unknown = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks",
+                    "/api/harbor/datasets/tasks/tasks",
                     {
                         "action": "unknown",
-                        "dataset_id": "tasks",
-                        "expected_revision": "unused",
                     },
                 )
-                self.assertEqual(status, 400, unknown)
+                self.assertEqual(status, 422, unknown)
 
                 status, inventory = self._request(server, "GET", "/api/harbor/datasets")
                 status, invalid_steps = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks",
+                    "/api/harbor/datasets/tasks/tasks",
                     {
-                        "action": "create",
-                        "dataset_id": "tasks",
                         "directory": "invalid-steps",
                         "package_name": "local/invalid-steps",
                         "steps": "two",
-                        "expected_revision": inventory["datasets"][0]["revision"],
+                    },
+                    request_headers={
+                        "If-Match": f'"{inventory["datasets"][0]["revision"]}"'
                     },
                 )
-                self.assertEqual(status, 400, invalid_steps)
+                self.assertEqual(status, 422, invalid_steps)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -1450,25 +1468,27 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, operation = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks/state",
+                    "/api/harbor/task-state-operations",
                     {
                         "archived": True,
                         "items": [
                             {
                                 "dataset_id": "tasks",
                                 "task": "first",
-                                "expected_revision": tasks["first"]["revision"],
+                                "etag": f'"{tasks["first"]["revision"]}"',
                             },
                             {
                                 "dataset_id": "tasks",
                                 "task": "second",
-                                "expected_revision": "stale",
+                                "etag": '"stale"',
                             },
                         ],
                     },
                 )
                 self.assertEqual(status, 202, operation)
-                completed = self._wait_operation(server, operation)
+                completed = self._wait_operation(
+                    server, operation, expected_state="failed"
+                )
                 self.assertEqual(len(completed["successes"]), 1)
                 self.assertEqual(len(completed["failures"]), 1)
                 self.assertIn("refresh", completed["failures"][0]["error"])
@@ -1484,13 +1504,13 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, operation = self._request(
                     server,
                     "POST",
-                    "/api/harbor/tasks/delete",
+                    "/api/harbor/task-deletion-operations",
                     {
                         "items": [
                             {
                                 "dataset_id": "tasks",
                                 "task": "second",
-                                "expected_revision": dataset["tasks"][0]["revision"],
+                                "etag": f'"{dataset["tasks"][0]["revision"]}"',
                             }
                         ]
                     },
@@ -1563,7 +1583,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, task_inventory = self._request(
                     server,
                     "GET",
-                    "/api/harbor/tasks?dataset_id=tasks",
+                    "/api/harbor/datasets/tasks/tasks",
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(task_inventory, inventory)
@@ -1571,7 +1591,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 status, detail = self._request(
                     server,
                     "GET",
-                    "/api/harbor/task?dataset_id=tasks&task=hello",
+                    "/api/harbor/datasets/tasks/tasks/hello",
                 )
                 self.assertEqual(status, 200)
                 paths = {item["path"]: item for item in detail["tree"]}
@@ -1588,30 +1608,24 @@ class HarborWorkspaceTests(unittest.TestCase):
                     status, text = self._request(
                         server,
                         "GET",
-                        "/api/harbor/files?dataset_id=tasks&task=hello&path=" + path,
+                        "/api/harbor/datasets/tasks/tasks/hello/files/" + path,
                     )
                     self.assertEqual(status, 200)
                     self.assertEqual(set(text), {"path", "content"})
 
-                status, blocked = self._request(
+                status, headers, content = self._request_bytes(
                     server,
-                    "GET",
-                    "/api/harbor/files?dataset_id=tasks&task=hello&path="
-                    "solution/solve.sh&download=1",
+                    "/api/harbor/datasets/tasks/tasks/hello/files/"
+                    "solution/solve.sh?download=1",
                 )
-                self.assertEqual(status, 400, blocked)
+                self.assertEqual(status, 400, content)
+                self.assertNotIn("content-disposition", headers)
+                self.assertIn(b"downloads are not supported", content)
                 status, blocked = self._request(
                     server,
-                    "POST",
-                    "/api/harbor/files",
-                    {
-                        "action": "save",
-                        "dataset_id": "tasks",
-                        "task": "hello",
-                        "path": "instruction.md",
-                        "content": "blocked",
-                        "expected_revision": "private",
-                    },
+                    "PUT",
+                    "/api/harbor/datasets/tasks/tasks/hello/files/instruction.md",
+                    {"content": "blocked"},
                 )
                 self.assertEqual(status, 403, blocked)
             finally:

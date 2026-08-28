@@ -74,7 +74,7 @@ class PevalServeHtmlTests(unittest.TestCase):
                 "workspace_id": "workspace-one",
                 "role": "guest",
                 "authentication_enabled": False,
-                "serve_page": "home",
+                "initial_page": "home",
             },
         )
 
@@ -106,20 +106,32 @@ class PevalServeHtmlTests(unittest.TestCase):
         finally:
             cache_clear()
 
-    def test_all_live_pages_render_their_owned_shell(self) -> None:
+    def test_all_live_routes_render_one_persistent_role_allowed_shell(self) -> None:
         expected = {
             "home": 'id="leaderboard-region"',
-            "datasets": "data-harbor-workbench",
-            "reports": "data-report-manager",
-            "config": "data-config-page",
+            "datasets": "data-harbor-workbench aria-label",
+            "reports": "data-report-manager aria-label",
+            "config": "data-config-page aria-label",
         }
         for page, marker in expected.items():
             with self.subTest(page=page):
                 html = render_serve_html(serve_page=page)
-                self.assertIn(marker, html)
+                for shell_page, shell_marker in expected.items():
+                    self.assertEqual(html.count(shell_marker), 1, shell_page)
                 self.assertEqual(
-                    script_json(html, "peval-render-options")["serve_page"], page
+                    script_json(html, "peval-render-options")["initial_page"], page
                 )
+                self.assertRegex(
+                    html,
+                    rf'data-workspace-page="{page}"(?![^>]*\shidden(?:\s|>))',
+                )
+
+        guest_html = render_serve_html(role="guest")
+        self.assertIn('data-workspace-page="home"', guest_html)
+        self.assertIn('data-workspace-page="datasets"', guest_html)
+        self.assertIn('data-workspace-page="reports"', guest_html)
+        self.assertNotIn('data-workspace-page="config"', guest_html)
+        self.assertNotIn("data-config-page aria-label", guest_html)
 
     def test_workspace_description_is_json_escaped_and_blank_is_omitted(self) -> None:
         description = "**Nightly** <script>alert(1)</script>"

@@ -1,14 +1,8 @@
 from __future__ import annotations
 
-from html import escape
 from importlib.resources import files
 
 ASSET_PACKAGE = "psycheval.assets"
-ECHARTS_VERSION = "6.0.0"
-ECHARTS_LOCAL_SRC = f"/assets/echarts/{ECHARTS_VERSION}/echarts.min.js"
-ECHARTS_CDN_SRC = (
-    f"https://cdn.jsdelivr.net/npm/echarts@{ECHARTS_VERSION}/dist/echarts.min.js"
-)
 WORKSPACE_STYLESHEET_PARTS = (
     "css/00-base.css",
     "css/05-data-table.css",
@@ -27,15 +21,6 @@ WORKSPACE_STYLESHEET_PARTS = (
     "css/30-workspace-views.css",
     "css/32-acp-client.css",
 )
-
-
-def render_echarts_script() -> str:
-    cdn = escape(ECHARTS_CDN_SRC)
-    local = escape(ECHARTS_LOCAL_SRC)
-    return (
-        f'<script src="{local}" '
-        f"onerror=\"this.onerror=null;this.src='{cdn}'\"></script>"
-    )
 
 
 def load_asset_text(name: str) -> str:

@@ -137,8 +137,8 @@ function bindDetailSidebarTaskBrowser(target, trial) {
     sidebar.taskBrowser = createTaskBrowser({
       root,
       editable: false,
-      loadTask: taskRef => serveApi(`/api/harbor/task?dataset_id=${encodeURIComponent(taskRef.dataset_id)}&task=${encodeURIComponent(taskRef.task)}`),
-      readFile: (taskRef, path) => serveApi(`/api/harbor/files?dataset_id=${encodeURIComponent(taskRef.dataset_id)}&task=${encodeURIComponent(taskRef.task)}&path=${encodeURIComponent(path)}`),
+      loadTask: taskRef => serveApi(`/api/harbor/datasets/${encodeURIComponent(taskRef.dataset_id)}/tasks/${encodeURIComponent(taskRef.task)}`),
+      readFile: (taskRef, path) => serveApi(`/api/harbor/datasets/${encodeURIComponent(taskRef.dataset_id)}/tasks/${encodeURIComponent(taskRef.task)}/files/${encodeURIComponent(path)}`),
     });
   } else sidebar.taskBrowser.attach(root);
   const metadata = trial.task_metadata && typeof trial.task_metadata === "object" ? trial.task_metadata : {};

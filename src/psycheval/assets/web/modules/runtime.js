@@ -1,61 +1,20 @@
-import { renderLeaderboard } from "./data-tables.js";
+import { configureLeaderboardDataTables, renderLeaderboard } from "./data-tables.js";
+import { bindServeExportControls, bindTrialSelection } from "./export.js";
 import { renderLeaderboardSummary } from "./leaderboard-summary.js";
 import { renderTrace, renderTrajectoryOverview } from "./trajectory-trace.js";
 import { renderDetailSidebar } from "./detail-sidebar.js";
-import { bindGlobalControls } from "./serve-controls.js";
-import { leaderboardRows, metaFor, reportRows, sourceForTrialIndex, sourceForTrialKey, syncSelectionWithVisibleRows, trajectoryFor } from "./serve-catalog.js";
+import { bindHomeControls } from "./home-controls.js";
+import { bindLeaderboardCatalogControls, catalogSortKey, filterOptions, leaderboardRows, metaFor, renderLeaderboardPanelControls, renderLeaderboardSearchControls, reportRows, requestCatalogFacets, requestCatalogSort, rowAnalysisCount, sourceForTrialIndex, sourceForTrialKey, syncSelectionWithVisibleRows, trajectoryFor } from "./serve-catalog.js";
+import { bindServeSourceStateControls } from "./source-state-controls.js";
+import { bindLeaderboardSearchControls, commitSourceCellEdit, existingSourceCategoryOptions, existingSourceTagOptions } from "./serve-effects.js";
+import { bindWorkspaceReportLeaderboardControls, workspaceReportLeaderboardColumn } from "./workspace-reports.js";
 import { refreshWorkspaceViews } from "./workspace-views.js";
 import { finalMetric, tokenTotal, trialWallDurationMs } from "./analysis-metrics.js";
 import { renderMarkdown } from "./markdown.js";
 import { inferenceRowMetrics } from "./inference-metrics.js";
+import { replaceReports, reportStore } from "./report-store.js";
+import { $, I18N, RENDER_OPTIONS, adminMode, authenticationEnabled, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtScore, fmtTps, fmtTtft, hasMetricValue, listValue, lower, scriptJson, statusLabel, t } from "./shared.js";
 
-const $ = id => document.getElementById(id);
-const esc = value => String(value ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
-const lower = value => String(value || "").toLowerCase();
-function scriptJson(id, fallback) {
-  const node = $(id);
-  if (!node) return fallback;
-  try {
-    return JSON.parse(node.textContent || JSON.stringify(fallback));
-  } catch {
-    return fallback;
-  }
-}
-const I18N = scriptJson("peval-i18n", {});
-const RENDER_OPTIONS = scriptJson("peval-render-options", {});
-function t(key, fallback) { return Object.prototype.hasOwnProperty.call(I18N, key) ? I18N[key] : (fallback ?? key); }
-function statusLabel(value) {
-  const raw = String(value || "-");
-  return t(`status.${lower(raw)}`, raw);
-}
-const fmtNum = value => value === null || value === undefined ? "-" : Number(value).toLocaleString();
-function fmtMs(value) {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
-  const seconds = Math.max(0, Number(value) / 1000);
-  return seconds >= 60 ? `${Math.floor(seconds / 60)}m${(seconds % 60).toFixed(1)}s` : `${seconds.toFixed(1)}s`;
-}
-function fmtTtft(value) {
-  if (!hasMetricValue(value)) return "-";
-  const milliseconds = Math.max(0, Number(value));
-  return milliseconds < 1000 ? `${Math.round(milliseconds)} ms` : `${(milliseconds / 1000).toFixed(2)}s`;
-}
-function fmtTps(value) { return hasMetricValue(value) ? `${Number(value).toFixed(1)} tok/s` : "-"; }
-function fmtDate(value) {
-  if (value === null || value === undefined || String(value).trim() === "") return "-";
-  const source = String(value).trim();
-  const date = typeof value === "number" || /^-?\d+(?:\.\d+)?$/.test(source)
-    ? new Date(Number(value))
-    : /(?:Z|[+-]\d{2}:\d{2})$/i.test(source)
-      ? new Date(source)
-      : null;
-  return date && !Number.isNaN(date.getTime()) ? date.toISOString() : source;
-}
-function fmtCost(value) { return hasMetricValue(value) ? `$${Number(value).toFixed(4)}` : "-"; }
-function fmtPct(value) { return hasMetricValue(value) ? `${(Number(value) * 100).toFixed(1)}%` : "-"; }
-function fmtScore(value) { return hasMetricValue(value) ? Number(value).toLocaleString() : "-"; }
-function hasMetricValue(value) { return value !== null && value !== undefined && value !== "" && !Number.isNaN(Number(value)); }
-function adminMode() { return RENDER_OPTIONS?.role !== "guest"; }
-function authenticationEnabled() { return Boolean(RENDER_OPTIONS?.authentication_enabled); }
 function initialAdapterDefaults() {
   return RENDER_OPTIONS?.adapter_defaults && typeof RENDER_OPTIONS.adapter_defaults === "object"
     ? { ...RENDER_OPTIONS.adapter_defaults }
@@ -64,7 +23,51 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-const state = { view: null, selectedTrial: null, selectedStep: null, detailSidebar: { open: false, opener: null, openerSelector: null, preferredWidth: null }, rowSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: [], sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: [], reportManager: { selectedId: null, search: "", page: 1, pageData: { page: 1, page_size: 100, total: 0 }, sourceRows: [], searchTimer: null, draftBindings: new Set(), dirty: false, loading: false, busy: false, opener: null }, reportReader: { openId: null, opener: null, width: null, objectUrl: null, previewObserver: null }, workspaceViews: [], workspaceViewSummaries: [], workspaceViewsLoaded: false, workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
+const state = { view: null, selectedTrial: null, selectedStep: null, detailSidebar: { open: false, opener: null, openerSelector: null, preferredWidth: null }, rowSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: [], sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: reportStore.reports, reportManager: reportStore.manager, reportReader: reportStore.reader, workspaceViews: [], workspaceViewSummaries: [], workspaceViewsLoaded: false, workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" }, serveLoading: Boolean(RENDER_OPTIONS?.loading) };
+Object.defineProperty(state, "workspaceReports", {
+  configurable: true,
+  enumerable: true,
+  get: () => reportStore.reports,
+  set: reports => { replaceReports(reports); },
+});
+configureLeaderboardDataTables({
+  state,
+  noteSnippetFor: (...args) => noteSnippetFor(...args),
+  notesFor: (...args) => notesFor(...args),
+  notesPlainText: (...args) => notesPlainText(...args),
+  renderComparisonPanels: (...args) => renderComparisonPanels(...args),
+  renderNotesCell: (...args) => renderNotesCell(...args),
+  renderReadOnlySourceCategory: (...args) => renderReadOnlySourceCategory(...args),
+  renderReadOnlySourceTags: (...args) => renderReadOnlySourceTags(...args),
+  renderTaskAlias: (...args) => renderTaskAlias(...args),
+  sessionAliasValue: (...args) => sessionAliasValue(...args),
+  sourceCategoryEditValue: (...args) => sourceCategoryEditValue(...args),
+  sourceCategoryFor: (...args) => sourceCategoryFor(...args),
+  sourceCategoryValue: (...args) => sourceCategoryValue(...args),
+  sourceIdentityFor: (...args) => sourceIdentityFor(...args),
+  sourceTagsEditValue: (...args) => sourceTagsEditValue(...args),
+  sourceTagsFor: (...args) => sourceTagsFor(...args),
+  sourceTagsValue: (...args) => sourceTagsValue(...args),
+  bindServeExportControls: (...args) => bindServeExportControls(...args),
+  bindTrialSelection: (...args) => bindTrialSelection(...args),
+  bindServeSourceStateControls: (...args) => bindServeSourceStateControls(...args),
+  bindLeaderboardSearchControls: (...args) => bindLeaderboardSearchControls(...args),
+  commitSourceCellEdit: (...args) => commitSourceCellEdit(...args),
+  existingSourceCategoryOptions: (...args) => existingSourceCategoryOptions(...args),
+  existingSourceTagOptions: (...args) => existingSourceTagOptions(...args),
+  bindLeaderboardCatalogControls: (...args) => bindLeaderboardCatalogControls(...args),
+  catalogSortKey: (...args) => catalogSortKey(...args),
+  filterOptions: (...args) => filterOptions(...args),
+  leaderboardRows: (...args) => leaderboardRows(...args),
+  renderLeaderboardPanelControls: (...args) => renderLeaderboardPanelControls(...args),
+  renderLeaderboardSearchControls: (...args) => renderLeaderboardSearchControls(...args),
+  reportRows: (...args) => reportRows(...args),
+  requestCatalogFacets: (...args) => requestCatalogFacets(...args),
+  requestCatalogSort: (...args) => requestCatalogSort(...args),
+  rowAnalysisCount: (...args) => rowAnalysisCount(...args),
+  bindWorkspaceReportLeaderboardControls: (...args) => bindWorkspaceReportLeaderboardControls(...args),
+  workspaceReportLeaderboardColumn: (...args) => workspaceReportLeaderboardColumn(...args),
+});
 state.leaderboardSummaryGroupBy = "agent";
 state.leaderboardSummaryTableOpen = false;
 state.leaderboardSummaryStatistic = "mean";
@@ -82,9 +85,6 @@ function closeOpenSubmenus(except = null) {
   document.querySelectorAll(OPEN_SUBMENU_DETAILS_SELECTOR).forEach(details => {
     if (details !== except) details.open = false;
   });
-}
-function listValue(value) {
-  return Array.isArray(value) ? value : [];
 }
 function synthesizedReportRow(trajectory, meta, index = -1) {
   const metrics = trajectory?.final_metrics || {};
@@ -148,7 +148,7 @@ function render(view) {
     state.selectedTrial = (firstFailed || reportRows()[0])?.trial_key || view.trajectory_meta?.[0]?.trial_key || null;
   }
   syncSelectedSourceFromView();
-  bindGlobalControls();
+  bindHomeControls();
   renderReportNotes(view.annotations?.report_notes || []);
   renderComparison();
   if (!state.workspaceViewsLoaded) refreshWorkspaceViews();

@@ -203,12 +203,15 @@ def _write_summary_sheet(
         (65, 11),
         (65, 20),
     )
+    visible_metrics = tuple(
+        metric for metric in SUMMARY_METRICS if metric[0] in metric_ranges
+    )
     metric_labels = {
         key: _metric_label(key, fallback, message_key, messages)
-        for key, _kind, fallback, message_key in SUMMARY_METRICS
+        for key, _kind, fallback, message_key in visible_metrics
     }
     for (metric_key, _metric_type, _fallback, _message_key), position in zip(
-        SUMMARY_METRICS,
+        visible_metrics,
         chart_positions,
     ):
         first_offset, last_offset = metric_ranges[metric_key]
@@ -275,7 +278,18 @@ def _summary_rows(
     ranges: dict[str, tuple[int, int]] = {}
     if sheet.matched_count < 1:
         return rows, ranges
-    for metric_key, metric_type, fallback, message_key in SUMMARY_METRICS:
+    visible_metrics = tuple(
+        metric
+        for metric in SUMMARY_METRICS
+        if any(
+            any(
+                item.get("key") == metric[0] and int(item.get("count") or 0) > 0
+                for item in group.get("metrics", ())
+            )
+            for group in sheet.groups
+        )
+    )
+    for metric_key, metric_type, fallback, message_key in visible_metrics:
         first = len(rows)
         for group in sheet.groups:
             metric = next(

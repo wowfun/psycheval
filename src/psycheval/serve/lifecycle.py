@@ -1,42 +1,30 @@
 from __future__ import annotations
 
+import socket
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
+
+import uvicorn
 
 from psycheval.cli.arguments import CliArgs
 from psycheval.config import apply_overrides, config_for_adapter, load_config
 from psycheval.inputs import parse_adapter_assignments
 from psycheval.serve.access import ServeAccess
-from psycheval.serve.constants import (
-    DEFAULT_PORT_END,
-    DEFAULT_PORT_START,
-    LOCALHOSTS,
-)
-from psycheval.serve.handler import make_handler
+from psycheval.serve.api import create_app
+from psycheval.serve.constants import DEFAULT_PORT_END, DEFAULT_PORT_START, LOCALHOSTS
 from psycheval.serve.runtime import ServeRuntime
 from psycheval.state import open_workspace_state
 
 
-class LocalHTTPServer(ThreadingHTTPServer):
-    allow_reuse_address = True
-    daemon_threads = True
-
-
-def run_serve_command(
-    args: CliArgs,
-) -> None:
+def run_serve_command(args: CliArgs) -> None:
     raw_host = getattr(args, "host", None) or "127.0.0.1"
     store = open_workspace_state(getattr(args, "root", None))
-    server: HTTPServer | None = None
+    listener: socket.socket | None = None
     runtime: ServeRuntime | None = None
     try:
         access = ServeAccess.from_workspace(store.paths.root)
         host = validate_bind_host(raw_host, access.authentication_enabled)
         config = apply_overrides(
-            load_config(
-                getattr(args, "config", None),
-                workspace_root=str(store.paths.root),
-            ),
+            load_config(workspace_root=store.paths.root),
             args,
         )
         adapter_assignments = parse_adapter_assignments(
@@ -45,9 +33,9 @@ def run_serve_command(
         )
         config = config_for_adapter(config, adapter_assignments.default_adapter)
         runtime = ServeRuntime(store, config, initialize_snapshot=False)
-        handler = make_handler(runtime, access=access)
-        server = bind_server(host, getattr(args, "port", None), handler)
-        print(f"peval serve: {format_url(host, server.server_port)}", flush=True)
+        listener = bind_listener(host, getattr(args, "port", None))
+        actual_port = int(listener.getsockname()[1])
+        print(f"peval serve: {format_url(host, actual_port)}", flush=True)
         if host.lower() not in LOCALHOSTS:
             print(
                 "warning: non-local peval HTTP is for trusted private networks only; "
@@ -56,12 +44,27 @@ def run_serve_command(
                 flush=True,
             )
         runtime.start_initial_load(args, adapter_assignments)
-        server.serve_forever()
+        server = uvicorn.Server(
+            uvicorn.Config(
+                create_app(runtime, access),
+                loop="asyncio",
+                http="h11",
+                ws="none",
+                lifespan="off",
+                workers=1,
+                proxy_headers=False,
+                access_log=False,
+                server_header=False,
+                timeout_graceful_shutdown=5,
+                log_config=None,
+            )
+        )
+        server.run(sockets=[listener])
     except KeyboardInterrupt:
         return
     finally:
-        if server is not None:
-            server.server_close()
+        if listener is not None:
+            listener.close()
         if runtime is not None:
             runtime.close()
             runtime.wait_until_ready(timeout=5)
@@ -91,23 +94,48 @@ def validate_bind_host(host: str, authentication_enabled: bool) -> str:
     return normalized
 
 
-def bind_server(
-    host: str,
-    requested_port: int | None,
-    handler: type[BaseHTTPRequestHandler],
-) -> HTTPServer:
+def bind_listener(host: str, requested_port: int | None) -> socket.socket:
     if requested_port is not None:
-        return LocalHTTPServer((host, requested_port), handler)
+        if isinstance(requested_port, bool) or not 0 <= requested_port <= 65535:
+            raise ValueError("serve port must be between 0 and 65535")
+        return _bind_port(host, requested_port)
 
     last_error: OSError | None = None
     for port in range(DEFAULT_PORT_START, DEFAULT_PORT_END + 1):
         try:
-            return LocalHTTPServer((host, port), handler)
+            return _bind_port(host, port)
         except OSError as exc:
             last_error = exc
     raise OSError(
         f"could not bind {host}:{DEFAULT_PORT_START}..{DEFAULT_PORT_END}"
     ) from last_error
+
+
+def _bind_port(host: str, port: int) -> socket.socket:
+    last_error: OSError | None = None
+    try:
+        addresses = socket.getaddrinfo(
+            host,
+            port,
+            family=socket.AF_UNSPEC,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+        )
+    except socket.gaierror as exc:
+        raise OSError(f"could not resolve serve host {host}: {exc}") from exc
+    for family, socktype, proto, _canonical, address in addresses:
+        listener = socket.socket(family, socktype, proto)
+        try:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.set_inheritable(False)
+            listener.bind(address)
+            listener.listen(128)
+            return listener
+        except OSError as exc:
+            last_error = exc
+            listener.close()
+    assert last_error is not None
+    raise last_error
 
 
 def format_url(host: str, port: int) -> str:

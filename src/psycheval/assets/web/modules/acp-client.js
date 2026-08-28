@@ -1,12 +1,11 @@
-import { RENDER_OPTIONS, adminMode, esc, listValue, renderComparisonPanels, state, t } from "./runtime.js";
-import { serveApi } from "./serve-effects.js";
-import { closeWorkspaceReportReader } from "./workspace-reports.js";
-import { closeDetailSidebar } from "./detail-sidebar.js";
-import { workbenchState } from "./harbor-workbench.js";
+import { snapshotWorkspace, subscribeWorkspaceInvalidation } from "../app/workspace-runtime.js";
+import { serveApi } from "./http.js";
 import { renderMarkdown } from "./markdown.js";
+import { RENDER_OPTIONS, adminMode, esc, listValue, t } from "./shared.js";
 
 const acpState = {
   initialized: false,
+  unsubscribeInvalidation: null,
   agents: [],
   sessions: [],
   agentId: "",
@@ -24,10 +23,22 @@ const acpState = {
 
 function drawer() { return document.querySelector("[data-acp-drawer]"); }
 function storageKey() { return `peval:${RENDER_OPTIONS?.workspace_id || "default"}:acp-client`; }
+function opaquePathToken(value) {
+  const bytes = new TextEncoder().encode(String(value));
+  let binary = "";
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+function sessionPath(sessionId = acpState.sessionId) {
+  return `/api/acp/agents/${encodeURIComponent(acpState.agentId)}/sessions/${opaquePathToken(sessionId)}`;
+}
 
 async function initializeAcp() {
   if (acpState.initialized || !adminMode() || !drawer()) return;
   acpState.initialized = true;
+  acpState.unsubscribeInvalidation = subscribeWorkspaceInvalidation(changes => {
+    if (changes.has("assistant-config")) void refreshAcpConfiguration();
+  });
   restoreUiState();
   bindControls();
   try {
@@ -36,7 +47,7 @@ async function initializeAcp() {
       serveApi("/api/prompts"),
     ]);
     acpState.agents = listValue(payload?.agents);
-    acpState.prompts = listValue(promptPayload?.prompts);
+    acpState.prompts = listValue(promptPayload);
     if (!acpState.prompts.some(prompt => prompt.id === acpState.promptAssetId)) {
       acpState.promptAssetId = acpState.prompts[0]?.id || "";
     }
@@ -47,6 +58,26 @@ async function initializeAcp() {
     renderPromptAssets();
     if (selectedAgent()?.connected) await refreshSessions(false);
     if (readSavedUi().open && acpState.agents.length) openAcpDrawer(document.querySelector("[data-acp-open]"));
+  } catch (error) {
+    showNotice(error.message || String(error), true);
+  }
+}
+
+async function refreshAcpConfiguration() {
+  if (!acpState.initialized) return;
+  try {
+    const [payload, promptPayload] = await Promise.all([
+      serveApi("/api/acp/agents"),
+      serveApi("/api/prompts"),
+    ]);
+    acpState.agents = listValue(payload?.agents);
+    acpState.prompts = listValue(promptPayload);
+    if (!acpState.agents.some(agent => agent.id === acpState.agentId)) {
+      acpState.agentId = acpState.agents[0]?.id || "";
+      acpState.sessionId = "";
+    }
+    renderAgentControls();
+    renderPromptAssets();
   } catch (error) {
     showNotice(error.message || String(error), true);
   }
@@ -92,10 +123,6 @@ function openAcpDrawer(opener = null) {
   const panel = drawer();
   if (!panel || !adminMode()) return false;
   acpState.contextCandidate = currentContext();
-  closeWorkspaceReportReader({ restoreFocus: false });
-  const sidebarClosed = closeDetailSidebar({ restoreFocus: false, render: false });
-  if (state.selectedStep) state.selectedStep = null;
-  if (sidebarClosed) renderComparisonPanels();
   acpState.opener = opener || document.activeElement;
   panel.hidden = false;
   const backdrop = document.querySelector("[data-acp-backdrop]");
@@ -130,9 +157,8 @@ async function toggleConnection(event) {
   button.disabled = true;
   showNotice(agent.connected ? t("acp_disconnecting", "Disconnecting…") : t("acp_connecting", "Starting local agent…"));
   try {
-    const payload = await serveApi(agent.connected ? "/api/acp/disconnect" : "/api/acp/connect", {
-      method: "POST", body: { agent_id: agent.id }
-    });
+    const path = `/api/acp/agents/${encodeURIComponent(agent.id)}/connection`;
+    const payload = await serveApi(path, { method: agent.connected ? "DELETE" : "PUT" });
     replaceAgent(payload);
     if (payload.connected) await refreshSessions(true);
     else {
@@ -150,8 +176,8 @@ async function toggleConnection(event) {
 
 async function refreshSessions(refresh = true) {
   if (!acpState.agentId) return;
-  const query = new URLSearchParams({ agent_id: acpState.agentId, refresh: refresh ? "1" : "0" });
-  const payload = await serveApi(`/api/acp/sessions?${query}`);
+  const query = new URLSearchParams({ refresh: refresh ? "1" : "0" });
+  const payload = await serveApi(`/api/acp/agents/${encodeURIComponent(acpState.agentId)}/sessions?${query}`);
   acpState.sessions = listValue(payload?.sessions);
   if (!acpState.sessions.some(session => session.session_id === acpState.sessionId)) {
     acpState.sessionId = acpState.sessions.find(session => !session.closed)?.session_id || "";
@@ -170,8 +196,8 @@ async function createSession() {
   if (!selectedAgent()?.connected) return;
   setBusy(true);
   try {
-    const session = await serveApi("/api/acp/sessions", {
-      method: "POST", body: { agent_id: acpState.agentId }
+    const session = await serveApi(`/api/acp/agents/${encodeURIComponent(acpState.agentId)}/sessions`, {
+      method: "POST", body: {}
     });
     upsertSession(session);
     selectSession(session.session_id);
@@ -187,9 +213,7 @@ async function closeSession() {
   const session = selectedSession();
   if (!session || session.active_prompt) return;
   try {
-    const updated = await serveApi("/api/acp/close", {
-      method: "POST", body: ids()
-    });
+    const updated = await serveApi(sessionPath(), { method: "DELETE" });
     upsertSession(updated);
     renderSessionControls();
   } catch (error) {
@@ -214,10 +238,7 @@ async function resumeSession(sessionId) {
   if (!sessionId) return;
   setBusy(true);
   try {
-    const session = await serveApi("/api/acp/sessions", {
-      method: "POST",
-      body: { agent_id: acpState.agentId, resume_session_id: sessionId },
-    });
+    const session = await serveApi(sessionPath(sessionId), { method: "PUT" });
     upsertSession(session);
     renderSessionControls();
   } catch (error) {
@@ -235,9 +256,9 @@ async function sendPrompt(event) {
   const session = selectedSession();
   if (!prompt || !session || session.active_prompt) return;
   try {
-    const updated = await serveApi("/api/acp/prompt", {
+    const updated = await serveApi(`${sessionPath()}/prompts`, {
       method: "POST",
-      body: { ...ids(), prompt, ...(acpState.context ? { context: acpState.context.value } : {}) }
+      body: { prompt, ...(acpState.context ? { context: acpState.context.value } : {}) }
     });
     if (textarea) textarea.value = "";
     upsertSession(updated);
@@ -250,7 +271,7 @@ async function sendPrompt(event) {
 
 async function cancelPrompt() {
   try {
-    const updated = await serveApi("/api/acp/cancel", { method: "POST", body: ids() });
+    const updated = await serveApi(`${sessionPath()}/prompts/active`, { method: "DELETE" });
     upsertSession(updated);
     renderSessionControls();
   } catch (error) {
@@ -292,24 +313,26 @@ function usePromptAsset() {
 }
 
 function currentContext() {
-  const page = RENDER_OPTIONS?.serve_page;
-  if (page === "home" && state.selectedSourceKey) {
-    const stepId = state.selectedStep?.stepId;
+  const context = snapshotWorkspace().context || {};
+  const page = context.page;
+  if (page === "home" && context.source_key) {
+    const stepId = context.step_id;
     return {
-      label: stepId ? `${state.selectedSourceKey} · ${t("step", "Step")} ${stepId}` : state.selectedSourceKey,
-      value: { kind: "source", source_key: state.selectedSourceKey, ...(stepId ? { step_id: stepId } : {}) }
+      label: stepId ? `${context.source_key} · ${t("step", "Step")} ${stepId}` : context.source_key,
+      value: { kind: "source", source_key: context.source_key, ...(stepId ? { step_id: stepId } : {}) }
     };
   }
-  if (page === "datasets" && workbenchState.datasetId && workbenchState.taskName) {
+  if (page === "datasets" && context.dataset_id && context.task) {
     return {
-      label: `${workbenchState.datasetId} / ${workbenchState.taskName}`,
-      value: { kind: "dataset_task", dataset_id: workbenchState.datasetId, task: workbenchState.taskName }
+      label: `${context.dataset_id} / ${context.task}`,
+      value: { kind: "dataset_task", dataset_id: context.dataset_id, task: context.task }
     };
   }
-  if (page === "reports") {
-    const reportId = state.reportReader.openId || state.reportManager.selectedId;
-    const report = listValue(state.workspaceReports).find(item => item.report_id === reportId);
-    if (reportId) return { label: report?.filename || reportId, value: { kind: "report", report_id: reportId } };
+  if (page === "reports" && context.report_id) {
+    return {
+      label: context.report_name || context.report_id,
+      value: { kind: "report", report_id: context.report_id },
+    };
   }
   return null;
 }
@@ -330,18 +353,16 @@ async function pollEvents(generation) {
   let failures = 0;
   while (acpState.polling && generation === acpState.pollGeneration) {
     const query = new URLSearchParams({
-      agent_id: acpState.agentId,
-      session_id: acpState.sessionId,
-      after: String(acpState.revision),
+      cursor: String(acpState.revision),
       wait: "20",
     });
     try {
-      const payload = await serveApi(`/api/acp/events?${query}`);
+      const payload = await serveApi(`${sessionPath()}/events?${query}`);
       if (!acpState.polling || generation !== acpState.pollGeneration) return;
-      const incoming = listValue(payload?.events);
+      const incoming = listValue(payload?.events).map(event => ({ ...event, revision: event.sequence }));
       const nextEvents = payload?.reset ? incoming : mergeByRevision(acpState.events, incoming);
       const eventsChanged = JSON.stringify(nextEvents) !== JSON.stringify(acpState.events);
-      const revision = Number(payload?.revision);
+      const revision = Number(payload?.next_cursor);
       if (Number.isFinite(revision)) acpState.revision = revision;
       const sessionChanged = payload?.session
         && JSON.stringify(payload.session) !== JSON.stringify(selectedSession());
@@ -467,10 +488,10 @@ async function handleEventAction(event) {
   if (!button) return;
   button.disabled = true;
   try {
-    await serveApi("/api/acp/permission", {
+    await serveApi(`${sessionPath()}/permission-responses`, {
       method: "POST",
       body: {
-        ...ids(), request_id: button.dataset.acpRequestIdType === "string"
+        request_id: button.dataset.acpRequestIdType === "string"
           ? String(button.dataset.acpPermission)
           : numericId(button.dataset.acpPermission),
         ...(button.dataset.optionId ? { option_id: button.dataset.optionId } : {}),
@@ -487,10 +508,10 @@ async function handleSessionOption(event) {
   const control = event.target;
   try {
     if (control.matches("[data-acp-mode]")) {
-      const payload = await serveApi("/api/acp/session-mode", { method: "POST", body: { ...ids(), mode_id: control.value } });
+      const payload = await serveApi(`${sessionPath()}/mode`, { method: "PUT", body: { mode_id: control.value } });
       upsertSession(payload.session);
     } else if (control.matches("[data-acp-config]")) {
-      const payload = await serveApi("/api/acp/session-config", { method: "POST", body: { ...ids(), option_id: control.dataset.acpConfig, value: control.value } });
+      const payload = await serveApi(`${sessionPath()}/config-options/${encodeURIComponent(control.dataset.acpConfig)}`, { method: "PUT", body: { value: control.value } });
       upsertSession(payload.session);
     }
   } catch (error) {

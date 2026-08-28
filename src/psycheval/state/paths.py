@@ -7,11 +7,10 @@ from pathlib import Path
 
 from psycheval.config import (
     PEVAL_CONFIG_FILENAME,
+    PEVAL_ROOT_ENV,
     default_workspace_config_text,
 )
 from psycheval.state.constants import SERVE_LOG_RELATIVE_PATH
-
-PEVAL_ROOT_ENV = "PEVAL_ROOT"
 
 
 @dataclass(frozen=True)

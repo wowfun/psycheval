@@ -193,7 +193,7 @@ class HarborTrialTests(unittest.TestCase):
                 'path = "../jobs"\ndataset_ids = ["pbench"]\n',
                 encoding="utf-8",
             )
-            config = load_config(None, workspace_root=str(workspace))
+            config = load_config(workspace_root=str(workspace))
             self.assertEqual(config.harbor_mounts[0].id, "jobs-2026-08-08")
             self.assertEqual(config.harbor_mounts[0].path, str(jobs.absolute()))
             self.assertEqual(
@@ -214,7 +214,9 @@ class HarborTrialTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "duplicate harbor mount id"):
                 apply_toml_config(ToolConfig(), duplicate_id)
-            with self.assertRaisesRegex(ValueError, "legacy .*roots"):
+            with self.assertRaisesRegex(
+                ValueError, "harbor.roots: unknown configuration field"
+            ):
                 apply_toml_config(ToolConfig(), {"harbor": {"roots": [str(jobs)]}})
             with self.assertRaisesRegex(ValueError, "lowercase path-safe"):
                 apply_toml_config(
@@ -263,7 +265,9 @@ class HarborTrialTests(unittest.TestCase):
                         }
                     },
                 )
-            with self.assertRaisesRegex(ValueError, "task_paths.*no longer"):
+            with self.assertRaisesRegex(
+                ValueError, "harbor.mounts.0.task_paths: unknown configuration field"
+            ):
                 apply_toml_config(
                     ToolConfig(),
                     {
@@ -291,7 +295,7 @@ class HarborTrialTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch("psycheval.config.WINDOWS_DRIVE_MOUNT_ROOT", base / "mnt"):
-                config = load_config(None, workspace_root=str(workspace))
+                config = load_config(workspace_root=str(workspace))
             self.assertEqual(config.harbor_mounts[0].path, str(mapped.absolute()))
 
     def test_only_configured_jobs_roots_are_discovered(self) -> None:

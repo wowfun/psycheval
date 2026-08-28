@@ -122,23 +122,9 @@ class StateQueryMixin:
                 workspace_root=str(self.paths.root),
                 analysis_eval_slug=eval_slug,
             )
-        return ToolConfig(
-            adapter=config.adapter,
-            locale=config.locale,
+        return config.validated_update(
             workspace_root=str(self.paths.root),
             analysis_eval_slug=eval_slug,
-            agent_name=config.agent_name,
-            agent_version=config.agent_version,
-            model=config.model,
-            max_content_chars=config.max_content_chars,
-            max_content_chars_explicit=config.max_content_chars_explicit,
-            redact=config.redact,
-            db=config.db,
-            adapter_options=config.adapter_options,
-            adapter_options_by_id=config.adapter_options_by_id,
-            adapter_default_db_paths=config.adapter_default_db_paths,
-            harbor_datasets=config.harbor_datasets,
-            harbor_mounts=config.harbor_mounts,
         )
 
     def source_rows(

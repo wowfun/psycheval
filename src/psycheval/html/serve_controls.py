@@ -24,6 +24,7 @@ def render_serve_header(
     links = "".join(
         f'<a href="{href}" class="workspace-nav-link'
         f'{" active" if key == page else ""}"'
+        f' data-workspace-route="{key}"'
         f"{' aria-current="page"' if key == page else ''}>{escape(label)}</a>"
         for key, href, label in pages
     )
@@ -58,12 +59,13 @@ def render_serve_header(
     return f"""
   <header class="workspace-header">
     <div class="workspace-header-left">
-      <a class="workspace-brand" href="/">__TITLE__</a>
+      <a class="workspace-brand" href="/" data-workspace-route="home">__TITLE__</a>
       <nav class="workspace-nav" aria-label="{escape(messages["workspace_navigation"])}">
         {links}
       </nav>
     </div>
     <div class="workspace-utilities">
+      <p class="workspace-shell-status" data-global-shell-status role="status" aria-live="polite" hidden></p>
       {auth_control}
       {language}
     </div>
@@ -151,6 +153,7 @@ def render_serve_report_page(messages: dict[str, str], *, role: str = "admin") -
             "RELOAD": escape(messages["serve_reload"]),
             "REPORT_INVENTORY": escape(messages["report_inventory"]),
             "REPORT_BINDINGS": escape(messages["report_bindings"]),
+            "REPORT_SEARCH_SESSIONS": escape(messages["report_search_sessions"]),
             "REPORT_BINDINGS_HIDDEN": " hidden" if role != "admin" else "",
             "REPORT_MANAGER_BODY_CLASS": " readonly" if role != "admin" else "",
         },
@@ -206,19 +209,16 @@ def render_view_save_dialog(messages: dict[str, str], *, role: str = "admin") ->
 def render_serve_overlays(
     messages: dict[str, str],
     *,
-    page: str,
     role: str,
     authentication_enabled: bool,
 ) -> str:
     parts: list[str] = []
     if role != "admin" and authentication_enabled:
         parts.append(render_auth_dialog(messages))
-    if page == "home":
-        parts.append(render_view_save_dialog(messages, role=role))
-    if page in {"home", "reports"}:
-        parts.append(
-            '<aside class="report-reader" id="workspace-report-reader" hidden></aside>'
-        )
+    parts.append(render_view_save_dialog(messages, role=role))
+    parts.append(
+        '<aside class="report-reader" id="workspace-report-reader" hidden></aside>'
+    )
     if role == "admin":
         parts.append(render_acp_drawer(messages))
     return "".join(parts)
@@ -243,6 +243,7 @@ def render_acp_drawer(messages: dict[str, str]) -> str:
       </label>
       <button class="action-button" type="button" data-acp-connect>{escape(messages["acp_connect"])}</button>
       <a class="action-button acp-configure" href="/config#acp-agents-title"
+        data-workspace-route="config"
         data-acp-configure hidden>{escape(messages["acp_configure_agents"])}</a>
       <span class="acp-protocol" data-acp-protocol>ACP · —</span>
       <label class="acp-session-control"><span>{escape(messages["acp_session"])}</span>

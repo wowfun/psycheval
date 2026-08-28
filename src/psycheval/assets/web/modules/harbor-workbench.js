@@ -1,6 +1,6 @@
-import { adminMode, esc, listValue, t } from "./runtime.js";
+import { adminMode, esc, listValue, t } from "./shared.js";
 import { applyDataTableControls, bindDataTableControls, renderDataTable, selectionColumn, tableControls } from "./data-tables.js";
-import { serveApi } from "./serve-effects.js";
+import { serveApi } from "./http.js";
 import { createTaskBrowser } from "./harbor-task-browser.js";
 
 const HARBOR_TABLE_ID = "harbor-datasets";
@@ -54,7 +54,7 @@ function workbenchTaskBrowser() {
     taskBrowser = createTaskBrowser({
       root,
       editable: adminMode(),
-      readFile: (taskRef, path) => serveApi(`/api/harbor/files?dataset_id=${encodeURIComponent(taskRef.dataset_id)}&task=${encodeURIComponent(taskRef.task)}&path=${encodeURIComponent(path)}`),
+      readFile: (taskRef, path) => serveApi(`/api/harbor/datasets/${encodeURIComponent(taskRef.dataset_id)}/tasks/${encodeURIComponent(taskRef.task)}/files/${encodeURIComponent(path)}`),
       onContextMenu: adminMode() ? item => fileActionMenu(item) : null,
       onError: error => setWorkbenchStatus(error?.message || String(error), true),
     });
@@ -365,7 +365,7 @@ async function loadSelectedTask() {
   clearEditor();
   renderFileTree();
   try {
-    const detail = await serveApi(`/api/harbor/task?dataset_id=${encodeURIComponent(datasetId)}&task=${encodeURIComponent(taskName)}`);
+    const detail = await serveApi(`/api/harbor/datasets/${encodeURIComponent(datasetId)}/tasks/${encodeURIComponent(taskName)}`);
     if (requestId !== workbenchState.taskRequestId || datasetId !== workbenchState.datasetId || taskName !== workbenchState.taskName) return;
     workbenchState.taskDetail = detail;
     renderHarborWorkbench();
@@ -434,27 +434,41 @@ async function saveFile() {
   }
   const task = selectedTask();
   if (!task) return;
-  await mutateFiles({ action: "save", path: file.path, content: file.content, expected_revision: task.revision }, { reopen: file.path });
+  await mutateFiles({ action: "save", path: file.path, content: file.content, expected_revision: file.revision || task.revision }, { reopen: file.path });
 }
 
 async function mutateFiles(body, options = {}) {
   if (!adminMode() || workbenchState.busy) return null;
   setWorkbenchBusy(true);
   try {
-    const payload = await serveApi("/api/harbor/files", {
-      method: "POST",
-      body: { ...body, dataset_id: workbenchState.datasetId, task: workbenchState.taskName },
+    const base = `/api/harbor/datasets/${encodeURIComponent(workbenchState.datasetId)}/tasks/${encodeURIComponent(workbenchState.taskName)}`;
+    const filePath = body.path ? `/${encodeURIComponent(body.path)}` : "";
+    let path = `${base}/files${filePath}`;
+    let method = "POST";
+    let requestBody;
+    if (body.action === "save") {
+      method = "PUT";
+      requestBody = { content: body.content };
+    } else if (body.action === "rename") {
+      method = "PATCH";
+      requestBody = { new_path: body.new_path };
+    } else if (body.action === "delete") {
+      method = "DELETE";
+    } else {
+      path = `${base}/files`;
+      requestBody = {
+        kind: body.action === "upload" ? "upload" : body.kind,
+        path: body.path,
+        content: body.action === "upload" ? body.content_base64 : undefined,
+      };
+    }
+    const operation = await serveApi(path, {
+      method,
+      body: requestBody,
+      ifMatch: body.expected_revision,
     });
-    workbenchState.taskDetail = payload.result;
-    trackOperation(payload.operation, { preserveTaskBrowser: true });
-    await refreshHarborInventory({ quiet: true, skipGuard: true, skipTaskReload: true });
-    await workbenchTaskBrowser()?.setTaskDetail(payload.result, {
-      taskRef: { dataset_id: workbenchState.datasetId, task: workbenchState.taskName },
-      preferredPath: options.reopen || null,
-      preserveCurrent: true,
-      focus: Boolean(options.reopen),
-    });
-    return payload;
+    trackOperation(operation, { reopen: options.reopen || null });
+    return operation;
   } catch (error) {
     setWorkbenchStatus(error.message || String(error), true);
     return null;
@@ -467,14 +481,47 @@ async function mutateTasks(body, datasetId = workbenchState.datasetId, options =
   if (!adminMode() || workbenchState.busy) return null;
   setWorkbenchBusy(true);
   try {
-    const payload = await serveApi("/api/harbor/tasks", {
-      method: "POST",
-      body: { ...body, dataset_id: datasetId },
+    const base = `/api/harbor/datasets/${encodeURIComponent(datasetId)}`;
+    let path = `${base}/tasks`;
+    let method = "POST";
+    let requestBody;
+    if (body.action === "create") {
+      requestBody = { directory: body.directory, package_name: body.package_name, steps: body.steps };
+    } else {
+      path = body.action === "rename_archived"
+        ? `${base}/archived-tasks/${encodeURIComponent(body.entry_id)}`
+        : `${base}/tasks/${encodeURIComponent(body.task)}`;
+      method = "PATCH";
+      requestBody = { new_directory: body.new_directory };
+    }
+    const operation = await serveApi(path, {
+      method,
+      body: requestBody,
+      ifMatch: body.expected_revision,
     });
-    trackOperation(payload.operation);
+    if (body.action === "rename" || body.action === "rename_archived") {
+      const datasets = listValue(workbenchState.inventory?.datasets).map(dataset => {
+        if (dataset.id !== datasetId) return dataset;
+        if (body.action === "rename") {
+          return {
+            ...dataset,
+            tasks: listValue(dataset.tasks).map(task => task.directory === body.task
+              ? { ...task, directory: body.new_directory }
+              : task),
+          };
+        }
+        return {
+          ...dataset,
+          trash: listValue(dataset.trash).map(entry => entry.entry_id === body.entry_id
+            ? { ...entry, directory: body.new_directory }
+            : entry),
+        };
+      });
+      workbenchState.inventory = { ...workbenchState.inventory, datasets };
+    }
+    trackOperation(operation, options);
     clearEditor();
-    await refreshHarborInventory({ quiet: true, skipGuard: true });
-    return payload;
+    return operation;
   } catch (error) {
     if (options.rethrow) throw error;
     setWorkbenchStatus(error.message || String(error), true);
@@ -499,8 +546,11 @@ async function createTask() {
     setWorkbenchStatus(t("harbor_steps_invalid", "Step count must be an integer from 0 to 50"), true);
     return;
   }
-  const result = await mutateTasks({ action: "create", directory: directory.trim(), package_name: packageName.trim(), steps, expected_revision: dataset.revision });
-  if (result) await selectTask(directory.trim());
+  await mutateTasks(
+    { action: "create", directory: directory.trim(), package_name: packageName.trim(), steps, expected_revision: dataset.revision },
+    dataset.id,
+    { selectTask: directory.trim() },
+  );
 }
 
 async function renameOverviewTask(row, value) {
@@ -546,8 +596,8 @@ function selectedTaskRows() {
 
 function taskOperationItem(row) {
   return row.kind === "trash"
-    ? { dataset_id: row.dataset.id, entry_id: row.entry.entry_id, directory: row.entry.directory || "", expected_revision: row.entry.revision }
-    : { dataset_id: row.dataset.id, task: row.task.directory, expected_revision: row.task.revision };
+    ? { dataset_id: row.dataset.id, entry_id: row.entry.entry_id, directory: row.entry.directory || "", etag: row.entry.revision }
+    : { dataset_id: row.dataset.id, task: row.task.directory, etag: row.task.revision };
 }
 
 async function mutateSelectedTaskState() {
@@ -556,7 +606,7 @@ async function mutateSelectedTaskState() {
   if (!rows.length) return;
   setWorkbenchBusy(true);
   try {
-    const operation = await serveApi("/api/harbor/tasks/state", {
+    const operation = await serveApi("/api/harbor/task-state-operations", {
       method: "POST",
       body: { archived: !workbenchState.showTrash, items: rows.map(taskOperationItem) },
     });
@@ -574,7 +624,7 @@ async function deleteSelectedTasks() {
   if (!rows.length || !window.confirm(t("harbor_delete_selected_confirm", "Permanently delete selected Tasks? This cannot be undone."))) return;
   setWorkbenchBusy(true);
   try {
-    const operation = await serveApi("/api/harbor/tasks/delete", {
+    const operation = await serveApi("/api/harbor/task-deletion-operations", {
       method: "POST",
       body: { items: rows.map(taskOperationItem) },
     });
@@ -591,9 +641,10 @@ async function syncManifest() {
   if (!adminMode() || !dataset) return;
   setWorkbenchBusy(true);
   try {
-    const summary = await serveApi("/api/harbor/tasks/manifest", {
-      method: "POST",
-      body: { dataset_id: dataset.id, expected_revision: dataset.revision },
+    const summary = await serveApi(`/api/harbor/datasets/${encodeURIComponent(dataset.id)}/manifest`, {
+      method: "PUT",
+      body: {},
+      ifMatch: dataset.revision,
     });
     const datasets = listValue(workbenchState.inventory?.datasets).map(item => item.id === summary.id ? summary : item);
     workbenchState.inventory = { ...workbenchState.inventory, datasets };
@@ -652,7 +703,7 @@ async function fileActionMenu(item) {
 }
 
 function trackOperation(operation, options = {}) {
-  const operationId = operation?.operation_id;
+  const operationId = operation?.id;
   if (operationId) {
     trackedWorkbenchOperations.add(operationId);
     syncWorkbenchBusyState();
@@ -665,7 +716,7 @@ async function pollHarborOperation(operationId, options = {}) {
   try {
     const operation = await serveApi(`/api/operations/${encodeURIComponent(operationId)}`);
     const node = workbenchRoot()?.querySelector?.("[data-harbor-operation-status]");
-    if (node) node.textContent = `${operation.operation_type}: ${operation.completed}/${operation.total}`;
+    if (node) node.textContent = `${operation.kind}: ${operation.completed}/${operation.total}`;
     if (operation.state === "queued" || operation.state === "running") {
       setTimeout(() => pollHarborOperation(operationId, options), 250);
       return;
@@ -681,9 +732,20 @@ async function pollHarborOperation(operationId, options = {}) {
     await refreshHarborInventory({
       quiet: true,
       skipGuard: true,
-      skipTaskReload: Boolean(options.preserveTaskBrowser),
+      skipTaskReload: false,
     });
     const failures = listValue(operation.failures);
+    if (options.selectTask && operation.state !== "failed" && !failures.length) {
+      await selectTask(options.selectTask);
+    }
+    if (options.reopen && workbenchState.taskDetail) {
+      await workbenchTaskBrowser()?.setTaskDetail(workbenchState.taskDetail, {
+        taskRef: { dataset_id: workbenchState.datasetId, task: workbenchState.taskName },
+        preferredPath: options.reopen,
+        preserveCurrent: false,
+        focus: true,
+      });
+    }
     if (operation.state === "failed" || failures.length) {
       setWorkbenchStatus(failures[0]?.error || t("harbor_reconcile_failed", "Catalog reconcile failed"), true);
     } else setWorkbenchStatus("");

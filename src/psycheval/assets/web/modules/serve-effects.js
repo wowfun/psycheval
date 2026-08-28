@@ -1,5 +1,7 @@
-import { RENDER_OPTIONS, adminMode, authenticationEnabled, currentServeSourceMode, listValue, normalizeServeSourceMode, readableServeSources, selectedKey, sourceTagsFromValue, state, t } from "./runtime.js";
+import { currentServeSourceMode, normalizeServeSourceMode, readableServeSources, selectedKey, sourceTagsFromValue, state } from "./runtime.js";
 import { applyLeaderboardSearchMode, applyServeMutationPayload, refreshSourceCategoryOptions } from "./serve-catalog.js";
+import { reloadExpiredAdminSession, serveApi, serveEtag } from "./http.js";
+import { adminMode, listValue, t } from "./shared.js";
 
 function formPayload(form) {
   const formData = new FormData(form);
@@ -72,14 +74,14 @@ async function commitSourceCellEdit(row, field, value) {
   const body = action === "category"
     ? { category: String(value || "").trim() }
     : {
-        report_source_state: currentServeSourceMode(),
         [action]: action === "tags" ? listValue(value) : String(value || "").trim()
       };
   try {
-    const payload = await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}/${action}`, {
-      method: "POST",
+    await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}`, {
+      method: "PATCH",
       body
     });
+    const payload = await serveApi("/api/sources");
     const updated = listValue(payload?.sources).find(source => source?.source_key === sourceKey);
     if (updated) Object.assign(row, updated);
     else if (action === "category") row.source_category = body.category || null;
@@ -127,47 +129,6 @@ function emptyServeReport() {
     trajectory_meta: []
   };
 }
-function reloadExpiredAdminSession(response) {
-  if (response?.status !== 403 || !adminMode() || !authenticationEnabled()) return false;
-  if (RENDER_OPTIONS?.serve_page === "config") window.location.assign("/");
-  else window.location.reload();
-  return true;
-}
-async function serveApi(path, options = {}) {
-  const headers = { ...(options.headers || {}) };
-  let body = options.body;
-  if (body !== undefined && typeof body !== "string") {
-    headers["Content-Type"] = "application/json";
-    body = JSON.stringify(body);
-  }
-  const response = await fetch(path, {
-    method: options.method || "GET",
-    headers,
-    body,
-    credentials: "same-origin"
-  });
-  const text = await response.text();
-  if (!response.ok) reloadExpiredAdminSession(response);
-  let payload = {};
-  if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch (cause) {
-      const message = response.ok
-        ? t("serve_invalid_json_response", "Server returned an invalid JSON response")
-        : response.statusText || `HTTP ${response.status}`;
-      const error = new Error(message, { cause });
-      error.status = response.status;
-      throw error;
-    }
-  }
-  if (!response.ok) {
-    const error = new Error(payload?.error || response.statusText);
-    error.status = response.status;
-    throw error;
-  }
-  return payload;
-}
 function clearServeReportCacheExcept(mode) {
   const keep = normalizeServeSourceMode(mode);
   state.serveReportCache = Object.fromEntries(
@@ -212,6 +173,7 @@ export {
   reportHasTrialKey,
   selectedAdapterValue,
   serveApi,
+  serveEtag,
   setAdapterChoice,
   setServeStatus,
   showServeNotice,

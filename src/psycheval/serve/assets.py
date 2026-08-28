@@ -55,6 +55,12 @@ def packaged_web_asset(path: str) -> bytes:
     return resource.read_bytes()
 
 
+def packaged_web_asset_with_etag(path: str) -> tuple[bytes, str]:
+    data = packaged_web_asset(path)
+    digest = hashlib.sha256(data).hexdigest()
+    return data, f'"{digest}"'
+
+
 @lru_cache(maxsize=1)
 def workspace_stylesheet_asset() -> tuple[bytes, str]:
     data = load_workspace_stylesheet().encode("utf-8")

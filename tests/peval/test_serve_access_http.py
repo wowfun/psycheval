@@ -10,14 +10,13 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from psycheval.config import ToolConfig
+from psycheval.config import HarborMount, ToolConfig
 from psycheval.serve import (
-    LocalHTTPServer,
     ServeAccess,
     ServeRuntime,
-    make_handler,
 )
 from psycheval.state import CatalogQuery, open_workspace_state
+from tests.peval.asgi_server import LocalHTTPServer, make_handler
 from tests.peval.cli_inputs_support import write_trial_cell_artifacts
 
 
@@ -96,6 +95,40 @@ class ServeAccessHttpTests(unittest.TestCase):
         thread.join(timeout=5)
         store.close()
 
+    def test_guest_cannot_read_harbor_mount_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs = root / "private-jobs"
+            jobs.mkdir()
+            (root / "peval.toml").write_text("", encoding="utf-8")
+            store = open_workspace_state(str(root))
+            runtime = ServeRuntime(
+                store,
+                ToolConfig(
+                    workspace_root=str(root),
+                    harbor_mounts=(
+                        HarborMount(id="private", path=str(jobs), dataset_ids=()),
+                    ),
+                ),
+            )
+            server = LocalHTTPServer(
+                ("127.0.0.1", 0),
+                make_handler(
+                    runtime,
+                    access=ServeAccess("correct horse battery staple"),
+                ),
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                status, _headers, body = self.request(
+                    server, "GET", "/api/harbor/mounts"
+                )
+                self.assertEqual(status, 403)
+                self.assertNotIn(str(jobs), body.decode("utf-8"))
+            finally:
+                self.stop(store, server, thread)
+
     def test_guest_login_admin_logout_and_fail_closed_authorization(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -107,7 +140,7 @@ class ServeAccessHttpTests(unittest.TestCase):
             store, runtime, server, thread = self.running_server(root)
             source_key = runtime.catalog.query(CatalogQuery()).items[0].source_key
             try:
-                status, headers, body = self.request(server, "GET", "/api/auth/session")
+                status, headers, body = self.request(server, "GET", "/api/session")
                 self.assertEqual(status, 200)
                 self.assertEqual(
                     json.loads(body),
@@ -127,7 +160,9 @@ class ServeAccessHttpTests(unittest.TestCase):
                     flags=re.DOTALL,
                 )
                 self.assertIn(b"data-admin-login-open", guest_markup)
-                self.assertNotIn(b"data-harbor-workbench", guest_markup)
+                self.assertIn(b"data-harbor-workbench", guest_markup)
+                self.assertIn(b"data-report-manager", guest_markup)
+                self.assertNotIn(b"data-config-page", guest_markup)
                 self.assertIn(b'href="/datasets"', guest_markup)
                 self.assertIn(b'href="/reports"', guest_markup)
                 self.assertNotIn(b'href="/config"', guest_markup)
@@ -155,7 +190,8 @@ class ServeAccessHttpTests(unittest.TestCase):
                         headers["content-type"],
                         "application/javascript; charset=utf-8",
                     )
-                    self.assertEqual(headers["cache-control"], "no-store")
+                    self.assertEqual(headers["cache-control"], "no-cache")
+                    self.assertRegex(headers["etag"], r'^"[0-9a-f]{64}"$')
                     self.assertTrue(asset.strip())
                 status, headers, stylesheet = self.request(
                     server, "GET", "/assets/peval/workspace.css"
@@ -200,12 +236,10 @@ class ServeAccessHttpTests(unittest.TestCase):
 
                 status, _headers, body = self.request(server, "GET", "/api/sources")
                 self.assertEqual(status, 403)
-                self.assertIn("administrator", json.loads(body)["error"])
-                status, _headers, body = self.request(
-                    server, "GET", "/api/config/harbor"
-                )
+                self.assertIn("administrator", json.loads(body)["detail"])
+                status, _headers, body = self.request(server, "GET", "/api/config")
                 self.assertEqual(status, 403)
-                self.assertIn("administrator", json.loads(body)["error"])
+                self.assertIn("administrator", json.loads(body)["detail"])
                 status, _headers, body = self.request(
                     server, "GET", "/api/harbor/datasets"
                 )
@@ -238,21 +272,21 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, _headers, _body = self.request(
                     server,
                     "POST",
-                    "/api/harbor/tasks",
+                    "/api/harbor/datasets",
                     {"action": "create"},
                 )
                 self.assertEqual(status, 403)
                 status, _headers, _body = self.request(
                     server,
-                    "POST",
-                    f"/api/sources/{source_key}/alias",
+                    "PATCH",
+                    f"/api/sources/{source_key}",
                     {"alias": "forbidden"},
                 )
                 self.assertEqual(status, 403)
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/catalog/resolve",
+                    "/api/source-key-resolutions",
                     {"source_keys": [source_key]},
                 )
                 self.assertEqual(status, 200)
@@ -260,12 +294,12 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, _headers, _body = self.request(
                     server, "GET", "/api/not-classified-yet"
                 )
-                self.assertEqual(status, 403)
+                self.assertEqual(status, 404)
 
                 status, _headers, _body = self.request(
                     server,
                     "POST",
-                    "/api/auth/login",
+                    "/api/session",
                     {"password": "correct horse battery staple"},
                     origin="http://attacker.invalid",
                 )
@@ -273,14 +307,14 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, _headers, _body = self.request(
                     server,
                     "POST",
-                    "/api/auth/login",
+                    "/api/session",
                     {"password": "wrong"},
                 )
                 self.assertEqual(status, 401)
                 status, headers, body = self.request(
                     server,
                     "POST",
-                    "/api/auth/login",
+                    "/api/session",
                     {"password": "correct horse battery staple"},
                 )
                 self.assertEqual(status, 200, body)
@@ -293,7 +327,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 cookie = set_cookie.split(";", 1)[0]
 
                 status, _headers, body = self.request(
-                    server, "GET", "/api/auth/session", cookie=cookie
+                    server, "GET", "/api/session", cookie=cookie
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(json.loads(body)["role"], "admin")
@@ -311,7 +345,9 @@ class ServeAccessHttpTests(unittest.TestCase):
                 self.assertIn(b'href="/datasets"', admin_markup)
                 self.assertIn(b'href="/reports"', admin_markup)
                 self.assertIn(b'href="/config"', admin_markup)
-                self.assertNotIn(b"data-harbor-workbench", admin_markup)
+                self.assertIn(b"data-harbor-workbench", admin_markup)
+                self.assertIn(b"data-report-manager", admin_markup)
+                self.assertIn(b"data-config-page", admin_markup)
                 self.assertLess(
                     admin_markup.index(b'href="/datasets"'),
                     admin_markup.index(b'href="/reports"'),
@@ -335,7 +371,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                     flags=re.DOTALL,
                 )
                 self.assertIn(b"data-harbor-workbench", admin_datasets_markup)
-                self.assertNotIn(b"data-config-page", admin_datasets_markup)
+                self.assertIn(b"data-config-page", admin_datasets_markup)
                 status, _headers, admin_reports = self.request(
                     server, "GET", "/reports", cookie=cookie
                 )
@@ -347,7 +383,8 @@ class ServeAccessHttpTests(unittest.TestCase):
                     flags=re.DOTALL,
                 )
                 self.assertIn(b"data-report-manager", admin_reports_markup)
-                self.assertNotIn(b"data-harbor-workbench", admin_reports_markup)
+                self.assertIn(b"data-harbor-workbench", admin_reports_markup)
+                self.assertIn(b"data-config-page", admin_reports_markup)
                 status, _headers, admin_config = self.request(
                     server, "GET", "/config", cookie=cookie
                 )
@@ -359,18 +396,17 @@ class ServeAccessHttpTests(unittest.TestCase):
                     flags=re.DOTALL,
                 )
                 self.assertIn(b"data-config-page", admin_config_markup)
-                self.assertNotIn(b"data-report-manager", admin_config_markup)
+                self.assertIn(b"data-report-manager", admin_config_markup)
+                self.assertIn(b"data-harbor-workbench", admin_config_markup)
                 status, _headers, _body = self.request(
                     server, "GET", "/sources", cookie=cookie
                 )
                 self.assertEqual(status, 404)
                 status, _headers, body = self.request(
-                    server, "GET", "/api/config/harbor", cookie=cookie
+                    server, "GET", "/api/config", cookie=cookie
                 )
                 self.assertEqual(status, 200, body)
-                self.assertEqual(
-                    set(json.loads(body)), {"revision", "datasets", "mounts"}
-                )
+                self.assertIn("acp_agents", json.loads(body))
                 status, _headers, body = self.request(
                     server, "GET", "/api/sources", cookie=cookie
                 )
@@ -378,8 +414,8 @@ class ServeAccessHttpTests(unittest.TestCase):
                 self.assertIn("sources", json.loads(body))
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    f"/api/sources/{source_key}/alias",
+                    "PATCH",
+                    f"/api/sources/{source_key}",
                     {"alias": "admin edit"},
                     cookie=cookie,
                 )
@@ -387,8 +423,8 @@ class ServeAccessHttpTests(unittest.TestCase):
 
                 status, headers, body = self.request(
                     server,
-                    "POST",
-                    "/api/auth/logout",
+                    "DELETE",
+                    "/api/session",
                     {},
                     cookie=cookie,
                 )
@@ -404,14 +440,14 @@ class ServeAccessHttpTests(unittest.TestCase):
                     status, _headers, _body = self.request(
                         server,
                         "POST",
-                        "/api/auth/login",
+                        "/api/session",
                         {"password": "wrong again"},
                     )
                     self.assertEqual(status, 401)
                 status, headers, _body = self.request(
                     server,
                     "POST",
-                    "/api/auth/login",
+                    "/api/session",
                     {"password": "wrong again"},
                 )
                 self.assertEqual(status, 429)
@@ -440,7 +476,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(server, "GET", "/api/reports")
                 self.assertEqual(status, 200, body)
 
-                reports = json.loads(body)["reports"]
+                reports = json.loads(body)
                 self.assertEqual([item["report_id"] for item in reports], [report_id])
 
                 status, headers, body = self.request(
@@ -452,7 +488,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 self.assertNotIn(b"<script>blocked()", body)
 
                 status, headers, body = self.request(
-                    server, "GET", f"/api/reports/{report_id}/open"
+                    server, "GET", f"/api/reports/{report_id}/reader"
                 )
                 self.assertEqual(status, 200, body)
                 self.assertIn('sandbox="allow-scripts"', body.decode())
@@ -460,9 +496,9 @@ class ServeAccessHttpTests(unittest.TestCase):
 
                 status, _headers, body = self.request(server, "GET", "/api/views")
                 self.assertEqual(status, 200, body)
-                self.assertEqual(json.loads(body), {"views": []})
+                self.assertEqual(json.loads(body), [])
                 status, _headers, body = self.request(
-                    server, "GET", "/api/views/summary"
+                    server, "GET", "/api/view-summaries"
                 )
                 self.assertEqual(status, 200, body)
                 self.assertEqual(json.loads(body)["views"], [])
@@ -476,7 +512,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/catalog/query",
+                    "/api/catalog-queries",
                     {
                         "state": "active",
                         "page": 1,
@@ -516,7 +552,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/catalog/summary",
+                    "/api/catalog-summaries",
                     summary_query,
                 )
                 self.assertEqual(status, 200, body)
@@ -524,7 +560,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, _headers, _body = self.request(
                     server,
                     "POST",
-                    "/api/catalog/summary",
+                    "/api/catalog-summaries",
                     summary_query,
                     origin="http://attacker.invalid",
                 )
@@ -532,7 +568,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/views/summary",
+                    "/api/view-summaries",
                     {"browser_views": [browser_view]},
                 )
                 self.assertEqual(status, 200, body)
@@ -540,7 +576,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, _headers, _body = self.request(
                     server,
                     "POST",
-                    "/api/views/summary",
+                    "/api/view-summaries",
                     {"browser_views": [browser_view]},
                     origin="http://attacker.invalid",
                 )
@@ -616,7 +652,7 @@ class ServeAccessHttpTests(unittest.TestCase):
             source_key = runtime.catalog.query(CatalogQuery()).items[0].source_key
             try:
                 status, _headers, body = self.request(
-                    server, "GET", f"/api/report?source_key={source_key}"
+                    server, "GET", f"/api/sources/{source_key}"
                 )
                 self.assertEqual(status, 200, body)
                 guest_report = json.loads(body)["report"]
@@ -674,7 +710,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, headers, login_body = self.request(
                     server,
                     "POST",
-                    "/api/auth/login",
+                    "/api/session",
                     {"password": "correct horse battery staple"},
                 )
                 self.assertEqual(status, 200, login_body)
@@ -682,7 +718,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, _headers, admin_body = self.request(
                     server,
                     "GET",
-                    f"/api/report?source_key={source_key}",
+                    f"/api/sources/{source_key}",
                     cookie=cookie,
                 )
                 self.assertEqual(status, 200, admin_body)
@@ -718,13 +754,13 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, headers, body = self.request(
                     server,
                     "POST",
-                    "/api/auth/login",
+                    "/api/session",
                     {"password": "correct horse battery staple"},
                 )
                 self.assertEqual(status, 200, body)
                 cookie = headers["set-cookie"].split(";", 1)[0]
 
-                status, _headers, body = self.request(
+                status, config_headers, body = self.request(
                     server, "GET", "/api/config", cookie=cookie
                 )
                 self.assertEqual(status, 200, body)
@@ -733,17 +769,20 @@ class ServeAccessHttpTests(unittest.TestCase):
 
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    "/api/config/acp/agents",
+                    "PATCH",
+                    "/api/config",
                     {
-                        "action": "upsert",
-                        "agent_id": "opencode",
-                        "title": "OpenCode",
-                        "command": "opencode",
-                        "args": ["acp"],
-                        "expected_revision": snapshot["revision"],
+                        "acp_agents": [
+                            {
+                                "id": "opencode",
+                                "title": "OpenCode",
+                                "command": "opencode",
+                                "args": ["acp"],
+                            }
+                        ]
                     },
                     cookie=cookie,
+                    request_headers={"If-Match": config_headers["etag"]},
                 )
                 self.assertEqual(status, 200, body)
                 configured = json.loads(body)
@@ -753,53 +792,41 @@ class ServeAccessHttpTests(unittest.TestCase):
                     (root / "peval.toml").read_text(encoding="utf-8"),
                 )
 
-                status, _headers, _body = self.request(
+                status, configured_headers, _body = self.request(
                     server,
-                    "POST",
-                    "/api/config/acp/agents",
+                    "PATCH",
+                    "/api/config",
                     {
-                        "action": "upsert",
-                        "agent_id": "stale",
-                        "title": "Stale",
-                        "command": "stale",
-                        "args": [],
-                        "expected_revision": snapshot["revision"],
+                        "acp_agents": [
+                            {
+                                "id": "stale",
+                                "title": "Stale",
+                                "command": "stale",
+                                "args": [],
+                            }
+                        ]
                     },
                     cookie=cookie,
+                    request_headers={"If-Match": config_headers["etag"]},
                 )
-                self.assertEqual(status, 409)
-                status, _headers, _body = self.request(
-                    server,
-                    "POST",
-                    "/api/config/acp/agents",
-                    {
-                        "action": "delete",
-                        "agent_ids": ["missing"],
-                        "expected_revision": configured["revision"],
-                    },
-                    cookie=cookie,
-                )
-                self.assertEqual(status, 404)
+                self.assertEqual(status, 412)
+                self.assertIn("etag", configured_headers)
 
                 status, _headers, body = self.request(
                     server, "GET", "/api/prompts", cookie=cookie
                 )
                 self.assertEqual(status, 200, body)
-                prompt = json.loads(body)["prompts"][0]
+                prompt = json.loads(body)[0]
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    "/api/prompts",
-                    {
-                        "action": "save",
-                        "prompt_id": prompt["id"],
-                        "content": "# Workspace review\n\nUse local criteria.\n",
-                        "expected_revision": prompt["revision"],
-                    },
+                    "PUT",
+                    f"/api/prompts/{prompt['id']}",
+                    {"content": "# Workspace review\n\nUse local criteria.\n"},
                     cookie=cookie,
+                    request_headers={"If-Match": f'"{prompt["revision"]}"'},
                 )
                 self.assertEqual(status, 200, body)
-                customized = json.loads(body)["prompt"]
+                customized = json.loads(body)
                 self.assertTrue(customized["customized"])
                 self.assertEqual(
                     (root / "prompts" / prompt["filename"]).read_text(encoding="utf-8"),
@@ -808,29 +835,23 @@ class ServeAccessHttpTests(unittest.TestCase):
 
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    "/api/prompts",
-                    {
-                        "action": "reset",
-                        "prompt_id": prompt["id"],
-                        "expected_revision": customized["revision"],
-                    },
+                    "DELETE",
+                    f"/api/prompts/{prompt['id']}/override",
+                    None,
                     cookie=cookie,
+                    request_headers={"If-Match": f'"{customized["revision"]}"'},
                 )
                 self.assertEqual(status, 200, body)
-                self.assertFalse(json.loads(body)["prompt"]["customized"])
+                self.assertFalse(json.loads(body)["customized"])
                 self.assertFalse((root / "prompts" / prompt["filename"]).exists())
 
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    "/api/config/acp/agents",
-                    {
-                        "action": "delete",
-                        "agent_ids": ["opencode"],
-                        "expected_revision": configured["revision"],
-                    },
+                    "PATCH",
+                    "/api/config",
+                    {"acp_agents": []},
                     cookie=cookie,
+                    request_headers={"If-Match": configured_headers["etag"]},
                 )
                 self.assertEqual(status, 200, body)
                 self.assertEqual(json.loads(body)["acp_agents"], [])

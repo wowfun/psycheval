@@ -1,8 +1,8 @@
-import { adminMode, esc, t } from "./runtime.js";
+import { adminMode, esc, t } from "./shared.js";
 import { applyDataTableControls, bindDataTableControls, bindDataTableSelection, renderDataTable, selectionColumn } from "./data-tables.js";
 import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
-import { applyDefaultDbToForm, syncAdapterDefaultDbControls } from "./serve-controls.js";
-import { formPayload, selectedAdapterValue, serveApi, setAdapterChoice, showServeNotice } from "./serve-effects.js";
+import { applyDefaultDbToForm, formPayload, selectedAdapterValue, setAdapterChoice, showServeNotice, syncAdapterDefaultDbControls, updateAdapterDefaults } from "./form-controls.js";
+import { serveApi } from "./http.js";
 
 const harborConfigState = {
   snapshot: null,
@@ -42,6 +42,13 @@ async function initializeConfiguration() {
   return true;
 }
 async function refreshHarborConfig() {
+  const activeCell = document.activeElement?.matches?.("[data-table-column-key]")
+    ? {
+        tableId: document.activeElement.closest?.("[data-table-id]")?.dataset?.tableId,
+        rowKey: document.activeElement.closest?.("[data-table-row-key]")?.dataset?.tableRowKey,
+        columnKey: document.activeElement.dataset.tableColumnKey,
+      }
+    : null;
   setConfigurationBusy(true);
   setConfigurationStatus(t("loading", "Loading"));
   try {
@@ -50,7 +57,8 @@ async function refreshHarborConfig() {
       serveApi("/api/prompts"),
     ]);
     harborConfigState.snapshot = configPayload;
-    promptConfigState.prompts = Array.isArray(promptPayload?.prompts) ? promptPayload.prompts : [];
+    updateAdapterDefaults(configPayload?.adapter_defaults);
+    promptConfigState.prompts = Array.isArray(promptPayload) ? promptPayload : [];
     if (!promptConfigState.prompts.some(prompt => prompt.id === promptConfigState.selectedId)) {
       promptConfigState.selectedId = promptConfigState.prompts[0]?.id || "";
       promptConfigState.dirty = false;
@@ -69,15 +77,25 @@ async function refreshHarborConfig() {
       if (!knownAgents.has(id)) harborConfigState.acpSelection.delete(id);
     });
     renderHarborConfiguration();
+    if (activeCell?.tableId && activeCell.rowKey && activeCell.columnKey) {
+      const cells = Array.from(document.querySelectorAll("[data-table-column-key]"));
+      cells.find(cell => (
+        cell.dataset.tableColumnKey === activeCell.columnKey
+        && cell.closest?.("[data-table-id]")?.dataset?.tableId === activeCell.tableId
+        && cell.closest?.("[data-table-row-key]")?.dataset?.tableRowKey === activeCell.rowKey
+      ))?.focus?.();
+    }
     setConfigurationBusy(false);
     setConfigurationStatus();
+    return true;
   } catch (error) {
     setConfigurationBusy(false);
     setConfigurationStatus(error.message || String(error), true);
+    return false;
   }
 }
 async function refreshConfigurationAfterConflict(error, { discardPrompt = false } = {}) {
-  if (error?.status !== 409 || !/changed.*(?:refresh|reload) before saving/i.test(String(error?.message || ""))) return;
+  if (error?.status !== 412) return;
   if (discardPrompt) {
     promptConfigState.dirty = false;
     promptConfigState.renderedId = "";
@@ -141,7 +159,7 @@ async function choosePathSourceFiles(button) {
   const field = form?.querySelector?.("[name=\"path\"]");
   if (!field) return;
   try {
-    const payload = await serveApi("/api/path-picker", {
+    const payload = await serveApi("/api/path-selections", {
       method: "POST",
       body: { multiple: true }
     });
@@ -314,6 +332,7 @@ function bindConfigurationActions() {
   const root = document.querySelector("[data-config-page]");
   if (!root || root.dataset.configBound === "true") return;
   root.dataset.configBound = "true";
+  bindConfigurationSourceControls(root);
   root.querySelector("[data-harbor-add-dataset]")?.addEventListener("click", () => createHarborDataset(false));
   root.querySelector("[data-harbor-register-dataset]")?.addEventListener("click", () => createHarborDataset(true));
   root.querySelector("[data-harbor-unregister-datasets]")?.addEventListener("click", unregisterSelectedHarborDatasets);
@@ -341,6 +360,80 @@ function bindConfigurationActions() {
   root.querySelector("[data-prompt-reset]")?.addEventListener("click", resetPromptAsset);
   root.querySelector("[data-harbor-config-reload]")?.addEventListener("click", reloadConfiguration);
   root.querySelector("[data-source-config-rescan]")?.addEventListener("click", rescanTrajectorySources);
+}
+function bindConfigurationSourceControls(root) {
+  root.querySelectorAll("[data-source-add-form]").forEach(form => {
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      void submitServeSourceForm(form);
+    });
+    const adapter = form.querySelector('[name="adapter"]');
+    const db = form.querySelector('[name="db"]');
+    adapter?.addEventListener("change", () => {
+      applyDefaultDbToForm(form, { force: true });
+      syncAdapterDefaultDbControls(form);
+    });
+    db?.addEventListener("input", () => syncAdapterDefaultDbControls(form));
+    form.querySelector("[data-adapter-default-db-save]")?.addEventListener("click", () => {
+      void saveAdapterDefaultDb(form, db?.value || "");
+    });
+    form.querySelector("[data-adapter-default-db-clear]")?.addEventListener("click", () => {
+      void saveAdapterDefaultDb(form, "");
+    });
+    syncAdapterDefaultDbControls(form);
+  });
+  root.querySelectorAll("[data-path-picker]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      void choosePathSourceFiles(button);
+    });
+  });
+  root.querySelectorAll("[data-db-inspect]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      void inspectDbSessions(button.closest("[data-source-add-form]"));
+    });
+  });
+  root.querySelectorAll("[data-db-session-picker]").forEach(picker => {
+    picker.addEventListener("click", event => {
+      const button = event.target?.closest?.("[data-db-add-selected]");
+      if (!button) return;
+      event.preventDefault();
+      void addSelectedDbSessions(button.closest("[data-source-add-form]"));
+    });
+  });
+}
+async function saveAdapterDefaultDb(form, path) {
+  const adapter = selectedAdapterValue(form);
+  if (!adapter) return false;
+  try {
+    await serveApi("/api/config");
+    const payload = await serveApi("/api/config", {
+      method: "PATCH",
+      body: { adapter_defaults: { [adapter]: String(path || "").trim() || null } },
+      ifMatch: true,
+      etagKey: "/api/config",
+    });
+    harborConfigState.snapshot = payload;
+    updateAdapterDefaults(payload?.adapter_defaults);
+    document.querySelectorAll('select[name="adapter"] option').forEach(option => {
+      const value = payload?.adapter_defaults?.[option.value] || "";
+      if (value) option.setAttribute("data-default-db", value);
+      else option.removeAttribute("data-default-db");
+    });
+    document.querySelectorAll('[data-source-add-form][data-source-kind="db"]').forEach(candidate => {
+      if (selectedAdapterValue(candidate) === adapter) applyDefaultDbToForm(candidate, { force: true });
+      syncAdapterDefaultDbControls(candidate);
+    });
+    showServeNotice(path
+      ? t("serve_adapter_default_db_saved", "Adapter default DB saved")
+      : t("serve_adapter_default_db_cleared", "Adapter default DB cleared"));
+    return true;
+  } catch (error) {
+    showServeNotice(error.message || String(error), true);
+    syncAdapterDefaultDbControls(form);
+    return false;
+  }
 }
 function openAcpAgentForm(event) {
   if (!adminMode()) return false;
@@ -381,9 +474,27 @@ function parseAcpArgs(value) {
 async function mutateAcpAgents(body) {
   setConfigurationBusy(true);
   try {
-    harborConfigState.snapshot = await serveApi("/api/config/acp/agents", {
-      method: "POST",
-      body: { ...body, expected_revision: harborConfigState.snapshot?.revision },
+    let agents = (harborConfigState.snapshot?.acp_agents || []).map(agent => ({
+      id: agent.id,
+      title: agent.title,
+      command: agent.command,
+      args: agent.args || [],
+    }));
+    if (body.action === "delete") {
+      const removed = new Set(body.agent_ids || []);
+      agents = agents.filter(agent => !removed.has(agent.id));
+    } else {
+      const next = { id: body.agent_id, title: body.title, command: body.command, args: body.args || [] };
+      const originalId = body.original_id || body.agent_id;
+      const index = agents.findIndex(agent => agent.id === originalId);
+      if (index >= 0) agents[index] = next;
+      else agents.push(next);
+    }
+    harborConfigState.snapshot = await serveApi("/api/config", {
+      method: "PATCH",
+      body: { acp_agents: agents },
+      ifMatch: true,
+      etagKey: "/api/config",
     });
     setConfigurationBusy(false);
     return harborConfigState.snapshot;
@@ -467,8 +578,12 @@ async function savePromptAsset() {
   try {
     setConfigurationBusy(true);
     setConfigurationStatus(t("saving", "Saving..."));
-    const payload = await serveApi("/api/prompts", { method: "POST", body: { action: "save", prompt_id: prompt.id, content, expected_revision: prompt.revision } });
-    replacePromptAsset(payload.prompt);
+    const payload = await serveApi(`/api/prompts/${encodeURIComponent(prompt.id)}`, {
+      method: "PUT",
+      body: { content },
+      ifMatch: prompt.revision,
+    });
+    replacePromptAsset(payload);
     promptConfigState.dirty = false;
     setConfigurationBusy(false);
     renderPromptConfiguration();
@@ -484,8 +599,11 @@ async function resetPromptAsset() {
   if (!prompt?.customized || !window.confirm(t("serve_prompt_reset_confirm", "Remove this workspace override and restore the repository default?"))) return;
   try {
     setConfigurationBusy(true);
-    const payload = await serveApi("/api/prompts", { method: "POST", body: { action: "reset", prompt_id: prompt.id, expected_revision: prompt.revision } });
-    replacePromptAsset(payload.prompt);
+    const payload = await serveApi(`/api/prompts/${encodeURIComponent(prompt.id)}/override`, {
+      method: "DELETE",
+      ifMatch: prompt.revision,
+    });
+    replacePromptAsset(payload);
     promptConfigState.dirty = false;
     setConfigurationBusy(false);
     renderPromptConfiguration();
@@ -500,9 +618,9 @@ async function rescanTrajectorySources() {
   try {
     setConfigurationBusy(true);
     setConfigurationStatus(t("serve_scanning_runs", "Checking runs"));
-    const operation = await serveApi("/api/sources/reload", { method: "POST", body: {} });
+    const operation = await serveApi("/api/source-discovery-operations", { method: "POST", body: {} });
     setConfigurationBusy(false);
-    await pollConfigurationOperation(operation.operation_id);
+    await pollConfigurationOperation(operation.id);
   } catch (error) {
     setConfigurationBusy(false);
     setConfigurationStatus(error.message || String(error), true);
@@ -514,7 +632,7 @@ async function pollConfigurationOperation(operationId) {
   syncConfigurationBusyState();
   try {
     const operation = await serveApi(`/api/operations/${encodeURIComponent(operationId)}`);
-    setConfigurationStatus(`${operation.operation_type}: ${operation.completed}/${operation.total}`);
+    setConfigurationStatus(`${operation.kind}: ${operation.completed}/${operation.total}`);
     if (["queued", "running"].includes(operation.state)) {
       setTimeout(() => pollConfigurationOperation(operationId), 250);
       return;
@@ -522,6 +640,7 @@ async function pollConfigurationOperation(operationId) {
     const failures = Array.isArray(operation.failures) ? operation.failures : [];
     activeConfigurationOperations.delete(operationId);
     syncConfigurationBusyState();
+    if (operation.kind.includes("harbor-")) await refreshHarborConfig();
     if (!showImportResultsSummary(operation)) {
       setConfigurationStatus(failures[0]?.error || "", failures.length > 0 || operation.state === "failed");
     }
@@ -534,17 +653,60 @@ async function pollConfigurationOperation(operationId) {
 async function mutateHarborDataset(body) {
   setConfigurationBusy(true);
   try {
-    const payload = await serveApi("/api/config/harbor/datasets", {
-      method: "POST",
-      body: { ...body, expected_revision: harborConfigState.snapshot?.revision },
-    });
-    harborConfigState.snapshot = payload.result || harborConfigState.snapshot;
-    if (payload.operation?.operation_id) {
-      setConfigurationBusy(false);
-      pollConfigurationOperation(payload.operation.operation_id);
+    let path = "/api/harbor/datasets";
+    let method = "POST";
+    let requestBody;
+    if (body.action === "update") {
+      path = `${path}/${encodeURIComponent(body.dataset_id)}`;
+      method = "PATCH";
+      requestBody = { new_id: body.new_id, path: body.path, mount_ids: body.mount_ids || [] };
+    } else if (body.action === "unregister") {
+      path = "/api/harbor/dataset-unregistration-operations";
+      requestBody = { dataset_ids: body.dataset_ids };
+    } else {
+      requestBody = {
+        source: body.action === "register" ? "existing" : "new",
+        id: body.dataset_id || undefined,
+        path: body.path,
+        package_name: body.package_name || undefined,
+        description: body.description || "",
+      };
     }
-    else setConfigurationBusy(false);
-    return payload;
+    const operation = await serveApi(path, {
+      method,
+      body: requestBody,
+      ifMatch: true,
+      etagKey: "/api/config",
+    });
+    if (body.action === "update") {
+      const selectedMounts = new Set(body.mount_ids || []);
+      harborConfigState.snapshot = {
+        ...harborConfigState.snapshot,
+        datasets: (harborConfigState.snapshot?.datasets || []).map(dataset => dataset.id === body.dataset_id
+          ? { ...dataset, id: body.new_id, path: body.path }
+          : dataset),
+        mounts: (harborConfigState.snapshot?.mounts || []).map(mount => ({
+          ...mount,
+          dataset_ids: Array.from(new Set((mount.dataset_ids || [])
+            .map(id => id === body.dataset_id ? body.new_id : id)
+            .filter(id => id !== body.new_id || selectedMounts.has(mount.id))
+            .concat(selectedMounts.has(mount.id) ? [body.new_id] : []))),
+        })),
+      };
+    } else if (body.action === "unregister") {
+      const removed = new Set(body.dataset_ids || []);
+      harborConfigState.snapshot = {
+        ...harborConfigState.snapshot,
+        datasets: (harborConfigState.snapshot?.datasets || []).filter(dataset => !removed.has(dataset.id)),
+        mounts: (harborConfigState.snapshot?.mounts || []).map(mount => ({
+          ...mount,
+          dataset_ids: (mount.dataset_ids || []).filter(id => !removed.has(id)),
+        })),
+      };
+    }
+    setConfigurationBusy(false);
+    setTimeout(() => pollConfigurationOperation(operation.id), 0);
+    return operation;
   } catch (error) {
     setConfigurationBusy(false);
     await refreshConfigurationAfterConflict(error);
@@ -618,11 +780,11 @@ async function submitServeSourceForm(form) {
   try {
     setConfigurationBusy(true);
     setConfigurationStatus(t("serve_refresh", "Refresh"));
-    const payload = await serveApi("/api/sources", { method: "POST", body });
+    const payload = await serveApi("/api/source-import-operations", { method: "POST", body });
     form.reset();
     if (kind === "db") syncAdapterDefaultDbControls(form);
     setConfigurationBusy(false);
-    if (payload?.operation_id) pollConfigurationOperation(payload.operation_id);
+    if (payload?.id) pollConfigurationOperation(payload.id);
     showImportResultsSummary(payload);
   } catch (error) {
     setConfigurationBusy(false);
@@ -636,7 +798,7 @@ function showImportResultsSummary(payload) {
     : Array.isArray(payload?.result?.import_results)
     ? payload.result.import_results
     : [];
-  if (!results.length && payload?.operation_type === "source-import") {
+  if (!results.length && payload?.kind === "source-import") {
     results = [
       ...(Array.isArray(payload?.successes) ? payload.successes : []),
       ...(Array.isArray(payload?.failures) ? payload.failures : []),
@@ -664,7 +826,7 @@ async function inspectDbSessions(form) {
   const picker = form.querySelector("[data-db-session-picker]");
   try {
     setConfigurationStatus(t("serve_inspect_db", "Inspect DB"));
-    const payload = await serveApi("/api/db-sessions", {
+    const payload = await serveApi("/api/database-inspections", {
       method: "POST",
       body: {
         db,
@@ -753,7 +915,7 @@ async function addSelectedDbSessions(form) {
   try {
     setConfigurationBusy(true);
     setConfigurationStatus(t("serve_refresh", "Refresh"));
-    const payload = await serveApi("/api/sources", {
+    const payload = await serveApi("/api/source-import-operations", {
       method: "POST",
       body: {
         db: form.dataset.inspectedDb || body.db,
@@ -773,7 +935,7 @@ async function addSelectedDbSessions(form) {
     delete form.dataset.inspectedDb;
     delete form.dataset.inspectedAdapter;
     setConfigurationBusy(false);
-    if (payload?.operation_id) pollConfigurationOperation(payload.operation_id);
+    if (payload?.id) pollConfigurationOperation(payload.id);
   } catch (error) {
     setConfigurationBusy(false);
     showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
@@ -784,17 +946,42 @@ async function mutateHarborMount(body) {
   if (!adminMode()) return;
   setConfigurationBusy(true);
   try {
-    const payload = await serveApi("/api/config/harbor/mounts", {
-      method: "POST",
-      body: { ...body, expected_revision: harborConfigState.snapshot?.revision },
-    });
-    harborConfigState.snapshot = payload.result || harborConfigState.snapshot;
-    if (payload.operation?.operation_id) {
-      setConfigurationBusy(false);
-      pollConfigurationOperation(payload.operation.operation_id);
+    let path = "/api/harbor/mounts";
+    let method = "POST";
+    let requestBody;
+    if (body.action === "delete") {
+      path = "/api/harbor/mount-deletion-operations";
+      requestBody = { mount_ids: body.mount_ids };
+    } else if (body.original_id) {
+      path = `${path}/${encodeURIComponent(body.original_id)}`;
+      method = "PATCH";
+      requestBody = { new_id: body.mount_id, path: body.jobs_path, dataset_ids: body.dataset_ids || [] };
+    } else {
+      requestBody = { id: body.mount_id || undefined, path: body.jobs_path, dataset_ids: body.dataset_ids || [] };
     }
-    else setConfigurationBusy(false);
-    return payload;
+    const operation = await serveApi(path, {
+      method,
+      body: requestBody,
+      ifMatch: true,
+      etagKey: "/api/config",
+    });
+    if (body.action === "delete") {
+      const removed = new Set(body.mount_ids || []);
+      harborConfigState.snapshot = {
+        ...harborConfigState.snapshot,
+        mounts: (harborConfigState.snapshot?.mounts || []).filter(mount => !removed.has(mount.id)),
+      };
+    } else if (body.original_id) {
+      harborConfigState.snapshot = {
+        ...harborConfigState.snapshot,
+        mounts: (harborConfigState.snapshot?.mounts || []).map(mount => mount.id === body.original_id
+          ? { ...mount, id: body.mount_id, path: body.jobs_path, dataset_ids: body.dataset_ids || [] }
+          : mount),
+      };
+    }
+    setConfigurationBusy(false);
+    setTimeout(() => pollConfigurationOperation(operation.id), 0);
+    return operation;
   } catch (error) {
     setConfigurationBusy(false);
     await refreshConfigurationAfterConflict(error);
@@ -854,6 +1041,7 @@ export {
   choosePathSourceFiles,
   initializeConfiguration,
   inspectDbSessions,
+  pollConfigurationOperation,
   renderDbSessionPicker,
   removeSelectedHarborMounts,
   selectedDbSessionIds,
@@ -862,5 +1050,6 @@ export {
   updateDbSelectedCount,
   harborConfigState,
   promptConfigState,
+  refreshHarborConfig,
   setConfigurationBusy,
 };

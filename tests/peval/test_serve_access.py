@@ -197,20 +197,6 @@ class ServeSessionTests(unittest.TestCase):
         padding = "=" * (-len(token) % 4)
         self.assertEqual(len(base64.urlsafe_b64decode(token + padding)), 32)
 
-    def test_guest_route_policy_is_fail_closed(self) -> None:
-        self.assertTrue(self.access.permits("GET", "/api/catalog", GUEST_ROLE))
-        self.assertTrue(self.access.permits("POST", "/api/exports", GUEST_ROLE))
-        self.assertTrue(
-            self.access.permits(
-                "GET", "/api/reports/20260101-000000-000001/preview", GUEST_ROLE
-            )
-        )
-        self.assertFalse(self.access.permits("GET", "/api/sources", GUEST_ROLE))
-        self.assertFalse(self.access.permits("GET", "/api/config/harbor", GUEST_ROLE))
-        self.assertFalse(self.access.permits("POST", "/api/views", GUEST_ROLE))
-        self.assertFalse(self.access.permits("GET", "/api/future", GUEST_ROLE))
-        self.assertTrue(self.access.permits("GET", "/api/future", ADMIN_ROLE))
-
 
 if __name__ == "__main__":
     unittest.main()

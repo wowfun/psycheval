@@ -28,7 +28,6 @@ from tests.peval.serve_state_support import (
     request_text,
     resolve_workspace_root,
     sample_report,
-    script_json,
     serve_args,
     shutil,
     tempfile,
@@ -126,42 +125,26 @@ class PevalServeStateWorkspaceTests(unittest.TestCase):
     def test_first_serve_on_new_root_uses_generated_adapter_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "new-workspace"
-            bound = threading.Event()
             captured: dict[str, object] = {}
 
-            def bind_ephemeral_server(host, _requested_port, handler):
-                server = LocalHTTPServer((host, 0), handler)
-                captured["server"] = server
-                bound.set()
-                return server
+            def inspect_run(server, *, sockets):
+                captured["port"] = sockets[0].getsockname()[1]
+                captured["config"] = server.config.app.state.runtime.config
+                captured["uvicorn"] = server.config
 
-            def run_cli() -> None:
+            with patch(
+                "psycheval.serve.lifecycle.uvicorn.Server.run",
+                new=inspect_run,
+            ):
                 captured["returncode"] = cli_main(
                     ["serve", "-r", str(root), "--port", "0"]
                 )
 
-            with patch(
-                "psycheval.serve.lifecycle.bind_server",
-                side_effect=bind_ephemeral_server,
-            ):
-                thread = threading.Thread(target=run_cli, daemon=True)
-                thread.start()
-                self.assertTrue(bound.wait(timeout=5), captured)
-                server = captured["server"]
-                try:
-                    status, _, html = request_text(server.server_port, "/")
-                    self.assertEqual(status, 200)
-                    options = script_json(html, "peval-render-options")
-                    expected = load_config(
-                        None,
-                        workspace_root=str(root),
-                    ).adapter_default_db_paths
-                    self.assertTrue((root / "peval.toml").is_file())
-                    self.assertEqual(options["adapter_defaults"], expected)
-                finally:
-                    server.shutdown()
-                    thread.join(timeout=5)
-            self.assertFalse(thread.is_alive())
+            expected = load_config(workspace_root=str(root)).adapter_default_db_paths
+            self.assertTrue((root / "peval.toml").is_file())
+            self.assertEqual(captured["config"].adapter_default_db_paths, expected)
+            self.assertGreater(captured["port"], 0)
+            self.assertFalse(captured["uvicorn"].server_header)
             self.assertEqual(captured.get("returncode"), 0)
 
     def test_port_policy_fallback_and_explicit_strict_failure(self) -> None:
@@ -410,7 +393,7 @@ class PevalServeStateWorkspaceTests(unittest.TestCase):
                 try:
                     status, _, raw_report = request_text(
                         server.server_port,
-                        f"/api/report?source_key={keys[0]}",
+                        f"/api/sources/{keys[0]}",
                     )
                     self.assertEqual(status, 200)
                     api_report = json.loads(raw_report)["report"]

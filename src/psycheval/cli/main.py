@@ -63,7 +63,7 @@ def run_cli_args(args: CliArgs) -> int:
             return 0
         workspace_root, _inferred_workspace_root = workspace_root_for_args(args)
         config = apply_overrides(
-            load_config(args.config, workspace_root=workspace_root),
+            load_config(workspace_root=workspace_root),
             args,
         )
         adapter_assignments = parse_adapter_assignments(

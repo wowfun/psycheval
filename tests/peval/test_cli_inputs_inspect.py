@@ -6,6 +6,7 @@ from tests.peval.cli_inputs_support import (
     contextlib,
     io,
     json,
+    patch,
     tempfile,
     unittest,
     written_report_path,
@@ -194,13 +195,14 @@ class PevalCliInputInspectTests(unittest.TestCase):
                 )
 
             config_stdout = io.StringIO()
-            with contextlib.redirect_stdout(config_stdout):
+            with (
+                contextlib.redirect_stdout(config_stdout),
+                patch("psycheval.config.Path.cwd", return_value=Path(tmp)),
+            ):
                 config_result = main(
                     [
                         "view",
                         "tr",
-                        "-c",
-                        str(config_path),
                         "-p",
                         str(report_path),
                     ]

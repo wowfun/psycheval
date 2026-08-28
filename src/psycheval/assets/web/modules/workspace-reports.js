@@ -1,9 +1,9 @@
-import { $, adminMode, esc, listValue, lower, readableServeSources, renderComparisonPanels, renderReadOnlySourceCategory, renderReadOnlySourceTags, sourceCategoryEditValue, sourceCategoryFor, sourceCategoryValue, sourceTagsFor, state, t } from "./runtime.js";
-import { bindDataTableEditors } from "./data-tables.js";
+import { $, adminMode, esc, listValue, renderComparisonPanels, state, t } from "./runtime.js";
 import { closeDetailSidebar, renderDetailSidebar } from "./detail-sidebar.js";
-import { commitSourceCellEdit, existingSourceCategoryOptions, serveApi, setServeStatus } from "./serve-effects.js";
+import { serveApi, setServeStatus } from "./serve-effects.js";
 import { leaderboardRows, visibleSelectedSourceKeys } from "./serve-catalog.js";
 import { focusSoon } from "./modal-surfaces.js";
+import { applyReportCatalog, normalizedReports, reportForId, reportStore } from "./report-store.js";
 
 function reportMessage(key, fallback, values = {}) {
   let message = String(t(key, fallback));
@@ -23,19 +23,11 @@ function workspaceReportPreviewPath(report) {
 }
 
 function workspaceReportOpenPath(report) {
-  return `/api/reports/${encodeURIComponent(report.report_id)}/open`;
+  return `/api/reports/${encodeURIComponent(report.report_id)}/reader`;
 }
 
-function normalizedWorkspaceReports(reports = state.workspaceReports) {
-  return listValue(reports)
-    .filter(report => report && report.report_id && report.filename)
-    .map(report => ({
-      report_id: String(report.report_id),
-      filename: String(report.filename),
-      format: lower(report.format) === "html" ? "html" : "markdown",
-      source_keys: Array.from(new Set(listValue(report.source_keys).map(key => String(key || "").trim()).filter(Boolean))),
-    }))
-    .sort((left, right) => right.report_id.localeCompare(left.report_id, undefined, { numeric: true }));
+function normalizedWorkspaceReports(reports = reportStore.reports) {
+  return normalizedReports(reports);
 }
 
 function workspaceReports() {
@@ -43,8 +35,7 @@ function workspaceReports() {
 }
 
 function workspaceReportForId(reportId) {
-  const wanted = String(reportId || "");
-  return workspaceReports().find(report => report.report_id === wanted) || null;
+  return reportForId(reportId);
 }
 
 function reportsForSourceKey(sourceKey) {
@@ -54,32 +45,23 @@ function reportsForSourceKey(sourceKey) {
 }
 
 function applyWorkspaceReportCatalog(reports) {
-  const selectedId = state.reportManager.selectedId;
-  const selectedStillExists = normalizedWorkspaceReports(reports).some(report => report.report_id === selectedId);
-  state.workspaceReports = normalizedWorkspaceReports(reports);
-  if (!selectedStillExists) {
-    state.reportManager.selectedId = state.workspaceReports[0]?.report_id || null;
-    syncWorkspaceReportDraft();
-  } else if (!state.reportManager.dirty) {
-    syncWorkspaceReportDraft();
-  }
+  applyReportCatalog(reports);
   if (state.reportReader.openId && !workspaceReportForId(state.reportReader.openId)) {
     closeWorkspaceReportReader({ restoreFocus: false });
   } else if (state.reportReader.openId) {
     renderWorkspaceReportReader();
   }
-  if (workspaceReportManagerOpen()) renderWorkspaceReportManager();
 }
 
 async function refreshWorkspaceReports(options = {}) {
   try {
     const payload = await serveApi("/api/reports");
-    applyWorkspaceReportCatalog(payload?.reports || []);
+    applyWorkspaceReportCatalog(Array.isArray(payload) ? payload : []);
     if (options.renderLeaderboard !== false) renderComparisonPanels({ trace: false });
     return workspaceReports();
   } catch (error) {
     setServeStatus(error.message || String(error), true);
-    return [];
+    return null;
   }
 }
 
@@ -151,7 +133,7 @@ async function attachWorkspaceReport(button) {
   if (!sourceKeys.length) return;
   button.disabled = true;
   try {
-    const pickerPayload = await serveApi("/api/path-picker", {
+    const pickerPayload = await serveApi("/api/path-selections", {
       method: "POST",
       body: { multiple: false }
     });
@@ -161,7 +143,7 @@ async function attachWorkspaceReport(button) {
       method: "POST",
       body: { path, source_keys: sourceKeys }
     });
-    applyWorkspaceReportCatalog(payload?.reports || []);
+    applyWorkspaceReportCatalog([...workspaceReports().filter(report => report.report_id !== payload.report_id), payload]);
     state.rowSelection.clear();
     renderComparisonPanels({ trace: false });
     openWorkspaceReportReader(payload?.report_id, {
@@ -173,446 +155,6 @@ async function attachWorkspaceReport(button) {
   } finally {
     button.disabled = false;
   }
-}
-
-function bindWorkspaceReportGlobalControls() {
-  document.querySelectorAll("[data-report-manager-reload]").forEach(button => {
-    button.addEventListener("click", event => {
-      event.preventDefault();
-      loadWorkspaceReportManagerData();
-    });
-  });
-  if (document.querySelector("[data-report-manager]")) {
-    window.addEventListener("beforeunload", event => {
-      if (!workspaceReportBindingsChanged()) return;
-      event.preventDefault();
-      event.returnValue = "";
-    });
-  }
-}
-
-function workspaceReportManagerOpen() {
-  return Boolean(document.querySelector("[data-report-manager]"));
-}
-
-function openWorkspaceReportManager(opener = null) {
-  const manager = document.querySelector("[data-report-manager]");
-  if (!manager) return false;
-  closeWorkspaceReportReader({ restoreFocus: false });
-  closeDetailSidebar({ restoreFocus: false, render: false });
-  renderDetailSidebar();
-  if (!workspaceReportForId(state.reportManager.selectedId)) {
-    state.reportManager.selectedId = workspaceReports()[0]?.report_id || null;
-    syncWorkspaceReportDraft();
-  }
-  renderWorkspaceReportManager();
-  return loadWorkspaceReportManagerData();
-}
-
-function initializeWorkspaceReportPage() {
-  return openWorkspaceReportManager();
-}
-
-async function loadWorkspaceReportManagerData(changes = {}) {
-  if (typeof URLSearchParams !== "function" || typeof fetch !== "function") return;
-  state.reportManager.loading = true;
-  setWorkspaceReportManagerStatus("");
-  renderWorkspaceReportManager();
-  state.reportManager.page = Math.max(1, Number(changes.page || state.reportManager.page || 1));
-  if (!adminMode()) {
-    try {
-      const reportsPayload = await serveApi("/api/reports");
-      applyWorkspaceReportCatalog(reportsPayload?.reports || []);
-      state.reportManager.sourceRows = [];
-      state.reportManager.loading = false;
-      setWorkspaceReportManagerStatus("");
-      renderWorkspaceReportManager();
-    } catch (error) {
-      state.reportManager.loading = false;
-      setWorkspaceReportManagerStatus(error.message || String(error), true);
-      renderWorkspaceReportManager();
-    }
-    return;
-  }
-  const params = new URLSearchParams({
-    state: "all",
-    surface: "sources",
-    page: String(state.reportManager.page),
-    page_size: "100",
-    search: state.reportManager.search || "",
-    sort: "last_turn_end",
-    direction: "desc"
-  });
-  try {
-    const [reportsPayload, page] = await Promise.all([
-      serveApi("/api/reports"),
-      serveApi(`/api/catalog?${params.toString()}`)
-    ]);
-    applyWorkspaceReportCatalog(reportsPayload?.reports || []);
-    state.reportManager.pageData = page;
-    state.reportManager.sourceRows = listValue(page?.items).filter(source => source?.readable !== false);
-    state.reportManager.loading = false;
-    setWorkspaceReportManagerStatus("");
-    renderWorkspaceReportManager();
-  } catch (error) {
-    state.reportManager.loading = false;
-    setWorkspaceReportManagerStatus(error.message || String(error), true);
-    renderWorkspaceReportManager();
-  }
-}
-
-function closeWorkspaceReportManager(options = {}) {
-  return false;
-}
-
-function syncWorkspaceReportDraft() {
-  const report = workspaceReportForId(state.reportManager.selectedId);
-  state.reportManager.draftBindings = new Set(report?.source_keys || []);
-  state.reportManager.dirty = false;
-}
-
-function workspaceReportBindingsChanged() {
-  const persisted = new Set(workspaceReportForId(state.reportManager.selectedId)?.source_keys || []);
-  const draft = state.reportManager.draftBindings;
-  if (persisted.size !== draft.size) return true;
-  return Array.from(draft).some(sourceKey => !persisted.has(sourceKey));
-}
-
-function selectWorkspaceReport(reportId) {
-  const report = workspaceReportForId(reportId);
-  if (!report) return;
-  state.reportManager.selectedId = report.report_id;
-  syncWorkspaceReportDraft();
-  renderWorkspaceReportManager();
-}
-
-function renderWorkspaceReportManager() {
-  const reports = workspaceReports();
-  const manager = document.querySelector("[data-report-manager]");
-  const inventory = document.querySelector("[data-report-inventory]");
-  const count = document.querySelector("[data-report-count]");
-  if (count) count.textContent = reportMessage("reports_count", "{count} reports", { count: reports.length });
-  if (inventory) {
-    inventory.innerHTML = state.reportManager.loading && !reports.length
-      ? `<p class="report-manager-empty loading">${esc(t("loading", "Loading"))}</p>`
-      : reports.length
-        ? reports.map(renderWorkspaceReportInventoryItem).join("")
-        : `<p class="report-manager-empty">${esc(t("report_no_reports", "No reports imported"))}</p>`;
-  }
-  renderWorkspaceReportBindings();
-  manager?.setAttribute?.("aria-busy", state.reportManager.loading || state.reportManager.busy ? "true" : "false");
-  if (state.reportManager.busy) {
-    manager?.querySelectorAll?.("button:not([data-report-manager-close]),input")?.forEach(control => {
-      control.disabled = true;
-    });
-  }
-  bindWorkspaceReportManagerControls();
-}
-
-function renderWorkspaceReportInventoryItem(report) {
-  if (!adminMode()) {
-    return `<button class="report-inventory-item" type="button" data-report-manager-preview="${esc(report.report_id)}">
-      <strong>${esc(report.filename)}</strong>
-      <span>${esc(report.format.toUpperCase())} &middot; ${esc(reportMessage("report_sessions_count", "{count} sessions", { count: report.source_keys.length }))}</span>
-      <code>${esc(report.report_id)}</code>
-    </button>`;
-  }
-  const selected = report.report_id === state.reportManager.selectedId;
-  return `<button class="report-inventory-item ${selected ? "selected" : ""}" type="button" data-report-inventory-id="${esc(report.report_id)}" ${selected ? 'aria-current="true"' : ""}>
-    <strong>${esc(report.filename)}</strong>
-    <span>${esc(report.format.toUpperCase())} &middot; ${esc(reportMessage("report_sessions_count", "{count} sessions", { count: report.source_keys.length }))}</span>
-    <code>${esc(report.report_id)}</code>
-  </button>`;
-}
-
-function renderWorkspaceReportBindings() {
-  const target = document.querySelector("[data-report-bindings]");
-  if (!target) return;
-  if (!adminMode()) {
-    target.innerHTML = "";
-    return;
-  }
-  target.setAttribute?.("aria-busy", state.reportManager.loading || state.reportManager.busy ? "true" : "false");
-  if (state.reportManager.loading) {
-    target.innerHTML = `<p class="report-manager-empty loading">${esc(t("loading", "Loading"))}</p>`;
-    return;
-  }
-  const report = workspaceReportForId(state.reportManager.selectedId);
-  if (!report) {
-    target.innerHTML = `<p class="report-manager-empty">${esc(t("report_no_selection", "Select a report to manage its session bindings."))}</p>`;
-    return;
-  }
-  const sources = filteredWorkspaceReportSources();
-  const selectedCount = state.reportManager.draftBindings.size;
-  const sourceRows = sources.length
-    ? sources.map(renderWorkspaceReportBindingSource).join("")
-    : `<p class="report-manager-empty">${esc(t("report_no_sessions", "No matching readable sessions"))}</p>`;
-  target.innerHTML = `
-    <div class="report-binding-summary">
-      <div>
-        <strong>${esc(report.filename)}</strong>
-        <span>${esc(report.format.toUpperCase())} &middot; ${esc(report.report_id)}</span>
-      </div>
-      <div class="report-binding-actions">
-        <button class="action-button" type="button" data-report-manager-preview="${esc(report.report_id)}">${esc(t("report_preview", "Preview"))}</button>
-        <button class="action-button danger" type="button" data-report-delete="${esc(report.report_id)}">${esc(t("report_delete", "Delete report"))}</button>
-      </div>
-    </div>
-    <label class="report-binding-search">
-      <span>${esc(t("report_search_sessions", "Search active and archived sessions"))}</span>
-      <input type="search" data-report-binding-search value="${esc(state.reportManager.search)}" placeholder="${esc(t("report_search_sessions", "Search active and archived sessions"))}">
-    </label>
-    <div class="report-binding-list" data-report-binding-list data-table-id="report-bindings">${sourceRows}</div>
-    <div class="report-binding-footer">
-      <span data-report-binding-selection-count>${esc(reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount }))}</span>
-      <span class="catalog-page-controls">
-        <button class="action-button icon-only" type="button" data-report-bindings-prev aria-label="${esc(t("previous", "Previous"))}" ${Number(state.reportManager.pageData?.page || 1) <= 1 ? "disabled" : ""}>‹</button>
-        <span>${esc(reportBindingPageLabel())}</span>
-        <button class="action-button icon-only" type="button" data-report-bindings-next aria-label="${esc(t("next", "Next"))}" ${reportBindingPageEnd() >= Number(state.reportManager.pageData?.total || 0) ? "disabled" : ""}>›</button>
-      </span>
-      <button class="action-button primary" type="button" data-report-bindings-save ${workspaceReportBindingsChanged() ? "" : "disabled"}>${esc(t("report_save_bindings", "Save bindings"))}</button>
-    </div>`;
-}
-
-function reportBindingPageEnd() {
-  const page = Number(state.reportManager.pageData?.page || 1);
-  const size = Number(state.reportManager.pageData?.page_size || 100);
-  return Math.min(Number(state.reportManager.pageData?.total || 0), page * size);
-}
-
-function reportBindingPageLabel() {
-  const page = Number(state.reportManager.pageData?.page || 1);
-  const size = Number(state.reportManager.pageData?.page_size || 100);
-  const total = Number(state.reportManager.pageData?.total || 0);
-  if (!total) return "0 / 0";
-  return `${(page - 1) * size + 1}-${reportBindingPageEnd()} / ${total}`;
-}
-
-function readableWorkspaceReportSources() {
-  if (state.reportManager.sourceRows.length || typeof fetch === "function") {
-    return listValue(state.reportManager.sourceRows);
-  }
-  return readableServeSources("all");
-}
-
-function filteredWorkspaceReportSources() {
-  const query = lower(state.reportManager.search).trim();
-  if (!query) return readableWorkspaceReportSources();
-  return readableWorkspaceReportSources().filter(source => workspaceReportSourceSearchText(source).includes(query));
-}
-
-function workspaceReportSourceLabel(source) {
-  return String(source?.source_alias || "").trim()
-    || source?.label
-    || source?.source_key
-    || "source";
-}
-
-function workspaceReportSourceSearchText(source) {
-  return [
-    workspaceReportSourceLabel(source),
-    source?.label,
-    source?.source_key,
-    source?.trial_session_id,
-    source?.session_id,
-    sourceCategoryFor(source),
-    sourceTagsFor(source).join(" "),
-    source?.active === false ? t("serve_archived", "archived") : t("serve_active", "active")
-  ].filter(Boolean).join(" ").toLowerCase();
-}
-
-function renderWorkspaceReportBindingSource(source) {
-  const sourceKey = String(source?.source_key || "");
-  const checked = state.reportManager.draftBindings.has(sourceKey);
-  const session = source?.trial_session_id || source?.session_id || sourceKey;
-  const stateLabel = source?.active === false ? t("serve_archived", "archived") : t("serve_active", "active");
-  const category = sourceCategoryValue(source);
-  return `<div class="report-binding-row" data-report-binding-row data-table-row-key="${esc(sourceKey)}">
-    <input type="checkbox" data-report-binding-key="${esc(sourceKey)}" ${checked ? "checked" : ""} aria-label="${esc(t("select_row", "Select row"))}: ${esc(session)}">
-    <span class="report-binding-row-main">
-      <strong>${esc(workspaceReportSourceLabel(source))}</strong>
-      <code>${esc(session)}</code>
-    </span>
-    <span class="report-binding-category table-value-text table-cell-editable" data-report-binding-category data-table-column-key="source_category" data-value-type="text" tabindex="0" aria-keyshortcuts="Enter" title="${esc(category)}" aria-label="${esc(`${t("category", "Category")}: ${category}`)}">${renderReadOnlySourceCategory(source)}</span>
-    <span class="report-binding-tags">${renderReadOnlySourceTags(source)}</span>
-    <span class="report-binding-state ${source?.active === false ? "archived" : ""}">${esc(stateLabel)}</span>
-  </div>`;
-}
-
-function workspaceReportBindingCategoryColumn() {
-  return {
-    key: "source_category",
-    label: t("category", "Category"),
-    valueType: "text",
-    value: source => sourceCategoryValue(source),
-    edit: {
-      value: source => sourceCategoryEditValue(source),
-      suggestions: existingSourceCategoryOptions,
-      commit: (source, value) => commitSourceCellEdit(source, "category", value),
-    },
-  };
-}
-
-function refreshWorkspaceReportBindingCategoryCells(manager = document.querySelector("[data-report-manager]")) {
-  const sourceByKey = new Map(readableWorkspaceReportSources().map(source => [String(source?.source_key || ""), source]));
-  manager?.querySelectorAll?.('[data-table-id="report-bindings"] [data-table-column-key="source_category"]').forEach(cell => {
-    const sourceKey = cell.closest("[data-table-row-key]")?.dataset?.tableRowKey || "";
-    const source = sourceByKey.get(sourceKey);
-    if (!source) return;
-    const category = sourceCategoryValue(source);
-    cell.innerHTML = renderReadOnlySourceCategory(source);
-    cell.setAttribute("title", category);
-    cell.setAttribute("aria-label", `${t("category", "Category")}: ${category}`);
-  });
-}
-
-function bindWorkspaceReportManagerControls() {
-  const manager = document.querySelector("[data-report-manager]");
-  if (!manager || manager.hidden) return;
-  manager.querySelectorAll?.("[data-report-inventory-id]").forEach(button => {
-    button.addEventListener("click", () => selectWorkspaceReport(button.dataset.reportInventoryId));
-  });
-  manager.querySelectorAll?.("[data-report-manager-preview]").forEach(button => {
-    button.addEventListener("click", () => {
-      const reportId = button.dataset.reportManagerPreview;
-      openWorkspaceReportReader(reportId, {
-        opener: button
-      });
-    });
-  });
-  manager.querySelectorAll?.("[data-report-delete]").forEach(button => {
-    button.addEventListener("click", () => deleteWorkspaceReport(button.dataset.reportDelete));
-  });
-  bindWorkspaceReportBindingControls(manager);
-}
-
-function bindWorkspaceReportBindingControls(manager = document.querySelector("[data-report-manager]")) {
-  if (!manager || manager.hidden) return;
-  manager.querySelectorAll?.("[data-report-binding-key]").forEach(input => {
-    input.addEventListener("change", () => updateWorkspaceReportBindingDraft(input, manager));
-  });
-  manager.querySelectorAll?.("[data-report-binding-row]").forEach(row => {
-    row.addEventListener("click", event => {
-      if (event.defaultPrevented || event.target.closest?.("input,button,a,select,textarea,[data-report-binding-category]")) return;
-      const input = row.querySelector("[data-report-binding-key]");
-      if (!input || input.disabled) return;
-      input.checked = !input.checked;
-      updateWorkspaceReportBindingDraft(input, manager);
-      input.focus();
-    });
-  });
-  const categoryColumn = workspaceReportBindingCategoryColumn();
-  bindDataTableEditors(manager, {
-    tableId: "report-bindings",
-    columns: [categoryColumn],
-    rows: filteredWorkspaceReportSources(),
-    rowKey: source => source?.source_key,
-    onChange: () => refreshWorkspaceReportBindingCategoryCells(manager),
-  });
-  const search = manager.querySelector?.("[data-report-binding-search]");
-  search?.addEventListener?.("input", () => {
-    state.reportManager.search = String(search.value || "");
-    clearTimeout(state.reportManager.searchTimer);
-    state.reportManager.searchTimer = setTimeout(() => {
-      loadWorkspaceReportManagerData({ page: 1 });
-      focusWorkspaceReportSearch();
-    }, 150);
-  });
-  manager.querySelector?.("[data-report-bindings-prev]")?.addEventListener?.("click", () => {
-    loadWorkspaceReportManagerData({ page: Math.max(1, Number(state.reportManager.page || 1) - 1) });
-  });
-  manager.querySelector?.("[data-report-bindings-next]")?.addEventListener?.("click", () => {
-    loadWorkspaceReportManagerData({ page: Number(state.reportManager.page || 1) + 1 });
-  });
-  manager.querySelector?.("[data-report-bindings-save]")?.addEventListener?.("click", saveWorkspaceReportBindings);
-}
-
-function updateWorkspaceReportBindingDraft(input, manager = document.querySelector("[data-report-manager]")) {
-  const sourceKey = input?.dataset?.reportBindingKey;
-  if (!sourceKey) return;
-  if (input.checked) state.reportManager.draftBindings.add(sourceKey);
-  else state.reportManager.draftBindings.delete(sourceKey);
-  state.reportManager.dirty = workspaceReportBindingsChanged();
-  syncWorkspaceReportBindingSelectionControls(manager);
-}
-
-function syncWorkspaceReportBindingSelectionControls(manager = document.querySelector("[data-report-manager]")) {
-  if (!manager) return;
-  const selectedCount = state.reportManager.draftBindings.size;
-  const count = manager.querySelector?.("[data-report-binding-selection-count]");
-  if (count) count.textContent = reportMessage("report_sessions_count", "{count} sessions", { count: selectedCount });
-  const save = manager.querySelector?.("[data-report-bindings-save]");
-  if (save) save.disabled = !workspaceReportBindingsChanged() || state.reportManager.busy;
-}
-
-function focusWorkspaceReportSearch() {
-  const input = document.querySelector("[data-report-binding-search]");
-  if (!input) return;
-  input.focus?.();
-  const end = String(input.value || "").length;
-  input.setSelectionRange?.(end, end);
-}
-
-async function saveWorkspaceReportBindings() {
-  if (!adminMode()) return;
-  const reportId = state.reportManager.selectedId;
-  const sourceKeys = Array.from(state.reportManager.draftBindings);
-  if (!reportId || !workspaceReportBindingsChanged()) return;
-  if (state.reportManager.busy) return;
-  state.reportManager.busy = true;
-  renderWorkspaceReportManager();
-  try {
-    const payload = await serveApi(`/api/reports/${encodeURIComponent(reportId)}/bindings`, {
-      method: "POST",
-      body: { source_keys: sourceKeys }
-    });
-    state.reportManager.dirty = false;
-    applyWorkspaceReportCatalog(payload?.reports || []);
-    renderComparisonPanels({ trace: false });
-    setWorkspaceReportManagerStatus(t("report_bindings_saved", "Report bindings saved"));
-  } catch (error) {
-    setWorkspaceReportManagerStatus(error.message || String(error), true);
-  } finally {
-    state.reportManager.busy = false;
-    renderWorkspaceReportManager();
-  }
-}
-
-async function deleteWorkspaceReport(reportId) {
-  if (!adminMode()) return;
-  const report = workspaceReportForId(reportId);
-  if (!report) return;
-  const prompt = reportMessage("report_delete_confirm", "Permanently delete {filename}?", { filename: report.filename });
-  if (typeof window.confirm === "function" && !window.confirm(prompt)) return;
-  if (state.reportManager.busy) return;
-  state.reportManager.busy = true;
-  renderWorkspaceReportManager();
-  try {
-    const payload = await serveApi(`/api/reports/${encodeURIComponent(report.report_id)}/delete`, {
-      method: "POST",
-      body: {}
-    });
-    if (state.reportReader.openId === report.report_id) closeWorkspaceReportReader({ restoreFocus: false });
-    state.reportManager.selectedId = null;
-    state.reportManager.dirty = false;
-    applyWorkspaceReportCatalog(payload?.reports || []);
-    renderComparisonPanels({ trace: false });
-    setWorkspaceReportManagerStatus(t("report_deleted", "Report deleted"));
-  } catch (error) {
-    setWorkspaceReportManagerStatus(error.message || String(error), true);
-  } finally {
-    state.reportManager.busy = false;
-    renderWorkspaceReportManager();
-  }
-}
-
-function setWorkspaceReportManagerStatus(message, error = false) {
-  const target = document.querySelector("[data-report-manager-status]");
-  if (!target) return;
-  target.textContent = message || "";
-  target.classList.toggle("danger", Boolean(error));
-  target.classList.toggle("loading", Boolean(state.reportManager.loading));
-  target.hidden = !message;
 }
 
 function openWorkspaceReportReader(reportId, options = {}) {
@@ -802,56 +344,28 @@ export {
   REPORT_READER_PREVIEW_WIDTH,
   applyWorkspaceReportCatalog,
   attachWorkspaceReport,
-  bindWorkspaceReportBindingControls,
-  bindWorkspaceReportGlobalControls,
   bindWorkspaceReportLeaderboardControls,
-  bindWorkspaceReportManagerControls,
   bindWorkspaceReportReaderControls,
-  closeWorkspaceReportManager,
   closeWorkspaceReportReader,
   currentWorkspaceReportReaderWidth,
-  deleteWorkspaceReport,
-  filteredWorkspaceReportSources,
   fitWorkspaceReportReaderPreview,
   focusSoon,
-  focusWorkspaceReportSearch,
-  initializeWorkspaceReportPage,
-  loadWorkspaceReportManagerData,
   normalizedWorkspaceReports,
-  openWorkspaceReportManager,
   openWorkspaceReportReader,
-  readableWorkspaceReportSources,
   refreshWorkspaceReports,
-  refreshWorkspaceReportBindingCategoryCells,
   renderAttachWorkspaceReportAction,
-  renderWorkspaceReportBindingSource,
-  renderWorkspaceReportBindings,
   renderWorkspaceReportCell,
-  renderWorkspaceReportInventoryItem,
-  renderWorkspaceReportManager,
   renderWorkspaceReportReader,
-  reportBindingPageEnd,
-  reportBindingPageLabel,
   reportMessage,
   reportReaderMaximumWidth,
   reportReaderPreviewGeometry,
   reportReaderViewportWidth,
   reportsForSourceKey,
-  saveWorkspaceReportBindings,
-  selectWorkspaceReport,
-  setWorkspaceReportManagerStatus,
   setWorkspaceReportReaderWidth,
-  syncWorkspaceReportBindingSelectionControls,
-  syncWorkspaceReportDraft,
   syncWorkspaceReportReaderResizeHandle,
-  updateWorkspaceReportBindingDraft,
-  workspaceReportBindingCategoryColumn,
-  workspaceReportBindingsChanged,
   workspaceReportForId,
   workspaceReportLeaderboardColumn,
-  workspaceReportManagerOpen,
   workspaceReportOpenPath,
   workspaceReportPreviewPath,
-  workspaceReportSourceSearchText,
   workspaceReports,
 };

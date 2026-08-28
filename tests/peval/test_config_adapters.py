@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import os
 
-from psycheval.config import write_workspace_adapter_default_db
+from psycheval.config import ToolConfig, write_workspace_adapter_default_db
 from tests.peval.peval_test_support import (
     BrokenEntryPoint,
     CustomPathAdapter,
     FakeEntryPoint,
     FakeEntryPoints,
-    MessageRecord,
     Path,
     SimpleNamespace,
     adapter_for,
     apply_overrides,
     available_adapter_ids,
     config_for_adapter,
-    convert_records,
     load_config,
     patch,
     tempfile,
@@ -24,160 +22,102 @@ from tests.peval.peval_test_support import (
 
 
 class PevalConfigAdapterTests(unittest.TestCase):
-    def test_config_uses_adapter_default_and_accepts_legacy_agent_key(self) -> None:
+    def test_config_discovery_honors_peval_root_outside_the_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            adapter_config = Path(tmp) / "adapter.toml"
-            adapter_config.write_text(
-                '[defaults]\nadapter = "opencode"\n',
-                encoding="utf-8",
+            base = Path(tmp)
+            workspace = base / "workspace"
+            outside = base / "outside"
+            workspace.mkdir()
+            outside.mkdir()
+            workspace.joinpath("peval.toml").write_text(
+                'description = "Environment workspace"\n', encoding="utf-8"
             )
-            self.assertEqual(load_config(str(adapter_config)).adapter, "opencode")
-
-            legacy_config = Path(tmp) / "legacy.toml"
-            legacy_config.write_text(
-                '[defaults]\nagent = "hermes"\n',
-                encoding="utf-8",
-            )
-            self.assertEqual(load_config(str(legacy_config)).adapter, "hermes")
-
-    def test_config_ignores_removed_trajectory_id_default(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            config_path = Path(tmp) / "removed.toml"
-            config_path.write_text(
-                '[defaults]\ntrajectory_id = "custom-trial"\n',
-                encoding="utf-8",
-            )
-            config = load_config(str(config_path))
-            self.assertFalse(hasattr(config, "trajectory_id"))
-            result = convert_records(
-                [
-                    MessageRecord(
-                        message={
-                            "role": "user",
-                            "content": "hello",
-                            "timestamp_ms": 100,
-                        }
-                    )
-                ],
-                config,
-            )
-            self.assertNotIn("trajectory_id", result.trajectory)
-
-    def test_config_locale_defaults_aliases_and_invalid_values(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
             old_cwd = Path.cwd()
             try:
-                os.chdir(tmp)
-                default_config = load_config(None)
-                self.assertEqual(default_config.locale, "en")
-                self.assertEqual(default_config.analysis_eval_slug, "default")
+                os.chdir(outside)
+                with patch.dict(os.environ, {"PEVAL_ROOT": str(workspace)}):
+                    discovered = load_config()
             finally:
                 os.chdir(old_cwd)
-            for value, expected in [
-                ("en", "en"),
-                ("en-US", "en"),
-                ("zh-CN", "zh-CN"),
-                ("zh", "zh-CN"),
-            ]:
-                with self.subTest(value=value):
-                    config_path = Path(tmp) / f"{value}.toml"
-                    config_path.write_text(
-                        f'[defaults]\nlocale = "{value}"\n',
-                        encoding="utf-8",
-                    )
-                    self.assertEqual(load_config(str(config_path)).locale, expected)
 
-            invalid_config = Path(tmp) / "invalid.toml"
-            invalid_config.write_text(
-                '[defaults]\nlocale = "fr-FR"\n',
-                encoding="utf-8",
-            )
-            with self.assertRaisesRegex(
-                ValueError,
-                "unsupported locale: fr-FR; supported locales: en, zh-CN",
-            ):
-                load_config(str(invalid_config))
+            self.assertEqual(discovered.workspace_root, str(workspace.resolve()))
+            self.assertEqual(discovered.description, "Environment workspace")
 
-    def test_peval_toml_locale_discovery_and_config_overlay(self) -> None:
+    def test_config_discovers_workspace_and_rejects_removed_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             child = root / "nested" / "child"
             child.mkdir(parents=True)
             root.joinpath("peval.toml").write_text(
-                'locale = "zh-CN"\nanalysis_eval_slug = "custom-eval"\n',
+                'locale = "zh"\nanalysis_eval_slug = "custom-eval"\n'
+                '[defaults]\nadapter = "opencode"\n',
                 encoding="utf-8",
-            )
-            explicit = root / "explicit.toml"
-            explicit.write_text('[defaults]\nadapter = "opencode"\n', encoding="utf-8")
-            explicit_locale = root / "explicit-locale.toml"
-            explicit_locale.write_text('[defaults]\nlocale = "en"\n', encoding="utf-8")
-            explicit_analysis = root / "explicit-analysis.toml"
-            explicit_analysis.write_text(
-                'analysis_eval_slug = "override-eval"\n', encoding="utf-8"
             )
             old_cwd = Path.cwd()
             try:
                 os.chdir(child)
-                discovered = load_config(None)
+                discovered = load_config()
                 self.assertEqual(discovered.locale, "zh-CN")
                 self.assertEqual(discovered.analysis_eval_slug, "custom-eval")
+                self.assertEqual(discovered.adapter, "opencode")
                 self.assertEqual(discovered.workspace_root, str(root.resolve()))
-                overlaid = load_config(str(explicit))
-                self.assertEqual(overlaid.adapter, "opencode")
-                self.assertEqual(overlaid.locale, "zh-CN")
-                self.assertEqual(overlaid.analysis_eval_slug, "custom-eval")
-                self.assertEqual(load_config(str(explicit_locale)).locale, "en")
-                analysis_overlaid = load_config(str(explicit_analysis))
-                self.assertEqual(analysis_overlaid.locale, "zh-CN")
-                self.assertEqual(analysis_overlaid.analysis_eval_slug, "override-eval")
             finally:
                 os.chdir(old_cwd)
 
-            root.joinpath("peval.toml").write_text(
-                'locale = "fr-FR"\n',
-                encoding="utf-8",
-            )
-            old_cwd = Path.cwd()
-            try:
-                os.chdir(child)
-                with self.assertRaisesRegex(ValueError, "unsupported locale"):
-                    load_config(None)
-            finally:
-                os.chdir(old_cwd)
+            for legacy in ("agent", "locale", "trajectory_id"):
+                root.joinpath("peval.toml").write_text(
+                    f'[defaults]\n{legacy} = "removed"\n', encoding="utf-8"
+                )
+                with (
+                    self.subTest(legacy=legacy),
+                    self.assertRaisesRegex(
+                        ValueError, rf"defaults\.{legacy}: unknown configuration field"
+                    ),
+                ):
+                    load_config(workspace_root=root)
 
-    def test_workspace_description_is_optional_markdown_with_config_overlay(
-        self,
-    ) -> None:
+    def test_config_is_strict_frozen_and_reports_source_field_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             root.joinpath("peval.toml").write_text(
                 'description = "**Nightly** evaluation workspace"\n',
                 encoding="utf-8",
             )
-            explicit = root / "explicit.toml"
-            explicit.write_text(
-                'description = "# Release candidate"\n', encoding="utf-8"
-            )
-
-            discovered = load_config(None, workspace_root=str(root))
+            discovered = load_config(workspace_root=root)
             self.assertEqual(discovered.description, "**Nightly** evaluation workspace")
-            self.assertEqual(
-                load_config(str(explicit), workspace_root=str(root)).description,
-                "# Release candidate",
-            )
+            with self.assertRaisesRegex(Exception, "frozen"):
+                discovered.locale = "en"  # type: ignore[misc]
+            with self.assertRaises(ValueError):
+                ToolConfig(max_content_chars="10")  # type: ignore[arg-type]
 
-            explicit.write_text('description = "   "\n', encoding="utf-8")
-            self.assertIsNone(
-                load_config(str(explicit), workspace_root=str(root)).description
+            root.joinpath("peval.toml").write_text(
+                "description = 42\n", encoding="utf-8"
             )
+            with self.assertRaisesRegex(
+                ValueError,
+                rf"{root / 'peval.toml'}: description: Input should be a valid string",
+            ):
+                load_config(workspace_root=root)
 
-            explicit.write_text("description = 42\n", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "description must be a string"):
-                load_config(str(explicit), workspace_root=str(root))
+            root.joinpath("peval.toml").write_text("unknown = true\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError, "unknown: unknown configuration field"
+            ):
+                load_config(workspace_root=root)
+
+            root.joinpath("peval.toml").write_text(
+                "[adapters.opencode]\ndefault_db_path = 42\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                r"adapters\.opencode\.default_db_path: Input should be a valid string",
+            ):
+                load_config(workspace_root=root)
 
     def test_config_passes_selected_adapter_options(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            config_path = Path(tmp) / "adapters.toml"
+            config_path = Path(tmp) / "peval.toml"
             config_path.write_text(
                 """
 [defaults]
@@ -189,7 +129,7 @@ enabled = true
 """,
                 encoding="utf-8",
             )
-            config = load_config(str(config_path))
+            config = load_config(workspace_root=tmp)
             self.assertEqual(config.adapter, "opencode")
             self.assertEqual(config.adapter_options, {})
 
@@ -223,7 +163,7 @@ enabled = true
         with tempfile.TemporaryDirectory() as tmp:
             config_dir = Path(tmp) / "configs"
             config_dir.mkdir()
-            config_path = config_dir / "adapters.toml"
+            config_path = config_dir / "peval.toml"
             config_path.write_text(
                 """
 [adapters.psychevo]
@@ -236,7 +176,7 @@ default_db_path = "../hermes/state.db"
                 encoding="utf-8",
             )
 
-            config = load_config(str(config_path))
+            config = load_config(workspace_root=config_dir)
             self.assertEqual(
                 config.adapter_default_db_paths,
                 {
@@ -273,7 +213,7 @@ default_db_path = '{unc_path}'
             )
 
             with patch.dict(os.environ, {"HOME": str(home)}):
-                config = load_config(str(config_path))
+                config = load_config(workspace_root=root)
 
             self.assertEqual(
                 config.adapter_default_db_paths["psychevo"],
@@ -297,7 +237,7 @@ default_db_path = '{unc_path}'
                     "psychevo",
                     str(home_db),
                 )
-                config = load_config(str(config_path))
+                config = load_config(workspace_root=root)
 
             self.assertEqual(resolved, str(home_db.resolve()))
             self.assertEqual(
@@ -334,7 +274,7 @@ default_db_path = "hermes.db"
             )
 
             self.assertEqual(resolved, str((Path(tmp) / "db/new.db").resolve()))
-            config = load_config(str(config_path))
+            config = load_config(workspace_root=tmp)
             self.assertEqual(
                 config.adapter_default_db_paths["opencode"],
                 str((Path(tmp) / "db/new.db").resolve()),
@@ -359,7 +299,7 @@ default_db_path = "hermes.db"
             )
 
             self.assertIsNone(cleared)
-            config = load_config(str(config_path))
+            config = load_config(workspace_root=tmp)
             self.assertNotIn("opencode", config.adapter_default_db_paths)
             self.assertEqual(
                 config.adapter_default_db_paths["hermes"],

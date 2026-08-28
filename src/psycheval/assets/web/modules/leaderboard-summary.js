@@ -108,10 +108,18 @@ function leaderboardSummaryDefinitions() {
   ];
 }
 
+function visibleLeaderboardSummaryDefinitions(groups) {
+  return leaderboardSummaryDefinitions().filter(definition => listValue(groups).some(group => (
+    listValue(group?.metrics).some(metric => (
+      metric?.key === definition.key && Number(metric?.count || 0) > 0
+    ))
+  )));
+}
+
 function renderLeaderboardSummaryTableDisclosure(groups) {
   const open = Boolean(state.leaderboardSummaryTableOpen);
   const unit = leaderboardSummaryGroupUnit(state.leaderboardSummaryGroupBy);
-  const summary = `${leaderboardSummaryDefinitions().length} ${t("summary_metrics", "metrics")} · ${groups.length} ${unit}`;
+  const summary = `${visibleLeaderboardSummaryDefinitions(groups).length} ${t("summary_metrics", "metrics")} · ${groups.length} ${unit}`;
   return `<div class="leaderboard-summary-table-disclosure">
     <button type="button" class="leaderboard-summary-table-toggle" data-summary-table-toggle aria-expanded="${open}" aria-controls="leaderboard-summary-table-region">
       <span><strong>${esc(t(open ? "summary_hide_table" : "summary_show_table", open ? "Hide summary table" : "Show summary table"))}</strong><small>${esc(summary)}</small></span>
@@ -131,7 +139,7 @@ function renderLeaderboardSummaryTable(groups) {
       <th ${tableValueAttributes("number", t("summary_count", "Count"), "num")}>${tableCellContent(esc(t("summary_count", "Count")))}</th>
       ${statistics.map(statistic => `<th ${tableValueAttributes("number", statistic.label, `num${state.leaderboardSummaryStatistic === statistic.key ? " summary-selected-stat" : ""}`)} data-summary-stat-heading="${esc(statistic.key)}">${tableCellContent(esc(statistic.label))}</th>`).join("")}
     </tr></thead>
-    <tbody>${leaderboardSummaryDefinitions().map(definition => renderLeaderboardSummaryMetricGroup(definition, groups, statistics)).join("")}</tbody>
+    <tbody>${visibleLeaderboardSummaryDefinitions(groups).map(definition => renderLeaderboardSummaryMetricGroup(definition, groups, statistics)).join("")}</tbody>
   </table></div></div>`;
 }
 
@@ -171,7 +179,7 @@ function renderLeaderboardSummaryCharts(groups) {
       ${renderLeaderboardSummaryStatisticControl()}
     </div>
     <div class="leaderboard-summary-chart-grid">
-      ${leaderboardSummaryDefinitions().map(definition => renderLeaderboardSummaryChart(definition, groups, statistic)).join("")}
+      ${visibleLeaderboardSummaryDefinitions(groups).map(definition => renderLeaderboardSummaryChart(definition, groups, statistic)).join("")}
     </div>
   </section>`;
 }
@@ -310,4 +318,5 @@ export {
   leaderboardSummaryScopeText,
   summaryNumber,
   toggleLeaderboardSummaryTable,
+  visibleLeaderboardSummaryDefinitions,
 };

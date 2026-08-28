@@ -1,6 +1,6 @@
 import { $, RENDER_OPTIONS, adminMode, closeOpenSubmenus, esc, fmtNum, listValue, normalizeServeSourceMode, state, statusLabel, t } from "./runtime.js";
 import { applyDataTableControls, bindDataTableControls, renderDataTable, selectionColumn, tableCellContent, tableControls, tableValueAttributes } from "./data-tables.js";
-import { leaderboardSummaryDefinitions, leaderboardSummaryGroupHeading, leaderboardSummaryGroupUnit, leaderboardSummaryStatistics, leaderboardSummaryValue, renderLeaderboardSummary, summaryNumber } from "./leaderboard-summary.js";
+import { leaderboardSummaryGroupHeading, leaderboardSummaryGroupUnit, leaderboardSummaryStatistics, leaderboardSummaryValue, renderLeaderboardSummary, summaryNumber, visibleLeaderboardSummaryDefinitions } from "./leaderboard-summary.js";
 import { serveApi, setServeStatus } from "./serve-effects.js";
 import { loadCatalogPage, serveDownload } from "./serve-catalog.js";
 import { closeModalSurface, focusSoon, openModalSurface } from "./modal-surfaces.js";
@@ -405,8 +405,8 @@ async function refreshWorkspaceViews() {
           const serverCount = views.filter(view => view.origin === "server").length;
           const browserIds = views.filter(view => view.origin === "browser").map(view => view.id);
           const [serverSummary, browserSummary] = await Promise.all([
-            serverCount ? serveApi("/api/views/summary") : Promise.resolve({ views: [] }),
-            browserIds.length ? serveApi("/api/views/summary", {
+            serverCount ? serveApi("/api/view-summaries") : Promise.resolve({ views: [] }),
+            browserIds.length ? serveApi("/api/view-summaries", {
               method: "POST",
               body: { browser_views: repository.queryPayload(browserIds).browser_views },
             }) : Promise.resolve({ views: [] }),
@@ -878,7 +878,7 @@ function renderWorkspaceViewTableDisclosure(view, summary) {
   const open = state.workspaceViewTableOpen.has(view.id);
   const groups = listValue(summary.groups);
   const unit = leaderboardSummaryGroupUnit(view.group_by);
-  const description = `${leaderboardSummaryDefinitions().length} ${t("summary_metrics", "metrics")} · ${groups.length} ${unit}`;
+  const description = `${visibleLeaderboardSummaryDefinitions(groups).length} ${t("summary_metrics", "metrics")} · ${groups.length} ${unit}`;
   const regionId = `workspace-view-table-${encodeURIComponent(view.id)}`;
   return `<div class="leaderboard-summary-table-disclosure workspace-view-table-disclosure">
     <button type="button" class="leaderboard-summary-table-toggle" data-view-table-toggle="${esc(view.id)}" aria-expanded="${open}" aria-controls="${esc(regionId)}">
@@ -895,7 +895,7 @@ function renderWorkspaceViewTable(summary, groupBy) {
   const groupHeading = leaderboardSummaryGroupHeading(groupBy);
   return `<div class="table-shell leaderboard-summary-shell workspace-view-table-shell"><div class="table-wrap"><table class="data-table leaderboard-summary-table workspace-view-table">
     <thead><tr><th ${tableValueAttributes("identity", t("summary_metric", "Metric"))}>${tableCellContent(esc(t("summary_metric", "Metric")))}</th><th ${tableValueAttributes("identity", groupHeading)}>${tableCellContent(esc(groupHeading))}</th><th ${tableValueAttributes("number", t("summary_count", "Count"), "num")}>${tableCellContent(esc(t("summary_count", "Count")))}</th>${statistics.map(statistic => `<th ${tableValueAttributes("number", statistic.label, "num")}>${tableCellContent(esc(statistic.label))}</th>`).join("")}</tr></thead>
-    <tbody>${leaderboardSummaryDefinitions().map(definition => groups.map((group, index) => {
+    <tbody>${visibleLeaderboardSummaryDefinitions(groups).map(definition => groups.map((group, index) => {
       const metric = listValue(group.metrics).find(item => item?.key === definition.key);
       const groupLabel = workspaceViewGroupLabel(group, groupBy);
       return `<tr${index === 0 ? " data-summary-group-start" : ""}>${index === 0 ? `<th ${tableValueAttributes("identity", definition.label, "summary-metric-cell")} scope="rowgroup" rowspan="${groups.length}">${tableCellContent(esc(definition.label))}</th>` : ""}<th ${tableValueAttributes("identity", groupLabel, "summary-group-cell")} scope="row">${tableCellContent(`<strong>${esc(groupLabel)}</strong><span>n=${fmtNum(group.count)}</span>`)}</th><td ${tableValueAttributes("number", fmtNum(metric?.count), "num")}>${tableCellContent(fmtNum(metric?.count))}</td>${statistics.map(statistic => { const value = leaderboardSummaryValue(metric, statistic.value(metric)); return `<td ${tableValueAttributes("number", value, "num")}>${tableCellContent(esc(value))}</td>`; }).join("")}</tr>`;
@@ -917,7 +917,7 @@ function renderWorkspaceViewCharts(summary, groupBy) {
   const groupLabel = leaderboardSummaryGroupHeading(groupBy);
   return `<section class="workspace-view-charts" aria-label="${esc(`${statistic.label} · ${groupLabel}`)}">
     <div class="workspace-view-chart-head"><strong>${esc(`${statistic.label} · ${groupLabel}`)}</strong></div>
-    <div class="workspace-view-chart-grid">${leaderboardSummaryDefinitions().map(definition => renderWorkspaceViewChart(definition, groups, statistic, groupBy)).join("")}</div>
+    <div class="workspace-view-chart-grid">${visibleLeaderboardSummaryDefinitions(groups).map(definition => renderWorkspaceViewChart(definition, groups, statistic, groupBy)).join("")}</div>
   </section>`;
 }
 

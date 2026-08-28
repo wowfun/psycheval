@@ -47,19 +47,20 @@ def request_json(
     method: str,
     path: str,
     payload: dict[str, Any] | None = None,
-) -> tuple[int, dict[str, Any]]:
+    *,
+    request_headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, str], dict[str, Any]]:
     parsed = urlsplit(base_url)
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    headers = {}
+    headers = dict(request_headers or {})
     if body is not None:
-        headers = {
-            "Content-Type": "application/json",
-            "Origin": f"{parsed.scheme}://{parsed.netloc}",
-        }
+        headers.setdefault("Content-Type", "application/json")
+        headers.setdefault("Origin", f"{parsed.scheme}://{parsed.netloc}")
     connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=10)
     connection.request(method, path, body=body, headers=headers)
     response = connection.getresponse()
     raw = response.read()
+    response_headers = {key.lower(): value for key, value in response.getheaders()}
     connection.close()
     try:
         result = json.loads(raw.decode("utf-8"))
@@ -69,7 +70,7 @@ def request_json(
         ) from exc
     if not isinstance(result, dict):
         raise RuntimeError(f"frozen peval returned a non-object for {method} {path}")
-    return response.status, result
+    return response.status, response_headers, result
 
 
 def request_bytes(base_url: str, path: str) -> tuple[int, dict[str, str], bytes]:
@@ -84,32 +85,31 @@ def request_bytes(base_url: str, path: str) -> tuple[int, dict[str, str], bytes]
 
 
 def expect_status(
-    response: tuple[int, dict[str, Any]], expected: int, action: str
-) -> dict[str, Any]:
-    status, payload = response
+    response: tuple[int, dict[str, str], dict[str, Any]], expected: int, action: str
+) -> tuple[dict[str, str], dict[str, Any]]:
+    status, headers, payload = response
     if status != expected:
-        detail = payload.get("error", payload)
+        detail = payload.get("detail", payload.get("error", payload))
         raise RuntimeError(f"frozen {action} failed ({status}): {detail}")
-    return payload
+    return headers, payload
 
 
 def wait_operation(base_url: str, payload: dict[str, Any]) -> None:
-    operation = payload.get("operation")
-    if not isinstance(operation, dict) or not isinstance(
-        operation.get("operation_id"), str
-    ):
+    operation_id = payload.get("id")
+    if not isinstance(operation_id, str):
         raise RuntimeError("frozen peval mutation omitted its operation status")
-    operation_id = operation["operation_id"]
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
-        status = expect_status(
+        _headers, status = expect_status(
             request_json(base_url, "GET", f"/api/operations/{operation_id}"),
             200,
             "operation status",
         )
         state = status.get("state")
-        if state == "completed":
+        if state == "succeeded":
             return
+        if state == "failed":
+            raise RuntimeError(f"frozen peval operation failed: {status}")
         if state not in {"queued", "running"}:
             raise RuntimeError(f"frozen peval operation failed: {status}")
         time.sleep(0.05)
@@ -195,53 +195,56 @@ def smoke_workbench(
         status, _headers, _body = request_bytes(base_url, "/assets/peval/report.css")
         if status != 404:
             raise RuntimeError("frozen peval retained the old report.css route")
-        inventory = expect_status(
-            request_json(base_url, "GET", "/api/config/harbor"),
+        headers, inventory = expect_status(
+            request_json(base_url, "GET", "/api/harbor/datasets"),
             200,
             "Harbor configuration",
         )
-        created_dataset = expect_status(
+        _headers, created_dataset = expect_status(
             request_json(
                 base_url,
                 "POST",
-                "/api/config/harbor/datasets",
+                "/api/harbor/datasets",
                 {
-                    "action": "create",
-                    "dataset_id": "smoke",
+                    "source": "new",
+                    "id": "smoke",
                     "path": "dataset",
                     "package_name": "smoke/dataset",
-                    "expected_revision": inventory["revision"],
                 },
+                request_headers={"If-Match": headers["etag"]},
             ),
             202,
             "Dataset scaffold",
         )
         wait_operation(base_url, created_dataset)
-        task_inventory = expect_status(
+        _headers, task_inventory = expect_status(
             request_json(base_url, "GET", "/api/harbor/datasets"),
             200,
             "Dataset workbench inventory",
         )
         dataset = task_inventory["datasets"][0]
-        created_task = expect_status(
+        _headers, created_task = expect_status(
             request_json(
                 base_url,
                 "POST",
-                "/api/harbor/tasks",
+                "/api/harbor/datasets/smoke/tasks",
                 {
-                    "action": "create",
-                    "dataset_id": "smoke",
                     "directory": "task",
                     "package_name": "smoke/task",
                     "steps": 0,
-                    "expected_revision": dataset["revision"],
                 },
+                request_headers={"If-Match": f'"{dataset["revision"]}"'},
             ),
             202,
             "Workbench Task scaffold",
         )
         wait_operation(base_url, created_task)
-        task = created_task.get("result", {}).get("task", {})
+        _headers, task_detail = expect_status(
+            request_json(base_url, "GET", "/api/harbor/datasets/smoke/tasks/task"),
+            200,
+            "Workbench Task detail",
+        )
+        task = task_detail.get("task", {})
         if task.get("status") != "valid":
             raise RuntimeError(f"frozen Workbench created an invalid Task: {task}")
         task_root = workspace / "dataset" / "task"

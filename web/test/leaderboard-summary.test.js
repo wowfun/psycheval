@@ -95,7 +95,7 @@ test("summary cache ignores pagination, sorting, and chart statistic", async () 
     await catalog.loadLeaderboardSummary();
 
     assert.equal(requests.length, 1);
-    assert.equal(requests[0].path, "/api/catalog/summary");
+    assert.equal(requests[0].path, "/api/catalog-summaries");
     assert.deepEqual(Object.keys(requests[0].body).sort(), [
       "agents", "browser_views", "categories", "group_by", "jobs", "models",
       "providers", "results", "search", "state", "tags", "tasks", "views",
@@ -185,7 +185,7 @@ test("loading and failure clear the previous query summary", async () => {
     assert.equal(runtime.state.leaderboardSummary, null);
     assert.equal(runtime.state.leaderboardSummaryLoading, true);
 
-    resolveRequest(response({ error: "summary failed" }, { ok: false, status: 500 }));
+    resolveRequest(response({ detail: "summary failed" }, { ok: false, status: 500 }));
     await request;
     assert.equal(runtime.state.leaderboardSummary, null);
     assert.equal(runtime.state.leaderboardSummaryLoading, false);
@@ -205,7 +205,7 @@ test("a detail request failure does not clear a completed summary", async () => 
   const summary = envelope(7, 125);
   runtime.state.leaderboardSummary = summary;
   globalThis.fetch = async () => response(
-    { error: "detail failed" },
+    { detail: "detail failed" },
     { ok: false, status: 500 },
   );
   try {
@@ -261,7 +261,7 @@ test("catalog pages without a comparison region skip the summary request", async
   runtime.state.workspaceViewsLoaded = true;
   globalThis.fetch = async path => {
     requests.push(String(path));
-    if (String(path) === "/api/catalog/summary") {
+    if (String(path) === "/api/catalog-summaries") {
       return response(envelope(7, 125));
     }
     return response({
@@ -306,7 +306,7 @@ test("pagination remains responsive while the complete-query summary is pending"
   runtime.state.view = { trajectory_meta: [{ trial_key: "existing-trial" }] };
   runtime.state.workspaceViewsLoaded = true;
   globalThis.fetch = async path => {
-    if (String(path) === "/api/catalog/summary") {
+    if (String(path) === "/api/catalog-summaries") {
       return new Promise(resolve => { resolveSummary = resolve; });
     }
     const url = new URL(String(path), "http://localhost");

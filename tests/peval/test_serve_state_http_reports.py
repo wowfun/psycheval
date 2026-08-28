@@ -251,41 +251,41 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                 initial_state = {
                     "source_refs": ["runs/default/psychevo/s1/s1_t001"],
                 }
-                for invalid_payload in (
-                    {},
-                    {"source_keys": None},
-                    {"source_key": source_key},
-                    {"source_keys": source_key},
-                    {"source_keys": [""]},
+                for invalid_payload, expected_status in (
+                    ({}, 422),
+                    ({"source_keys": None}, 422),
+                    ({"source_key": source_key}, 422),
+                    ({"source_keys": source_key}, 422),
+                    ({"source_keys": [""]}, 400),
                 ):
                     status, _, body = request_json(
                         port,
-                        "POST",
+                        "PUT",
                         f"/api/reports/{report_id}/bindings",
                         invalid_payload,
                         origin=origin,
                     )
-                    self.assertEqual(status, 400)
-                    self.assertIn("source_keys", body["error"])
+                    self.assertEqual(status, expected_status)
+                    self.assertTrue(body.get("detail"))
                     self.assertEqual(json.loads(state_path.read_text()), initial_state)
 
                 status, _, body = request_json(
                     port,
-                    "POST",
+                    "PUT",
                     f"/api/reports/{report_id}/bindings",
                     {"source_keys": []},
                     origin=origin,
                 )
 
                 self.assertEqual(status, 200)
-                self.assertEqual(body["reports"][0]["source_keys"], [])
+                self.assertEqual(body["source_keys"], [])
                 self.assertEqual(
                     json.loads(state_path.read_text()),
                     {"source_refs": []},
                 )
                 get_status, catalog = raw_get_json(port, "/api/reports")
                 self.assertEqual(get_status, 200)
-                self.assertEqual(catalog["reports"][0]["source_keys"], [])
+                self.assertEqual(catalog[0]["source_keys"], [])
             finally:
                 server.shutdown()
                 server.server_close()
@@ -332,7 +332,7 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                         origin=rejected_origin,
                     )
                     self.assertEqual(status, 403)
-                    self.assertIn("same-origin Origin", body["error"])
+                    self.assertIn("same-origin Origin", body["detail"])
 
                 request_body = json.dumps(payload)
                 conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
@@ -346,7 +346,7 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                 referer_body = json.loads(response.read())
                 conn.close()
                 self.assertEqual(response.status, 403)
-                self.assertIn("same-origin Referer", referer_body["error"])
+                self.assertIn("same-origin Referer", referer_body["detail"])
 
                 status, _, body = request_json(
                     port,
@@ -355,7 +355,7 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                     payload,
                     origin=origin,
                 )
-                self.assertEqual(status, 200)
+                self.assertEqual(status, 201)
                 markdown_id = body["report_id"]
                 status, headers, preview = request_bytes(
                     port,
@@ -384,7 +384,7 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                     {"path": str(html_path.resolve()), "source_keys": [source_key]},
                     origin=origin,
                 )
-                self.assertEqual(status, 200)
+                self.assertEqual(status, 201)
                 html_id = body["report_id"]
                 status, headers, preview = request_bytes(
                     port,
@@ -399,7 +399,7 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
 
                 status, headers, opened = request_bytes(
                     port,
-                    f"/api/reports/{html_id}/open",
+                    f"/api/reports/{html_id}/reader",
                 )
                 self.assertEqual(status, 200)
                 self.assertIn("text/html", headers["content-type"])

@@ -4,7 +4,7 @@ import json
 from html import escape
 from typing import Any
 
-from psycheval.html.assets import load_asset_text, render_echarts_script
+from psycheval.html.assets import load_asset_text
 from psycheval.html.serve_controls import (
     render_harbor_dataset_page,
     render_serve_configuration_page,
@@ -36,7 +36,7 @@ def render_serve_html(
         "workspace_id": workspace_id or "default",
         "role": role,
         "authentication_enabled": bool(authentication_enabled),
-        "serve_page": normalized_page,
+        "initial_page": normalized_page,
     }
     normalized_description = str(workspace_description or "").strip()
     if normalized_description:
@@ -61,7 +61,7 @@ def render_serve_html(
     )
     payload = payload.replace(
         "__PAGE_CONTENT__",
-        render_serve_page(
+        render_serve_pages(
             normalized_page,
             messages,
             role=role,
@@ -72,16 +72,11 @@ def render_serve_html(
         "__SERVE_OVERLAYS__",
         render_serve_overlays(
             messages,
-            page=normalized_page,
             role=role,
             authentication_enabled=authentication_enabled,
         ),
     )
     payload = payload.replace("__TITLE__", escape(messages["serve_title"]))
-    payload = payload.replace(
-        "__ECHARTS_SCRIPT__",
-        render_echarts_script() if normalized_page == "home" else "",
-    )
     payload = payload.replace(
         "__I18N__",
         safe_json_for_script(json.dumps(messages, ensure_ascii=False)),
@@ -93,20 +88,28 @@ def render_serve_html(
     return payload
 
 
-def render_serve_page(
-    page: str,
+def render_serve_pages(
+    initial_page: str,
     messages: dict[str, str],
     *,
     role: str,
     adapter_defaults: dict[str, str],
 ) -> str:
-    if page == "home":
-        return render_serve_home()
-    if page == "datasets":
-        return render_harbor_dataset_page(messages, role=role)
-    if page == "reports":
-        return render_serve_report_page(messages, role=role)
-    return render_serve_configuration_page(messages, adapter_defaults)
+    pages = [
+        ("home", render_serve_home()),
+        ("datasets", render_harbor_dataset_page(messages, role=role)),
+        ("reports", render_serve_report_page(messages, role=role)),
+    ]
+    if role == "admin":
+        pages.append(
+            ("config", render_serve_configuration_page(messages, adapter_defaults))
+        )
+    return "".join(
+        f'<section class="workspace-page-slot" data-workspace-page="{page}" '
+        f'tabindex="-1"{"" if page == initial_page else " hidden"}>'
+        f"{content}</section>"
+        for page, content in pages
+    )
 
 
 def normalize_serve_page(value: object) -> str:

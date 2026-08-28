@@ -6,13 +6,16 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.141.1,<0.142",
     "harbor==0.21.0",
     "markdown-it-py>=4.2,<5",
     "pandas>=2.2",
     "pathspec>=1.0,<2",
+    "pydantic>=2.13.4,<3",
     "python-dotenv>=1.2,<2",
     "PyYAML>=6.0,<7",
     "typer>=0.27,<1",
+    "uvicorn>=0.52.1,<0.53",
     "XlsxWriter>=3.2,<4",
 ]
 

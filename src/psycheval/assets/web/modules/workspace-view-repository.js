@@ -189,7 +189,7 @@ function createWorkspaceViewRepository({ workspaceId, storage, request }) {
 
   async function refresh() {
     const response = await request("/api/views");
-    const nextServer = normalizeBrowserViews(response?.views || [], { enforceLimit: false });
+    const nextServer = normalizeBrowserViews(Array.isArray(response) ? response : [], { enforceLimit: false });
     serverViews = nextServer;
     serverLoaded = true;
     browserLoaded = false;
@@ -201,13 +201,16 @@ function createWorkspaceViewRepository({ workspaceId, storage, request }) {
   async function save(definition, { location = "browser", overwrite = false } = {}) {
     const view = normalizeBrowserView(definition);
     if (location === "workspace") {
-      const response = await request("/api/views", {
-        method: "POST",
-        body: { ...view, overwrite: Boolean(overwrite) },
+      const response = await request(`/api/views/${encodeURIComponent(view.name)}`, {
+        method: "PUT",
+        body: { filters: view.filters, group_by: view.group_by, notes: view.notes, overwrite: Boolean(overwrite) },
       });
-      serverViews = normalizeBrowserViews(response?.views || serverViews, { enforceLimit: false });
+      serverViews = normalizeBrowserViews([
+        ...serverViews.filter(item => item.name !== response.name),
+        response,
+      ], { enforceLimit: false });
       serverLoaded = true;
-      return identified("server", view);
+      return identified("server", response);
     }
     if (location !== "browser") throw repositoryError("Saved View location must be workspace or browser.");
     if (!serverLoaded) throw repositoryError("Load workspace Saved Views before saving to this browser.");
@@ -231,12 +234,15 @@ function createWorkspaceViewRepository({ workspaceId, storage, request }) {
       throw repositoryError("Saved View update must change name, notes, or configuration.");
     }
     if (current.origin === "server") {
-      const response = await request("/api/views/update", {
-        method: "POST",
-        body: { name: current.name, field: change.field, value: change.value },
+      const response = await request(`/api/views/${encodeURIComponent(current.name)}`, {
+        method: "PATCH",
+        body: { field: change.field, value: change.value },
       });
-      serverViews = normalizeBrowserViews(response?.views || serverViews, { enforceLimit: false });
-      return identified("server", response?.view || current);
+      serverViews = normalizeBrowserViews([
+        ...serverViews.filter(item => item.name !== current.name && item.name !== response.name),
+        response,
+      ], { enforceLimit: false });
+      return identified("server", response);
     }
     let next = { name: current.name, filters: current.filters, group_by: current.group_by, notes: current.notes };
     if (change.field === "name") next.name = change.value;
@@ -269,11 +275,19 @@ function createWorkspaceViewRepository({ workspaceId, storage, request }) {
     const serverNames = resolved.filter(view => view.origin === "server").map(view => view.name);
     const browserNames = new Set(resolved.filter(view => view.origin === "browser").map(view => view.name));
     if (serverNames.length) {
-      const response = await request("/api/views/delete", { method: "POST", body: { names: serverNames } });
-      serverViews = normalizeBrowserViews(
-        response?.views || serverViews.filter(view => !serverNames.includes(view.name)),
-        { enforceLimit: false },
-      );
+      let operation = await request("/api/view-deletion-operations", {
+        method: "POST",
+        body: { names: serverNames },
+      });
+      while (["queued", "running"].includes(operation?.state)) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        operation = await request(`/api/operations/${encodeURIComponent(operation.id)}`);
+      }
+      const failures = Array.isArray(operation?.failures) ? operation.failures : [];
+      if (operation?.state === "failed" || failures.length) {
+        throw repositoryError(failures[0]?.error || "Workspace Saved View deletion failed.");
+      }
+      serverViews = normalizeBrowserViews(serverViews.filter(view => !serverNames.includes(view.name)), { enforceLimit: false });
     }
     if (browserNames.size) persist(browserViews.filter(view => !browserNames.has(view.name)));
     return { server: serverNames, browser: Array.from(browserNames), views: visibleViews() };

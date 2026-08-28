@@ -121,7 +121,7 @@ default_db_path = "state.db"
                 encoding="utf-8",
             )
             store = open_workspace_state(str(workspace))
-            config = load_config(None, workspace_root=str(workspace))
+            config = load_config(workspace_root=str(workspace))
             keys = store.import_loaded_sources(
                 LoadedInputs(
                     sessions=[

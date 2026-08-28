@@ -9,7 +9,6 @@ import re
 import shutil
 import stat
 import tempfile
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
@@ -120,7 +119,10 @@ class HarborWorkspace:
             _atomic_write(root / "dataset.toml", manifest.to_toml().encode("utf-8"))
             _atomic_write(root / "README.md", f"# {package_name}\n".encode("utf-8"))
             return self._save_config(
-                (*self.config.harbor_datasets, HarborDataset(dataset_id, str(root))),
+                (
+                    *self.config.harbor_datasets,
+                    HarborDataset(id=dataset_id, path=str(root)),
+                ),
                 self.config.harbor_mounts,
             )
         except Exception:
@@ -146,7 +148,10 @@ class HarborWorkspace:
         self._ensure_unique_dataset_path(root)
         self._validate_dataset_directory(root)
         return self._save_config(
-            (*self.config.harbor_datasets, HarborDataset(dataset_id, str(root))),
+            (
+                *self.config.harbor_datasets,
+                HarborDataset(id=dataset_id, path=str(root)),
+            ),
             self.config.harbor_mounts,
         )
 
@@ -186,7 +191,7 @@ class HarborWorkspace:
             )
         selected_mount_id_set = set(selected_mount_ids)
         datasets = tuple(
-            HarborDataset(new_id, str(root)) if item.id == current.id else item
+            HarborDataset(id=new_id, path=str(root)) if item.id == current.id else item
             for item in self.config.harbor_datasets
         )
         mounts = []
@@ -199,7 +204,7 @@ class HarborWorkspace:
                     dataset_ids.append(new_id)
             else:
                 dataset_ids = [item for item in dataset_ids if item != new_id]
-            mounts.append(replace(mount, dataset_ids=tuple(dataset_ids)))
+            mounts.append(mount.validated_update(dataset_ids=tuple(dataset_ids)))
         return self._save_config(datasets, tuple(mounts))
 
     def remove_dataset(self, *, dataset_id: str, expected_revision: str) -> ToolConfig:
@@ -671,8 +676,7 @@ class HarborWorkspace:
             )
         except ValueError as exc:
             raise HarborWorkspaceError(str(exc)) from exc
-        return replace(
-            self.config,
+        return self.config.validated_update(
             harbor_datasets=saved_datasets,
             harbor_mounts=saved_mounts,
         )

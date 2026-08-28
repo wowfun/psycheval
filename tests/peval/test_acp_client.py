@@ -16,13 +16,12 @@ from psycheval.config import (
     apply_toml_config,
     write_workspace_acp_agents,
 )
-from psycheval.serve.access import GUEST_ROLE, ServeAccess
+from psycheval.serve.access import ServeAccess
 from psycheval.serve.acp import AcpError, AcpManager
-from psycheval.serve.handler import make_handler
-from psycheval.serve.lifecycle import LocalHTTPServer
 from psycheval.serve.prompt_assets import PromptAssetConflict, PromptAssetLibrary
 from psycheval.serve.runtime import ServeRuntime
 from psycheval.state import open_workspace_state
+from tests.peval.asgi_server import LocalHTTPServer, make_handler
 
 FAKE_AGENT = r"""
 import json
@@ -53,7 +52,7 @@ for line in sys.stdin:
     elif method == "session/new":
         session_number += 1
         send({"jsonrpc":"2.0","id":request_id,"result":{
-            "sessionId":f"session-{session_number}",
+            "sessionId":f"session/{session_number}",
             "modes":{"currentModeId":"ask","availableModes":[{"id":"ask","name":"Ask"}]}
         }})
     elif method == "session/resume":
@@ -143,13 +142,6 @@ class AcpConfigTests(unittest.TestCase):
                     }
                 },
             )
-
-    def test_guest_cannot_access_acp_routes(self) -> None:
-        access = ServeAccess("password")
-        self.assertFalse(access.permits("GET", "/api/acp/agents", GUEST_ROLE))
-        self.assertFalse(access.permits("POST", "/api/acp/connect", GUEST_ROLE))
-        self.assertFalse(access.permits("GET", "/api/config", GUEST_ROLE))
-        self.assertFalse(access.permits("GET", "/api/prompts", GUEST_ROLE))
 
     def test_writes_only_acp_agent_tables_and_preserves_sibling_config(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -818,6 +810,7 @@ class AcpHttpTests(unittest.TestCase):
         payload: dict[str, object] | None = None,
         *,
         cookie: str | None = None,
+        request_headers: dict[str, str] | None = None,
     ) -> tuple[int, dict[str, str], dict[str, object]]:
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         headers: dict[str, str] = {}
@@ -826,6 +819,7 @@ class AcpHttpTests(unittest.TestCase):
             headers["Origin"] = f"http://127.0.0.1:{self.server.server_port}"
         if cookie:
             headers["Cookie"] = cookie
+        headers.update(request_headers or {})
         connection = http.client.HTTPConnection(
             "127.0.0.1", self.server.server_port, timeout=5
         )
@@ -839,42 +833,67 @@ class AcpHttpTests(unittest.TestCase):
     def login(self) -> str:
         status, headers, _payload = self.request(
             "POST",
-            "/api/auth/login",
+            "/api/session",
             {"password": "correct horse battery staple"},
         )
         self.assertEqual(status, 200)
         return headers["set-cookie"].split(";", 1)[0]
 
     def test_new_acp_configuration_prompt_and_task_routes_are_admin_only(self) -> None:
+        session_token = "c2Vzc2lvbi0x"
         requests = (
             ("GET", "/api/acp/agents", None),
-            ("GET", "/api/acp/sessions?agent_id=synthetic", None),
+            ("GET", "/api/acp/agents/synthetic/sessions", None),
             (
                 "GET",
-                "/api/acp/events?agent_id=synthetic&session_id=session-1&wait=0",
+                f"/api/acp/agents/synthetic/sessions/{session_token}/events?wait=0",
                 None,
             ),
-            ("POST", "/api/acp/connect", {}),
-            ("POST", "/api/acp/disconnect", {}),
-            ("POST", "/api/acp/sessions", {}),
-            ("POST", "/api/acp/prompt", {}),
-            ("POST", "/api/acp/cancel", {}),
-            ("POST", "/api/acp/close", {}),
-            ("POST", "/api/acp/permission", {}),
-            ("POST", "/api/acp/session-mode", {}),
-            ("POST", "/api/acp/session-config", {}),
+            ("PUT", "/api/acp/agents/synthetic/connection", {}),
+            ("DELETE", "/api/acp/agents/synthetic/connection", {}),
+            ("POST", "/api/acp/agents/synthetic/sessions", {}),
+            (
+                "POST",
+                f"/api/acp/agents/synthetic/sessions/{session_token}/prompts",
+                {},
+            ),
+            (
+                "DELETE",
+                f"/api/acp/agents/synthetic/sessions/{session_token}/prompts/active",
+                {},
+            ),
+            (
+                "DELETE",
+                f"/api/acp/agents/synthetic/sessions/{session_token}",
+                {},
+            ),
+            (
+                "POST",
+                f"/api/acp/agents/synthetic/sessions/{session_token}/permission-responses",
+                {},
+            ),
+            (
+                "PUT",
+                f"/api/acp/agents/synthetic/sessions/{session_token}/mode",
+                {},
+            ),
+            (
+                "PUT",
+                f"/api/acp/agents/synthetic/sessions/{session_token}/config-options/verbosity",
+                {},
+            ),
             ("GET", "/api/prompts", None),
-            ("POST", "/api/prompts", {}),
-            ("POST", "/api/config/acp/agents", {}),
-            ("POST", "/api/harbor/tasks/state", {}),
-            ("POST", "/api/harbor/tasks/delete", {}),
-            ("POST", "/api/harbor/tasks/manifest", {}),
+            ("PUT", "/api/prompts/report", {}),
+            ("PATCH", "/api/config", {}),
+            ("POST", "/api/harbor/task-state-operations", {}),
+            ("POST", "/api/harbor/task-deletion-operations", {}),
+            ("PUT", "/api/harbor/datasets/tasks/manifest", {}),
         )
         for method, path, body in requests:
             with self.subTest(method=method, path=path):
                 status, _headers, payload = self.request(method, path, body)
                 self.assertEqual(status, 403)
-                self.assertIn("administrator", str(payload["error"]))
+                self.assertIn("administrator", str(payload["detail"]))
 
     def test_acp_http_lifecycle_statuses_validation_and_error_mapping(self) -> None:
         cookie = self.login()
@@ -885,80 +904,75 @@ class AcpHttpTests(unittest.TestCase):
         self.assertEqual(payload["agents"][0]["id"], "synthetic")  # type: ignore[index]
 
         status, _headers, payload = self.request(
-            "POST", "/api/acp/connect", {"agent_id": "missing"}, cookie=cookie
+            "PUT", "/api/acp/agents/missing/connection", {}, cookie=cookie
         )
         self.assertEqual(status, 404)
-        self.assertIn("unknown ACP agent", str(payload["error"]))
+        self.assertIn("unknown ACP agent", str(payload["detail"]))
         status, _headers, _payload = self.request(
-            "POST", "/api/acp/sessions", {}, cookie=cookie
+            "POST", "/api/acp/agents/missing/sessions", {}, cookie=cookie
         )
-        self.assertEqual(status, 400)
+        self.assertEqual(status, 404)
 
         status, _headers, connected = self.request(
-            "POST",
-            "/api/acp/connect",
-            {"agent_id": "synthetic"},
+            "PUT",
+            "/api/acp/agents/synthetic/connection",
+            {},
             cookie=cookie,
         )
         self.assertEqual(status, 200)
         self.assertTrue(connected["connected"])
         status, _headers, sessions = self.request(
             "GET",
-            "/api/acp/sessions?agent_id=synthetic&refresh=1",
+            "/api/acp/agents/synthetic/sessions?refresh=true",
             cookie=cookie,
         )
         self.assertEqual(status, 200)
         self.assertEqual(sessions["sessions"], [])
 
-        status, _headers, session = self.request(
+        status, headers, session = self.request(
             "POST",
-            "/api/acp/sessions",
-            {"agent_id": "synthetic"},
+            "/api/acp/agents/synthetic/sessions",
+            {},
             cookie=cookie,
         )
         self.assertEqual(status, 201)
         session_id = str(session["session_id"])
+        self.assertEqual(session_id, "session/1")
+        session_token = "c2Vzc2lvbi8x"
+        self.assertEqual(
+            headers["location"],
+            f"/api/acp/agents/synthetic/sessions/{session_token}",
+        )
 
-        for path, body in (
+        for method, path, body in (
             (
-                "/api/acp/session-mode",
-                {
-                    "agent_id": "synthetic",
-                    "session_id": session_id,
-                    "mode_id": "ask",
-                },
+                "PUT",
+                f"/api/acp/agents/synthetic/sessions/{session_token}/mode",
+                {"mode_id": "ask"},
             ),
             (
-                "/api/acp/session-config",
-                {
-                    "agent_id": "synthetic",
-                    "session_id": session_id,
-                    "option_id": "verbosity",
-                    "value": "high",
-                },
+                "PUT",
+                f"/api/acp/agents/synthetic/sessions/{session_token}/config-options/verbosity",
+                {"value": "high"},
             ),
         ):
-            status, _headers, _payload = self.request("POST", path, body, cookie=cookie)
+            status, _headers, _payload = self.request(method, path, body, cookie=cookie)
             self.assertEqual(status, 200)
 
         status, _headers, _payload = self.request(
             "POST",
-            "/api/acp/permission",
+            f"/api/acp/agents/synthetic/sessions/{session_token}/permission-responses",
             {
-                "agent_id": "synthetic",
-                "session_id": session_id,
                 "request_id": True,
                 "cancelled": True,
             },
             cookie=cookie,
         )
-        self.assertEqual(status, 400)
+        self.assertEqual(status, 422)
         status, _headers, _payload = self.request(
             "POST",
-            "/api/acp/prompt",
+            f"/api/acp/agents/synthetic/sessions/{session_token}/prompts",
             {
-                "agent_id": "synthetic",
-                "session_id": session_id,
                 "prompt": "Review this evaluation",
             },
             cookie=cookie,
@@ -971,11 +985,11 @@ class AcpHttpTests(unittest.TestCase):
         while time.monotonic() < deadline and permission is None:
             status, _headers, events = self.request(
                 "GET",
-                f"/api/acp/events?agent_id=synthetic&session_id={session_id}&after={revision}&wait=0.2",
+                f"/api/acp/agents/synthetic/sessions/{session_token}/events?cursor={revision}&wait=0.2",
                 cookie=cookie,
             )
             self.assertEqual(status, 200)
-            revision = int(events["revision"])
+            revision = int(events["next_cursor"])
             permission = next(
                 (
                     event
@@ -987,10 +1001,8 @@ class AcpHttpTests(unittest.TestCase):
         self.assertIsNotNone(permission)
         status, _headers, _payload = self.request(
             "POST",
-            "/api/acp/permission",
+            f"/api/acp/agents/synthetic/sessions/{session_token}/permission-responses",
             {
-                "agent_id": "synthetic",
-                "session_id": session_id,
                 "request_id": permission["request_id"],  # type: ignore[index]
                 "option_id": "allow_once",
                 "cancelled": False,
@@ -1004,29 +1016,35 @@ class AcpHttpTests(unittest.TestCase):
         while time.monotonic() < deadline and not complete:
             status, _headers, events = self.request(
                 "GET",
-                f"/api/acp/events?agent_id=synthetic&session_id={session_id}&after={revision}&wait=0.2",
+                f"/api/acp/agents/synthetic/sessions/{session_token}/events?cursor={revision}&wait=0.2",
                 cookie=cookie,
             )
             self.assertEqual(status, 200)
-            revision = int(events["revision"])
+            revision = int(events["next_cursor"])
             complete = any(
                 event["type"] == "prompt_complete"
                 for event in events["events"]  # type: ignore[union-attr]
             )
         self.assertTrue(complete)
 
-        for path in ("/api/acp/cancel", "/api/acp/close"):
+        for method, path in (
+            (
+                "DELETE",
+                f"/api/acp/agents/synthetic/sessions/{session_token}/prompts/active",
+            ),
+            ("DELETE", f"/api/acp/agents/synthetic/sessions/{session_token}"),
+        ):
             status, _headers, _payload = self.request(
-                "POST",
+                method,
                 path,
-                {"agent_id": "synthetic", "session_id": session_id},
+                {},
                 cookie=cookie,
             )
             self.assertEqual(status, 200)
         status, _headers, disconnected = self.request(
-            "POST",
-            "/api/acp/disconnect",
-            {"agent_id": "synthetic"},
+            "DELETE",
+            "/api/acp/agents/synthetic/connection",
+            {},
             cookie=cookie,
         )
         self.assertEqual(status, 200)
@@ -1036,54 +1054,39 @@ class AcpHttpTests(unittest.TestCase):
         cookie = self.login()
         status, _headers, catalog = self.request("GET", "/api/prompts", cookie=cookie)
         self.assertEqual(status, 200)
-        prompt = catalog["prompts"][0]  # type: ignore[index]
+        prompt = catalog[0]  # type: ignore[index]
         status, _headers, saved = self.request(
-            "POST",
-            "/api/prompts",
-            {
-                "action": "save",
-                "prompt_id": prompt["id"],
-                "content": "# Workspace prompt\n",
-                "expected_revision": prompt["revision"],
-            },
+            "PUT",
+            f"/api/prompts/{prompt['id']}",
+            {"content": "# Workspace prompt\n"},
             cookie=cookie,
+            request_headers={"If-Match": f'"{prompt["revision"]}"'},
         )
         self.assertEqual(status, 200)
-        customized = saved["prompt"]  # type: ignore[assignment]
+        customized = saved
 
         status, _headers, _payload = self.request(
-            "POST",
-            "/api/prompts",
-            {
-                "action": "save",
-                "prompt_id": prompt["id"],
-                "content": "# Stale prompt\n",
-                "expected_revision": prompt["revision"],
-            },
+            "PUT",
+            f"/api/prompts/{prompt['id']}",
+            {"content": "# Stale prompt\n"},
             cookie=cookie,
+            request_headers={"If-Match": f'"{prompt["revision"]}"'},
         )
-        self.assertEqual(status, 409)
+        self.assertEqual(status, 412)
         status, _headers, _payload = self.request(
-            "POST",
-            "/api/prompts",
-            {
-                "action": "save",
-                "prompt_id": prompt["id"],
-                "content": "# Too large\n" + ("x" * (256 * 1024)),
-                "expected_revision": customized["revision"],  # type: ignore[index]
-            },
+            "PUT",
+            f"/api/prompts/{prompt['id']}",
+            {"content": "# Too large\n" + ("x" * (256 * 1024))},
             cookie=cookie,
+            request_headers={"If-Match": f'"{customized["revision"]}"'},
         )
         self.assertEqual(status, 400)
         status, _headers, _payload = self.request(
-            "POST",
-            "/api/prompts",
-            {
-                "action": "reset",
-                "prompt_id": prompt["id"],
-                "expected_revision": customized["revision"],  # type: ignore[index]
-            },
+            "DELETE",
+            f"/api/prompts/{prompt['id']}/override",
+            None,
             cookie=cookie,
+            request_headers={"If-Match": f'"{customized["revision"]}"'},
         )
         self.assertEqual(status, 200)
 
@@ -1092,23 +1095,21 @@ class AcpHttpTests(unittest.TestCase):
         (self.root / "prompts" / str(prompt["filename"])).symlink_to(outside)
         status, _headers, payload = self.request("GET", "/api/prompts", cookie=cookie)
         self.assertEqual(status, 400)
-        self.assertIn("regular file", str(payload["error"]))
+        self.assertIn("regular file", str(payload["detail"]))
 
     def test_prompt_source_context_maps_unknown_source_to_client_error(self) -> None:
         cookie = self.login()
         status, _headers, payload = self.request(
             "POST",
-            "/api/acp/prompt",
+            "/api/acp/agents/synthetic/sessions/bWlzc2luZy1zZXNzaW9u/prompts",
             {
-                "agent_id": "synthetic",
-                "session_id": "missing-session",
                 "prompt": "Review this evaluation",
                 "context": {"kind": "source", "source_key": "missing-source"},
             },
             cookie=cookie,
         )
         self.assertEqual(status, 400)
-        self.assertIn("unknown source", str(payload["error"]))
+        self.assertIn("unknown source", str(payload["detail"]))
 
 
 if __name__ == "__main__":

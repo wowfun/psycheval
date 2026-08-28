@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import replace
 from typing import Any
 
 from psycheval.adapters.base import ConversionResult
@@ -32,7 +31,7 @@ def config_for_session(session: LoadedSession, config: ToolConfig) -> ToolConfig
         updates["agent_version"] = session.agent_version
     if session.model is not None:
         updates["model"] = session.model
-    return replace(session_config, **updates) if updates else session_config
+    return session_config.validated_update(**updates) if updates else session_config
 
 
 def convert_session(session: LoadedSession, config: ToolConfig) -> ConversionResult:

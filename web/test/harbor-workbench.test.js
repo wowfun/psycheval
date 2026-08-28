@@ -125,19 +125,16 @@ test("Dataset overview renders status rails and saves text explicitly", async ()
     calls.push({ path: String(path), method, body });
     let payload = {};
     if (String(path) === "/api/harbor/datasets") payload = inventory;
-    else if (String(path).startsWith("/api/harbor/task?")) payload = detail;
-    else if (String(path).startsWith("/api/harbor/files?") && method === "GET") {
+    else if (String(path) === "/api/harbor/datasets/pbench/tasks/valid-task") payload = detail;
+    else if (String(path).endsWith("/tasks/valid-task/files/instruction.md") && method === "GET") {
       payload = { path: "instruction.md", content: "Original", revision: "file-r1", task_revision: "task-r1" };
-    } else if (String(path) === "/api/harbor/files" && method === "POST") {
-      payload = {
-        result: { ...detail, task: { ...detail.task, revision: "task-r2" } },
-        operation: { operation_id: "file-op" },
-      };
+    } else if (String(path).endsWith("/tasks/valid-task/files/instruction.md") && method === "PUT") {
+      payload = { id: "file-op", kind: "harbor-task-file", state: "queued", completed: 0, total: 1, successes: [], failures: [] };
     } else if (String(path) === "/api/operations/file-op") {
       payload = {
-        operation_id: "file-op",
-        operation_type: "harbor-task-reconcile",
-        state: "completed",
+        id: "file-op",
+        kind: "harbor-task-file",
+        state: "succeeded",
         completed: 1,
         total: 1,
         successes: [{ index: 0, status: "ok" }],
@@ -146,7 +143,7 @@ test("Dataset overview renders status rails and saves text explicitly", async ()
     }
     return {
       ok: true,
-      status: method === "POST" ? 202 : 200,
+      status: method === "PUT" ? 202 : 200,
       statusText: "OK",
       text: async () => JSON.stringify(payload),
     };
@@ -170,17 +167,12 @@ test("Dataset overview renders status rails and saves text explicitly", async ()
     await harbor.saveFile();
     await tick();
     await tick();
-    const save = calls.find(call => call.path === "/api/harbor/files" && call.method === "POST");
+    const save = calls.find(call => call.path.endsWith("/tasks/valid-task/files/instruction.md") && call.method === "PUT");
     assert.deepEqual(save.body, {
-      action: "save",
-      path: "instruction.md",
       content: "Changed",
-      expected_revision: "task-r1",
-      dataset_id: "pbench",
-      task: "valid-task",
     });
     assert.equal(harbor.isHarborDirty(), false);
-    assert.equal(calls.filter(call => call.path.startsWith("/api/harbor/task?")).length, 1);
+    assert.ok(calls.filter(call => call.path === "/api/harbor/datasets/pbench/tasks/valid-task").length >= 2);
   } finally {
     globalThis.fetch = previousFetch;
   }
@@ -192,7 +184,7 @@ test("dirty guard protects navigation and Archived is a separate overview", asyn
     const requestPath = String(path);
     const payload = requestPath === "/api/harbor/datasets"
       ? inventory
-      : requestPath.startsWith("/api/harbor/task?")
+      : requestPath === "/api/harbor/datasets/pbench/tasks/valid-task"
         ? detail
         : { path: "instruction.md", content: "Original", revision: "file-r1" };
     return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(payload) };
@@ -228,7 +220,7 @@ test("the latest overlapping Task selection owns the file tree", async () => {
   const previousFetch = globalThis.fetch;
   const pending = new Map();
   globalThis.fetch = path => new Promise(resolve => {
-    const taskName = new URL(String(path), "http://localhost").searchParams.get("task");
+    const taskName = decodeURIComponent(String(path).split("/tasks/")[1] || "");
     pending.set(taskName, payload => resolve({
       ok: true,
       status: 200,
@@ -278,10 +270,13 @@ test("renaming the open Task keeps the renamed Task selected", async () => {
     const requestPath = String(path);
     const method = options.method || "GET";
     let payload;
-    if (requestPath === "/api/harbor/tasks" && method === "POST") payload = { result: { task: task("renamed-task", "draft", "renamed-r1") } };
+    if (requestPath === "/api/harbor/datasets/pbench/tasks/draft-task" && method === "PATCH") {
+      payload = { id: "rename-op", kind: "harbor-task-reconcile", state: "queued", completed: 0, total: 1, successes: [], failures: [] };
+    }
+    else if (requestPath === "/api/operations/rename-op") payload = { id: "rename-op", kind: "harbor-task-reconcile", state: "succeeded", completed: 1, total: 1, successes: [{ index: 0, status: "ok" }], failures: [] };
     else if (requestPath === "/api/harbor/datasets") payload = renamedInventory;
-    else if (requestPath.startsWith("/api/harbor/task?")) {
-      const taskName = new URL(requestPath, "http://localhost").searchParams.get("task");
+    else if (requestPath.includes("/api/harbor/datasets/pbench/tasks/")) {
+      const taskName = decodeURIComponent(requestPath.split("/tasks/")[1]);
       payload = { dataset_id: "pbench", task: task(taskName, taskName === "valid-task" ? "valid" : "draft"), tree: [] };
     } else throw new Error(`unexpected request: ${requestPath}`);
     return {
@@ -325,22 +320,22 @@ test("a pending file save rejects an overlapping save", async () => {
   let saveRequests = 0;
   globalThis.fetch = async (path, options = {}) => {
     const requestPath = String(path);
-    if (requestPath === "/api/harbor/files" && options.method === "POST") {
+    if (requestPath.endsWith("/tasks/valid-task/files/instruction.md") && options.method === "PUT") {
       saveRequests += 1;
       return new Promise(resolve => pendingSaves.push(() => resolve({
         ok: true,
         status: 200,
         statusText: "OK",
-        text: async () => JSON.stringify({ result: detail }),
+        text: async () => JSON.stringify({ id: "save-op", kind: "harbor-task-file", state: "queued", completed: 0, total: 1, successes: [], failures: [] }),
       })));
     }
     if (requestPath === "/api/harbor/datasets") {
       return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(inventory) };
     }
-    if (requestPath.startsWith("/api/harbor/task?")) {
+    if (requestPath === "/api/harbor/datasets/pbench/tasks/valid-task") {
       return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(detail) };
     }
-    if (requestPath.startsWith("/api/harbor/files?") && (!options.method || options.method === "GET")) {
+    if (requestPath.endsWith("/tasks/valid-task/files/instruction.md") && (!options.method || options.method === "GET")) {
       return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify({ path: "instruction.md", content: "Original", revision: "file-r1" }) };
     }
     throw new Error(`unexpected request: ${requestPath}`);
@@ -415,9 +410,9 @@ test("Task batches span Datasets, restore edited archive names, and retain only 
   };
   const calls = [];
   let operation = {
-    operation_id: "archive-op",
-    operation_type: "harbor-task-archive",
-    state: "completed",
+    id: "archive-op",
+    kind: "harbor-task-archive",
+    state: "succeeded",
     completed: 2,
     total: 2,
     successes: [{ index: 0, status: "ok" }],
@@ -429,14 +424,13 @@ test("Task batches span Datasets, restore edited archive names, and retain only 
     const body = options.body ? JSON.parse(String(options.body)) : null;
     calls.push({ path: requestPath, method, body });
     let payload;
-    if (requestPath === "/api/harbor/tasks/state") payload = { operation_id: operation.operation_id };
-    else if (requestPath === "/api/harbor/tasks/delete") payload = { operation_id: operation.operation_id };
+    if (requestPath === "/api/harbor/task-state-operations") payload = operation;
+    else if (requestPath === "/api/harbor/task-deletion-operations") payload = operation;
     else if (requestPath.startsWith("/api/operations/")) payload = operation;
     else if (requestPath === "/api/harbor/datasets") payload = harbor.workbenchState.inventory;
-    else if (requestPath.startsWith("/api/harbor/task?")) {
-      const url = new URL(requestPath, "http://localhost");
-      const datasetId = url.searchParams.get("dataset_id");
-      const taskName = url.searchParams.get("task");
+    else if (requestPath.includes("/api/harbor/datasets/") && requestPath.includes("/tasks/")) {
+      const [, suffix] = requestPath.split("/api/harbor/datasets/");
+      const [datasetId, taskName] = suffix.split("/tasks/").map(decodeURIComponent);
       payload = { dataset_id: datasetId, task: task(taskName, "valid"), tree: [] };
     } else throw new Error(`unexpected request: ${requestPath}`);
     return {
@@ -463,12 +457,12 @@ test("Task batches span Datasets, restore edited archive names, and retain only 
     await tick();
     await tick();
 
-    const archive = calls.find(call => call.path === "/api/harbor/tasks/state" && call.method === "POST");
+    const archive = calls.find(call => call.path === "/api/harbor/task-state-operations" && call.method === "POST");
     assert.deepEqual(archive.body, {
       archived: true,
       items: [
-        { dataset_id: "one", task: "first", expected_revision: "first-r1" },
-        { dataset_id: "two", task: "second", expected_revision: "second-r1" },
+        { dataset_id: "one", task: "first", etag: "first-r1" },
+        { dataset_id: "two", task: "second", etag: "second-r1" },
       ],
     });
     assert.deepEqual(Array.from(harbor.workbenchState.taskSelection), ["dataset:two|task:second"]);
@@ -489,26 +483,87 @@ test("Task batches span Datasets, restore edited archive names, and retain only 
     harbor.workbenchState.showTrash = true;
     harbor.workbenchState.taskSelection = new Set(["dataset:one|trash:archive-1"]);
     harbor.workbenchState.busy = false;
-    operation = { ...operation, operation_id: "restore-op", operation_type: "harbor-task-restore", total: 1, completed: 1, successes: [{ index: 0, status: "ok" }], failures: [] };
+    operation = { ...operation, id: "restore-op", kind: "harbor-task-restore", total: 1, completed: 1, successes: [{ index: 0, status: "ok" }], failures: [] };
     calls.length = 0;
     harbor.renderHarborWorkbench();
     await harbor.mutateSelectedTaskState();
     await tick();
 
-    const restore = calls.find(call => call.path === "/api/harbor/tasks/state" && call.method === "POST");
+    const restore = calls.find(call => call.path === "/api/harbor/task-state-operations" && call.method === "POST");
     assert.deepEqual(restore.body, {
       archived: false,
       items: [{
         dataset_id: "one",
         entry_id: "archive-1",
         directory: "restore-as-this",
-        expected_revision: "archive-r1",
+        etag: "archive-r1",
       }],
     });
   } finally {
     globalThis.fetch = previousFetch;
     harbor.workbenchState.busy = false;
     harbor.workbenchState.taskSelection.clear();
+  }
+});
+
+test("a newly created Task is selected after its queued reconcile completes", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousPrompt = window.prompt;
+  const createdInventory = {
+    ...inventory,
+    datasets: [{
+      ...inventory.datasets[0],
+      tasks: [...inventory.datasets[0].tasks, task("new-task", "valid", "new-r1")],
+    }],
+  };
+  const answers = ["new-task", "local/new-task", "0"];
+  window.prompt = () => answers.shift();
+  globalThis.fetch = async (path, options = {}) => {
+    const requestPath = String(path);
+    const method = options.method || "GET";
+    let payload;
+    if (requestPath === "/api/harbor/datasets/pbench/tasks" && method === "POST") {
+      payload = { id: "create-op", kind: "harbor-task-reconcile", state: "queued", completed: 0, total: 1, successes: [], failures: [] };
+    } else if (requestPath === "/api/operations/create-op") {
+      payload = { id: "create-op", kind: "harbor-task-reconcile", state: "succeeded", completed: 1, total: 1, successes: [{ index: 0, status: "ok" }], failures: [] };
+    } else if (requestPath === "/api/harbor/datasets") {
+      payload = createdInventory;
+    } else if (requestPath.includes("/api/harbor/datasets/pbench/tasks/")) {
+      const taskName = decodeURIComponent(requestPath.split("/tasks/")[1]);
+      payload = {
+        dataset_id: "pbench",
+        task: task(taskName, "valid", taskName === "new-task" ? "new-r1" : "task-r1"),
+        default_file_path: null,
+        tree: [],
+      };
+    } else throw new Error(`unexpected request: ${requestPath}`);
+    return {
+      ok: true,
+      status: method === "POST" ? 202 : 200,
+      statusText: "OK",
+      text: async () => JSON.stringify(payload),
+    };
+  };
+
+  try {
+    harbor.workbenchState.inventory = inventory;
+    harbor.workbenchState.datasetId = "pbench";
+    harbor.workbenchState.taskName = "valid-task";
+    harbor.workbenchState.taskDetail = detail;
+    harbor.workbenchState.showTrash = false;
+    harbor.workbenchState.search = "";
+    harbor.workbenchState.busy = false;
+    harbor.renderHarborWorkbench();
+
+    await harbor.createTask();
+    for (let index = 0; index < 5; index += 1) await tick();
+
+    assert.equal(harbor.workbenchState.taskName, "new-task");
+    assert.equal(harbor.workbenchState.taskDetail.task.directory, "new-task");
+  } finally {
+    window.prompt = previousPrompt;
+    globalThis.fetch = previousFetch;
+    harbor.workbenchState.busy = false;
   }
 });
 

@@ -13,18 +13,22 @@ from psycheval.analysis.constants import (
 )
 
 
-def write_note_file(path: Path, root: Path, markdown: str) -> str:
+def validate_note_file(path: Path, root: Path, markdown: str) -> str:
     if not isinstance(markdown, str):
         raise ValueError("markdown must be a string")
     if len(markdown.encode("utf-8")) > MAX_NOTE_BYTES:
         raise ValueError("notes.md exceeds 1 MiB limit")
-    target = path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(markdown, encoding="utf-8")
     try:
-        return target.relative_to(root).as_posix()
+        return path.relative_to(root).as_posix()
     except ValueError as exc:
         raise ValueError("notes.md target is outside the workspace root") from exc
+
+
+def write_note_file(path: Path, root: Path, markdown: str) -> str:
+    relative_path = validate_note_file(path, root, markdown)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(markdown, encoding="utf-8")
+    return relative_path
 
 
 def task_root_for(

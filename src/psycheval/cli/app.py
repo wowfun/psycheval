@@ -46,9 +46,6 @@ export_app = make_app(help="Export normalized data for a supported scenario.")
 import_app = make_app(help="Import analysis files into peval workspace artifacts.")
 
 
-ConfigOption = Annotated[
-    str | None, typer.Option("-c", "--config", help="TOML config path")
-]
 AdapterOption = Annotated[
     list[str] | None,
     typer.Option(
@@ -163,7 +160,6 @@ def output_value(value: str | None) -> object | None:
 
 def input_values(
     *,
-    config: str | None,
     adapter: list[str] | None,
     path: list[str] | None,
     db: list[str] | None,
@@ -171,7 +167,6 @@ def input_values(
     max_content_chars: int | None,
 ) -> dict[str, object]:
     return {
-        "config": config,
         "adapter": many(adapter),
         "path": many(path),
         "db": many(db),
@@ -222,7 +217,6 @@ def init_command(
     epilog=INSPECT_EPILOG,
 )
 def view_trajectory(
-    config: ConfigOption = None,
     adapter: AdapterOption = None,
     path: PathOption = None,
     db: DbOption = None,
@@ -313,7 +307,6 @@ def view_trajectory(
             command="view",
             scenario="trajectory",
             **input_values(
-                config=config,
                 adapter=adapter,
                 path=path,
                 db=db,
@@ -352,7 +345,6 @@ def view_trajectory(
     short_help="Export one retained agent trajectory as ATIF JSON",
 )
 def export_trajectory(
-    config: ConfigOption = None,
     adapter: AdapterOption = None,
     path: PathOption = None,
     db: DbOption = None,
@@ -370,7 +362,6 @@ def export_trajectory(
             command="export",
             scenario="trajectory",
             **input_values(
-                config=config,
                 adapter=adapter,
                 path=path,
                 db=db,
@@ -468,7 +459,6 @@ app.add_typer(
     short_help="Serve the local saved trajectory workspace UI",
 )
 def serve_command(
-    config: ConfigOption = None,
     adapter: AdapterOption = None,
     path: PathOption = None,
     db: DbOption = None,
@@ -504,7 +494,6 @@ def serve_command(
         CliArgs(
             command="serve",
             **input_values(
-                config=config,
                 adapter=adapter,
                 path=path,
                 db=db,

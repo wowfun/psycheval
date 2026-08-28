@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from psycheval._state.artifacts import remove_artifact_dir
-from psycheval.analysis import write_note_file
+from psycheval.analysis import validate_note_file, write_note_file
 from psycheval.config import ToolConfig
 from psycheval.state.summaries import now_ms, trial_summary
 from psycheval.state.workspace_sources import WorkspaceSources, is_harbor_source
@@ -167,27 +168,34 @@ class StateMutationMixin:
         markdown: str,
         config: ToolConfig,
     ) -> None:
+        note_path = self.validate_source_notes_row(source, markdown, config)
+        if is_harbor_source(source) and not markdown:
+            sources = WorkspaceSources(self, config)
+            sources.remove_annotation(str(source["source_ref"]), "notes.md")
+            self.refresh_source(source, config)
+            return
+        write_note_file(note_path, self.paths.root, markdown)
+        self.refresh_source(source, config)
+
+    def validate_source_notes_row(
+        self,
+        source: dict[str, Any],
+        markdown: str,
+        config: ToolConfig,
+    ) -> Path:
         if not source.get("refreshable") or source.get("snapshot"):
             raise ValueError("notes.md can only be saved for refreshable sources")
         if is_harbor_source(source):
             sources = WorkspaceSources(self, config)
             note_path = sources.annotation_path(str(source["source_ref"]), "notes.md")
-            if not markdown:
-                sources.remove_annotation(str(source["source_ref"]), "notes.md")
-                self.refresh_source(source, config)
-                return
         elif source.get("artifact_dir"):
             note_path = (
                 self.resolve_artifact_dir(str(source["artifact_dir"])) / "notes.md"
             )
         else:
             raise ValueError("notes.md requires a persisted source")
-        write_note_file(
-            note_path,
-            self.paths.root,
-            markdown,
-        )
-        self.refresh_source(source, config)
+        validate_note_file(note_path, self.paths.root, markdown)
+        return note_path
 
     def _harbor_overlay(self, row: dict[str, Any]) -> dict[str, Any]:
         return WorkspaceSources(self, ToolConfig()).read_overlay(str(row["source_ref"]))

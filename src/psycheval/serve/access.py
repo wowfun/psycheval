@@ -12,8 +12,6 @@ from threading import Lock
 
 from dotenv import dotenv_values
 
-from psycheval.serve.assets import ECHARTS_ASSET_PATH, PEVAL_WEB_ASSET_PREFIX
-
 ADMIN_PASSWORD_ENV = "PEVAL_ADMIN_PASSWORD"
 ADMIN_ROLE = "admin"
 GUEST_ROLE = "guest"
@@ -75,7 +73,7 @@ def resolve_admin_password(
 
 
 class ServeAccess:
-    """Own serve authentication, sessions, throttling, and route authorization."""
+    """Own serve authentication, sessions, and login throttling."""
 
     def __init__(
         self,
@@ -163,11 +161,6 @@ class ServeAccess:
         with self._lock:
             self._sessions.pop(token, None)
 
-    def permits(self, method: str, path: str, role: str) -> bool:
-        if role == ADMIN_ROLE:
-            return True
-        return _guest_route(method, path)
-
     @staticmethod
     def session_cookie(token: str) -> str:
         cookie = SimpleCookie()
@@ -227,49 +220,3 @@ class ServeAccess:
             return None
         morsel = cookie.get(SESSION_COOKIE_NAME)
         return morsel.value if morsel is not None and morsel.value else None
-
-
-def _guest_route(method: str, path: str) -> bool:
-    normalized_method = method.upper()
-    if normalized_method == "GET":
-        if path.startswith(PEVAL_WEB_ASSET_PREFIX):
-            return True
-        if path in {
-            "/",
-            "/datasets",
-            "/reports",
-            ECHARTS_ASSET_PATH,
-            "/api/auth/session",
-            "/api/catalog",
-            "/api/harbor/datasets",
-            "/api/harbor/tasks",
-            "/api/harbor/task",
-            "/api/harbor/files",
-            "/api/report",
-            "/api/reports",
-            "/api/views",
-            "/api/views/summary",
-        }:
-            return True
-        return _public_report_reader_path(path)
-    if normalized_method == "POST":
-        return path in {
-            "/api/auth/login",
-            "/api/auth/logout",
-            "/api/catalog/resolve",
-            "/api/catalog/query",
-            "/api/catalog/summary",
-            "/api/exports",
-            "/api/views/summary",
-        }
-    return False
-
-
-def _public_report_reader_path(path: str) -> bool:
-    parts = path.strip("/").split("/")
-    return (
-        len(parts) == 4
-        and parts[:2] == ["api", "reports"]
-        and bool(parts[2])
-        and parts[3] in {"preview", "open"}
-    )

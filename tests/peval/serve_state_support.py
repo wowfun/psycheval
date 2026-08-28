@@ -12,13 +12,10 @@ from psycheval.serve import DEFAULT_PORT_END as DEFAULT_PORT_END
 from psycheval.serve import DEFAULT_PORT_START as DEFAULT_PORT_START
 from psycheval.serve import ECHARTS_ASSET_PATH as ECHARTS_ASSET_PATH
 from psycheval.serve import HttpError as HttpError
-from psycheval.serve import LocalHTTPServer as LocalHTTPServer
 from psycheval.serve import ServeRuntime as ServeRuntime
-from psycheval.serve import bind_server as bind_server
 from psycheval.serve import cached_echarts_asset as cached_echarts_asset
 from psycheval.serve import echarts_cache_path as echarts_cache_path
 from psycheval.serve import load_serve_inputs as load_serve_inputs
-from psycheval.serve import make_handler as make_handler
 from psycheval.serve import source_path_values as source_path_values
 from psycheval.serve import workspace_relative_path as workspace_relative_path
 from psycheval.state import REFRESH_LOG_LIMIT as REFRESH_LOG_LIMIT
@@ -30,6 +27,9 @@ from psycheval.state import (
 )
 from psycheval.state import open_workspace_state as open_workspace_state
 from psycheval.state import resolve_workspace_root as resolve_workspace_root
+from tests.peval.asgi_server import LocalHTTPServer as LocalHTTPServer
+from tests.peval.asgi_server import bind_server as bind_server
+from tests.peval.asgi_server import make_handler as make_handler
 from tests.peval.cli_inputs_support import (
     write_trial_cell_artifacts as write_trial_cell_artifacts,
 )
@@ -138,12 +138,14 @@ def request_json(
     payload: dict,
     *,
     origin: str,
+    request_headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, str], dict]:
     body = json.dumps(payload)
     headers = {
         "Content-Type": "application/json",
         "Origin": origin,
     }
+    headers.update(request_headers or {})
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     conn.request(method, path, body=body, headers=headers)
     response = conn.getresponse()
@@ -151,15 +153,17 @@ def request_json(
     result = json.loads(raw)
     response_headers = {key.lower(): value for key, value in response.getheaders()}
     conn.close()
-    if (
-        response.status in {200, 202}
-        and isinstance(result, dict)
-        and (result.get("operation_id") or result.get("generation"))
-    ):
+    if response.status in {200, 202} and isinstance(result, dict):
         original_status = response.status
-        if result.get("operation_id"):
-            result = wait_for_catalog_operation(port, str(result["operation_id"]))
-        result = hydrate_legacy_catalog_response(port, result, payload)
+        operation_id = result.get("id") or result.get("operation_id")
+        if operation_id:
+            result = wait_for_catalog_operation(port, str(operation_id))
+        if operation_id or (
+            method in {"PATCH", "POST"}
+            and path.startswith("/api/sources/")
+            and result.get("generation")
+        ):
+            result = hydrate_legacy_catalog_response(port, result, payload)
         if original_status == 202:
             return 200, response_headers, result
     return response.status, response_headers, result
@@ -221,8 +225,15 @@ def hydrate_legacy_catalog_response(
     )
     hydrated["report_source_state"] = report_state
     status, reports = raw_get_json(port, "/api/reports")
-    hydrated["reports"] = reports.get("reports", []) if status == 200 else []
-    if result.get("operation_id") and result.get("operation_type") == "source-import":
+    if status == 200:
+        hydrated["reports"] = (
+            reports if isinstance(reports, list) else reports.get("reports", [])
+        )
+    else:
+        hydrated["reports"] = []
+    if (result.get("id") or result.get("operation_id")) and (
+        result.get("kind") or result.get("operation_type")
+    ) == "source-import":
         entries: list[dict] = []
         for item in sorted(
             [*(result.get("successes") or []), *(result.get("failures") or [])],
@@ -256,7 +267,7 @@ def legacy_catalog_report(port: int, sources: list[dict]) -> dict:
     for source in sources:
         status, envelope = raw_get_json(
             port,
-            f"/api/report?source_key={source['source_key']}",
+            f"/api/sources/{source['source_key']}",
         )
         if status != 200:
             continue

@@ -160,7 +160,7 @@ class SummaryXlsxTests(unittest.TestCase):
                 for name in names
                 if name.startswith("xl/charts/") and name.endswith(".xml")
             ]
-        self.assertEqual(len(charts), 20)
+        self.assertEqual(len(charts), 16)
         self.assertIn("xl/drawings/drawing1.xml", names)
         self.assertIn('name="Unsafe_View"', workbook)
         self.assertIn('name="unsafe_view (2)"', workbook)
@@ -171,6 +171,10 @@ class SummaryXlsxTests(unittest.TestCase):
         self.assertIn("Avg TTFT", shared_strings)
         self.assertIn("Decode TPS", shared_strings)
         self.assertIn("Cache Hit", shared_strings)
+        self.assertIn("Tokens", shared_strings)
+        self.assertIn("Tool Error Rate", shared_strings)
+        self.assertNotIn("Reward", shared_strings)
+        self.assertNotIn("Turns", shared_strings)
         self.assertNotIn("<f>", first_sheet)
         self.assertIn("1.157407407407407E-05", first_sheet)
         self.assertRegex(first_sheet, r"<v>0</v>")

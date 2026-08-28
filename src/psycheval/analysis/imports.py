@@ -99,7 +99,7 @@ def resolve_import_source_ref(root: Path, source_ref: str) -> AnalysisImportTarg
     from psycheval.state.workspace_sources import WorkspaceSources
 
     store = ServeStateStore(workspace_paths(root), initialize=False)
-    sources = WorkspaceSources(store, load_config(None, workspace_root=str(root)))
+    sources = WorkspaceSources(store, load_config(workspace_root=str(root)))
     absolute = sources.annotation_dir(source_ref)
     parts = Path(source_ref).parts
     harbor = source_ref.startswith("harbor/")

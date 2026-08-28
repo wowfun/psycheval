@@ -13,17 +13,16 @@ from unittest.mock import patch
 
 from psycheval.config import ToolConfig
 from psycheval.serve import (
-    LocalHTTPServer,
     ServeAccess,
     ServeRuntime,
-    make_handler,
 )
-from psycheval.serve.handler import catalog_query
+from psycheval.serve.api_support import catalog_query
 from psycheval.state import (
     CatalogQuery,
     CatalogSummaryCapacityError,
     open_workspace_state,
 )
+from tests.peval.asgi_server import LocalHTTPServer, make_handler
 from tests.peval.cli_inputs_support import write_trial_cell_artifacts
 
 
@@ -143,7 +142,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 )
 
                 status, _headers, body = self.request(
-                    server, "GET", f"/api/report?source_key={source_key}"
+                    server, "GET", f"/api/sources/{source_key}"
                 )
                 detail = json.loads(body)
                 self.assertEqual(status, 200)
@@ -156,29 +155,29 @@ class ServeCatalogHttpTests(unittest.TestCase):
 
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    f"/api/sources/{source_key}/alias",
+                    "PATCH",
+                    f"/api/sources/{source_key}",
                     {"alias": "compact"},
                 )
                 mutation = json.loads(body)
                 self.assertEqual(status, 200)
-                self.assertEqual(mutation["change"], "alias")
-                self.assertEqual(mutation["source_keys"], [source_key])
-                self.assertNotIn("sources", mutation)
-                self.assertNotIn("report", mutation)
+                self.assertEqual(mutation["source_key"], source_key)
+                self.assertEqual(
+                    runtime.catalog.query(CatalogQuery())
+                    .items[0]
+                    .payload["source_alias"],
+                    "compact",
+                )
 
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    f"/api/sources/{source_key}/category",
+                    "PATCH",
+                    f"/api/sources/{source_key}",
                     {"category": "  Regression  "},
                 )
                 mutation = json.loads(body)
                 self.assertEqual(status, 200)
-                self.assertEqual(mutation["change"], "category")
-                self.assertEqual(mutation["source_keys"], [source_key])
-                self.assertNotIn("sources", mutation)
-                self.assertNotIn("report", mutation)
+                self.assertEqual(mutation["source_key"], source_key)
                 category_page = runtime.catalog.query(
                     CatalogQuery(categories=("Regression",))
                 )
@@ -190,8 +189,8 @@ class ServeCatalogHttpTests(unittest.TestCase):
 
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    f"/api/sources/{source_key}/category",
+                    "PATCH",
+                    f"/api/sources/{source_key}",
                     {"category": "  "},
                 )
                 self.assertEqual(status, 200, body)
@@ -205,15 +204,17 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/catalog/resolve",
+                    "/api/source-key-resolutions",
                     {"source_keys": ["missing", source_key]},
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(json.loads(body)["source_keys"], [source_key])
 
-                status, _headers, body = self.request(server, "GET", "/api/report")
-                self.assertEqual(status, 400)
-                self.assertIn("source_key is required", json.loads(body)["error"])
+                status, _headers, body = self.request(
+                    server, "GET", "/api/sources/missing"
+                )
+                self.assertEqual(status, 404)
+                self.assertIn("unknown source", json.loads(body)["detail"])
             finally:
                 self.stop(store, server, thread)
 
@@ -233,11 +234,11 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     status, _headers, body = self.request(
                         server,
                         "POST",
-                        "/api/catalog/resolve",
-                        {"source_keys": []},
+                        "/api/source-key-resolutions",
+                        {"source_keys": ["missing"]},
                     )
                 self.assertEqual(status, 500)
-                self.assertEqual(json.loads(body)["error"], "internal server error")
+                self.assertEqual(json.loads(body)["detail"], "internal server error")
             finally:
                 self.stop(store, server, thread)
 
@@ -383,22 +384,21 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertEqual(page["total"], 1)
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    f"/api/sources/{source_key}/alias",
+                    "PATCH",
+                    f"/api/sources/{source_key}",
                     {"alias": "blocked"},
                 )
                 self.assertEqual(status, 409)
-                self.assertIn("checking runs", json.loads(body)["error"])
+                self.assertIn("checking runs", json.loads(body)["detail"])
                 with runtime.catalog._state_lock:
                     runtime.catalog._checking = False
                 self.assertTrue(runtime.catalog._writer_lock.acquire(blocking=False))
                 try:
                     status, _headers, body = self.request(
                         server,
-                        "POST",
-                        "/api/views",
+                        "PUT",
+                        "/api/views/Blocked%20during%20snapshot",
                         {
-                            "name": "Blocked during snapshot",
                             "filters": {},
                             "group_by": "agent",
                             "notes": "",
@@ -408,7 +408,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 finally:
                     runtime.catalog._writer_lock.release()
                 self.assertEqual(status, 409)
-                self.assertIn("writer operation", json.loads(body)["error"])
+                self.assertIn("writer operation", json.loads(body)["detail"])
                 self.assertFalse((root / "views/Blocked during snapshot.md").exists())
             finally:
                 with runtime.catalog._state_lock:
@@ -442,23 +442,26 @@ class ServeCatalogHttpTests(unittest.TestCase):
             try:
                 status, _headers, body = self.request(server, "GET", "/api/views")
                 self.assertEqual(status, 200)
-                self.assertEqual(json.loads(body), {"views": []})
+                self.assertEqual(json.loads(body), [])
 
                 status, _headers, body = self.request(
-                    server, "POST", "/api/views", payload
+                    server,
+                    "PUT",
+                    "/api/views/Daily%20focus",
+                    {key: value for key, value in payload.items() if key != "name"},
                 )
-                self.assertEqual(status, 200)
+                self.assertEqual(status, 201)
                 saved = json.loads(body)
-                self.assertEqual(saved["view"]["name"], "Daily focus")
-                self.assertEqual(saved["view"]["notes"], payload["notes"])
-                self.assertEqual(saved["view"]["filters"], {})
+                self.assertEqual(saved["name"], "Daily focus")
+                self.assertEqual(saved["notes"], payload["notes"])
+                self.assertEqual(saved["filters"], {})
                 stored = (root / "views" / "Daily focus.md").read_text(encoding="utf-8")
                 self.assertIn("group_by: agent", stored)
                 self.assertNotIn("filters:", stored)
                 self.assertTrue(stored.endswith(payload["notes"]))
 
                 status, _headers, body = self.request(
-                    server, "GET", "/api/views/summary"
+                    server, "GET", "/api/view-summaries"
                 )
                 self.assertEqual(status, 200)
                 summary = json.loads(body)
@@ -467,18 +470,28 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertEqual(summary["views"][0]["group_by"], "agent")
 
                 status, _headers, body = self.request(
-                    server, "POST", "/api/views", payload
+                    server,
+                    "PUT",
+                    "/api/views/Daily%20focus",
+                    {key: value for key, value in payload.items() if key != "name"},
                 )
                 self.assertEqual(status, 409)
-                self.assertIn("already exists", json.loads(body)["error"])
+                self.assertIn("already exists", json.loads(body)["detail"])
+                self.assertEqual(
+                    (root / "views" / "Daily focus.md").read_text(encoding="utf-8"),
+                    stored,
+                )
 
                 payload["notes"] = "Replacement notes"
                 payload["overwrite"] = True
                 status, _headers, body = self.request(
-                    server, "POST", "/api/views", payload
+                    server,
+                    "PUT",
+                    "/api/views/Daily%20focus",
+                    {key: value for key, value in payload.items() if key != "name"},
                 )
                 self.assertEqual(status, 200)
-                self.assertEqual(json.loads(body)["view"]["notes"], "Replacement notes")
+                self.assertEqual(json.loads(body)["notes"], "Replacement notes")
                 self.assertEqual(
                     (root / "views" / "Daily focus.md")
                     .read_text(encoding="utf-8")
@@ -493,80 +506,82 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     "overwrite": False,
                 }
                 status, _headers, _body = self.request(
-                    server, "POST", "/api/views", other_payload
+                    server,
+                    "PUT",
+                    "/api/views/Other%20view",
+                    {
+                        key: value
+                        for key, value in other_payload.items()
+                        if key != "name"
+                    },
                 )
-                self.assertEqual(status, 200)
+                self.assertEqual(status, 201)
 
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    "/api/views/update",
+                    "PATCH",
+                    "/api/views/Daily%20focus",
                     {
-                        "name": "Daily focus",
                         "field": "notes",
                         "value": "Edited **Markdown**",
                     },
                 )
                 self.assertEqual(status, 200)
-                self.assertEqual(
-                    json.loads(body)["view"]["notes"], "Edited **Markdown**"
-                )
+                self.assertEqual(json.loads(body)["notes"], "Edited **Markdown**")
 
                 configuration = (
                     "filters:\n  results:\n    - passed\ngroup_by: overall\n"
                 )
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    "/api/views/update",
+                    "PATCH",
+                    "/api/views/Daily%20focus",
                     {
-                        "name": "Daily focus",
                         "field": "configuration",
                         "value": configuration,
                     },
                 )
                 self.assertEqual(status, 200)
-                updated = json.loads(body)["view"]
+                updated = json.loads(body)
                 self.assertEqual(updated["filters"], {"results": ["passed"]})
                 self.assertEqual(updated["group_by"], "overall")
 
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    "/api/views/update",
+                    "PATCH",
+                    "/api/views/Daily%20focus",
                     {
-                        "name": "Daily focus",
                         "field": "configuration",
                         "value": "schema_version: 1\ngroup_by: agent\n",
                     },
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("optional filters", json.loads(body)["error"])
+                self.assertIn("optional filters", json.loads(body)["detail"])
 
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    "/api/views/update",
-                    {"name": "Daily focus", "field": "name", "value": "Other view"},
+                    "PATCH",
+                    "/api/views/Daily%20focus",
+                    {"field": "name", "value": "Other view"},
                 )
                 self.assertEqual(status, 409)
-                self.assertIn("already exists", json.loads(body)["error"])
+                self.assertIn("already exists", json.loads(body)["detail"])
 
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    "/api/views/update",
-                    {"name": "Daily focus", "field": "name", "value": "Renamed view"},
+                    "PATCH",
+                    "/api/views/Daily%20focus",
+                    {"field": "name", "value": "Renamed view"},
                 )
                 self.assertEqual(status, 200)
-                self.assertEqual(json.loads(body)["view"]["name"], "Renamed view")
+                self.assertEqual(json.loads(body)["name"], "Renamed view")
                 self.assertFalse((root / "views" / "Daily focus.md").exists())
 
                 status, _headers, _body = self.request(
                     server,
-                    "POST",
-                    "/api/views/delete",
-                    {"names": ["Renamed view", "Missing view"]},
+                    "DELETE",
+                    "/api/views/Missing%20view",
+                    None,
                 )
                 self.assertEqual(status, 404)
                 self.assertTrue((root / "views" / "Renamed view.md").is_file())
@@ -575,14 +590,42 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/views/delete",
-                    {"names": ["Renamed view", "Other view"]},
+                    "/api/view-deletion-operations",
+                    {"names": ["Renamed view", "Missing view"]},
                 )
-                self.assertEqual(status, 200)
-                self.assertEqual(
-                    json.loads(body),
-                    {"deleted": ["Renamed view", "Other view"], "views": []},
+                self.assertEqual(status, 202)
+                operation_id = json.loads(body)["id"]
+                deadline = time.monotonic() + 5
+                while True:
+                    status, _headers, body = self.request(
+                        server, "GET", f"/api/operations/{operation_id}"
+                    )
+                    self.assertEqual(status, 200)
+                    operation = json.loads(body)
+                    if operation["state"] not in {"queued", "running"}:
+                        break
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.01)
+                self.assertEqual(operation["state"], "failed")
+                self.assertTrue((root / "views" / "Renamed view.md").is_file())
+                self.assertTrue((root / "views" / "Other view.md").is_file())
+
+                status, _headers, body = self.request(
+                    server,
+                    "DELETE",
+                    "/api/views/Renamed%20view",
+                    None,
                 )
+                self.assertEqual(status, 204)
+                status, _headers, body = self.request(
+                    server,
+                    "DELETE",
+                    "/api/views/Other%20view",
+                    None,
+                )
+                self.assertEqual(status, 204)
+                status, _headers, body = self.request(server, "GET", "/api/views")
+                self.assertEqual(json.loads(body), [])
             finally:
                 self.stop(store, server, thread)
 
@@ -613,17 +656,16 @@ class ServeCatalogHttpTests(unittest.TestCase):
             try:
                 status, _headers, _body = self.request(
                     server,
-                    "POST",
-                    "/api/views",
+                    "PUT",
+                    "/api/views/Passed",
                     {
-                        "name": "Passed",
                         "filters": {"results": ["passed"]},
                         "group_by": "agent",
                         "notes": "",
                         "overwrite": False,
                     },
                 )
-                self.assertEqual(status, 200)
+                self.assertEqual(status, 201)
 
                 query = {
                     "state": "all",
@@ -644,7 +686,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     "browser_views": [browser_view],
                 }
                 status, _headers, body = self.request(
-                    server, "POST", "/api/catalog/query", query
+                    server, "POST", "/api/catalog-queries", query
                 )
                 self.assertEqual(status, 200, body)
                 self.assertEqual(
@@ -655,7 +697,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/catalog/query",
+                    "/api/catalog-queries",
                     {**query, "results": ["failed"]},
                 )
                 self.assertEqual(status, 200, body)
@@ -667,7 +709,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/views/summary",
+                    "/api/view-summaries",
                     {"browser_views": [browser_view]},
                 )
                 self.assertEqual(status, 200, body)
@@ -679,7 +721,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/views/summary",
+                    "/api/view-summaries",
                     {"browser_views": [{**browser_view, "name": "Passed"}]},
                 )
                 self.assertEqual(status, 409, body)
@@ -687,7 +729,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/views/summary",
+                    "/api/view-summaries",
                     {"browser_views": [{**browser_view, "unexpected": True}]},
                 )
                 self.assertEqual(status, 400, body)
@@ -695,16 +737,16 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/views/summary",
+                    "/api/view-summaries",
                     {"browser_views": [browser_view, browser_view]},
                 )
                 self.assertEqual(status, 400, body)
-                self.assertIn("duplicate", json.loads(body)["error"])
+                self.assertIn("duplicate", json.loads(body)["detail"])
 
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/views/summary",
+                    "/api/view-summaries",
                     {
                         "browser_views": [
                             {**browser_view, "name": f"Local {index}"}
@@ -713,7 +755,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(status, 400, body)
-                self.assertIn("at most 100", json.loads(body)["error"])
+                self.assertIn("at most 100", json.loads(body)["detail"])
             finally:
                 self.stop(store, server, thread)
 
@@ -759,17 +801,16 @@ class ServeCatalogHttpTests(unittest.TestCase):
             try:
                 status, _headers, _body = self.request(
                     server,
-                    "POST",
-                    "/api/views",
+                    "PUT",
+                    "/api/views/Passed",
                     {
-                        "name": "Passed",
                         "filters": {"results": ["passed"]},
                         "group_by": "agent",
                         "notes": "server export note",
                         "overwrite": False,
                     },
                 )
-                self.assertEqual(status, 200)
+                self.assertEqual(status, 201)
 
                 status, _headers, body = self.request(
                     server,
@@ -845,17 +886,16 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 for name, result in (("Passed", "passed"), ("Failed", "failed")):
                     status, _headers, _body = self.request(
                         server,
-                        "POST",
-                        "/api/views",
+                        "PUT",
+                        f"/api/views/{name}",
                         {
-                            "name": name,
                             "filters": {"results": [result]},
                             "group_by": "agent",
                             "notes": "",
                             "overwrite": False,
                         },
                     )
-                    self.assertEqual(status, 200)
+                    self.assertEqual(status, 201)
 
                 status, _headers, body = self.request(
                     server,
@@ -909,7 +949,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     server, "GET", "/api/catalog?view=Missing"
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("does not exist", json.loads(body)["error"])
+                self.assertIn("does not exist", json.loads(body)["detail"])
             finally:
                 self.stop(store, server, thread)
 
@@ -938,11 +978,11 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/sources/state",
+                    "/api/source-state-operations",
                     {"source_keys": keys, "active": False},
                 )
                 self.assertEqual(status, 202)
-                operation_id = json.loads(body)["operation_id"]
+                operation_id = json.loads(body)["id"]
                 operation = None
                 for _attempt in range(100):
                     status, _headers, body = self.request(
@@ -953,7 +993,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                         break
                     time.sleep(0.01)
                 self.assertEqual(status, 200)
-                self.assertEqual(operation["state"], "completed")
+                self.assertEqual(operation["state"], "failed")
                 self.assertEqual(operation["completed"], 2)
                 self.assertEqual(len(operation["successes"]), 1)
                 self.assertEqual(len(operation["failures"]), 1)
@@ -982,11 +1022,11 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/sources/delete",
+                    "/api/source-deletion-operations",
                     {"source_keys": [source_key]},
                 )
                 self.assertEqual(status, 202, body)
-                operation_id = json.loads(body)["operation_id"]
+                operation_id = json.loads(body)["id"]
                 operation = None
                 for _attempt in range(100):
                     status, _headers, body = self.request(
@@ -996,7 +1036,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     if operation["state"] not in {"queued", "running"}:
                         break
                     time.sleep(0.01)
-                self.assertEqual(operation["state"], "completed")
+                self.assertEqual(operation["state"], "succeeded")
                 self.assertEqual(len(operation["successes"]), 1)
                 self.assertEqual(runtime.catalog.query(CatalogQuery()).total, 0)
 
@@ -1016,14 +1056,14 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     status, _headers, body = self.request(
                         server,
                         "POST",
-                        "/api/sources/delete",
+                        "/api/source-deletion-operations",
                         {"source_keys": ["normal", "linked"]},
                     )
                 finally:
                     runtime.catalog.row_for_key = original_row_for_key
                     store.delete_source_row = original_delete
                 self.assertEqual(status, 400, body)
-                self.assertIn("linked Harbor Trials", json.loads(body)["error"])
+                self.assertIn("linked Harbor Trials", json.loads(body)["detail"])
                 self.assertEqual(deleted, [])
             finally:
                 self.stop(store, server, thread)
@@ -1044,8 +1084,8 @@ class ServeCatalogHttpTests(unittest.TestCase):
             try:
                 status, _headers, body = self.request(
                     server,
-                    "POST",
-                    f"/api/sources/{items[0].source_key}/category",
+                    "PATCH",
+                    f"/api/sources/{items[0].source_key}",
                     {"category": "Regression"},
                 )
                 self.assertEqual(status, 200, body)
@@ -1088,7 +1128,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     {"kind": "html", "source_keys": [items[1].source_key]},
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("xlsx or json", json.loads(body)["error"])
+                self.assertIn("xlsx or json", json.loads(body)["detail"])
 
                 status, _headers, body = self.request(
                     server,
@@ -1097,7 +1137,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     {"kind": "workspace_html", "source_keys": [items[1].source_key]},
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("xlsx or json", json.loads(body)["error"])
+                self.assertIn("xlsx or json", json.loads(body)["detail"])
             finally:
                 self.stop(store, server, thread)
 
@@ -1150,7 +1190,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 }
                 page_query.pop("group_by")
                 status, _headers, body = self.request(
-                    server, "POST", "/api/catalog/query", page_query
+                    server, "POST", "/api/catalog-queries", page_query
                 )
                 self.assertEqual(status, 200, body)
                 page = json.loads(body)
@@ -1161,7 +1201,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     views=["Passed"], browser_views=[browser_view]
                 )
                 status, _headers, body = self.request(
-                    server, "POST", "/api/catalog/summary", summary_query
+                    server, "POST", "/api/catalog-summaries", summary_query
                 )
                 self.assertEqual(status, 200, body)
                 payload = json.loads(body)
@@ -1175,7 +1215,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/catalog/summary",
+                    "/api/catalog-summaries",
                     leaderboard_summary_query(group_by="category"),
                 )
                 self.assertEqual(status, 200, body)
@@ -1195,25 +1235,25 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     status, _headers, _body = self.request(
                         server,
                         "POST",
-                        "/api/catalog/summary",
+                        "/api/catalog-summaries",
                         {**summary_query, forbidden: 1},
                     )
-                    self.assertEqual(status, 400, forbidden)
+                    self.assertEqual(status, 422, forbidden)
                 status, _headers, _body = self.request(
                     server,
                     "POST",
-                    "/api/catalog/summary",
+                    "/api/catalog-summaries",
                     {**summary_query, "group_by": "session"},
                 )
                 self.assertEqual(status, 400)
                 status, _headers, body = self.request(
                     server,
                     "POST",
-                    "/api/catalog/summary",
+                    "/api/catalog-summaries",
                     leaderboard_summary_query(views=["Missing"]),
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("does not exist", json.loads(body)["error"])
+                self.assertIn("does not exist", json.loads(body)["detail"])
 
                 export_query = dict(summary_query)
                 export_query.pop("group_by")
@@ -1261,11 +1301,11 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     status, _headers, body = self.request(
                         server,
                         "POST",
-                        "/api/catalog/summary",
+                        "/api/catalog-summaries",
                         leaderboard_summary_query(group_by="job"),
                     )
                     self.assertEqual(status, 413, body)
-                    self.assertIn("at most 1000 groups", json.loads(body)["error"])
+                    self.assertIn("at most 1000 groups", json.loads(body)["detail"])
 
                     query = leaderboard_summary_query()
                     query.pop("group_by")
@@ -1284,7 +1324,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                         },
                     )
                     self.assertEqual(status, 413, body)
-                    self.assertIn("at most 1000 groups", json.loads(body)["error"])
+                    self.assertIn("at most 1000 groups", json.loads(body)["detail"])
             finally:
                 self.stop(store, server, thread)
 
@@ -1352,12 +1392,18 @@ class ServeCatalogHttpTests(unittest.TestCase):
                             if name.startswith("xl/charts/") and name.endswith(".xml")
                         }
                     ),
-                    10,
+                    4,
                 )
                 self.assertIn("Complete Leaderboard query", strings)
                 self.assertIn("Category", strings)
                 self.assertIn("Regression", strings)
                 self.assertIn("<t>-</t>", strings)
+                self.assertIn("Active Duration", strings)
+                self.assertIn("Turns", strings)
+                self.assertIn("Tool Calls", strings)
+                self.assertIn("Tool Error Rate", strings)
+                self.assertNotIn("Reward", strings)
+                self.assertNotIn("Avg TTFT", strings)
 
                 status, _headers, body = self.request(
                     server,
@@ -1381,9 +1427,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 with zipfile.ZipFile(BytesIO(body)) as archive:
                     strings = archive.read("xl/sharedStrings.xml").decode("utf-8")
                 self.assertIn("Complete Leaderboard query", strings)
-                self.assertIn("Avg TTFT", strings)
-                self.assertIn("Decode TPS", strings)
-                self.assertIn("Cache Hit", strings)
+                self.assertNotIn("Avg TTFT", strings)
+                self.assertNotIn("Decode TPS", strings)
+                self.assertNotIn("Cache Hit", strings)
 
                 status, headers, body = self.request(
                     server,
@@ -1414,7 +1460,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                             if name.startswith("xl/charts/") and name.endswith(".xml")
                         }
                     ),
-                    10,
+                    4,
                 )
 
                 status, _headers, body = self.request(
@@ -1439,7 +1485,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("does not exist", json.loads(body)["error"])
+                self.assertIn("does not exist", json.loads(body)["detail"])
 
                 status, _headers, body = self.request(
                     server,
@@ -1451,7 +1497,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("does not exist", json.loads(body)["error"])
+                self.assertIn("does not exist", json.loads(body)["detail"])
             finally:
                 self.stop(store, server, thread)
 
@@ -1484,7 +1530,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 )
 
                 self.assertEqual(status, 400, body[:200])
-                self.assertIn("no valid generation", json.loads(body)["error"])
+                self.assertIn("no valid generation", json.loads(body)["detail"])
             finally:
                 self.stop(store, server, thread)
 

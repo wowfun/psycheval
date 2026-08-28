@@ -402,7 +402,7 @@ async function loadLeaderboardSummary() {
   state.leaderboardSummaryLoading = true;
   const request = (async () => {
     try {
-      const response = await serveApi("/api/catalog/summary", {
+      const response = await serveApi("/api/catalog-summaries", {
         method: "POST",
         body: payload,
       });
@@ -461,7 +461,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
     state.catalogQuery.views = applied.views;
     if (prepareLeaderboardSummaryScope()) renderCatalogComparison();
     const page = applied.browser_views.length
-      ? await serveApi("/api/catalog/query", {
+      ? await serveApi("/api/catalog-queries", {
         method: "POST",
         body: {
           state: state.catalogQuery.state || "active",
@@ -506,6 +506,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
       !state.workspaceViewsLoaded
       || (workspaceViews().length >= 1 && Number(state.workspaceViewSummaryGeneration) !== Number(page.generation || 0))
     ) refreshWorkspaceViews();
+    return page;
   } catch (error) {
     if (error?.status === 409 && state.workspaceAppliedViewNames.size) {
       const appliedCount = state.workspaceAppliedViewNames.size;
@@ -522,6 +523,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
     state.leaderboardSummaryError = error?.message || String(error);
     renderCatalogComparison();
     setServeStatus(error.message || String(error), true);
+    return null;
   } finally {
     state.catalogLoading = false;
   }
@@ -530,7 +532,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
 async function resolveCatalogSelections() {
   const selected = Array.from(new Set([...state.rowSelection, state.selectedSourceKey].filter(Boolean)));
   if (!selected.length) return;
-  const payload = await serveApi("/api/catalog/resolve", { method: "POST", body: { source_keys: selected } });
+  const payload = await serveApi("/api/source-key-resolutions", { method: "POST", body: { source_keys: selected } });
   const present = new Set(listValue(payload?.source_keys));
   Array.from(state.rowSelection).forEach(key => { if (!present.has(key)) state.rowSelection.delete(key); });
   if (state.selectedSourceKey && !present.has(state.selectedSourceKey)) {
@@ -559,11 +561,12 @@ async function ensureCatalogDetail(generationChanged = false) {
 }
 
 async function loadServeWorkspace() {
-  await Promise.all([
+  const [catalog, reports] = await Promise.all([
     loadCatalogPage(),
     refreshWorkspaceReports(),
     refreshSourceCategoryOptions(),
   ]);
+  if (catalog === null || reports === null) throw new Error("Workspace data is stale");
 }
 
 function catalogRowForSourceKey(sourceKey) {
@@ -620,7 +623,7 @@ function selectServeSource(sourceKey) {
 async function loadServeSourceReport(sourceKey, selection = {}) {
   if (!sourceKey) return;
   try {
-    const envelope = await serveApi(`/api/report?source_key=${encodeURIComponent(sourceKey)}`);
+    const envelope = await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}`);
     applyServeDetailSelection(sourceKey, envelope.report || emptyServeReport(), envelope.artifact_revision, selection);
     setServeStatus(serveSourceModeStatusText());
   } catch (error) {
@@ -649,8 +652,8 @@ async function switchServeSourceMode(mode) {
 
 function applyServeMutationPayload(payload, options = {}) {
   hideServeNotice();
-  if (payload?.operation_id) {
-    return pollCatalogOperation(payload.operation_id, options);
+  if (payload?.id) {
+    return pollCatalogOperation(payload.id, options);
   }
   return loadCatalogPage({}, { force: true });
 }
@@ -662,7 +665,7 @@ async function applyServeSourceStateMutationPayload(payload, options = {}) {
 async function pollCatalogOperation(operationId, options = {}) {
   try {
     const operation = await serveApi(`/api/operations/${encodeURIComponent(operationId)}`);
-    setServeStatus(`${operation.operation_type}: ${operation.completed}/${operation.total}`);
+    setServeStatus(`${operation.kind}: ${operation.completed}/${operation.total}`);
     setWorkspaceWriteControlsDisabled(operation.state === "queued" || operation.state === "running");
     if (operation.state === "queued" || operation.state === "running") {
       setTimeout(() => pollCatalogOperation(operationId, options), 200);
@@ -706,9 +709,12 @@ function setWorkspaceWriteControlsDisabled(disabled) {
 async function refreshServeSourcesFromServer() {
   if (!adminMode()) return;
   try {
-    const payload = await serveApi("/api/sources/reload", { method: "POST", body: {} });
+    const payload = await serveApi("/api/source-discovery-operations", {
+      method: "POST",
+      body: {},
+    });
     await applyServeMutationPayload(payload);
-    if (!payload?.operation_id) await refreshSourceCategoryOptions();
+    if (!payload?.id) await refreshSourceCategoryOptions();
   } catch (error) {
     setServeStatus(error.message || String(error), true);
   }
@@ -762,7 +768,7 @@ async function serveDownload(kind, body, requestedFilename = "") {
     if (!response.ok) {
       reloadExpiredAdminSession(response);
       const payload = await response.json().catch(() => ({}));
-      throw new Error(payload?.error || response.statusText);
+      throw new Error(payload?.detail || payload?.title || response.statusText);
     }
     const blob = await response.blob();
     const filename = requestedFilename || (kind === "xlsx" ? "peval-leaderboard.xlsx" : "peval-report-v19.json");

@@ -1,4 +1,4 @@
-import { listValue, t } from "./runtime.js";
+import { listValue, t } from "./shared.js";
 
 function createTaskBrowser(options = {}) {
   const browser = {

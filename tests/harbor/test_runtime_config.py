@@ -76,7 +76,7 @@ def test_unified_config_is_read_by_each_section_owner(tmp_path: Path) -> None:
 
     assert settings.source_path == config.resolve()
     assert settings.workdir_root == config.parent / "relative workspaces"
-    workspace = load_peval_config(None, workspace_root=str(config.parent))
+    workspace = load_peval_config(workspace_root=str(config.parent))
     assert workspace.description == "Nightly workspace"
     assert workspace.adapter_default_db_paths == {
         "psychevo": str((config.parent / "state.db").resolve())

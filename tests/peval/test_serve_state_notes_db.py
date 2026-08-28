@@ -56,7 +56,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {"path": "common_session.jsonl", "adapter": "opencode"},
                     origin=origin,
                 )
@@ -70,26 +70,26 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
 
                 status, _, body = request_json(
                     port,
-                    "POST",
-                    f"/api/sources/{source_key}/notes",
-                    {"markdown": "Updated HTTP note."},
+                    "PATCH",
+                    f"/api/sources/{source_key}",
+                    {"notes": "Updated HTTP note."},
                     origin=origin,
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("refreshable", body["error"])
+                self.assertIn("refreshable", body["detail"])
                 self.assertEqual(
                     note_path.read_text(encoding="utf-8"), "Initial HTTP note."
                 )
 
                 status, _, rejected = request_json(
                     port,
-                    "POST",
-                    f"/api/sources/{source_key}/notes",
-                    {"markdown": "bad origin"},
+                    "PATCH",
+                    f"/api/sources/{source_key}",
+                    {"notes": "bad origin"},
                     origin="http://example.test",
                 )
                 self.assertEqual(status, 403)
-                self.assertIn("same-origin", rejected["error"])
+                self.assertIn("same-origin", rejected["detail"])
 
                 snapshot_keys = store.ingest_report_snapshot(
                     sample_report(config),
@@ -100,19 +100,19 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 request_json(
                     port,
                     "POST",
-                    "/api/sources/reload",
+                    "/api/source-discovery-operations",
                     {},
                     origin=origin,
                 )
                 status, _, snapshot_error = request_json(
                     port,
-                    "POST",
-                    f"/api/sources/{snapshot_keys[0]}/notes",
-                    {"markdown": "snapshot note"},
+                    "PATCH",
+                    f"/api/sources/{snapshot_keys[0]}",
+                    {"notes": "snapshot note"},
                     origin=origin,
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("refreshable", snapshot_error["error"])
+                self.assertIn("refreshable", snapshot_error["detail"])
             finally:
                 server.shutdown()
                 server.server_close()
@@ -295,7 +295,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/db-sessions",
+                    "/api/database-inspections",
                     {"db": ".hermes/state.db"},
                     origin=origin,
                 )
@@ -308,7 +308,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/db-sessions",
+                    "/api/database-inspections",
                     {"db": ".psychevo/state.db"},
                     origin=origin,
                 )
@@ -319,7 +319,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/db-sessions",
+                    "/api/database-inspections",
                     {"db": ".opencode/opencode.db"},
                     origin=origin,
                 )
@@ -330,7 +330,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {
                         "db": ".hermes/state.db",
                         "adapter": "hermes",
@@ -390,7 +390,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                     status, _, body = request_json(
                         port,
                         "POST",
-                        "/api/db-sessions",
+                        "/api/database-inspections",
                         {"db": r"C:\Users\kevin\.hermes\state.db"},
                         origin=origin,
                     )
@@ -402,7 +402,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                     status, _, body = request_json(
                         port,
                         "POST",
-                        "/api/sources",
+                        "/api/source-import-operations",
                         {
                             "db": r"C:\Users\kevin\.hermes\state.db",
                             "adapter": "hermes",
@@ -420,7 +420,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                     status, _, body = request_json(
                         port,
                         "POST",
-                        "/api/sources",
+                        "/api/source-import-operations",
                         {
                             "path": r"D:\sessions\common.jsonl",
                             "adapter": "opencode",
@@ -479,18 +479,18 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/db-sessions",
+                    "/api/database-inspections",
                     {"db": "data/state.db"},
                     origin=origin,
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("could not infer adapter", body["error"])
-                self.assertIn("available adapters", body["error"])
+                self.assertIn("could not infer adapter", body["detail"])
+                self.assertIn("available adapters", body["detail"])
 
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/db-sessions",
+                    "/api/database-inspections",
                     {"db": "data/state.db", "adapter": "hermes"},
                     origin=origin,
                 )
@@ -501,23 +501,23 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/db-sessions",
+                    "/api/database-inspections",
                     {"db": "hermes/opencode/state.db"},
                     origin=origin,
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("ambiguous adapter inference", body["error"])
+                self.assertIn("ambiguous adapter inference", body["detail"])
 
                 missing_db = root / "missing" / "state.db"
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/db-sessions",
+                    "/api/database-inspections",
                     {"db": "missing/state.db"},
                     origin=origin,
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("DB path does not exist", body["error"])
+                self.assertIn("DB path does not exist", body["detail"])
                 self.assertFalse(missing_db.exists())
 
                 custom_entry = FakeEntryPoint("custom", CustomPathAdapter)
@@ -528,23 +528,23 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                     status, _, body = request_json(
                         port,
                         "POST",
-                        "/api/db-sessions",
+                        "/api/database-inspections",
                         {"db": "custom/state.db", "adapter": "custom"},
                         origin=origin,
                     )
                 self.assertEqual(status, 400)
-                self.assertIn("does not support session listing", body["error"])
+                self.assertIn("does not support session listing", body["detail"])
 
                 status, headers, body = request_json(
                     port,
                     "POST",
-                    "/api/db-sessions",
+                    "/api/database-inspections",
                     {"db": "data/state.db", "adapter": "hermes"},
                     origin="http://example.test",
                 )
                 self.assertEqual(status, 403)
                 self.assertNotIn("access-control-allow-origin", headers)
-                self.assertIn("same-origin", body["error"])
+                self.assertIn("same-origin", body["detail"])
             finally:
                 server.shutdown()
                 server.server_close()

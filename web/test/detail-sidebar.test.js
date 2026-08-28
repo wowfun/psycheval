@@ -51,7 +51,7 @@ test("the selected Harbor trial renders the shared read-only browser at its curr
   const calls = [];
   globalThis.fetch = async path => {
     calls.push(String(path));
-    const payload = String(path).startsWith("/api/harbor/task?")
+    const payload = String(path) === "/api/harbor/datasets/dataset/tasks/task"
       ? {
           dataset_id: "dataset",
           task: { directory: "task" },
@@ -83,7 +83,7 @@ test("the selected Harbor trial renders the shared read-only browser at its curr
   assert.equal(task.querySelector("[data-harbor-editor]").value, "Collect evidence.");
   assert.equal(task.querySelector("[data-harbor-editor]").readOnly, true);
   assert.equal(task.querySelector("[data-harbor-save]"), null);
-  assert.ok(calls.some(path => path.includes("path=steps%2Fcollect%2Finstruction.md")));
+  assert.ok(calls.some(path => path.endsWith("/files/steps%2Fcollect%2Finstruction.md")));
   assert.equal(steps.querySelectorAll(".step").length, 2);
   assert.equal(task.compareDocumentPosition(steps) & window.Node.DOCUMENT_POSITION_FOLLOWING, window.Node.DOCUMENT_POSITION_FOLLOWING);
   assert.equal(document.querySelector("#trace #step-list"), null);

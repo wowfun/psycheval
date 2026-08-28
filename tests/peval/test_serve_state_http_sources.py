@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from psycheval.config import HarborDataset
-from psycheval.serve.harbor_workspace import config_revision
 from psycheval.serve.path_picker import PathPickerUnavailable
 from tests.peval.serve_state_support import (
     ECHARTS_ASSET_PATH,
@@ -52,7 +51,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 404)
                 self.assertNotIn("access-control-allow-origin", headers)
-                self.assertEqual(body["error"], "not found")
+                self.assertEqual(body["detail"], "Not Found")
                 self.assertEqual(store.source_payload(), [])
             finally:
                 server.shutdown()
@@ -77,22 +76,22 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, headers, body = request_json(
                     port,
                     "POST",
-                    "/api/path-picker",
+                    "/api/path-selections",
                     {"multiple": True},
                     origin="http://example.test",
                 )
                 self.assertEqual(status, 403)
                 self.assertNotIn("access-control-allow-origin", headers)
-                self.assertIn("same-origin", body["error"])
+                self.assertIn("same-origin", body["detail"])
 
                 with patch(
-                    "psycheval.serve.handler.pick_file_paths",
+                    "psycheval.serve.api.pick_file_paths",
                     return_value=["/tmp/one.jsonl", "/tmp/two.json"],
                 ) as picker:
                     status, headers, body = request_json(
                         port,
                         "POST",
-                        "/api/path-picker",
+                        "/api/path-selections",
                         {"multiple": True},
                         origin=origin,
                     )
@@ -106,28 +105,28 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 self.assertEqual(json.loads(body_bytes.decode("utf-8"))["sources"], [])
 
                 with patch(
-                    "psycheval.serve.handler.pick_file_paths",
+                    "psycheval.serve.api.pick_file_paths",
                     side_effect=PathPickerUnavailable("native file picker unavailable"),
                 ):
                     status, _, body = request_json(
                         port,
                         "POST",
-                        "/api/path-picker",
+                        "/api/path-selections",
                         {"multiple": True},
                         origin=origin,
                     )
                 self.assertEqual(status, 503)
-                self.assertIn("native file picker unavailable", body["error"])
+                self.assertIn("native file picker unavailable", body["detail"])
 
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/path-picker",
+                    "/api/path-selections",
                     {"multiple": "yes"},
                     origin=origin,
                 )
-                self.assertEqual(status, 400)
-                self.assertIn("multiple must be true or false", body["error"])
+                self.assertEqual(status, 422)
+                self.assertEqual(body["errors"][0]["pointer"], "/multiple")
             finally:
                 server.shutdown()
                 server.server_close()
@@ -228,7 +227,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {
                         "path": "common_session.jsonl",
                         "adapter": "opencode",
@@ -254,8 +253,8 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
 
                 status, _, body = request_json(
                     port,
-                    "POST",
-                    f"/api/sources/{source_key}/alias",
+                    "PATCH",
+                    f"/api/sources/{source_key}",
                     {"alias": "Renamed source"},
                     origin=origin,
                 )
@@ -269,8 +268,30 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
 
                 status, _, body = request_json(
                     port,
+                    "PATCH",
+                    f"/api/sources/{source_key}",
+                    {
+                        "alias": "Must not persist",
+                        "notes": "x" * (1024 * 1024 + 1),
+                    },
+                    origin=origin,
+                )
+                self.assertEqual(status, 400)
+                self.assertIn("notes.md", body["detail"])
+                status, _, body = request_json(
+                    port,
                     "POST",
-                    f"/api/sources/{source_key}/category",
+                    "/api/source-import-operations",
+                    {"path": "common_session.jsonl", "adapter": "opencode"},
+                    origin=origin,
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(body["sources"][0]["source_alias"], "Renamed source")
+
+                status, _, body = request_json(
+                    port,
+                    "PATCH",
+                    f"/api/sources/{source_key}",
                     {"category": "  Regression  "},
                     origin=origin,
                 )
@@ -283,9 +304,9 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
 
                 status, _, body = request_json(
                     port,
-                    "POST",
-                    f"/api/sources/{source_key}/tags",
-                    {"tags": "alpha，beta, alpha"},
+                    "PATCH",
+                    f"/api/sources/{source_key}",
+                    {"tags": ["alpha", "beta", "alpha"]},
                     origin=origin,
                 )
                 self.assertEqual(status, 200)
@@ -298,7 +319,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {"path": "common_session.jsonl", "adapter": "opencode"},
                     origin=origin,
                 )
@@ -310,8 +331,8 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
 
                 status, _, body = request_json(
                     port,
-                    "POST",
-                    f"/api/sources/{source_key}/alias",
+                    "PATCH",
+                    f"/api/sources/{source_key}",
                     {"alias": ""},
                     origin=origin,
                 )
@@ -322,8 +343,8 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
 
                 status, _, body = request_json(
                     port,
-                    "POST",
-                    f"/api/sources/{source_key}/category",
+                    "PATCH",
+                    f"/api/sources/{source_key}",
                     {"category": "   "},
                     origin=origin,
                 )
@@ -335,9 +356,9 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
 
                 status, _, body = request_json(
                     port,
-                    "POST",
-                    f"/api/sources/{source_key}/tags",
-                    {"tags": ""},
+                    "PATCH",
+                    f"/api/sources/{source_key}",
+                    {"tags": []},
                     origin=origin,
                 )
                 self.assertEqual(status, 200)
@@ -346,23 +367,22 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
 
                 status, _, body = request_json(
                     port,
-                    "POST",
-                    f"/api/sources/{source_key}/category",
+                    "PATCH",
+                    f"/api/sources/{source_key}",
                     {"category": ["not", "scalar"]},
                     origin=origin,
                 )
-                self.assertEqual(status, 400)
-                self.assertIn("category must be a string", body["error"])
+                self.assertEqual(status, 422)
+                self.assertEqual(body["errors"][0]["pointer"], "/category")
 
                 status, _, body = request_json(
                     port,
-                    "POST",
-                    f"/api/sources/{source_key}/category",
+                    "PATCH",
+                    f"/api/sources/{source_key}",
                     {},
                     origin=origin,
                 )
-                self.assertEqual(status, 400)
-                self.assertIn("category must be a string", body["error"])
+                self.assertEqual(status, 422)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -387,23 +407,28 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
             try:
                 status, _, rejected = request_json(
                     port,
-                    "POST",
-                    "/api/config/locale",
+                    "PATCH",
+                    "/api/config",
                     {"locale": "zh"},
                     origin="http://example.test",
                 )
                 self.assertEqual(status, 403)
-                self.assertIn("same-origin", rejected["error"])
+                self.assertIn("same-origin", rejected["detail"])
 
-                status, _, body = request_json(
+                config_status, config_headers, _config_body = request_bytes(
+                    port, "/api/config"
+                )
+                self.assertEqual(config_status, 200)
+                status, response_headers, body = request_json(
                     port,
-                    "POST",
-                    "/api/config/locale",
+                    "PATCH",
+                    "/api/config",
                     {"locale": "zh"},
                     origin=origin,
+                    request_headers={"If-Match": config_headers["etag"]},
                 )
                 self.assertEqual(status, 200)
-                self.assertEqual(body, {"locale": "zh-CN"})
+                self.assertEqual(body["locale"], "zh-CN")
                 config_text = (root / "peval.toml").read_text(encoding="utf-8")
                 self.assertIn('locale = "zh-CN"\n', config_text)
 
@@ -416,13 +441,14 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
 
                 status, _, body = request_json(
                     port,
-                    "POST",
-                    "/api/config/locale",
+                    "PATCH",
+                    "/api/config",
                     {"locale": "en-US"},
                     origin=origin,
+                    request_headers={"If-Match": response_headers["etag"]},
                 )
                 self.assertEqual(status, 200)
-                self.assertEqual(body, {"locale": "en"})
+                self.assertEqual(body["locale"], "en")
                 self.assertIn(
                     'locale = "en"\n',
                     (root / "peval.toml").read_text(encoding="utf-8"),
@@ -451,38 +477,39 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
             try:
                 status, _, rejected = request_json(
                     port,
-                    "POST",
-                    "/api/config/adapter-default-db",
-                    {"adapter": "opencode", "default_db_path": "db/opencode.db"},
+                    "PATCH",
+                    "/api/config",
+                    {"adapter_defaults": {"opencode": "db/opencode.db"}},
                     origin="http://example.test",
                 )
                 self.assertEqual(status, 403)
-                self.assertIn("same-origin", rejected["error"])
+                self.assertIn("same-origin", rejected["detail"])
 
-                status, _, invalid = request_json(
+                config_status, config_headers, _config_body = request_bytes(
+                    port, "/api/config"
+                )
+                self.assertEqual(config_status, 200)
+                status, response_headers, configured = request_json(
                     port,
-                    "POST",
-                    "/api/config/adapter-default-db",
-                    {"adapter": "missing", "default_db_path": "db/missing.db"},
+                    "PATCH",
+                    "/api/config",
+                    {"adapter_defaults": {"missing": "db/missing.db"}},
                     origin=origin,
+                    request_headers={"If-Match": config_headers["etag"]},
                 )
-                self.assertEqual(status, 400)
-                self.assertIn(
-                    "unsupported adapter for adapter default DB: missing",
-                    invalid["error"],
-                )
+                self.assertEqual(status, 422)
+                self.assertIn("unsupported adapter", configured["detail"])
 
-                status, _, body = request_json(
+                status, response_headers, body = request_json(
                     port,
-                    "POST",
-                    "/api/config/adapter-default-db",
-                    {"adapter": "opencode", "default_db_path": "db/opencode.db"},
+                    "PATCH",
+                    "/api/config",
+                    {"adapter_defaults": {"opencode": "db/opencode.db"}},
                     origin=origin,
+                    request_headers={"If-Match": config_headers["etag"]},
                 )
                 expected = str((root / "db/opencode.db").resolve())
                 self.assertEqual(status, 200)
-                self.assertEqual(body["adapter"], "opencode")
-                self.assertEqual(body["default_db_path"], expected)
                 self.assertEqual(body["adapter_defaults"]["opencode"], expected)
                 config_text = (root / "peval.toml").read_text(encoding="utf-8")
                 self.assertIn("[adapters.opencode]\n", config_text)
@@ -497,17 +524,16 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
 
                 status, _, body = request_json(
                     port,
-                    "POST",
-                    "/api/config/adapter-default-db",
-                    {"adapter": "opencode", "default_db_path": ""},
+                    "PATCH",
+                    "/api/config",
+                    {"adapter_defaults": {"opencode": None}},
                     origin=origin,
+                    request_headers={"If-Match": response_headers["etag"]},
                 )
                 self.assertEqual(status, 200)
-                self.assertEqual(body["adapter"], "opencode")
-                self.assertIsNone(body["default_db_path"])
                 self.assertNotIn("opencode", body["adapter_defaults"])
                 self.assertNotIn(
-                    "default_db_path",
+                    "[adapters.opencode]\ndefault_db_path",
                     (root / "peval.toml").read_text(encoding="utf-8"),
                 )
 
@@ -565,7 +591,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
             config = ToolConfig(
                 adapter="opencode",
                 locale="en",
-                harbor_datasets=(HarborDataset("pbench", str(dataset)),),
+                harbor_datasets=(HarborDataset(id="pbench", path=str(dataset)),),
             )
             store = open_workspace_state(str(root))
             server = LocalHTTPServer(
@@ -577,40 +603,42 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
             port = server.server_port
             origin = f"http://127.0.0.1:{port}"
             try:
-                status, _, body = request_json(
-                    port,
-                    "POST",
-                    "/api/config/harbor/mounts",
-                    {
-                        "action": "upsert",
-                        "expected_revision": config_revision(root / "peval.toml"),
-                        "jobs_path": str(jobs),
-                    },
-                    origin=origin,
+                status, mount_headers, mounts_body = request_bytes(
+                    port, "/api/harbor/mounts"
                 )
                 self.assertEqual(status, 200)
-                mount_revision = body["result"]["revision"]
-                mounts = body["result"]["mounts"]
+                self.assertEqual(json.loads(mounts_body), [])
+                status, response_headers, _body = request_json(
+                    port,
+                    "POST",
+                    "/api/harbor/mounts",
+                    {"path": str(jobs)},
+                    origin=origin,
+                    request_headers={"If-Match": mount_headers["etag"]},
+                )
+                self.assertEqual(status, 200)
+                status, _, mounts_body = request_bytes(port, "/api/harbor/mounts")
+                self.assertEqual(status, 200)
+                mounts = json.loads(mounts_body)
                 self.assertEqual(mounts[0]["id"], "jobs")
                 self.assertEqual(mounts[0]["dataset_ids"], [])
 
-                status, _, body = request_json(
+                status, response_headers, _body = request_json(
                     port,
-                    "POST",
-                    "/api/config/harbor/mounts",
+                    "PATCH",
+                    "/api/harbor/mounts/jobs",
                     {
-                        "action": "upsert",
-                        "expected_revision": mount_revision,
-                        "original_id": "jobs",
-                        "mount_id": "pbench-jobs",
-                        "jobs_path": str(jobs),
+                        "new_id": "pbench-jobs",
+                        "path": str(jobs),
                         "dataset_ids": ["pbench"],
                     },
                     origin=origin,
+                    request_headers={"If-Match": response_headers["etag"]},
                 )
                 self.assertEqual(status, 200)
-                mount_revision = body["result"]["revision"]
-                mounts = body["result"]["mounts"]
+                status, _, mounts_body = request_bytes(port, "/api/harbor/mounts")
+                self.assertEqual(status, 200)
+                mounts = json.loads(mounts_body)
                 self.assertEqual(mounts[0]["id"], "pbench-jobs")
                 self.assertEqual(mounts[0]["dataset_ids"], ["pbench"])
                 config_text = (root / "peval.toml").read_text(encoding="utf-8")
@@ -629,38 +657,38 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 before_invalid = config_text
                 status, _, rejected = request_json(
                     port,
-                    "POST",
-                    "/api/config/harbor/mounts",
+                    "PATCH",
+                    "/api/harbor/mounts/pbench-jobs",
                     {
-                        "action": "upsert",
-                        "expected_revision": mount_revision,
-                        "original_id": "pbench-jobs",
-                        "mount_id": "pbench-jobs",
-                        "jobs_path": str(jobs),
+                        "new_id": "pbench-jobs",
+                        "path": str(jobs),
                         "dataset_ids": ["missing"],
                     },
                     origin=origin,
+                    request_headers={"If-Match": response_headers["etag"]},
                 )
                 self.assertEqual(status, 400)
-                self.assertIn("unknown dataset id", rejected["error"])
+                self.assertIn("unknown dataset id", rejected["detail"])
                 self.assertEqual(
                     (root / "peval.toml").read_text(encoding="utf-8"),
                     before_invalid,
                 )
 
-                status, _, body = request_json(
-                    port,
-                    "POST",
-                    "/api/config/harbor/mounts",
-                    {
-                        "action": "delete",
-                        "mount_ids": ["pbench-jobs"],
-                        "expected_revision": mount_revision,
-                    },
-                    origin=origin,
+                status, mount_headers, _mounts_body = request_bytes(
+                    port, "/api/harbor/mounts"
                 )
                 self.assertEqual(status, 200)
-                self.assertEqual(body["result"]["mounts"], [])
+                status, _, _body = request_json(
+                    port,
+                    "POST",
+                    "/api/harbor/mount-deletion-operations",
+                    {"mount_ids": ["pbench-jobs"]},
+                    origin=origin,
+                    request_headers={"If-Match": mount_headers["etag"]},
+                )
+                self.assertEqual(status, 200)
+                status, _, mounts_body = request_bytes(port, "/api/harbor/mounts")
+                self.assertEqual(json.loads(mounts_body), [])
                 self.assertNotIn(
                     "[[harbor.mounts]]",
                     (root / "peval.toml").read_text(encoding="utf-8"),
@@ -694,7 +722,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {
                         "path": "common one.jsonl\ncommon_two.jsonl",
                         "adapter": "opencode",
@@ -758,7 +786,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, failed = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {"path": "missing.jsonl", "adapter": "opencode"},
                     origin=origin,
                 )
@@ -843,30 +871,32 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, failed = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {"path": "common_session.jsonl", "adapter": "auto"},
                     origin=origin,
                 )
-                self.assertEqual(status, 400)
-                self.assertIn("could not infer adapter", failed["error"])
-                self.assertIn("available adapters", failed["error"])
+                self.assertEqual(status, 200)
+                self.assertEqual(failed["state"], "failed")
+                self.assertIn("could not infer adapter", failed["failures"][0]["error"])
+                self.assertIn("available adapters", failed["failures"][0]["error"])
                 self.assertEqual(store.source_payload(), [])
 
                 status, _, failed = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {"path": "common_session.jsonl"},
                     origin=origin,
                 )
-                self.assertEqual(status, 400)
-                self.assertIn("could not infer adapter", failed["error"])
+                self.assertEqual(status, 200)
+                self.assertEqual(failed["state"], "failed")
+                self.assertIn("could not infer adapter", failed["failures"][0]["error"])
                 self.assertEqual(store.source_payload(), [])
 
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {"path": "common_session.jsonl", "adapter": "opencode"},
                     origin=origin,
                 )
@@ -877,7 +907,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {"path": ".opencode/common_session.jsonl", "adapter": "auto"},
                     origin=origin,
                 )
@@ -889,15 +919,18 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, failed = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {
                         "path": ".hermes/opencode/common_session.jsonl",
                         "adapter": "auto",
                     },
                     origin=origin,
                 )
-                self.assertEqual(status, 400)
-                self.assertIn("ambiguous adapter inference", failed["error"])
+                self.assertEqual(status, 200)
+                self.assertEqual(failed["state"], "failed")
+                self.assertIn(
+                    "ambiguous adapter inference", failed["failures"][0]["error"]
+                )
                 self.assertEqual(store.source_payload(), before_ambiguous)
             finally:
                 server.shutdown()
@@ -930,7 +963,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {
                         "path": "common_session.jsonl\n.opencode/common_session.jsonl",
                         "adapter": "auto",
@@ -972,12 +1005,14 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {"input_table": "inputs.csv", "adapter": "auto"},
                     origin=origin,
                 )
-                self.assertEqual(status, 400)
-                self.assertIn("path or db", body["error"])
+                self.assertEqual(status, 422)
+                self.assertTrue(
+                    any(error["pointer"] == "/input_table" for error in body["errors"])
+                )
                 self.assertEqual(store.source_payload(), [])
             finally:
                 server.shutdown()
@@ -1018,7 +1053,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {
                         "path": "common_one.jsonl\ncommon_two.jsonl\ncommon_three.jsonl",
                         "adapter": "opencode",
@@ -1213,7 +1248,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {"path": str(external / "runs")},
                     origin=origin,
                 )
@@ -1260,7 +1295,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {
                         "path": "missing.jsonl\ncommon_session.jsonl",
                         "adapter": "opencode",
@@ -1308,12 +1343,15 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/sources",
+                    "/api/source-import-operations",
                     {"path": str(external / "runs")},
                     origin=origin,
                 )
-                self.assertEqual(status, 400)
-                self.assertIn("no complete Trial cells found", body["error"])
+                self.assertEqual(status, 200)
+                self.assertEqual(body["state"], "failed")
+                self.assertIn(
+                    "no complete Trial cells found", body["failures"][0]["error"]
+                )
                 self.assertEqual(store.source_payload(), [])
             finally:
                 server.shutdown()

@@ -57,7 +57,7 @@ const catalog = await import("../../src/psycheval/assets/web/modules/serve-catal
 const effects = await import("../../src/psycheval/assets/web/modules/serve-effects.js");
 const reports = await import("../../src/psycheval/assets/web/modules/workspace-reports.js");
 const views = await import("../../src/psycheval/assets/web/modules/workspace-views.js");
-const controls = await import("../../src/psycheval/assets/web/modules/serve-controls.js");
+const shell = await import("../../src/psycheval/assets/web/modules/global-shell.js");
 const harbor = await import("../../src/psycheval/assets/web/modules/harbor-workbench.js");
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -107,42 +107,24 @@ test("guest surfaces keep browsing controls and omit every workspace mutation", 
   assert.match(viewIndex, /data-view-delete-selected/);
   assert.match(viewIndex, /Delete local \(1\)/);
 
-  runtime.state.workspaceReports = [{
-    report_id: "20260101-000000-000001",
-    filename: "published.md",
-    format: "markdown",
-    source_keys: [],
-  }];
-  const inventory = reports.renderWorkspaceReportInventoryItem(runtime.state.workspaceReports[0]);
-  assert.match(inventory, /data-report-manager-preview/);
-  assert.doesNotMatch(inventory, /data-report-inventory-id/);
-  reports.renderWorkspaceReportBindings();
-  assert.equal(document.querySelector("[data-report-bindings]").innerHTML, "");
-
   await assert.rejects(
     effects.commitSourceCellEdit({ source_key: "source" }, "alias", "blocked"),
     /unavailable/,
   );
 });
 
-test("guest report library fetches only public report inventory", async () => {
-  const calls = [];
-  const previousFetch = globalThis.fetch;
-  globalThis.fetch = async path => {
-    calls.push(String(path));
-    return {
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      text: async () => JSON.stringify({ reports: [] }),
-    };
-  };
-  try {
-    await reports.loadWorkspaceReportManagerData();
-    assert.deepEqual(calls, ["/api/reports"]);
-  } finally {
-    globalThis.fetch = previousFetch;
-  }
+test("Home report refresh does not render into the Reports page-owned manager", () => {
+  const inventory = document.querySelector("[data-report-inventory]");
+  inventory.innerHTML = '<span data-reports-page-owner>owned by Reports page</span>';
+
+  reports.applyWorkspaceReportCatalog([{
+    report_id: "report-2",
+    filename: "new-report.md",
+    format: "markdown",
+    source_keys: [],
+  }]);
+
+  assert.ok(inventory.querySelector("[data-reports-page-owner]"));
 });
 
 test("guest Dataset page loads Task text as read-only without download controls", async () => {
@@ -153,7 +135,7 @@ test("guest Dataset page loads Task text as read-only without download controls"
     const value = String(path);
     const payload = value === "/api/harbor/datasets"
       ? { datasets: [{ id: "public", tasks: [{ directory: "task-1", package_name: "org/task", status: "valid", diagnostics: [] }] }] }
-      : value.startsWith("/api/harbor/task?")
+      : value === "/api/harbor/datasets/public/tasks/task-1"
         ? { dataset_id: "public", task: { directory: "task-1", package_name: "org/task", status: "valid", diagnostics: [] }, tree: [{ path: "solution/solve.sh", kind: "file", size: 9, editable: true }] }
         : { path: "solution/solve.sh", content: "echo done" };
     return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(payload) };
@@ -162,7 +144,7 @@ test("guest Dataset page loads Task text as read-only without download controls"
     await harbor.initializeHarborWorkbench();
     assert.deepEqual(calls.slice(0, 2), [
       "/api/harbor/datasets",
-      "/api/harbor/task?dataset_id=public&task=task-1",
+      "/api/harbor/datasets/public/tasks/task-1",
     ]);
     document.querySelector(".harbor-file-row.kind-file").click();
     await tick();
@@ -210,7 +192,7 @@ test("guest administrator action functions issue no requests when invoked direct
   dbForm.innerHTML = '<input name="db" value="/tmp/source.db">';
   try {
     await catalog.refreshServeSourcesFromServer();
-    await controls.changeServeLocale("zh-CN");
+    await shell.changeLocale("zh-CN");
     await configuration.submitServeSourceForm(sourceForm);
     await configuration.inspectDbSessions(dbForm);
     await configuration.addHarborMount();
@@ -283,8 +265,8 @@ test("guest saves a view only to workspace-scoped browser storage", async () => 
       body: options.body ? JSON.parse(String(options.body)) : null,
     });
     const payload = String(path) === "/api/views"
-      ? { views: serverViews }
-      : String(path) === "/api/views/summary"
+      ? serverViews
+      : String(path) === "/api/view-summaries"
       ? { generation: 1, views: [{ name: "Guest local", matched_count: 0, groups: [] }] }
       : { views: [] };
     return {
@@ -327,7 +309,7 @@ test("guest saves a view only to workspace-scoped browser storage", async () => 
     assert.equal(calls.some(call => call.path === "/api/views/update"), false);
     runtime.state.workspaceViewSelection = new Set(["browser:Guest local"]);
     await views.applySelectedWorkspaceViews();
-    const catalogQuery = calls.find(call => call.path === "/api/catalog/query");
+    const catalogQuery = calls.find(call => call.path === "/api/catalog-queries");
     assert.deepEqual(catalogQuery.body.browser_views, [{
       name: "Guest local",
       filters: {},
@@ -389,18 +371,18 @@ test("guest login dialog submits credentials, reports failure, and closes", asyn
       ok: false,
       status: 401,
       statusText: "Unauthorized",
-      text: async () => JSON.stringify({ error: "invalid administrator password" }),
+      text: async () => JSON.stringify({ detail: "invalid administrator password" }),
     };
   };
   try {
-    controls.bindAuthenticationControls();
+    shell.bindAuthenticationControls();
     document.querySelector("[data-admin-login-open]").click();
     const dialog = document.querySelector("[data-admin-login-dialog]");
     assert.equal(dialog.hidden, false);
     dialog.querySelector("form").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
     await tick();
     assert.deepEqual(calls, [{
-      path: "/api/auth/login",
+      path: "/api/session",
       body: { password: "wrong" },
     }]);
     assert.equal(dialog.querySelector("[data-admin-login-status]").hidden, false);

@@ -29,6 +29,9 @@ const modals = await import("../../src/psycheval/assets/web/modules/modal-surfac
 const reports = await import("../../src/psycheval/assets/web/modules/workspace-reports.js");
 const views = await import("../../src/psycheval/assets/web/modules/workspace-views.js");
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+const etagHeaders = revision => ({
+  get: name => String(name).toLowerCase() === "etag" ? `"${revision}"` : null,
+});
 
 test.after(() => browser.cleanup());
 
@@ -185,10 +188,15 @@ test("Configuration loads workspace configuration and prompt assets without a so
   delete root.dataset.configBound;
   globalThis.fetch = async path => {
     requests.push(String(path));
+    const payload = String(path) === "/api/prompts"
+      ? []
+      : { datasets: [{ id: "tasks", path: "/workspace/tasks" }], mounts: [] };
     return {
       ok: true,
+      status: 200,
       statusText: "OK",
-      text: async () => JSON.stringify({ revision: "r1", datasets: [{ id: "tasks", path: "/workspace/tasks" }], mounts: [] }),
+      headers: etagHeaders("r1"),
+      text: async () => JSON.stringify(payload),
     };
   };
   try {
@@ -233,21 +241,21 @@ test("Configuration adds ACP agents and saves same-name prompt overrides", async
   let snapshot = { revision: "r1", datasets: [], mounts: [], acp_agents: [] };
   let prompt = { id: "failure-diagnosis", filename: "failure-diagnosis.md", title: "Failure diagnosis", content: "# Failure diagnosis\n\nDefault.", customized: false, revision: "p1" };
   globalThis.fetch = async (path, options = {}) => {
-    const request = { path: String(path), method: options.method || "GET", body: options.body ? JSON.parse(String(options.body)) : null };
+    const request = { path: String(path), method: options.method || "GET", body: options.body ? JSON.parse(String(options.body)) : null, headers: options.headers || {} };
     requests.push(request);
     let payload;
-    if (request.path === "/api/config/acp/agents") {
+    if (request.path === "/api/config" && request.method === "PATCH") {
       snapshot = { ...snapshot, revision: "r2", acp_agents: [{ id: "opencode", title: "OpenCode", command: "opencode", args: ["acp"], connected: false }] };
       payload = snapshot;
-    } else if (request.path === "/api/prompts" && request.method === "POST") {
+    } else if (request.path === "/api/prompts/failure-diagnosis" && request.method === "PUT") {
       prompt = { ...prompt, content: request.body.content, customized: true, revision: "p2" };
-      payload = { prompt };
+      payload = prompt;
     } else if (request.path === "/api/prompts") {
-      payload = { prompts: [prompt] };
+      payload = [prompt];
     } else {
       payload = snapshot;
     }
-    return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(payload) };
+    return { ok: true, status: 200, statusText: "OK", headers: etagHeaders(request.path.startsWith("/api/prompts") ? prompt.revision : snapshot.revision), text: async () => JSON.stringify(payload) };
   };
 
   try {
@@ -276,13 +284,13 @@ test("Configuration adds ACP agents and saves same-name prompt overrides", async
     root.querySelector("[data-acp-agent-form]").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
     await tick();
     await tick();
-    assert.deepEqual(requests.find(request => request.path === "/api/config/acp/agents").body, {
-      action: "upsert",
-      agent_id: "opencode",
-      title: "OpenCode",
-      command: "opencode",
-      args: ["acp"],
-      expected_revision: "r1",
+    assert.deepEqual(requests.find(request => request.path === "/api/config" && request.method === "PATCH").body, {
+      acp_agents: [{
+        id: "opencode",
+        title: "OpenCode",
+        command: "opencode",
+        args: ["acp"],
+      }],
     });
     assert.equal(panel.hidden, true);
     assert.equal(document.activeElement, open);
@@ -295,13 +303,11 @@ test("Configuration adds ACP agents and saves same-name prompt overrides", async
     root.querySelector("[data-prompt-save]").click();
     await tick();
     await tick();
-    const save = requests.find(request => request.path === "/api/prompts" && request.method === "POST");
+    const save = requests.find(request => request.path === "/api/prompts/failure-diagnosis" && request.method === "PUT");
     assert.deepEqual(save.body, {
-      action: "save",
-      prompt_id: "failure-diagnosis",
       content: "# Team diagnosis\n\nInspect evidence.",
-      expected_revision: "p1",
     });
+    assert.equal(save.headers["If-Match"], '"p1"');
     assert.match(root.querySelector("[data-prompt-origin]").textContent, /Workspace override/);
   } finally {
     globalThis.fetch = previousFetch;
@@ -329,17 +335,18 @@ test("Configuration reloads the current prompt after a revision conflict", async
   globalThis.fetch = async (path, options = {}) => {
     const request = { path: String(path), method: options.method || "GET" };
     requests.push(request);
-    if (request.path === "/api/prompts" && request.method === "POST") {
+    if (request.path === "/api/prompts/failure-diagnosis" && request.method === "PUT") {
       conflicted = true;
-      return { ok: false, status: 409, statusText: "Conflict", text: async () => JSON.stringify({ error: "Workspace prompt changed; refresh before saving" }) };
+      return { ok: false, status: 412, statusText: "Precondition Failed", headers: etagHeaders("p2"), text: async () => JSON.stringify({ detail: "Workspace prompt changed; refresh before saving" }) };
     }
     if (request.path === "/api/prompts") {
       const prompt = conflicted
         ? { id: "failure-diagnosis", filename: "failure-diagnosis.md", title: "Teammate edit", content: "# Teammate edit\n", customized: true, revision: "p2" }
         : { id: "failure-diagnosis", filename: "failure-diagnosis.md", title: "Failure diagnosis", content: "# Default\n", customized: false, revision: "p1" };
-      return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify({ prompts: [prompt] }) };
+      return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify([prompt]) };
     }
-    return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify({ revision: conflicted ? "r2" : "r1", datasets: [], mounts: [], acp_agents: [] }) };
+    const revision = conflicted ? "r2" : "r1";
+    return { ok: true, status: 200, statusText: "OK", headers: etagHeaders(revision), text: async () => JSON.stringify({ datasets: [], mounts: [], acp_agents: [] }) };
   };
 
   try {
@@ -365,6 +372,52 @@ test("Configuration reloads the current prompt after a revision conflict", async
   }
 });
 
+test("Configuration preserves a failed Harbor operation status after refreshing", async () => {
+  const previousFetch = globalThis.fetch;
+  const root = document.querySelector("[data-config-page]");
+  root.hidden = false;
+  root.innerHTML = `
+    <p data-config-page-status hidden></p><button data-harbor-config-reload></button>
+    <div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div>
+    <div data-harbor-mount-count></div><div data-harbor-mount-config></div>`;
+  globalThis.fetch = async path => {
+    const requestPath = String(path);
+    let payload;
+    if (requestPath === "/api/operations/failed-op") {
+      payload = {
+        id: "failed-op",
+        kind: "harbor-mount-config",
+        state: "failed",
+        completed: 1,
+        total: 1,
+        successes: [],
+        failures: [{ index: 0, status: "error", error: "reconcile exploded" }],
+      };
+    } else if (requestPath === "/api/prompts") payload = [];
+    else if (requestPath === "/api/config") payload = { revision: "r2", datasets: [], mounts: [], acp_agents: [] };
+    else throw new Error(`unexpected request: ${requestPath}`);
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: etagHeaders("r2"),
+      text: async () => JSON.stringify(payload),
+    };
+  };
+
+  try {
+    await configuration.pollConfigurationOperation("failed-op");
+    const status = root.querySelector("[data-config-page-status]");
+    assert.equal(status.textContent, "reconcile exploded");
+    assert.equal(status.hidden, false);
+    assert.equal(status.classList.contains("danger"), true);
+  } finally {
+    globalThis.fetch = previousFetch;
+    configuration.harborConfigState.busy = false;
+    root.hidden = true;
+  }
+});
+
 test("Configuration registers Dataset and Jobs roots from path-only actions", async () => {
   const requests = [];
   const prompts = [];
@@ -382,15 +435,22 @@ test("Configuration registers Dataset and Jobs roots from path-only actions", as
       body: options.body ? JSON.parse(String(options.body)) : null,
     };
     requests.push(request);
-    if (request.path === "/api/config/harbor/datasets") {
+    if (request.path === "/api/prompts") {
+      return { ok: true, status: 200, statusText: "OK", text: async () => "[]" };
+    }
+    if (request.path === "/api/harbor/datasets") {
       snapshot = { revision: "r2", datasets: [{ id: "tasks", path: "/workspace/tasks" }], mounts: [] };
-      return { ok: true, statusText: "OK", text: async () => JSON.stringify({ result: snapshot }) };
+      return { ok: true, status: 202, statusText: "Accepted", headers: etagHeaders("r2"), text: async () => JSON.stringify({ id: "dataset-op", kind: "harbor-dataset-config", state: "queued", completed: 0, total: 1, successes: [], failures: [] }) };
     }
-    if (request.path === "/api/config/harbor/mounts") {
+    if (request.path === "/api/harbor/mounts") {
       snapshot = { revision: "r3", datasets: snapshot.datasets, mounts: [{ id: "jobs", path: "/workspace/jobs", dataset_ids: [] }] };
-      return { ok: true, statusText: "OK", text: async () => JSON.stringify({ result: snapshot }) };
+      return { ok: true, status: 202, statusText: "Accepted", headers: etagHeaders("r3"), text: async () => JSON.stringify({ id: "mount-op", kind: "harbor-mount-config", state: "queued", completed: 0, total: 1, successes: [], failures: [] }) };
     }
-    return { ok: true, statusText: "OK", text: async () => JSON.stringify(snapshot) };
+    if (request.path.startsWith("/api/operations/")) {
+      const id = request.path.endsWith("dataset-op") ? "dataset-op" : "mount-op";
+      return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify({ id, kind: id === "dataset-op" ? "harbor-dataset-config" : "harbor-mount-config", state: "succeeded", completed: 1, total: 1, successes: [{ index: 0 }], failures: [] }) };
+    }
+    return { ok: true, status: 200, statusText: "OK", headers: etagHeaders(snapshot.revision), text: async () => JSON.stringify(snapshot) };
   };
   window.prompt = message => {
     prompts.push(message);
@@ -402,16 +462,15 @@ test("Configuration registers Dataset and Jobs roots from path-only actions", as
     assert.equal(root.querySelector("[data-harbor-mount-form]"), null);
 
     root.querySelector("[data-harbor-register-dataset]").click();
-    await tick();
-    await tick();
+    for (let index = 0; index < 5; index += 1) await tick();
 
     assert.equal(prompts.length, 1);
     assert.deepEqual(
-      requests.find(request => request.path === "/api/config/harbor/datasets").body,
+      requests.find(request => request.path === "/api/harbor/datasets").body,
       {
-        action: "register",
+        source: "existing",
         path: "/workspace/tasks",
-        expected_revision: "r1",
+        description: "",
       },
     );
     assert.equal(
@@ -420,17 +479,15 @@ test("Configuration registers Dataset and Jobs roots from path-only actions", as
     );
 
     root.querySelector("[data-harbor-add-mount]").click();
-    await tick();
-    await tick();
+    for (let index = 0; index < 5; index += 1) await tick();
     const mountRequests = requests.filter(
-      request => request.path === "/api/config/harbor/mounts",
+      request => request.path === "/api/harbor/mounts",
     );
     assert.deepEqual(
       mountRequests.at(-1).body,
       {
-        action: "upsert",
-        expected_revision: "r2",
-        jobs_path: "/workspace/jobs",
+        path: "/workspace/jobs",
+        dataset_ids: [],
       },
     );
     assert.equal(prompts.length, 2);
@@ -462,18 +519,21 @@ test("Configuration edits Dataset cells and atomically unregisters the selected 
     };
     requests.push(request);
     let payload = snapshot;
-    if (request.path === "/api/config/harbor/datasets" && request.body.action === "update") {
+    if (request.path === "/api/prompts") payload = [];
+    else if (request.path === "/api/harbor/datasets/tasks" && request.method === "PATCH") {
       snapshot = { revision: "r2", datasets: [{ id: "renamed", path: "/workspace/tasks" }], mounts: [] };
-      payload = { result: snapshot, operation: { operation_id: "config-op" } };
-    } else if (request.path === "/api/config/harbor/datasets" && request.body.action === "unregister") {
+      payload = { id: "config-op", kind: "harbor-dataset-config", state: "queued", completed: 0, total: 1, successes: [], failures: [] };
+    } else if (request.path === "/api/harbor/dataset-unregistration-operations") {
       snapshot = { revision: "r3", datasets: [], mounts: [] };
-      payload = { result: snapshot, operation: { operation_id: "config-op" } };
+      payload = { id: "config-op", kind: "harbor-dataset-config", state: "queued", completed: 0, total: 1, successes: [], failures: [] };
     } else if (request.path === "/api/operations/config-op") {
-      payload = { operation_id: "config-op", operation_type: "harbor-dataset-config", state: "completed", completed: 1, total: 1, successes: [{ index: 0 }], failures: [] };
+      payload = { id: "config-op", kind: "harbor-dataset-config", state: "succeeded", completed: 1, total: 1, successes: [{ index: 0 }], failures: [] };
     }
     return {
       ok: true,
+      status: request.path.startsWith("/api/harbor/") && request.method !== "GET" ? 202 : 200,
       statusText: "OK",
+      headers: etagHeaders(snapshot.revision),
       text: async () => JSON.stringify(payload),
     };
   };
@@ -486,29 +546,22 @@ test("Configuration edits Dataset cells and atomically unregisters the selected 
     const editor = idCell.querySelector("[data-table-cell-editor] input");
     editor.value = "renamed";
     editor.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await tick();
-    await tick();
+    for (let index = 0; index < 5; index += 1) await tick();
     assert.match(root.querySelector("[data-harbor-dataset-registry]").textContent, /renamed/);
 
     root.querySelector('[data-table-row-select="renamed"]').click();
     root.querySelector("[data-harbor-unregister-datasets]").click();
-    await tick();
-    await tick();
+    for (let index = 0; index < 5; index += 1) await tick();
 
-    const mutations = requests.filter(request => request.path === "/api/config/harbor/datasets");
+    const mutations = requests.filter(request => request.path === "/api/harbor/datasets/tasks" || request.path === "/api/harbor/dataset-unregistration-operations");
     assert.deepEqual(mutations.map(request => request.body), [
       {
-        action: "update",
-        dataset_id: "tasks",
         new_id: "renamed",
         path: "/workspace/tasks",
         mount_ids: [],
-        expected_revision: "r1",
       },
       {
-        action: "unregister",
         dataset_ids: ["renamed"],
-        expected_revision: "r2",
       },
     ]);
     assert.equal(root.querySelectorAll("[data-table-row-select]").length, 0);
@@ -549,7 +602,10 @@ test("Configuration edits reciprocal Harbor associations and batch removes mount
       body: options.body ? JSON.parse(String(options.body)) : null,
     };
     requests.push(request);
-    if (request.path === "/api/config/harbor/datasets") {
+    if (request.path === "/api/prompts") {
+      return { ok: true, status: 200, statusText: "OK", text: async () => "[]" };
+    }
+    if (request.path === "/api/harbor/datasets/tasks") {
       snapshot = {
         ...snapshot,
         revision: `r${++revision}`,
@@ -558,26 +614,30 @@ test("Configuration edits reciprocal Harbor associations and batch removes mount
           snapshot.mounts[1],
         ],
       };
-      return { ok: true, statusText: "OK", text: async () => JSON.stringify({ result: snapshot }) };
+      return { ok: true, status: 202, statusText: "Accepted", headers: etagHeaders(snapshot.revision), text: async () => JSON.stringify({ id: "config-op", kind: "harbor-dataset-config", state: "queued", completed: 0, total: 1, successes: [], failures: [] }) };
     }
-    if (request.path === "/api/config/harbor/mounts") {
-      if (request.body.action === "delete") {
+    if (request.path === "/api/harbor/mount-deletion-operations") {
         const removed = new Set(request.body.mount_ids);
         snapshot = { ...snapshot, revision: `r${++revision}`, mounts: snapshot.mounts.filter(mount => !removed.has(mount.id)) };
-      } else {
+      return { ok: true, status: 202, statusText: "Accepted", headers: etagHeaders(snapshot.revision), text: async () => JSON.stringify({ id: "config-op", kind: "harbor-mount-delete", state: "queued", completed: 0, total: 1, successes: [], failures: [] }) };
+    }
+    if (request.path.startsWith("/api/harbor/mounts/") && request.method === "PATCH") {
+        const originalId = decodeURIComponent(request.path.split("/api/harbor/mounts/")[1]);
         snapshot = {
           ...snapshot,
           revision: `r${++revision}`,
-          mounts: snapshot.mounts.map(mount => mount.id === request.body.original_id ? {
-            id: request.body.mount_id,
-            path: request.body.jobs_path,
+          mounts: snapshot.mounts.map(mount => mount.id === originalId ? {
+            id: request.body.new_id,
+            path: request.body.path,
             dataset_ids: request.body.dataset_ids,
           } : mount),
         };
-      }
-      return { ok: true, statusText: "OK", text: async () => JSON.stringify({ result: snapshot }) };
+      return { ok: true, status: 202, statusText: "Accepted", headers: etagHeaders(snapshot.revision), text: async () => JSON.stringify({ id: "config-op", kind: "harbor-mount-config", state: "queued", completed: 0, total: 1, successes: [], failures: [] }) };
     }
-    return { ok: true, statusText: "OK", text: async () => JSON.stringify(snapshot) };
+    if (request.path === "/api/operations/config-op") {
+      return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify({ id: "config-op", kind: "harbor-config", state: "succeeded", completed: 1, total: 1, successes: [{ index: 0 }], failures: [] }) };
+    }
+    return { ok: true, status: 200, statusText: "OK", headers: etagHeaders(snapshot.revision), text: async () => JSON.stringify(snapshot) };
   };
   window.confirm = () => true;
 
@@ -593,17 +653,13 @@ test("Configuration edits reciprocal Harbor associations and batch removes mount
     );
     mountsCell.querySelector('[data-table-suggestion="one"]').click();
     mountsCell.querySelector("input").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await tick();
-    await tick();
+    for (let index = 0; index < 5; index += 1) await tick();
     assert.deepEqual(
-      requests.find(request => request.path === "/api/config/harbor/datasets").body,
+      requests.find(request => request.path === "/api/harbor/datasets/tasks").body,
       {
-        action: "update",
-        dataset_id: "tasks",
         new_id: "tasks",
         path: "/workspace/tasks",
         mount_ids: ["two", "one"],
-        expected_revision: "r1",
       },
     );
 
@@ -611,15 +667,13 @@ test("Configuration edits reciprocal Harbor associations and batch removes mount
     datasetsCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
     datasetsCell.querySelector('[data-table-suggestion="other"]').click();
     datasetsCell.querySelector("input").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await tick();
-    await tick();
+    for (let index = 0; index < 5; index += 1) await tick();
 
     let idCell = root.querySelector('[data-table-id="harbor-mount-registry"] [data-table-row-key="one"] [data-table-column-key="id"]');
     idCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
     idCell.querySelector("input").value = "uno";
     idCell.querySelector("input").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await tick();
-    await tick();
+    for (let index = 0; index < 5; index += 1) await tick();
     assert.equal(document.activeElement.dataset.tableColumnKey, "id");
     assert.equal(document.activeElement.closest("tr").dataset.tableRowKey, "uno");
 
@@ -627,21 +681,19 @@ test("Configuration edits reciprocal Harbor associations and batch removes mount
     pathCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
     pathCell.querySelector("input").value = "/workspace/jobs-renamed";
     pathCell.querySelector("input").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await tick();
-    await tick();
+    for (let index = 0; index < 5; index += 1) await tick();
 
     root.querySelector('[data-table-id="harbor-mount-registry"] [data-table-row-select="uno"]').click();
     root.querySelector('[data-table-id="harbor-mount-registry"] [data-table-row-select="two"]').click();
     root.querySelector("[data-harbor-remove-mounts]").click();
-    await tick();
-    await tick();
+    for (let index = 0; index < 5; index += 1) await tick();
 
-    const mountRequests = requests.filter(request => request.path === "/api/config/harbor/mounts");
+    const mountRequests = requests.filter(request => request.path.startsWith("/api/harbor/mounts/") || request.path === "/api/harbor/mount-deletion-operations");
     assert.deepEqual(mountRequests.map(request => request.body), [
-      { action: "upsert", original_id: "one", mount_id: "one", jobs_path: "/workspace/jobs-one", dataset_ids: ["tasks"], expected_revision: "r2" },
-      { action: "upsert", original_id: "one", mount_id: "uno", jobs_path: "/workspace/jobs-one", dataset_ids: ["tasks"], expected_revision: "r3" },
-      { action: "upsert", original_id: "uno", mount_id: "uno", jobs_path: "/workspace/jobs-renamed", dataset_ids: ["tasks"], expected_revision: "r4" },
-      { action: "delete", mount_ids: ["uno", "two"], expected_revision: "r5" },
+      { new_id: "one", path: "/workspace/jobs-one", dataset_ids: ["tasks"] },
+      { new_id: "uno", path: "/workspace/jobs-one", dataset_ids: ["tasks"] },
+      { new_id: "uno", path: "/workspace/jobs-renamed", dataset_ids: ["tasks"] },
+      { mount_ids: ["uno", "two"] },
     ]);
     assert.equal(root.querySelectorAll('[data-table-id="harbor-mount-registry"] [data-table-row-select]').length, 0);
     assert.equal(configuration.harborConfigState.mountSelection.size, 0);
@@ -761,14 +813,14 @@ test("Configuration reports nested and background source import results", async 
     root.append(form);
     globalThis.fetch = async path => ({
       ok: true,
-      status: String(path) === "/api/sources" ? 202 : 200,
+      status: String(path) === "/api/source-import-operations" ? 202 : 200,
       statusText: "OK",
-      text: async () => JSON.stringify(String(path) === "/api/sources"
-        ? { operation_id: "import-op", operation_type: "source-import", state: "queued", completed: 0, total: 2, successes: [], failures: [] }
+      text: async () => JSON.stringify(String(path) === "/api/source-import-operations"
+        ? { id: "import-op", kind: "source-import", state: "queued", completed: 0, total: 2, successes: [], failures: [] }
         : {
-            operation_id: "import-op",
-            operation_type: "source-import",
-            state: "completed",
+            id: "import-op",
+            kind: "source-import",
+            state: "succeeded",
             completed: 2,
             total: 2,
             successes: [{ index: 0, status: "ok", path: "one.jsonl", source_keys: ["source-a"] }],
@@ -801,14 +853,14 @@ test("one completed Configuration operation does not clear another operation's b
   let resolveFirstOperation;
   globalThis.fetch = async (path, options = {}) => {
     const requestPath = String(path);
-    if (requestPath === "/api/sources") {
+    if (requestPath === "/api/source-import-operations") {
       const body = JSON.parse(String(options.body));
       const operationId = body.path.startsWith("first") ? "first-op" : "second-op";
       return {
         ok: true,
         status: 202,
         statusText: "Accepted",
-        text: async () => JSON.stringify({ operation_id: operationId }),
+        text: async () => JSON.stringify({ id: operationId, kind: "source-import", state: "queued", completed: 0, total: 1, successes: [], failures: [] }),
       };
     }
     if (requestPath === "/api/operations/first-op") {
@@ -819,7 +871,7 @@ test("one completed Configuration operation does not clear another operation's b
         ok: true,
         status: 200,
         statusText: "OK",
-        text: async () => JSON.stringify({ operation_id: "second-op", operation_type: "source-import", state: "completed", completed: 1, total: 1, successes: [], failures: [] }),
+        text: async () => JSON.stringify({ id: "second-op", kind: "source-import", state: "succeeded", completed: 1, total: 1, successes: [], failures: [] }),
       };
     }
     throw new Error(`unexpected request: ${requestPath}`);
@@ -837,7 +889,7 @@ test("one completed Configuration operation does not clear another operation's b
       ok: true,
       status: 200,
       statusText: "OK",
-      text: async () => JSON.stringify({ operation_id: "first-op", operation_type: "source-import", state: "completed", completed: 1, total: 1, successes: [], failures: [] }),
+      text: async () => JSON.stringify({ id: "first-op", kind: "source-import", state: "succeeded", completed: 1, total: 1, successes: [], failures: [] }),
     });
     await tick();
     assert.equal(configuration.harborConfigState.busy, false);
@@ -923,7 +975,7 @@ test("Category suggestions refresh when the initial catalog scan completes", asy
   };
   globalThis.fetch = async path => {
     const request = new URL(String(path), "http://localhost");
-    if (request.pathname === "/api/catalog/summary") {
+    if (request.pathname === "/api/catalog-summaries") {
       const generation = catalogPageRequests === 1 ? 0 : 1;
       return response({
         generation,
@@ -1028,8 +1080,8 @@ test("Category summary preserves server groups for missing and literal dash valu
       summary: {
         matched_count: 2,
         groups: [
-          { key: null, label: "-", count: 1, metrics: [] },
-          { key: "-", label: "-", count: 1, metrics: [] },
+          { key: null, label: "-", count: 1, metrics: [{ key: "score", type: "number", count: 1, mean: 1 }] },
+          { key: "-", label: "-", count: 1, metrics: [{ key: "score", type: "number", count: 1, mean: 1 }] },
         ],
       },
     };
@@ -1086,20 +1138,6 @@ test("remaining dialog surfaces are mutually exclusive and restore focus", () =>
   opener.remove();
 });
 
-test("Reports Manager distinguishes loading from empty and clears old errors", () => {
-  runtime.state.workspaceReports = [];
-  runtime.state.reportManager.loading = true;
-  runtime.state.reportManager.busy = false;
-  reports.renderWorkspaceReportManager();
-  assert.match(document.querySelector("[data-report-inventory]").textContent, /Loading/);
-  assert.equal(document.querySelector("[data-report-manager]").getAttribute("aria-busy"), "true");
-
-  runtime.state.reportManager.loading = false;
-  reports.setWorkspaceReportManagerStatus("Old error", true);
-  reports.setWorkspaceReportManagerStatus("");
-  assert.equal(document.querySelector("[data-report-manager-status]").hidden, true);
-});
-
 test("serve startup loads existing report bindings for Leaderboard cells", async () => {
   const previousFetch = globalThis.fetch;
   const calls = [];
@@ -1108,14 +1146,12 @@ test("serve startup loads existing report bindings for Leaderboard cells", async
     return {
       ok: true,
       statusText: "OK",
-      text: async () => JSON.stringify({
-        reports: [{
+      text: async () => JSON.stringify([{
           report_id: "20260720-120000-000000",
           filename: "startup-analysis.md",
           format: "markdown",
           source_keys: ["session-1"],
-        }],
-      }),
+        }]),
     };
   };
 
@@ -1179,239 +1215,6 @@ test("a session with multiple reports lets each report open from the Leaderboard
     reports.closeWorkspaceReportReader({ restoreFocus: false });
     runtime.state.workspaceReports = [];
     target.remove();
-  }
-});
-
-test("Reports Manager keeps the session list stable when a middle binding changes", () => {
-  const manager = document.querySelector("[data-report-manager]");
-  manager.hidden = false;
-  runtime.state.workspaceReports = [{
-    report_id: "20260719-120000-000000",
-    filename: "analysis.html",
-    format: "html",
-    source_keys: [],
-  }];
-  runtime.state.reportManager.selectedId = "20260719-120000-000000";
-  runtime.state.reportManager.sourceRows = Array.from({ length: 30 }, (_, index) => ({
-    source_key: `session-${index + 1}`,
-    label: `Session ${index + 1}`,
-    trial_session_id: `trial-${index + 1}`,
-    active: true,
-    readable: true,
-  }));
-  runtime.state.reportManager.draftBindings = new Set();
-  runtime.state.reportManager.loading = false;
-  runtime.state.reportManager.busy = false;
-  reports.renderWorkspaceReportManager();
-
-  const list = document.querySelector("[data-report-binding-list]");
-  const checkbox = list.querySelector('[data-report-binding-key="session-20"]');
-  list.scrollTop = 240;
-  checkbox.focus();
-  checkbox.checked = true;
-  checkbox.dispatchEvent(new window.Event("change", { bubbles: true }));
-
-  assert.equal(document.querySelector("[data-report-binding-list]"), list);
-  assert.equal(list.scrollTop, 240);
-  assert.equal(document.activeElement, checkbox);
-  assert.equal(document.querySelector("[data-report-bindings-save]").disabled, false);
-
-  manager.hidden = true;
-  runtime.state.reportManager.sourceRows = [];
-});
-
-test("Reports Manager Category editing preserves binding draft, page, search, list scroll, and focus", async () => {
-  const previousFetch = globalThis.fetch;
-  const requests = [];
-  const manager = document.querySelector("[data-report-manager]");
-  const reportId = "20260725-135000-000000";
-  const source = {
-    source_key: "session-category",
-    label: "Unrelated session",
-    trial_session_id: "trial-category",
-    source_category: "Evaluation",
-    source_tags: ["nightly"],
-    active: true,
-    readable: true,
-  };
-  globalThis.fetch = async (path, options = {}) => {
-    const requestPath = String(path);
-    requests.push({
-      path: requestPath,
-      body: options.body ? JSON.parse(String(options.body)) : null,
-    });
-    if (requestPath === `/api/sources/${source.source_key}/category`) {
-      return {
-        ok: true,
-        statusText: "OK",
-        text: async () => JSON.stringify({
-          generation: 2,
-          change: "category",
-          source_keys: [source.source_key],
-        }),
-      };
-    }
-    if (requestPath.startsWith("/api/catalog?")) {
-      return {
-        ok: true,
-        statusText: "OK",
-        text: async () => JSON.stringify({
-          items: [],
-          page: 1,
-          page_size: 100,
-          total: 0,
-          generation: 2,
-          checking: false,
-          facets: { categories: [{ value: "Regression", count: 1 }] },
-        }),
-      };
-    }
-    throw new Error(`unexpected request: ${requestPath}`);
-  };
-
-  try {
-    manager.hidden = false;
-    runtime.state.workspaceReports = [{
-      report_id: reportId,
-      filename: "category-analysis.md",
-      format: "markdown",
-      source_keys: [],
-    }];
-    runtime.state.reportManager.selectedId = reportId;
-    runtime.state.reportManager.sourceRows = [source];
-    runtime.state.reportManager.draftBindings = new Set([source.source_key]);
-    runtime.state.reportManager.dirty = true;
-    runtime.state.reportManager.search = "evaluation";
-    runtime.state.reportManager.page = 3;
-    runtime.state.reportManager.pageData = { page: 3, page_size: 100, total: 250 };
-    runtime.state.reportManager.loading = false;
-    runtime.state.reportManager.busy = false;
-    runtime.state.sourceCategoryOptions = ["Evaluation", "Regression"];
-    assert.match(reports.workspaceReportSourceSearchText(source), /evaluation/);
-    reports.renderWorkspaceReportManager();
-
-    const list = document.querySelector("[data-report-binding-list]");
-    const row = list.querySelector("[data-report-binding-row]");
-    const checkbox = row.querySelector("[data-report-binding-key]");
-    const categoryCell = row.querySelector("[data-report-binding-category]");
-    list.scrollTop = 96;
-
-    row.querySelector(".report-binding-row-main").click();
-    assert.equal(checkbox.checked, false);
-    row.querySelector(".report-binding-row-main").click();
-    assert.equal(checkbox.checked, true);
-    assert.deepEqual(Array.from(runtime.state.reportManager.draftBindings), [source.source_key]);
-
-    categoryCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
-    const editor = categoryCell.querySelector("[data-table-cell-editor]");
-    const input = editor.querySelector(".table-cell-editor-control");
-    editor.querySelector('[data-table-suggestion="Regression"]').click();
-    assert.equal(input.value, "Regression");
-    assert.equal(checkbox.checked, true);
-    assert.deepEqual(Array.from(runtime.state.reportManager.draftBindings), [source.source_key]);
-    input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    for (let index = 0; index < 6; index += 1) await tick();
-
-    assert.deepEqual(requests.find(request => request.path.endsWith("/category")), {
-      path: `/api/sources/${source.source_key}/category`,
-      body: { category: "Regression" },
-    });
-    assert.equal(document.querySelector("[data-report-binding-list]"), list);
-    assert.equal(list.scrollTop, 96);
-    assert.equal(runtime.state.reportManager.page, 3);
-    assert.equal(runtime.state.reportManager.search, "evaluation");
-    assert.deepEqual(Array.from(runtime.state.reportManager.draftBindings), [source.source_key]);
-    assert.equal(checkbox.checked, true);
-    assert.match(categoryCell.textContent, /Regression/);
-    assert.equal(document.activeElement, categoryCell);
-  } finally {
-    globalThis.fetch = previousFetch;
-    manager.hidden = true;
-    runtime.state.workspaceReports = [];
-    runtime.state.reportManager.selectedId = null;
-    runtime.state.reportManager.search = "";
-    runtime.state.reportManager.page = 1;
-    runtime.state.reportManager.pageData = { page: 1, page_size: 100, total: 0 };
-    runtime.state.reportManager.sourceRows = [];
-    runtime.state.reportManager.draftBindings = new Set();
-    runtime.state.reportManager.dirty = false;
-    runtime.state.sourceCategoryOptions = [];
-  }
-});
-
-test("clearing the final report binding immediately refreshes the rendered Leaderboard", async () => {
-  const previousFetch = globalThis.fetch;
-  const requests = [];
-  const manager = document.querySelector("[data-report-manager]");
-  const report = {
-    report_id: "20260725-140000-000000",
-    filename: "binding-analysis.md",
-    format: "markdown",
-    source_keys: ["session-a"],
-  };
-  const rows = [{
-    source_key: "session-a",
-    trial_key: "session-a",
-    trial_session_id: "Session A",
-    active: true,
-    readable: true,
-  }];
-  globalThis.fetch = async (path, options = {}) => {
-    requests.push({
-      path: String(path),
-      body: JSON.parse(String(options.body || "{}")),
-    });
-    return {
-      ok: true,
-      statusText: "OK",
-      text: async () => JSON.stringify({
-        reports: [{ ...report, source_keys: [] }],
-      }),
-    };
-  };
-
-  try {
-    runtime.state.catalogRows = rows;
-    runtime.state.catalogPage.generation = 1;
-    runtime.state.workspaceReports = [report];
-    runtime.state.reportManager.selectedId = report.report_id;
-    runtime.state.reportManager.sourceRows = rows;
-    runtime.state.reportManager.draftBindings = new Set(["session-a"]);
-    runtime.state.reportManager.dirty = false;
-    runtime.state.reportManager.loading = false;
-    runtime.state.reportManager.busy = false;
-    manager.hidden = false;
-    runtime.renderComparisonPanels({ trace: false });
-
-    const reportCell = sourceKey => document.querySelector(
-      `[data-source-key="${sourceKey}"] [data-table-column-key="workspace_reports"]`,
-    );
-    assert.match(reportCell("session-a").textContent, /binding-analysis\.md/);
-    reports.renderWorkspaceReportManager();
-    const checkbox = document.querySelector('[data-report-binding-key="session-a"]');
-    checkbox.checked = false;
-    checkbox.dispatchEvent(new window.Event("change", { bubbles: true }));
-    assert.equal(document.querySelector("[data-report-bindings-save]").disabled, false);
-
-    await reports.saveWorkspaceReportBindings();
-
-    assert.deepEqual(requests, [{
-      path: `/api/reports/${report.report_id}/bindings`,
-      body: { source_keys: [] },
-    }]);
-    assert.equal(reportCell("session-a"), null);
-  } finally {
-    globalThis.fetch = previousFetch;
-    manager.hidden = true;
-    runtime.state.catalogRows = [];
-    runtime.state.catalogPage.generation = 0;
-    runtime.state.workspaceReports = [];
-    runtime.state.reportManager.selectedId = null;
-    runtime.state.reportManager.sourceRows = [];
-    runtime.state.reportManager.draftBindings = new Set();
-    runtime.state.reportManager.dirty = false;
-    runtime.state.reportManager.busy = false;
-    document.querySelector("#leaderboard").innerHTML = "";
   }
 });
 

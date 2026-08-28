@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from tests.peval.cli_inputs_support import (
     FIXTURES,
     CustomPathAdapter,
@@ -26,6 +28,46 @@ from tests.peval.cli_inputs_support import (
 
 
 class PevalCliInputSourceTests(unittest.TestCase):
+    def test_view_and_export_validate_the_peval_root_configuration(self) -> None:
+        from psycheval.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            workspace = base / "workspace"
+            outside = base / "outside"
+            workspace.mkdir()
+            outside.mkdir()
+            workspace.joinpath("peval.toml").write_text(
+                "description = 42\n", encoding="utf-8"
+            )
+            with (
+                contextlib.chdir(outside),
+                patch.dict(os.environ, {"PEVAL_ROOT": str(workspace)}),
+            ):
+                for command in ("view", "export"):
+                    with self.subTest(command=command):
+                        stderr = io.StringIO()
+                        output = base / f"{command}.json"
+                        with contextlib.redirect_stderr(stderr):
+                            result = main(
+                                [
+                                    command,
+                                    "tr",
+                                    "-a",
+                                    "opencode",
+                                    "-p",
+                                    str(FIXTURES / "common_session.jsonl"),
+                                    "-o",
+                                    str(output),
+                                ]
+                            )
+                        self.assertNotEqual(result, 0)
+                        self.assertIn(
+                            "description: Input should be a valid string",
+                            stderr.getvalue(),
+                        )
+                        self.assertFalse(output.exists())
+
     def test_cli_uses_custom_path_adapter_and_rejects_db_when_path_only(self) -> None:
         from psycheval.cli import main
 
@@ -35,7 +77,7 @@ class PevalCliInputSourceTests(unittest.TestCase):
             second = tmp_path / "second.txt"
             first.write_text("first prompt\n", encoding="utf-8")
             second.write_text("second prompt\n", encoding="utf-8")
-            config_path = tmp_path / "custom.toml"
+            config_path = tmp_path / "peval.toml"
             config_path.write_text(
                 """
 [defaults]
@@ -49,16 +91,17 @@ label_prefix = "configured"
             export_out = tmp_path / "trajectory.json"
             view_out = tmp_path / "report.json"
             entry = FakeEntryPoint("custom", CustomPathAdapter)
-            with patch(
-                "psycheval.adapters.entry_points",
-                return_value=FakeEntryPoints([entry]),
+            with (
+                patch(
+                    "psycheval.adapters.entry_points",
+                    return_value=FakeEntryPoints([entry]),
+                ),
+                patch("psycheval.config.Path.cwd", return_value=tmp_path),
             ):
                 result = main(
                     [
                         "export",
                         "tr",
-                        "-c",
-                        str(config_path),
                         "-p",
                         str(first),
                         "-o",
@@ -76,8 +119,6 @@ label_prefix = "configured"
                         "tr",
                         "-m",
                         "raw",
-                        "-c",
-                        str(config_path),
                         "-p",
                         str(first),
                         "-p",
@@ -103,8 +144,6 @@ label_prefix = "configured"
                             "tr",
                             "-m",
                             "raw",
-                            "-c",
-                            str(config_path),
                             "-d",
                             str(db_path),
                             "-s",
@@ -123,7 +162,7 @@ label_prefix = "configured"
             tmp_path = Path(tmp)
             custom_path = tmp_path / "custom.txt"
             custom_path.write_text("custom prompt\n", encoding="utf-8")
-            config_path = tmp_path / "custom.toml"
+            config_path = tmp_path / "peval.toml"
             config_path.write_text(
                 """
 [adapters.custom]
@@ -133,9 +172,12 @@ label_prefix = "selected"
             )
             out_path = tmp_path / "report.json"
             entry = FakeEntryPoint("custom", CustomPathAdapter)
-            with patch(
-                "psycheval.adapters.entry_points",
-                return_value=FakeEntryPoints([entry]),
+            with (
+                patch(
+                    "psycheval.adapters.entry_points",
+                    return_value=FakeEntryPoints([entry]),
+                ),
+                patch("psycheval.config.Path.cwd", return_value=tmp_path),
             ):
                 result = main(
                     [
@@ -143,8 +185,6 @@ label_prefix = "selected"
                         "tr",
                         "-m",
                         "raw",
-                        "-c",
-                        str(config_path),
                         "-a",
                         "opencode",
                         "-a",
@@ -647,41 +687,39 @@ label_prefix = "selected"
             self.assertEqual(payload["trajectory"][0], source.trajectory)
             self.assertEqual(payload["trajectory_meta"][0]["adapter"], "atif")
 
-            missing_adapter_config = tmp_path / "missing.toml"
+            missing_adapter_config = tmp_path / "peval.toml"
             missing_adapter_config.write_text(
                 '[defaults]\nadapter = "missing"\n',
                 encoding="utf-8",
             )
-            result = main(
-                [
-                    "view",
-                    "tr",
-                    "-m",
-                    "raw",
-                    "-c",
-                    str(missing_adapter_config),
-                    "-p",
-                    str(atif_path),
-                    "-o",
-                    str(out_path),
-                ]
-            )
+            with patch("psycheval.config.Path.cwd", return_value=tmp_path):
+                result = main(
+                    [
+                        "view",
+                        "tr",
+                        "-m",
+                        "raw",
+                        "-p",
+                        str(atif_path),
+                        "-o",
+                        str(out_path),
+                    ]
+                )
             self.assertEqual(result, 0)
             payload = json.loads(out_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["trajectory_meta"][0]["adapter"], "atif")
 
-            result = main(
-                [
-                    "export",
-                    "tr",
-                    "-c",
-                    str(missing_adapter_config),
-                    "-p",
-                    str(atif_path),
-                    "-o",
-                    str(tmp_path / "exported-again.json"),
-                ]
-            )
+            with patch("psycheval.config.Path.cwd", return_value=tmp_path):
+                result = main(
+                    [
+                        "export",
+                        "tr",
+                        "-p",
+                        str(atif_path),
+                        "-o",
+                        str(tmp_path / "exported-again.json"),
+                    ]
+                )
             self.assertEqual(result, 0)
 
     def test_cli_db_multi_session_view_and_note_validation(self) -> None:
@@ -766,22 +804,21 @@ default_db_path = "state.db"
                 encoding="utf-8",
             )
             out_path = root / "default-db.json"
-            result = main(
-                [
-                    "view",
-                    "tr",
-                    "-m",
-                    "raw",
-                    "-c",
-                    str(config_path),
-                    "-d",
-                    "@psychevo",
-                    "-s",
-                    "db-a",
-                    "-o",
-                    str(out_path),
-                ]
-            )
+            with patch("psycheval.config.Path.cwd", return_value=root):
+                result = main(
+                    [
+                        "view",
+                        "tr",
+                        "-m",
+                        "raw",
+                        "-d",
+                        "@psychevo",
+                        "-s",
+                        "db-a",
+                        "-o",
+                        str(out_path),
+                    ]
+                )
             self.assertEqual(result, 0)
             payload = json.loads(out_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["trajectory"][0]["session_id"], "db-a")
@@ -794,8 +831,6 @@ default_db_path = "state.db"
                         "tr",
                         "-m",
                         "raw",
-                        "-c",
-                        str(config_path),
                         "-d",
                         "@psychevo",
                         "-a",
@@ -804,13 +839,14 @@ default_db_path = "state.db"
                     "uses @psychevo but adapter selector d1=opencode",
                 ),
                 (
-                    ["view", "tr", "-c", str(config_path), "-d", "@missing"],
+                    ["view", "tr", "-d", "@missing"],
                     "no default_db_path configured for adapter: missing",
                 ),
             ]:
                 with self.subTest(message=message):
                     stderr = io.StringIO()
                     with contextlib.redirect_stderr(stderr):
-                        result = main(argv)
+                        with patch("psycheval.config.Path.cwd", return_value=root):
+                            result = main(argv)
                     self.assertNotEqual(result, 0)
                     self.assertIn(message, stderr.getvalue())

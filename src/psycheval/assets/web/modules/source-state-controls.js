@@ -62,12 +62,11 @@ async function mutateVisibleServeSourceState() {
   }
   const targetMode = mode === "archived" ? "active" : "archived";
   try {
-    const payload = await serveApi("/api/sources/state", {
+    const payload = await serveApi("/api/source-state-operations", {
       method: "POST",
       body: {
         source_keys: sourceKeys,
-        active: targetMode === "active",
-        report_source_state: mode
+        active: targetMode === "active"
       }
     });
     await applyServeSourceStateMutationPayload(payload, { sourceKeys, targetMode });
@@ -81,7 +80,7 @@ async function deleteVisibleServeSources() {
   if (!sourceKeys.length) return;
   if (!window.confirm(t("serve_delete_selected_confirm", "Permanently delete the selected sources? This cannot be undone."))) return;
   try {
-    const payload = await serveApi("/api/sources/delete", {
+    const payload = await serveApi("/api/source-deletion-operations", {
       method: "POST",
       body: { source_keys: sourceKeys },
     });

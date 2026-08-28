@@ -7,10 +7,17 @@ import secrets
 import stat
 import tempfile
 import tomllib
-from dataclasses import dataclass, replace
-from dataclasses import field as dataclass_field
 from pathlib import Path, PureWindowsPath
 from typing import Any, Iterable
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from psycheval.i18n import normalize_locale
 
@@ -23,6 +30,7 @@ HARBOR_MOUNT_HEADER_RE = re.compile(r"^\s*\[\[\s*harbor\.mounts\s*\]\]\s*(?:#.*)
 HARBOR_DATASET_HEADER_RE = re.compile(r"^\s*\[\[\s*harbor\.datasets\s*\]\]\s*(?:#.*)?$")
 ACP_AGENT_HEADER_RE = re.compile(r"^\s*\[\[\s*acp\.agents\s*\]\]\s*(?:#.*)?$")
 PEVAL_CONFIG_FILENAME = "peval.toml"
+PEVAL_ROOT_ENV = "PEVAL_ROOT"
 WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 WINDOWS_DRIVE_MOUNT_ROOT = Path("/mnt")
 DEFAULT_ADAPTER_DB_PATHS = {
@@ -32,8 +40,26 @@ DEFAULT_ADAPTER_DB_PATHS = {
 }
 
 
-@dataclass(frozen=True)
-class DbMapping:
+class WorkspaceConfigError(ValueError):
+    """A stable, source-aware workspace configuration failure."""
+
+
+class _FrozenConfigModel(BaseModel):
+    model_config = ConfigDict(
+        strict=True,
+        extra="forbid",
+        frozen=True,
+        validate_default=True,
+        hide_input_in_errors=True,
+    )
+
+    def validated_update(self, **changes: Any):
+        values = {name: getattr(self, name) for name in type(self).model_fields}
+        values.update(changes)
+        return type(self).model_validate(values, strict=True)
+
+
+class DbMapping(_FrozenConfigModel):
     messages_table: str = "messages"
     session_id_column: str = "session_id"
     sequence_column: str = "session_seq"
@@ -41,30 +67,80 @@ class DbMapping:
     usage_column: str = "usage_json"
     metadata_column: str = "metadata_json"
 
+    @field_validator("*")
+    @classmethod
+    def validate_identifier(cls, value: str) -> str:
+        return _safe_identifier(value)
 
-@dataclass(frozen=True)
-class HarborDataset:
+
+class HarborDataset(_FrozenConfigModel):
     id: str
     path: str
 
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return _harbor_id(value, kind="dataset")
 
-@dataclass(frozen=True)
-class HarborMount:
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("harbor dataset path must be a non-empty string")
+        return value
+
+
+class HarborMount(_FrozenConfigModel):
     id: str
     path: str
     dataset_ids: tuple[str, ...] = ()
 
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        return _harbor_id(value, kind="mount")
 
-@dataclass(frozen=True)
-class AcpAgent:
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("harbor mount path must be a non-empty string")
+        return value
+
+    @field_validator("dataset_ids")
+    @classmethod
+    def validate_dataset_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        validated = tuple(_harbor_id(item, kind="dataset") for item in value)
+        if len(set(validated)) != len(validated):
+            raise ValueError("harbor mount dataset_ids must not contain duplicates")
+        return validated
+
+
+class AcpAgent(_FrozenConfigModel):
     id: str
     title: str
     command: str
     args: tuple[str, ...] = ()
 
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        if ACP_AGENT_ID_RE.fullmatch(value) is None:
+            raise ValueError(
+                "acp agent id must be 1-64 lowercase letters, numbers, '.', '_' or '-'"
+            )
+        return value
 
-@dataclass(frozen=True)
-class ToolConfig:
+    @field_validator("title", "command")
+    @classmethod
+    def validate_non_empty(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must be a non-empty string")
+        return stripped
+
+
+class ToolConfig(_FrozenConfigModel):
     adapter: str = "psychevo"
     locale: str = "en"
     workspace_root: str | None = None
@@ -74,20 +150,166 @@ class ToolConfig:
     agent_version: str = "0.1.0"
     model: str | None = None
     max_content_chars: int = 128 * 1024
-    max_content_chars_explicit: bool = dataclass_field(default=False, repr=False)
+    max_content_chars_explicit: bool = Field(default=False, repr=False)
     redact: bool = True
-    db: DbMapping = DbMapping()
-    adapter_options: dict[str, Any] = dataclass_field(default_factory=dict)
-    adapter_options_by_id: dict[str, dict[str, Any]] = dataclass_field(
+    db: DbMapping = Field(default_factory=DbMapping)
+    adapter_options_by_id: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
         repr=False,
     )
-    adapter_default_db_paths: dict[str, str] = dataclass_field(
-        default_factory=dict, repr=False
-    )
+    adapter_default_db_paths: dict[str, str] = Field(default_factory=dict, repr=False)
     harbor_datasets: tuple[HarborDataset, ...] = ()
     harbor_mounts: tuple[HarborMount, ...] = ()
     acp_agents: tuple[AcpAgent, ...] = ()
+
+    @property
+    def adapter_options(self) -> dict[str, Any]:
+        return _adapter_options_for(self.adapter, self.adapter_options_by_id)
+
+    def for_adapter(self, adapter: object) -> ToolConfig:
+        return self.validated_update(adapter=_normalize_adapter_id(adapter))
+
+    @field_validator("adapter")
+    @classmethod
+    def validate_adapter(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("adapter must be a non-empty string")
+        return stripped
+
+    @field_validator("locale")
+    @classmethod
+    def validate_locale(cls, value: str) -> str:
+        return normalize_locale(value)
+
+    @field_validator("analysis_eval_slug")
+    @classmethod
+    def validate_analysis_eval_slug(cls, value: str) -> str:
+        return _safe_path_segment(value)
+
+    @field_validator("max_content_chars")
+    @classmethod
+    def validate_max_content_chars(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("max_content_chars must be positive")
+        return value
+
+    @model_validator(mode="after")
+    def validate_collections(self) -> ToolConfig:
+        dataset_ids: set[str] = set()
+        dataset_paths: set[str] = set()
+        for dataset in self.harbor_datasets:
+            identity = os.path.normcase(os.path.normpath(dataset.path))
+            if dataset.id in dataset_ids:
+                raise ValueError(f"duplicate harbor dataset id: {dataset.id}")
+            if identity in dataset_paths:
+                raise ValueError(f"duplicate harbor dataset path: {dataset.path}")
+            dataset_ids.add(dataset.id)
+            dataset_paths.add(identity)
+        mount_ids: set[str] = set()
+        mount_paths: set[str] = set()
+        for mount in self.harbor_mounts:
+            identity = os.path.normcase(os.path.normpath(mount.path))
+            if mount.id in mount_ids:
+                raise ValueError(f"duplicate harbor mount id: {mount.id}")
+            if identity in mount_paths:
+                raise ValueError(f"duplicate harbor mount path: {mount.path}")
+            unknown = [item for item in mount.dataset_ids if item not in dataset_ids]
+            if unknown:
+                raise ValueError(
+                    f"harbor mount {mount.id} references unknown dataset id: {unknown[0]}"
+                )
+            mount_ids.add(mount.id)
+            mount_paths.add(identity)
+        agent_ids: set[str] = set()
+        for agent in self.acp_agents:
+            if agent.id in agent_ids:
+                raise ValueError(f"duplicate acp agent id: {agent.id}")
+            agent_ids.add(agent.id)
+        return self
+
+
+class _RawConfigModel(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+
+
+class _DefaultsDocument(_RawConfigModel):
+    adapter: str | None = None
+    agent_name: str | None = None
+    agent_version: str | None = None
+    model: str | None = None
+    max_content_chars: int | None = None
+    redact: bool | None = None
+
+
+class _DbDocument(_RawConfigModel):
+    messages_table: str | None = None
+    session_id_column: str | None = None
+    sequence_column: str | None = None
+    message_column: str | None = None
+    usage_column: str | None = None
+    metadata_column: str | None = None
+
+
+class _AcpAgentDocument(_RawConfigModel):
+    id: str
+    title: str
+    command: str
+    args: list[str] = Field(default_factory=list)
+
+
+class _AcpDocument(_RawConfigModel):
+    agents: list[_AcpAgentDocument] = Field(default_factory=list)
+
+
+class _HarborDatasetDocument(_RawConfigModel):
+    id: str
+    path: str
+
+
+class _HarborMountDocument(_RawConfigModel):
+    id: str
+    path: str
+    dataset_ids: list[str] = Field(default_factory=list)
+
+
+class _HarborDocument(_RawConfigModel):
+    datasets: list[_HarborDatasetDocument] | None = None
+    mounts: list[_HarborMountDocument] | None = None
+    host: dict[str, Any] | None = None
+
+
+class _AdapterDocument(BaseModel):
+    model_config = ConfigDict(strict=True, extra="allow", hide_input_in_errors=True)
+
+    default_db_path: str | None = None
+
+
+class _WorkspaceDocument(_RawConfigModel):
+    locale: str | None = None
+    description: str | None = None
+    analysis_eval_slug: str | None = None
+    defaults: _DefaultsDocument | None = None
+    db: _DbDocument | None = None
+    adapters: dict[str, _AdapterDocument] = Field(default_factory=dict)
+    acp: _AcpDocument | None = None
+    harbor: _HarborDocument | None = None
+
+
+def _validate_workspace_document(
+    data: dict[str, Any], *, source: Path | None = None
+) -> None:
+    try:
+        _WorkspaceDocument.model_validate(data, strict=True)
+    except ValidationError as exc:
+        error = exc.errors(include_url=False, include_input=False)[0]
+        location = ".".join(str(part) for part in error["loc"]) or "configuration"
+        if error["type"] == "extra_forbidden":
+            message = "unknown configuration field"
+        else:
+            message = str(error["msg"])
+        prefix = f"{source}: " if source is not None else ""
+        raise WorkspaceConfigError(f"{prefix}{location}: {message}") from exc
 
 
 def default_workspace_config_text() -> str:
@@ -104,33 +326,28 @@ def default_workspace_config_text() -> str:
     return "".join(lines)
 
 
-def load_config(path: str | None, *, workspace_root: str | None = None) -> ToolConfig:
+def load_config(*, workspace_root: str | Path | None = None) -> ToolConfig:
     config = ToolConfig()
     workspace_config = discover_peval_config(workspace_root)
     if workspace_config is not None:
-        data = tomllib.loads(workspace_config.read_text(encoding="utf-8"))
-        config = replace(config, workspace_root=str(workspace_config.parent))
+        try:
+            data = tomllib.loads(workspace_config.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError as exc:
+            raise WorkspaceConfigError(f"{workspace_config}: {exc}") from exc
+        _validate_workspace_document(data, source=workspace_config)
+        config = config.validated_update(workspace_root=str(workspace_config.parent))
         config = apply_toml_config(
             config,
             data,
-            top_level_locale=True,
             base_dir=workspace_config.parent,
-        )
-    if path:
-        config_path = Path(path).expanduser()
-        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
-        config = apply_toml_config(
-            config,
-            data,
-            top_level_locale=True,
-            base_dir=config_path.parent,
         )
     return config
 
 
-def discover_peval_config(workspace_root: str | None = None) -> Path | None:
-    if workspace_root:
-        candidate = Path(workspace_root).expanduser() / PEVAL_CONFIG_FILENAME
+def discover_peval_config(workspace_root: str | Path | None = None) -> Path | None:
+    configured_root = workspace_root or os.environ.get(PEVAL_ROOT_ENV)
+    if configured_root:
+        candidate = Path(configured_root).expanduser() / PEVAL_CONFIG_FILENAME
         return candidate.resolve() if candidate.is_file() else None
     current = Path.cwd().resolve()
     while True:
@@ -146,23 +363,20 @@ def apply_toml_config(
     config: ToolConfig,
     data: dict[str, Any],
     *,
-    top_level_locale: bool = False,
     base_dir: Path | None = None,
 ) -> ToolConfig:
-    if top_level_locale and "locale" in data:
-        config = replace(config, locale=normalize_locale(data["locale"]))
+    _validate_workspace_document(data)
+    if "locale" in data:
+        config = config.validated_update(locale=data["locale"])
     if "description" in data:
         raw_description = data["description"]
         if not isinstance(raw_description, str):
             raise ValueError("description must be a string")
-        config = replace(config, description=raw_description.strip() or None)
+        config = config.validated_update(description=raw_description.strip() or None)
     if "acp" in data:
-        config = replace(config, acp_agents=_acp_agents(data["acp"]))
+        config = config.validated_update(acp_agents=_acp_agents(data["acp"]))
     if "analysis_eval_slug" in data:
-        config = replace(
-            config,
-            analysis_eval_slug=_safe_path_segment(data["analysis_eval_slug"]),
-        )
+        config = config.validated_update(analysis_eval_slug=data["analysis_eval_slug"])
     if "harbor" in data:
         harbor = data.get("harbor")
         if not isinstance(harbor, dict):
@@ -270,8 +484,7 @@ def apply_toml_config(
                     dataset_ids=tuple(dataset_ids),
                 )
             )
-        config = replace(
-            config,
+        config = config.validated_update(
             harbor_datasets=tuple(datasets),
             harbor_mounts=tuple(mounts),
         )
@@ -280,30 +493,20 @@ def apply_toml_config(
         if not isinstance(defaults, dict):
             raise ValueError("defaults config must be a TOML table")
         updates: dict[str, Any] = {}
-        if "adapter" in defaults or "agent" in defaults:
-            updates["adapter"] = str(
-                defaults.get(
-                    "adapter",
-                    defaults.get("agent", config.adapter),
-                )
-            )
+        if "adapter" in defaults:
+            updates["adapter"] = defaults["adapter"]
         if "agent_name" in defaults:
             updates["agent_name"] = _optional_string(defaults.get("agent_name"))
         if "agent_version" in defaults:
             updates["agent_version"] = str(defaults.get("agent_version"))
-        if "locale" in defaults:
-            updates["locale"] = normalize_locale(defaults.get("locale"))
         if "model" in defaults:
             updates["model"] = _optional_string(defaults.get("model"))
         if "max_content_chars" in defaults:
-            updates["max_content_chars"] = int(defaults.get("max_content_chars"))
+            updates["max_content_chars"] = defaults["max_content_chars"]
             updates["max_content_chars_explicit"] = True
         if "redact" in defaults:
-            updates["redact"] = bool(defaults.get("redact"))
-        config = replace(
-            config,
-            **updates,
-        )
+            updates["redact"] = defaults["redact"]
+        config = config.validated_update(**updates)
     db = data.get("db", {})
     if db:
         if not isinstance(db, dict):
@@ -320,7 +523,9 @@ def apply_toml_config(
             if key in db:
                 db_updates[key] = _safe_identifier(db[key])
         if db_updates:
-            config = replace(config, db=replace(config.db, **db_updates))
+            config = config.validated_update(
+                db=config.db.validated_update(**db_updates)
+            )
     adapter_options_by_id, adapter_default_db_paths = _adapter_config_by_id(
         data.get("adapters", {}),
         base_dir=base_dir,
@@ -328,7 +533,9 @@ def apply_toml_config(
     if adapter_default_db_paths:
         merged_default_db_paths = dict(config.adapter_default_db_paths)
         merged_default_db_paths.update(adapter_default_db_paths)
-        config = replace(config, adapter_default_db_paths=merged_default_db_paths)
+        config = config.validated_update(
+            adapter_default_db_paths=merged_default_db_paths
+        )
     if adapter_options_by_id:
         merged_options = {
             key: dict(value) for key, value in config.adapter_options_by_id.items()
@@ -337,11 +544,7 @@ def apply_toml_config(
             merged = dict(merged_options.get(adapter_id, {}))
             merged.update(options)
             merged_options[adapter_id] = merged
-        config = replace(
-            config,
-            adapter_options_by_id=merged_options,
-            adapter_options=_adapter_options_for(config.adapter, merged_options),
-        )
+        config = config.validated_update(adapter_options_by_id=merged_options)
     return config
 
 
@@ -410,22 +613,11 @@ def apply_overrides(config: ToolConfig, args: Any) -> ToolConfig:
                 updates["max_content_chars_explicit"] = True
     if getattr(args, "no_redact", False):
         updates["redact"] = False
-    adapter = str(updates.get("adapter", config.adapter))
-    if updates or config.adapter_options_by_id:
-        updates["adapter_options"] = _adapter_options_for(
-            adapter,
-            config.adapter_options_by_id,
-        )
-    return replace(config, **updates)
+    return config.validated_update(**updates)
 
 
 def config_for_adapter(config: ToolConfig, adapter: object) -> ToolConfig:
-    adapter_id = _normalize_adapter_id(adapter)
-    return replace(
-        config,
-        adapter=adapter_id,
-        adapter_options=_adapter_options_for(adapter_id, config.adapter_options_by_id),
-    )
+    return config.for_adapter(adapter)
 
 
 def write_workspace_locale(config_path: Path, locale: str) -> None:
@@ -456,7 +648,6 @@ def write_workspace_harbor_mounts(
     current = apply_toml_config(
         ToolConfig(workspace_root=str(path.parent)),
         data,
-        top_level_locale=True,
         base_dir=path.parent,
     )
     _, validated_mounts = write_workspace_harbor_config(
@@ -503,7 +694,6 @@ def write_workspace_acp_agents(
     validated_config = apply_toml_config(
         ToolConfig(workspace_root=str(path.parent)),
         data,
-        top_level_locale=True,
         base_dir=path.parent,
     )
     _atomic_write_text(path, rendered)
@@ -559,7 +749,6 @@ def write_workspace_harbor_config(
     validated_config = apply_toml_config(
         ToolConfig(workspace_root=str(path.parent)),
         data,
-        top_level_locale=True,
         base_dir=path.parent,
     )
     validate_harbor_mount_paths(

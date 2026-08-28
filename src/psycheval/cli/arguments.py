@@ -8,7 +8,6 @@ class CliArgs:
     command: str
     scenario: str | None = None
     root: str | None = None
-    config: str | None = None
     adapter: tuple[str, ...] | None = None
     path: tuple[str, ...] | None = None
     db: tuple[str, ...] | None = None

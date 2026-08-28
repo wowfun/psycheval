@@ -4,6 +4,7 @@ import test from "node:test";
 import { installBrowserDom } from "./support/browser.js";
 
 const calls = [];
+const STALE_SESSION_TOKEN = "c3RhbGUtc2Vzc2lvbg";
 const jsonResponse = (payload, status = 200) => ({
   ok: status >= 200 && status < 300,
   status,
@@ -18,11 +19,11 @@ const fetchStub = async path => {
       agents: [{ id: "opencode", title: "OpenCode", connected: false }],
     });
   }
-  if (value === "/api/prompts") return jsonResponse({ prompts: [] });
-  if (value.startsWith("/api/acp/events?")) {
-    return jsonResponse({ error: "unknown ACP session" }, 404);
+  if (value === "/api/prompts") return jsonResponse([]);
+  if (value.startsWith(`/api/acp/agents/opencode/sessions/${STALE_SESSION_TOKEN}/events?`)) {
+    return jsonResponse({ detail: "unknown ACP session" }, 404);
   }
-  if (value.startsWith("/api/acp/sessions?")) {
+  if (value.startsWith("/api/acp/agents/opencode/sessions?")) {
     return jsonResponse({ sessions: [] });
   }
   return jsonResponse({});
@@ -30,7 +31,7 @@ const fetchStub = async path => {
 
 const browser = installBrowserDom(`
   <script type="application/json" id="peval-i18n">{}</script>
-  <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","serve_page":"home","workspace_id":"recovery-test","sources":[]}</script>
+  <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","initial_page":"home","workspace_id":"recovery-test","sources":[]}</script>
   <button data-acp-open>Copilot</button>
   <div data-acp-backdrop hidden></div>
   <aside data-acp-drawer hidden>
@@ -58,16 +59,16 @@ test.after(() => browser.cleanup());
 test("stale persisted ACP session recovers after one 404 poll", async () => {
   await acp.initializeAcp();
   const deadline = Date.now() + 1000;
-  while (!calls.some(path => path.startsWith("/api/acp/sessions?")) && Date.now() < deadline) {
+  while (!calls.some(path => path.startsWith("/api/acp/agents/opencode/sessions?")) && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
 
   assert.equal(
-    calls.filter(path => path.startsWith("/api/acp/events?")).length,
+    calls.filter(path => path.startsWith(`/api/acp/agents/opencode/sessions/${STALE_SESSION_TOKEN}/events?`)).length,
     1,
   );
   assert.equal(
-    calls.filter(path => path.startsWith("/api/acp/sessions?")).length,
+    calls.filter(path => path.startsWith("/api/acp/agents/opencode/sessions?")).length,
     1,
   );
   assert.equal(acp.acpState.sessionId, "");

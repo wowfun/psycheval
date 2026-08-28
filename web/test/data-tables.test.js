@@ -82,6 +82,7 @@ test("Leaderboard renders the complete-query summary returned by the server", ()
   const previousSummary = runtime.state.leaderboardSummary;
   const previousTotal = runtime.state.catalogPage.total;
   try {
+    const metricValues = { ttft_ms: 500, tokens: 0 };
     runtime.state.leaderboardSummaryGroupBy = "agent";
     runtime.state.leaderboardSummaryTableOpen = true;
     runtime.state.catalogPage.total = 125;
@@ -93,15 +94,19 @@ test("Leaderboard renders the complete-query summary returned by the server", ()
           key: "agent-a",
           label: "agent-a",
           count: 125,
-          metrics: definitions.map(definition => ({
-            key: definition.key,
-            type: definition.type,
-            count: definition.key === "ttft_ms" ? 125 : 0,
-            mean: definition.key === "ttft_ms" ? 500 : null,
-            distribution: definition.key === "ttft_ms"
-              ? { min: 100, q1: 200, p50: 400, q3: 700, p95: 900, max: 900 }
-              : null,
-          })),
+          metrics: definitions.map(definition => {
+            const measured = Object.hasOwn(metricValues, definition.key);
+            const mean = measured ? metricValues[definition.key] : null;
+            return {
+              key: definition.key,
+              type: definition.type,
+              count: measured ? 125 : 0,
+              mean,
+              distribution: measured
+                ? { min: mean, q1: mean, p50: mean, q3: mean, p95: mean, max: mean }
+                : null,
+            };
+          }),
         }],
       },
     };
@@ -111,10 +116,16 @@ test("Leaderboard renders the complete-query summary returned by the server", ()
     const target = document.querySelector("#leaderboard-summary");
     assert.match(target.textContent, /125 matching Trials across all pages/);
     assert.match(target.querySelector('[data-summary-metric="ttft_ms"]').textContent, /0\.5s/);
+    assert.match(target.querySelector('[data-summary-metric="tokens"]').textContent, /0/);
     assert.equal(target.querySelector(".inference-overview"), null);
-    for (const key of ["ttft_ms", "tps", "cache_hit_rate"]) {
+    assert.match(target.querySelector("[data-summary-table-toggle]").textContent, /2 metrics/);
+    for (const key of ["ttft_ms", "tokens"]) {
       assert.ok(target.querySelector(`[data-summary-metric="${key}"]`));
       assert.ok(target.querySelector(`[data-summary-chart="${key}"]`));
+    }
+    for (const key of ["score", "tps", "cache_hit_rate"]) {
+      assert.equal(target.querySelector(`[data-summary-metric="${key}"]`), null);
+      assert.equal(target.querySelector(`[data-summary-chart="${key}"]`), null);
     }
   } finally {
     runtime.state.leaderboardSummaryGroupBy = previousGroupBy;
@@ -122,6 +133,40 @@ test("Leaderboard renders the complete-query summary returned by the server", ()
     runtime.state.leaderboardSummary = previousSummary;
     runtime.state.catalogPage.total = previousTotal;
   }
+});
+
+test("Saved View summaries hide metrics with no measured Trials", () => {
+  const summary = {
+    matched_count: 2,
+    groups: [
+      {
+        key: "agent-a",
+        label: "agent-a",
+        count: 1,
+        metrics: [
+          { key: "tokens", type: "number", count: 0, mean: null, distribution: null },
+          { key: "turns", type: "number", count: 0, mean: null, distribution: null },
+        ],
+      },
+      {
+        key: "agent-b",
+        label: "agent-b",
+        count: 1,
+        metrics: [
+          { key: "tokens", type: "number", count: 1, mean: 0, distribution: { min: 0, q1: 0, p50: 0, q3: 0, p95: 0, max: 0 } },
+          { key: "turns", type: "number", count: 0, mean: null, distribution: null },
+        ],
+      },
+    ],
+  };
+
+  const table = views.renderWorkspaceViewTable(summary, "agent");
+  const charts = views.renderWorkspaceViewCharts(summary, "agent");
+
+  assert.match(table, /Tokens/);
+  assert.doesNotMatch(table, /Turns/);
+  assert.match(charts, /data-view-chart="tokens"/);
+  assert.doesNotMatch(charts, /data-view-chart="turns"/);
 });
 
 test("#Analysis counts Harbor and workspace origins without double-counting overlay files", () => {
@@ -602,6 +647,7 @@ test("Leaderboard and saved-view adapters keep persistence behind the shared edi
   const originalFetch = globalThis.fetch;
   const response = payload => ({
     ok: true,
+    status: 200,
     statusText: "OK",
     async text() { return JSON.stringify(payload); },
   });
@@ -609,15 +655,15 @@ test("Leaderboard and saved-view adapters keep persistence behind the shared edi
     const path = String(url);
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({ path, method: options.method || "GET", body });
-    if (path.includes("/api/sources/source-1/category")) return response({ generation: 2, change: "category", source_keys: ["source-1"] });
-    if (path.includes("/api/sources/source-1/tags")) return response({});
+    if (path === "/api/sources/source-1" && options.method === "PATCH") return response({ source_key: "source-1" });
+    if (path === "/api/sources") return response({ generation: 2, sources: [{ source_key: "source-1" }] });
     if (path.includes("/api/catalog?")) return response({ items: [], page: 1, page_size: 100, total: 0, generation: 0, checking: false, facets: { categories: [{ value: "Evaluation", count: 1 }] } });
-    if (path === "/api/views/update") {
+    if (path === "/api/views/Daily") {
       const updated = { name: "Daily", filters: { tags: ["daily", "nightly"], results: ["passed"] }, group_by: "agent", notes: "Note" };
-      return response({ view: updated, views: [updated] });
+      return response(updated);
     }
-    if (path === "/api/views") return response({ views: runtime.state.workspaceViews });
-    if (path === "/api/views/summary") return response({ views: [], generation: 0 });
+    if (path === "/api/views") return response(runtime.state.workspaceViews);
+    if (path === "/api/view-summaries") return response({ views: [], generation: 0 });
     throw new Error(`unexpected request: ${path}`);
   };
   window.fetch = globalThis.fetch;
@@ -632,16 +678,16 @@ test("Leaderboard and saved-view adapters keep persistence behind the shared edi
   assert.equal(typeof leaderboardTags.edit.commit, "function");
   await leaderboardTags.edit.commit({ source_key: "source-1", trial_key: "trial-1" }, ["green", "blue"]);
   assert.deepEqual(calls[0], {
-    path: "/api/sources/source-1/tags",
-    method: "POST",
-    body: { report_source_state: "active", tags: ["green", "blue"] },
+    path: "/api/sources/source-1",
+    method: "PATCH",
+    body: { tags: ["green", "blue"] },
   });
   runtime.state.sourceCategoryOptions = ["Evaluation", "Regression"];
   assert.deepEqual(leaderboardCategory.edit.suggestions(), ["Evaluation", "Regression"]);
   await leaderboardCategory.edit.commit({ source_key: "source-1", trial_key: "trial-1" }, "  Evaluation  ");
-  assert.deepEqual(calls.find(call => call.path === "/api/sources/source-1/category"), {
-    path: "/api/sources/source-1/category",
-    method: "POST",
+  assert.deepEqual(calls.find(call => call.path === "/api/sources/source-1" && call.body?.category), {
+    path: "/api/sources/source-1",
+    method: "PATCH",
     body: { category: "Evaluation" },
   });
 
@@ -653,7 +699,7 @@ test("Leaderboard and saved-view adapters keep persistence behind the shared edi
   await views.refreshWorkspaceViews();
   const view = views.workspaceViewForName("Daily");
   await views.commitWorkspaceViewCellEdit(view, "tags", ["daily", "nightly"]);
-  const update = calls.find(call => call.path === "/api/views/update");
+  const update = calls.find(call => call.path === "/api/views/Daily");
   assert.equal(update.body.field, "configuration");
   assert.match(update.body.value, /tags:\n    - "daily"\n    - "nightly"/);
   assert.match(update.body.value, /results:\n    - "passed"/);
@@ -687,6 +733,7 @@ test("Saved View Category editing preserves a scalar value containing a comma", 
   };
   const response = payload => ({
     ok: true,
+    status: 200,
     statusText: "OK",
     async text() { return JSON.stringify(payload); },
   });
@@ -694,9 +741,9 @@ test("Saved View Category editing preserves a scalar value containing a comma", 
     const path = String(url);
     const body = options.body ? JSON.parse(options.body) : null;
     calls.push({ path, body });
-    if (path === "/api/views/update") return response({ view, views: [view] });
-    if (path === "/api/views") return response({ views: [view] });
-    if (path === "/api/views/summary") return response({ views: [], generation: 1 });
+    if (path === "/api/views/Comma%20category") return response(view);
+    if (path === "/api/views") return response([view]);
+    if (path === "/api/view-summaries") return response({ views: [], generation: 1 });
     throw new Error(`unexpected request: ${path}`);
   };
   window.fetch = globalThis.fetch;
@@ -733,7 +780,7 @@ test("Saved View Category editing preserves a scalar value containing a comma", 
     input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     for (let index = 0; index < 5; index += 1) await tick();
 
-    const update = calls.find(call => call.path === "/api/views/update");
+    const update = calls.find(call => call.path === "/api/views/Comma%20category");
     assert.match(update.body.value, /categories:\n    - "Safety, Eval"/);
     assert.doesNotMatch(update.body.value, /categories:\n    - "Safety"\n    - "Eval"/);
   } finally {

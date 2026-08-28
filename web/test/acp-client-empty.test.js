@@ -11,7 +11,7 @@ const jsonResponse = payload => ({
 });
 const browser = installBrowserDom(`
   <script type="application/json" id="peval-i18n">{}</script>
-  <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","serve_page":"home","workspace_id":"empty-agent-test","sources":[]}</script>
+  <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","initial_page":"home","workspace_id":"empty-agent-test","sources":[]}</script>
   <button data-acp-open>Copilot</button>
   <div data-acp-backdrop hidden></div>
   <aside data-acp-drawer hidden>
@@ -30,7 +30,7 @@ const browser = installBrowserDom(`
 `, {
   fetch: async path => jsonResponse(String(path) === "/api/acp/agents"
     ? { agents: [] }
-    : { prompts: [] }),
+    : []),
 });
 
 const acp = await import("../../src/psycheval/assets/web/modules/acp-client.js");
