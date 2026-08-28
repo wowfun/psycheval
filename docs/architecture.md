@@ -19,7 +19,10 @@ The package-level implementation reads retained sessions and Harbor Trial
 evidence, converts strict ATIF, and builds reports and workspaces behind the
 `psycheval.cli` interface. One internal Harbor Trial loader owns read-only
 recognition and projection for both direct CLI paths and workspace mounts;
-workspace state owns only discovery, overlays, and derived catalog records.
+one internal Harbor Task loader owns validated Task configuration, text
+decoding, and publishable file selection for both workspace state and the
+Dataset workbench. Workspace state owns only discovery, overlays, and derived
+catalog records.
 `psycheval.harbor` is the adapter module for Harbor's Agent, Environment,
 trajectory, and verifier seams; it owns host execution, harness integration,
 and evidence scoring.
@@ -46,9 +49,13 @@ entry points with the same server-side access checks.
 `WorkspaceApp` owns the active page and maps the `catalog`, `reports`,
 `dataset-registry`, `tasks`, and `assistant-config` invalidation domains to page
 adapters. Page adapters do not import one another; shared browser primitives do
-not depend on the Home runtime. HTML remains `no-store`, browser modules use
-strong ETags, and ECharts is loaded only from the versioned immutable workspace
-asset rather than from a browser-side third-party fallback.
+not depend on the Home runtime. One shared sidebar primitive owns lifecycle,
+focus, mutual exclusion, and responsive width interaction for report previews
+across Home and Reports, the Home Saved View rail, and Trial detail; the global
+ACP drawer remains independent.
+HTML remains `no-store`, browser modules use strong ETags, and ECharts is loaded
+only from the versioned immutable workspace asset rather than from a browser-side
+third-party fallback.
 
 The serve-owned ACP seam launches only administrator-configured local child
 processes and projects their JSON-RPC session events into browser UI state. It

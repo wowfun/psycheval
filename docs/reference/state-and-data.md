@@ -25,8 +25,10 @@ passes the current strict validator; the compatibility view is not persisted.
 Derived browser views render absolute timestamps as UTC without rewriting the
 underlying ATIF, Harbor, or catalog values.
 Live Harbor Task text is read on demand through the bounded Workspace Task file
-interface. Task text is not copied into reports, catalog summaries, search
-documents, or exports; live detail may expose only a safe Dataset/Task reference.
+interface. Task configuration, required instruction files, and Task ignore
+rules are strict UTF-8, independent of the host locale. Task text is not copied
+into reports, catalog summaries, search documents, or exports; live detail may
+expose only a safe Dataset/Task reference.
 The Workspace is the only browser presentation surface. It fetches derived data
 through local HTTP interfaces and does not serialize that state into offline HTML
 reports or Workspace snapshots.
