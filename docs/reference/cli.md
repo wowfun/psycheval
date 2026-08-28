@@ -17,6 +17,10 @@ execution never changes shell configuration. Repeatable sources and selectors,
 optional-value bare `-o`, and command exit codes are part of the tested CLI
 contract.
 
+Configuration comes only from the workspace selected with `-r`/`--root`, the
+current directory and its parents, or `PEVAL_ROOT`. Commands do not accept a
+separate config-file path.
+
 ## Inputs and adapters
 
 Built-in adapters are `psychevo`, `opencode`, `hermes`, and path-only

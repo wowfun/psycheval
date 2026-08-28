@@ -41,6 +41,11 @@ command = "opencode"
 args = ["acp"]
 ```
 
+Use `-r`/`--root` to select a workspace. Without it, `peval` discovers
+`peval.toml` from the current directory and its parents (or `PEVAL_ROOT`). The
+file is validated strictly, so remove obsolete or misspelled fields instead of
+expecting them to be ignored.
+
 Configuration ownership and path semantics live in the
 [workspace reference](../../reference/workspace.md).
 
@@ -70,6 +75,15 @@ select rows to archive, restore, or permanently delete them, and use **Sync
 manifest** only when `dataset.toml` should be updated. The **Leaderboard** owns
 the corresponding trajectory lifecycle, including archived views and permanent
 source deletion.
+
+Home, Datasets, Reports, and Configuration share one persistent browser
+document. Their direct URLs still open the named page, while navigation and the
+browser back/forward controls switch pages without reloading the document.
+Visited pages retain their selection, scroll position, and unsaved Dataset file
+or Report binding draft. Use each page's Reload or Rescan action for external
+filesystem changes; a related mutation made in another page refreshes the stale
+page when it is next activated. Reloading or closing the browser still warns
+before discarding an unsaved draft.
 
 ## Psycheval Copilot
 

@@ -45,10 +45,11 @@ search, facets, and applied Saved Views, including browser-local Saved Views.
 Pagination, sorting, and row selection do not change that scope. Leaderboard and
 Saved View grouped summaries treat each measured Trial as one observation for
 Count, Mean, and percentile statistics. Unknown Trial values are excluded while
-an explicit numeric zero remains part of the distribution. Grouped summaries
-remain exact and are never truncated or approximated; a query whose distinct
-group count exceeds the service capacity is rejected so the user can refine the
-scope or select an overall summary.
+an explicit numeric zero remains part of the distribution. Summary tables,
+charts, and spreadsheet exports omit a metric only when its Count is zero in
+every group. Grouped summaries remain exact and are never truncated or
+approximated; a query whose distinct group count exceeds the service capacity is
+rejected so the user can refine the scope or select an overall summary.
 
 An explicit trajectory value wins over aligned supplemental Trial telemetry.
 Optional telemetry failure does not invalidate a readable trajectory. Multiple

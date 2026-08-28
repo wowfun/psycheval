@@ -29,6 +29,27 @@ ownership: the CLI reads workspace, adapter, Dataset, and mount fields; Harbor
 reads only `[harbor.host]`. Child harnesses receive a generated `peval.json`, not
 the user TOML.
 
+The serve subtree owns one internal FastAPI application for the bundled browser
+UI. `run_serve_command` owns listener selection, the single-process runtime, and
+shutdown through Uvicorn; the application borrows that runtime and does not own
+its lifecycle. The `/api` interface is not a public integration API and does not
+publish interactive API documentation or a generated client contract.
+
+The browser UI is one persistent document. The server renders every page shell
+allowed for the current role and the requested route selects the initial page;
+the browser application owns later navigation, page activation, and history.
+Page adapters load on first activation and keep their DOM and draft state until
+the document is unloaded. They consume explicit invalidation domains instead of
+using navigation as a data-refresh mechanism. Direct page URLs remain complete
+entry points with the same server-side access checks.
+
+`WorkspaceApp` owns the active page and maps the `catalog`, `reports`,
+`dataset-registry`, `tasks`, and `assistant-config` invalidation domains to page
+adapters. Page adapters do not import one another; shared browser primitives do
+not depend on the Home runtime. HTML remains `no-store`, browser modules use
+strong ETags, and ECharts is loaded only from the versioned immutable workspace
+asset rather than from a browser-side third-party fallback.
+
 The serve-owned ACP seam launches only administrator-configured local child
 processes and projects their JSON-RPC session events into browser UI state. It
 does not enter the retained-session conversion, report, workspace overlay, or
@@ -55,6 +76,12 @@ Core CLI implementation may consume pinned Harbor interfaces but not
 configuration sections and explicit formats. Tasks invoke the installed
 verifier rather than checkout-relative Python paths; documentation and skills
 consume public interfaces but runtime code does not depend on them.
+
+Pydantic models own the validated CLI workspace configuration, HTTP request
+shapes, and Problem responses. Large catalog, report, and Harbor projections
+remain owned by their domain modules instead of being duplicated as transport
+models. Uvicorn is the only production ASGI adapter; integration tests exercise
+the same application through a test-owned Uvicorn host.
 
 ## Authority seams
 

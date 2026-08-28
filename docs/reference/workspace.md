@@ -7,7 +7,10 @@ evidence.
 ## Configuration ownership
 
 An initialized root contains `peval.toml`. The CLI discovers it through explicit
-`-r`/`--root`, the current directory and its parents, or `PEVAL_ROOT`.
+`-r`/`--root`, the current directory and its parents, or `PEVAL_ROOT`; there is
+no separate config-file option. Workspace configuration is strict: unknown
+Psycheval-owned fields, removed defaults, invalid types, duplicate identities,
+and dangling Dataset references fail before any command or mutation runs.
 The Psycheval CLI owns top-level workspace presentation, `[adapters.*]`,
 `[[acp.agents]]`, `[[harbor.datasets]]`, and `[[harbor.mounts]]`. `psycheval.harbor` owns
 `[harbor.host]`; each parser accepts the sibling section without copying its
@@ -18,7 +21,9 @@ Harbor Jobs roots and ordered Dataset IDs; there is no implicit Jobs discovery.
 Harbor evidence and registered Dataset files remain read-only to source/catalog
 operations except explicit administrator Dataset workbench mutations.
 Dataset registration and mount configuration share one revisioned configuration
-snapshot. Unregister is atomic across the requested Dataset IDs, preserves their
+snapshot. HTTP reads expose its strong ETag and writes require `If-Match` so a
+stale browser cannot overwrite a newer file. Unregister is atomic across the
+requested Dataset IDs, preserves their
 directories, and fails if any requested ID is still mounted. Task archive,
 restore, rename, and permanent deletion do not rewrite `dataset.toml`; manifest
 contents change only through explicit synchronization.
@@ -66,6 +71,13 @@ Guests receive allowlisted, path-safe projections and read-only exports.
 Administrators may inspect source locations, refresh, and mutate workspace or
 Dataset state. Authorization is centralized and unclassified routes fail
 closed; hiding a browser control is not an access check.
+
+The bundled UI uses the unversioned `/api` resource interface. Successful
+responses are direct resource representations; HTTP errors use Problem Details.
+Potentially slow and batch mutations return an operation resource for polling.
+This interface, its disabled API documentation, and its single-process server
+are local workspace implementation details rather than an external service
+contract.
 
 ACP routes are administrator-only because an allowlisted Agent runs with the OS
 authority of `peval serve`; an ACP permission card is Agent protocol state, not
