@@ -9,8 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from typing import Any, Iterable
 
-import pathspec
-
+from psycheval._harbor_tasks import load_harbor_task, select_publishable_task_files
 from psycheval._state.annotations import optional_str
 
 TRIAL_JSON_FILES = (
@@ -20,14 +19,6 @@ TRIAL_JSON_FILES = (
     "result.json",
 )
 JOB_JSON_FILES = ("config.json", "lock.json", "result.json")
-DEFAULT_TASK_IGNORES = (
-    "__pycache__/",
-    "*.pyc",
-    ".DS_Store",
-    "*.swp",
-    "*.swo",
-    "*~",
-)
 
 
 @dataclass(frozen=True)
@@ -381,14 +372,14 @@ def _task_candidates_once(
             [root] if _regular_file(root / "task.toml") else _child_task_dirs(root)
         )
         for task_dir in task_dirs:
-            config_path = task_dir / "task.toml"
             try:
                 _walk_regular_files(task_dir, task_dir)
-                config_bytes = _read_bytes_no_follow(task_dir, config_path)
-                from harbor.models.task.task import Task
-
-                validated_task = Task(task_dir)
-                task = validated_task.config.task
+                loaded_task = load_harbor_task(
+                    task_dir,
+                    read_bytes=lambda path: _read_bytes_no_follow(task_dir, path),
+                )
+                config_bytes = loaded_task.config_bytes
+                task = loaded_task.config.task
                 if task is None:
                     raise ValueError("task.toml must contain a [task] table")
                 metadata = {
@@ -542,6 +533,7 @@ def _task_path_matches(candidate: Path, raw_path: Any) -> bool:
 
 
 def _task_content_digest(task_dir: Path) -> tuple[str, str]:
+    task_dir = Path(os.path.abspath(task_dir))
     last_error: Exception | None = None
     for _attempt in range(3):
         try:
@@ -574,30 +566,11 @@ def _task_content_digest(task_dir: Path) -> tuple[str, str]:
 
 
 def _task_files(task_dir: Path) -> list[Path]:
-    gitignore = task_dir / ".gitignore"
-    patterns = (
-        _read_bytes_no_follow(task_dir, gitignore).decode("utf-8").splitlines()
-        if _regular_file(gitignore)
-        else DEFAULT_TASK_IGNORES
+    return select_publishable_task_files(
+        task_dir,
+        files=_walk_regular_files(task_dir, task_dir),
+        read_bytes=lambda path: _read_bytes_no_follow(task_dir, path),
     )
-    spec = pathspec.PathSpec.from_lines("gitignore", patterns)
-    files: list[Path] = []
-    for name in ("task.toml", "instruction.md", "README.md"):
-        path = task_dir / name
-        if _regular_file(path):
-            files.append(path)
-    for name in ("environment", "tests", "solution", "steps"):
-        root = task_dir / name
-        if not root.exists():
-            continue
-        files.extend(_walk_regular_files(task_dir, root))
-    result = [
-        path
-        for path in files
-        if not spec.match_file(path.relative_to(task_dir).as_posix())
-    ]
-    result.sort(key=lambda path: path.relative_to(task_dir).as_posix())
-    return result
 
 
 def _walk_regular_files(containment_root: Path, root: Path) -> list[Path]:

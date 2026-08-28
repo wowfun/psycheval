@@ -44,6 +44,26 @@ from psycheval.sources import read_sqlite_messages as read_sqlite_messages
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+@contextlib.contextmanager
+def emulate_default_path_encoding(encoding: str):
+    original_read_text = Path.read_text
+    default_encoding = encoding
+
+    def read_text_with_default(
+        path: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        return original_read_text(
+            path,
+            encoding=default_encoding if encoding is None else encoding,
+            errors=errors,
+        )
+
+    with patch.object(Path, "read_text", read_text_with_default):
+        yield
+
+
 def script_json(html: str, element_id: str):
     match = re.search(
         rf'<script type="application/json" id="{re.escape(element_id)}">(.*?)</script>',

@@ -16,9 +16,12 @@ from uuid import uuid4
 
 from harbor.models.dataset.manifest import DatasetInfo, DatasetManifest, DatasetTaskRef
 from harbor.models.task.config import PackageInfo, TaskConfig
-from harbor.models.task.task import Task
-from harbor.publisher.packager import Packager
 
+from psycheval._harbor_tasks import (
+    load_harbor_task,
+    load_harbor_task_config,
+    select_publishable_task_files,
+)
 from psycheval.config import (
     HARBOR_ID_RE,
     HarborDataset,
@@ -779,12 +782,11 @@ class HarborWorkspace:
 
     def _task_package_name(self, task_dir: Path) -> str | None:
         try:
-            config = TaskConfig.model_validate_toml(
-                _read_regular_file(
-                    task_dir / "task.toml", limit=TEXT_EDIT_LIMIT
-                ).decode("utf-8")
+            loaded_task = load_harbor_task_config(
+                task_dir,
+                read_bytes=lambda path: _read_regular_file(path, limit=None),
             )
-            return config.task.name if config.task else None
+            return loaded_task.config.task.name if loaded_task.config.task else None
         except Exception:  # noqa: BLE001 - summary may describe invalid drafts.
             return None
 
@@ -846,7 +848,10 @@ class HarborWorkspace:
 def _validate_task(task_dir: Path) -> tuple[bool, str | None]:
     try:
         _walk_tree(task_dir)
-        Task(task_dir)
+        load_harbor_task(
+            task_dir,
+            read_bytes=lambda path: _read_regular_file(path, limit=None),
+        )
         return True, None
     except Exception as exc:  # noqa: BLE001 - Harbor owns validation types.
         return False, _safe_diagnostic(exc, task_dir, "<task>")
@@ -860,13 +865,29 @@ def _missing_harbor_templates_error() -> HarborWorkspaceError:
 
 
 def _task_ref(task_dir: Path) -> DatasetTaskRef:
-    task = Task(task_dir)
-    if task.config.task is None:
+    task_dir = Path(os.path.abspath(task_dir))
+    loaded_task = load_harbor_task(
+        task_dir,
+        read_bytes=lambda path: _read_regular_file(path, limit=None),
+    )
+    if loaded_task.config.task is None:
         raise HarborWorkspaceError("Task package metadata is missing")
-    content_hash, _ = Packager.compute_content_hash(task_dir)
+    files = select_publishable_task_files(
+        task_dir,
+        files=(
+            path
+            for path in _walk_tree(task_dir)
+            if stat.S_ISREG(path.stat(follow_symlinks=False).st_mode)
+        ),
+        read_bytes=lambda path: _read_regular_file(path, limit=None),
+    )
+    digest = hashlib.sha256()
+    for path in files:
+        relative = path.relative_to(task_dir).as_posix()
+        digest.update(f"{relative}\0{_regular_file_hash(path)}\n".encode())
     return DatasetTaskRef(
-        name=task.config.task.name,
-        digest=f"sha256:{content_hash}",
+        name=loaded_task.config.task.name,
+        digest=f"sha256:{digest.hexdigest()}",
     )
 
 
@@ -1007,6 +1028,22 @@ def _read_regular_file(path: Path, *, limit: int | None) -> bytes:
                 f"File exceeds the {limit // (1024 * 1024)} MiB limit"
             )
         return content
+    finally:
+        os.close(descriptor)
+
+
+def _regular_file_hash(path: Path) -> str:
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        value = os.fstat(descriptor)
+        if not stat.S_ISREG(value.st_mode):
+            raise HarborWorkspaceError("Path is not a regular file")
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
     finally:
         os.close(descriptor)
 

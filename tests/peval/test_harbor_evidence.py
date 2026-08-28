@@ -18,8 +18,12 @@ from psycheval.state import (
     harbor_evidence,
     open_workspace_state,
 )
-from psycheval.state.harbor_evidence import read_harbor_evidence
+from psycheval.state.harbor_evidence import (
+    read_harbor_evidence,
+    read_harbor_task_index,
+)
 from psycheval.state.workspace_sources import WorkspaceSources
+from tests.peval.peval_test_support import emulate_default_path_encoding
 
 
 def write_json(path: Path, value: dict[str, object]) -> None:
@@ -289,6 +293,53 @@ class HarborEvidenceTests(unittest.TestCase):
                     "harbor_version"
                 ],
                 "0.21.0-trial",
+            )
+
+    def test_utf8_task_association_is_independent_of_host_encoding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            task = root / "dataset" / "chinese"
+            write_task(task, "org/chinese")
+            (task / "instruction.md").write_text(
+                "请分析这个中文任务，并给出完整答案。\n",
+                encoding="utf-8",
+            )
+            trial = root / "jobs" / "job" / "trial"
+            write_evidence_trial(
+                trial,
+                config_task={"name": "chinese", "source": "org"},
+                result={"id": "result", "task_name": "org/chinese"},
+            )
+            workspace = root / "workspace"
+            store = open_workspace_state(str(workspace))
+            config = ToolConfig(
+                workspace_root=str(workspace),
+                harbor_datasets=(HarborDataset(id="tasks", path=str(task.parent)),),
+                harbor_mounts=(
+                    HarborMount(
+                        id="jobs",
+                        path=str(trial.parents[1]),
+                        dataset_ids=("tasks",),
+                    ),
+                ),
+            )
+            try:
+                with emulate_default_path_encoding("gbk"):
+                    index = read_harbor_task_index((str(task.parent),))
+                    evidence = self.read(trial, (task.parent,))
+                    catalog = WorkspaceCatalog(store, config)
+                    catalog.reconcile()
+                    row = catalog.query(CatalogQuery()).items[0].to_dict()
+                    detail = catalog.load_detail(row["source_key"]).report
+            finally:
+                store.close()
+
+            self.assertEqual(len(index.candidates), 1)
+            self.assertEqual(evidence.task_metadata["status"], "resolved")
+            self.assertEqual(evidence.task_metadata["name"], "org/chinese")
+            self.assertEqual(
+                detail["trajectory_meta"][0]["task_metadata"]["task_ref"],
+                {"dataset_id": "tasks", "task": "chinese"},
             )
 
     def test_package_ref_digest_is_provenance_not_a_local_digest_comparison(

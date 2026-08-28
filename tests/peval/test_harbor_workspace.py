@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harbor.models.dataset.manifest import DatasetManifest
+from harbor.publisher.packager import Packager
 
 from psycheval.config import (
     HarborDataset,
@@ -36,6 +37,7 @@ from psycheval.serve.harbor_workspace import (
 from psycheval.state import open_workspace_state
 from psycheval.state.harbor_evidence import read_harbor_task_index
 from tests.peval.asgi_server import LocalHTTPServer, make_handler
+from tests.peval.peval_test_support import emulate_default_path_encoding
 
 
 class HarborWorkspaceTests(unittest.TestCase):
@@ -526,6 +528,208 @@ class HarborWorkspaceTests(unittest.TestCase):
             self.assertFalse(
                 (root / "dataset" / ".peval-trash" / trashed_again["entry_id"]).exists()
             )
+
+    def test_utf8_task_and_gitignore_are_locale_independent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "peval.toml"
+            config_path.write_text("", encoding="utf-8")
+            config = HarborWorkspace(
+                config_path, ToolConfig(workspace_root=str(root))
+            ).create_dataset(
+                dataset_id="tasks",
+                path="dataset",
+                package_name="local/tasks",
+                expected_revision=config_revision(config_path),
+            )
+            library = HarborWorkspace(config_path, config)
+            dataset = library.inventory()["datasets"][0]
+            detail = library.create_task(
+                dataset_id="tasks",
+                directory="chinese",
+                package_name="local/chinese",
+                steps=0,
+                expected_revision=dataset["revision"],
+            )
+            task_dir = root / "dataset" / "chinese"
+            (task_dir / ".gitignore").write_text(
+                "environment/忽略.txt\n", encoding="utf-8"
+            )
+            (task_dir / "environment" / "忽略.txt").write_text(
+                "ignored task input\n", encoding="utf-8"
+            )
+            detail = library.task_detail("tasks", "chinese")
+
+            with emulate_default_path_encoding("gbk"):
+                detail = library.mutate_file(
+                    "save",
+                    {
+                        "dataset_id": "tasks",
+                        "task": "chinese",
+                        "path": "instruction.md",
+                        "content": "请分析这个中文任务，并给出完整答案。\n",
+                        "expected_revision": detail["task"]["revision"],
+                    },
+                )
+                inventory = library.inventory()["datasets"][0]
+                library.sync_manifest(
+                    dataset_id="tasks",
+                    expected_revision=inventory["revision"],
+                )
+
+            self.assertEqual(detail["task"]["status"], "valid")
+            self.assertEqual(detail["task"]["diagnostics"], [])
+            self.assertEqual(inventory["tasks"][0]["status"], "valid")
+            self.assertEqual(inventory["tasks"][0]["diagnostics"], [])
+            manifest = DatasetManifest.from_toml_file(root / "dataset" / "dataset.toml")
+            self.assertEqual([task.name for task in manifest.tasks], ["local/chinese"])
+            digest = manifest.tasks[0].digest
+            expected_hash, _ = Packager.compute_content_hash(task_dir)
+            self.assertEqual(digest, f"sha256:{expected_hash}")
+
+            (task_dir / "environment" / "忽略.txt").write_text(
+                "changed ignored task input\n", encoding="utf-8"
+            )
+            inventory = library.inventory()["datasets"][0]
+            with emulate_default_path_encoding("gbk"):
+                library.sync_manifest(
+                    dataset_id="tasks",
+                    expected_revision=inventory["revision"],
+                )
+            manifest = DatasetManifest.from_toml_file(root / "dataset" / "dataset.toml")
+            self.assertEqual(manifest.tasks[0].digest, digest)
+
+    def test_utf8_multistep_task_metadata_and_instructions_are_locale_independent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "peval.toml"
+            config_path.write_text("", encoding="utf-8")
+            config = HarborWorkspace(
+                config_path, ToolConfig(workspace_root=str(root))
+            ).create_dataset(
+                dataset_id="tasks",
+                path="dataset",
+                package_name="local/tasks",
+                expected_revision=config_revision(config_path),
+            )
+            library = HarborWorkspace(config_path, config)
+            dataset = library.inventory()["datasets"][0]
+            detail = library.create_task(
+                dataset_id="tasks",
+                directory="multistep",
+                package_name="local/multistep",
+                steps=2,
+                expected_revision=dataset["revision"],
+            )
+            config_file = library.read_file("tasks", "multistep", "task.toml")
+            config_text = str(config_file["content"]).replace(
+                'description = ""',
+                'description = "中文任务"',
+                1,
+            )
+            with emulate_default_path_encoding("gbk"):
+                detail = library.mutate_file(
+                    "save",
+                    {
+                        "dataset_id": "tasks",
+                        "task": "multistep",
+                        "path": "task.toml",
+                        "content": config_text,
+                        "expected_revision": detail["task"]["revision"],
+                    },
+                )
+                for step in ("step-1", "step-2"):
+                    detail = library.mutate_file(
+                        "save",
+                        {
+                            "dataset_id": "tasks",
+                            "task": "multistep",
+                            "path": f"steps/{step}/instruction.md",
+                            "content": f"完成{step}的中文要求。\n",
+                            "expected_revision": detail["task"]["revision"],
+                        },
+                    )
+
+            self.assertEqual(detail["task"]["status"], "valid")
+            self.assertEqual(detail["task"]["diagnostics"], [])
+            self.assertEqual(detail["default_file_path"], "steps/step-1/instruction.md")
+
+    def test_large_valid_task_config_keeps_its_package_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "peval.toml"
+            config_path.write_text("", encoding="utf-8")
+            config = HarborWorkspace(
+                config_path, ToolConfig(workspace_root=str(root))
+            ).create_dataset(
+                dataset_id="tasks",
+                path="dataset",
+                package_name="local/tasks",
+                expected_revision=config_revision(config_path),
+            )
+            library = HarborWorkspace(config_path, config)
+            dataset = library.inventory()["datasets"][0]
+            library.create_task(
+                dataset_id="tasks",
+                directory="large-config",
+                package_name="local/large-config",
+                steps=0,
+                expected_revision=dataset["revision"],
+            )
+            task_config = root / "dataset" / "large-config" / "task.toml"
+            config_text = task_config.read_text(encoding="utf-8").replace(
+                'description = ""',
+                f'description = "{"x" * TEXT_EDIT_LIMIT}"',
+                1,
+            )
+            task_config.write_text(config_text, encoding="utf-8")
+
+            task = library.inventory()["datasets"][0]["tasks"][0]
+
+            self.assertEqual(task["status"], "valid")
+            self.assertEqual(task["package_name"], "local/large-config")
+
+    def test_non_utf8_task_text_remains_a_draft_with_stable_diagnostic(self) -> None:
+        for relative_path in ("instruction.md", ".gitignore"):
+            with (
+                self.subTest(relative_path=relative_path),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                root = Path(tmp)
+                config_path = root / "peval.toml"
+                config_path.write_text("", encoding="utf-8")
+                config = HarborWorkspace(
+                    config_path, ToolConfig(workspace_root=str(root))
+                ).create_dataset(
+                    dataset_id="tasks",
+                    path="dataset",
+                    package_name="local/tasks",
+                    expected_revision=config_revision(config_path),
+                )
+                library = HarborWorkspace(config_path, config)
+                dataset = library.inventory()["datasets"][0]
+                library.create_task(
+                    dataset_id="tasks",
+                    directory="invalid-text",
+                    package_name="local/invalid-text",
+                    steps=0,
+                    expected_revision=dataset["revision"],
+                )
+                (root / "dataset" / "invalid-text" / relative_path).write_bytes(b"\xff")
+
+                detail = library.task_detail("tasks", "invalid-text")
+
+                self.assertEqual(detail["task"]["status"], "draft")
+                self.assertEqual(
+                    detail["task"]["diagnostics"],
+                    [f"Harbor Task text must be UTF-8: {relative_path}"],
+                )
+                self.assertEqual(
+                    read_harbor_task_index((str(root / "dataset"),)).candidates,
+                    (),
+                )
 
     def test_manifest_sync_rechecks_external_changes_before_commit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
