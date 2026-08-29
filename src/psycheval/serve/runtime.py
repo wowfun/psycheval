@@ -6,7 +6,7 @@ from typing import Any, Callable, Sequence
 
 from psycheval.config import ToolConfig
 from psycheval.inputs import AdapterAssignments
-from psycheval.serve.acp import AcpManager
+from psycheval.serve.acp import AcpGateway
 from psycheval.serve.prompt_assets import PromptAssetLibrary
 from psycheval.serve.sources import load_serve_inputs
 from psycheval.serve.summary_xlsx import SummaryWorksheet
@@ -49,7 +49,7 @@ class ServeRuntime:
         self.workspace_id = hashlib.sha256(
             str(store.paths.root.resolve()).encode("utf-8")
         ).hexdigest()[:20]
-        self.acp = AcpManager(config.acp_agents, store.paths.root)
+        self.acp = AcpGateway(config.acp_agents, store.paths.root)
         self.prompt_assets = PromptAssetLibrary(store.paths.root)
         self._lock = Lock()
         self._ready = Event()

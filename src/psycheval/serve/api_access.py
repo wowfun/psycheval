@@ -4,8 +4,8 @@ from collections.abc import Callable
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Request
-from fastapi.routing import APIRoute
+from fastapi import FastAPI, Request, WebSocket, WebSocketException
+from fastapi.routing import APIRoute, APIWebSocketRoute
 
 from psycheval.serve.access import ADMIN_ROLE, ServeAccess
 from psycheval.serve.api_http import ProblemException
@@ -31,6 +31,35 @@ def role_for(request: Request) -> str:
 def require_admin(request: Request) -> None:
     if role_for(request) != ADMIN_ROLE:
         raise ProblemException(403, "administrator access required")
+
+
+def role_for_websocket(websocket: WebSocket) -> str:
+    control: ServeAccess = websocket.app.state.access
+    return control.role(websocket.headers.get("cookie"))
+
+
+def require_admin_websocket(websocket: WebSocket) -> None:
+    if role_for_websocket(websocket) != ADMIN_ROLE:
+        raise WebSocketException(code=1008, reason="administrator access required")
+
+
+def require_same_origin_websocket(websocket: WebSocket) -> None:
+    host = websocket.headers.get("host")
+    origin = websocket.headers.get("origin")
+    if not host or not origin:
+        raise WebSocketException(code=1008, reason="ACP requires a same-origin client")
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        parsed = None
+    expected_scheme = "https" if websocket.url.scheme == "wss" else "http"
+    if (
+        parsed is None
+        or parsed.scheme != expected_scheme
+        or parsed.netloc.lower() != host.lower()
+        or bool(parsed.path or parsed.query or parsed.fragment)
+    ):
+        raise WebSocketException(code=1008, reason="ACP requires a same-origin client")
 
 
 def require_same_origin(request: Request) -> None:
@@ -73,17 +102,24 @@ def verify_route_access(app: FastAPI) -> None:
     missing = []
     unenforced_admin = []
     for route in app.routes:
-        if not isinstance(route, APIRoute):
+        if not isinstance(route, (APIRoute, APIWebSocketRoute)):
             continue
-        label = f"{','.join(sorted(route.methods or []))} {route.path}"
+        methods = getattr(route, "methods", None)
+        label = f"{','.join(sorted(methods or ['WEBSOCKET']))} {route.path}"
         level = getattr(route.endpoint, "__peval_access__", None)
         if level is None:
             missing.append(label)
-        elif level == ADMIN_ACCESS and not any(
-            dependency.call is require_admin
-            for dependency in route.dependant.dependencies
-        ):
-            unenforced_admin.append(label)
+        elif level == ADMIN_ACCESS:
+            expected = (
+                require_admin_websocket
+                if isinstance(route, APIWebSocketRoute)
+                else require_admin
+            )
+            if not any(
+                dependency.call is expected
+                for dependency in route.dependant.dependencies
+            ):
+                unenforced_admin.append(label)
     if missing:
         raise RuntimeError(f"serve routes missing access classification: {missing}")
     if unenforced_admin:

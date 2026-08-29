@@ -42,7 +42,7 @@ def render_serve_header(
             )
         language = (
             '<button class="action-button acp-launch" type="button" data-acp-open '
-            f'aria-haspopup="dialog">{escape(messages["acp_client"])}'
+            f'aria-haspopup="dialog" disabled>{escape(messages["acp_client"])}'
             '<span class="acp-launch-mark" aria-hidden="true"></span></button>'
             + render_language_control(messages, locale)
         )
@@ -228,15 +228,7 @@ def render_acp_drawer(messages: dict[str, str]) -> str:
     return f"""
   <div class="acp-backdrop" data-acp-backdrop hidden></div>
   <aside class="acp-drawer" data-acp-drawer hidden role="dialog"
-    aria-modal="true" aria-labelledby="acp-drawer-title">
-    <header class="acp-drawer-head">
-      <div>
-        <p class="eyebrow">{escape(messages["acp_client"])}</p>
-        <h2 id="acp-drawer-title">{escape(messages["acp_assistant"])}</h2>
-      </div>
-      <button class="action-button compact" type="button" data-acp-close
-        aria-label="{escape(messages["close"])}">{escape(messages["close"])}</button>
-    </header>
+    aria-modal="true" aria-label="{escape(messages["acp_client"])}">
     <section class="acp-controls" aria-label="{escape(messages["acp_client"])}">
       <label><span>{escape(messages["acp_agent"])}</span>
         <select data-acp-agent></select>
@@ -245,39 +237,20 @@ def render_acp_drawer(messages: dict[str, str]) -> str:
       <a class="action-button acp-configure" href="/config#acp-agents-title"
         data-workspace-route="config"
         data-acp-configure hidden>{escape(messages["acp_configure_agents"])}</a>
-      <span class="acp-protocol" data-acp-protocol>ACP · —</span>
-      <label class="acp-session-control"><span>{escape(messages["acp_session"])}</span>
-        <select data-acp-session><option value="">{escape(messages["acp_no_session"])}</option></select>
-      </label>
-      <button class="action-button" type="button" data-acp-new-session>{escape(messages["acp_new_session"])}</button>
-      <button class="action-button compact acp-session-close" type="button" data-acp-session-close aria-label="{escape(messages["close"])}">×</button>
-    </section>
-    <section class="acp-context-bar">
-      <div class="acp-context-chip" data-acp-context-chip>
-        <span class="acp-context-glyph" aria-hidden="true"></span>
-        <span data-acp-context-label>{escape(messages["acp_context_none"])}</span>
-      </div>
-      <button class="action-button compact" type="button" data-acp-context-capture>{escape(messages["acp_attach_context"])}</button>
+      <button class="action-button compact" type="button" data-acp-close
+        aria-label="{escape(messages["close"])}">{escape(messages["close"])}</button>
     </section>
     <p class="acp-notice" data-acp-notice aria-live="polite" hidden></p>
-    <div class="acp-event-log" data-acp-events tabindex="0">
-      <div class="acp-empty" data-acp-empty>{escape(messages["acp_empty"])}</div>
+    <div class="acp-chat-frame">
+      <div class="acp-chat-placeholder" data-acp-placeholder>{escape(messages["acp_empty"])}</div>
+      <div class="acp-chat-host" data-acp-chat></div>
     </div>
-    <section class="acp-session-options" data-acp-session-options hidden></section>
-    <form class="acp-composer" data-acp-composer>
-      <div class="acp-prompt-assets">
-        <label><span>{escape(messages["acp_prompt_asset"])}</span>
-          <select data-acp-prompt-asset><option value="">{escape(messages["acp_prompt_custom"])}</option></select>
-        </label>
-        <button class="action-button compact" type="button" data-acp-use-prompt>{escape(messages["acp_use_prompt"])}</button>
-      </div>
-      <textarea rows="3" data-acp-prompt placeholder="{escape(messages["acp_prompt_placeholder"])}"></textarea>
-      <div class="acp-composer-actions">
-        <span class="acp-usage" data-acp-usage></span>
-        <button class="action-button" type="button" data-acp-stop hidden>{escape(messages["acp_stop"])}</button>
-        <button class="action-button primary" type="submit" data-acp-send>{escape(messages["acp_send"])}</button>
-      </div>
-    </form>
+    <section class="acp-prompt-assets">
+      <label><span>{escape(messages["acp_prompt_asset"])}</span>
+        <select data-acp-prompt-asset><option value="">{escape(messages["acp_prompt_custom"])}</option></select>
+      </label>
+      <button class="action-button compact" type="button" data-acp-use-prompt>{escape(messages["acp_use_prompt"])}</button>
+    </section>
   </aside>"""
 
 

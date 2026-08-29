@@ -23,6 +23,17 @@ CODE_SUFFIXES = {
     ".ts",
     ".tsx",
 }
+GENERATED_WEB_VENDOR = Path("src/psycheval/assets/web/vendor")
+
+
+def _is_authored_code(path: Path, relative: Path) -> bool:
+    return (
+        path.is_file()
+        and path.suffix in CODE_SUFFIXES
+        and "node_modules" not in relative.parts
+        and "__pycache__" not in relative.parts
+        and not relative.is_relative_to(GENERATED_WEB_VENDOR)
+    )
 
 
 def test_authored_code_files_stay_below_semantic_split_threshold() -> None:
@@ -30,18 +41,24 @@ def test_authored_code_files_stay_below_semantic_split_threshold() -> None:
     for source_root in ("src", "tests", "scripts", "web"):
         for path in (ROOT / source_root).rglob("*"):
             relative = path.relative_to(ROOT)
-            if (
-                not path.is_file()
-                or path.suffix not in CODE_SUFFIXES
-                or "node_modules" in relative.parts
-                or "__pycache__" in relative.parts
-            ):
+            if not _is_authored_code(path, relative):
                 continue
             line_count = len(path.read_text(encoding="utf-8").splitlines())
             if line_count > 2_000:
                 oversized[relative.as_posix()] = line_count
 
     assert oversized == {}
+
+
+def test_semantic_split_scope_excludes_only_the_generated_web_vendor() -> None:
+    assert not _is_authored_code(
+        ROOT / GENERATED_WEB_VENDOR / "pretty-aui/pretty-aui.js",
+        GENERATED_WEB_VENDOR / "pretty-aui/pretty-aui.js",
+    )
+    assert _is_authored_code(
+        ROOT / "src/psycheval/assets/web/modules/acp-client.js",
+        Path("src/psycheval/assets/web/modules/acp-client.js"),
+    )
 
 
 def test_distribution_declares_the_repository_license() -> None:
@@ -51,6 +68,23 @@ def test_distribution_declares_the_repository_license() -> None:
 
     assert project["license"] == "MIT"
     assert (ROOT / "LICENSE").read_text(encoding="utf-8").startswith("MIT License\n")
+
+
+def test_vendored_pretty_aui_consolidates_third_party_licenses() -> None:
+    standalone = ROOT / GENERATED_WEB_VENDOR / "pretty-aui"
+    assert standalone.joinpath("LICENSE").is_file()
+    third_party = standalone.joinpath("THIRD_PARTY_LICENSES.txt").read_text(
+        encoding="utf-8"
+    )
+    for package_name in (
+        "@agentclientprotocol/sdk",
+        "dompurify",
+        "marked",
+        "preact",
+        "zod",
+    ):
+        assert package_name in third_party
+    assert not standalone.joinpath("licenses").exists()
 
 
 def test_distribution_workflow_does_not_pin_artifact_version() -> None:

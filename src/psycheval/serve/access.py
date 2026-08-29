@@ -154,12 +154,26 @@ class ServeAccess:
             self._sessions[token] = now
             return token
 
-    def logout(self, cookie_header: str | None) -> None:
+    def active_session_token(self, cookie_header: str | None) -> str | None:
+        if not self.authentication_enabled:
+            return None
         token = self._session_token(cookie_header)
         if token is None:
-            return
+            return None
+        now = self._now()
         with self._lock:
-            self._sessions.pop(token, None)
+            self._prune_expired(now)
+            if token not in self._sessions:
+                return None
+            self._sessions[token] = now
+            return token
+
+    def logout(self, cookie_header: str | None) -> str | None:
+        token = self._session_token(cookie_header)
+        if token is None:
+            return None
+        with self._lock:
+            return token if self._sessions.pop(token, None) is not None else None
 
     @staticmethod
     def session_cookie(token: str) -> str:

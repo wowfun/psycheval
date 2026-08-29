@@ -66,7 +66,7 @@ def emulate_default_path_encoding(encoding: str):
 
 def script_json(html: str, element_id: str):
     match = re.search(
-        rf'<script type="application/json" id="{re.escape(element_id)}">(.*?)</script>',
+        rf'<script type="application/json" id="{re.escape(element_id)}"[^>]*>(.*?)</script>',
         html,
         re.S,
     )

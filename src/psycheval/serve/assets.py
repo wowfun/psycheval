@@ -44,7 +44,7 @@ def packaged_web_asset(path: str) -> bytes:
     if (
         not relative
         or candidate.is_absolute()
-        or candidate.suffix != ".js"
+        or not (relative.endswith(".js") or relative.endswith(".js.map"))
         or "\\" in relative
         or any(part in {"", ".", ".."} for part in candidate.parts)
     ):

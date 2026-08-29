@@ -18,7 +18,7 @@ def literal_translation_keys(source: str) -> set[str]:
 
 def script_json(html: str, element_id: str) -> dict:
     match = re.search(
-        rf'<script type="application/json" id="{re.escape(element_id)}">(.*?)</script>',
+        rf'<script type="application/json" id="{re.escape(element_id)}"[^>]*>(.*?)</script>',
         html,
         re.S,
     )
@@ -59,7 +59,8 @@ class PevalServeHtmlTests(unittest.TestCase):
         self.assertNotIn("<style", html)
         self.assertNotIn("__CSS__", html)
         self.assertIn(
-            '<script type="module" src="/assets/peval/main.js"></script>', html
+            '<script type="module" src="/assets/peval/main.js" nonce="static-render"></script>',
+            html,
         )
         self.assertNotIn('id="peval-data"', html)
         self.assertNotIn('id="peval-token-estimates"', html)
@@ -75,8 +76,10 @@ class PevalServeHtmlTests(unittest.TestCase):
                 "role": "guest",
                 "authentication_enabled": False,
                 "initial_page": "home",
+                "csp_nonce": "static-render",
             },
         )
+        self.assertEqual(html.count('nonce="static-render"'), 3)
 
     def test_workspace_stylesheet_preserves_fragment_order(self) -> None:
         asset_root = Path(__file__).resolve().parents[2] / "src/psycheval/assets"
@@ -132,6 +135,41 @@ class PevalServeHtmlTests(unittest.TestCase):
         self.assertIn('data-workspace-page="reports"', guest_html)
         self.assertNotIn('data-workspace-page="config"', guest_html)
         self.assertNotIn("data-config-page aria-label", guest_html)
+
+    def test_admin_acp_drawer_starts_with_compact_agent_controls(self) -> None:
+        html = render_serve_html(role="admin")
+
+        drawer = html[html.index('<aside class="acp-drawer"') :]
+        self.assertIn('aria-label="Copilot"', drawer[:300])
+        self.assertNotIn('aria-labelledby="acp-drawer-title"', drawer[:300])
+        self.assertNotIn('class="acp-drawer-head"', drawer)
+        self.assertNotIn("Psycheval Copilot</h2>", drawer)
+        self.assertNotIn('class="acp-context-bar"', drawer)
+        self.assertNotIn("data-acp-context-capture", drawer)
+        self.assertNotIn("data-acp-protocol", drawer)
+        self.assertLess(
+            drawer.index('class="acp-controls"'),
+            drawer.index('class="acp-chat-frame"'),
+        )
+        controls = drawer[
+            drawer.index('class="acp-controls"') : drawer.index("</section>")
+        ]
+        self.assertIn("data-acp-agent", controls)
+        self.assertIn("data-acp-close", controls)
+
+    def test_chinese_acp_prompt_preset_uses_compact_copy(self) -> None:
+        html = render_serve_html(role="admin", locale="zh-CN")
+        drawer = html[html.index('<aside class="acp-drawer"') :]
+        prompt_assets = drawer[
+            drawer.index('<section class="acp-prompt-assets"') : drawer.index(
+                "</section>", drawer.index('<section class="acp-prompt-assets"')
+            )
+        ]
+
+        self.assertIn("<span>预设</span>", prompt_assets)
+        self.assertIn(">使用</button>", prompt_assets)
+        self.assertNotIn("提示词资产", prompt_assets)
+        self.assertNotIn("使用提示词", prompt_assets)
 
     def test_workspace_description_is_json_escaped_and_blank_is_omitted(self) -> None:
         description = "**Nightly** <script>alert(1)</script>"

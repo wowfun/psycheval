@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import secrets
 import stat
 import tempfile
 import tomllib
@@ -9,7 +11,15 @@ from pathlib import Path
 from typing import Annotated, Any, Iterator
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Header, Query, Request, Response
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketException,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -33,13 +43,14 @@ from psycheval.serve.access import (
     LoginRateLimited,
     ServeAccess,
 )
-from psycheval.serve.acp import AcpError
 from psycheval.serve.api_access import (
     ADMIN_ACCESS,
     GUEST_ACCESS,
     access,
     mutation_guard,
     require_admin,
+    require_admin_websocket,
+    require_same_origin_websocket,
     role_for,
 )
 from psycheval.serve.api_access import (
@@ -49,7 +60,6 @@ from psycheval.serve.api_http import (
     BodyLimitMiddleware,
     Problem,
     ProblemException,
-    opaque_path_token,
 )
 from psycheval.serve.api_http import (
     etag as _etag,
@@ -70,12 +80,10 @@ from psycheval.serve.api_http import (
     problem_title as _problem_title,
 )
 from psycheval.serve.api_models import (
-    AcpPromptRequest,
-    AcpSessionRequest,
+    AcpContextRequest,
     BrowserViewsRequest,
     CatalogQueryRequest,
     CatalogSummaryRequest,
-    ConfigOptionRequest,
     ConfigPatchRequest,
     DatabaseInspectionRequest,
     DatasetCreateRequest,
@@ -87,12 +95,10 @@ from psycheval.serve.api_models import (
     FilePutRequest,
     LoginRequest,
     ManifestPutRequest,
-    ModeRequest,
     MountCreateRequest,
     MountDeletionRequest,
     MountPatchRequest,
     PathSelectionRequest,
-    PermissionResponseRequest,
     PromptPutRequest,
     ReportBindingsRequest,
     ReportImportRequest,
@@ -111,8 +117,7 @@ from psycheval.serve.api_models import (
 from psycheval.serve.api_support import (
     REPORT_PREVIEW_CSP,
     REPORT_READER_CSP,
-    acp_prompt_blocks,
-    acp_session_id_from_token,
+    acp_context_item,
     add_source_result_payload,
     catalog_query,
     catalog_query_payload,
@@ -442,10 +447,6 @@ def _install_error_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         return _problem_response(request, 409, str(exc))
 
-    @app.exception_handler(AcpError)
-    async def acp_error_handler(request: Request, exc: AcpError) -> JSONResponse:
-        return _problem_response(request, exc.status, str(exc))
-
     @app.exception_handler(Exception)
     async def unexpected_error_handler(
         request: Request, exc: Exception
@@ -544,7 +545,11 @@ def _register_static_routes(app: FastAPI) -> None:
             return Response(status_code=304, headers=headers)
         return Response(
             data,
-            media_type="application/javascript; charset=utf-8",
+            media_type=(
+                "application/json; charset=utf-8"
+                if path.endswith(".js.map")
+                else "application/javascript; charset=utf-8"
+            ),
             headers=headers,
         )
 
@@ -553,6 +558,7 @@ def _serve_page(request: Request, page: str) -> HTMLResponse:
     runtime: ServeRuntime = request.app.state.runtime
     access_control: ServeAccess = request.app.state.access
     role = role_for(request)
+    csp_nonce = secrets.token_urlsafe(24)
     return HTMLResponse(
         render_serve_html(
             locale=runtime.config.locale,
@@ -572,13 +578,47 @@ def _serve_page(request: Request, page: str) -> HTMLResponse:
             role=role,
             authentication_enabled=access_control.authentication_enabled,
             serve_page=page,
+            csp_nonce=csp_nonce,
         ),
         headers={
             "Cache-Control": "no-store",
+            "Content-Security-Policy": _workspace_csp(request, csp_nonce),
             "Referrer-Policy": "no-referrer",
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY",
         },
+    )
+
+
+_CSP_HOST = re.compile(
+    r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::[0-9]{1,5})?"
+)
+
+
+def _workspace_csp(request: Request, nonce: str) -> str:
+    host = request.headers.get("host", "")
+    websocket_source = ""
+    if _CSP_HOST.fullmatch(host):
+        raw_port = host.rpartition(":")[2]
+        if not raw_port.isdigit() or int(raw_port) <= 65535:
+            scheme = "wss" if request.url.scheme == "https" else "ws"
+            websocket_source = f" {scheme}://{host}"
+    return "; ".join(
+        [
+            "default-src 'none'",
+            f"script-src 'self' 'nonce-{nonce}'",
+            f"style-src-elem 'self' 'nonce-{nonce}'",
+            "style-src-attr 'unsafe-inline'",
+            "img-src 'self' data: blob:",
+            "media-src 'self' data: blob:",
+            "font-src 'self'",
+            f"connect-src 'self'{websocket_source}",
+            "frame-src 'self'",
+            "object-src 'none'",
+            "base-uri 'none'",
+            "form-action 'self'",
+            "frame-ancestors 'none'",
+        ]
     )
 
 
@@ -615,7 +655,10 @@ def _register_session_routes(app: FastAPI) -> None:
     @access(GUEST_ACCESS)
     def logout(request: Request) -> JSONResponse:
         access_control: ServeAccess = request.app.state.access
-        access_control.logout(request.headers.get("cookie"))
+        token = access_control.logout(request.headers.get("cookie"))
+        if token is not None:
+            runtime: ServeRuntime = request.app.state.runtime
+            runtime.acp.revoke_session(token)
         return _json(
             {
                 "authentication_enabled": access_control.authentication_enabled,
@@ -1815,174 +1858,36 @@ def _register_acp_routes(app: FastAPI) -> None:
         runtime: ServeRuntime = request.app.state.runtime
         return _json(runtime.acp.agents())
 
-    @app.put("/api/acp/agents/{agent_id}/connection", dependencies=admin_mutation)
+    @app.websocket(
+        "/api/acp/agents/{agent_id}/ws",
+        dependencies=[
+            Depends(require_admin_websocket),
+            Depends(require_same_origin_websocket),
+        ],
+    )
     @access(ADMIN_ACCESS)
-    def connect_acp_agent(request: Request, agent_id: str) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        return _json(runtime.acp.connect(agent_id))
-
-    @app.delete("/api/acp/agents/{agent_id}/connection", dependencies=admin_mutation)
-    @access(ADMIN_ACCESS)
-    def disconnect_acp_agent(request: Request, agent_id: str) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        return _json(runtime.acp.disconnect(agent_id))
-
-    @app.get("/api/acp/agents/{agent_id}/sessions", dependencies=admin_get)
-    @access(ADMIN_ACCESS)
-    def acp_sessions(
-        request: Request, agent_id: str, refresh: bool = Query(False)
-    ) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        return _json(runtime.acp.sessions(agent_id, refresh=refresh))
-
-    @app.post("/api/acp/agents/{agent_id}/sessions", dependencies=admin_mutation)
-    @access(ADMIN_ACCESS)
-    def open_acp_session(
-        request: Request, agent_id: str, body: AcpSessionRequest
-    ) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        payload = runtime.acp.open_session(
-            agent_id, resume_session_id=body.resume_session_id
+    async def acp_websocket(websocket: WebSocket, agent_id: str) -> None:
+        runtime: ServeRuntime = websocket.app.state.runtime
+        access_control: ServeAccess = websocket.app.state.access
+        session_token = access_control.active_session_token(
+            websocket.headers.get("cookie")
         )
-        session_id = str(payload.get("session_id") or "")
-        return _json(
-            payload,
-            status=201,
-            headers={
-                "Location": f"/api/acp/agents/{quote(agent_id)}/sessions/{opaque_path_token(session_id)}"
-            },
+        if access_control.authentication_enabled and session_token is None:
+            raise WebSocketException(code=1008, reason="administrator access required")
+        try:
+            runtime.acp.configuration(agent_id)
+        except KeyError as exc:
+            raise WebSocketException(code=1008, reason="unknown ACP agent") from exc
+        await runtime.acp.serve(websocket, agent_id, session_token)
+
+    @app.post("/api/acp/context-resolutions", dependencies=admin_mutation)
+    @access(ADMIN_ACCESS)
+    def resolve_acp_context(request: Request, body: AcpContextRequest) -> JSONResponse:
+        runtime: ServeRuntime = request.app.state.runtime
+        item = acp_context_item(
+            runtime.store,
+            runtime,
+            body.context,
+            embedded_context=body.embedded_context,
         )
-
-    @app.put(
-        "/api/acp/agents/{agent_id}/sessions/{session_token}",
-        dependencies=admin_mutation,
-    )
-    @access(ADMIN_ACCESS)
-    def resume_acp_session(
-        request: Request, agent_id: str, session_token: str
-    ) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        session_id = acp_session_id_from_token(session_token)
-        return _json(runtime.acp.open_session(agent_id, resume_session_id=session_id))
-
-    @app.delete(
-        "/api/acp/agents/{agent_id}/sessions/{session_token}",
-        dependencies=admin_mutation,
-    )
-    @access(ADMIN_ACCESS)
-    def close_acp_session(
-        request: Request, agent_id: str, session_token: str
-    ) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        session_id = acp_session_id_from_token(session_token)
-        return _json(runtime.acp.close_session(agent_id, session_id))
-
-    @app.get(
-        "/api/acp/agents/{agent_id}/sessions/{session_token}/events",
-        dependencies=admin_get,
-    )
-    @access(ADMIN_ACCESS)
-    def acp_events(
-        request: Request,
-        agent_id: str,
-        session_token: str,
-        cursor: int = Query(0, ge=0),
-        wait: float = Query(20, ge=0, le=20),
-    ) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        session_id = acp_session_id_from_token(session_token)
-        payload = runtime.acp.events(agent_id, session_id, after=cursor, wait=wait)
-        projected = dict(payload)
-        if "revision" in projected:
-            projected["next_cursor"] = projected.pop("revision")
-        projected["events"] = []
-        for raw_event in payload.get("events", []):
-            event = dict(raw_event)
-            if "revision" in event:
-                event["sequence"] = event.pop("revision")
-            projected["events"].append(event)
-        return _json(projected)
-
-    @app.post(
-        "/api/acp/agents/{agent_id}/sessions/{session_token}/prompts",
-        dependencies=admin_mutation,
-    )
-    @access(ADMIN_ACCESS)
-    def acp_prompt(
-        request: Request,
-        agent_id: str,
-        session_token: str,
-        body: AcpPromptRequest,
-    ) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        session_id = acp_session_id_from_token(session_token)
-        blocks = acp_prompt_blocks(runtime.store, runtime, body.prompt, body.context)
-        return _json(runtime.acp.prompt(agent_id, session_id, blocks), status=202)
-
-    @app.delete(
-        "/api/acp/agents/{agent_id}/sessions/{session_token}/prompts/active",
-        dependencies=admin_mutation,
-    )
-    @access(ADMIN_ACCESS)
-    def cancel_acp_prompt(
-        request: Request, agent_id: str, session_token: str
-    ) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        session_id = acp_session_id_from_token(session_token)
-        return _json(runtime.acp.cancel(agent_id, session_id))
-
-    @app.post(
-        "/api/acp/agents/{agent_id}/sessions/{session_token}/permission-responses",
-        dependencies=admin_mutation,
-    )
-    @access(ADMIN_ACCESS)
-    def acp_permission(
-        request: Request,
-        agent_id: str,
-        session_token: str,
-        body: PermissionResponseRequest,
-    ) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        session_id = acp_session_id_from_token(session_token)
-        return _json(
-            runtime.acp.permission(
-                agent_id,
-                session_id,
-                body.request_id,
-                body.option_id,
-                cancelled=body.cancelled,
-            )
-        )
-
-    @app.put(
-        "/api/acp/agents/{agent_id}/sessions/{session_token}/mode",
-        dependencies=admin_mutation,
-    )
-    @access(ADMIN_ACCESS)
-    def acp_mode(
-        request: Request,
-        agent_id: str,
-        session_token: str,
-        body: ModeRequest,
-    ) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        session_id = acp_session_id_from_token(session_token)
-        return _json(runtime.acp.set_mode(agent_id, session_id, body.mode_id))
-
-    @app.put(
-        "/api/acp/agents/{agent_id}/sessions/{session_token}/config-options/{option_id}",
-        dependencies=admin_mutation,
-    )
-    @access(ADMIN_ACCESS)
-    def acp_config_option(
-        request: Request,
-        agent_id: str,
-        session_token: str,
-        option_id: str,
-        body: ConfigOptionRequest,
-    ) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        session_id = acp_session_id_from_token(session_token)
-        return _json(
-            runtime.acp.set_config(agent_id, session_id, option_id, body.value)
-        )
+        return _json({"items": [item]})

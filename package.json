@@ -3,17 +3,22 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.13.0"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
     "check:types": "tsc -p jsconfig.json && tsc -p jsconfig.node.json",
+    "vendor:pretty-aui": "node scripts/vendor-pretty-aui.mjs",
+    "check:vendor": "node scripts/vendor-pretty-aui.mjs --check",
     "test": "node --test web/test/*.test.js",
-    "check": "npm run check:types && npm test"
+    "test:e2e": "playwright test --project=chromium",
+    "check": "npm run check:types && npm run check:vendor && npm test && npm run test:e2e"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/jsdom": "28.0.3",
     "@types/node": "26.1.1",
     "jsdom": "29.1.1",
+    "pretty-aui": "0.1.0",
     "typescript": "6.0.3"
   }
 }

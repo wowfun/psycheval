@@ -250,24 +250,6 @@ class MountDeletionRequest(StrictRequest):
     mount_ids: list[str] = Field(min_length=1)
 
 
-class AcpSessionRequest(StrictRequest):
-    resume_session_id: str | None = None
-
-
-class AcpPromptRequest(StrictRequest):
-    prompt: str
-    context: dict[str, Any] | None = None
-
-
-class PermissionResponseRequest(StrictRequest):
-    request_id: str | int
-    option_id: str | None = None
-    cancelled: bool = False
-
-
-class ModeRequest(StrictRequest):
-    mode_id: str
-
-
-class ConfigOptionRequest(StrictRequest):
-    value: Any
+class AcpContextRequest(StrictRequest):
+    context: dict[str, Any]
+    embedded_context: bool

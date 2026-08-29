@@ -8,6 +8,7 @@ import uvicorn
 
 from psycheval.config import ToolConfig
 from psycheval.serve.access import ServeAccess
+from psycheval.serve.acp import MAX_ACP_FRAME_BYTES
 from psycheval.serve.api import create_app
 from psycheval.serve.lifecycle import bind_listener
 from psycheval.serve.runtime import ServeRuntime
@@ -57,7 +58,11 @@ class LocalHTTPServer:
                 app,
                 loop="asyncio",
                 http="h11",
-                ws="none",
+                ws="websockets-sansio",
+                ws_max_size=MAX_ACP_FRAME_BYTES,
+                ws_max_queue=16,
+                ws_ping_interval=20,
+                ws_ping_timeout=20,
                 lifespan="off",
                 workers=1,
                 proxy_headers=False,

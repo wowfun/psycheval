@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
 <title>__TITLE__</title>
 <link rel="stylesheet" href="/assets/peval/workspace.css">
 </head>
@@ -12,8 +13,8 @@
   __PAGE_CONTENT__
 </div>
 __SERVE_OVERLAYS__
-<script type="application/json" id="peval-i18n">__I18N__</script>
-<script type="application/json" id="peval-render-options">__RENDER_OPTIONS__</script>
-<script type="module" src="/assets/peval/main.js"></script>
+<script type="application/json" id="peval-i18n" nonce="__CSP_NONCE__">__I18N__</script>
+<script type="application/json" id="peval-render-options" nonce="__CSP_NONCE__">__RENDER_OPTIONS__</script>
+<script type="module" src="/assets/peval/main.js" nonce="__CSP_NONCE__"></script>
 </body>
 </html>

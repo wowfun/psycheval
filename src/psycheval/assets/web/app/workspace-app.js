@@ -13,6 +13,7 @@ const INVALIDATION_PAGES = Object.freeze({
   "dataset-registry": ["home", "datasets", "config"],
   tasks: ["home", "datasets"],
   "assistant-config": ["config"],
+  "prompt-assets": ["config"],
 });
 
 /** @typedef {keyof typeof PAGE_PATHS} WorkspacePage */

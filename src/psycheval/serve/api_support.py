@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 from psycheval.config import (
     HarborMount,
@@ -13,7 +13,6 @@ from psycheval.config import (
     validate_harbor_mount_paths,
     write_workspace_harbor_mounts,
 )
-from psycheval.serve.api_http import ProblemException, opaque_path_value
 from psycheval.serve.errors import HttpError
 from psycheval.serve.harbor_workspace import (
     HarborConflictError,
@@ -60,13 +59,6 @@ REPORT_READER_CSP = "; ".join(
         "frame-ancestors 'none'",
     ]
 )
-
-
-def acp_session_id_from_token(token: str) -> str:
-    try:
-        return opaque_path_value(token)
-    except ValueError as exc:
-        raise ProblemException(404, "ACP session is not available") from exc
 
 
 def harbor_error_status(exc: HarborWorkspaceError) -> int:
@@ -447,20 +439,23 @@ def update_harbor_mount_config(
     return workspace_config_payload(store, runtime)
 
 
-def acp_prompt_blocks(
-    store: ServeStateStore,
+def acp_context_item(
+    store: ServeStateStore | None,
     runtime: ServeRuntime,
-    prompt: str,
     raw_context: Any,
-) -> list[dict[str, Any]]:
-    blocks: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-    if raw_context is None:
-        return blocks
+    *,
+    embedded_context: bool,
+) -> dict[str, Any]:
     if not isinstance(raw_context, dict):
         raise HttpError(400, "ACP context must be an object")
-    kind = required_string(raw_context, "kind")
+    kind = _bounded_acp_context_field(raw_context, "kind", maximum=32)
     if kind == "source":
-        source_key = required_string(raw_context, "source_key")
+        _require_acp_context_keys(raw_context, {"kind", "source_key", "step_id"})
+        source_key = _bounded_acp_context_field(raw_context, "source_key")
+        step_id = raw_context.get("step_id")
+        if step_id is not None:
+            if not isinstance(step_id, str) or not step_id or len(step_id) > 128:
+                raise HttpError(400, "step_id must be a non-empty bounded string")
         try:
             context_payload: Any = runtime.detail(source_key).to_dict()
         except ValueError as exc:
@@ -468,17 +463,25 @@ def acp_prompt_blocks(
         reference = {
             "kind": kind,
             "source_key": source_key,
-            "step_id": raw_context.get("step_id"),
+            **({"step_id": step_id} if step_id is not None else {}),
         }
-        uri = f"peval://source/{source_key}"
+        item_id = f"source:{source_key}:{step_id or ''}"
+        label = f"{source_key} · Step {step_id}" if step_id else source_key
+        uri = f"peval://source/{quote(source_key, safe='')}"
     elif kind == "dataset_task":
-        dataset_id = required_string(raw_context, "dataset_id")
-        task = required_string(raw_context, "task")
+        _require_acp_context_keys(raw_context, {"kind", "dataset_id", "task"})
+        dataset_id = _bounded_acp_context_field(raw_context, "dataset_id")
+        task = _bounded_acp_context_field(raw_context, "task")
+        if store is None:
+            raise HttpError(500, "workspace state is unavailable")
         context_payload = harbor_workspace(store, runtime).task_detail(dataset_id, task)
         reference = {"kind": kind, "dataset_id": dataset_id, "task": task}
-        uri = f"peval://dataset/{dataset_id}/{task}"
+        item_id = f"dataset:{dataset_id}:{task}"
+        label = f"{dataset_id} / {task}"
+        uri = f"peval://dataset/{quote(dataset_id, safe='')}/{quote(task, safe='')}"
     elif kind == "report":
-        report_id = required_string(raw_context, "report_id")
+        _require_acp_context_keys(raw_context, {"kind", "report_id"})
+        report_id = _bounded_acp_context_field(raw_context, "report_id")
         try:
             report = runtime.workspace_reports.read(report_id)
         except ValueError as exc:
@@ -491,7 +494,9 @@ def acp_prompt_blocks(
             "content": report.content.decode("utf-8", errors="replace"),
         }
         reference = {"kind": kind, "report_id": report_id}
-        uri = f"peval://report/{report_id}"
+        item_id = f"report:{report_id}"
+        label = report.filename or report_id
+        uri = f"peval://report/{quote(report_id, safe='')}"
     else:
         raise HttpError(400, "ACP context kind must be source, dataset_task, or report")
     serialized = json.dumps(
@@ -505,8 +510,8 @@ def acp_prompt_blocks(
         marker = "\n[peval context truncated]"
         serialized = (serialized[: max(0, limit - len(marker))] + marker)[:limit]
         mime_type = "text/plain"
-    blocks.append(
-        {
+    if embedded_context:
+        block: dict[str, Any] = {
             "type": "resource",
             "resource": {
                 "uri": uri,
@@ -514,8 +519,27 @@ def acp_prompt_blocks(
                 "text": serialized,
             },
         }
-    )
-    return blocks
+    else:
+        prefix = f"Psycheval evaluation context ({label}):\n"
+        available = max(0, limit - len(prefix))
+        text = prefix[:limit] + serialized[:available]
+        block = {"type": "text", "text": text[:limit]}
+    return {"id": item_id, "label": label, "content": [block]}
+
+
+def _bounded_acp_context_field(
+    payload: dict[str, Any], key: str, *, maximum: int = 512
+) -> str:
+    value = required_string(payload, key)
+    if len(value) > maximum:
+        raise HttpError(400, f"{key} exceeds {maximum} characters")
+    return value
+
+
+def _require_acp_context_keys(payload: dict[str, Any], allowed: set[str]) -> None:
+    unexpected = sorted(payload.keys() - allowed)
+    if unexpected:
+        raise HttpError(400, f"unexpected ACP context fields: {', '.join(unexpected)}")
 
 
 def harbor_mounts_from_payload(

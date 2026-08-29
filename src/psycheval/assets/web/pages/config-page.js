@@ -18,7 +18,11 @@ function createConfigPage(_context) {
         initialized = true;
         return;
       }
-      if (changes.has("dataset-registry") || changes.has("assistant-config")) {
+      if (
+        changes.has("dataset-registry") ||
+        changes.has("assistant-config") ||
+        changes.has("prompt-assets")
+      ) {
         const loaded = await refreshHarborConfig();
         if (!loaded) throw new Error("Configuration is stale");
       }

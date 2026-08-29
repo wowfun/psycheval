@@ -31,6 +31,7 @@ async function serveApi(path, options = {}) {
     headers,
     body,
     credentials: "same-origin",
+    signal: options.signal,
   });
   const responseEtag = response.headers?.get?.("ETag");
   if (response.ok && responseEtag) responseEtags.set(etagKey, responseEtag);
@@ -81,7 +82,7 @@ function requestInvalidations(path, method, body) {
     || /^\/api\/harbor\/datasets(?:\/[^/]+)?$/.test(path)
   ) changes.add("dataset-registry");
   else if (/^\/api\/harbor\//.test(path)) changes.add("tasks");
-  if (/^\/api\/prompts(?:\/|$)/.test(path)) changes.add("assistant-config");
+  if (/^\/api\/prompts(?:\/|$)/.test(path)) changes.add("prompt-assets");
   if (path === "/api/config") {
     const keys = new Set(Object.keys(body && typeof body === "object" ? body : {}));
     if (keys.has("datasets") || keys.has("mounts")) changes.add("dataset-registry");

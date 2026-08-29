@@ -24,6 +24,7 @@ test("successful mutations map to stable Workspace invalidation domains", () => 
     domains("/api/config", "PATCH", { acp_agents: [] }),
     ["assistant-config"],
   );
+  assert.deepEqual(domains("/api/prompts/task-audit", "PUT", {}), ["prompt-assets"]);
   assert.deepEqual(domains("/api/reports", "GET", undefined), []);
   assert.deepEqual(domains("/api/source-key-resolutions", "POST", { items: [] }), []);
 });

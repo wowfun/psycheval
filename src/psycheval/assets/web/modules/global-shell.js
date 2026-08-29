@@ -16,7 +16,6 @@ function initializeGlobalShell() {
     closeAdminLogin();
   });
   window.addEventListener("peval:workspace-navigate", () => {
-    closeAcpDrawer({ restoreFocus: false });
     closeAdminLogin({ restoreFocus: false });
   });
   bindAuthenticationControls();

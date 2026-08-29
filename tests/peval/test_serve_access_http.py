@@ -26,7 +26,7 @@ class ServeAccessHttpTests(unittest.TestCase):
         match = re.search(
             rb'<script type="application/json" id="'
             + re.escape(element_id.encode())
-            + rb'">(.*?)</script>',
+            + rb'"[^>]*>(.*?)</script>',
             content,
             re.DOTALL,
         )
@@ -153,6 +153,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, headers, shell = self.request(server, "GET", "/")
                 self.assertEqual(status, 200)
                 self.assertEqual(headers["x-frame-options"], "DENY")
+                self.assertNotIn("'unsafe-eval'", headers["content-security-policy"])
                 guest_markup = re.sub(
                     rb"<script(?:\s[^>]*)?>.*?</script>",
                     b"",
@@ -178,6 +179,16 @@ class ServeAccessHttpTests(unittest.TestCase):
                 self.assertNotIn("harbor_mounts", guest_options)
                 self.assertNotIn("load_error", guest_options)
                 self.assertEqual(guest_options["workspace_id"], runtime.workspace_id)
+                nonce = guest_options["csp_nonce"]
+                self.assertIn(
+                    f"script-src 'self' 'nonce-{nonce}'",
+                    headers["content-security-policy"],
+                )
+                self.assertIn(
+                    f"connect-src 'self' ws://127.0.0.1:{server.server_port}",
+                    headers["content-security-policy"],
+                )
+                self.assertEqual(shell.count(f'nonce="{nonce}"'.encode()), 3)
                 self.assertNotIn(str(root), json.dumps(guest_options))
 
                 for asset_path in (
@@ -193,6 +204,16 @@ class ServeAccessHttpTests(unittest.TestCase):
                     self.assertEqual(headers["cache-control"], "no-cache")
                     self.assertRegex(headers["etag"], r'^"[0-9a-f]{64}"$')
                     self.assertTrue(asset.strip())
+                status, headers, source_map = self.request(
+                    server,
+                    "GET",
+                    "/assets/peval/vendor/pretty-aui/pretty-aui.js.map",
+                )
+                self.assertEqual(status, 200, source_map[:200])
+                self.assertEqual(
+                    headers["content-type"], "application/json; charset=utf-8"
+                )
+                self.assertIn("sources", json.loads(source_map))
                 status, headers, stylesheet = self.request(
                     server, "GET", "/assets/peval/workspace.css"
                 )

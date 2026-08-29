@@ -26,6 +26,7 @@ def render_serve_html(
     role: str = "admin",
     authentication_enabled: bool = False,
     serve_page: str = "home",
+    csp_nonce: str = "static-render",
 ) -> str:
     normalized_page = normalize_serve_page(serve_page)
     normalized_locale = normalize_locale(locale)
@@ -37,6 +38,7 @@ def render_serve_html(
         "role": role,
         "authentication_enabled": bool(authentication_enabled),
         "initial_page": normalized_page,
+        "csp_nonce": csp_nonce,
     }
     normalized_description = str(workspace_description or "").strip()
     if normalized_description:
@@ -77,6 +79,7 @@ def render_serve_html(
         ),
     )
     payload = payload.replace("__TITLE__", escape(messages["serve_title"]))
+    payload = payload.replace("__CSP_NONCE__", escape(csp_nonce, quote=True))
     payload = payload.replace(
         "__I18N__",
         safe_json_for_script(json.dumps(messages, ensure_ascii=False)),

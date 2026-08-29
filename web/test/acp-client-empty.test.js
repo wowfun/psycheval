@@ -19,11 +19,9 @@ const browser = installBrowserDom(`
     <select data-acp-agent></select>
     <button data-acp-connect>Connect</button>
     <a href="/config#acp-agents-title" data-acp-configure hidden>Configure agents</a>
-    <span data-acp-protocol></span>
-    <select data-acp-session></select><button data-acp-new-session>New</button><button data-acp-session-close>×</button>
-    <div data-acp-context-chip><span data-acp-context-label></span></div><button data-acp-context-capture>Attach</button>
-    <p data-acp-notice hidden></p><div data-acp-events></div><div data-acp-session-options hidden></div>
-    <form data-acp-composer><select data-acp-prompt-asset></select><button data-acp-use-prompt type="button">Use</button><textarea data-acp-prompt></textarea><span data-acp-usage></span><button data-acp-stop type="button">Stop</button><button data-acp-send>Send</button></form>
+    <p data-acp-notice hidden></p>
+    <div data-acp-placeholder></div><div data-acp-chat></div>
+    <select data-acp-prompt-asset></select><button data-acp-use-prompt type="button">Use</button>
   </aside>
   <aside id="workspace-report-reader" hidden></aside>
   <main id="comparison"></main><section id="trace"></section><aside id="detail-sidebar"></aside>

@@ -1,137 +1,169 @@
-import { snapshotWorkspace, subscribeWorkspaceInvalidation } from "../app/workspace-runtime.js";
+// @ts-check
+
+import {
+  createWebSocketConnector,
+  mountChat,
+} from "../vendor/pretty-aui/pretty-aui.js";
+import {
+  snapshotWorkspace,
+  subscribeWorkspaceInvalidation,
+} from "../app/workspace-runtime.js";
 import { serveApi } from "./http.js";
-import { renderMarkdown } from "./markdown.js";
 import { RENDER_OPTIONS, adminMode, esc, listValue, t } from "./shared.js";
 
 const acpState = {
   initialized: false,
   unsubscribeInvalidation: null,
   agents: [],
-  sessions: [],
+  cwd: "",
   agentId: "",
-  sessionId: "",
-  revision: 0,
-  events: [],
-  context: null,
-  contextCandidate: null,
+  mounted: null,
+  contexts: [],
   prompts: [],
   promptAssetId: "",
-  polling: false,
-  pollGeneration: 0,
   opener: null,
+  connecting: false,
+  mountGeneration: 0,
 };
 
-function drawer() { return document.querySelector("[data-acp-drawer]"); }
-function storageKey() { return `peval:${RENDER_OPTIONS?.workspace_id || "default"}:acp-client`; }
-function opaquePathToken(value) {
-  const bytes = new TextEncoder().encode(String(value));
-  let binary = "";
-  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+const contextListeners = new Set();
+const contextProvider = {
+  getSelection: () =>
+    acpState.contexts.map(context => ({ id: context.id, label: context.label })),
+  subscribe(listener) {
+    contextListeners.add(listener);
+    return () => contextListeners.delete(listener);
+  },
+  add: captureContext,
+  remove: removeContext,
+  resolve: resolveCapturedContexts,
+};
+
+function drawer() {
+  return /** @type {HTMLElement | null} */ (
+    document.querySelector("[data-acp-drawer]")
+  );
 }
-function sessionPath(sessionId = acpState.sessionId) {
-  return `/api/acp/agents/${encodeURIComponent(acpState.agentId)}/sessions/${opaquePathToken(sessionId)}`;
+
+function storageKey() {
+  return `peval:${RENDER_OPTIONS?.workspace_id || "default"}:acp-client`;
 }
 
 async function initializeAcp() {
   if (acpState.initialized || !adminMode() || !drawer()) return;
   acpState.initialized = true;
-  acpState.unsubscribeInvalidation = subscribeWorkspaceInvalidation(changes => {
-    if (changes.has("assistant-config")) void refreshAcpConfiguration();
-  });
   restoreUiState();
   bindControls();
+  document.querySelectorAll("[data-acp-open]").forEach(button => {
+    /** @type {HTMLButtonElement} */ (button).disabled = false;
+  });
+  acpState.unsubscribeInvalidation = subscribeWorkspaceInvalidation(changes => {
+    if (changes.has("assistant-config")) void refreshAcpConfiguration();
+    else if (changes.has("prompt-assets")) void refreshPromptCatalog();
+  });
   try {
-    const [payload, promptPayload] = await Promise.all([
-      serveApi("/api/acp/agents"),
-      serveApi("/api/prompts"),
-    ]);
-    acpState.agents = listValue(payload?.agents);
-    acpState.prompts = listValue(promptPayload);
-    if (!acpState.prompts.some(prompt => prompt.id === acpState.promptAssetId)) {
-      acpState.promptAssetId = acpState.prompts[0]?.id || "";
+    await loadCatalogs();
+    const saved = readSavedUi();
+    if (saved.open && acpState.agents.length) {
+      openAcpDrawer(document.querySelector("[data-acp-open]"));
     }
-    if (!acpState.agents.some(agent => agent.id === acpState.agentId)) {
-      acpState.agentId = acpState.agents[0]?.id || "";
-    }
-    renderAgentControls();
-    renderPromptAssets();
-    if (selectedAgent()?.connected) await refreshSessions(false);
-    if (readSavedUi().open && acpState.agents.length) openAcpDrawer(document.querySelector("[data-acp-open]"));
+    if (saved.auto_connect && acpState.agentId) await connectAcpAgent();
   } catch (error) {
-    showNotice(error.message || String(error), true);
+    showNotice(errorMessage(error), true);
+  }
+}
+
+async function loadCatalogs() {
+  const [agentPayload, promptPayload] = await Promise.all([
+    serveApi("/api/acp/agents"),
+    serveApi("/api/prompts"),
+  ]);
+  applyAgentCatalog(agentPayload);
+  applyPromptCatalog(promptPayload);
+  renderControls();
+}
+
+function applyAgentCatalog(agentPayload) {
+  acpState.cwd = typeof agentPayload?.cwd === "string" ? agentPayload.cwd : "";
+  acpState.agents = listValue(agentPayload?.agents);
+  if (!acpState.agents.some(agent => agent.id === acpState.agentId)) {
+    acpState.agentId = acpState.agents[0]?.id || "";
+  }
+}
+
+function applyPromptCatalog(promptPayload) {
+  acpState.prompts = listValue(promptPayload);
+  if (!acpState.prompts.some(prompt => prompt.id === acpState.promptAssetId)) {
+    acpState.promptAssetId = acpState.prompts[0]?.id || "";
+  }
+}
+
+async function refreshPromptCatalog() {
+  if (!acpState.initialized) return;
+  try {
+    applyPromptCatalog(await serveApi("/api/prompts"));
+    renderPromptAssets();
+  } catch (error) {
+    showNotice(errorMessage(error), true);
   }
 }
 
 async function refreshAcpConfiguration() {
   if (!acpState.initialized) return;
+  await disconnectAcpAgent({ persist: false });
   try {
-    const [payload, promptPayload] = await Promise.all([
-      serveApi("/api/acp/agents"),
-      serveApi("/api/prompts"),
-    ]);
-    acpState.agents = listValue(payload?.agents);
-    acpState.prompts = listValue(promptPayload);
-    if (!acpState.agents.some(agent => agent.id === acpState.agentId)) {
-      acpState.agentId = acpState.agents[0]?.id || "";
-      acpState.sessionId = "";
-    }
-    renderAgentControls();
-    renderPromptAssets();
+    await loadCatalogs();
+    persistUiState({ auto_connect: false });
   } catch (error) {
-    showNotice(error.message || String(error), true);
+    showNotice(errorMessage(error), true);
   }
 }
 
 function bindControls() {
-  document.querySelectorAll("[data-acp-open]").forEach(button => button.addEventListener("click", () => openAcpDrawer(button)));
-  document.querySelectorAll("[data-acp-close]").forEach(button => button.addEventListener("click", () => closeAcpDrawer()));
-  document.querySelector("[data-acp-backdrop]")?.addEventListener("click", () => closeAcpDrawer());
-  document.querySelector("[data-acp-agent]")?.addEventListener("change", async event => {
-    acpState.agentId = String(event.target.value || "");
-    acpState.sessionId = "";
-    acpState.revision = 0;
-    acpState.events = [];
-    stopPolling();
-    renderAgentControls();
-    if (selectedAgent()?.connected) await refreshSessions(false);
-    persistUiState();
+  document.querySelectorAll("[data-acp-open]").forEach(button => {
+    button.addEventListener("click", () => openAcpDrawer(button));
   });
-  document.querySelector("[data-acp-connect]")?.addEventListener("click", toggleConnection);
-  document.querySelector("[data-acp-new-session]")?.addEventListener("click", createSession);
-  document.querySelector("[data-acp-session-close]")?.addEventListener("click", closeSession);
-  document.querySelector("[data-acp-session]")?.addEventListener("change", event => selectSession(String(event.target.value || ""), { resume: true }));
-  document.querySelector("[data-acp-context-capture]")?.addEventListener("click", captureContext);
+  document.querySelectorAll("[data-acp-close]").forEach(button => {
+    button.addEventListener("click", () => closeAcpDrawer());
+  });
+  document.querySelector("[data-acp-backdrop]")?.addEventListener("click", () => {
+    closeAcpDrawer();
+  });
+  document.querySelector("[data-acp-agent]")?.addEventListener("change", event => {
+    const target = /** @type {HTMLSelectElement} */ (event.target);
+    acpState.agentId = String(target.value || "");
+    persistUiState({ agent_id: acpState.agentId, auto_connect: false });
+    renderControls();
+  });
+  document.querySelector("[data-acp-connect]")?.addEventListener("click", () => {
+    if (acpState.mounted) void disconnectAcpAgent();
+    else void connectAcpAgent();
+  });
   document.querySelector("[data-acp-prompt-asset]")?.addEventListener("change", event => {
-    acpState.promptAssetId = String(event.target.value || "");
+    const target = /** @type {HTMLSelectElement} */ (event.target);
+    acpState.promptAssetId = String(target.value || "");
+    persistUiState({ prompt_asset_id: acpState.promptAssetId });
     renderPromptAssets();
   });
-  document.querySelector("[data-acp-use-prompt]")?.addEventListener("click", usePromptAsset);
-  document.querySelector("[data-acp-composer]")?.addEventListener("submit", sendPrompt);
-  document.querySelector("[data-acp-stop]")?.addEventListener("click", cancelPrompt);
-  document.querySelector("[data-acp-prompt]")?.addEventListener("keydown", event => {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      document.querySelector("[data-acp-composer]")?.requestSubmit?.();
-    }
-  });
-  document.querySelector("[data-acp-events]")?.addEventListener("click", handleEventAction);
-  document.querySelector("[data-acp-session-options]")?.addEventListener("change", handleSessionOption);
+  document
+    .querySelector("[data-acp-use-prompt]")
+    ?.addEventListener("click", usePromptAsset);
 }
 
 function openAcpDrawer(opener = null) {
   const panel = drawer();
   if (!panel || !adminMode()) return false;
-  acpState.contextCandidate = currentContext();
   acpState.opener = opener || document.activeElement;
   panel.hidden = false;
-  const backdrop = document.querySelector("[data-acp-backdrop]");
+  const backdrop = /** @type {HTMLElement | null} */ (
+    document.querySelector("[data-acp-backdrop]")
+  );
   if (backdrop) backdrop.hidden = false;
   document.body.classList.add("acp-drawer-open");
   document.querySelector("[data-acp-open]")?.setAttribute("aria-expanded", "true");
   persistUiState({ open: true });
-  panel.querySelector("[data-acp-prompt]")?.focus?.();
-  startPolling();
+  if (acpState.mounted) acpState.mounted.focusComposer();
+  else /** @type {HTMLElement | null} */ (document.querySelector("[data-acp-connect]"))?.focus();
   return true;
 }
 
@@ -139,197 +171,222 @@ function closeAcpDrawer(options = {}) {
   const panel = drawer();
   if (!panel || panel.hidden) return false;
   panel.hidden = true;
-  const backdrop = document.querySelector("[data-acp-backdrop]");
+  const backdrop = /** @type {HTMLElement | null} */ (
+    document.querySelector("[data-acp-backdrop]")
+  );
   if (backdrop) backdrop.hidden = true;
   document.body.classList.remove("acp-drawer-open");
   document.querySelector("[data-acp-open]")?.setAttribute("aria-expanded", "false");
-  stopPolling();
   persistUiState({ open: false });
   if (options.restoreFocus !== false) acpState.opener?.focus?.();
   acpState.opener = null;
   return true;
 }
 
-async function toggleConnection(event) {
-  const button = event.currentTarget;
-  const agent = selectedAgent();
-  if (!agent) return;
-  button.disabled = true;
-  showNotice(agent.connected ? t("acp_disconnecting", "Disconnecting…") : t("acp_connecting", "Starting local agent…"));
+async function connectAcpAgent(options = {}) {
+  if (
+    acpState.connecting ||
+    acpState.mounted ||
+    !selectedAgent() ||
+    !acpState.cwd
+  ) {
+    return false;
+  }
+  const host = document.querySelector("[data-acp-chat]");
+  if (!host) return false;
+  const agentId = acpState.agentId;
+  const savedSessionId = options.fresh ? "" : savedSession(agentId);
+  const generation = ++acpState.mountGeneration;
+  acpState.connecting = true;
+  showNotice(t("acp_connecting", "Starting local agent…"));
+  renderControls();
+
+  const mounted = mountChat(host, {
+    options: {
+      connector: createWebSocketConnector(websocketUrl(agentId), {
+        cookies: "include",
+      }),
+      protocol: "auto",
+      session: { cwd: acpState.cwd },
+      initialSession: savedSessionId
+        ? { type: "open", sessionId: savedSessionId }
+        : { type: "new" },
+      context: contextProvider,
+      allowAuthentication: false,
+      clientInfo: {
+        name: "psycheval",
+        title: "Psycheval",
+        version: "0.1.0",
+      },
+      onEvent: event => handleChatEvent(event, agentId, generation),
+    },
+    surface: "sidebar",
+    colorScheme: "system",
+    labels: prettyLabels(),
+    ...(RENDER_OPTIONS.csp_nonce
+      ? { styleNonce: String(RENDER_OPTIONS.csp_nonce) }
+      : {}),
+  });
+  acpState.mounted = mounted;
+  renderControls();
   try {
-    const path = `/api/acp/agents/${encodeURIComponent(agent.id)}/connection`;
-    const payload = await serveApi(path, { method: agent.connected ? "DELETE" : "PUT" });
-    replaceAgent(payload);
-    if (payload.connected) await refreshSessions(true);
-    else {
-      acpState.sessions = [];
-      selectSession("");
+    await mounted.ready;
+    if (generation !== acpState.mountGeneration || acpState.mounted !== mounted) {
+      return false;
     }
-    showNotice(payload.connected ? t("acp_connected", "Local agent connected") : t("acp_disconnected", "Local agent disconnected"));
+    acpState.connecting = false;
+    persistUiState({ auto_connect: true });
+    showNotice(t("acp_connected", "Local agent connected"));
+    renderControls();
+    if (!drawer()?.hidden) mounted.focusComposer();
+    return true;
   } catch (error) {
-    showNotice(error.message || String(error), true);
-  } finally {
-    button.disabled = false;
-    renderAgentControls();
+    if (generation !== acpState.mountGeneration || acpState.mounted !== mounted) {
+      return false;
+    }
+    await releaseMounted(mounted);
+    if (
+      savedSessionId &&
+      error?.code === "SESSION_REJECTED" &&
+      error?.phase === "session/open"
+    ) {
+      forgetSavedSession(agentId);
+      return connectAcpAgent({ fresh: true });
+    }
+    acpState.connecting = false;
+    persistUiState({ auto_connect: false });
+    showNotice(errorMessage(error), true);
+    renderControls();
+    return false;
   }
 }
 
-async function refreshSessions(refresh = true) {
-  if (!acpState.agentId) return;
-  const query = new URLSearchParams({ refresh: refresh ? "1" : "0" });
-  const payload = await serveApi(`/api/acp/agents/${encodeURIComponent(acpState.agentId)}/sessions?${query}`);
-  acpState.sessions = listValue(payload?.sessions);
-  if (!acpState.sessions.some(session => session.session_id === acpState.sessionId)) {
-    acpState.sessionId = acpState.sessions.find(session => !session.closed)?.session_id || "";
-    acpState.revision = 0;
-    acpState.events = [];
-  }
-  renderSessionControls();
-  persistUiState();
-  if (acpState.sessionId && selectedSession()?.loaded === false) {
-    await resumeSession(acpState.sessionId);
-  }
-  startPolling();
+async function disconnectAcpAgent(options = {}) {
+  const mounted = acpState.mounted;
+  ++acpState.mountGeneration;
+  acpState.mounted = null;
+  acpState.connecting = false;
+  if (mounted) await mounted.unmount();
+  if (options.persist !== false) persistUiState({ auto_connect: false });
+  if (mounted) showNotice(t("acp_disconnected", "Local agent disconnected"));
+  renderControls();
+  return Boolean(mounted);
 }
 
-async function createSession() {
-  if (!selectedAgent()?.connected) return;
-  setBusy(true);
-  try {
-    const session = await serveApi(`/api/acp/agents/${encodeURIComponent(acpState.agentId)}/sessions`, {
-      method: "POST", body: {}
-    });
-    upsertSession(session);
-    selectSession(session.session_id);
-    showNotice(t("acp_session_created", "Session ready"));
-  } catch (error) {
-    showNotice(error.message || String(error), true);
-  } finally {
-    setBusy(false);
-  }
+async function releaseMounted(mounted) {
+  if (acpState.mounted === mounted) acpState.mounted = null;
+  acpState.connecting = false;
+  await mounted.unmount();
 }
 
-async function closeSession() {
-  const session = selectedSession();
-  if (!session || session.active_prompt) return;
-  try {
-    const updated = await serveApi(sessionPath(), { method: "DELETE" });
-    upsertSession(updated);
-    renderSessionControls();
-  } catch (error) {
-    showNotice(error.message || String(error), true);
+function handleChatEvent(event, agentId, generation) {
+  if (generation !== acpState.mountGeneration) return;
+  if (event.type === "session_changed") {
+    saveSession(agentId, event.sessionId);
+    return;
   }
+  if (event.type === "error") showNotice(event.error?.message || t("error", "Error"), true);
 }
 
-function selectSession(sessionId, options = {}) {
-  stopPolling();
-  acpState.sessionId = sessionId;
-  acpState.revision = 0;
-  acpState.events = [];
-  renderSessionControls();
-  renderEvents();
-  persistUiState();
-  if (options.resume && selectedSession()?.loaded === false) {
-    resumeSession(sessionId);
-  } else startPolling();
-}
-
-async function resumeSession(sessionId) {
-  if (!sessionId) return;
-  setBusy(true);
-  try {
-    const session = await serveApi(sessionPath(sessionId), { method: "PUT" });
-    upsertSession(session);
-    renderSessionControls();
-  } catch (error) {
-    showNotice(error.message || String(error), true);
-  } finally {
-    setBusy(false);
-    startPolling();
-  }
-}
-
-async function sendPrompt(event) {
-  event.preventDefault();
-  const textarea = document.querySelector("[data-acp-prompt]");
-  const prompt = String(textarea?.value || "").trim();
-  const session = selectedSession();
-  if (!prompt || !session || session.active_prompt) return;
-  try {
-    const updated = await serveApi(`${sessionPath()}/prompts`, {
-      method: "POST",
-      body: { prompt, ...(acpState.context ? { context: acpState.context.value } : {}) }
-    });
-    if (textarea) textarea.value = "";
-    upsertSession(updated);
-    renderSessionControls();
-    startPolling();
-  } catch (error) {
-    showNotice(error.message || String(error), true);
-  }
-}
-
-async function cancelPrompt() {
-  try {
-    const updated = await serveApi(`${sessionPath()}/prompts/active`, { method: "DELETE" });
-    upsertSession(updated);
-    renderSessionControls();
-  } catch (error) {
-    showNotice(error.message || String(error), true);
-  }
+async function resolveCapturedContexts(request) {
+  const contextsById = new Map(
+    acpState.contexts.map(context => [context.id, context]),
+  );
+  const payloads = await Promise.all(
+    request.selection.map(async selection => {
+      const context = contextsById.get(selection.id);
+      if (!context) throw new Error(`Selected context is unavailable: ${selection.label}`);
+      return serveApi("/api/acp/context-resolutions", {
+        method: "POST",
+        body: {
+          context: context.value,
+          embedded_context: Boolean(request.capabilities?.embeddedContext),
+        },
+        signal: request.signal,
+      });
+    }),
+  );
+  return payloads.flatMap(payload => listValue(payload?.items));
 }
 
 function captureContext() {
-  const next = acpState.contextCandidate || currentContext();
+  const next = currentContext();
   if (!next) {
     showNotice(t("acp_context_unavailable", "Select an evaluation item first"), true);
     return;
   }
-  acpState.context = next;
-  const suggestedPromptId = { source: "failure-diagnosis", dataset_task: "task-audit", report: "report-review" }[next.value?.kind];
+  if (acpState.contexts.some(context => context.id === next.id)) {
+    showNotice(t("acp_context_already_attached", "Evaluation context is already attached"));
+    return;
+  }
+  if (acpState.contexts.length >= 64) {
+    showNotice(t("acp_context_limit", "Context is limited to 64 items"), true);
+    return;
+  }
+  acpState.contexts = [...acpState.contexts, next];
+  persistUiState({ contexts: acpState.contexts });
+  const suggestedPromptId = {
+    source: "failure-diagnosis",
+    dataset_task: "task-audit",
+    report: "report-review",
+  }[next.value?.kind];
   if (suggestedPromptId && acpState.prompts.some(prompt => prompt.id === suggestedPromptId)) {
     acpState.promptAssetId = suggestedPromptId;
-    renderPromptAssets();
   }
-  renderContext();
   showNotice(t("acp_context_attached", "Current evaluation context attached"));
+  notifyContextSelection();
+  renderPromptAssets();
 }
 
-function renderPromptAssets() {
-  const select = document.querySelector("[data-acp-prompt-asset]");
-  if (select) {
-    select.innerHTML = `<option value="">${esc(t("acp_prompt_custom", "Custom prompt"))}</option>${acpState.prompts.map(prompt => `<option value="${esc(prompt.id)}" ${prompt.id === acpState.promptAssetId ? "selected" : ""}>${esc(prompt.title)}</option>`).join("")}`;
-  }
-  const use = document.querySelector("[data-acp-use-prompt]");
-  if (use) use.disabled = !acpState.prompts.some(prompt => prompt.id === acpState.promptAssetId);
+function removeContext(id) {
+  const next = acpState.contexts.filter(context => context.id !== id);
+  if (next.length === acpState.contexts.length) return;
+  acpState.contexts = next;
+  persistUiState({ contexts: next });
+  notifyContextSelection();
+  showNotice(t("acp_context_removed", "Evaluation context removed"));
+}
+
+function notifyContextSelection() {
+  for (const listener of contextListeners) listener();
 }
 
 function usePromptAsset() {
   const prompt = acpState.prompts.find(item => item.id === acpState.promptAssetId);
-  const textarea = document.querySelector("[data-acp-prompt]");
-  if (!prompt || !textarea) return;
-  textarea.value = prompt.content || "";
-  textarea.focus?.();
+  if (!prompt || !acpState.mounted) return;
+  acpState.mounted.setDraft(String(prompt.content || ""), { focus: true });
 }
 
 function currentContext() {
   const context = snapshotWorkspace().context || {};
-  const page = context.page;
-  if (page === "home" && context.source_key) {
+  if (context.page === "home" && context.source_key) {
     const stepId = context.step_id;
     return {
-      label: stepId ? `${context.source_key} · ${t("step", "Step")} ${stepId}` : context.source_key,
-      value: { kind: "source", source_key: context.source_key, ...(stepId ? { step_id: stepId } : {}) }
+      id: `source:${context.source_key}:${stepId || ""}`,
+      label: stepId
+        ? `${context.source_key} · ${t("step", "Step")} ${stepId}`
+        : context.source_key,
+      value: {
+        kind: "source",
+        source_key: context.source_key,
+        ...(stepId ? { step_id: stepId } : {}),
+      },
     };
   }
-  if (page === "datasets" && context.dataset_id && context.task) {
+  if (context.page === "datasets" && context.dataset_id && context.task) {
     return {
+      id: `dataset:${context.dataset_id}:${context.task}`,
       label: `${context.dataset_id} / ${context.task}`,
-      value: { kind: "dataset_task", dataset_id: context.dataset_id, task: context.task }
+      value: {
+        kind: "dataset_task",
+        dataset_id: context.dataset_id,
+        task: context.task,
+      },
     };
   }
-  if (page === "reports" && context.report_id) {
+  if (context.page === "reports" && context.report_id) {
     return {
+      id: `report:${context.report_id}`,
       label: context.report_name || context.report_id,
       value: { kind: "report", report_id: context.report_id },
     };
@@ -337,298 +394,269 @@ function currentContext() {
   return null;
 }
 
-function startPolling() {
-  if (acpState.polling || drawer()?.hidden || !acpState.agentId || !acpState.sessionId) return;
-  acpState.polling = true;
-  const generation = ++acpState.pollGeneration;
-  pollEvents(generation);
+function websocketUrl(agentId) {
+  const scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${scheme}//${window.location.host}/api/acp/agents/${encodeURIComponent(agentId)}/ws`;
 }
 
-function stopPolling() {
-  acpState.polling = false;
-  acpState.pollGeneration += 1;
+function prettyLabels() {
+  return {
+    accept: t("acp_continue", "Continue"),
+    addContext: t("acp_add_context", "Add context"),
+    agentName: agent => agent ? `${agent} Agent` : t("agent", "Agent"),
+    agentOngoing: t("acp_agent_ongoing", "Ongoing"),
+    agentCompleted: t("acp_agent_completed", "Completed"),
+    agentFailed: t("acp_agent_failed", "Failed"),
+    agentCancelled: t("acp_agent_cancelled", "Cancelled"),
+    agentBackground: t("acp_agent_background", "Started in background"),
+    agentObserved: duration => formatLabel("acp_agent_observed", "Observed {duration}", { duration }),
+    assistantName: t("acp_assistant", "Psycheval Copilot"),
+    authRequired: t("acp_auth_required", "Authentication required"),
+    binaryChange: t("acp_binary_change", "Binary or structural change"),
+    cancel: t("cancel", "Cancel"),
+    changedFiles: t("acp_changed_files", "Changed files"),
+    close: t("close", "Close"),
+    closeSession: t("acp_close_session", "Close session"),
+    commands: t("acp_commands", "Commands"),
+    composerPlaceholder: t("acp_prompt_placeholder", "Ask about this evaluation…"),
+    contextInjection: t("acp_context_injection", "Context injection"),
+    contextSelection: t("acp_context_selection", "Context for next prompt"),
+    contextTruncated: total => formatLabel(
+      "acp_context_truncated",
+      "Context display truncated ({count} characters total).",
+      { count: total.toLocaleString() },
+    ),
+    decline: t("acp_decline", "Decline"),
+    deleteSession: t("acp_delete_session", "Delete session"),
+    emptyDescription: t("acp_empty_description", "Messages, tool activity, and plans will appear here."),
+    emptyTitle: t("acp_empty_title", "Start a conversation"),
+    error: t("error", "Error"),
+    finish: t("acp_finish", "I've finished"),
+    historyGap: t("acp_history_gap", "Earlier messages are unavailable for this session."),
+    historyGapTitle: t("acp_history_gap_title", "Partial history"),
+    loadMore: t("acp_load_more", "Load more"),
+    newChat: t("acp_new_session", "New session"),
+    noSessions: t("acp_no_session", "No session yet"),
+    openLink: t("acp_open_link", "Open link"),
+    openChildSession: t("acp_open_child_session", "Open child session"),
+    permission: t("acp_permission", "Permission"),
+    pendingInteractions: count => formatLabel(
+      "acp_pending_interactions",
+      "{count} pending interactions",
+      { count },
+    ),
+    plan: t("acp_plan", "Plan"),
+    retry: t("acp_retry", "Retry"),
+    removeContext: label => `${t("acp_remove_context", "Remove context")}: ${label}`,
+    resource: t("acp_resource", "Resource"),
+    scrollToLatest: t("acp_scroll_latest", "Scroll to latest message"),
+    send: t("acp_send", "Send"),
+    sessionPhase: phase => t(`acp_phase_${phase}`, phase),
+    sessionUntitled: t("acp_untitled_session", "Untitled session"),
+    sessions: t("acp_session", "Session"),
+    stop: t("acp_stop", "Stop"),
+    thinking: t("acp_thinking", "Thinking"),
+    terminalOutputInActivity: t("acp_terminal_output", "Terminal output is shown in the activity stream."),
+    tool: t("acp_tool", "Tool"),
+    toolInput: t("acp_tool_input", "Input"),
+    toolOutput: t("acp_tool_output", "Output"),
+    toolResult: t("acp_tool_result", "tool result"),
+    unsupportedContent: type => formatLabel(
+      "acp_unsupported_content",
+      "Unsupported agent content: {type}",
+      { type },
+    ),
+    unsafeResourceLink: t("acp_unsafe_resource_link", "unsafe resource link"),
+    usage: (used, size) => `${formatUsage(used)} / ${formatUsage(size)}`,
+    you: t("you", "You"),
+    confirmDeleteSession: title => formatLabel(
+      "acp_confirm_delete_session",
+      "Delete “{title}”?",
+      { title },
+    ),
+    backToSession: title => formatLabel(
+      "acp_back_to_session",
+      "Back to {title}",
+      { title },
+    ),
+  };
 }
 
-async function pollEvents(generation) {
-  let failures = 0;
-  while (acpState.polling && generation === acpState.pollGeneration) {
-    const query = new URLSearchParams({
-      cursor: String(acpState.revision),
-      wait: "20",
-    });
-    try {
-      const payload = await serveApi(`${sessionPath()}/events?${query}`);
-      if (!acpState.polling || generation !== acpState.pollGeneration) return;
-      const incoming = listValue(payload?.events).map(event => ({ ...event, revision: event.sequence }));
-      const nextEvents = payload?.reset ? incoming : mergeByRevision(acpState.events, incoming);
-      const eventsChanged = JSON.stringify(nextEvents) !== JSON.stringify(acpState.events);
-      const revision = Number(payload?.next_cursor);
-      if (Number.isFinite(revision)) acpState.revision = revision;
-      const sessionChanged = payload?.session
-        && JSON.stringify(payload.session) !== JSON.stringify(selectedSession());
-      acpState.events = nextEvents;
-      if (sessionChanged) upsertSession(payload.session);
-      if (sessionChanged) renderSessionControls();
-      if (eventsChanged) renderEvents();
-      failures = 0;
-    } catch (error) {
-      if (generation !== acpState.pollGeneration) return;
-      if (error?.status === 404) {
-        stopPolling();
-        acpState.sessionId = "";
-        acpState.revision = 0;
-        acpState.events = [];
-        renderSessionControls();
-        renderEvents();
-        persistUiState();
-        try {
-          await refreshSessions(false);
-        } catch (refreshError) {
-          showNotice(refreshError.message || String(refreshError), true);
-        }
-        return;
-      }
-      showNotice(error.message || String(error), true);
-      failures += 1;
-      await new Promise(resolve => setTimeout(resolve, Math.min(250 * (2 ** (failures - 1)), 5000)));
-    }
+function formatLabel(key, fallback, values) {
+  let value = String(t(key, fallback));
+  for (const [name, replacement] of Object.entries(values)) {
+    value = value.replaceAll(`{${name}}`, String(replacement));
   }
+  return value;
 }
 
-function mergeByRevision(existing, incoming) {
-  const values = new Map(existing.map(event => [Number(event.revision), event]));
-  incoming.forEach(event => values.set(Number(event.revision), event));
-  return Array.from(values.values()).sort((left, right) => Number(left.revision) - Number(right.revision));
+function formatUsage(value) {
+  return value < 1_000_000_000_000
+    ? value.toLocaleString()
+    : value.toExponential(2);
 }
 
-function renderEvents() {
-  const target = document.querySelector("[data-acp-events]");
-  if (!target) return;
-  if (!acpState.events.length) {
-    target.innerHTML = `<div class="acp-empty">${esc(t("acp_empty_session", "This session is quiet. Send a prompt to start."))}</div>`;
-    return;
-  }
-  target.innerHTML = collapseChunks(acpState.events).map(renderEvent).join("");
-  target.querySelectorAll(".acp-message-body[data-markdown]").forEach(node => {
-    node.innerHTML = renderMarkdown(node.dataset.markdown || "");
-  });
-  target.scrollTop = target.scrollHeight;
-}
-
-function collapseChunks(events) {
-  const collapsed = [];
-  events.forEach(event => {
-    const previous = collapsed[collapsed.length - 1];
-    if (previous && ["message", "thought"].includes(event.type) && previous.type === event.type) {
-      previous.text = `${previous.text || ""}${event.text || ""}`;
-      previous.revision = event.revision;
-    } else collapsed.push({ ...event });
-  });
-  return collapsed;
-}
-
-function renderEvent(event) {
-  const type = String(event.type || "unknown");
-  const label = eventLabel(type);
-  let body = "";
-  if (["message", "user_message"].includes(type)) {
-    body = `<div class="acp-message-body note-body" data-markdown="${esc(event.text || "")}"></div>`;
-  } else if (type === "thought") {
-    body = `<details><summary>${esc(t("acp_show_thought", "Agent reasoning"))}</summary><div class="acp-message-body note-body" data-markdown="${esc(event.text || "")}"></div></details>`;
-  } else if (type === "tool") {
-    body = `<div class="acp-tool-head"><strong>${esc(event.title || event.kind || t("tool_calls", "Tool call"))}</strong><span>${esc(event.status || "pending")}</span></div>${renderJsonDetails(event.raw_input || event.content || event.raw_output)}`;
-  } else if (type === "permission") {
-    const permissionResult = latestPermissionResult(event.request_id);
-    const options = listValue(event.options);
-    const selectedOption = options.find(option => String(option.optionId ?? option.id ?? "") === String(permissionResult?.option_id ?? ""));
-    const requestIdAttributes = `data-acp-permission="${esc(event.request_id)}" data-acp-request-id-type="${esc(typeof event.request_id)}"`;
-    const answered = permissionResult ? " disabled" : "";
-    const resultSummary = permissionResult
-      ? `<p class="acp-permission-result">${esc(permissionResult.cancelled ? t("cancel", "Cancel") : selectedOption?.name || selectedOption?.label || permissionResult.option_id || t("complete", "Complete"))}</p>`
-      : "";
-    body = `<strong>${esc(t("acp_permission_required", "Permission required"))}</strong>${renderJsonDetails(event.tool_call)}<div class="acp-permission-options">${options.map(option => `<button class="action-button compact" type="button" ${requestIdAttributes} data-option-id="${esc(option.optionId || option.id || "")}"${answered}>${esc(option.name || option.label || option.optionId || option.id || t("allow", "Allow"))}</button>`).join("")}<button class="action-button compact danger" type="button" ${requestIdAttributes} data-cancelled="true"${answered}>${esc(t("cancel", "Cancel"))}</button></div>${resultSummary}`;
-  } else if (type === "plan") {
-    body = `<ol class="acp-plan">${listValue(event.entries).map(entry => `<li data-status="${esc(entry.status || "pending")}"><span>${esc(entry.content || entry.title || "")}</span><small>${esc(entry.status || "pending")}</small></li>`).join("")}</ol>`;
-  } else if (type === "error") {
-    body = `<p class="danger">${esc(event.message || t("error", "Error"))}</p>`;
-  } else if (["status", "session", "prompt_complete", "mode", "config", "usage", "permission_result"].includes(type)) {
-    body = `<p>${esc(event.status || event.stop_reason || event.mode_id || t("acp_event_recorded", "Event recorded"))}</p>`;
-  } else if (type === "commands") {
-    body = `<div class="acp-command-list">${listValue(event.commands).map(command => `<code>/${esc(command.name || command.command || "")}</code>`).join("")}</div>`;
-  } else {
-    body = renderJsonDetails(event.payload || event.result || event);
-  }
-  return `<article class="acp-event acp-event-${esc(type)}"><span class="acp-event-node" aria-hidden="true"></span><header><span>${esc(label)}</span><code>#${esc(event.revision || "")}</code></header><div class="acp-event-body">${body}</div></article>`;
-}
-
-function latestPermissionResult(requestId) {
-  return [...acpState.events].reverse().find(event => (
-    event.type === "permission_result"
-    && typeof event.request_id === typeof requestId
-    && event.request_id === requestId
-  ));
-}
-
-function renderJsonDetails(value) {
-  if (value === null || value === undefined || value === "") return "";
-  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  return `<details class="acp-payload"><summary>${esc(t("details", "Details"))}</summary><pre>${esc(text)}</pre></details>`;
-}
-
-function eventLabel(type) {
-  return ({
-    message: t("agent", "Agent"), user_message: t("you", "You"), thought: t("analysis", "Analysis"),
-    tool: t("tool_calls", "Tool call"), permission: t("acp_permission", "Permission"), plan: t("acp_plan", "Plan"),
-    error: t("error", "Error"), prompt_complete: t("complete", "Complete"), session: t("session", "Session"),
-  })[type] || type.replaceAll("_", " ");
-}
-
-async function handleEventAction(event) {
-  const button = event.target?.closest?.("[data-acp-permission]");
-  if (!button) return;
-  button.disabled = true;
-  try {
-    await serveApi(`${sessionPath()}/permission-responses`, {
-      method: "POST",
-      body: {
-        request_id: button.dataset.acpRequestIdType === "string"
-          ? String(button.dataset.acpPermission)
-          : numericId(button.dataset.acpPermission),
-        ...(button.dataset.optionId ? { option_id: button.dataset.optionId } : {}),
-        cancelled: button.dataset.cancelled === "true",
-      }
-    });
-  } catch (error) {
-    button.disabled = false;
-    showNotice(error.message || String(error), true);
-  }
-}
-
-async function handleSessionOption(event) {
-  const control = event.target;
-  try {
-    if (control.matches("[data-acp-mode]")) {
-      const payload = await serveApi(`${sessionPath()}/mode`, { method: "PUT", body: { mode_id: control.value } });
-      upsertSession(payload.session);
-    } else if (control.matches("[data-acp-config]")) {
-      const payload = await serveApi(`${sessionPath()}/config-options/${encodeURIComponent(control.dataset.acpConfig)}`, { method: "PUT", body: { value: control.value } });
-      upsertSession(payload.session);
-    }
-  } catch (error) {
-    showNotice(error.message || String(error), true);
-  }
-}
-
-function renderAgentControls() {
-  const select = document.querySelector("[data-acp-agent]");
+function renderControls() {
+  const select = /** @type {HTMLSelectElement | null} */ (
+    document.querySelector("[data-acp-agent]")
+  );
   if (select) {
-    select.innerHTML = acpState.agents.length ? acpState.agents.map(agent => `<option value="${esc(agent.id)}" ${agent.id === acpState.agentId ? "selected" : ""}>${esc(agent.title)}</option>`).join("") : `<option value="">${esc(t("acp_no_agents", "No agents configured"))}</option>`;
-    select.disabled = !acpState.agents.length;
+    select.innerHTML = acpState.agents.length
+      ? acpState.agents
+          .map(
+            agent =>
+              `<option value="${esc(agent.id)}" ${agent.id === acpState.agentId ? "selected" : ""}>${esc(agent.title)}</option>`,
+          )
+          .join("")
+      : `<option value="">${esc(t("acp_no_agents", "No agents configured"))}</option>`;
+    select.disabled = !acpState.agents.length || acpState.connecting || Boolean(acpState.mounted);
   }
-  const agent = selectedAgent();
-  const connect = document.querySelector("[data-acp-connect]");
+  const connect = /** @type {HTMLButtonElement | null} */ (
+    document.querySelector("[data-acp-connect]")
+  );
   if (connect) {
-    connect.hidden = !agent;
-    connect.textContent = agent?.connected ? t("acp_disconnect", "Disconnect") : t("acp_connect", "Connect");
-    connect.disabled = !agent;
+    connect.textContent = acpState.mounted
+      ? t("acp_disconnect", "Disconnect")
+      : t("acp_connect", "Connect");
+    connect.disabled = !selectedAgent() || acpState.connecting;
+    connect.hidden = !acpState.agents.length;
   }
-  const configure = document.querySelector("[data-acp-configure]");
-  if (configure) configure.hidden = Boolean(agent);
-  const protocol = document.querySelector("[data-acp-protocol]");
-  if (protocol) {
-    protocol.textContent = agent?.connected ? `ACP v${agent.protocol_version}` : "ACP · —";
-    protocol.classList.toggle("connected", Boolean(agent?.connected));
-  }
-  renderSessionControls();
+  const configure = /** @type {HTMLElement | null} */ (
+    document.querySelector("[data-acp-configure]")
+  );
+  if (configure) configure.hidden = Boolean(acpState.agents.length);
+  const placeholder = /** @type {HTMLElement | null} */ (
+    document.querySelector("[data-acp-placeholder]")
+  );
+  if (placeholder) placeholder.hidden = Boolean(acpState.mounted);
+  renderPromptAssets();
 }
 
-function renderSessionControls() {
-  const select = document.querySelector("[data-acp-session]");
+function renderPromptAssets() {
+  const select = /** @type {HTMLSelectElement | null} */ (
+    document.querySelector("[data-acp-prompt-asset]")
+  );
   if (select) {
-    select.innerHTML = `<option value="">${esc(t("acp_no_session", "No session yet"))}</option>${acpState.sessions.map(session => `<option value="${esc(session.session_id)}" ${session.session_id === acpState.sessionId ? "selected" : ""}>${esc(session.title || shortId(session.session_id))}${session.closed ? ` · ${esc(t("closed", "closed"))}` : ""}</option>`).join("")}`;
-    select.disabled = !selectedAgent()?.connected;
+    select.innerHTML = `<option value="">${esc(t("acp_prompt_custom", "Custom prompt"))}</option>${acpState.prompts
+      .map(
+        prompt =>
+          `<option value="${esc(prompt.id)}" ${prompt.id === acpState.promptAssetId ? "selected" : ""}>${esc(prompt.title)}</option>`,
+      )
+      .join("")}`;
   }
-  const session = selectedSession();
-  const create = document.querySelector("[data-acp-new-session]");
-  if (create) create.disabled = !selectedAgent()?.connected;
-  const close = document.querySelector("[data-acp-session-close]");
-  if (close) close.disabled = !session || session.closed || session.active_prompt;
-  const prompt = document.querySelector("[data-acp-prompt]");
-  const send = document.querySelector("[data-acp-send]");
-  if (prompt) prompt.disabled = !session || session.closed;
-  if (send) send.disabled = !session || session.closed || session.active_prompt;
-  const stop = document.querySelector("[data-acp-stop]");
-  if (stop) stop.hidden = !session?.active_prompt;
-  const usage = document.querySelector("[data-acp-usage]");
-  if (usage) usage.textContent = usageText(session?.usage);
-  renderSessionOptions(session);
+  const use = /** @type {HTMLButtonElement | null} */ (
+    document.querySelector("[data-acp-use-prompt]")
+  );
+  if (use) {
+    use.disabled =
+      !acpState.mounted ||
+      !acpState.prompts.some(prompt => prompt.id === acpState.promptAssetId);
+  }
 }
 
-function renderSessionOptions(session) {
-  const target = document.querySelector("[data-acp-session-options]");
-  if (!target) return;
-  const modes = listValue(session?.modes?.availableModes);
-  const options = listValue(session?.config_options);
-  target.hidden = !modes.length && !options.length;
-  target.innerHTML = [
-    modes.length ? `<label><span>${esc(t("acp_mode", "Mode"))}</span><select data-acp-mode>${modes.map(mode => `<option value="${esc(mode.id)}" ${mode.id === session.current_mode ? "selected" : ""}>${esc(mode.name || mode.id)}</option>`).join("")}</select></label>` : "",
-    ...options.map(option => renderConfigOption(option)),
-  ].join("");
+function selectedAgent() {
+  return acpState.agents.find(agent => agent.id === acpState.agentId) || null;
 }
 
-function renderConfigOption(option) {
-  const id = option.id || option.configId || "";
-  const values = listValue(option.options);
-  if (!id || !values.length) return "";
-  return `<label><span>${esc(option.name || id)}</span><select data-acp-config="${esc(id)}">${values.map(value => `<option value="${esc(value.value ?? value.id ?? "")}" ${(value.value ?? value.id) === option.currentValue ? "selected" : ""}>${esc(value.name || value.label || value.value || value.id || "")}</option>`).join("")}</select></label>`;
-}
-
-function renderContext() {
-  const label = document.querySelector("[data-acp-context-label]");
-  if (label) label.textContent = acpState.context?.label || t("acp_context_none", "No evaluation context attached");
-  document.querySelector("[data-acp-context-chip]")?.classList.toggle("attached", Boolean(acpState.context));
-  const button = document.querySelector("[data-acp-context-capture]");
-  if (button) button.textContent = acpState.context ? t("acp_replace_context", "Replace context") : t("acp_attach_context", "Attach current context");
-}
-
-function selectedAgent() { return acpState.agents.find(agent => agent.id === acpState.agentId) || null; }
-function selectedSession() { return acpState.sessions.find(session => session.session_id === acpState.sessionId) || null; }
-function ids() { return { agent_id: acpState.agentId, session_id: acpState.sessionId }; }
-function replaceAgent(agent) { acpState.agents = acpState.agents.map(item => item.id === agent.id ? agent : item); }
-function upsertSession(session) {
-  if (!session?.session_id) return;
-  const index = acpState.sessions.findIndex(item => item.session_id === session.session_id);
-  if (index >= 0) acpState.sessions[index] = session;
-  else acpState.sessions.push(session);
-}
-function shortId(value) { const text = String(value || ""); return text.length > 22 ? `${text.slice(0, 10)}…${text.slice(-8)}` : text; }
-function numericId(value) { const number = Number(value); return Number.isSafeInteger(number) && String(number) === String(value) ? number : String(value); }
-function usageText(usage) {
-  if (!usage || typeof usage !== "object") return "";
-  const used = usage.used ?? usage.tokens ?? usage.totalTokens;
-  const size = usage.size ?? usage.contextWindow;
-  return used === undefined ? "" : `${Number(used).toLocaleString()}${size ? ` / ${Number(size).toLocaleString()}` : ""} tok`;
-}
-function setBusy(busy) { document.querySelectorAll("[data-acp-new-session],[data-acp-session-close]").forEach(button => { button.disabled = busy; }); }
 function showNotice(message, error = false) {
-  const node = document.querySelector("[data-acp-notice]");
+  const node = /** @type {HTMLElement | null} */ (
+    document.querySelector("[data-acp-notice]")
+  );
   if (!node) return;
   node.textContent = message;
   node.classList.toggle("danger", error);
   node.hidden = !message;
 }
-function readSavedUi() {
-  try { return JSON.parse(window.localStorage.getItem(storageKey()) || "{}"); } catch { return {}; }
+
+function errorMessage(error) {
+  return error?.message || String(error || t("error", "Error"));
 }
+
+function readSavedUi() {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(storageKey()) || "{}");
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
 function restoreUiState() {
   const saved = readSavedUi();
   acpState.agentId = typeof saved.agent_id === "string" ? saved.agent_id : "";
-  acpState.sessionId = typeof saved.session_id === "string" ? saved.session_id : "";
-}
-function persistUiState(extra = {}) {
-  try {
-    window.localStorage.setItem(storageKey(), JSON.stringify({ ...readSavedUi(), agent_id: acpState.agentId, session_id: acpState.sessionId, ...extra }));
-  } catch { /* UI preference persistence is best effort. */ }
+  acpState.promptAssetId =
+    typeof saved.prompt_asset_id === "string" ? saved.prompt_asset_id : "";
+  acpState.contexts = restoredContexts(saved.contexts);
+  persistUiState({ contexts: acpState.contexts });
 }
 
-export { acpState, closeAcpDrawer, currentContext, initializeAcp, openAcpDrawer };
+function restoredContexts(value) {
+  const contexts = [];
+  const ids = new Set();
+  for (const context of listValue(value)) {
+    if (
+      !context ||
+      typeof context !== "object" ||
+      typeof context.id !== "string" ||
+      !context.id ||
+      context.id.length > 16 * 1024 ||
+      ids.has(context.id) ||
+      typeof context.label !== "string" ||
+      !context.label ||
+      context.label.length > 16 * 1024 ||
+      !context.value ||
+      typeof context.value !== "object" ||
+      Array.isArray(context.value)
+    ) {
+      continue;
+    }
+    ids.add(context.id);
+    contexts.push({ id: context.id, label: context.label, value: context.value });
+    if (contexts.length === 64) break;
+  }
+  return contexts;
+}
+
+function persistUiState(extra = {}) {
+  try {
+    window.localStorage.setItem(
+      storageKey(),
+      JSON.stringify({
+        ...readSavedUi(),
+        agent_id: acpState.agentId,
+        prompt_asset_id: acpState.promptAssetId,
+        contexts: acpState.contexts,
+        ...extra,
+      }),
+    );
+  } catch {
+    // Workspace-local UI preference persistence is best effort.
+  }
+}
+
+function savedSession(agentId) {
+  const sessions = readSavedUi().sessions;
+  return sessions && typeof sessions[agentId] === "string" ? sessions[agentId] : "";
+}
+
+function saveSession(agentId, sessionId) {
+  const saved = readSavedUi();
+  const sessions = { ...(saved.sessions || {}) };
+  if (sessionId) sessions[agentId] = sessionId;
+  else delete sessions[agentId];
+  persistUiState({ sessions });
+}
+
+function forgetSavedSession(agentId) {
+  saveSession(agentId, undefined);
+}
+
+export {
+  acpState,
+  closeAcpDrawer,
+  connectAcpAgent,
+  currentContext,
+  disconnectAcpAgent,
+  initializeAcp,
+  openAcpDrawer,
+};

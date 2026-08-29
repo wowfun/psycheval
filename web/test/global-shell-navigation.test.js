@@ -3,13 +3,13 @@ import test from "node:test";
 
 import { installBrowserDom } from "./support/browser.js";
 
-test("Workspace navigation closes the global ACP drawer", async () => {
+test("Workspace navigation preserves the open global ACP drawer", async () => {
   const browser = installBrowserDom(`
     <script type="application/json" id="peval-i18n">{}</script>
     <script type="application/json" id="peval-render-options">{"role":"admin"}</script>
     <button data-acp-open aria-expanded="false">ACP</button>
     <div data-acp-backdrop hidden></div>
-    <aside data-acp-drawer hidden><textarea data-acp-prompt></textarea></aside>
+    <aside data-acp-drawer hidden><div data-acp-chat></div></aside>
   `, {
     fetch: async path => {
       if (String(path) === "/api/acp/agents") {
@@ -27,12 +27,14 @@ test("Workspace navigation closes the global ACP drawer", async () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(openAcpDrawer(), true);
     assert.equal(document.querySelector("[data-acp-drawer]").hidden, false);
+    const chatHost = document.querySelector("[data-acp-chat]");
 
     window.dispatchEvent(new window.CustomEvent("peval:workspace-navigate"));
 
-    assert.equal(document.querySelector("[data-acp-drawer]").hidden, true);
-    assert.equal(document.querySelector("[data-acp-backdrop]").hidden, true);
-    assert.equal(document.body.classList.contains("acp-drawer-open"), false);
+    assert.equal(document.querySelector("[data-acp-drawer]").hidden, false);
+    assert.equal(document.querySelector("[data-acp-backdrop]").hidden, false);
+    assert.equal(document.body.classList.contains("acp-drawer-open"), true);
+    assert.equal(document.querySelector("[data-acp-chat]"), chatHost);
   } finally {
     browser.cleanup();
   }

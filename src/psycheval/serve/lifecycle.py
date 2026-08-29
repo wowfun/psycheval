@@ -9,6 +9,7 @@ from psycheval.cli.arguments import CliArgs
 from psycheval.config import apply_overrides, config_for_adapter, load_config
 from psycheval.inputs import parse_adapter_assignments
 from psycheval.serve.access import ServeAccess
+from psycheval.serve.acp import MAX_ACP_FRAME_BYTES
 from psycheval.serve.api import create_app
 from psycheval.serve.constants import DEFAULT_PORT_END, DEFAULT_PORT_START, LOCALHOSTS
 from psycheval.serve.runtime import ServeRuntime
@@ -49,7 +50,11 @@ def run_serve_command(args: CliArgs) -> None:
                 create_app(runtime, access),
                 loop="asyncio",
                 http="h11",
-                ws="none",
+                ws="websockets-sansio",
+                ws_max_size=MAX_ACP_FRAME_BYTES,
+                ws_max_queue=16,
+                ws_ping_interval=20,
+                ws_ping_timeout=20,
                 lifespan="off",
                 workers=1,
                 proxy_headers=False,
