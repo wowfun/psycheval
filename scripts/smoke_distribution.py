@@ -157,6 +157,23 @@ def main() -> int:
         web_assets = assets.joinpath("web")
         assert web_assets.joinpath("main.js").is_file()
         assert web_assets.joinpath("modules", "runtime.js").is_file()
+        pretty_aui = web_assets.joinpath("vendor", "pretty-aui")
+        assert pretty_aui.joinpath("pretty-aui.js").is_file()
+        assert pretty_aui.joinpath("chunks", "types.js").is_file()
+        assert pretty_aui.joinpath("chunks", "v2.js").is_file()
+        assert pretty_aui.joinpath("LICENSE").is_file()
+        third_party_licenses = pretty_aui.joinpath(
+            "THIRD_PARTY_LICENSES.txt"
+        ).read_text(encoding="utf-8")
+        for package_name in (
+            "@agentclientprotocol/sdk",
+            "dompurify",
+            "marked",
+            "preact",
+            "zod",
+        ):
+            assert package_name in third_party_licenses
+        assert not pretty_aui.joinpath("licenses").is_dir()
         assert assets.joinpath("workspace.html").is_file()
         assert assets.joinpath("css", "00-base.css").is_file()
         assert not assets.joinpath("report.js").is_file()

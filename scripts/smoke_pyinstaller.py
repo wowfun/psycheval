@@ -23,6 +23,11 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/peval/fixtures/common_session.jsonl"
 SERVE_URL_RE = re.compile(r"^peval serve: (http://[^\s]+/)$")
 SERVE_START_TIMEOUT_SECONDS = 30
+PRETTY_AUI_LICENSE_PREFIX = "psycheval/assets/web/vendor/pretty-aui/"
+PRETTY_AUI_LICENSE_ASSETS = {
+    PRETTY_AUI_LICENSE_PREFIX + "LICENSE",
+    PRETTY_AUI_LICENSE_PREFIX + "THIRD_PARTY_LICENSES.txt",
+}
 
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str]) -> str:
@@ -161,6 +166,22 @@ def wait_serve_url(process: subprocess.Popen[str]) -> str:
     )
 
 
+def assert_pretty_aui_license_assets(executable: Path) -> None:
+    from PyInstaller.archive.readers import CArchiveReader
+
+    names = set(CArchiveReader(str(executable)).toc)
+    missing = sorted(PRETTY_AUI_LICENSE_ASSETS - names)
+    if missing:
+        raise RuntimeError(f"frozen peval omitted pretty-aui licenses: {missing}")
+    legacy = sorted(
+        name
+        for name in names
+        if name.startswith(PRETTY_AUI_LICENSE_PREFIX + "licenses/")
+    )
+    if legacy:
+        raise RuntimeError(f"frozen peval retained split license files: {legacy}")
+
+
 def smoke_workbench(
     executable: Path, *, cwd: Path, workspace: Path, env: dict[str, str]
 ) -> None:
@@ -183,6 +204,18 @@ def smoke_workbench(
             raise RuntimeError("frozen peval omitted the browser ESM entrypoint")
         if headers.get("content-type") != "application/javascript; charset=utf-8":
             raise RuntimeError("frozen peval served the browser module with wrong MIME")
+        for asset_path in (
+            "vendor/pretty-aui/pretty-aui.js",
+            "vendor/pretty-aui/chunks/types.js",
+            "vendor/pretty-aui/chunks/v2.js",
+        ):
+            status, headers, module = request_bytes(
+                base_url, f"/assets/peval/{asset_path}"
+            )
+            if status != 200 or not module.strip():
+                raise RuntimeError(f"frozen peval omitted {asset_path}")
+            if headers.get("content-type") != "application/javascript; charset=utf-8":
+                raise RuntimeError(f"frozen peval served {asset_path} with wrong MIME")
         status, headers, stylesheet = request_bytes(
             base_url, "/assets/peval/workspace.css"
         )
@@ -280,6 +313,7 @@ def main() -> int:
     executable = args.executable.resolve()
     if not executable.is_file():
         raise RuntimeError(f"frozen peval executable not found: {executable}")
+    assert_pretty_aui_license_assets(executable)
 
     with tempfile.TemporaryDirectory() as raw_tmp:
         tmp = Path(raw_tmp)
