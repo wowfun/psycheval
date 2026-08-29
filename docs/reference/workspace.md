@@ -35,11 +35,12 @@ appends it after that Mount's existing evidence lookup order.
 ACP agents form an executable allowlist. Each entry names a path-safe identity,
 display title, executable, and argument array. Serve starts that array directly,
 without a shell, in the workspace root and with the serve process environment.
-Connection and session requests name only an Agent ID; serve resolves its array
-from the current workspace configuration. Administrators may edit that allowlist
-through the separate configuration API. The client first probes the pinned ACP
-v2 draft and restarts with an ACP v1 handshake when the Agent negotiates v1 or
-rejects the v2 initialize shape.
+Each administrator WebSocket names only an Agent ID; serve resolves its array
+from the current workspace configuration and gives that socket one child
+process. The gateway transports bounded text frames and does not interpret or
+retain ACP sessions. The vendored `pretty-aui` client first probes ACP v2 and
+opens a fresh gateway connection for ACP v1 fallback when required.
+Administrators may edit the allowlist through the separate configuration API.
 
 Repository Markdown assets own the default ACP prompt text. The workspace
 `prompts/` directory may contain a same-name Markdown file for any known asset;
@@ -79,22 +80,35 @@ This interface, its disabled API documentation, and its single-process server
 are local workspace implementation details rather than an external service
 contract.
 
-ACP routes are administrator-only because an allowlisted Agent runs with the OS
-authority of `peval serve`; an ACP permission card is Agent protocol state, not
-an operating-system sandbox. Agent credentials must already be provisioned in
-the inherited environment or Agent profile. Psycheval neither collects those
-secrets nor exposes Agent authentication commands in the browser.
+The ACP WebSocket and context resolver are administrator-only and same-origin
+because an allowlisted Agent runs with the OS authority of `peval serve`; an ACP
+permission card is Agent protocol state, not an operating-system sandbox.
+Binary WebSocket messages, oversized frames, excess concurrent connections, and
+unconfigured Agent IDs fail at the gateway boundary. Agent credentials must
+already be provisioned in the inherited environment or Agent profile.
+Psycheval disables Agent-advertised browser authentication and neither collects
+those secrets nor exposes Agent authentication commands in the browser.
 
 Workspace configuration and prompt asset APIs are also administrator-only.
 Changing or removing a connected Agent immediately stops that process;
 unchanged Agent configurations keep their current connections.
 
-ACP session transcripts and pending permissions remain process-local and are
-not evaluation evidence, workspace overlays, or reports. The browser persists
-only drawer, Agent, and session selection. Attaching the current source, Task,
-or report is an explicit per-prompt action; the server resolves and bounds the
-selected content according to `max_content_chars` before sending it to the
-Agent.
+ACP session transcripts and pending interactions remain inside the Agent and
+the live `pretty-aui` controller; they are not evaluation evidence, workspace
+overlays, or reports. Workspace page navigation leaves the live drawer open and
+does not remount its controller. The browser persists drawer and Agent
+selection, the ordered set of attached evaluation references, and the last
+Agent session identity used for reconnect. Adding the current source, Task, or
+report is explicit and duplicate references are ignored; each attachment can be
+removed independently. On each later prompt, the context provider asks the
+server to resolve and bound every frozen reference according to
+`max_content_chars`. Agents without embedded-context support receive bounded
+text fallbacks. Each item actually submitted is shown by `pretty-aui` as a
+collapsed Context injection activity after the user message; expanding it
+shows a bounded literal view of the content and inert resource metadata. These
+activities remain with the loaded browser controller across in-page session
+selection and reconnect, but Psycheval does not persist a second resolved-
+content log for restoration after a full page reload.
 
 Sessions are process-local, idle-expiring cookies. Direct HTTP is intended for
 a trusted private network; the cookie is not marked `Secure` in this mode.

@@ -88,21 +88,28 @@ before discarding an unsaved draft.
 ## Psycheval Copilot
 
 After adding an allowlisted Agent such as OpenCode in Configuration, use
-**Copilot** in the administrator header. Connect the Agent, create or
-resume a session, and optionally attach the source, Task, or report that was
-selected when the drawer opened. The attachment is captured only when you click
-the context button; later page selection changes do not silently replace it.
+**Copilot** in the administrator header. Connect the Agent and use the
+`pretty-aui` session controls to create, select, or close conversations. You can
+attach multiple sources, Tasks, or reports with the **Add context** control
+above the prompt. Select an evaluation item, add it, and repeat; remove one with
+the named close control on its chip. Adding the same reference again has no
+effect. The drawer stays open when you switch Workspace pages; close it
+explicitly with its close control, backdrop, or Escape. Page selection changes
+do not silently alter attached references. Every attached reference is resolved
+again for each prompt, so the Agent receives current bounded content in the
+visible chip order.
 When no Agent is configured, the connection control links directly to the ACP
 Agent form in **Configuration**.
-The composer can load any configured Markdown prompt asset; attaching a source,
+The composer can load any configured Markdown prompt asset; adding a source,
 Task, or report selects the corresponding suggested asset without sending it.
 
 Provision the Agent outside Psycheval first—for OpenCode, use `opencode auth
 login` in a terminal when its provider needs authentication. The panel shows
-messages, plans, tool progress, permission requests, modes, and usage, and lets
-separate sessions run concurrently while rejecting overlapping prompts within
-one session. Closing `peval serve` terminates its child Agents. Conversations
-stay in Agent/process state and are never imported as evaluation evidence.
+messages, plans, tool progress, permission and elicitation requests, modes,
+configuration, usage, and Agent-owned session history. Separate sessions may
+run concurrently while one session accepts only one active prompt. Disconnecting
+or closing `peval serve` terminates the gateway child process. Conversations
+stay in Agent state and are never imported as evaluation evidence.
 
 ACP Agents inherit the serve process environment and OS permissions. Only
 configure executables you trust, and do not treat a permission card in the

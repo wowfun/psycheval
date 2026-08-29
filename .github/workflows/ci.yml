@@ -46,10 +46,11 @@ jobs:
           python-version: "3.12"
       - uses: actions/setup-node@v6
         with:
-          node-version: 22.13.0
+          node-version: 22.22.2
           cache: npm
       - run: uv sync --frozen
       - run: npm ci
+      - run: npx playwright install --with-deps chromium
       - run: npm run check
       - run: uv run python scripts/check_docs.py
       - run: uv run python scripts/check_skill.py skills/peval

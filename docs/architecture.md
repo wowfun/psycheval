@@ -43,7 +43,10 @@ allowed for the current role and the requested route selects the initial page;
 the browser application owns later navigation, page activation, and history.
 Page adapters load on first activation and keep their DOM and draft state until
 the document is unloaded. They consume explicit invalidation domains instead of
-using navigation as a data-refresh mechanism. Direct page URLs remain complete
+using navigation as a data-refresh mechanism. Agent launch changes use the
+`assistant-config` domain; prompt-library changes use the independent
+`prompt-assets` domain, so editing a prompt never replaces a live ACP
+connection. Direct page URLs remain complete
 entry points with the same server-side access checks.
 
 `WorkspaceApp` owns the active page and maps the `catalog`, `reports`,
@@ -52,17 +55,30 @@ adapters. Page adapters do not import one another; shared browser primitives do
 not depend on the Home runtime. One shared sidebar primitive owns lifecycle,
 focus, mutual exclusion, and responsive width interaction for report previews
 across Home and Reports, the Home Saved View rail, and Trial detail; the global
-ACP drawer remains independent.
+ACP drawer remains independent and stays mounted and open across in-document
+Workspace page navigation.
 HTML remains `no-store`, browser modules use strong ETags, and ECharts is loaded
 only from the versioned immutable workspace asset rather than from a browser-side
 third-party fallback.
 
 The serve-owned ACP seam launches only administrator-configured local child
-processes and projects their JSON-RPC session events into browser UI state. It
-does not enter the retained-session conversion, report, workspace overlay, or
-Harbor evidence paths. ACP conversations remain Agent-owned runtime state; an
-explicit, bounded context attachment reads from those existing authorities
-without transferring write ownership to the ACP client.
+processes and carries bounded JSON-RPC frames through an authenticated,
+same-origin WebSocket. An authenticated bridge remains bound to the exact
+administrator session that opened it; logout revokes every bridge and process
+owned by that session. On POSIX, shutdown owns the complete new-session process
+group and escalates surviving descendants after the grace period even when the
+group leader has already exited. The vendored `pretty-aui` standalone client owns ACP
+negotiation, sessions, interactions, normalized state, and rendering; serve
+does not maintain a second protocol projection. The gateway does not enter the
+retained-session conversion, report, workspace overlay, or Harbor evidence
+paths. ACP conversations remain Agent-owned runtime state; an explicit, bounded
+context adapter keeps an ordered set of evaluation references and resolves
+their current content from the existing authorities without transferring write
+ownership to the ACP client. The drawer keeps only Agent selection in its
+compact host control row. The vendored client renders the context references as
+addable and individually removable composer chips, then records each accepted
+turn's resolved items as collapsible transcript activities rather than
+duplicating resolved content in serve-owned browser state.
 
 ## Repository topology
 

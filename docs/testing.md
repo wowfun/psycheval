@@ -8,6 +8,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run pytest
 npm ci
+npx playwright install chromium
 npm run check
 uv run python scripts/check_docs.py
 uv run python scripts/check_skill.py skills/peval
@@ -15,7 +16,16 @@ git diff --check
 ```
 
 Pytest covers Harbor integration and all `peval` CLI behavior in one collection.
-Node `check` runs type checking and browser tests against the authored ESM graph.
+Node `check` runs type checking, browser-module tests against the authored ESM
+graph, a byte-for-byte check of the vendored `pretty-aui` distribution,
+including its consolidated third-party license file, and the Chromium visual
+and browser behavior gate. Live OpenCode ACP coverage remains an explicit
+opt-in:
+
+```console
+PEVAL_LIVE_OPENCODE=1 npm run test:e2e -- web/e2e/acp-live.spec.mjs
+```
+
 Tests isolate HOME/XDG state, config, sockets, timers, and environment secrets.
 Focused success is not a release claim unless the expected test inventory is
 visible.
@@ -44,6 +54,8 @@ package data. Its smoke covers help, a synthetic Harbor Trial view, a
 fixture-backed report, and a Dataset Workbench Task scaffold. The PyInstaller
 check freezes the checkout source;
 wheel provenance is covered separately by the preceding isolated-install smoke.
+Both distribution smokes require the pretty-aui license and consolidated
+third-party license files; a JavaScript-only asset check is insufficient.
 
 ## Platform boundaries
 
