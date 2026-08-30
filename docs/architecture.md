@@ -56,7 +56,21 @@ not depend on the Home runtime. One shared sidebar primitive owns lifecycle,
 focus, mutual exclusion, and responsive width interaction for report previews
 across Home and Reports, the Home Saved View rail, and Trial detail; the global
 ACP drawer remains independent and stays mounted and open across in-document
-Workspace page navigation.
+Workspace page navigation. While that fixed drawer is open, the shell locks the
+document scroller and makes the bounded Workspace pane its main-content scroll
+owner, so pointer scrolling follows the pane under the pointer. `pretty-aui`
+retains ownership of transcript scrolling inside the drawer, and closing the
+drawer restores document scrolling. When a regular right sidebar is active, the
+drawer follows that sidebar's effective content width; otherwise it uses the
+same default desktop width scale rather than defining a second one. In the wide
+in-page sidebar layout, its flush-right outer box also includes the Workspace
+edge gutter so its visible left boundary aligns with a regular sidebar without
+shrinking the main-content column by that gutter a second time. The shell also
+keeps that outer edge gutter distinct from the shared inner gap between the
+main-content column and the active side region. It measures the Workspace
+scrollbar after transferring scroll ownership and
+compensates the drawer outer box for non-overlay scrollbars; overlay scrollbars
+remain zero-width and need no platform-specific constant.
 HTML remains `no-store`, browser modules use strong ETags, and ECharts is loaded
 only from the versioned immutable workspace asset rather than from a browser-side
 third-party fallback.
@@ -69,16 +83,33 @@ owned by that session. On POSIX, shutdown owns the complete new-session process
 group and escalates surviving descendants after the grace period even when the
 group leader has already exited. The vendored `pretty-aui` standalone client owns ACP
 negotiation, sessions, interactions, normalized state, and rendering; serve
-does not maintain a second protocol projection. The gateway does not enter the
-retained-session conversion, report, workspace overlay, or Harbor evidence
-paths. ACP conversations remain Agent-owned runtime state; an explicit, bounded
-context adapter keeps an ordered set of evaluation references and resolves
-their current content from the existing authorities without transferring write
-ownership to the ACP client. The drawer keeps only Agent selection in its
-compact host control row. The vendored client renders the context references as
-addable and individually removable composer chips, then records each accepted
-turn's resolved items as collapsible transcript activities rather than
-duplicating resolved content in serve-owned browser state.
+does not maintain a second protocol projection. Psycheval supplies only a
+workspace- and Agent-scoped browser preference adapter so new conversations can
+reuse the currently selected model across reconnects and page loads; model
+recognition and session configuration remain owned by `pretty-aui`. The gateway
+does not enter the retained-session conversion, report, workspace overlay, or
+Harbor evidence paths. ACP conversations remain Agent-owned runtime state; an
+explicit, bounded context adapter keeps an ordered set of evaluation references
+and resolves their current content from the existing authorities without
+transferring write ownership to the ACP client. Transient host notices belong to
+the vendored `pretty-aui` transcript seam: Psycheval forwards successful
+connection and context-selection outcomes to the selected session, routes
+session-scoped errors to that loaded session, and does not persist or replay the
+resulting rows. Before a chat is mounted, only initialization and connection
+errors use the chat placeholder; connection progress and ordinary disconnects
+have no separate notification projection. The vendored client renders the
+context references as addable and individually removable composer chips, then
+records each accepted turn's resolved items as collapsible transcript activities
+rather than duplicating resolved content in serve-owned browser state.
+`pretty-aui` also owns the model-facing user-message envelope and full-history
+recovery that keep resolved context out of a restored user bubble and project
+recoverable prompt prefixes as historical Context injection activities.
+Its default React renderer also owns bounded tool presentation: trustworthy
+Execute, Read, and ACP Diff payloads become semantic cards, while ambiguous
+payloads remain lossless generic input/output sections. Psycheval supplies only
+localized chrome and does not parse tool payloads or duplicate the renderer.
+Psycheval neither parses Agent transcripts nor renews those recovered activities
+as live host context references after a page load.
 
 ## Repository topology
 
@@ -88,6 +119,8 @@ duplicating resolved content in serve-owned browser state.
 - `src/psycheval/assets/web/` is the browser module graph distributed with the
   package and served directly by the local workspace. `web/` owns its Node test
   harness.
+- `web/vendor/` holds lockfile-referenced Node package archives required to
+  reproduce browser distributions that have not been published upstream.
 - `datasets/` contains maintained Harbor Datasets; `examples/` contains
   authoring examples, not maintained evaluation members.
 - `skills/peval/` consumes the public command.

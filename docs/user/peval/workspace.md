@@ -89,8 +89,11 @@ before discarding an unsaved draft.
 
 After adding an allowlisted Agent such as OpenCode in Configuration, use
 **Copilot** in the administrator header. Connect the Agent and use the
-`pretty-aui` session controls to create, select, or close conversations. You can
-attach multiple sources, Tasks, or reports with the **Add context** control
+`pretty-aui` session controls to create, select, or close conversations. Select
+a model in the composer and new conversations reuse it; the preference survives
+page reloads for the same Workspace and Agent. Existing conversations retain
+their own Agent-managed model. Attach multiple sources, Tasks, or reports with
+the **Add context** control
 above the prompt. Select an evaluation item, add it, and repeat; remove one with
 the named close control on its chip. Adding the same reference again has no
 effect. The drawer stays open when you switch Workspace pages; close it
@@ -98,18 +101,45 @@ explicitly with its close control, backdrop, or Escape. Page selection changes
 do not silently alter attached references. Every attached reference is resolved
 again for each prompt, so the Agent receives current bounded content in the
 visible chip order.
+
+Connection success, context attachment, duplicate attachment, removal, and
+related errors appear as ordered, low-emphasis rows in the session transcript.
+They exist only in the current browser controller and are neither sent to the
+Agent nor restored from session history. An error that occurs before the chat is
+available appears in the empty chat placeholder; connection progress and a
+normal disconnect do not add notification rows.
+
+For a live turn, the transcript shows each submitted item as a **Context
+injection** activity while the user bubble and its Copy action keep only the
+original prompt. The client adds an explicit model-facing boundary around that
+prompt, so reopening a conversation written by the current client can recover
+the original user content even when the Agent flattened the context and prompt
+into plain text. Restored history recreates best-effort **Context injection**
+activities from that prompt prefix: preserved metadata retains distinct items,
+while flattened content appears as one recovered item. These historical rows do
+not become live Workspace references. Conversations created before this boundary
+format are displayed exactly as the Agent replays them because their context and
+user content cannot be separated safely.
+
 When no Agent is configured, the connection control links directly to the ACP
 Agent form in **Configuration**.
 The composer can load any configured Markdown prompt asset; adding a source,
 Task, or report selects the corresponding suggested asset without sending it.
 
-Provision the Agent outside Psycheval first—for OpenCode, use `opencode auth
+Provision the Agent outside Psycheval first. For OpenCode, use `opencode auth
 login` in a terminal when its provider needs authentication. The panel shows
 messages, plans, tool progress, permission and elicitation requests, modes,
 configuration, usage, and Agent-owned session history. Separate sessions may
 run concurrently while one session accepts only one active prompt. Disconnecting
 or closing `peval serve` terminates the gateway child process. Conversations
 stay in Agent state and are never imported as evaluation evidence.
+
+Expand a tool row to inspect its structured result. Recognized Execute, Read,
+and file-change calls use terminal, source, and diff cards; other calls retain
+separate input and output sections. Long source and diff bodies keep their head
+and tail visible until expanded. Each available Copy control copies the semantic
+body for its section—such as raw command output or file text—without card labels,
+line-number gutters, or command chrome.
 
 ACP Agents inherit the serve process environment and OS permissions. Only
 configure executables you trust, and do not treat a permission card in the

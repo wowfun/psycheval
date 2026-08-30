@@ -15,9 +15,13 @@ under `tests` and use normal package imports. Browser modules live under
 `src/psycheval/assets/web`, ship as authored ESM, and are exercised by the Node
 tests under `web` without an application bundle. The exception is the immutable
 `pretty-aui` standalone distribution under `assets/web/vendor`, which is copied
-from the exact npm dependency by `npm run vendor:pretty-aui`; do not edit that
-generated subtree directly. Its `LICENSE` and `THIRD_PARTY_LICENSES.txt` files
-are part of the immutable distribution and must remain in wheel and frozen
+by `npm run vendor:pretty-aui` from the lockfile-pinned package archive in
+`web/vendor`; do not edit either generated artifact directly. Refresh that
+archive by packing the owning pretty-aui checkout, then update the lockfile,
+install it, and run the vendoring command. The lockfile integrity and
+byte-for-byte vendor check make a clean `npm ci` reproduce the checked-in
+browser distribution. Its `LICENSE` and `THIRD_PARTY_LICENSES.txt` files are
+part of the immutable distribution and must remain in wheel and frozen
 application outputs.
 
 Keep Harbor-specific adapters at the pinned public `0.21.0` seams under

@@ -17,10 +17,12 @@ git diff --check
 
 Pytest covers Harbor integration and all `peval` CLI behavior in one collection.
 Node `check` runs type checking, browser-module tests against the authored ESM
-graph, a byte-for-byte check of the vendored `pretty-aui` distribution,
-including its consolidated third-party license file, and the Chromium visual
-and browser behavior gate. Live OpenCode ACP coverage remains an explicit
-opt-in:
+graph, a byte-for-byte check of the vendored `pretty-aui` distribution from the
+lockfile-pinned local archive, including its consolidated third-party license
+file, and the Chromium visual and browser behavior gate. Deterministic browser
+fixtures bind an ephemeral loopback port and expose that origin to their tests;
+they do not reserve a repository-wide host port. Live OpenCode ACP coverage
+remains an explicit opt-in:
 
 ```console
 PEVAL_LIVE_OPENCODE=1 npm run test:e2e -- web/e2e/acp-live.spec.mjs
