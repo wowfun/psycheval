@@ -1,5 +1,5 @@
 globalThis.__zod_globalConfig ??= {}, globalThis.__zod_globalConfig.jitless = !0;
-import { A as e, B as t, D as n, E as r, F as i, H as a, I as o, L as s, M as c, N as l, O as u, P as d, R as f, T as p, V as m, W as h, a as ee, b as te, d as ne, f as re, h as ie, i as ae, j as g, k as _, l as oe, o as se, p as ce, r as le, s as ue, t as de, v as fe, x as v, y, z as b } from "./types.js";
+import { A as e, B as t, D as n, E as r, F as i, H as a, I as o, K as s, L as c, M as l, N as u, O as d, P as f, R as p, T as m, V as h, a as ee, b as te, d as ne, f as re, h as ie, i as ae, j as g, k as _, l as oe, o as se, p as ce, r as le, s as ue, t as de, v as fe, x as v, y, z as b } from "./types.js";
 //#region node_modules/.pnpm/@agentclientprotocol+sdk@1.4.0_zod@4.4.3/node_modules/@agentclientprotocol/sdk/dist/v2/schema/index.js
 var x = {
 	initialize: "initialize",
@@ -36,89 +36,89 @@ var x = {
 	mcp_disconnect: "mcp/disconnect",
 	elicitation_create: "elicitation/create",
 	elicitation_complete: "elicitation/complete"
-}, C = { cancel_request: "$/cancel_request" }, w = b([i(), f()]).nullable(), T = f(), E = f(), pe = b([
-	d("read"),
-	d("edit"),
-	d("delete"),
-	d("move"),
-	d("search"),
-	d("execute"),
-	d("think"),
-	d("fetch"),
-	d("switch_mode"),
-	d("other"),
-	f()
+}, C = { cancel_request: "$/cancel_request" }, w = b([i(), p()]).nullable(), T = p(), E = p(), pe = b([
+	f("read"),
+	f("edit"),
+	f("delete"),
+	f("move"),
+	f("search"),
+	f("execute"),
+	f("think"),
+	f("fetch"),
+	f("switch_mode"),
+	f("other"),
+	p()
 ]), me = b([
-	d("pending"),
-	d("in_progress"),
-	d("completed"),
-	d("failed"),
-	d("cancelled"),
-	f()
+	f("pending"),
+	f("in_progress"),
+	f("completed"),
+	f("failed"),
+	f("cancelled"),
+	p()
 ]), he = b([
-	d("assistant"),
-	d("user"),
-	f()
+	f("assistant"),
+	f("user"),
+	p()
 ]), D = o({
-	audience: p(_(he).nullish(), () => void 0),
-	lastModified: p(a({ offset: !0 }).nullish(), () => void 0),
-	priority: p(i().gte(0).lte(1).nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	audience: m(_(he).nullish(), () => void 0),
+	lastModified: m(a({ offset: !0 }).nullish(), () => void 0),
+	priority: m(i().gte(0).lte(1).nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ge = o({
-	text: f(),
-	annotations: p(D.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), O = f(), _e = o({
-	data: f(),
+	text: p(),
+	annotations: m(D.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), O = p(), _e = o({
+	data: p(),
 	mimeType: O,
-	uri: p(m().nullish(), () => void 0),
-	annotations: p(D.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	uri: m(h().nullish(), () => void 0),
+	annotations: m(D.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ve = o({
-	data: f(),
+	data: p(),
 	mimeType: O,
-	annotations: p(D.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	annotations: m(D.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ye = b([
-	d("light"),
-	d("dark"),
-	f()
+	f("light"),
+	f("dark"),
+	p()
 ]), be = o({
-	src: m(),
-	mimeType: p(O.nullish(), () => void 0),
-	sizes: p(_(f()).nullish(), () => void 0),
-	theme: p(ye.nullish(), () => void 0)
+	src: h(),
+	mimeType: m(O.nullish(), () => void 0),
+	sizes: m(_(p()).nullish(), () => void 0),
+	theme: m(ye.nullish(), () => void 0)
 }), xe = o({
-	name: f(),
-	uri: m(),
-	title: p(f().nullish(), () => void 0),
-	description: p(f().nullish(), () => void 0),
-	icons: p(_(be).nullish(), () => void 0),
-	mimeType: p(O.nullish(), () => void 0),
-	size: p(i().nullish(), () => void 0),
-	annotations: p(D.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	name: p(),
+	uri: h(),
+	title: m(p().nullish(), () => void 0),
+	description: m(p().nullish(), () => void 0),
+	icons: m(_(be).nullish(), () => void 0),
+	mimeType: m(O.nullish(), () => void 0),
+	size: m(i().nullish(), () => void 0),
+	annotations: m(D.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Se = o({
-	text: f(),
-	uri: m(),
-	mimeType: p(O.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	text: p(),
+	uri: h(),
+	mimeType: m(O.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Ce = o({
-	blob: f(),
-	uri: m(),
-	mimeType: p(O.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	blob: p(),
+	uri: h(),
+	mimeType: m(O.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), we = b([Se, Ce]), Te = o({
 	resource: we,
-	annotations: p(D.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	annotations: m(D.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), k = n(b([
-	ge.and(o({ type: d("text") })),
-	_e.and(o({ type: d("image") })),
-	ve.and(o({ type: d("audio") })),
-	xe.and(o({ type: d("resource_link") })),
-	Te.and(o({ type: d("resource") })),
-	r(o({ type: f() }), "type", [
+	ge.and(o({ type: f("text") })),
+	_e.and(o({ type: f("image") })),
+	ve.and(o({ type: f("audio") })),
+	xe.and(o({ type: f("resource_link") })),
+	Te.and(o({ type: f("resource") })),
+	r(o({ type: p() }), "type", [
 		"audio",
 		"image",
 		"resource",
@@ -133,23 +133,23 @@ var x = {
 	"text"
 ]), Ee = o({
 	content: k,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), De = b([
-	d("text"),
-	d("binary"),
-	d("directory"),
-	d("symlink"),
-	f()
-]), A = f(), j = o({ path: A }), M = o({
+	f("text"),
+	f("binary"),
+	f("directory"),
+	f("symlink"),
+	p()
+]), A = p(), j = o({ path: A }), M = o({
 	oldPath: A,
 	path: A
-}), Oe = n(l(b([
-	j.and(o({ operation: d("add") })),
-	j.and(o({ operation: d("delete") })),
-	j.and(o({ operation: d("modify") })),
-	M.and(o({ operation: d("move") })),
-	M.and(o({ operation: d("copy") })),
-	r(o({ operation: f() }), "operation", [
+}), Oe = n(u(b([
+	j.and(o({ operation: f("add") })),
+	j.and(o({ operation: f("delete") })),
+	j.and(o({ operation: f("modify") })),
+	M.and(o({ operation: f("move") })),
+	M.and(o({ operation: f("copy") })),
+	r(o({ operation: p() }), "operation", [
 		"add",
 		"copy",
 		"delete",
@@ -157,30 +157,30 @@ var x = {
 		"move"
 	])
 ]), o({
-	fileType: p(De.nullish(), () => void 0),
-	mimeType: p(O.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	fileType: m(De.nullish(), () => void 0),
+	mimeType: m(O.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 })), "operation", [
 	"add",
 	"copy",
 	"delete",
 	"modify",
 	"move"
-]), ke = b([d("git_patch"), f()]), Ae = o({
+]), ke = b([f("git_patch"), p()]), Ae = o({
 	format: ke,
-	text: f()
+	text: p()
 }), je = o({
 	changes: _(Oe),
-	patch: p(Ae.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), N = f(), Me = o({
+	patch: m(Ae.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), N = p(), Me = o({
 	terminalId: N,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Ne = n(b([
-	Ee.and(o({ type: d("content") })),
-	je.and(o({ type: d("diff") })),
-	Me.and(o({ type: d("terminal") })),
-	r(o({ type: f() }), "type", [
+	Ee.and(o({ type: f("content") })),
+	je.and(o({ type: f("diff") })),
+	Me.and(o({ type: f("terminal") })),
+	r(o({ type: p() }), "type", [
 		"content",
 		"diff",
 		"terminal"
@@ -191,116 +191,116 @@ var x = {
 	"terminal"
 ]), Pe = o({
 	path: A,
-	line: p(c().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	line: m(l().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Fe = o({
 	toolCallId: E,
-	name: p(f().nullish(), () => void 0),
-	title: p(f().nullish(), () => void 0),
-	kind: p(pe.nullish(), () => void 0),
-	status: p(me.nullish(), () => void 0),
-	content: p(_(Ne).nullish(), () => void 0),
-	locations: p(_(Pe).nullish(), () => void 0),
-	rawInput: p(t().optional(), () => void 0),
-	rawOutput: p(t().optional(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	name: m(p().nullish(), () => void 0),
+	title: m(p().nullish(), () => void 0),
+	kind: m(pe.nullish(), () => void 0),
+	status: m(me.nullish(), () => void 0),
+	content: m(_(Ne).nullish(), () => void 0),
+	locations: m(_(Pe).nullish(), () => void 0),
+	rawInput: m(t().optional(), () => void 0),
+	rawOutput: m(t().optional(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Ie = o({ toolCall: Fe }), Le = o({
-	command: f(),
+	command: p(),
 	cwd: A,
-	toolCallId: p(E.nullish(), () => void 0),
-	terminalId: p(N.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	toolCallId: m(E.nullish(), () => void 0),
+	terminalId: m(N.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Re = n(b([
-	Ie.and(o({ type: d("tool_call") })),
-	Le.and(o({ type: d("command") })),
-	r(o({ type: f() }), "type", ["command", "tool_call"])
-]), "type", ["command", "tool_call"]), ze = f(), Be = b([
-	d("allow_once"),
-	d("allow_always"),
-	d("reject_once"),
-	d("reject_always"),
-	f()
+	Ie.and(o({ type: f("tool_call") })),
+	Le.and(o({ type: f("command") })),
+	r(o({ type: p() }), "type", ["command", "tool_call"])
+]), "type", ["command", "tool_call"]), ze = p(), Be = b([
+	f("allow_once"),
+	f("allow_always"),
+	f("reject_once"),
+	f("reject_always"),
+	p()
 ]), Ve = o({
 	optionId: ze,
-	name: f(),
+	name: p(),
 	kind: Be,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), He = o({
 	sessionId: T,
-	title: f(),
-	description: p(f().nullish(), () => void 0),
+	title: p(),
+	description: m(p().nullish(), () => void 0),
 	subject: Re.nullish(),
 	options: e(Ve).min(1),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Ue = o({
 	sessionId: T,
-	toolCallId: p(E.nullish(), () => void 0)
-}), We = o({ requestId: w }), Ge = d("object"), Ke = b([
-	d("email"),
-	d("uri"),
-	d("date"),
-	d("date-time"),
-	f()
+	toolCallId: m(E.nullish(), () => void 0)
+}), We = o({ requestId: w }), Ge = f("object"), Ke = b([
+	f("email"),
+	f("uri"),
+	f("date"),
+	f("date-time"),
+	p()
 ]), qe = o({
-	const: f(),
-	title: f(),
-	description: p(f().nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	const: p(),
+	title: p(),
+	description: m(p().nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Je = o({
-	title: p(f().nullish(), () => void 0),
-	description: p(f().nullish(), () => void 0),
-	minLength: c().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(),
-	maxLength: c().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(),
-	pattern: f().nullish(),
+	title: m(p().nullish(), () => void 0),
+	description: m(p().nullish(), () => void 0),
+	minLength: l().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(),
+	maxLength: l().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(),
+	pattern: p().nullish(),
 	format: Ke.nullish(),
-	default: p(f().nullish(), () => void 0),
-	enum: e(f()).min(1).nullish(),
+	default: m(p().nullish(), () => void 0),
+	enum: e(p()).min(1).nullish(),
 	oneOf: e(qe).min(1).nullish(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Ye = o({
-	title: p(f().nullish(), () => void 0),
-	description: p(f().nullish(), () => void 0),
+	title: m(p().nullish(), () => void 0),
+	description: m(p().nullish(), () => void 0),
 	minimum: i().nullish(),
 	maximum: i().nullish(),
-	default: p(i().nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	default: m(i().nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Xe = o({
-	title: p(f().nullish(), () => void 0),
-	description: p(f().nullish(), () => void 0),
+	title: m(p().nullish(), () => void 0),
+	description: m(p().nullish(), () => void 0),
 	minimum: i().nullish(),
 	maximum: i().nullish(),
-	default: p(i().nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	default: m(i().nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Ze = o({
-	title: p(f().nullish(), () => void 0),
-	description: p(f().nullish(), () => void 0),
-	default: p(g().nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	title: m(p().nullish(), () => void 0),
+	description: m(p().nullish(), () => void 0),
+	default: m(g().nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Qe = o({
-	enum: e(f()).min(1),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	enum: e(p()).min(1),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), $e = o({
 	anyOf: e(qe).min(1),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), et = n(b([
-	Qe.and(o({ type: d("string") })),
-	r(o({ type: f() }), "type", ["string"]),
+	Qe.and(o({ type: f("string") })),
+	r(o({ type: p() }), "type", ["string"]),
 	$e
 ]), "type", ["string"]), tt = o({
-	title: p(f().nullish(), () => void 0),
-	description: p(f().nullish(), () => void 0),
+	title: m(p().nullish(), () => void 0),
+	description: m(p().nullish(), () => void 0),
 	minItems: i().nullish(),
 	maxItems: i().nullish(),
 	items: et,
-	default: p(_(f()).nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	default: m(_(p()).nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), nt = n(b([
-	Je.and(o({ type: d("string") })),
-	Ye.and(o({ type: d("number") })),
-	Xe.and(o({ type: d("integer") })),
-	Ze.and(o({ type: d("boolean") })),
-	tt.and(o({ type: d("array") })),
-	r(o({ type: f() }), "type", [
+	Je.and(o({ type: f("string") })),
+	Ye.and(o({ type: f("number") })),
+	Xe.and(o({ type: f("integer") })),
+	Ze.and(o({ type: f("boolean") })),
+	tt.and(o({ type: f("array") })),
+	r(o({ type: p() }), "type", [
 		"array",
 		"boolean",
 		"integer",
@@ -314,37 +314,37 @@ var x = {
 	"number",
 	"string"
 ]), rt = o({
-	type: p(Ge.optional().default("object"), () => "object"),
-	title: p(f().nullish(), () => void 0),
-	properties: s(f(), nt).optional().default({}),
-	required: e(f()).nullish(),
-	description: p(f().nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), it = l(b([Ue, We]), o({ requestedSchema: rt })), at = f(), ot = l(b([Ue, We]), o({
+	type: m(Ge.optional().default("object"), () => "object"),
+	title: m(p().nullish(), () => void 0),
+	properties: c(p(), nt).optional().default({}),
+	required: e(p()).nullish(),
+	description: m(p().nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), it = u(b([Ue, We]), o({ requestedSchema: rt })), at = p(), ot = u(b([Ue, We]), o({
 	elicitationId: at,
-	url: m()
-})), st = n(l(b([
-	it.and(o({ mode: d("form") })),
-	ot.and(o({ mode: d("url") })),
-	r(l(b([Ue, We]), o({ mode: f() })), "mode", ["form", "url"])
+	url: h()
+})), st = n(u(b([
+	it.and(o({ mode: f("form") })),
+	ot.and(o({ mode: f("url") })),
+	r(u(b([Ue, We]), o({ mode: p() })), "mode", ["form", "url"])
 ]), o({
-	message: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-})), "mode", ["form", "url"]), ct = f(), lt = o({
+	message: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+})), "mode", ["form", "url"]), ct = p(), lt = o({
 	serverId: ct,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), ut = f(), dt = o({
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), ut = p(), dt = o({
 	connectionId: ut,
-	method: f(),
-	params: s(f(), t()).nullish(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	method: p(),
+	params: c(p(), t()).nullish(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ft = o({
 	connectionId: ut,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), pt = t();
 o({
 	id: w,
-	method: f(),
+	method: p(),
 	params: b([
 		He,
 		st,
@@ -354,225 +354,225 @@ o({
 		pt
 	]).nullish()
 });
-var mt = c().gte(0).lte(65535), ht = o({
-	name: f(),
-	title: p(f().nullish(), () => void 0),
-	version: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), gt = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), _t = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), vt = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), yt = o({
-	image: p(gt.nullish(), () => void 0),
-	audio: p(_t.nullish(), () => void 0),
-	embeddedContext: p(vt.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), bt = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), xt = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), St = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Ct = o({
-	stdio: p(bt.nullish(), () => void 0),
-	http: p(xt.nullish(), () => void 0),
-	acp: p(St.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), wt = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Tt = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Et = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Dt = o({
-	prompt: p(yt.nullish(), () => void 0),
-	mcp: p(Ct.nullish(), () => void 0),
-	delete: p(wt.nullish(), () => void 0),
-	additionalDirectories: p(Tt.nullish(), () => void 0),
-	fork: p(Et.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), Ot = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), kt = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), At = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), jt = b([d("full"), d("incremental")]), Mt = o({
+var mt = l().gte(0).lte(65535), ht = o({
+	name: p(),
+	title: m(p().nullish(), () => void 0),
+	version: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), gt = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), _t = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), vt = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), yt = o({
+	image: m(gt.nullish(), () => void 0),
+	audio: m(_t.nullish(), () => void 0),
+	embeddedContext: m(vt.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), bt = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), xt = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), St = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Ct = o({
+	stdio: m(bt.nullish(), () => void 0),
+	http: m(xt.nullish(), () => void 0),
+	acp: m(St.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), wt = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Tt = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Et = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Dt = o({
+	prompt: m(yt.nullish(), () => void 0),
+	mcp: m(Ct.nullish(), () => void 0),
+	delete: m(wt.nullish(), () => void 0),
+	additionalDirectories: m(Tt.nullish(), () => void 0),
+	fork: m(Et.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), Ot = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), kt = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), At = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), jt = b([f("full"), f("incremental")]), Mt = o({
 	syncKind: jt,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), Nt = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Pt = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Ft = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), It = o({
-	didOpen: p(At.nullish(), () => void 0),
-	didChange: p(Mt.nullish(), () => void 0),
-	didClose: p(Nt.nullish(), () => void 0),
-	didSave: p(Pt.nullish(), () => void 0),
-	didFocus: p(Ft.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), Nt = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Pt = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Ft = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), It = o({
+	didOpen: m(At.nullish(), () => void 0),
+	didChange: m(Mt.nullish(), () => void 0),
+	didClose: m(Nt.nullish(), () => void 0),
+	didSave: m(Pt.nullish(), () => void 0),
+	didFocus: m(Ft.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Lt = o({
-	document: p(It.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	document: m(It.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Rt = o({
-	maxCount: p(c().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), zt = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Bt = o({
-	maxCount: p(c().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	maxCount: m(l().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), zt = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Bt = o({
+	maxCount: m(l().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Vt = o({
-	maxCount: p(c().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), Ht = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Ut = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Wt = o({
-	recentFiles: p(Rt.nullish(), () => void 0),
-	relatedSnippets: p(zt.nullish(), () => void 0),
-	editHistory: p(Bt.nullish(), () => void 0),
-	userActions: p(Vt.nullish(), () => void 0),
-	openFiles: p(Ht.nullish(), () => void 0),
-	diagnostics: p(Ut.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	maxCount: m(l().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), Ht = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Ut = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Wt = o({
+	recentFiles: m(Rt.nullish(), () => void 0),
+	relatedSnippets: m(zt.nullish(), () => void 0),
+	editHistory: m(Bt.nullish(), () => void 0),
+	userActions: m(Vt.nullish(), () => void 0),
+	openFiles: m(Ht.nullish(), () => void 0),
+	diagnostics: m(Ut.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Gt = o({
-	events: p(Lt.nullish(), () => void 0),
-	context: p(Wt.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	events: m(Lt.nullish(), () => void 0),
+	context: m(Wt.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Kt = b([
-	d("utf-16"),
-	d("utf-32"),
-	d("utf-8")
+	f("utf-16"),
+	f("utf-32"),
+	f("utf-8")
 ]), qt = o({
-	session: p(Dt.nullish(), () => void 0),
-	auth: p(Ot.nullish(), () => void 0),
-	providers: p(kt.nullish(), () => void 0),
-	nes: p(Gt.nullish(), () => void 0),
-	positionEncoding: p(Kt.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), P = f(), Jt = o({
-	name: f(),
-	value: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	session: m(Dt.nullish(), () => void 0),
+	auth: m(Ot.nullish(), () => void 0),
+	providers: m(kt.nullish(), () => void 0),
+	nes: m(Gt.nullish(), () => void 0),
+	positionEncoding: m(Kt.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), P = p(), Jt = o({
+	name: p(),
+	value: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Yt = o({
 	methodId: P,
-	name: f(),
-	description: p(f().nullish(), () => void 0),
-	args: p(_(f()).optional(), () => []),
-	env: p(_(Jt).optional(), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	name: p(),
+	description: m(p().nullish(), () => void 0),
+	args: m(_(p()).optional(), () => []),
+	env: m(_(Jt).optional(), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Xt = o({
 	methodId: P,
-	name: f(),
-	description: p(f().nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	name: p(),
+	description: m(p().nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Zt = n(b([
-	Yt.and(o({ type: d("terminal") })),
-	Xt.and(o({ type: d("agent") })),
+	Yt.and(o({ type: f("terminal") })),
+	Xt.and(o({ type: f("agent") })),
 	r(o({
-		type: f(),
+		type: p(),
 		methodId: P,
-		name: f(),
-		description: p(f().nullish(), () => void 0),
-		_meta: p(s(f(), t()).nullish(), () => void 0)
+		name: p(),
+		description: m(p().nullish(), () => void 0),
+		_meta: m(c(p(), t()).nullish(), () => void 0)
 	}), "type", ["agent", "terminal"])
 ]), "type", ["agent", "terminal"]), Qt = o({
 	protocolVersion: mt,
 	info: ht,
-	capabilities: p(qt.optional().default({}), () => ({})),
-	authMethods: p(_(Zt).optional(), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), $t = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), en = f(), tn = b([
-	d("anthropic"),
-	d("openai"),
-	d("azure"),
-	d("vertex"),
-	d("bedrock"),
-	f()
+	capabilities: m(qt.optional().default({}), () => ({})),
+	authMethods: m(_(Zt).optional(), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), $t = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), en = p(), tn = b([
+	f("anthropic"),
+	f("openai"),
+	f("azure"),
+	f("vertex"),
+	f("bedrock"),
+	p()
 ]), nn = o({
 	apiType: tn,
-	baseUrl: m(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	baseUrl: h(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), rn = o({
 	providerId: en,
-	supported: u(_(tn), () => []),
+	supported: d(_(tn), () => []),
 	required: g(),
 	current: nn.nullish(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), an = o({
 	providers: e(rn),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), on = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), sn = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), cn = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), F = f(), ln = b([
-	d("mode"),
-	d("model"),
-	d("model_config"),
-	d("thought_level"),
-	f()
-]), I = f(), un = o({
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), on = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), sn = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), cn = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), F = p(), ln = b([
+	f("mode"),
+	f("model"),
+	f("model_config"),
+	f("thought_level"),
+	p()
+]), I = p(), un = o({
 	value: I,
-	name: f(),
-	description: p(f().nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), dn = f(), fn = o({
+	name: p(),
+	description: m(p().nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), dn = p(), fn = o({
 	groupId: dn,
-	name: f(),
-	options: u(_(un), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	name: p(),
+	options: d(_(un), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), pn = b([e(un), e(fn)]), mn = o({
 	currentValue: I,
 	options: pn
-}), hn = o({ currentValue: g() }), L = n(l(b([
-	mn.and(o({ type: d("select") })),
-	hn.and(o({ type: d("boolean") })),
-	r(o({ type: f() }), "type", ["boolean", "select"])
+}), hn = o({ currentValue: g() }), L = n(u(b([
+	mn.and(o({ type: f("select") })),
+	hn.and(o({ type: f("boolean") })),
+	r(o({ type: p() }), "type", ["boolean", "select"])
 ]), o({
 	configId: F,
-	name: f(),
-	description: p(f().nullish(), () => void 0),
-	category: p(ln.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	name: p(),
+	description: m(p().nullish(), () => void 0),
+	category: m(ln.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 })), "type", ["boolean", "select"]), gn = o({
 	sessionId: T,
-	configOptions: p(_(L).optional(), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	configOptions: m(_(L).optional(), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), _n = o({
 	sessionId: T,
 	cwd: A,
-	additionalDirectories: p(_(A).optional(), () => []),
-	title: p(f().nullish(), () => void 0),
-	updatedAt: p(a({ offset: !0 }).nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), vn = f(), yn = o({
-	sessions: u(_(_n), () => []),
-	nextCursor: p(vn.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), bn = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), xn = o({
+	additionalDirectories: m(_(A).optional(), () => []),
+	title: m(p().nullish(), () => void 0),
+	updatedAt: m(a({ offset: !0 }).nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), vn = p(), yn = o({
+	sessions: d(_(_n), () => []),
+	nextCursor: m(vn.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), bn = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), xn = o({
 	sessionId: T,
-	configOptions: p(_(L).optional(), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	configOptions: m(_(L).optional(), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Sn = o({
-	configOptions: p(_(L).optional(), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), Cn = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), wn = o({
-	configOptions: u(_(L), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), Tn = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), En = o({
+	configOptions: m(_(L).optional(), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), Cn = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), wn = o({
+	configOptions: d(_(L), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), Tn = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), En = o({
 	sessionId: T,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), R = f(), z = o({
-	line: c().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }),
-	character: c().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), R = p(), z = o({
+	line: l().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }),
+	character: l().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), B = o({
 	start: z,
 	end: z,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Dn = o({
 	range: B,
-	newText: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	newText: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), On = o({
 	suggestionId: R,
-	uri: m(),
+	uri: h(),
 	edits: e(Dn).min(1),
-	cursorPosition: p(z.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	cursorPosition: m(z.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), kn = o({
 	suggestionId: R,
-	uri: m(),
+	uri: h(),
 	position: z,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), An = o({
 	suggestionId: R,
-	uri: m(),
+	uri: h(),
 	position: z,
-	newName: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	newName: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), jn = o({
 	suggestionId: R,
-	uri: m(),
-	search: f(),
-	replace: f(),
+	uri: h(),
+	search: p(),
+	replace: p(),
 	isRegex: g().nullish(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Mn = n(b([
-	On.and(o({ kind: d("edit") })),
-	kn.and(o({ kind: d("jump") })),
-	An.and(o({ kind: d("rename") })),
-	jn.and(o({ kind: d("searchAndReplace") })),
+	On.and(o({ kind: f("edit") })),
+	kn.and(o({ kind: f("jump") })),
+	An.and(o({ kind: f("rename") })),
+	jn.and(o({ kind: f("searchAndReplace") })),
 	r(o({
-		kind: f(),
+		kind: p(),
 		suggestionId: R
 	}), "kind", [
 		"edit",
@@ -587,21 +587,21 @@ var mt = c().gte(0).lte(65535), ht = o({
 	"searchAndReplace"
 ]), Nn = o({
 	suggestions: e(Mn),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), Pn = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Fn = t(), V = t(), In = b([
-	d(-32700),
-	d(-32600),
-	d(-32601),
-	d(-32602),
-	d(-32603),
-	d(-32800),
-	d(-32e3),
-	d(-32002),
-	c().min(-2147483648, { error: "Invalid value: Expected int32 to be >= -2147483648" }).max(2147483647, { error: "Invalid value: Expected int32 to be <= 2147483647" })
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), Pn = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Fn = t(), V = t(), In = b([
+	f(-32700),
+	f(-32600),
+	f(-32601),
+	f(-32602),
+	f(-32603),
+	f(-32800),
+	f(-32e3),
+	f(-32002),
+	l().min(-2147483648, { error: "Invalid value: Expected int32 to be >= -2147483648" }).max(2147483647, { error: "Invalid value: Expected int32 to be <= 2147483647" })
 ]), Ln = o({
 	code: In,
-	message: f(),
-	data: p(t().optional(), () => void 0)
+	message: p(),
+	data: m(t().optional(), () => void 0)
 });
 b([o({
 	id: w,
@@ -630,46 +630,46 @@ b([o({
 	id: w,
 	error: Ln
 })]);
-var H = f(), U = o({
+var H = p(), U = o({
 	messageId: H,
 	content: k,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Rn = o({
 	messageId: H,
-	content: p(_(k).nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	content: m(_(k).nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), zn = o({
 	messageId: H,
-	content: p(_(k).nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	content: m(_(k).nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Bn = o({
 	messageId: H,
-	content: p(_(k).nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), Vn = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Hn = b([
-	d("end_turn"),
-	d("max_tokens"),
-	d("max_turn_requests"),
-	d("refusal"),
-	d("cancelled"),
-	f()
+	content: m(_(k).nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), Vn = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Hn = b([
+	f("end_turn"),
+	f("max_tokens"),
+	f("max_turn_requests"),
+	f("refusal"),
+	f("cancelled"),
+	p()
 ]), Un = o({
 	totalTokens: i(),
 	inputTokens: i(),
 	outputTokens: i(),
-	thoughtTokens: p(i().nullish(), () => void 0),
-	cachedReadTokens: p(i().nullish(), () => void 0),
-	cachedWriteTokens: p(i().nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	thoughtTokens: m(i().nullish(), () => void 0),
+	cachedReadTokens: m(i().nullish(), () => void 0),
+	cachedWriteTokens: m(i().nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Wn = o({
-	stopReason: p(Hn.nullish(), () => void 0),
-	usage: p(Un.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), Gn = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Kn = n(b([
-	Vn.and(o({ state: d("running") })),
-	Wn.and(o({ state: d("idle") })),
-	Gn.and(o({ state: d("requires_action") })),
-	r(o({ state: f() }), "state", [
+	stopReason: m(Hn.nullish(), () => void 0),
+	usage: m(Un.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), Gn = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Kn = n(b([
+	Vn.and(o({ state: f("running") })),
+	Wn.and(o({ state: f("idle") })),
+	Gn.and(o({ state: f("requires_action") })),
+	r(o({ state: p() }), "state", [
 		"idle",
 		"requires_action",
 		"running"
@@ -681,59 +681,59 @@ var H = f(), U = o({
 ]), qn = o({
 	toolCallId: E,
 	content: Ne,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Jn = o({
-	data: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	data: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Yn = o({
-	exitCode: p(c().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(), () => void 0),
-	signal: p(f().nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	exitCode: m(l().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }).nullish(), () => void 0),
+	signal: m(p().nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Xn = o({
 	terminalId: N,
-	command: p(f().nullish(), () => void 0),
-	cwd: p(A.nullish(), () => void 0),
-	output: p(Jn.nullish(), () => void 0),
-	exitStatus: p(Yn.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	command: m(p().nullish(), () => void 0),
+	cwd: m(A.nullish(), () => void 0),
+	output: m(Jn.nullish(), () => void 0),
+	exitStatus: m(Yn.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Zn = o({
 	terminalId: N,
-	data: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), W = f(), Qn = b([
-	d("high"),
-	d("medium"),
-	d("low"),
-	f()
+	data: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), W = p(), Qn = b([
+	f("high"),
+	f("medium"),
+	f("low"),
+	p()
 ]), $n = b([
-	d("pending"),
-	d("in_progress"),
-	d("completed"),
-	d("cancelled"),
-	f()
+	f("pending"),
+	f("in_progress"),
+	f("completed"),
+	f("cancelled"),
+	p()
 ]), er = o({
-	content: f(),
+	content: p(),
 	priority: Qn,
 	status: $n,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), tr = o({
 	planId: W,
-	entries: u(_(er), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	entries: d(_(er), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), nr = o({
 	planId: W,
-	uri: m(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	uri: h(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), rr = o({
 	planId: W,
-	content: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	content: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ir = n(b([
-	tr.and(o({ type: d("items") })),
-	nr.and(o({ type: d("file") })),
-	rr.and(o({ type: d("markdown") })),
+	tr.and(o({ type: f("items") })),
+	nr.and(o({ type: f("file") })),
+	rr.and(o({ type: f("markdown") })),
 	r(o({
-		type: f(),
+		type: p(),
 		planId: W
 	}), "type", [
 		"file",
@@ -746,74 +746,74 @@ var H = f(), U = o({
 	"markdown"
 ]), ar = o({
 	plan: ir,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), or = o({
 	planId: W,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), sr = o({
-	hint: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), cr = n(b([sr.and(o({ type: d("text") })), r(o({ type: f() }), "type", ["text"])]), "type", ["text"]), lr = o({
-	name: f(),
-	description: f(),
-	input: p(cr.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	hint: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), cr = n(b([sr.and(o({ type: f("text") })), r(o({ type: p() }), "type", ["text"])]), "type", ["text"]), lr = o({
+	name: p(),
+	description: p(),
+	input: m(cr.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ur = o({
-	availableCommands: u(_(lr), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	availableCommands: d(_(lr), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), dr = o({
-	configOptions: u(_(L), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	configOptions: d(_(L), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), fr = o({
-	title: p(f().nullish(), () => void 0),
-	updatedAt: p(a({ offset: !0 }).nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	title: m(p().nullish(), () => void 0),
+	updatedAt: m(a({ offset: !0 }).nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), pr = o({
 	amount: i(),
-	currency: f().regex(/^[A-Z]{3}$/),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	currency: p().regex(/^[A-Z]{3}$/),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), mr = o({
 	used: i(),
 	size: i(),
-	cost: p(pr.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), hr = f(), gr = b([
-	d("in_progress"),
-	d("completed"),
-	d("failed"),
-	d("cancelled"),
-	f()
+	cost: m(pr.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), hr = p(), gr = b([
+	f("in_progress"),
+	f("completed"),
+	f("failed"),
+	f("cancelled"),
+	p()
 ]), _r = o({
 	compactionId: hr,
 	status: gr,
-	summary: p(_(k).nullish(), () => void 0),
-	error: p(f().nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	summary: m(_(k).nullish(), () => void 0),
+	error: m(p().nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), vr = o({
 	compactionId: hr,
 	content: k,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), yr = n(b([
-	U.and(o({ sessionUpdate: d("user_message_chunk") })),
-	Rn.and(o({ sessionUpdate: d("user_message") })),
-	U.and(o({ sessionUpdate: d("agent_message_chunk") })),
-	zn.and(o({ sessionUpdate: d("agent_message") })),
-	U.and(o({ sessionUpdate: d("agent_thought_chunk") })),
-	Bn.and(o({ sessionUpdate: d("agent_thought") })),
-	Kn.and(o({ sessionUpdate: d("state_update") })),
-	qn.and(o({ sessionUpdate: d("tool_call_content_chunk") })),
-	Fe.and(o({ sessionUpdate: d("tool_call_update") })),
-	Xn.and(o({ sessionUpdate: d("terminal_update") })),
-	Zn.and(o({ sessionUpdate: d("terminal_output_chunk") })),
-	ar.and(o({ sessionUpdate: d("plan_update") })),
-	or.and(o({ sessionUpdate: d("plan_removed") })),
-	ur.and(o({ sessionUpdate: d("available_commands_update") })),
-	dr.and(o({ sessionUpdate: d("config_option_update") })),
-	fr.and(o({ sessionUpdate: d("session_info_update") })),
-	mr.and(o({ sessionUpdate: d("usage_update") })),
-	_r.and(o({ sessionUpdate: d("compaction_update") })),
-	vr.and(o({ sessionUpdate: d("compaction_summary_chunk") })),
-	r(o({ sessionUpdate: f() }), "sessionUpdate", [
+	U.and(o({ sessionUpdate: f("user_message_chunk") })),
+	Rn.and(o({ sessionUpdate: f("user_message") })),
+	U.and(o({ sessionUpdate: f("agent_message_chunk") })),
+	zn.and(o({ sessionUpdate: f("agent_message") })),
+	U.and(o({ sessionUpdate: f("agent_thought_chunk") })),
+	Bn.and(o({ sessionUpdate: f("agent_thought") })),
+	Kn.and(o({ sessionUpdate: f("state_update") })),
+	qn.and(o({ sessionUpdate: f("tool_call_content_chunk") })),
+	Fe.and(o({ sessionUpdate: f("tool_call_update") })),
+	Xn.and(o({ sessionUpdate: f("terminal_update") })),
+	Zn.and(o({ sessionUpdate: f("terminal_output_chunk") })),
+	ar.and(o({ sessionUpdate: f("plan_update") })),
+	or.and(o({ sessionUpdate: f("plan_removed") })),
+	ur.and(o({ sessionUpdate: f("available_commands_update") })),
+	dr.and(o({ sessionUpdate: f("config_option_update") })),
+	fr.and(o({ sessionUpdate: f("session_info_update") })),
+	mr.and(o({ sessionUpdate: f("usage_update") })),
+	_r.and(o({ sessionUpdate: f("compaction_update") })),
+	vr.and(o({ sessionUpdate: f("compaction_summary_chunk") })),
+	r(o({ sessionUpdate: p() }), "sessionUpdate", [
 		"agent_message",
 		"agent_message_chunk",
 		"agent_thought",
@@ -857,18 +857,18 @@ var H = f(), U = o({
 ]), br = o({
 	sessionId: T,
 	update: yr,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), xr = o({
 	elicitationId: at,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Sr = o({
 	connectionId: ut,
-	method: f(),
-	params: p(s(f(), t()).nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	method: p(),
+	params: m(c(p(), t()).nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Cr = t();
 o({
-	method: f(),
+	method: p(),
 	params: b([
 		br,
 		xr,
@@ -876,65 +876,65 @@ o({
 		Cr
 	]).nullish()
 });
-var wr = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Tr = o({
-	terminal: p(wr.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), Er = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Dr = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Or = o({
-	form: p(Er.nullish(), () => void 0),
-	url: p(Dr.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), kr = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Ar = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), jr = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Mr = o({
-	jump: p(kr.nullish(), () => void 0),
-	rename: p(Ar.nullish(), () => void 0),
-	searchAndReplace: p(jr.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+var wr = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Tr = o({
+	terminal: m(wr.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), Er = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Dr = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Or = o({
+	form: m(Er.nullish(), () => void 0),
+	url: m(Dr.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), kr = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Ar = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), jr = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Mr = o({
+	jump: m(kr.nullish(), () => void 0),
+	rename: m(Ar.nullish(), () => void 0),
+	searchAndReplace: m(jr.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Nr = o({
-	auth: p(Tr.nullish(), () => void 0),
-	elicitation: p(Or.nullish(), () => void 0),
-	nes: p(Mr.nullish(), () => void 0),
-	positionEncodings: p(_(Kt).optional(), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	auth: m(Tr.nullish(), () => void 0),
+	elicitation: m(Or.nullish(), () => void 0),
+	nes: m(Mr.nullish(), () => void 0),
+	positionEncodings: m(_(Kt).optional(), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Pr = o({
 	protocolVersion: mt,
 	info: ht,
-	capabilities: p(Nr.optional().default({}), () => ({})),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	capabilities: m(Nr.optional().default({}), () => ({})),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Fr = o({
 	methodId: P,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), Ir = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Lr = o({
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), Ir = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Lr = o({
 	providerId: en,
 	apiType: tn,
-	baseUrl: m(),
-	headers: s(f(), f()).optional(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	baseUrl: h(),
+	headers: c(p(), p()).optional(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Rr = o({
 	providerId: en,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), zr = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Br = o({
-	name: f(),
-	value: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), zr = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Br = o({
+	name: p(),
+	value: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Vr = o({
-	name: f(),
-	url: m(),
+	name: p(),
+	url: h(),
 	headers: e(Br).optional(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Hr = o({
-	name: f(),
+	name: p(),
 	serverId: ct,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Ur = o({
-	name: f(),
+	name: p(),
 	command: A,
-	args: e(f()).optional(),
+	args: e(p()).optional(),
 	env: e(Jt).optional(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Wr = n(b([
-	Vr.and(o({ type: d("http") })),
-	Hr.and(o({ type: d("acp") })),
-	Ur.and(o({ type: d("stdio") })),
-	r(o({ type: f() }), "type", [
+	Vr.and(o({ type: f("http") })),
+	Hr.and(o({ type: f("acp") })),
+	Ur.and(o({ type: f("stdio") })),
+	r(o({ type: p() }), "type", [
 		"acp",
 		"http",
 		"stdio"
@@ -945,117 +945,117 @@ var wr = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Tr = o({
 	"stdio"
 ]), Gr = o({
 	cwd: A,
-	additionalDirectories: p(_(A).optional(), () => []),
-	mcpServers: p(_(Wr).optional(), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	additionalDirectories: m(_(A).optional(), () => []),
+	mcpServers: m(_(Wr).optional(), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Kr = o({
 	cwd: A.nullish(),
 	cursor: vn.nullish(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), qr = o({
 	sessionId: T,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Jr = o({
 	sessionId: T,
 	cwd: A,
-	additionalDirectories: p(_(A).optional(), () => []),
-	mcpServers: p(_(Wr).optional(), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), Yr = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Xr = n(b([Yr.and(o({ type: d("start") })), r(o({
-	type: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	additionalDirectories: m(_(A).optional(), () => []),
+	mcpServers: m(_(Wr).optional(), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), Yr = o({ _meta: m(c(p(), t()).nullish(), () => void 0) }), Xr = n(b([Yr.and(o({ type: f("start") })), r(o({
+	type: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), "type", ["start"])]), "type", ["start"]), Zr = o({
 	sessionId: T,
 	cwd: A,
-	additionalDirectories: p(_(A).optional(), () => []),
-	mcpServers: p(_(Wr).optional(), () => []),
-	replayFrom: p(Xr.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	additionalDirectories: m(_(A).optional(), () => []),
+	mcpServers: m(_(Wr).optional(), () => []),
+	replayFrom: m(Xr.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Qr = o({
 	sessionId: T,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), $r = n(l(b([
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), $r = n(u(b([
 	o({
 		value: I,
-		type: d("id")
+		type: f("id")
 	}),
 	o({
 		value: g(),
-		type: d("boolean")
+		type: f("boolean")
 	}),
 	r(o({
-		type: f(),
+		type: p(),
 		value: t()
 	}), "type", ["boolean", "id"])
 ]), o({
 	sessionId: T,
 	configId: F,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 })), "type", ["boolean", "id"]), ei = o({
 	sessionId: T,
 	prompt: e(k),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ti = o({
-	uri: m(),
-	name: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	uri: h(),
+	name: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ni = o({
-	name: f(),
-	owner: f(),
-	remoteUrl: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	name: p(),
+	owner: p(),
+	remoteUrl: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ri = o({
-	workspaceUri: p(m().nullish(), () => void 0),
+	workspaceUri: m(h().nullish(), () => void 0),
 	workspaceFolders: e(ti).nullish(),
-	repository: p(ni.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	repository: m(ni.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ii = b([
-	d("automatic"),
-	d("diagnostic"),
-	d("manual"),
-	f()
+	f("automatic"),
+	f("diagnostic"),
+	f("manual"),
+	p()
 ]), ai = o({
-	uri: m(),
-	languageId: f(),
-	text: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	uri: h(),
+	languageId: p(),
+	text: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), oi = o({
-	startLine: c().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }),
-	endLine: c().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }),
-	text: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	startLine: l().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }),
+	endLine: l().gte(0).max(4294967295, { error: "Invalid value: Expected uint32 to be <= 4294967295" }),
+	text: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), si = o({
-	uri: m(),
+	uri: h(),
 	excerpts: e(oi),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ci = o({
-	uri: m(),
-	diff: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	uri: h(),
+	diff: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), li = o({
-	action: f(),
-	uri: m(),
+	action: p(),
+	uri: h(),
 	position: z,
 	timestampMs: i(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ui = o({
-	uri: m(),
-	languageId: f(),
-	visibleRange: p(B.nullish(), () => void 0),
-	lastFocusedMs: p(i().nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	uri: h(),
+	languageId: p(),
+	visibleRange: m(B.nullish(), () => void 0),
+	lastFocusedMs: m(i().nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), di = b([
-	d("error"),
-	d("warning"),
-	d("information"),
-	d("hint"),
-	f()
+	f("error"),
+	f("warning"),
+	f("information"),
+	f("hint"),
+	p()
 ]), fi = o({
-	uri: m(),
+	uri: h(),
 	range: B,
 	severity: di,
-	message: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	message: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), pi = o({
 	recentFiles: e(ai).nullish(),
 	relatedSnippets: e(si).nullish(),
@@ -1063,23 +1063,23 @@ var wr = o({ _meta: p(s(f(), t()).nullish(), () => void 0) }), Tr = o({
 	userActions: e(li).nullish(),
 	openFiles: e(ui).nullish(),
 	diagnostics: e(fi).nullish(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), mi = o({
 	sessionId: T,
-	uri: m(),
+	uri: h(),
 	version: i(),
 	position: z,
 	selection: B.nullish(),
 	triggerKind: ii,
 	context: pi.nullish(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), hi = o({
 	sessionId: T,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 });
 o({
 	id: w,
-	method: f(),
+	method: p(),
 	params: b([
 		Pr,
 		Fr,
@@ -1104,37 +1104,37 @@ o({
 });
 var gi = o({
 	optionId: ze,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), _i = n(b([
-	o({ outcome: d("cancelled") }),
-	gi.and(o({ outcome: d("selected") })),
-	r(o({ outcome: f() }), "outcome", ["cancelled", "selected"])
+	o({ outcome: f("cancelled") }),
+	gi.and(o({ outcome: f("selected") })),
+	r(o({ outcome: p() }), "outcome", ["cancelled", "selected"])
 ]), "outcome", ["cancelled", "selected"]), vi = o({
 	outcome: _i,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), yi = b([
-	f(),
+	p(),
 	i(),
 	i(),
 	g(),
-	e(f())
-]), bi = o({ content: s(f(), yi).nullish() }), xi = n(l(b([
-	bi.and(o({ action: d("accept") })),
-	o({ action: d("decline") }),
-	o({ action: d("cancel") }),
-	r(o({ action: f() }), "action", [
+	e(p())
+]), bi = o({ content: c(p(), yi).nullish() }), xi = n(u(b([
+	bi.and(o({ action: f("accept") })),
+	o({ action: f("decline") }),
+	o({ action: f("cancel") }),
+	r(o({ action: p() }), "action", [
 		"accept",
 		"cancel",
 		"decline"
 	])
-]), o({ _meta: p(s(f(), t()).nullish(), () => void 0) })), "action", [
+]), o({ _meta: m(c(p(), t()).nullish(), () => void 0) })), "action", [
 	"accept",
 	"cancel",
 	"decline"
 ]), Si = o({
 	connectionId: ut,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
-}), Ci = o({ _meta: p(s(f(), t()).nullish(), () => void 0) });
+	_meta: m(c(p(), t()).nullish(), () => void 0)
+}), Ci = o({ _meta: m(c(p(), t()).nullish(), () => void 0) });
 b([o({
 	id: w,
 	result: b([
@@ -1151,57 +1151,57 @@ b([o({
 })]);
 var wi = o({
 	sessionId: T,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Ti = o({
 	sessionId: T,
-	uri: m(),
-	languageId: f(),
+	uri: h(),
+	languageId: p(),
 	version: i(),
-	text: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	text: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Ei = o({
 	range: B.nullish(),
-	text: f(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	text: p(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Di = o({
 	sessionId: T,
-	uri: m(),
+	uri: h(),
 	version: i(),
-	contentChanges: u(_(Ei), () => []),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	contentChanges: d(_(Ei), () => []),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Oi = o({
 	sessionId: T,
-	uri: m(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	uri: h(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ki = o({
 	sessionId: T,
-	uri: m(),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	uri: h(),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Ai = o({
 	sessionId: T,
-	uri: m(),
+	uri: h(),
 	version: i(),
 	position: z,
 	visibleRange: B,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), ji = o({
 	sessionId: T,
 	suggestionId: R,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 }), Mi = b([
-	d("rejected"),
-	d("ignored"),
-	d("replaced"),
-	d("cancelled"),
-	f()
+	f("rejected"),
+	f("ignored"),
+	f("replaced"),
+	f("cancelled"),
+	p()
 ]), Ni = o({
 	sessionId: T,
 	suggestionId: R,
-	reason: p(Mi.nullish(), () => void 0),
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	reason: m(Mi.nullish(), () => void 0),
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 });
 o({
-	method: f(),
+	method: p(),
 	params: b([
 		wi,
 		Ti,
@@ -1217,10 +1217,10 @@ o({
 });
 var Pi = o({
 	requestId: w,
-	_meta: p(s(f(), t()).nullish(), () => void 0)
+	_meta: m(c(p(), t()).nullish(), () => void 0)
 });
 o({
-	method: f(),
+	method: p(),
 	params: Pi.nullish()
 });
 //#endregion
@@ -1228,32 +1228,32 @@ o({
 function G(e, t) {
 	return typeof e == "object" && e ? e[t] : void 0;
 }
-Ie.and(o({ type: d("tool_call") })), Le.and(o({ type: d("command") })), Ee.and(o({ type: d("content") })), je.and(o({ type: d("diff") })), Me.and(o({ type: d("terminal") }));
-var Fi = ge.and(o({ type: d("text") })), Ii = _e.and(o({ type: d("image") })), Li = ve.and(o({ type: d("audio") })), Ri = xe.and(o({ type: d("resource_link") })), zi = Te.and(o({ type: d("resource") }));
-j.and(o({ operation: d("add") })), j.and(o({ operation: d("delete") })), j.and(o({ operation: d("modify") })), M.and(o({ operation: d("move") })), M.and(o({ operation: d("copy") })), it.and(o({ mode: d("form") })).and(o({ message: f() })), ot.and(o({ mode: d("url") })).and(o({ message: f() })), b([Ue, We]).and(o({ message: f() })), Je.and(o({ type: d("string") })), Ye.and(o({ type: d("number") })), Xe.and(o({ type: d("integer") })), Ze.and(o({ type: d("boolean") })), tt.and(o({ type: d("array") })), Qe.and(o({ type: d("string") })), Yt.and(o({ type: d("terminal") })), Xt.and(o({ type: d("agent") })), o({
+Ie.and(o({ type: f("tool_call") })), Le.and(o({ type: f("command") })), Ee.and(o({ type: f("content") })), je.and(o({ type: f("diff") })), Me.and(o({ type: f("terminal") }));
+var Fi = ge.and(o({ type: f("text") })), Ii = _e.and(o({ type: f("image") })), Li = ve.and(o({ type: f("audio") })), Ri = xe.and(o({ type: f("resource_link") })), zi = Te.and(o({ type: f("resource") }));
+j.and(o({ operation: f("add") })), j.and(o({ operation: f("delete") })), j.and(o({ operation: f("modify") })), M.and(o({ operation: f("move") })), M.and(o({ operation: f("copy") })), it.and(o({ mode: f("form") })).and(o({ message: p() })), ot.and(o({ mode: f("url") })).and(o({ message: p() })), b([Ue, We]).and(o({ message: p() })), Je.and(o({ type: f("string") })), Ye.and(o({ type: f("number") })), Xe.and(o({ type: f("integer") })), Ze.and(o({ type: f("boolean") })), tt.and(o({ type: f("array") })), Qe.and(o({ type: f("string") })), Yt.and(o({ type: f("terminal") })), Xt.and(o({ type: f("agent") })), o({
 	methodId: P,
-	name: f()
-}), mn.and(o({ type: d("select") })).and(o({
+	name: p()
+}), mn.and(o({ type: f("select") })).and(o({
 	configId: F,
-	name: f()
-})), hn.and(o({ type: d("boolean") })).and(o({
+	name: p()
+})), hn.and(o({ type: f("boolean") })).and(o({
 	configId: F,
-	name: f()
+	name: p()
 })), o({
 	configId: F,
-	name: f()
-}), On.and(o({ kind: d("edit") })), kn.and(o({ kind: d("jump") })), An.and(o({ kind: d("rename") })), jn.and(o({ kind: d("searchAndReplace") })), o({ suggestionId: R });
-var Bi = U.and(o({ sessionUpdate: d("user_message_chunk") })), Vi = Rn.and(o({ sessionUpdate: d("user_message") })), Hi = U.and(o({ sessionUpdate: d("agent_message_chunk") })), Ui = zn.and(o({ sessionUpdate: d("agent_message") })), Wi = U.and(o({ sessionUpdate: d("agent_thought_chunk") })), Gi = Bn.and(o({ sessionUpdate: d("agent_thought") })), Ki = Kn.and(o({ sessionUpdate: d("state_update") })), qi = qn.and(o({ sessionUpdate: d("tool_call_content_chunk") })), Ji = Fe.and(o({ sessionUpdate: d("tool_call_update") })), Yi = Xn.and(o({ sessionUpdate: d("terminal_update") })), Xi = Zn.and(o({ sessionUpdate: d("terminal_output_chunk") })), Zi = ar.and(o({ sessionUpdate: d("plan_update") })), Qi = or.and(o({ sessionUpdate: d("plan_removed") })), $i = ur.and(o({ sessionUpdate: d("available_commands_update") })), ea = dr.and(o({ sessionUpdate: d("config_option_update") })), ta = fr.and(o({ sessionUpdate: d("session_info_update") })), na = mr.and(o({ sessionUpdate: d("usage_update") })), ra = _r.and(o({ sessionUpdate: d("compaction_update") })), ia = vr.and(o({ sessionUpdate: d("compaction_summary_chunk") })), aa = Vn.and(o({ state: d("running") })), oa = Wn.and(o({ state: d("idle") })), sa = Gn.and(o({ state: d("requires_action") }));
-tr.and(o({ type: d("items") })), nr.and(o({ type: d("file") })), rr.and(o({ type: d("markdown") })), o({ planId: W }), sr.and(o({ type: d("text") })), Vr.and(o({ type: d("http") })), Hr.and(o({ type: d("acp") })), Ur.and(o({ type: d("stdio") })), Yr.and(o({ type: d("start") })), o({ type: d("id") }).and(o({ value: I })).and(o({
+	name: p()
+}), On.and(o({ kind: f("edit") })), kn.and(o({ kind: f("jump") })), An.and(o({ kind: f("rename") })), jn.and(o({ kind: f("searchAndReplace") })), o({ suggestionId: R });
+var Bi = U.and(o({ sessionUpdate: f("user_message_chunk") })), Vi = Rn.and(o({ sessionUpdate: f("user_message") })), Hi = U.and(o({ sessionUpdate: f("agent_message_chunk") })), Ui = zn.and(o({ sessionUpdate: f("agent_message") })), Wi = U.and(o({ sessionUpdate: f("agent_thought_chunk") })), Gi = Bn.and(o({ sessionUpdate: f("agent_thought") })), Ki = Kn.and(o({ sessionUpdate: f("state_update") })), qi = qn.and(o({ sessionUpdate: f("tool_call_content_chunk") })), Ji = Fe.and(o({ sessionUpdate: f("tool_call_update") })), Yi = Xn.and(o({ sessionUpdate: f("terminal_update") })), Xi = Zn.and(o({ sessionUpdate: f("terminal_output_chunk") })), Zi = ar.and(o({ sessionUpdate: f("plan_update") })), Qi = or.and(o({ sessionUpdate: f("plan_removed") })), $i = ur.and(o({ sessionUpdate: f("available_commands_update") })), ea = dr.and(o({ sessionUpdate: f("config_option_update") })), ta = fr.and(o({ sessionUpdate: f("session_info_update") })), na = mr.and(o({ sessionUpdate: f("usage_update") })), ra = _r.and(o({ sessionUpdate: f("compaction_update") })), ia = vr.and(o({ sessionUpdate: f("compaction_summary_chunk") })), aa = Vn.and(o({ state: f("running") })), oa = Wn.and(o({ state: f("idle") })), sa = Gn.and(o({ state: f("requires_action") }));
+tr.and(o({ type: f("items") })), nr.and(o({ type: f("file") })), rr.and(o({ type: f("markdown") })), o({ planId: W }), sr.and(o({ type: f("text") })), Vr.and(o({ type: f("http") })), Hr.and(o({ type: f("acp") })), Ur.and(o({ type: f("stdio") })), Yr.and(o({ type: f("start") })), o({ type: f("id") }).and(o({ value: I })).and(o({
 	sessionId: T,
 	configId: F
-})), o({ type: d("boolean") }).and(o({ value: g() })).and(o({
+})), o({ type: f("boolean") }).and(o({ value: g() })).and(o({
 	sessionId: T,
 	configId: F
 })), o({ value: t() }).and(o({
 	sessionId: T,
 	configId: F
-})), o({ outcome: d("cancelled") }), gi.and(o({ outcome: d("selected") })), bi.and(o({ action: d("accept") })), o({ action: d("decline") }), o({ action: d("cancel") });
+})), o({ outcome: f("cancelled") }), gi.and(o({ outcome: f("selected") })), bi.and(o({ action: f("accept") })), o({ action: f("decline") }), o({ action: f("cancel") });
 var ca = {
 	isText(e) {
 		return G(e, "type") === "text" && Fi.safeParse(e).success;
@@ -2182,18 +2182,18 @@ async function uo(e) {
 			}
 		});
 	} catch (e) {
-		throw r.close(e), new h("INITIALIZE_REJECTED", "ACP v2 initialization failed", {
+		throw r.close(e), new s("INITIALIZE_REJECTED", "ACP v2 initialization failed", {
 			cause: e,
 			protocol: 2,
 			phase: "initialize",
 			retryable: !0
 		});
 	}
-	if (a.protocolVersion !== 2) throw r.close(), new h("PROTOCOL_VERSION_MISMATCH", `Requested ACP v2 but agent selected v${a.protocolVersion}`, {
+	if (a.protocolVersion !== 2) throw r.close(), new s("PROTOCOL_VERSION_MISMATCH", `Requested ACP v2 but agent selected v${a.protocolVersion}`, {
 		protocol: 2,
 		phase: "initialize"
 	});
-	if (a.capabilities?.session == null) throw r.close(), new h("CAPABILITY_REQUIRED", "The ACP v2 agent does not advertise the session surface", {
+	if (a.capabilities?.session == null) throw r.close(), new s("CAPABILITY_REQUIRED", "The ACP v2 agent does not advertise the session surface", {
 		protocol: 2,
 		phase: "initialize"
 	});
@@ -2263,7 +2263,7 @@ var fo = class {
 		return ie(n);
 	}
 	async deleteSession(e) {
-		if (!this.initialized.capabilities.deleteSession) throw new h("CAPABILITY_REQUIRED", "The agent does not support session/delete", { protocol: 2 });
+		if (!this.initialized.capabilities.deleteSession) throw new s("CAPABILITY_REQUIRED", "The agent does not support session/delete", { protocol: 2 });
 		await this.connection.agent.request(Y.agent.session.delete, { sessionId: e });
 	}
 	async closeSession(e) {
@@ -2273,7 +2273,7 @@ var fo = class {
 		return !this.#t.has(e);
 	}
 	async prompt(e, t, n) {
-		if (this.#e.has(e)) throw new h("SESSION_BUSY", `Session '${e}' already has a foreground turn`, { protocol: 2 });
+		if (this.#e.has(e)) throw new s("SESSION_BUSY", `Session '${e}' already has a foreground turn`, { protocol: 2 });
 		let r, i, a = new Promise((e, t) => {
 			r = e, i = t;
 		}), o = {
@@ -2315,7 +2315,7 @@ var fo = class {
 	}
 	async authenticate(e) {
 		if (e.type === "terminal") {
-			if (!this.host?.terminalAuth) throw new h("CAPABILITY_REQUIRED", "Terminal authentication needs a host handler", { protocol: 2 });
+			if (!this.host?.terminalAuth) throw new s("CAPABILITY_REQUIRED", "Terminal authentication needs a host handler", { protocol: 2 });
 			await this.host.terminalAuth(e);
 			return;
 		}
@@ -2330,7 +2330,7 @@ var fo = class {
 		n && (this.#e.delete(e), n.resolve(oe(t.stopReason) ?? "end_turn"));
 	}
 	handleClose() {
-		for (let e of this.#e.values()) e.reject(new h("TURN_INTERRUPTED", "Connection closed before the turn completed", {
+		for (let e of this.#e.values()) e.reject(new s("TURN_INTERRUPTED", "Connection closed before the turn completed", {
 			protocol: 2,
 			phase: "prompt",
 			retryable: !0,
@@ -2351,7 +2351,7 @@ function po(e) {
 	};
 }
 function mo(e) {
-	if (e.type === "sse") throw new h("INVALID_CONFIGURATION", "SSE MCP servers are not part of ACP v2", { protocol: 2 });
+	if (e.type === "sse") throw new s("INVALID_CONFIGURATION", "SSE MCP servers are not part of ACP v2", { protocol: 2 });
 	return e.type === "stdio" ? {
 		type: "stdio",
 		name: e.name,
