@@ -5,7 +5,12 @@ import { installBrowserDom } from "./support/browser.js";
 
 const calls = [];
 const contextRequests = [];
+const modelUpdates = [];
 const prompts = [];
+const backgroundErrorPrefix = "background session failed ";
+const oversizedBackgroundError = `${backgroundErrorPrefix}${"😀".repeat(
+  8 * 1024,
+)}tail`;
 const response = payload => new Response(JSON.stringify(payload), { status: 200 });
 const fetchStub = async (path, options = {}) => {
   const value = String(path);
@@ -62,19 +67,25 @@ const browser = installBrowserDom(`
   <script type="application/json" id="peval-i18n">{}</script>
   <script type="application/json" id="peval-render-options">{"role":"admin","initial_page":"home","workspace_id":"workspace-test","csp_nonce":"test-nonce"}</script>
   <button data-acp-open aria-expanded="false" disabled>Copilot</button>
+  <main class="workspace"></main>
   <div data-acp-backdrop hidden></div>
   <aside data-acp-drawer hidden>
     <button data-acp-close>Close</button>
     <select data-acp-agent></select><button data-acp-connect>Connect</button>
     <a href="/config#acp-agents-title" data-acp-configure hidden>Configure</a>
-    <p data-acp-notice hidden></p>
     <div data-acp-placeholder>Connect first</div><div data-acp-chat></div>
     <select data-acp-prompt-asset></select><button data-acp-use-prompt>Use</button>
   </aside>
 `, { fetch: fetchStub });
 
+window.localStorage.setItem(
+  "peval:workspace-test:acp-client",
+  JSON.stringify({ models: { another: "another-model" } }),
+);
+
 class SyntheticAcpSocket extends window.EventTarget {
   static instances = [];
+  static newRequests = 0;
 
   constructor(url) {
     super();
@@ -116,9 +127,21 @@ class SyntheticAcpSocket extends window.EventTarget {
       return;
     }
     if (message.method === "session/new") {
+      const sessionId = `session-${++SyntheticAcpSocket.newRequests}`;
       this.#result(message.id, {
-        sessionId: "session-1",
-        modes: { currentModeId: "", availableModes: [] },
+        sessionId,
+        configOptions: [modelConfig("balanced")],
+      });
+      return;
+    }
+    if (message.method === "session/set_config_option") {
+      modelUpdates.push({
+        sessionId: message.params.sessionId,
+        id: message.params.configId,
+        value: message.params.value,
+      });
+      this.#result(message.id, {
+        configOptions: [modelConfig(message.params.value)],
       });
       return;
     }
@@ -128,11 +151,21 @@ class SyntheticAcpSocket extends window.EventTarget {
     }
     if (message.method === "session/prompt") {
       prompts.push(message.params.prompt);
+      if (JSON.stringify(message.params.prompt).includes("fail in background")) {
+        setTimeout(() => {
+          this.#message({
+            jsonrpc: "2.0",
+            id: message.id,
+            error: { code: -32603, message: oversizedBackgroundError },
+          });
+        }, 30);
+        return;
+      }
       this.#message({
         jsonrpc: "2.0",
         method: "session/update",
         params: {
-          sessionId: "session-1",
+          sessionId: message.params.sessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
             content: { type: "text", text: "Synthetic response." },
@@ -155,6 +188,20 @@ class SyntheticAcpSocket extends window.EventTarget {
       );
     });
   }
+}
+
+function modelConfig(currentValue) {
+  return {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue,
+    options: [
+      { value: "fast", name: "Fast" },
+      { value: "balanced", name: "Balanced" },
+    ],
+  };
 }
 
 const previousWebSocket = globalThis.WebSocket;
@@ -186,7 +233,18 @@ test("Psycheval composes the vendored controller through its gateway and context
   await acp.initializeAcp();
   assert.equal(opener.disabled, false, "the launcher becomes interactive only after its handler is bound");
   opener.focus();
+  const workspace = document.querySelector(".workspace");
+  Object.defineProperties(workspace, {
+    offsetWidth: { configurable: true, value: 800 },
+    clientWidth: { configurable: true, value: 785 },
+  });
   acp.openAcpDrawer(opener);
+  assert.equal(
+    document.documentElement.style.getPropertyValue(
+      "--acp-scrollbar-compensation",
+    ),
+    "15px",
+  );
 
   assert.equal(await acp.connectAcpAgent(), true);
   assert.equal(SyntheticAcpSocket.instances.length, 2, "v1 fallback gets a fresh gateway process");
@@ -201,6 +259,36 @@ test("Psycheval composes the vendored controller through its gateway and context
     '[aria-label="Add context"]',
   );
   await waitFor(() => addContext.disabled === false);
+  const modelSelect = host.shadowRoot.querySelector(
+    '[role="combobox"][aria-label="Model"]',
+  );
+  assert.match(modelSelect.textContent, /Balanced/);
+  modelSelect.click();
+  await waitFor(() =>
+    [...host.shadowRoot.querySelectorAll('[role="option"]')]
+      .some(option => option.textContent.includes("Fast")),
+  );
+  const fastOption = [...host.shadowRoot.querySelectorAll('[role="option"]')]
+    .find(option => option.textContent.includes("Fast"));
+  assert.ok(fastOption);
+  fastOption.click();
+  await waitFor(() => modelUpdates.length === 1);
+  const newSession = [...host.shadowRoot.querySelectorAll("button")].find(button =>
+    button.textContent.includes("New session"),
+  );
+  assert.ok(newSession);
+  newSession.click();
+  await waitFor(() => SyntheticAcpSocket.newRequests === 2);
+  await waitFor(() => modelUpdates.length === 2);
+  assert.deepEqual(modelUpdates, [
+    { sessionId: "session-1", id: "model", value: "fast" },
+    { sessionId: "session-2", id: "model", value: "fast" },
+  ]);
+  assert.match(
+    host.shadowRoot.querySelector('[role="combobox"][aria-label="Model"]')
+      .textContent,
+    /Fast/,
+  );
   addContext.click();
   await waitFor(() => acp.acpState.contexts.length === 1);
   await waitFor(
@@ -215,12 +303,31 @@ test("Psycheval composes the vendored controller through its gateway and context
     task: "trend-digest-01",
   };
   addContext.click();
+  await waitFor(() => acp.acpState.contexts.length === 2);
+  await waitFor(() => addContext.disabled === false);
   addContext.click();
   await waitFor(
     () =>
       host.shadowRoot.querySelectorAll(
         '[data-pretty-aui-slot="composer-context-item"]',
       ).length === 2,
+  );
+  await waitFor(
+    () => host.shadowRoot.querySelectorAll('[data-kind="notice"]').length === 3,
+  );
+  assert.deepEqual(
+    [...host.shadowRoot.querySelectorAll('[data-kind="notice"]')].map(
+      row => row.textContent,
+    ),
+    [
+      "Current evaluation context attached",
+      "Current evaluation context attached",
+      "Evaluation context is already attached",
+    ],
+  );
+  assert.equal(
+    host.shadowRoot.querySelector('[data-kind="notice"] button'),
+    null,
   );
   assert.match(host.shadowRoot.textContent, /source-7.*Step 4/);
   assert.match(host.shadowRoot.textContent, /bench-v1\.0 \/ trend-digest-01/);
@@ -247,7 +354,20 @@ test("Psycheval composes the vendored controller through its gateway and context
   ]);
   assert.equal(prompts[0][0].type, "resource");
   assert.equal(prompts[0][1].type, "resource");
-  assert.equal(prompts[0].at(-1).text, "Trace the first mistake.");
+  assert.deepEqual(prompts[0][0]._meta["pretty-aui/context"], {
+    version: 1,
+    id: "source:source-7:4",
+    label: "source-7 · Step 4",
+  });
+  const envelope = prompts[0][2].text.match(
+    /^\n\n<pretty-aui-user-message-v1-([a-f0-9]{32})>\n$/,
+  );
+  assert.ok(envelope);
+  assert.equal(prompts[0][3].text, "Trace the first mistake.");
+  assert.equal(
+    prompts[0][4].text,
+    `\n</pretty-aui-user-message-v1-${envelope[1]}>`,
+  );
   await waitFor(() => host.shadowRoot.textContent.includes("Synthetic response."));
   host.shadowRoot
     .querySelector('[aria-label="Remove context: source-7 · Step 4"]')
@@ -258,6 +378,20 @@ test("Psycheval composes the vendored controller through its gateway and context
         '[data-pretty-aui-slot="composer-context-item"]',
       ).length === 1,
   );
+  await waitFor(
+    () => host.shadowRoot.querySelectorAll('[data-kind="notice"]').length === 4,
+  );
+  assert.deepEqual(
+    [...host.shadowRoot.querySelectorAll('[data-kind="notice"]')].map(
+      row => row.textContent,
+    ),
+    [
+      "Current evaluation context attached",
+      "Current evaluation context attached",
+      "Evaluation context is already attached",
+      "Evaluation context removed",
+    ],
+  );
   assert.doesNotMatch(
     host.shadowRoot
       .querySelector('[data-pretty-aui-slot="composer-context"]')
@@ -266,8 +400,13 @@ test("Psycheval composes the vendored controller through its gateway and context
   );
   assert.equal(
     JSON.parse(window.localStorage.getItem("peval:workspace-test:acp-client")).sessions.opencode,
-    "session-1",
+    "session-2",
   );
+  assert.deepEqual(
+    JSON.parse(window.localStorage.getItem("peval:workspace-test:acp-client")).models,
+    { another: "another-model", opencode: "fast" },
+  );
+  assert.equal(window.localStorage.getItem("peval:other-workspace:acp-client"), null);
   assert.deepEqual(
     JSON.parse(window.localStorage.getItem("peval:workspace-test:acp-client"))
       .contexts.map(context => context.value.kind),
@@ -275,8 +414,55 @@ test("Psycheval composes the vendored controller through its gateway and context
   );
   assert.equal(calls.some(path => path.includes("/sessions")), false);
 
+  const controller = acp.acpState.mounted.controller;
+  await controller.openSession("session-1");
+  await waitFor(
+    () =>
+      host.shadowRoot.querySelectorAll('[data-kind="notice"]').length === 1 &&
+      host.shadowRoot.querySelector('[data-kind="notice"]')?.textContent ===
+        "Local agent connected",
+  );
+  assert.deepEqual(
+    [...host.shadowRoot.querySelectorAll('[data-kind="notice"]')].map(
+      row => row.textContent,
+    ),
+    ["Local agent connected"],
+  );
+  await controller.openSession("session-2");
+  const failedTurn = controller.send("fail in background");
+  await waitFor(() => prompts.length === 2);
+  await controller.newSession();
+  await assert.rejects(failedTurn.done, /background session failed/);
+  assert.equal(controller.getSnapshot().sessionId, "session-3");
+  assert.equal(
+    host.shadowRoot.textContent.includes("background session failed"),
+    false,
+  );
+  await controller.openSession("session-2");
+  await waitFor(
+    () =>
+      host.shadowRoot.querySelector(
+        '[data-kind="notice"][data-level="error"]',
+      )?.textContent?.startsWith("background session failed"),
+  );
+  const errorNotice = host.shadowRoot.querySelector(
+    '[data-kind="notice"][data-level="error"]',
+  );
+  assert.equal(new TextEncoder().encode(errorNotice.textContent).length <= 16 * 1024, true);
+  assert.equal(errorNotice.textContent.endsWith("…"), true);
+  assert.equal(
+    oversizedBackgroundError.startsWith(errorNotice.textContent.slice(0, -1)),
+    true,
+  );
+
   acp.closeAcpDrawer();
   assert.equal(document.querySelector("[data-acp-drawer]").hidden, true);
+  assert.equal(
+    document.documentElement.style.getPropertyValue(
+      "--acp-scrollbar-compensation",
+    ),
+    "",
+  );
   assert.equal(document.activeElement, opener);
   assert.ok(acp.acpState.mounted, "closing the drawer keeps background sessions alive");
 });

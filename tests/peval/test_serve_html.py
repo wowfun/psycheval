@@ -42,6 +42,8 @@ class PevalServeHtmlTests(unittest.TestCase):
         asset_root = Path(__file__).resolve().parents[2] / "src/psycheval/assets/web"
         frontend_keys: set[str] = set()
         for path in asset_root.rglob("*.js"):
+            if path.is_relative_to(asset_root / "vendor"):
+                continue
             frontend_keys.update(
                 literal_translation_keys(path.read_text(encoding="utf-8"))
             )
@@ -147,6 +149,8 @@ class PevalServeHtmlTests(unittest.TestCase):
         self.assertNotIn('class="acp-context-bar"', drawer)
         self.assertNotIn("data-acp-context-capture", drawer)
         self.assertNotIn("data-acp-protocol", drawer)
+        self.assertNotIn('class="acp-notice"', drawer)
+        self.assertNotIn("data-acp-notice", drawer)
         self.assertLess(
             drawer.index('class="acp-controls"'),
             drawer.index('class="acp-chat-frame"'),

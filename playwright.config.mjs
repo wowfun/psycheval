@@ -9,7 +9,6 @@ export default defineConfig({
   reporter: "line",
   expect: { timeout: 10_000 },
   use: {
-    baseURL: "http://127.0.0.1:4178",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

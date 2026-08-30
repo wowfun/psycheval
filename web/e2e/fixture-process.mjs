@@ -6,18 +6,33 @@ async function startFixture(environment = {}) {
     env: { ...process.env, ...environment },
   });
   const output = [];
-  fixture.stdout.on("data", chunk => output.push(String(chunk)));
+  let stdout = "";
+  fixture.stdout.on("data", chunk => {
+    const text = String(chunk);
+    stdout += text;
+    output.push(text);
+  });
   fixture.stderr.on("data", chunk => output.push(String(chunk)));
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     if (fixture.exitCode !== null) {
       throw new Error(`ACP fixture exited early:\n${output.join("")}`);
     }
+    const origin = stdout.match(
+      /^PEVAL_E2E_ORIGIN=(http:\/\/127\.0\.0\.1:\d+)\r?$/m,
+    )?.[1];
+    if (!origin) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      continue;
+    }
     try {
-      const response = await fetch("http://127.0.0.1:4178/api/session", {
+      const response = await fetch(new URL("/api/session", origin), {
         signal: AbortSignal.timeout(250),
       });
-      if (response.ok) return fixture;
+      if (response.ok) {
+        fixture.origin = origin;
+        return fixture;
+      }
     } catch {
       // The fixture has not bound its listener yet.
     }

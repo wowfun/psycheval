@@ -11,9 +11,13 @@ import {
 import { serveApi } from "./http.js";
 import { RENDER_OPTIONS, adminMode, esc, listValue, t } from "./shared.js";
 
+const MAX_MODEL_PREFERENCE_LENGTH = 16 * 1024;
+const MAX_NOTICE_LENGTH = 16 * 1024;
+
 const acpState = {
   initialized: false,
   unsubscribeInvalidation: null,
+  scrollbarObserver: null,
   agents: [],
   cwd: "",
   agentId: "",
@@ -42,6 +46,41 @@ const contextProvider = {
 function drawer() {
   return /** @type {HTMLElement | null} */ (
     document.querySelector("[data-acp-drawer]")
+  );
+}
+
+function workspaceScrollbarWidth() {
+  const workspace = /** @type {HTMLElement | null} */ (
+    document.querySelector(".workspace")
+  );
+  if (!workspace) return 0;
+  return Math.max(0, workspace.offsetWidth - workspace.clientWidth);
+}
+
+function syncScrollbarCompensation() {
+  if (!document.body.classList.contains("acp-drawer-open")) return;
+  document.documentElement.style.setProperty(
+    "--acp-scrollbar-compensation",
+    `${workspaceScrollbarWidth()}px`,
+  );
+}
+
+function startScrollbarCompensation() {
+  stopScrollbarCompensation();
+  syncScrollbarCompensation();
+  const workspace = document.querySelector(".workspace");
+  if (!workspace || typeof window.ResizeObserver !== "function") return;
+  acpState.scrollbarObserver = new window.ResizeObserver(
+    syncScrollbarCompensation,
+  );
+  acpState.scrollbarObserver.observe(workspace);
+}
+
+function stopScrollbarCompensation() {
+  acpState.scrollbarObserver?.disconnect();
+  acpState.scrollbarObserver = null;
+  document.documentElement.style.removeProperty(
+    "--acp-scrollbar-compensation",
   );
 }
 
@@ -160,6 +199,7 @@ function openAcpDrawer(opener = null) {
   );
   if (backdrop) backdrop.hidden = false;
   document.body.classList.add("acp-drawer-open");
+  startScrollbarCompensation();
   document.querySelector("[data-acp-open]")?.setAttribute("aria-expanded", "true");
   persistUiState({ open: true });
   if (acpState.mounted) acpState.mounted.focusComposer();
@@ -176,6 +216,7 @@ function closeAcpDrawer(options = {}) {
   );
   if (backdrop) backdrop.hidden = true;
   document.body.classList.remove("acp-drawer-open");
+  stopScrollbarCompensation();
   document.querySelector("[data-acp-open]")?.setAttribute("aria-expanded", "false");
   persistUiState({ open: false });
   if (options.restoreFocus !== false) acpState.opener?.focus?.();
@@ -197,8 +238,8 @@ async function connectAcpAgent(options = {}) {
   const agentId = acpState.agentId;
   const savedSessionId = options.fresh ? "" : savedSession(agentId);
   const generation = ++acpState.mountGeneration;
+  clearPlaceholderError();
   acpState.connecting = true;
-  showNotice(t("acp_connecting", "Starting local agent…"));
   renderControls();
 
   const mounted = mountChat(host, {
@@ -211,6 +252,10 @@ async function connectAcpAgent(options = {}) {
       initialSession: savedSessionId
         ? { type: "open", sessionId: savedSessionId }
         : { type: "new" },
+      modelPreference: {
+        get: () => savedModel(agentId),
+        set: value => saveModel(agentId, value),
+      },
       context: contextProvider,
       allowAuthentication: false,
       clientInfo: {
@@ -268,7 +313,7 @@ async function disconnectAcpAgent(options = {}) {
   acpState.connecting = false;
   if (mounted) await mounted.unmount();
   if (options.persist !== false) persistUiState({ auto_connect: false });
-  if (mounted) showNotice(t("acp_disconnected", "Local agent disconnected"));
+  clearPlaceholderError();
   renderControls();
   return Boolean(mounted);
 }
@@ -285,7 +330,13 @@ function handleChatEvent(event, agentId, generation) {
     saveSession(agentId, event.sessionId);
     return;
   }
-  if (event.type === "error") showNotice(event.error?.message || t("error", "Error"), true);
+  if (event.type === "error") {
+    showNotice(
+      event.error?.message || t("error", "Error"),
+      true,
+      event.sessionId,
+    );
+  }
 }
 
 async function resolveCapturedContexts(request) {
@@ -416,7 +467,6 @@ function prettyLabels() {
     cancel: t("cancel", "Cancel"),
     changedFiles: t("acp_changed_files", "Changed files"),
     close: t("close", "Close"),
-    closeSession: t("acp_close_session", "Close session"),
     commands: t("acp_commands", "Commands"),
     composerPlaceholder: t("acp_prompt_placeholder", "Ask about this evaluation…"),
     contextInjection: t("acp_context_injection", "Context injection"),
@@ -426,6 +476,8 @@ function prettyLabels() {
       "Context display truncated ({count} characters total).",
       { count: total.toLocaleString() },
     ),
+    copied: t("acp_copied", "Copied"),
+    copy: t("acp_copy", "Copy"),
     decline: t("acp_decline", "Decline"),
     deleteSession: t("acp_delete_session", "Delete session"),
     emptyDescription: t("acp_empty_description", "Messages, tool activity, and plans will appear here."),
@@ -451,6 +503,12 @@ function prettyLabels() {
     resource: t("acp_resource", "Resource"),
     scrollToLatest: t("acp_scroll_latest", "Scroll to latest message"),
     send: t("acp_send", "Send"),
+    sessionAge: formatSessionAgeLabel,
+    sessionActions: title => formatLabel(
+      "acp_session_actions",
+      "Actions for {title}",
+      { title },
+    ),
     sessionPhase: phase => t(`acp_phase_${phase}`, phase),
     sessionUntitled: t("acp_untitled_session", "Untitled session"),
     sessions: t("acp_session", "Session"),
@@ -458,7 +516,14 @@ function prettyLabels() {
     thinking: t("acp_thinking", "Thinking"),
     terminalOutputInActivity: t("acp_terminal_output", "Terminal output is shown in the activity stream."),
     tool: t("acp_tool", "Tool"),
+    toolCollapseLines: t("acp_tool_collapse_lines", "Show less"),
+    toolExpandLines: hidden => formatLabel(
+      "acp_tool_expand_lines",
+      "... more {count} lines",
+      { count: hidden.toLocaleString() },
+    ),
     toolInput: t("acp_tool_input", "Input"),
+    toolNoOutput: t("acp_tool_no_output", "No output"),
     toolOutput: t("acp_tool_output", "Output"),
     toolResult: t("acp_tool_result", "tool result"),
     unsupportedContent: type => formatLabel(
@@ -480,6 +545,19 @@ function prettyLabels() {
       { title },
     ),
   };
+}
+
+function formatSessionAgeLabel(value, unit) {
+  if (unit === "now") return t("acp_session_age_now", "now");
+  const labels = {
+    minute: ["acp_session_age_minute", "{count}m"],
+    hour: ["acp_session_age_hour", "{count}h"],
+    day: ["acp_session_age_day", "{count}d"],
+    month: ["acp_session_age_month", "{count}mo"],
+    year: ["acp_session_age_year", "{count}y"],
+  };
+  const [key, fallback] = labels[unit] || ["acp_session_age_now", "now"];
+  return formatLabel(key, fallback, { count: value.toLocaleString() });
 }
 
 function formatLabel(key, fallback, values) {
@@ -558,25 +636,73 @@ function selectedAgent() {
   return acpState.agents.find(agent => agent.id === acpState.agentId) || null;
 }
 
-function showNotice(message, error = false) {
-  const node = /** @type {HTMLElement | null} */ (
-    document.querySelector("[data-acp-notice]")
+function showNotice(message, error = false, sessionId = undefined) {
+  const text = boundedNoticeText(message);
+  if (!text) return false;
+  const controller = acpState.mounted?.controller;
+  if (controller) {
+    try {
+      return controller.appendNotice({
+        text,
+        level: error ? "error" : "info",
+        ...(sessionId ? { sessionId } : {}),
+      });
+    } catch {
+      return false;
+    }
+  }
+  if (!error) return false;
+  const placeholder = /** @type {HTMLElement | null} */ (
+    document.querySelector("[data-acp-placeholder]")
   );
-  if (!node) return;
-  node.textContent = message;
-  node.classList.toggle("danger", error);
-  node.hidden = !message;
+  if (!placeholder) return false;
+  placeholder.textContent = text;
+  placeholder.classList.add("danger");
+  placeholder.setAttribute("role", "alert");
+  placeholder.hidden = false;
+  return true;
+}
+
+function boundedNoticeText(message) {
+  const text = String(message || "");
+  const encoder = new TextEncoder();
+  if (encoder.encode(text).byteLength <= MAX_NOTICE_LENGTH) return text;
+  const suffix = "…";
+  const budget = MAX_NOTICE_LENGTH - encoder.encode(suffix).byteLength;
+  let bytes = 0;
+  let end = 0;
+  for (const character of text) {
+    const next = encoder.encode(character).byteLength;
+    if (bytes + next > budget) break;
+    bytes += next;
+    end += character.length;
+  }
+  return `${text.slice(0, end)}${suffix}`;
+}
+
+function clearPlaceholderError() {
+  const placeholder = /** @type {HTMLElement | null} */ (
+    document.querySelector("[data-acp-placeholder]")
+  );
+  if (!placeholder) return;
+  placeholder.textContent = t(
+    "acp_empty",
+    "Connect an agent and open a session to begin.",
+  );
+  placeholder.classList.remove("danger");
+  placeholder.removeAttribute("role");
 }
 
 function errorMessage(error) {
   return error?.message || String(error || t("error", "Error"));
 }
 
-function readSavedUi() {
+function readSavedUi(throwOnError = false) {
   try {
     const value = JSON.parse(window.localStorage.getItem(storageKey()) || "{}");
     return value && typeof value === "object" ? value : {};
-  } catch {
+  } catch (error) {
+    if (throwOnError) throw error;
     return {};
   }
 }
@@ -617,19 +743,20 @@ function restoredContexts(value) {
   return contexts;
 }
 
-function persistUiState(extra = {}) {
+function persistUiState(extra = {}, throwOnError = false) {
   try {
     window.localStorage.setItem(
       storageKey(),
       JSON.stringify({
-        ...readSavedUi(),
+        ...readSavedUi(throwOnError),
         agent_id: acpState.agentId,
         prompt_asset_id: acpState.promptAssetId,
         contexts: acpState.contexts,
         ...extra,
       }),
     );
-  } catch {
+  } catch (error) {
+    if (throwOnError) throw error;
     // Workspace-local UI preference persistence is best effort.
   }
 }
@@ -649,6 +776,38 @@ function saveSession(agentId, sessionId) {
 
 function forgetSavedSession(agentId) {
   saveSession(agentId, undefined);
+}
+
+// Let pretty-aui diagnose model-store failures while keeping the session usable.
+function savedModel(agentId) {
+  const models = readSavedUi(true).models;
+  if (
+    !models ||
+    typeof models !== "object" ||
+    Array.isArray(models) ||
+    !Object.hasOwn(models, agentId)
+  ) {
+    return undefined;
+  }
+  return validModelPreference(models[agentId]) ? models[agentId] : undefined;
+}
+
+function saveModel(agentId, value) {
+  if (!validModelPreference(value)) return;
+  const saved = readSavedUi(true);
+  const existing =
+    saved.models && typeof saved.models === "object" && !Array.isArray(saved.models)
+      ? saved.models
+      : {};
+  persistUiState({ models: { ...existing, [agentId]: value } }, true);
+}
+
+function validModelPreference(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    new TextEncoder().encode(value).byteLength <= MAX_MODEL_PREFERENCE_LENGTH
+  );
 }
 
 export {

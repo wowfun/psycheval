@@ -11,8 +11,12 @@ test.afterAll(async () => {
   await stopFixture(fixture);
 });
 
-test("Chinese workspace supplies complete visible ACP chat labels", async ({ page }) => {
-  await page.goto("/");
+test("Chinese workspace supplies complete visible ACP chat labels", async ({
+  context,
+  page,
+}) => {
+  await context.grantPermissions(["clipboard-write"]);
+  await page.goto(fixture.origin);
   await page.getByRole("button", { name: "Copilot" }).click();
 
   const drawer = page.locator("[data-acp-drawer]");
@@ -28,4 +32,45 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({ pag
   await expect(chat.getByText("消息、工具活动和计划会显示在这里。", { exact: true })).toBeVisible();
   await expect(chat.getByRole("button", { name: "新建会话" })).toBeVisible();
   await expect(chat.getByRole("button", { name: "添加上下文" })).toBeVisible();
+  await chat.locator("textarea").fill("检查复制标签");
+  await chat.locator(".paui-send").click();
+  await expect(chat).toContainText("Synthetic response");
+  await expect(chat.getByRole("button", { name: "复制" })).toHaveCount(2);
+  await chat.getByRole("button", { name: "复制" }).first().click();
+  await expect(chat.getByRole("button", { name: "已复制" })).toBeVisible();
+
+  await chat.locator("textarea").fill("Show structured tools");
+  await chat.locator(".paui-send").click();
+  await expect(chat.locator(".paui-tool")).toHaveCount(3);
+  for (const tool of await chat.locator(".paui-tool").all()) {
+    await tool.locator("summary").click();
+  }
+  const read = chat.locator('[data-tool-block="read"]');
+  await expect(read.getByRole("button", { name: "复制" })).toBeVisible();
+  await read.getByRole("button", { name: "... 其余 2 行" }).click();
+  await expect(read.getByRole("button", { name: "收起" })).toBeVisible();
+
+  await chat.getByRole("button", { name: "会话", exact: true }).click();
+  const dialog = chat.getByRole("dialog", { name: "会话" });
+  await expect(
+    dialog.getByRole("button", { name: "关闭会话" }),
+  ).toHaveCount(0);
+  const catalogSession = dialog
+    .locator(".paui-session")
+    .filter({ hasText: "Earlier session" });
+  await expect(catalogSession).toContainText("现在");
+  await catalogSession.hover();
+  const actions = catalogSession.getByRole("button", {
+    name: "Earlier session 的操作",
+  });
+  await expect(actions).toBeVisible();
+  const actionBox = await actions.boundingBox();
+  expect(actionBox?.width).toBeGreaterThanOrEqual(32);
+  expect(actionBox?.height).toBeGreaterThanOrEqual(32);
+  await actions.click();
+  await expect(
+    dialog.getByRole("menuitem", { name: "删除会话" }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(actions).toBeFocused();
 });

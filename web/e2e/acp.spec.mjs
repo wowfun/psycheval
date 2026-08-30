@@ -11,20 +11,34 @@ test.afterAll(async () => {
   await stopFixture(fixture);
 });
 
+test("fixture exposes its isolated browser origin", async () => {
+  expect(fixture.origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+  const response = await fetch(new URL("/api/session", fixture.origin));
+  expect(response.ok).toBe(true);
+});
+
 test("disconnected drawer keeps controls, placeholder, and presets in separate rows", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto(fixture.origin);
+  const body = page.locator("body");
+  await expect(body).toHaveCSS("overflow-y", "visible");
   await page.getByRole("button", { name: "Copilot" }).click();
+  await expect(body).toHaveCSS("overflow-y", "hidden");
   const drawer = page.locator("[data-acp-drawer]");
-  const geometry = await drawer.evaluate(element => {
-    const box = selector => element.querySelector(selector).getBoundingClientRect();
+  const geometry = await drawer.evaluate((element) => {
+    const widthProbe = document.createElement("div");
+    widthProbe.style.cssText =
+      "position:fixed;right:var(--workspace-sidebar-gap);visibility:hidden;width:var(--detail-sidebar-width)";
+    document.body.append(widthProbe);
+    const box = (selector) =>
+      element.querySelector(selector).getBoundingClientRect();
     const drawerBox = element.getBoundingClientRect();
     const controls = box(".acp-controls");
     const chat = box(".acp-chat-frame");
     const placeholder = box(".acp-chat-placeholder");
     const presets = box(".acp-prompt-assets");
-    return {
+    const result = {
       controlsBottom: controls.bottom,
       chatTop: chat.top,
       chatBottom: chat.bottom,
@@ -34,7 +48,11 @@ test("disconnected drawer keeps controls, placeholder, and presets in separate r
       presetsBottom: presets.bottom,
       presetsHeight: presets.height,
       drawerBottom: drawerBox.bottom,
+      drawerLeft: drawerBox.left,
+      regularRightSidebarLeft: widthProbe.getBoundingClientRect().left,
     };
+    widthProbe.remove();
+    return result;
   });
   expect(geometry.chatTop).toBeGreaterThanOrEqual(geometry.controlsBottom);
   expect(geometry.placeholderTop).toBeGreaterThanOrEqual(geometry.chatTop);
@@ -42,11 +60,119 @@ test("disconnected drawer keeps controls, placeholder, and presets in separate r
   expect(geometry.presetsTop).toBeGreaterThanOrEqual(geometry.chatBottom);
   expect(geometry.presetsBottom).toBeLessThanOrEqual(geometry.drawerBottom + 1);
   expect(geometry.presetsHeight).toBeLessThanOrEqual(96);
+  expect(geometry.drawerLeft).toBeCloseTo(
+    geometry.regularRightSidebarLeft,
+    0,
+  );
+  await drawer.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(body).toHaveCSS("overflow-y", "visible");
+});
+
+test("drawer aligns with the active regular right-sidebar boundary", async ({
+  page,
+}) => {
+  await page.goto(fixture.origin);
+  await page.evaluate(() => {
+    document.body.classList.add("workspace-sidebar-right-open");
+    document.documentElement.style.setProperty(
+      "--workspace-side-region-gap",
+      "27px",
+    );
+    document.documentElement.style.setProperty(
+      "--workspace-right-sidebar-width",
+      "760px",
+    );
+  });
+
+  await page.getByRole("button", { name: "Copilot" }).click();
+  const drawer = page.locator("[data-acp-drawer]");
+  for (const width of [760, 360]) {
+    await page.evaluate((nextWidth) => {
+      document.documentElement.style.setProperty(
+        "--workspace-right-sidebar-width",
+        `${nextWidth}px`,
+      );
+    }, width);
+    const geometry = await drawer.evaluate((element) => ({
+      drawerLeft: element.getBoundingClientRect().left,
+      drawerOverflow: element.scrollWidth - element.clientWidth,
+      contentGap: Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue(
+          "--workspace-side-region-gap",
+        ),
+      ),
+      regularRightSidebarLeft:
+        innerWidth -
+        Number.parseFloat(
+          getComputedStyle(document.body).getPropertyValue(
+            "--workspace-right-sidebar-width",
+          ),
+        ) -
+        Number.parseFloat(
+          getComputedStyle(document.body).getPropertyValue(
+            "--workspace-sidebar-gap",
+          ),
+        ),
+      workspaceContentRight: document
+        .querySelector(".workspace-content")
+        .getBoundingClientRect().right,
+    }));
+
+    expect(geometry.drawerLeft).toBe(geometry.regularRightSidebarLeft);
+    expect(geometry.drawerOverflow).toBeLessThanOrEqual(0);
+    expect(geometry.drawerLeft - geometry.workspaceContentRight).toBe(
+      geometry.contentGap,
+    );
+  }
+
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty(
+      "--acp-scrollbar-compensation",
+      "15px",
+    );
+  });
+  const classicScrollbarGeometry = await drawer.evaluate((element) => {
+    const style = getComputedStyle(document.documentElement);
+    return {
+      drawerLeft: element.getBoundingClientRect().left,
+      expectedLeft:
+        innerWidth -
+        Number.parseFloat(
+          getComputedStyle(document.body).getPropertyValue(
+            "--workspace-right-sidebar-width",
+          ),
+        ) -
+        Number.parseFloat(style.getPropertyValue("--workspace-sidebar-gap")) -
+        Number.parseFloat(
+          style.getPropertyValue("--acp-scrollbar-compensation"),
+        ),
+    };
+  });
+  expect(classicScrollbarGeometry.drawerLeft).toBe(
+    classicScrollbarGeometry.expectedLeft,
+  );
+
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty(
+      "--acp-scrollbar-compensation",
+      "0px",
+    );
+    document.documentElement.style.setProperty(
+      "--workspace-right-sidebar-width",
+      "620px",
+    );
+  });
+  await expect
+    .poll(() => drawer.evaluate((element) => element.getBoundingClientRect().width))
+    .toBe(620);
 });
 
 test("vendored ACP chat runs under the workspace CSP and keeps drawer state", async ({
+  context,
   page,
 }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const consoleErrors = [];
   const pageErrors = [];
   const requests = [];
@@ -67,7 +193,7 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
   page.on("request", (request) => requests.push(request.url()));
   page.on("websocket", (socket) => webSockets.push(socket.url()));
 
-  const response = await page.goto("/");
+  const response = await page.goto(fixture.origin);
   const csp = response.headers()["content-security-policy"];
   expect(csp).toContain("script-src 'self' 'nonce-");
   expect(csp).not.toContain("'unsafe-eval'");
@@ -97,12 +223,25 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
   await page.getByRole("button", { name: "Connect" }).click();
   await expect(page.locator("[data-acp-protocol]")).toHaveCount(0);
   await expect(page.locator("[data-acp-chat] textarea")).toBeEnabled();
+  await expect(drawer.locator(".acp-notice, [data-acp-notice]")).toHaveCount(0);
   expect(webSockets).toEqual([
-    "ws://127.0.0.1:4178/api/acp/agents/synthetic/ws",
-    "ws://127.0.0.1:4178/api/acp/agents/synthetic/ws",
+    `${fixture.origin.replace("http://", "ws://")}/api/acp/agents/synthetic/ws`,
+    `${fixture.origin.replace("http://", "ws://")}/api/acp/agents/synthetic/ws`,
   ]);
 
   const chat = page.locator("[data-acp-chat]");
+  const noticeRows = chat.locator(
+    '[data-pretty-aui-slot="activity"][data-kind="notice"]',
+  );
+  await expect(noticeRows).toHaveCount(1);
+  await expect(noticeRows.first()).toHaveAttribute("data-level", "info");
+  await expect(noticeRows.first().getByRole("status")).toHaveText(
+    "Local agent connected",
+  );
+  await expect(noticeRows.first().locator(".paui-host-notice")).toHaveCSS(
+    "background-color",
+    "rgba(0, 0, 0, 0)",
+  );
   const composer = chat.locator("textarea");
   const addContext = chat.getByRole("button", { name: "Add context" });
   await expect(addContext).toBeEnabled();
@@ -110,9 +249,9 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
   await expect(
     chat.locator('[data-pretty-aui-slot="composer-context-item"]'),
   ).toHaveCount(1);
-  await expect(chat.locator('[data-pretty-aui-slot="composer-context"]')).toContainText(
-    sourceKey,
-  );
+  await expect(
+    chat.locator('[data-pretty-aui-slot="composer-context"]'),
+  ).toContainText(sourceKey);
   const secondSourceRow = page.locator("tr[data-source-key]").nth(1);
   await expect(secondSourceRow).toBeVisible();
   const secondSourceKey = await secondSourceRow.getAttribute("data-source-key");
@@ -122,16 +261,24 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
   await expect(
     chat.locator('[data-pretty-aui-slot="composer-context-item"]'),
   ).toHaveCount(2);
-  await expect(chat.locator('[data-pretty-aui-slot="composer-context"]')).toContainText(
-    secondSourceKey,
-  );
-  const contextInputOrder = await chat.evaluate(element => {
+  await expect(
+    chat.locator('[data-pretty-aui-slot="composer-context"]'),
+  ).toContainText(secondSourceKey);
+  await expect(noticeRows).toHaveCount(4);
+  await expect(noticeRows).toHaveText([
+    "Local agent connected",
+    "Current evaluation context attached",
+    "Current evaluation context attached",
+    "Evaluation context is already attached",
+  ]);
+  const contextInputOrder = await chat.evaluate((element) => {
     const selection = element.shadowRoot.querySelector(
       '[data-pretty-aui-slot="composer-context"]',
     );
     const input = element.shadowRoot.querySelector("textarea");
     return Boolean(
-      selection.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING,
+      selection.compareDocumentPosition(input) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });
   expect(contextInputOrder).toBe(true);
@@ -146,6 +293,33 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
   await composer.fill("Review it one more time.");
   await chat.locator(".paui-send").click();
   await expect(chat.locator('[data-kind="context"]')).toHaveCount(4);
+  const actionRows = chat.locator('[data-pretty-aui-slot="message-actions"]');
+  await expect(actionRows).toHaveCount(4);
+  await expect(chat.getByRole("button", { name: "Copy" })).toHaveCount(4);
+  const firstUserMessage = chat
+    .locator(".paui-turn")
+    .first()
+    .locator('.paui-message[data-role="user"]');
+  const firstUserTime = firstUserMessage.locator("time");
+  await expect(firstUserTime).toHaveText(/^\d{2}:\d{2}$/);
+  await expect(firstUserTime).toHaveCSS("opacity", "0");
+  await firstUserMessage.hover();
+  await expect(firstUserTime).toHaveCSS("opacity", "1");
+  await page.mouse.move(0, 0);
+  await firstUserMessage.getByRole("button", { name: "Copy" }).focus();
+  await expect(firstUserTime).toHaveCSS("opacity", "1");
+
+  const copy = firstUserMessage.getByRole("button", { name: "Copy" });
+  await copy.click();
+  await expect(
+    firstUserMessage.getByRole("button", { name: "Copied" }),
+  ).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe("Review this evaluation.");
+  await expect(
+    firstUserMessage.getByRole("button", { name: "Copy" }),
+  ).toBeVisible();
   const contexts = chat.locator('[data-kind="context"]');
   for (let index = 0; index < 4; index += 1) {
     const context = contexts.nth(index);
@@ -197,6 +371,29 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
     ).toHaveCount(2);
   }
 
+  const workspace = page.locator(".workspace");
+  await expect(workspace).toHaveCSS("overflow-y", "auto");
+  const workspaceGeometry = await workspace.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(workspaceGeometry.scrollHeight).toBeGreaterThan(
+    workspaceGeometry.clientHeight,
+  );
+  const workspaceBox = await workspace.boundingBox();
+  if (!workspaceBox) throw new Error("missing Workspace geometry");
+  await workspace.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await page.mouse.move(workspaceBox.x + 24, workspaceBox.y + 120);
+  await page.mouse.wheel(0, 500);
+  await expect
+    .poll(() => workspace.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0);
+  await workspace.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+
   const transcript = chat.locator(".paui-body");
   const scrollGeometry = await transcript.evaluate((element) => {
     element.scrollTop = 0;
@@ -222,35 +419,45 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
     await contexts.nth(index).locator("summary").click();
   }
 
-  await transcript.evaluate(element => {
+  await transcript.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
   await expect
     .poll(() =>
       transcript.evaluate(
-        element => element.scrollHeight - element.clientHeight - element.scrollTop,
+        (element) =>
+          element.scrollHeight - element.clientHeight - element.scrollTop,
       ),
     )
     .toBeLessThanOrEqual(1);
-  const bottomGap = await chat.evaluate(element => {
+  const bottomGap = await chat.evaluate((element) => {
     const transcript = element.shadowRoot.querySelector(".paui-body");
     const activities = element.shadowRoot.querySelectorAll(
       '[data-pretty-aui-slot="activity"]',
     );
     const last = activities.item(activities.length - 1);
-    return transcript.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom;
+    return (
+      transcript.getBoundingClientRect().bottom -
+      last.getBoundingClientRect().bottom
+    );
   });
   expect(bottomGap).toBeLessThanOrEqual(48);
-  await transcript.evaluate(element => {
-    element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 160);
+  await transcript.evaluate((element) => {
+    element.scrollTop = Math.max(
+      0,
+      element.scrollHeight - element.clientHeight - 160,
+    );
     element.dispatchEvent(new Event("scroll"));
   });
   const toBottom = chat.locator(".paui-to-bottom");
   await expect(toBottom).toBeVisible();
-  const buttonOffset = await chat.evaluate(element => {
+  const buttonOffset = await chat.evaluate((element) => {
     const transcript = element.shadowRoot.querySelector(".paui-body");
     const button = element.shadowRoot.querySelector(".paui-to-bottom");
-    return transcript.getBoundingClientRect().bottom - button.getBoundingClientRect().bottom;
+    return (
+      transcript.getBoundingClientRect().bottom -
+      button.getBoundingClientRect().bottom
+    );
   });
   expect(buttonOffset).toBeLessThanOrEqual(24);
 
@@ -284,10 +491,144 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
   expect(pageErrors).toEqual([]);
 });
 
+test("restored OpenCode-shaped history shows and copies only the user query", async ({
+  context,
+  page,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto(fixture.origin);
+  await page.getByRole("button", { name: "Copilot" }).click();
+  await page.getByRole("button", { name: "Connect" }).click();
+  const chat = page.locator("[data-acp-chat]");
+  await expect(chat.locator("textarea")).toBeEnabled();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        [...Array(localStorage.length).keys()]
+          .map((index) => localStorage.key(index))
+          .filter((key) => key?.endsWith(":acp-client"))
+          .map((key) => JSON.parse(localStorage.getItem(key)))
+          .some((value) => value.sessions?.synthetic),
+      ),
+    )
+    .toBe(true);
+
+  await page.reload();
+  await expect(chat.locator("textarea")).toBeEnabled();
+  const userMessage = chat.locator('.paui-message[data-role="user"]');
+  const userContent = userMessage.locator(".paui-message__content");
+  await expect(userMessage).toHaveCount(1);
+  await expect(userContent).toHaveText("Only the restored browser query");
+  await expect(userContent).not.toContainText('"score":0');
+  await expect(userContent).not.toContainText("pretty-aui-user-message-v1");
+  const restoredContext = chat.locator('[data-kind="context"]');
+  await expect(restoredContext).toHaveCount(1);
+  await expect(restoredContext.locator("summary")).toContainText(
+    "[peval://source/e2e-restored]",
+  );
+  await restoredContext.locator("summary").click();
+  await expect(restoredContext).toContainText('"score":0');
+  await expect(restoredContext).not.toContainText("pretty-aui-user-message-v1");
+
+  await userMessage.getByRole("button", { name: "Copy" }).click();
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe("Only the restored browser query");
+});
+
+test("running sessions show a decorative spinner after the title", async ({
+  page,
+}) => {
+  await page.goto(fixture.origin);
+  await page.getByRole("button", { name: "Copilot" }).click();
+  await page.getByRole("button", { name: "Connect" }).click();
+  const chat = page.locator("[data-acp-chat]");
+  const composer = chat.locator("textarea");
+  await expect(composer).toBeEnabled();
+
+  await composer.fill("Hold the running session");
+  await composer.press("Enter");
+  await expect(
+    chat.locator('.paui-presence[data-phase="running"]'),
+  ).toBeVisible();
+  await chat.getByRole("button", { name: "Session", exact: true }).click();
+  const runningSpinner = chat.locator(".paui-session__spinner");
+  await expect(runningSpinner).toHaveCount(1);
+  await expect(runningSpinner).toHaveAttribute("aria-hidden", "true");
+  await expect(chat.getByText("Earlier session", { exact: true })).toBeVisible({
+    timeout: 1_000,
+  });
+  await chat.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(composer).toBeEnabled({ timeout: 5_000 });
+});
+
+test("structured Execute, Read, and Diff rows expose semantic cards and copies", async ({
+  context,
+  page,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(fixture.origin);
+  await page.getByRole("button", { name: "Copilot" }).click();
+  await page.getByRole("button", { name: "Connect" }).click();
+  const chat = page.locator("[data-acp-chat]");
+  const composer = chat.locator("textarea");
+  await expect(composer).toBeEnabled();
+  await composer.fill("Show structured tools");
+  await composer.press("Enter");
+  await expect(chat).toContainText("Synthetic response");
+
+  const tools = chat.locator(".paui-tool");
+  await expect(tools).toHaveCount(3);
+  for (const tool of await tools.all()) await tool.locator("summary").click();
+
+  const terminal = chat.locator('[data-tool-block="terminal"]');
+  await expect(terminal).toContainText("/workspace");
+  await expect(terminal).toContainText("alpha");
+  await terminal.getByRole("button", { name: "Copy" }).click();
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe("alpha\nbeta\n");
+  await expect(terminal.locator(".paui-tool-terminal__output")).toHaveCSS(
+    "overflow-x",
+    "auto",
+  );
+
+  const read = chat.locator('[data-tool-block="read"]');
+  await expect(read).not.toContainText("fixture line 5");
+  await read.getByRole("button", { name: "... more 2 lines" }).click();
+  await expect(read).toContainText("fixture line 5");
+  await expect(
+    read.getByRole("button", { name: "Show less" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await read.getByRole("button", { name: "Copy" }).click();
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe(
+      Array.from({ length: 10 }, (_, index) => `fixture line ${index + 1}`).join(
+        "\n",
+      ),
+    );
+
+  const diff = chat.locator('[data-tool-block="diff"]');
+  await expect(diff.locator('[data-line-kind="add"]')).toHaveCount(4);
+  await expect(diff.locator('[data-line-kind="delete"]')).toHaveCount(3);
+  await diff.getByRole("button", { name: "... more 3 lines" }).click();
+  await expect(diff.locator('[data-line-kind="add"]')).toHaveCount(5);
+  await expect(diff.locator('[data-line-kind="delete"]')).toHaveCount(5);
+
+  expect(
+    await chat.evaluate((element) => {
+      const root = element.shadowRoot.querySelector(".pretty-aui");
+      return root.scrollWidth - root.clientWidth;
+    }),
+  ).toBeLessThanOrEqual(0);
+});
+
 test("session list uses the fixed-height chat viewport and scrolls independently", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto(fixture.origin);
   await page.getByRole("button", { name: "Copilot" }).click();
   await page.getByRole("button", { name: "Connect" }).click();
   const chat = page.locator("[data-acp-chat]");
@@ -303,8 +644,8 @@ test("session list uses the fixed-height chat viewport and scrolls independently
   await expect(list).toBeVisible();
   const compactGeometry = await list.evaluate((element) => {
     const listBox = element.getBoundingClientRect();
-    const rowBoxes = [...element.querySelectorAll(".paui-session")].map(
-      (row) => row.getBoundingClientRect(),
+    const rowBoxes = [...element.querySelectorAll(".paui-session")].map((row) =>
+      row.getBoundingClientRect(),
     );
     return {
       lastBottom: rowBoxes.at(-1).bottom - listBox.top,
@@ -315,6 +656,7 @@ test("session list uses the fixed-height chat viewport and scrolls independently
   expect(compactGeometry.lastBottom).toBeLessThanOrEqual(300);
 
   await chat.getByRole("button", { name: "Close", exact: true }).click();
+  await page.setViewportSize({ width: 1440, height: 600 });
   for (let index = 0; index < 8; index += 1) {
     await newChat.click();
     await expect(newChat).toBeEnabled();

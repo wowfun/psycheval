@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import tempfile
 from pathlib import Path
@@ -61,22 +62,28 @@ def main() -> None:
             ),
         )
         try:
-            uvicorn.run(
-                create_app(runtime, ServeAccess(None)),
-                host="127.0.0.1",
-                port=4178,
-                loop="asyncio",
-                http="h11",
-                ws="websockets-sansio",
-                ws_max_size=MAX_ACP_FRAME_BYTES,
-                ws_max_queue=16,
-                lifespan="off",
-                workers=1,
-                proxy_headers=False,
-                access_log=False,
-                server_header=False,
-                log_config=None,
-            )
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+                listener.bind(("127.0.0.1", 0))
+                listener.listen(2048)
+                origin = f"http://127.0.0.1:{listener.getsockname()[1]}"
+                print(f"PEVAL_E2E_ORIGIN={origin}", flush=True)
+                config = uvicorn.Config(
+                    create_app(runtime, ServeAccess(None)),
+                    host="127.0.0.1",
+                    port=0,
+                    loop="asyncio",
+                    http="h11",
+                    ws="websockets-sansio",
+                    ws_max_size=MAX_ACP_FRAME_BYTES,
+                    ws_max_queue=16,
+                    lifespan="off",
+                    workers=1,
+                    proxy_headers=False,
+                    access_log=False,
+                    server_header=False,
+                    log_config=None,
+                )
+                uvicorn.Server(config).run(sockets=[listener])
         finally:
             runtime.close()
             store.close()

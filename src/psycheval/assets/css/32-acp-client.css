@@ -1,5 +1,8 @@
 :root {
-  --acp-drawer-width:min(720px,52vw);
+  --acp-sidebar-width:var(--detail-sidebar-width);
+}
+body.workspace-sidebar-right-open {
+  --acp-sidebar-width:var(--workspace-right-sidebar-width);
 }
 .acp-launch {
   position:relative;
@@ -29,18 +32,27 @@
   right:0;
   bottom:0;
   z-index:71;
-  width:var(--acp-drawer-width);
-  min-width:440px;
+  width:calc(var(--acp-sidebar-width) + var(--workspace-sidebar-gap) + var(--acp-scrollbar-compensation,0px));
+  min-width:360px;
   display:grid;
-  grid-template-rows:auto auto minmax(0,1fr) auto;
+  grid-template-rows:auto minmax(0,1fr) auto;
   border-left:1px solid var(--rule);
   background:var(--surface);
   box-shadow:-24px 0 60px rgba(51,44,27,.18);
 }
+body.acp-drawer-open {
+  overflow-y:hidden;
+}
+body.acp-drawer-open .workspace {
+  height:100vh;
+  height:100dvh;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+}
 .acp-drawer-open .workspace {
-  max-width:calc(100vw - var(--acp-drawer-width) - 18px);
+  max-width:calc(100vw - var(--acp-sidebar-width) - var(--workspace-side-region-gap));
   margin-left:0;
-  margin-right:calc(var(--acp-drawer-width) + 18px);
+  margin-right:calc(var(--acp-sidebar-width) + var(--workspace-side-region-gap));
 }
 .acp-controls {
   grid-row:1;
@@ -77,23 +89,8 @@
 .acp-configure[hidden] {
   display:none;
 }
-.acp-notice {
-  grid-row:2;
-  margin:9px 16px 0;
-  border:1px solid var(--rule);
-  border-radius:6px;
-  background:var(--surface-2);
-  padding:8px 10px;
-  color:var(--ink);
-  font:12px/1.35 var(--mono);
-}
-.acp-notice.danger {
-  border-color:color-mix(in oklch,var(--fail),var(--rule) 35%);
-  background:color-mix(in oklch,var(--fail),var(--surface) 94%);
-  color:var(--fail);
-}
 .acp-chat-frame {
-  grid-row:3;
+  grid-row:2;
   min-height:0;
   padding:10px 12px 0;
 }
@@ -111,6 +108,11 @@
 }
 .acp-chat-placeholder[hidden] {
   display:none;
+}
+.acp-chat-placeholder.danger {
+  border-color:color-mix(in oklch,var(--fail),var(--rule) 35%);
+  background:transparent;
+  color:var(--fail);
 }
 .acp-chat-host {
   --pretty-aui-color-background:var(--surface);
@@ -134,7 +136,7 @@
   min-height:0;
 }
 .acp-prompt-assets {
-  grid-row:4;
+  grid-row:3;
   display:grid;
   grid-template-columns:minmax(0,1fr) max-content;
   align-items:end;
@@ -168,6 +170,11 @@
 .acp-controls select:focus,.acp-prompt-assets select:focus {
   outline:2px solid color-mix(in oklch,var(--focus),transparent 35%);
   outline-offset:1px;
+}
+@media (max-width:1180px) {
+  .acp-drawer {
+    width:calc(var(--acp-sidebar-width) + var(--acp-scrollbar-compensation,0px));
+  }
 }
 @media (max-width:900px) {
   .acp-backdrop {

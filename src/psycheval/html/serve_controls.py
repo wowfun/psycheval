@@ -240,7 +240,6 @@ def render_acp_drawer(messages: dict[str, str]) -> str:
       <button class="action-button compact" type="button" data-acp-close
         aria-label="{escape(messages["close"])}">{escape(messages["close"])}</button>
     </section>
-    <p class="acp-notice" data-acp-notice aria-live="polite" hidden></p>
     <div class="acp-chat-frame">
       <div class="acp-chat-placeholder" data-acp-placeholder>{escape(messages["acp_empty"])}</div>
       <div class="acp-chat-host" data-acp-chat></div>

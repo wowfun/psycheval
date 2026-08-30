@@ -14,7 +14,6 @@ const browser = installBrowserDom(`
     <button data-acp-close>Close</button>
     <select data-acp-agent></select><button data-acp-connect>Connect</button>
     <a data-acp-configure hidden></a>
-    <p data-acp-notice hidden></p>
     <div data-acp-placeholder></div><div data-acp-chat></div>
     <select data-acp-prompt-asset></select><button data-acp-use-prompt>Use</button>
   </aside>
@@ -34,6 +33,7 @@ window.localStorage.setItem(
   JSON.stringify({
     agent_id: "opencode",
     sessions: { opencode: "missing-session" },
+    models: { opencode: "fast", another: "another-model" },
     contexts: [
       {
         id: "source:source-7:4",
@@ -54,6 +54,7 @@ class StaleSessionSocket extends window.EventTarget {
   static instances = [];
   static loadRequests = 0;
   static newRequests = 0;
+  static modelUpdates = [];
 
   constructor() {
     super();
@@ -90,7 +91,16 @@ class StaleSessionSocket extends window.EventTarget {
         StaleSessionSocket.newRequests += 1;
         this.#result(message.id, {
           sessionId: "fresh-session",
-          modes: { currentModeId: "", availableModes: [] },
+          configOptions: [modelConfig("balanced")],
+        });
+      } else if (message.method === "session/set_config_option") {
+        StaleSessionSocket.modelUpdates.push({
+          sessionId: message.params.sessionId,
+          id: message.params.configId,
+          value: message.params.value,
+        });
+        this.#result(message.id, {
+          configOptions: [modelConfig(message.params.value)],
         });
       }
     }
@@ -114,6 +124,20 @@ class StaleSessionSocket extends window.EventTarget {
       );
     });
   }
+}
+
+function modelConfig(currentValue) {
+  return {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue,
+    options: [
+      { value: "fast", name: "Fast" },
+      { value: "balanced", name: "Balanced" },
+    ],
+  };
 }
 
 const previousWebSocket = globalThis.WebSocket;
@@ -149,9 +173,35 @@ test("a structured stale-session rejection retries once with a fresh session", a
   assert.equal(await acp.connectAcpAgent(), true);
   assert.equal(StaleSessionSocket.loadRequests, 1);
   assert.equal(StaleSessionSocket.newRequests, 1);
+  assert.deepEqual(StaleSessionSocket.modelUpdates, [
+    { sessionId: "fresh-session", id: "model", value: "fast" },
+  ]);
   const saved = JSON.parse(
     window.localStorage.getItem("peval:ownership-test:acp-client"),
   );
   assert.equal(saved.sessions.opencode, "fresh-session");
+  assert.deepEqual(saved.models, { opencode: "fast", another: "another-model" });
   assert.ok(acp.acpState.mounted);
+});
+
+test("corrupt browser state cannot block a fresh session or its Agent default", async () => {
+  await acp.disconnectAcpAgent({ persist: false });
+  window.localStorage.setItem("peval:ownership-test:acp-client", "'");
+
+  assert.equal(await acp.connectAcpAgent(), true);
+  assert.equal(StaleSessionSocket.loadRequests, 1);
+  assert.equal(StaleSessionSocket.newRequests, 2);
+  assert.deepEqual(StaleSessionSocket.modelUpdates, [
+    { sessionId: "fresh-session", id: "model", value: "fast" },
+  ]);
+  assert.equal(acp.acpState.mounted.controller.getSnapshot().phase, "idle");
+  assert.equal(
+    acp.acpState.mounted.controller.getSnapshot().configOptions[0].currentValue,
+    "balanced",
+  );
+  assert.doesNotThrow(() =>
+    JSON.parse(
+      window.localStorage.getItem("peval:ownership-test:acp-client"),
+    ),
+  );
 });

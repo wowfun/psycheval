@@ -1,3 +1,6 @@
+:root {
+  --workspace-side-region-gap:18px;
+}
 .workspace-content,
 .workspace-main {
   min-width:0;
@@ -47,7 +50,7 @@
   display:grid;
   grid-template-columns:minmax(0,1fr) var(--workspace-right-sidebar-width);
   align-items:start;
-  gap:18px;
+  gap:var(--workspace-side-region-gap);
 }
 .serve-mode.workspace-views-open .workspace-side-region,
 .serve-mode.detail-sidebar-open .workspace-side-region {
