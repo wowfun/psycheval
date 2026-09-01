@@ -654,7 +654,10 @@ class HarborWorkspace:
     def _file_tree(self, task_dir: Path) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for path in _walk_tree(task_dir):
-            relative = path.relative_to(task_dir).as_posix()
+            relative_path = path.relative_to(task_dir)
+            if "__pycache__" in relative_path.parts:
+                continue
+            relative = relative_path.as_posix()
             value = path.stat(follow_symlinks=False)
             item = {
                 "path": relative,
@@ -860,7 +863,7 @@ def _validate_task(task_dir: Path) -> tuple[bool, str | None]:
 def _missing_harbor_templates_error() -> HarborWorkspaceError:
     return HarborWorkspaceError(
         "Harbor Task templates are unavailable; reinstall peval with Harbor "
-        "package data (PyInstaller builds require --collect-data harbor)"
+        "installed Harbor package data"
     )
 
 

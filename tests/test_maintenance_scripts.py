@@ -1,36 +1,10 @@
 from __future__ import annotations
 
-import io
 from pathlib import Path
 
 from scripts import check_docs, check_skill
-from scripts.check_distribution_assets import WHEEL_REQUIRED
-from scripts.smoke_pyinstaller import wait_serve_url
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def test_wheel_contract_covers_every_runtime_asset() -> None:
-    assets_root = ROOT / "src/psycheval/assets"
-    expected = {
-        f"psycheval/assets/{path.relative_to(assets_root).as_posix()}"
-        for path in assets_root.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts
-    }
-
-    assert WHEEL_REQUIRED == expected
-
-
-def test_frozen_serve_smoke_ignores_output_before_the_url() -> None:
-    class Process:
-        stdout = io.StringIO("startup notice\npeval serve: http://127.0.0.1:58010/\n")
-        stderr = io.StringIO()
-
-        @staticmethod
-        def poll() -> None:
-            return None
-
-    assert wait_serve_url(Process()) == "http://127.0.0.1:58010/"  # type: ignore[arg-type]
 
 
 def test_docs_checker_handles_reference_links_and_parenthesized_paths(

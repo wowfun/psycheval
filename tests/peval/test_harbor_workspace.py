@@ -1763,6 +1763,19 @@ class HarborWorkspaceTests(unittest.TestCase):
             (root / "dataset" / "hello" / "large.txt").write_bytes(
                 b"x" * (2 * 1024 * 1024 + 1)
             )
+            cache = root / "dataset" / "hello" / "__pycache__"
+            cache.mkdir()
+            cached_module = cache / "helper.cpython-313.pyc"
+            cached_module.write_bytes(b"first")
+            nested_cache = root / "dataset" / "hello" / "steps" / "__pycache__"
+            nested_cache.mkdir(parents=True)
+            (nested_cache / "step.cpython-313.pyc").write_bytes(b"step")
+            cache_revision = library.task_detail("tasks", "hello")["task"]["revision"]
+            cached_module.write_bytes(b"second")
+            self.assertNotEqual(
+                library.task_detail("tasks", "hello")["task"]["revision"],
+                cache_revision,
+            )
 
             store = open_workspace_state(str(root))
             runtime = ServeRuntime(store, config)
@@ -1800,6 +1813,9 @@ class HarborWorkspaceTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 paths = {item["path"]: item for item in detail["tree"]}
                 self.assertEqual(detail["default_file_path"], "instruction.md")
+                self.assertFalse(
+                    any("__pycache__" in Path(path).parts for path in paths)
+                )
                 self.assertIn("solution/solve.sh", paths)
                 self.assertIn("tests/test.sh", paths)
                 self.assertFalse(paths["binary.bin"]["editable"])

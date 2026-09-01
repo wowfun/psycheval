@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import re
-import subprocess
-import sys
 import tomllib
 from pathlib import Path
 
@@ -87,14 +84,6 @@ def test_vendored_pretty_aui_consolidates_third_party_licenses() -> None:
     assert not standalone.joinpath("licenses").exists()
 
 
-def test_distribution_workflow_does_not_pin_artifact_version() -> None:
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-
-    assert re.search(r"\.local/dist/psycheval-\d+\.\d+\.\d+", workflow) is None
-    assert ".local/dist/psycheval-*.whl" in workflow
-    assert ".local/dist/psycheval-*.tar.gz" in workflow
-
-
 def test_ci_uses_least_privilege_and_avoids_duplicate_branch_runs() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
@@ -104,15 +93,18 @@ def test_ci_uses_least_privilege_and_avoids_duplicate_branch_runs() -> None:
     assert "cancel-in-progress: true" in workflow
 
 
-def test_pyinstaller_workflow_collects_harbor_data_and_smokes_workbench() -> None:
+def test_ci_uses_only_the_editable_source_tool_installation() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
-    assert "--collect-data harbor" in workflow
-    assert "--collect-data psycheval" in workflow
-    assert "psycheval.peval" not in workflow
-    assert "--additional-hooks-dir scripts/pyinstaller_hooks" in workflow
-    assert "scripts/smoke_pyinstaller.py" in workflow
-    assert ".local/pyinstaller/dist/peval" in workflow
+    assert "uv tool install -e . --force" in workflow
+    assert "scripts/smoke_source_tool.py" in workflow
+    assert "scripts/check_skill.py\n          skills/peval" in workflow
+    assert "uv build" not in workflow
+    assert ".whl" not in workflow
+    assert ".tar.gz" not in workflow
+    assert "smoke_distribution" not in workflow
+    assert "check_distribution_assets" not in workflow
+    assert "pyinstaller" not in workflow.lower()
 
 
 def test_checkout_installs_the_tool_before_using_bare_peval_commands() -> None:
@@ -121,9 +113,14 @@ def test_checkout_installs_the_tool_before_using_bare_peval_commands() -> None:
     quick_start = readme.split("## Quick start", 1)[1].split("## Documentation", 1)[0]
 
     assert "uv tool install -e ." in install
-    assert "peval init" in quick_start
+    assert "peval init -r .local/evaluation" in quick_start
+    assert "peval init\n" not in quick_start
     assert "peval --help" in quick_start
     assert "peval view trajectory --help" in quick_start
+
+
+def test_removed_distribution_smoke_helpers_do_not_survive_as_dead_code() -> None:
+    assert not (ROOT / "scripts/_smoke_harbor.py").exists()
 
 
 def test_user_facing_peval_examples_do_not_use_python_or_uv_wrappers() -> None:
@@ -137,8 +134,9 @@ def test_user_facing_peval_examples_do_not_use_python_or_uv_wrappers() -> None:
         assert "python -m psycheval.cli" not in text, path
 
 
-def test_peval_skill_is_read_only_and_trajectory_focused() -> None:
+def test_peval_skill_owns_review_then_revision_bound_publication() -> None:
     skill_root = ROOT / "skills/peval"
+    assert not (ROOT / "src/psycheval/assets/agent_skills").exists()
     files = {
         path.relative_to(skill_root).as_posix()
         for path in skill_root.rglob("*")
@@ -146,7 +144,9 @@ def test_peval_skill_is_read_only_and_trajectory_focused() -> None:
     }
     assert files == {
         "SKILL.md",
+        "assets/trial-analysis-template.md",
         "references/analysis-guide.md",
+        "references/trial-analysis-workflow.md",
         "references/view-tr.md",
     }
 
@@ -154,29 +154,9 @@ def test_peval_skill_is_read_only_and_trajectory_focused() -> None:
         (skill_root / relative).read_text(encoding="utf-8")
         for relative in sorted(files)
     )
-    for unsupported_workflow in (
-        "peval export",
-        "peval import",
-        "peval init",
-        "peval serve",
-        "report_tools.py",
-        "source-ref",
-    ):
-        assert unsupported_workflow not in text
-    assert "peval view tr -p <trial-dir>" in text
+    assert "peval view tr -r <workspace> --source-ref <ref>" in text
+    assert "peval view task-skill" in text
+    assert "peval publish trial-analysis" in text
+    assert "--replace-revision" in text
+    assert "Do not publish in plan mode" in text
     assert "trajectory_available" in text
-
-
-def test_distribution_smoke_rejects_editable_install_with_actionable_error() -> None:
-    completed = subprocess.run(
-        [sys.executable, str(ROOT / "scripts/smoke_distribution.py")],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert completed.returncode != 0
-    output = completed.stdout + completed.stderr
-    assert "requires an isolated wheel installation" in output
-    assert "current interpreter uses an editable psycheval checkout" in output
