@@ -32,39 +32,31 @@ Tests isolate HOME/XDG state, config, sockets, timers, and environment secrets.
 Focused success is not a release claim unless the expected test inventory is
 visible.
 
-## Distribution checks
+## Editable source-tool check
 
-Build both archives and verify their contents:
+Install the checkout into an isolated tool directory and exercise its public
+command entry points:
 
 ```console
-uv build --out-dir .local/dist
-uv run python scripts/check_distribution_assets.py \
-  .local/dist/psycheval-*.whl \
-  .local/dist/psycheval-*.tar.gz
-uv venv .local/wheel-env
-uv pip install --python .local/wheel-env/bin/python \
-  .local/dist/psycheval-*.whl
-.local/wheel-env/bin/python scripts/smoke_distribution.py
+UV_TOOL_DIR=.local/source-tool \
+UV_TOOL_BIN_DIR=.local/source-tool-bin \
+uv tool install -e . --force
+uv run python scripts/smoke_source_tool.py \
+  .local/source-tool-bin/peval skills/peval
 ```
 
-Install the wheel in an isolated environment and exercise `peval --help`, shell
-completion, a synthetic Harbor Trial view, a fixture-backed conversion and report, plus
-`psycheval-psychevo-harness`. The installed environment must not expose removed
-module or command names. Build a PyInstaller single file from
-`src/psycheval/cli/__main__.py`, collecting both Psycheval and Harbor
-package data. Its smoke covers help, a synthetic Harbor Trial view, a
-fixture-backed report, and a Dataset Workbench Task scaffold. The PyInstaller
-check freezes the checkout source;
-wheel provenance is covered separately by the preceding isolated-install smoke.
-Both distribution smokes require the pretty-aui license and consolidated
-third-party license files; a JavaScript-only asset check is insufficient.
+The smoke covers `peval --help`, default initialization without a Skill,
+explicit Agent Skill installation and replacement, and the
+`psycheval-psychevo-harness` entry point.
+Psycheval does not build or validate wheel, sdist, or frozen executable
+artifacts as project gates.
 
 ## Platform boundaries
 
 CI runs the complete Python suite on Linux and native Windows. Node,
-documentation, skill, and distribution checks run on Ubuntu. Local Linux or WSL
-validation does not establish native Windows support; declare it only after the
-remote Windows job succeeds.
+documentation, skill, and editable source-tool checks run on Ubuntu. Local Linux
+or WSL validation does not establish native Windows support; declare it only
+after the remote Windows job succeeds.
 
 Live PBench runs are separate opt-in evidence. Classify provider, network,
 browser, harness, and upstream failures independently from Agent contract

@@ -6,6 +6,7 @@ Initialize and serve a workspace:
 
 ```console
 peval init -r .local/evaluation
+peval init -r .local/evaluation --skill skills/peval
 peval serve -r .local/evaluation
 ```
 
@@ -56,7 +57,9 @@ template; configured entries remain editable as direct executable-and-argument
 arrays. Changes apply immediately, and changing or removing a connected Agent
 stops its process. Repository Markdown files provide the default prompts.
 Editing one in the page writes a same-name override to the workspace `prompts/`
-directory; **Restore default** removes that override. Dataset IDs and paths are edited
+directory; **Restore default** removes that override. The four English prompts
+and their four Simplified Chinese counterparts are separate assets, so each can
+be customized or restored without changing its translation. Dataset IDs and paths are edited
 directly in the registry table. Registering an existing Dataset
 requires only its path; adding a Jobs mount likewise requires only the Jobs path.
 Each generated ID uses the directory basename when it is path-safe and unique,
@@ -92,7 +95,9 @@ After adding an allowlisted Agent such as OpenCode in Configuration, use
 `pretty-aui` session controls to create, select, or close conversations. Select
 a model in the composer and new conversations reuse it; the preference survives
 page reloads for the same Workspace and Agent. Existing conversations retain
-their own Agent-managed model. Attach multiple sources, Tasks, or reports with
+their own Agent-managed model. Every new conversation starts in the Agent's
+`plan` mode, while an opened conversation retains its Agent-managed mode. Attach
+multiple sources, Tasks, or reports with
 the **Add context** control
 above the prompt. Select an evaluation item, add it, and repeat; remove one with
 the named close control on its chip. Adding the same reference again has no
@@ -125,6 +130,10 @@ When no Agent is configured, the connection control links directly to the ACP
 Agent form in **Configuration**.
 The composer can load any configured Markdown prompt asset; adding a source,
 Task, or report selects the corresponding suggested asset without sending it.
+All eight language variants remain available. A fresh Chinese page starts with
+the Chinese evaluation-review prompt and recommends Chinese context prompts;
+other locales use English. An existing valid saved selection always wins over
+that locale default.
 
 Provision the Agent outside Psycheval first. For OpenCode, use `opencode auth
 login` in a terminal when its provider needs authentication. The panel shows
@@ -146,12 +155,31 @@ configure executables you trust, and do not treat a permission card in the
 drawer as a filesystem or process sandbox. The exact access and persistence
 rules are in the [workspace reference](../../reference/workspace.md).
 
+## Skill-based Trial evaluation
+
+From the Psycheval checkout root, explicitly install the repository Skill with
+`peval init -r .local/evaluation --skill skills/peval`. The option replaces the
+complete same-name workspace copy; plain `peval init` does not install a Skill.
+Start a new Copilot session after an install or replacement, attach one or more
+Harbor Trials, and name the Task skill to evaluate. The Copilot reads each Trial
+through its source reference and reads the named live Task criterion from
+`environment/skills/<name>`.
+
+The skill drafts one standard Markdown report per parent Trial while the session
+is in plan mode. Review the draft and displayed evidence, skill, and current
+analysis revisions. Then manually switch to execute/build mode and confirm
+publication. The write is revision-bound and no-clobber; replacing an existing
+report also requires its exact current revision. Single-step and MultiStep
+phases share `<trial-dir>/analysis.md`, which the Trial detail view reads after
+the completed turn refreshes the catalog.
+
 ## Serve access
 
 Before binding to a non-local address, follow the access rules in the
 [workspace reference](../../reference/workspace.md).
 
-Import authored analysis into a selected source reference with:
+Import authored analysis into a selected local Trial-cell source reference
+with:
 
 ```console
 peval import analysis -r .local/evaluation \

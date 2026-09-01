@@ -5,9 +5,10 @@ rebuildable projections.
 
 | Data | Authority | Mutation rule |
 | --- | --- | --- |
-| Task, Job, Trial, result, reward, artifacts | Harbor files | Read-only to the CLI |
+| Task, Job, Trial, result, reward, artifacts | Harbor files | Read-only to ordinary CLI views |
+| Trial evaluation report | Harbor Trial-root `analysis.md` | Publish only through `peval publish trial-analysis` |
 | Portable steps, calls, observations, timestamps, usage | ATIF trajectory | Strictly validate before writing |
-| Aliases, state, notes, analysis, report bindings | Workspace overlay | Explicit user mutation |
+| Aliases, state, notes, local-source analysis, report bindings | Workspace overlay | Explicit user mutation |
 | Catalog rows, summaries, JSON/XLSX exports | Derived data | Rebuildable from authorities |
 
 ## Trajectories and sidecars
@@ -28,7 +29,13 @@ Live Harbor Task text is read on demand through the bounded Workspace Task file
 interface. Task configuration, required instruction files, and Task ignore
 rules are strict UTF-8, independent of the host locale. Task text is not copied
 into reports, catalog summaries, search documents, or exports; live detail may
-expose only a safe Dataset/Task reference.
+expose only a safe Dataset/Task reference. Task file-tree responses omit
+`__pycache__` directories and their descendants as generated presentation noise;
+named Task-skill snapshots also omit that generated cache from their readable
+file set, size budget, and criterion revision. A named Task-skill snapshot is
+limited to 1,000 authored files in addition to its per-file and aggregate byte
+budgets. Authored Task files remain visible to validation, revision, copy, and
+publish ownership.
 The Workspace is the only browser presentation surface. It fetches derived data
 through local HTTP interfaces and does not serialize that state into offline HTML
 reports or Workspace snapshots.
@@ -65,3 +72,26 @@ attachment. Display aliases never replace evidence identity. Workspace
 mutations return or produce a generation; clients reconcile by generation and
 stable key. Rebuilding a catalog or report never silently deletes original
 inputs or Harbor-owned evidence.
+
+## Harbor Trial analysis
+
+A Harbor evaluation report has one authority: `<trial-dir>/analysis.md`.
+Single-step and MultiStep Trial projections share that parent report. Step
+directories, collected artifacts, nested log files, and the legacy workspace
+`harbor/.../analysis.md` overlay are not report authorities and are not shown as
+Trial analysis. Workspace report packages under `reports/` remain independent.
+
+Publication is no-clobber by default. Creation binds the current Trial evidence
+revision and named live Task-skill revision. Replacement additionally requires
+the exact current analysis revision. The publisher recomputes every revision
+under the workspace writer lease and a persistent Trial-root coordination lock
+shared by workspaces that mount the same Trial. It rejects active Trials and
+stale inputs, then atomically replaces only the Trial-root Markdown file. The
+coordination lock is not report evidence and is excluded from source revisions.
+A recorded/live Task digest mismatch remains analyzable but must be preserved as
+prominent report provenance; a missing, ambiguous, invalid, or unreadable Task
+or skill is an error.
+
+For MultiStep Trials, catalog phase rows retain phase-scoped evidence revisions
+for projection invalidation. Trial analysis publication and ACP context use the
+parent Trial aggregate revision because every phase shares the same report.

@@ -21,17 +21,19 @@ archive by packing the owning pretty-aui checkout, then update the lockfile,
 install it, and run the vendoring command. The lockfile integrity and
 byte-for-byte vendor check make a clean `npm ci` reproduce the checked-in
 browser distribution. Its `LICENSE` and `THIRD_PARTY_LICENSES.txt` files are
-part of the immutable distribution and must remain in wheel and frozen
-application outputs.
+part of that immutable vendored asset and must remain present.
 
 Keep Harbor-specific adapters at the pinned public `0.21.0` seams under
 `psycheval.harbor`; package-wide CLI, trajectory, report, and workspace code
 lives directly under `psycheval`. Update the owning reference and closest
 deterministic test when a stable interface changes.
 
-The `skills/peval` package uses progressive references and helper scripts.
-Validate its frontmatter, name, and local references with the repository skill
-checker. Follow [Documentation Ownership](AGENTS.md) for docs changes.
+The repository-owned `skills/peval` Skill uses progressive references and
+assets and is not Python package data. `peval init --skill <skill-dir>` validates
+one explicitly selected local Skill and atomically replaces its workspace copy;
+plain `peval init` installs nothing. Validate the repository source with the
+Skill checker. Follow
+[Documentation Ownership](AGENTS.md) for docs changes.
 
 Build artifacts belong in `.local/` and are not authority. Never develop against
 real profile databases, credentials, provider configuration, or user

@@ -11,6 +11,23 @@ An initialized root contains `peval.toml`. The CLI discovers it through explicit
 no separate config-file option. Workspace configuration is strict: unknown
 Psycheval-owned fields, removed defaults, invalid types, duplicate identities,
 and dangling Dataset references fail before any command or mutation runs.
+
+Plain `peval init` creates or validates only the workspace configuration and log
+directory. `peval init --skill <skill-dir>` additionally validates one local
+Agent Skill, using the Skill directory name and matching `SKILL.md` frontmatter,
+then stages and installs it at `.agents/skills/<name>/`. A relative Skill path is
+resolved from the command's current directory, not from the workspace root.
+Explicit installations in one workspace are serialized. Every installation
+replaces the complete same-name destination, including local edits and stale
+files; a caught replacement failure restores the prior destination, and a later
+explicit installation recovers a uniquely identifiable backup left by an
+interrupted replacement. No managed manifest or revision guard is created.
+Serialization uses the persistent `.agents/skills/.peval-install.lock`
+coordination file; it is not Skill ownership metadata and does not affect the
+installed tree.
+Invalid, linked, special-file, or source/destination-overlapping Skill trees
+fail before workspace initialization writes.
+
 The Psycheval CLI owns top-level workspace presentation, `[adapters.*]`,
 `[[acp.agents]]`, `[[harbor.datasets]]`, and `[[harbor.mounts]]`. `psycheval.harbor` owns
 `[harbor.host]`; each parser accepts the sibling section without copying its
@@ -45,7 +62,11 @@ Administrators may edit the allowlist through the separate configuration API.
 Repository Markdown assets own the default ACP prompt text. The workspace
 `prompts/` directory may contain a same-name Markdown file for any known asset;
 that file is the workspace override. Removing an override restores the
-repository default. Prompt writes are revision-checked, bounded UTF-8 text
+repository default. English and Simplified Chinese variants are independent
+assets and are all present in the catalog. A fresh Chinese workspace view uses
+the Chinese evaluation-review asset and Chinese context recommendations; other
+locales use the English counterparts. A valid saved selection remains selected
+regardless of locale. Prompt writes are revision-checked, bounded UTF-8 text
 mutations and do not modify evaluation evidence.
 
 ## Storage and identity

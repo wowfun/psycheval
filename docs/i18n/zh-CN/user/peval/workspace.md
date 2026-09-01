@@ -6,6 +6,7 @@
 
 ```console
 peval init -r .local/evaluation
+peval init -r .local/evaluation --skill skills/peval
 peval serve -r .local/evaluation
 ```
 
@@ -53,7 +54,8 @@ args = ["acp"]
 模板的表单面板；已有配置仍可直接编辑可执行文件与参数数组。保存后立即生效，
 修改或移除已连接的 Agent 会停止对应进程。仓库 Markdown 文件提供
 默认提示词；在配置页编辑后，会在工作区 `prompts/` 目录写入同名覆盖文件；点击
-**恢复默认**会移除该覆盖。Dataset ID 与路径可直接在注册表格中编辑。注册已有 Dataset 时
+**恢复默认**会移除该覆盖。四份英文提示词及其四份简体中文版是彼此独立的资产，
+每一份都能单独自定义或恢复，不会连带修改对应译文。Dataset ID 与路径可直接在注册表格中编辑。注册已有 Dataset 时
 只需输入路径，添加 Jobs 挂载时也只需输入 Jobs 路径。目录 basename 合法且未
 占用时会直接作为 ID；basename 非法或已冲突时则生成带随机字符串的 path-safe
 ID。新挂载默认不关联 Dataset。两个注册区都使用可编辑表格：双击挂载 ID、
@@ -80,6 +82,7 @@ Dataset，操作会被拒绝。手写 `peval.toml` 时仍需显式填写 ID。
 **Copilot**。连接 Agent，并使用 `pretty-aui` 的会话控件新建、选择或关闭对话。
 在输入区选择模型后，新对话会继承当前模型；同一工作区和 Agent 的偏好在页面
 刷新后仍会保留。打开已有对话时，仍使用 Agent 为该对话保存的模型。
+每个新对话都会以 Agent 的 `plan` 模式启动，打开已有对话时则保留其 Agent 管理的模式。
 通过输入框上方的**添加上下文**可以同时附加多个来源、Task 或报告：先选择评测
 对象再添加，重复以上操作；使用各 chip 上有明确名称的关闭按钮可逐项移除。
 重复添加同一引用不会产生副本。切换工作台页面时抽屉保持打开；请使用关闭按钮、
@@ -101,7 +104,9 @@ Dataset，操作会被拒绝。手写 `peval.toml` 时仍需显式填写 ID。
 
 未配置 Agent 时，连接控件会直接跳转到**配置**页中的 ACP Agent 表单。
 输入区可以载入任一已配置的 Markdown 提示词资产；添加来源、Task 或报告时只会
-选中对应的建议资产，不会自动发送。
+选中对应的建议资产，不会自动发送。八个语言版本始终都可选择。中文页面首次打开时
+默认使用中文版评测复盘，并按上下文推荐中文提示词；其他语言页面使用英文版本。
+只要已保存的选择仍然有效，就始终优先保留该选择，不会按页面语言替换。
 
 请先在 Psycheval 外部配置 Agent。以 OpenCode 为例，Provider 需要认证时，应在
 终端运行 `opencode auth login`。面板会展示消息、计划、工具进度、权限和信息请求、
@@ -119,12 +124,27 @@ ACP Agent 会继承 serve 进程的环境变量与操作系统权限。请只配
 也不要把抽屉中的权限卡片当作文件系统或进程沙箱。完整访问和持久化规则见
 [workspace reference](../../../../reference/workspace.md)。
 
+## 基于 Skill 的 Trial 评测
+
+在 Psycheval checkout 根目录中，通过 `peval init -r .local/evaluation
+--skill skills/peval` 显式安装仓库 Skill。该参数会完整替换工作区中的同名副本；
+普通 `peval init` 不会安装 Skill。安装或替换后，请新建一个 Copilot 会话，附加
+一个或多个 Harbor Trial，并明确要评测的 Task skill 名称。Copilot 会按 source
+reference 读取各 Trial，并从 live Task 的 `environment/skills/<name>` 读取指定
+评测准则。
+
+Skill 会在 plan 模式下为每个 parent Trial 生成一份标准 Markdown 草稿，并展示
+证据、Skill 和现有分析的 revision。完成审阅后，请手动切换到 execute/build
+模式并确认发布。写入默认禁止覆盖并绑定 revision；替换现有报告时还必须提供其
+当前 revision。Single-step 和 MultiStep 的所有阶段共用
+`<trial-dir>/analysis.md`；Copilot 回合完成后，目录会刷新，Trial 详情即可读取该报告。
+
 ## Serve 访问
 
 绑定非本地地址前，遵循
 [workspace reference](../../../../reference/workspace.md) 中的访问规则。
 
-将分析报告导入指定 source reference：
+将分析报告导入指定的本地 Trial-cell source reference：
 
 ```console
 peval import analysis -r .local/evaluation \

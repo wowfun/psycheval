@@ -1,7 +1,7 @@
 # Architecture
 
-Psycheval is one Python distribution and package. `peval` is the installed CLI
-name, not a second package or module.
+Psycheval is one Python project and package. `peval` is the installed CLI name,
+not a second package or module.
 
 ```text
 psycheval
@@ -22,7 +22,11 @@ recognition and projection for both direct CLI paths and workspace mounts;
 one internal Harbor Task loader owns validated Task configuration, text
 decoding, and publishable file selection for both workspace state and the
 Dataset workbench. Workspace state owns only discovery, overlays, and derived
-catalog records.
+catalog records. One Trial-analysis module resolves normalized Harbor source
+references, exposes a named live Task skill as evaluation criteria, and
+publishes a reviewed Markdown report through an optimistic, cross-process
+serialized write. It is the only Psycheval module allowed to create or replace
+Harbor Trial-root `analysis.md`.
 `psycheval.harbor` is the adapter module for Harbor's Agent, Environment,
 trajectory, and verifier seams; it owns host execution, harness integration,
 and evidence scoring.
@@ -85,8 +89,10 @@ group leader has already exited. The vendored `pretty-aui` standalone client own
 negotiation, sessions, interactions, normalized state, and rendering; serve
 does not maintain a second protocol projection. Psycheval supplies only a
 workspace- and Agent-scoped browser preference adapter so new conversations can
-reuse the currently selected model across reconnects and page loads; model
-recognition and session configuration remain owned by `pretty-aui`. The gateway
+reuse the currently selected model across reconnects and page loads, and asks
+`pretty-aui` to apply the fixed `plan` mode before publishing every genuinely
+new conversation. Existing conversations retain their Agent-owned mode and
+model; recognition and session configuration remain owned by `pretty-aui`. The gateway
 does not enter the retained-session conversion, report, workspace overlay, or
 Harbor evidence paths. ACP conversations remain Agent-owned runtime state; an
 explicit, bounded context adapter keeps an ordered set of evaluation references
@@ -109,7 +115,14 @@ Execute, Read, and ACP Diff payloads become semantic cards, while ambiguous
 payloads remain lossless generic input/output sections. Psycheval supplies only
 localized chrome and does not parse tool payloads or duplicate the renderer.
 Psycheval neither parses Agent transcripts nor renews those recovered activities
-as live host context references after a page load.
+as live host context references after a page load. A selected Harbor source is
+resolved from its normalized mount, Job, Trial, and optional step identity; live
+detail reads validate and load only that target rather than rediscovering every
+configured Harbor Trial. The context adapter resolves an ordered batch under
+one global character budget; stable Trial identity and revision fields are
+never displaced by large trajectory content. A completed ACP turn only asks
+the Psycheval host to refresh current catalog/detail projections. Generic chat
+event behavior remains owned by `pretty-aui`.
 
 ## Repository topology
 
@@ -123,15 +136,18 @@ as live host context references after a page load.
   reproduce browser distributions that have not been published upstream.
 - `datasets/` contains maintained Harbor Datasets; `examples/` contains
   authoring examples, not maintained evaluation members.
-- `skills/peval/` consumes the public command.
+- `skills/peval/` is the repository source of the project Agent Skill and is
+  not package data. `peval init --skill <skill-dir>` explicitly installs or
+  replaces one workspace copy at `.agents/skills/<name>/`.
 
 ## Dependency direction
 
 Core CLI implementation may consume pinned Harbor interfaces but not
 `psycheval.harbor` internals. The two implementations exchange only owned
 configuration sections and explicit formats. Tasks invoke the installed
-verifier rather than checkout-relative Python paths; documentation and skills
-consume public interfaces but runtime code does not depend on them.
+verifier rather than checkout-relative Python paths. Documentation and skills
+consume public interfaces; runtime code reads a Skill only when its local
+directory is explicitly supplied to `peval init --skill`.
 
 Pydantic models own the validated CLI workspace configuration, HTTP request
 shapes, and Problem responses. Large catalog, report, and Harbor projections
