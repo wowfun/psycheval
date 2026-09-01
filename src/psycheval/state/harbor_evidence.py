@@ -33,6 +33,8 @@ class HarborEvidence:
     task_metadata: dict[str, Any]
     provenance: dict[str, Any]
     phase_timing: dict[str, Any]
+    source_revision: str
+    task_revision: str
     revision: str
 
 
@@ -176,13 +178,12 @@ def _read_once(
     }
     provenance = {key: value for key, value in provenance.items() if value is not None}
 
+    source_digest = hashlib.sha256()
+    for value in (trial_revision, job_revision):
+        source_digest.update(value.encode("utf-8") + b"\0")
+    source_revision = source_digest.hexdigest()
     digest = hashlib.sha256()
-    for value in (
-        trial_revision,
-        job_revision,
-        index.revision,
-        selected_revision,
-    ):
+    for value in (source_revision, index.revision, selected_revision):
         digest.update(value.encode("utf-8") + b"\0")
     return HarborEvidence(
         trial_values=trial_values,
@@ -195,6 +196,8 @@ def _read_once(
         task_metadata=task_metadata,
         provenance=provenance,
         phase_timing=phase_timing,
+        source_revision=source_revision,
+        task_revision=selected_revision,
         revision=digest.hexdigest(),
     )
 

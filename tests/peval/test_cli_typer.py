@@ -18,7 +18,7 @@ class PevalTyperCliTests(unittest.TestCase):
         root = get_command(app)
         self.assertEqual(
             set(root.commands),
-            {"init", "view", "export", "import", "serve"},
+            {"init", "view", "export", "import", "publish", "serve"},
         )
         root_options = {
             option
@@ -29,9 +29,13 @@ class PevalTyperCliTests(unittest.TestCase):
         self.assertIn("--show-completion", root_options)
 
         view = root.commands["view"]
-        self.assertEqual(set(view.commands), {"trajectory", "tr"})
+        self.assertEqual(set(view.commands), {"trajectory", "tr", "task-skill"})
         self.assertFalse(view.commands["trajectory"].hidden)
         self.assertTrue(view.commands["tr"].hidden)
+        self.assertEqual(
+            set(root.commands["publish"].commands),
+            {"trial-analysis"},
+        )
         view_options = {
             option
             for parameter in view.commands["trajectory"].params

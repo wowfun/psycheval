@@ -14,6 +14,7 @@ from psycheval.cli.arguments import CliArgs
 from psycheval.config import ToolConfig
 from psycheval.inputs import AdapterAssignments, load_inputs
 from psycheval.pipeline import build_report_from_loaded_inputs
+from psycheval.trial_analysis import TrialAnalysisService
 
 
 def inspect_report_for_args(
@@ -22,6 +23,9 @@ def inspect_report_for_args(
     config: object,
 ) -> dict[str, Any]:
     validate_inspect_raw_only_args(args)
+    source_ref_report = inspect_source_ref_report(args, config)
+    if source_ref_report is not None:
+        return source_ref_report
     path_reports, remaining_paths, remaining_indexes = direct_inspect_reports(
         getattr(args, "path", None) or [],
         adapter_assignments,
@@ -65,8 +69,57 @@ def inspect_report_for_args(
             reports.extend(converted[len(remaining_paths) :])
     reports = [report for report in path_reports if report is not None] + reports
     if not reports:
-        raise ValueError("missing input source; pass --path or --db")
+        raise ValueError("missing input source; pass --path, --db, or --source-ref")
     return merge_reports(reports)
+
+
+def inspect_source_ref_report(
+    args: CliArgs,
+    config: object,
+) -> dict[str, Any] | None:
+    source_refs = list(getattr(args, "source_refs", None) or [])
+    if not source_refs:
+        return None
+    if getattr(args, "path", None) or getattr(args, "db", None):
+        raise ValueError("--source-ref cannot be combined with --path or --db")
+    if getattr(args, "adapter", None):
+        raise ValueError("--source-ref is self-describing; do not assign an adapter")
+    if getattr(args, "session_id", None):
+        raise ValueError("--session-id is only valid with --db")
+    if not isinstance(config, ToolConfig) or not config.workspace_root:
+        raise ValueError("--source-ref requires an initialized workspace root")
+
+    service = TrialAnalysisService(config.workspace_root)
+    try:
+        documents = service.documents(source_refs)
+    finally:
+        service.close()
+    trajectories: list[dict[str, Any]] = []
+    metas: list[dict[str, Any]] = []
+    for document in documents:
+        meta = (
+            dict(document.meta)
+            if document.meta is not None
+            else harbor_diagnostic_meta(document, Path(config.workspace_root))
+        )
+        if document.last_error:
+            meta.setdefault("diagnostic", document.last_error)
+        data_ref = meta.get("data_ref")
+        path = (
+            Path(data_ref["path"])
+            if isinstance(data_ref, dict) and isinstance(data_ref.get("path"), str)
+            else Path(config.workspace_root)
+        )
+        trajectories.append(
+            document.trajectory or empty_trajectory_for_meta(meta, path)
+        )
+        metas.append(meta)
+    return {
+        "schema_version": None,
+        "includes": ["core"],
+        "trajectory": trajectories,
+        "trajectory_meta": metas,
+    }
 
 
 def direct_inspect_reports(

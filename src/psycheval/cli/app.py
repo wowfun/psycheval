@@ -44,6 +44,7 @@ app = make_app(help=APP_HELP, add_completion=True)
 view_app = make_app(help="Render a peval-style report for a supported scenario.")
 export_app = make_app(help="Export normalized data for a supported scenario.")
 import_app = make_app(help="Import analysis files into peval workspace artifacts.")
+publish_app = make_app(help="Publish revision-bound evaluation artifacts.")
 
 
 AdapterOption = Annotated[
@@ -198,12 +199,33 @@ def init_command(
             help="Workspace root; defaults to the current directory",
         ),
     ] = None,
+    skill: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--skill",
+            metavar="DIR",
+            help="Install one local Agent Skill directory into the workspace",
+        ),
+    ] = None,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Print machine-readable init results"),
     ] = False,
 ) -> None:
-    execute(CliArgs(command="init", root=root, json=json_output))
+    skill_values = skill or []
+    if len(skill_values) > 1:
+        raise typer.BadParameter(
+            "may be provided only once; run init again to install another Skill",
+            param_hint="--skill",
+        )
+    execute(
+        CliArgs(
+            command="init",
+            root=root,
+            skill_dir=skill_values[0] if skill_values else None,
+            json=json_output,
+        )
+    )
 
 
 @view_app.command("tr", hidden=True)
@@ -240,6 +262,14 @@ def view_trajectory(
         typer.Option("--no-redact", help="Raw mode only: disable secret redaction"),
     ] = False,
     root: RootOption = None,
+    source_ref: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--source-ref",
+            metavar="REF",
+            help="Workspace Harbor source reference; repeatable",
+        ),
+    ] = None,
     mode: Annotated[
         ViewMode,
         typer.Option(
@@ -319,6 +349,7 @@ def view_trajectory(
             model=model,
             no_redact=no_redact,
             root=root,
+            source_refs=many(source_ref),
             mode=mode.value,
             list_sessions=list_sessions,
             list_interactive=list_interactive,
@@ -330,6 +361,49 @@ def view_trajectory(
             steps=many(steps),
             tool_call=many(tool_call),
             source=many(source),
+        )
+    )
+
+
+@view_app.command(
+    "task-skill",
+    help="Read one named live Task skill as revision-bound evaluation criteria.",
+    short_help="Read a Harbor Task skill",
+)
+def view_task_skill(
+    root: Annotated[
+        str,
+        typer.Option("-r", "--root", metavar="DIR", help="Existing peval workspace"),
+    ],
+    source_ref: Annotated[
+        str,
+        typer.Option(
+            "--source-ref", metavar="REF", help="Workspace Harbor source reference"
+        ),
+    ],
+    name: Annotated[
+        str,
+        typer.Option("--name", metavar="NAME", help="Task skill directory name"),
+    ],
+    relative_file: Annotated[
+        str | None,
+        typer.Option(
+            "--file", metavar="PATH", help="One supporting file relative to the skill"
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print the structured criterion snapshot"),
+    ] = False,
+) -> None:
+    execute(
+        CliArgs(
+            command="view-task-skill",
+            root=root,
+            source_ref=source_ref,
+            skill_name=name,
+            relative_file=relative_file,
+            json=json_output,
         )
     )
 
@@ -433,6 +507,62 @@ def import_analysis(
     )
 
 
+@publish_app.command(
+    "trial-analysis",
+    help="Atomically publish a reviewed Markdown report to a Harbor Trial root.",
+    short_help="Publish a Harbor Trial report",
+)
+def publish_trial_analysis(
+    root: Annotated[
+        str,
+        typer.Option("-r", "--root", metavar="DIR", help="Existing peval workspace"),
+    ],
+    source_ref: Annotated[
+        str,
+        typer.Option(
+            "--source-ref", metavar="REF", help="Workspace Harbor source reference"
+        ),
+    ],
+    skill: Annotated[
+        str,
+        typer.Option("--skill", metavar="NAME", help="Task skill used as criteria"),
+    ],
+    expected_evidence_revision: Annotated[
+        str,
+        typer.Option(help="Evidence revision shown during draft review"),
+    ],
+    expected_skill_revision: Annotated[
+        str,
+        typer.Option(help="Task skill revision shown during draft review"),
+    ],
+    path: Annotated[
+        str,
+        typer.Option("-p", "--path", metavar="PATH", help="Reviewed Markdown draft"),
+    ],
+    replace_revision: Annotated[
+        str | None,
+        typer.Option(help="Exact current analysis revision approved for replacement"),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Print a structured publication receipt"),
+    ] = False,
+) -> None:
+    execute(
+        CliArgs(
+            command="publish-trial-analysis",
+            root=root,
+            source_ref=source_ref,
+            skill_name=skill,
+            expected_evidence_revision=expected_evidence_revision,
+            expected_skill_revision=expected_skill_revision,
+            path=(path,),
+            replace_revision=replace_revision,
+            json=json_output,
+        )
+    )
+
+
 app.add_typer(
     view_app,
     name="view",
@@ -447,6 +577,11 @@ app.add_typer(
     import_app,
     name="import",
     short_help="Import workspace artifacts",
+)
+app.add_typer(
+    publish_app,
+    name="publish",
+    short_help="Publish evaluation artifacts",
 )
 
 

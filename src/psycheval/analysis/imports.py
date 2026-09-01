@@ -38,6 +38,11 @@ def import_analysis_artifacts(
     input_paths: list[str],
 ) -> AnalysisImportResult:
     root = ensure_import_workspace_root(workspace_root)
+    if str(source_ref).startswith("harbor/"):
+        raise ValueError(
+            "import analysis does not write Harbor Trial reports; use "
+            "`peval publish trial-analysis` with expected revisions"
+        )
     inputs = read_analysis_import_inputs(input_paths)
     cell = resolve_import_source_ref(root, source_ref)
     written_payloads: dict[str, str] = {}

@@ -59,6 +59,7 @@ from psycheval.state.workspace_harbor import (
     is_harbor_source as is_harbor_source,
 )
 from psycheval.state.workspace_source_models import (
+    HARBOR_ANALYSIS_MD_FILE,
     HARBOR_JSON_SOURCE_FILES,
     HARBOR_OVERLAY_FILES,
     HARBOR_OVERLAY_ROOT,
@@ -107,10 +108,85 @@ class WorkspaceSources:
 
     def load_ref(self, source_ref: str) -> SourceDocument:
         wanted = str(source_ref or "").strip()
+        if wanted.startswith(f"{HARBOR_OVERLAY_ROOT}/"):
+            return self.load(self._harbor_candidate_for_ref(wanted))
         for candidate in self.discover():
             if candidate.source_ref == wanted:
                 return self.load(candidate)
         raise ValueError(f"unknown source reference: {wanted}")
+
+    def _harbor_candidate_for_ref(self, source_ref: str) -> SourceCandidate:
+        candidates = self.harbor_candidates_for_ref(source_ref)
+        if len(candidates) != 1:
+            raise ValueError(
+                "parent MultiStep Harbor source reference identifies multiple phases; "
+                "select /steps/<name>"
+            )
+        return candidates[0]
+
+    def harbor_candidates_for_ref(self, source_ref: str) -> list[SourceCandidate]:
+        self._reject_legacy_harbor_projections()
+        overlay_root = self.workspace_root / HARBOR_OVERLAY_ROOT
+        if overlay_root.is_symlink():
+            raise ValueError("workspace Harbor overlay root must not be a symlink")
+        self.overlay_dir(source_ref)
+        parts = Path(source_ref).parts
+        mount_id, job_name, trial_name = parts[1:4]
+        mount = next(
+            (
+                candidate
+                for candidate in self.config.harbor_mounts
+                if candidate.id == mount_id
+            ),
+            None,
+        )
+        if mount is None:
+            raise ValueError(f"unknown source reference: {source_ref}")
+        datasets_by_id = {
+            dataset.id: dataset for dataset in self.config.harbor_datasets
+        }
+        mount_datasets = tuple(
+            datasets_by_id[dataset_id]
+            for dataset_id in mount.dataset_ids
+            if dataset_id in datasets_by_id
+        )
+        validate_harbor_mount_paths((mount,), mount_datasets)
+        lexical_root = Path(os.path.abspath(Path(mount.path).expanduser()))
+        diagnostic = self._mount_diagnostic(lexical_root)
+        if diagnostic is not None:
+            raise ValueError(diagnostic)
+        root = lexical_root.resolve()
+        job_dir = self._direct_harbor_directory(root, job_name, "Job")
+        trial_dir = self._direct_harbor_directory(job_dir, trial_name, "Trial")
+        if not _looks_like_trial(trial_dir):
+            raise ValueError(f"unknown source reference: {source_ref}")
+        dataset_paths = harbor_dataset_paths_for_mount(self.config, mount)
+        task_index = read_harbor_task_index(dataset_paths)
+        candidates = self._harbor_trial_candidates(
+            mount,
+            job_name,
+            trial_name,
+            trial_dir,
+            root,
+            task_index,
+            dataset_paths,
+        )
+        if len(parts) == 4:
+            return candidates
+        for candidate in candidates:
+            if candidate.source_ref == source_ref:
+                return [candidate]
+        raise ValueError(f"unknown source reference: {source_ref}")
+
+    @staticmethod
+    def _direct_harbor_directory(root: Path, name: str, kind: str) -> Path:
+        path = root / name
+        _assert_safe_descendant(root, path, label=f"Harbor {kind}")
+        if _path_has_symlink(path):
+            raise ValueError(f"Harbor {kind} directory must not be a symlink: {path}")
+        if not path.is_dir():
+            raise ValueError(f"Harbor {kind} directory not found: {path}")
+        return path
 
     def overlay_dir(self, source_ref: str) -> Path:
         parts = Path(str(source_ref)).parts
@@ -344,8 +420,8 @@ class WorkspaceSources:
         job_name = bundle.trial_dir.parent.name
         trial_name = bundle.trial_dir.name
         overlay_dir = self.overlay_dir(entry.source_ref)
-        analysis_relative_path = _harbor_analysis_relative_path(entry.data_dir)
-        source_files = _harbor_entry_source_files(entry, analysis_relative_path)
+        analysis_relative_path = _harbor_analysis_relative_path(bundle.trial_dir)
+        source_files = _harbor_entry_source_files(entry, None)
         return SourceCandidate(
             source_ref=entry.source_ref,
             kind=HARBOR_SOURCE_KIND,
@@ -354,7 +430,7 @@ class WorkspaceSources:
             fingerprint=_combined_revision(
                 _fingerprint(
                     bundle.trial_dir,
-                    source_files,
+                    (*source_files, HARBOR_ANALYSIS_MD_FILE),
                     extra_root=overlay_dir,
                     extra_files=HARBOR_OVERLAY_FILES,
                 ),
@@ -567,6 +643,11 @@ class WorkspaceSources:
     ) -> SourceDocument:
         assert candidate.source_key is not None
         harbor_analysis_markdown = _read_harbor_analysis_markdown(candidate)
+        analysis_revision = (
+            hashlib.sha256(harbor_analysis_markdown.encode("utf-8")).hexdigest()
+            if harbor_analysis_markdown is not None
+            else None
+        )
         try:
             overlay = (
                 self.read_overlay(candidate.source_ref)
@@ -583,15 +664,16 @@ class WorkspaceSources:
             )
         source = _harbor_source(candidate, overlay)
         source_files = _harbor_candidate_source_files(candidate)
-        timestamp = _updated_at_ms(candidate.path, source_files)
+        presentation_files = (*source_files, HARBOR_ANALYSIS_MD_FILE)
+        timestamp = _updated_at_ms(candidate.path, presentation_files)
 
         def current_fingerprint(*, revision: str | None = None) -> str:
             if direct:
-                fingerprint = _fingerprint(candidate.path, source_files)
+                fingerprint = _fingerprint(candidate.path, presentation_files)
             else:
                 fingerprint = _fingerprint(
                     candidate.path,
-                    source_files,
+                    presentation_files,
                     extra_root=self.overlay_dir(candidate.source_ref),
                     extra_files=HARBOR_OVERLAY_FILES,
                 )
@@ -625,6 +707,10 @@ class WorkspaceSources:
                 mount_id=candidate.mount_id,
             )
             values = evidence.trial_values
+            evidence_revision = _combined_revision(
+                _fingerprint(candidate.path, source_files),
+                evidence.source_revision,
+            )
             revision = evidence.revision
             config_json = values.get("config.json")
             lock_json = values.get("lock.json")
@@ -671,8 +757,8 @@ class WorkspaceSources:
                     trajectory=None,
                     meta=meta,
                     fingerprint=current_fingerprint(revision=evidence.revision),
-                    updated_at_ms=_updated_at_ms(candidate.path, source_files),
-                    input_bytes=_input_bytes(candidate.path, source_files),
+                    updated_at_ms=_updated_at_ms(candidate.path, presentation_files),
+                    input_bytes=_input_bytes(candidate.path, presentation_files),
                     readable=False,
                     refreshable=True,
                     snapshot=False,
@@ -685,6 +771,8 @@ class WorkspaceSources:
                         if harbor_analysis_markdown
                         else None
                     ),
+                    evidence_revision=evidence_revision,
+                    analysis_revision=analysis_revision,
                 )
             trajectory, source_schema = _compatible_harbor_trajectory(
                 raw_trajectory,
@@ -733,8 +821,8 @@ class WorkspaceSources:
                 trajectory=trajectory,
                 meta=meta,
                 fingerprint=current_fingerprint(revision=evidence.revision),
-                updated_at_ms=_updated_at_ms(candidate.path, source_files),
-                input_bytes=_input_bytes(candidate.path, source_files),
+                updated_at_ms=_updated_at_ms(candidate.path, presentation_files),
+                input_bytes=_input_bytes(candidate.path, presentation_files),
                 readable=True,
                 refreshable=True,
                 snapshot=False,
@@ -747,6 +835,8 @@ class WorkspaceSources:
                     if harbor_analysis_markdown
                     else None
                 ),
+                evidence_revision=evidence_revision,
+                analysis_revision=analysis_revision,
             )
         except Exception as exc:  # noqa: BLE001 - one Trial becomes one diagnostic.
             source = _harbor_source(
@@ -768,8 +858,8 @@ class WorkspaceSources:
                 trajectory=None,
                 meta=None,
                 fingerprint=current_fingerprint(),
-                updated_at_ms=_updated_at_ms(candidate.path, source_files),
-                input_bytes=_input_bytes(candidate.path, source_files),
+                updated_at_ms=_updated_at_ms(candidate.path, presentation_files),
+                input_bytes=_input_bytes(candidate.path, presentation_files),
                 readable=False,
                 refreshable=True,
                 snapshot=False,

@@ -27,7 +27,7 @@ HARBOR_PSYCHEVO_TELEMETRY_FILES = (
     "agent/psychevo-state.db-shm",
 )
 HARBOR_HERMES_TELEMETRY_FILES = ("agent/hermes-session.jsonl",)
-HARBOR_ANALYSIS_MD_FILE = "artifacts/logs/analysis.md"
+HARBOR_ANALYSIS_MD_FILE = "analysis.md"
 HARBOR_SOURCE_FILES = (
     HARBOR_JSON_SOURCE_FILES
     + HARBOR_OPENCODE_TELEMETRY_FILES
@@ -103,6 +103,8 @@ class SourceDocument:
     last_error: str | None
     harbor_analysis_markdown: str | None = None
     harbor_analysis_relative_path: str | None = None
+    evidence_revision: str | None = None
+    analysis_revision: str | None = None
 
 
 @dataclass(frozen=True)

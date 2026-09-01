@@ -8,6 +8,7 @@ class CliArgs:
     command: str
     scenario: str | None = None
     root: str | None = None
+    skill_dir: str | None = None
     adapter: tuple[str, ...] | None = None
     path: tuple[str, ...] | None = None
     db: tuple[str, ...] | None = None
@@ -30,6 +31,12 @@ class CliArgs:
     tool_call: tuple[str, ...] | None = None
     source: tuple[int, ...] | None = None
     source_ref: str | None = None
+    source_refs: tuple[str, ...] | None = None
+    skill_name: str | None = None
+    relative_file: str | None = None
+    expected_evidence_revision: str | None = None
+    expected_skill_revision: str | None = None
+    replace_revision: str | None = None
     json: bool = False
     host: str = "127.0.0.1"
     port: int | None = None

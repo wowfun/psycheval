@@ -9,7 +9,7 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
-from psycheval._harbor_trials import is_harbor_trial_dir
+from psycheval._harbor_trials import is_harbor_trial_dir, load_harbor_trial_bundle
 from psycheval.analysis import import_analysis_artifacts
 from psycheval.atif import convert_db
 from psycheval.config import (
@@ -128,6 +128,35 @@ class HarborTrialTests(unittest.TestCase):
             )
 
             self.assertTrue(is_harbor_trial_dir(trial))
+
+    def test_detail_load_reads_only_the_selected_harbor_trial(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            jobs = base / "jobs"
+            for name in ("first", "selected", "third", "fourth"):
+                write_trial(
+                    jobs / "job-a" / name,
+                    trajectory=atif_trajectory(name),
+                )
+            store, config, catalog = self.workspace(base / "workspace", jobs)
+            try:
+                catalog.reconcile()
+                rows = [item.to_dict() for item in catalog.query(CatalogQuery()).items]
+                selected = next(
+                    row for row in rows if row["source_ref"].endswith("/selected")
+                )
+
+                with patch(
+                    "psycheval._harbor_trials.load_harbor_trial_bundle",
+                    wraps=load_harbor_trial_bundle,
+                ) as load_bundle:
+                    detail = catalog.load_detail(selected["source_key"]).report
+
+                self.assertEqual(detail["trajectory"][0]["session_id"], "selected")
+                self.assertEqual(load_bundle.call_count, 1)
+                self.assertEqual(load_bundle.call_args.args[0].name, "selected")
+            finally:
+                store.close()
 
     def test_generated_harbor_ids_are_bounded_and_retry_random_collisions(
         self,
@@ -982,7 +1011,7 @@ class HarborTrialTests(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_trial_and_workspace_analysis_markdown_are_composed_in_source_order(
+    def test_only_trial_root_analysis_markdown_is_presented(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -990,8 +1019,7 @@ class HarborTrialTests(unittest.TestCase):
             jobs = base / "jobs"
             trial = jobs / "job-a" / "trial-a"
             write_trial(trial)
-            harbor_analysis = trial / "artifacts/logs/analysis.md"
-            harbor_analysis.parent.mkdir(parents=True)
+            harbor_analysis = trial / "analysis.md"
             harbor_analysis.write_text("# Harbor review\n", encoding="utf-8")
             workspace = base / "workspace"
             store, config, catalog = self.workspace(workspace, jobs)
@@ -1006,7 +1034,7 @@ class HarborTrialTests(unittest.TestCase):
             try:
                 catalog.reconcile()
                 row = catalog.query(CatalogQuery()).items[0].to_dict()
-                self.assertEqual(row["analysis_count"], 2)
+                self.assertEqual(row["analysis_count"], 1)
                 self.assertNotIn("analysised", row)
                 analysis = catalog.load_detail(row["source_key"]).report["annotations"][
                     "analysis"
@@ -1018,14 +1046,7 @@ class HarborTrialTests(unittest.TestCase):
                         {
                             "source": "harbor_trial",
                             "markdown": "# Harbor review\n",
-                            "relative_path": "artifacts/logs/analysis.md",
-                        },
-                        {
-                            "source": "workspace_overlay",
-                            "markdown": "# Workspace review\n",
-                            "relative_path": (
-                                "harbor/jobs-2026-08-08/job-a/trial-a/analysis.md"
-                            ),
+                            "relative_path": "analysis.md",
                         },
                     ],
                 )
@@ -1054,22 +1075,14 @@ class HarborTrialTests(unittest.TestCase):
                 harbor_analysis.unlink()
                 catalog.reconcile()
                 self.assertEqual(
-                    catalog.row_for_key(row["source_key"])["analysis_count"], 1
+                    catalog.row_for_key(row["source_key"])["analysis_count"], 0
                 )
                 overlay_only = catalog.load_detail(row["source_key"]).report[
                     "annotations"
-                ]["analysis"][0]["markdown_reports"]
+                ]["analysis"][0]
+                self.assertNotIn("markdown_reports", overlay_only)
                 self.assertEqual(
-                    overlay_only,
-                    [
-                        {
-                            "source": "workspace_overlay",
-                            "markdown": "# Workspace review\n",
-                            "relative_path": (
-                                "harbor/jobs-2026-08-08/job-a/trial-a/analysis.md"
-                            ),
-                        }
-                    ],
+                    overlay.read_text(encoding="utf-8"), "# Workspace review\n"
                 )
             finally:
                 store.close()
@@ -1082,8 +1095,7 @@ class HarborTrialTests(unittest.TestCase):
             jobs = base / "jobs"
             trial = jobs / "job-a" / "trial-a"
             write_trial(trial)
-            analysis = trial / "artifacts/logs/analysis.md"
-            analysis.parent.mkdir(parents=True)
+            analysis = trial / "analysis.md"
             store, config, catalog = self.workspace(base / "workspace", jobs)
             try:
                 catalog.reconcile()
@@ -1160,7 +1172,7 @@ class HarborTrialTests(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_harbor_analysis_uses_canonical_then_stable_nested_fallback(
+    def test_harbor_analysis_ignores_nested_log_fallbacks(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1188,22 +1200,19 @@ class HarborTrialTests(unittest.TestCase):
                 row = catalog.query(CatalogQuery()).items[0].to_dict()
                 source_key = row["source_key"]
                 nested_revision = row["artifact_revision"]
-                self.assertEqual(
+                self.assertEqual(row["analysis_count"], 0)
+                self.assertNotIn(
+                    "markdown_reports",
                     catalog.load_detail(source_key).report["annotations"]["analysis"][
                         0
-                    ]["markdown_reports"][0],
-                    {
-                        "source": "harbor_trial",
-                        "markdown": "# First path\n",
-                        "relative_path": "artifacts/logs/a/analysis.md",
-                    },
+                    ],
                 )
                 self.assertNotIn(
                     "must not traverse",
                     json.dumps(catalog.load_detail(source_key).report),
                 )
 
-                canonical = trial / "artifacts/logs/analysis.md"
+                canonical = trial / "analysis.md"
                 canonical.write_text("# Canonical\n", encoding="utf-8")
                 catalog.reconcile()
                 row = catalog.row_for_key(source_key)
@@ -1213,23 +1222,23 @@ class HarborTrialTests(unittest.TestCase):
                     catalog.load_detail(source_key).report["annotations"]["analysis"][
                         0
                     ]["markdown_reports"][0]["relative_path"],
-                    "artifacts/logs/analysis.md",
+                    "analysis.md",
                 )
 
                 canonical.unlink()
                 catalog.reconcile()
                 row = catalog.row_for_key(source_key)
                 self.assertNotEqual(row["artifact_revision"], canonical_revision)
-                self.assertEqual(
+                self.assertNotIn(
+                    "markdown_reports",
                     catalog.load_detail(source_key).report["annotations"]["analysis"][
                         0
-                    ]["markdown_reports"][0]["relative_path"],
-                    "artifacts/logs/a/analysis.md",
+                    ],
                 )
             finally:
                 store.close()
 
-    def test_deep_harbor_analysis_fallback_does_not_exhaust_the_call_stack(
+    def test_deep_harbor_analysis_fallback_is_ignored_without_scanning(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1250,11 +1259,11 @@ class HarborTrialTests(unittest.TestCase):
             try:
                 catalog.reconcile()
                 row = catalog.query(CatalogQuery()).items[0].to_dict()
-                markdown = catalog.load_detail(row["source_key"]).report["annotations"][
-                    "analysis"
-                ][0]["markdown_reports"][0]
-                self.assertEqual(markdown["markdown"], "# Deep review\n")
-                self.assertTrue(markdown["relative_path"].endswith("/analysis.md"))
+                self.assertEqual(row["analysis_count"], 0)
+                analysis_payload = catalog.load_detail(row["source_key"]).report[
+                    "annotations"
+                ]["analysis"][0]
+                self.assertNotIn("markdown_reports", analysis_payload)
             finally:
                 store.close()
                 analysis.unlink(missing_ok=True)
@@ -1269,8 +1278,7 @@ class HarborTrialTests(unittest.TestCase):
             jobs = base / "jobs"
             trial = jobs / "job-a" / "trial-a"
             write_trial(trial)
-            analysis = trial / "artifacts/logs/analysis.md"
-            analysis.parent.mkdir(parents=True)
+            analysis = trial / "analysis.md"
             analysis.write_text("too large", encoding="utf-8")
             store, config, catalog = self.workspace(base / "workspace", jobs)
             try:
@@ -1291,7 +1299,7 @@ class HarborTrialTests(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_analysis_import_targets_harbor_overlay_by_source_ref(self) -> None:
+    def test_analysis_import_rejects_harbor_source_ref(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             jobs = base / "jobs"
@@ -1301,21 +1309,17 @@ class HarborTrialTests(unittest.TestCase):
             analysis = base / "analysis.json"
             analysis.write_text(json.dumps({"summary": "direct"}), encoding="utf-8")
             try:
-                result = import_analysis_artifacts(
-                    workspace_root=workspace,
-                    source_ref="harbor/jobs-2026-08-08/job-a/trial-a",
-                    input_paths=[str(analysis)],
-                )
-                self.assertEqual(
-                    result.source_ref,
-                    "harbor/jobs-2026-08-08/job-a/trial-a",
-                )
-                payload = json.loads(
-                    (workspace / result.source_ref / "analysis.json").read_text(
-                        encoding="utf-8"
+                with self.assertRaisesRegex(ValueError, "peval publish trial-analysis"):
+                    import_analysis_artifacts(
+                        workspace_root=workspace,
+                        source_ref="harbor/jobs-2026-08-08/job-a/trial-a",
+                        input_paths=[str(analysis)],
                     )
+                self.assertFalse(
+                    (
+                        workspace / "harbor/jobs-2026-08-08/job-a/trial-a/analysis.json"
+                    ).exists()
                 )
-                self.assertEqual(payload["subject"], {"source_ref": result.source_ref})
                 self.assertFalse(
                     (jobs / "job-a" / "trial-a" / "analysis.json").exists()
                 )

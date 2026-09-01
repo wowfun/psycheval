@@ -61,7 +61,7 @@ def _direct_harbor_candidate(
     }
     source_key = source_key_for_components(identity)
     internal_ref = entry.source_ref or f"direct-harbor:{source_key}"
-    analysis_relative_path = _harbor_analysis_relative_path(entry.data_dir)
+    analysis_relative_path = _harbor_analysis_relative_path(bundle.trial_dir)
     return SourceCandidate(
         source_ref=internal_ref,
         kind=HARBOR_SOURCE_KIND,
@@ -944,8 +944,7 @@ def _read_harbor_analysis_markdown(candidate: SourceCandidate) -> str | None:
     relative_path = candidate.harbor_analysis_relative_path
     if relative_path is None:
         return None
-    data_path = candidate.data_path or candidate.path
-    path = data_path / relative_path
+    path = candidate.path / relative_path
     try:
         file_stat = path.stat(follow_symlinks=False)
     except OSError:
@@ -967,12 +966,6 @@ def _read_harbor_analysis_markdown(candidate: SourceCandidate) -> str | None:
 
 
 def _harbor_analysis_relative_path(trial_dir: Path) -> str | None:
-    logs_dir = trial_dir / "artifacts" / "logs"
-    try:
-        _assert_safe_descendant(trial_dir, logs_dir, label="Harbor analysis")
-    except ValueError:
-        return None
-
     canonical = trial_dir / HARBOR_ANALYSIS_MD_FILE
     try:
         canonical.stat(follow_symlinks=False)
@@ -983,43 +976,7 @@ def _harbor_analysis_relative_path(trial_dir: Path) -> str | None:
     else:
         return HARBOR_ANALYSIS_MD_FILE
 
-    return min(
-        _nested_harbor_analysis_paths(logs_dir, Path("artifacts/logs")),
-        default=None,
-    )
-
-
-def _nested_harbor_analysis_paths(
-    directory: Path,
-    relative_directory: Path,
-) -> Iterator[str]:
-    pending = [(directory, relative_directory)]
-    while pending:
-        current, current_relative = pending.pop()
-        try:
-            directory_stat = current.stat(follow_symlinks=False)
-        except OSError:
-            continue
-        if not stat.S_ISDIR(directory_stat.st_mode):
-            continue
-        try:
-            with os.scandir(current) as entries:
-                ordered = sorted(entries, key=lambda entry: entry.name)
-        except OSError:
-            continue
-        nested: list[tuple[Path, Path]] = []
-        for entry in ordered:
-            relative = current_relative / entry.name
-            if entry.name == "analysis.md":
-                yield relative.as_posix()
-                continue
-            try:
-                is_directory = entry.is_dir(follow_symlinks=False)
-            except OSError:
-                continue
-            if is_directory:
-                nested.append((Path(entry.path), relative))
-        pending.extend(reversed(nested))
+    return None
 
 
 def _assert_safe_descendant(root: Path, path: Path, *, label: str) -> None:
@@ -1217,7 +1174,7 @@ def _harbor_candidate_source_files(candidate: SourceCandidate) -> tuple[str, ...
         f"{prefix}{relative}"
         for relative in _harbor_source_files(
             data_path,
-            candidate.harbor_analysis_relative_path,
+            None,
         )
     )
     if not prefix:

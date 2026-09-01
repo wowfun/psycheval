@@ -95,8 +95,13 @@ def load_sessions(
 ) -> list[LoadedSession]:
     paths = list(getattr(args, "path", None) or [])
     dbs = list(getattr(args, "db", None) or [])
-    if require_sources and not paths and not dbs:
-        raise ValueError("missing input source; pass --path or --db")
+    source_refs = list(getattr(args, "source_refs", None) or [])
+    if source_refs and (paths or dbs):
+        raise ValueError("--source-ref cannot be combined with --path or --db")
+    if source_refs and getattr(args, "adapter", None):
+        raise ValueError("--source-ref is self-describing; do not assign an adapter")
+    if require_sources and not paths and not dbs and not source_refs:
+        raise ValueError("missing input source; pass --path, --db, or --source-ref")
     validate_adapter_selector_range(
         adapter_assignments,
         path_count=len(paths),
@@ -107,6 +112,36 @@ def load_sessions(
 
     available = set(available_adapter_ids())
     sessions: list[LoadedSession] = []
+    if source_refs:
+        from psycheval.trial_analysis import TrialAnalysisService
+
+        if not isinstance(config, ToolConfig) or not config.workspace_root:
+            raise ValueError("--source-ref requires an initialized workspace root")
+        service = TrialAnalysisService(config.workspace_root)
+        try:
+            documents = service.documents(source_refs)
+        finally:
+            service.close()
+        for document in documents:
+            if document.trajectory is None or document.meta is None:
+                raise ValueError(
+                    "raw Harbor Trial view requires a trajectory for every source: "
+                    f"{document.last_error or document.source_ref}"
+                )
+            sessions.append(
+                LoadedSession(
+                    records=None,
+                    input_label=str(
+                        document.source.get("label") or document.source_ref
+                    ),
+                    adapter_id="harbor",
+                    input_path=document.source_ref,
+                    session_hint=optional_text(document.trajectory.get("session_id")),
+                    source_kind="harbor-trial",
+                    snapshot_trajectory=document.trajectory,
+                    snapshot_meta=document.meta,
+                )
+            )
     for index, path in enumerate(paths, start=1):
         trial_cell_session = loaded_trial_cell_artifact_session(path, config)
         if trial_cell_session is not None:

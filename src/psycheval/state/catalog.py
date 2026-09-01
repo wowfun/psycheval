@@ -888,15 +888,15 @@ class WorkspaceCatalog:
         }
         if document.source_ref.startswith("runs/"):
             row["artifact_dir"] = document.source_ref
+        if document.evidence_revision is not None:
+            row["evidence_revision"] = document.evidence_revision
+        if document.analysis_revision is not None:
+            row["analysis_revision"] = document.analysis_revision
         return row, document.readable, _search_document(row, trajectory)
 
     def _analysis_count(self, document: SourceDocument) -> int:
         if document.source.get("kind") == HARBOR_SOURCE_KIND:
-            workspace_present = any(
-                self.sources.annotation_path(document.source_ref, filename).is_file()
-                for filename in ("analysis.json", "analysis.md")
-            )
-            return int(bool(document.harbor_analysis_markdown)) + int(workspace_present)
+            return int(bool(document.harbor_analysis_markdown))
         cell_dir = self.store.resolve_artifact_dir(document.source_ref)
         return int(
             any(
