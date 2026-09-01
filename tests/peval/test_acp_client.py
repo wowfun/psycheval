@@ -87,6 +87,43 @@ class AcpConfigTests(unittest.TestCase):
 
 
 class PromptAssetTests(unittest.TestCase):
+    def test_catalog_exposes_independent_english_and_chinese_prompt_pairs(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            library = PromptAssetLibrary(temporary)
+            prompts = library.catalog()["prompts"]
+            self.assertIsInstance(prompts, list)
+            self.assertEqual(
+                [prompt["id"] for prompt in prompts],
+                [
+                    "evaluation-review",
+                    "evaluation-review-zh-cn",
+                    "failure-diagnosis",
+                    "failure-diagnosis-zh-cn",
+                    "task-audit",
+                    "task-audit-zh-cn",
+                    "report-review",
+                    "report-review-zh-cn",
+                ],
+            )
+            chinese = library.read("failure-diagnosis-zh-cn")
+            english = library.read("failure-diagnosis")
+            self.assertEqual(chinese.title, "失败诊断")
+            self.assertIn("追溯最早造成实质影响的错误", chinese.content)
+
+            customized = library.save(
+                chinese.id,
+                "# 团队诊断\n\n先检查第一个失败的工具调用。\n",
+                expected_revision=chinese.revision,
+            )
+            self.assertTrue(customized.customized)
+            self.assertEqual(library.read(english.id).content, english.content)
+            restored = library.reset(
+                customized.id, expected_revision=customized.revision
+            )
+            self.assertEqual(restored.content, chinese.content)
+
     def test_workspace_same_name_override_and_restore_default(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             library = PromptAssetLibrary(temporary)
@@ -259,7 +296,7 @@ class AcpHttpTests(unittest.TestCase):
                 "POST",
                 "/api/acp/context-resolutions",
                 {
-                    "context": {"kind": "source", "source_key": "missing"},
+                    "contexts": [{"kind": "source", "source_key": "missing"}],
                     "embedded_context": True,
                 },
             ),
@@ -321,11 +358,13 @@ class AcpHttpTests(unittest.TestCase):
             "POST",
             "/api/acp/context-resolutions",
             {
-                "context": {
-                    "kind": "source",
-                    "source_key": "missing-source",
-                    "unexpected": True,
-                },
+                "contexts": [
+                    {
+                        "kind": "source",
+                        "source_key": "missing-source",
+                        "unexpected": True,
+                    }
+                ],
                 "embedded_context": True,
             },
             cookie=cookie,
@@ -337,7 +376,7 @@ class AcpHttpTests(unittest.TestCase):
             "POST",
             "/api/acp/context-resolutions",
             {
-                "context": {"kind": "source", "source_key": "missing-source"},
+                "contexts": [{"kind": "source", "source_key": "missing-source"}],
                 "embedded_context": False,
             },
             cookie=cookie,

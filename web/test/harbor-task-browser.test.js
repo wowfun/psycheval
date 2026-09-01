@@ -66,6 +66,61 @@ test("a Task browser opens the server-selected default and ignores stale file re
   assert.equal(document.querySelector("[data-harbor-editor]").value, "First");
 });
 
+test("same-context Task loads share one request while a new context supersedes the old one", async () => {
+  const pending = [];
+  let loads = 0;
+  const taskBrowser = createTaskBrowser({
+    root: document.querySelector("[data-task-browser]"),
+    editable: false,
+    loadTask: () => new Promise(resolve => {
+      loads += 1;
+      pending.push(resolve);
+    }),
+    readFile: async (_taskRef, path) => ({
+      path,
+      content: path,
+      revision: `${path}-r1`,
+    }),
+  });
+  const taskRef = { dataset_id: "dataset", task: "task" };
+
+  const first = taskBrowser.loadTask(taskRef, { contextKey: "same" });
+  const second = taskBrowser.loadTask(taskRef, { contextKey: "same" });
+  pending.forEach(resolve => resolve(detail()));
+  const [firstDetail, secondDetail] = await Promise.all([first, second]);
+
+  assert.equal(loads, 1);
+  assert.equal(firstDetail, secondDetail);
+
+  const older = taskBrowser.loadTask(taskRef, { contextKey: "older" });
+  const newer = taskBrowser.loadTask(taskRef, { contextKey: "newer" });
+  pending[2]?.(detail("steps/first/instruction.md"));
+  pending[1]?.(detail());
+  await Promise.all([older, newer]);
+
+  assert.equal(loads, 3);
+  assert.equal(taskBrowser.state.contextKey, "newer");
+  assert.equal(taskBrowser.currentFile().path, "steps/first/instruction.md");
+});
+
+test("a synchronously failed Task loader can retry the same context", async () => {
+  let attempts = 0;
+  const taskBrowser = createTaskBrowser({
+    root: document.querySelector("[data-task-browser]"),
+    editable: false,
+    loadTask: () => {
+      attempts += 1;
+      throw new Error("Task unavailable");
+    },
+  });
+  const taskRef = { dataset_id: "dataset", task: "task" };
+
+  await taskBrowser.loadTask(taskRef, { contextKey: "retry" });
+  await taskBrowser.loadTask(taskRef, { contextKey: "retry" });
+
+  assert.equal(attempts, 2);
+});
+
 test("a strict step instruction never falls back and read-only mode exposes no editing", async () => {
   let reads = 0;
   const taskBrowser = createTaskBrowser({

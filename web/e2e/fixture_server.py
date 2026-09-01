@@ -22,7 +22,7 @@ def main() -> None:
         root = Path(temporary)
         locale = os.environ.get("PEVAL_E2E_LOCALE", "en")
         (root / "peval.toml").write_text(
-            f"locale = {json.dumps(locale)}\nanalysis_eval_slug = \"default\"\n",
+            f'locale = {json.dumps(locale)}\nanalysis_eval_slug = "default"\n',
             encoding="utf-8",
         )
         write_e2e_trial(

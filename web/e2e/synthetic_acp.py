@@ -110,9 +110,17 @@ for line in sys.stdin:
             request_id,
             {
                 "sessionId": f"visual-session-{session_number}",
-                "modes": {"currentModeId": "", "availableModes": []},
+                "modes": {
+                    "currentModeId": "build",
+                    "availableModes": [
+                        {"id": "plan", "name": "Plan"},
+                        {"id": "build", "name": "Build"},
+                    ],
+                },
             },
         )
+    elif method == "session/set_mode":
+        result(request_id, {})
     elif method == "session/list":
         result(request_id, {"sessions": list(catalog_sessions.values())})
     elif method == "session/delete":
@@ -162,7 +170,13 @@ for line in sys.stdin:
         result(
             request_id,
             {
-                "modes": {"currentModeId": "", "availableModes": []},
+                "modes": {
+                    "currentModeId": "build",
+                    "availableModes": [
+                        {"id": "plan", "name": "Plan"},
+                        {"id": "build", "name": "Build"},
+                    ],
+                },
             },
         )
     elif method == "session/prompt":

@@ -33,11 +33,10 @@ const fetchStub = async (path, options = {}) => {
   if (value === "/api/acp/context-resolutions") {
     const body = JSON.parse(options.body);
     contextRequests.push(body);
-    const context = body.context;
-    const source = context.kind === "source";
     return response({
-      items: [
-        {
+      items: body.contexts.map(context => {
+        const source = context.kind === "source";
+        return {
           id: source
             ? `source:${context.source_key}:${context.step_id || ""}`
             : `dataset:${context.dataset_id}:${context.task}`,
@@ -56,8 +55,8 @@ const fetchStub = async (path, options = {}) => {
               },
             },
           ],
-        },
-      ],
+        };
+      }),
     });
   }
   throw new Error(`unexpected request: ${value}`);
@@ -219,6 +218,15 @@ test.after(async () => {
 });
 
 test("Psycheval composes the vendored controller through its gateway and context seam", async () => {
+  const workspaceRefreshes = [];
+  workspaceRuntime.setWorkspaceApp({
+    invalidate(changes) {
+      workspaceRefreshes.push(["invalidate", changes]);
+    },
+    async navigate(page, options) {
+      workspaceRefreshes.push(["navigate", page, options]);
+    },
+  });
   let workspaceContext = {
     page: "home",
     source_key: "source-7",
@@ -340,15 +348,14 @@ test("Psycheval composes the vendored controller through its gateway and context
   await waitFor(() => prompts.length === 1);
   assert.deepEqual(contextRequests, [
     {
-      context: { kind: "source", source_key: "source-7", step_id: "4" },
-      embedded_context: true,
-    },
-    {
-      context: {
-        kind: "dataset_task",
-        dataset_id: "bench-v1.0",
-        task: "trend-digest-01",
-      },
+      contexts: [
+        { kind: "source", source_key: "source-7", step_id: "4" },
+        {
+          kind: "dataset_task",
+          dataset_id: "bench-v1.0",
+          task: "trend-digest-01",
+        },
+      ],
       embedded_context: true,
     },
   ]);
@@ -369,6 +376,11 @@ test("Psycheval composes the vendored controller through its gateway and context
     `\n</pretty-aui-user-message-v1-${envelope[1]}>`,
   );
   await waitFor(() => host.shadowRoot.textContent.includes("Synthetic response."));
+  await waitFor(() => workspaceRefreshes.length === 2);
+  assert.deepEqual(workspaceRefreshes, [
+    ["invalidate", "catalog"],
+    ["navigate", "datasets", { focus: false, history: false }],
+  ]);
   host.shadowRoot
     .querySelector('[aria-label="Remove context: source-7 · Step 4"]')
     .click();
@@ -480,6 +492,46 @@ test("prompt asset invalidation refreshes presets without replacing live chat", 
   assert.equal(acp.acpState.mounted, mounted);
   assert.equal(SyntheticAcpSocket.instances.length, socketCount);
   assert.ok(document.querySelector("[data-acp-chat]").shadowRoot);
+});
+
+test("a failed post-turn workspace refresh is reported without an unhandled rejection", async () => {
+  const errors = [];
+  const unhandled = [];
+  const previousConsoleError = console.error;
+  const captureUnhandled = error => unhandled.push(error);
+  console.error = (...values) => errors.push(values);
+  process.on("unhandledRejection", captureUnhandled);
+  workspaceRuntime.setWorkspaceApp({
+    invalidate() {},
+    async navigate() {
+      throw new Error("injected workspace refresh failure");
+    },
+  });
+  workspaceRuntime.setWorkspaceSnapshotProvider(() => ({
+    context: { page: "home", source_key: "source-7", step_id: "4" },
+    dirty: false,
+  }));
+
+  try {
+    const controller = acp.acpState.mounted.controller;
+    await controller.newSession();
+    const host = document.querySelector("[data-acp-chat]");
+    host.shadowRoot.querySelector('[aria-label="Add context"]').click();
+    await waitFor(() =>
+      acp.acpState.contexts.some(context => context.value?.kind === "source"),
+    );
+    const turn = controller.send("refresh failure");
+    await turn.done;
+    await waitFor(() => errors.length === 1);
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(unhandled.length, 0);
+    assert.match(String(errors[0][0]), /workspace refresh.*failed/i);
+    assert.match(String(errors[0][1]), /injected workspace refresh failure/);
+  } finally {
+    process.off("unhandledRejection", captureUnhandled);
+    console.error = previousConsoleError;
+  }
 });
 
 async function waitFor(predicate) {

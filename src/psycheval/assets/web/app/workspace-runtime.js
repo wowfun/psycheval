@@ -17,6 +17,12 @@ function invalidateWorkspace(changes) {
   for (const listener of invalidationListeners) listener(new Set(domains));
 }
 
+async function refreshWorkspace(changes) {
+  invalidateWorkspace(changes);
+  const page = snapshotWorkspace().context?.page;
+  if (page) await workspaceApp?.navigate(page, { focus: false, history: false });
+}
+
 function snapshotWorkspace() {
   return snapshotProvider?.() || { context: { page: "home" }, dirty: false };
 }
@@ -32,6 +38,7 @@ function subscribeWorkspaceInvalidation(listener) {
 
 export {
   invalidateWorkspace,
+  refreshWorkspace,
   setWorkspaceApp,
   setWorkspaceSnapshotProvider,
   snapshotWorkspace,

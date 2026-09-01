@@ -24,6 +24,9 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({
   await expect(drawer.getByText("连接 Agent 并新建会话后开始协作。", { exact: true })).toBeVisible();
   await expect(drawer.getByText("预设", { exact: true })).toBeVisible();
   await expect(drawer.getByRole("button", { name: "使用", exact: true })).toBeVisible();
+  const presets = drawer.locator("[data-acp-prompt-asset]");
+  await expect(presets.locator("option")).toHaveCount(9);
+  await expect(presets).toHaveValue("evaluation-review-zh-cn");
 
   await drawer.getByRole("button", { name: "连接" }).click();
   const chat = drawer.locator("[data-acp-chat]");
@@ -31,7 +34,16 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({
   await expect(chat.getByText("开始对话", { exact: true })).toBeVisible();
   await expect(chat.getByText("消息、工具活动和计划会显示在这里。", { exact: true })).toBeVisible();
   await expect(chat.getByRole("button", { name: "新建会话" })).toBeVisible();
-  await expect(chat.getByRole("button", { name: "添加上下文" })).toBeVisible();
+  await expect(chat.getByRole("combobox", { name: "模式" })).toBeVisible();
+  const addContext = chat.getByRole("button", { name: "添加上下文" });
+  await expect(addContext).toBeEnabled();
+  await expect.poll(() => page.evaluate(async () =>
+    (await import("/assets/peval/modules/acp-client.js")).currentContext()?.value?.kind,
+  )).toBe("source");
+  await addContext.click();
+  await expect(presets).toHaveValue("failure-diagnosis-zh-cn");
+  await drawer.getByRole("button", { name: "使用", exact: true }).click();
+  await expect(chat.locator("textarea")).toHaveValue(/追溯最早造成实质影响的错误/);
   await chat.locator("textarea").fill("检查复制标签");
   await chat.locator(".paui-send").click();
   await expect(chat).toContainText("Synthetic response");
@@ -73,4 +85,35 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({
   ).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(actions).toBeFocused();
+});
+
+test("a saved preset wins over the Chinese context recommendation", async ({
+  page,
+}) => {
+  await page.goto(fixture.origin);
+  const workspaceId = await page.locator("#peval-render-options").evaluate(node =>
+    JSON.parse(node.textContent || "{}").workspace_id,
+  );
+  await page.evaluate(id => {
+    window.localStorage.setItem(
+      `peval:${id}:acp-client`,
+      JSON.stringify({ prompt_asset_id: "report-review" }),
+    );
+  }, workspaceId);
+  await page.reload();
+  await page.getByRole("button", { name: "Copilot" }).click();
+
+  const drawer = page.locator("[data-acp-drawer]");
+  const presets = drawer.locator("[data-acp-prompt-asset]");
+  await expect(presets).toHaveValue("report-review");
+  await drawer.getByRole("button", { name: "连接" }).click();
+  const addContext = drawer
+    .locator("[data-acp-chat]")
+    .getByRole("button", { name: "添加上下文" });
+  await expect(addContext).toBeEnabled();
+  await expect.poll(() => page.evaluate(async () =>
+    (await import("/assets/peval/modules/acp-client.js")).currentContext()?.value?.kind,
+  )).toBe("source");
+  await addContext.click();
+  await expect(presets).toHaveValue("report-review");
 });

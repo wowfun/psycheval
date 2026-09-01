@@ -150,10 +150,8 @@ function render(view) {
   syncSelectedSourceFromView();
   bindHomeControls();
   renderReportNotes(view.annotations?.report_notes || []);
-  renderComparison();
+  renderComparison({ trace: true });
   if (!state.workspaceViewsLoaded) refreshWorkspaceViews();
-  renderTrace();
-  renderDetailSidebar();
 }
 function renderWorkspaceDescription() {
   const node = document.querySelector("[data-workspace-description]");
@@ -172,7 +170,7 @@ function syncSelectedSourceFromView() {
 function renderReportNotes(notes) {
   $("report-notes").innerHTML = notes.length ? `<div class="report-note-list">${notes.map(note => `<article class="report-note"><strong>${esc(note.label || t("report_note", "Report note"))}</strong><div class="note-body">${renderMarkdown(note.markdown || "")}</div></article>`).join("")}</div>` : "";
 }
-function renderComparison() {
+function renderComparison(options = {}) {
   const scrollState = comparisonScrollState();
   const rows = reportRows();
   const leaderboardRegion = $("leaderboard-region");
@@ -180,6 +178,8 @@ function renderComparison() {
     if (leaderboardRegion) leaderboardRegion.innerHTML = "";
     $("comparison").innerHTML = `<section class="leaderboard-summary panel" aria-labelledby="leaderboard-summary-title" id="leaderboard-summary"></section>`;
     renderLeaderboardSummary();
+    if (options.trace === true) renderTrace();
+    renderDetailSidebar();
     return;
   }
   if (leaderboardRegion) leaderboardRegion.innerHTML = `<section class="leaderboard panel" aria-labelledby="leaderboard-title" id="leaderboard"></section>`;
@@ -188,7 +188,7 @@ function renderComparison() {
     <section class="leaderboard-summary panel" aria-labelledby="leaderboard-summary-title" id="leaderboard-summary"></section>
     <section class="trajectory-overview panel" aria-labelledby="trajectory-overview-title" id="trajectory-overview"></section>
   `;
-  renderComparisonPanels({ trace: false }, scrollState);
+  renderComparisonPanels({ trace: options.trace === true }, scrollState);
 }
 function notesFor(trialKey) {
   return (state.view?.annotations?.notes || []).filter(note => note.trial_key === trialKey);

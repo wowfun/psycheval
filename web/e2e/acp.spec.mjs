@@ -11,10 +11,38 @@ test.afterAll(async () => {
   await stopFixture(fixture);
 });
 
+test.afterEach(async ({ page }) => {
+  if (!page.isClosed()) await page.close();
+  await expect
+    .poll(async () => {
+      const response = await fetch(new URL("/api/acp/agents", fixture.origin));
+      if (!response.ok) return -1;
+      const payload = await response.json();
+      return payload.agents.reduce(
+        (total, agent) => total + agent.connections,
+        0,
+      );
+    })
+    .toBe(0);
+});
+
 test("fixture exposes its isolated browser origin", async () => {
   expect(fixture.origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   const response = await fetch(new URL("/api/session", fixture.origin));
   expect(response.ok).toBe(true);
+});
+
+test("every new Copilot session starts in plan mode", async ({ page }) => {
+  await page.goto(fixture.origin);
+  await page.getByRole("button", { name: "Copilot" }).click();
+  await expect(page.locator("[data-acp-agent]")).toHaveValue("synthetic");
+  await page.getByRole("button", { name: "Connect" }).click();
+  const chat = page.locator("[data-acp-chat]");
+  const mode = chat.getByRole("combobox", { name: "Mode" });
+  await expect(mode).toContainText("Plan");
+
+  await chat.getByRole("button", { name: "New session" }).click();
+  await expect(mode).toContainText("Plan");
 });
 
 test("disconnected drawer keeps controls, placeholder, and presets in separate rows", async ({
@@ -485,7 +513,7 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
   ).toBe(false);
   expect(
     requests.filter((url) => url.endsWith("/api/acp/context-resolutions")),
-  ).toHaveLength(4);
+  ).toHaveLength(2);
   expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
   expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);

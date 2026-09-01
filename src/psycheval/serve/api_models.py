@@ -251,5 +251,5 @@ class MountDeletionRequest(StrictRequest):
 
 
 class AcpContextRequest(StrictRequest):
-    context: dict[str, Any]
+    contexts: list[dict[str, Any]] = Field(min_length=1, max_length=64)
     embedded_context: bool

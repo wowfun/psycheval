@@ -7,6 +7,7 @@ const browser = installBrowserDom(`
   <script type="application/json" id="peval-i18n">{}</script>
   <script type="application/json" id="peval-render-options">{"mode":"serve","role":"guest","sources":[]}</script>
   <section id="leaderboard-region"></section>
+  <section id="report-notes"></section>
   <section id="comparison"></section>
   <section id="trace"></section>
   <aside id="detail-sidebar" hidden></aside>
@@ -64,12 +65,12 @@ test("the selected Harbor trial renders the shared read-only browser at its curr
       : { path: "steps/collect/instruction.md", content: "Collect evidence.", revision: "file-r1" };
     return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(payload) };
   };
-  runtime.state.view = harborReport();
   runtime.state.selectedTrial = "trial-one";
   runtime.state.selectedStep = null;
   runtime.state.detailSidebar = { open: true, pendingOpener: null, pendingOpenerSelector: null };
+  runtime.state.workspaceViewsLoaded = true;
 
-  runtime.renderComparisonPanels();
+  runtime.render(harborReport());
   await new Promise(resolve => setTimeout(resolve, 0));
   await new Promise(resolve => setTimeout(resolve, 0));
 
@@ -83,7 +84,14 @@ test("the selected Harbor trial renders the shared read-only browser at its curr
   assert.equal(task.querySelector("[data-harbor-editor]").value, "Collect evidence.");
   assert.equal(task.querySelector("[data-harbor-editor]").readOnly, true);
   assert.equal(task.querySelector("[data-harbor-save]"), null);
-  assert.ok(calls.some(path => path.endsWith("/files/steps%2Fcollect%2Finstruction.md")));
+  assert.equal(
+    calls.filter(path => path === "/api/harbor/datasets/dataset/tasks/task").length,
+    1,
+  );
+  assert.equal(
+    calls.filter(path => path.endsWith("/files/steps%2Fcollect%2Finstruction.md")).length,
+    1,
+  );
   assert.equal(steps.querySelectorAll(".step").length, 2);
   assert.equal(task.compareDocumentPosition(steps) & window.Node.DOCUMENT_POSITION_FOLLOWING, window.Node.DOCUMENT_POSITION_FOLLOWING);
   assert.equal(document.querySelector("#trace #step-list"), null);

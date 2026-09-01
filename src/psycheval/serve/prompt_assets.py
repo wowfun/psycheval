@@ -11,9 +11,13 @@ from pathlib import Path
 
 PROMPT_ASSET_FILENAMES = (
     "evaluation-review.md",
+    "evaluation-review-zh-cn.md",
     "failure-diagnosis.md",
+    "failure-diagnosis-zh-cn.md",
     "task-audit.md",
+    "task-audit-zh-cn.md",
     "report-review.md",
+    "report-review-zh-cn.md",
 )
 PROMPT_ASSET_LIMIT = 256 * 1024
 

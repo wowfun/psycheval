@@ -19,6 +19,7 @@ function createTaskBrowser(options = {}) {
     busy: false,
     requestId: 0,
     taskRequestId: 0,
+    taskRequestPromise: null,
     previewStatus: "empty",
     previewMessage: "",
   };
@@ -48,6 +49,10 @@ function createTaskBrowser(options = {}) {
       render();
       return browser.detail;
     }
+    if (browser.contextKey === contextKey && browser.taskRequestPromise) {
+      render();
+      return browser.taskRequestPromise;
+    }
     resetState({ keepRoot: true });
     browser.taskRef = normalizedRef;
     browser.contextKey = contextKey;
@@ -60,16 +65,26 @@ function createTaskBrowser(options = {}) {
     browser.previewStatus = "loading";
     browser.previewMessage = t("loading", "Loading…");
     render();
+    const operation = (async () => {
+      try {
+        const detail = await browser.loadTask(normalizedRef);
+        if (requestId !== browser.taskRequestId || contextKey !== browser.contextKey) return null;
+        await setTaskDetail(detail, { ...selection, taskRef: normalizedRef, contextKey });
+        return detail;
+      } catch (error) {
+        if (requestId !== browser.taskRequestId || contextKey !== browser.contextKey) return null;
+        showUnavailable(selection.preferredPath, error?.message || String(error));
+        browser.onError?.(error);
+        return null;
+      }
+    })();
+    browser.taskRequestPromise = operation;
     try {
-      const detail = await browser.loadTask(normalizedRef);
-      if (requestId !== browser.taskRequestId || contextKey !== browser.contextKey) return null;
-      await setTaskDetail(detail, { ...selection, taskRef: normalizedRef, contextKey });
-      return detail;
-    } catch (error) {
-      if (requestId !== browser.taskRequestId || contextKey !== browser.contextKey) return null;
-      showUnavailable(selection.preferredPath, error?.message || String(error));
-      browser.onError?.(error);
-      return null;
+      return await operation;
+    } finally {
+      if (browser.taskRequestPromise === operation) {
+        browser.taskRequestPromise = null;
+      }
     }
   }
 
@@ -194,6 +209,7 @@ function createTaskBrowser(options = {}) {
   function resetState({ keepRoot = false } = {}) {
     browser.requestId += 1;
     browser.taskRequestId += 1;
+    browser.taskRequestPromise = null;
     browser.detail = null;
     browser.taskRef = null;
     browser.contextKey = null;

@@ -12,6 +12,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from websockets.exceptions import ConnectionClosedError, InvalidStatus
 from websockets.sync.client import connect
@@ -26,7 +27,13 @@ from psycheval.serve.acp import (
     _Bridge,
     _BridgeFailure,
 )
-from psycheval.serve.api_support import acp_context_item
+from psycheval.serve.api_support import (
+    _compact_acp_value,
+    _render_acp_context,
+    _ResolvedAcpContext,
+    acp_context_items,
+)
+from psycheval.serve.errors import HttpError
 from psycheval.serve.runtime import ServeRuntime
 from psycheval.state import open_workspace_state
 from tests.peval.asgi_server import LocalHTTPServer, make_handler
@@ -324,24 +331,330 @@ class AcpGatewayTests(unittest.TestCase):
 
 class AcpContextTests(unittest.TestCase):
     def test_resolves_embedded_resource_and_text_fallback_at_the_owner(self) -> None:
-        detail = SimpleNamespace(to_dict=lambda: {"summary": "x" * 200})
+        detail = SimpleNamespace(
+            to_dict=lambda: {
+                "artifact_revision": "artifact-revision",
+                "report": {
+                    "trajectory": [
+                        {
+                            "session_id": "session-7",
+                            "steps": [
+                                {
+                                    "step_id": 4,
+                                    "source": "agent",
+                                    "message": "x" * 2_000,
+                                },
+                                {"step_id": 5, "source": "agent", "message": "other"},
+                            ],
+                        }
+                    ],
+                    "trajectory_meta": [{"status": "completed"}],
+                },
+            }
+        )
         runtime = SimpleNamespace(
-            config=SimpleNamespace(max_content_chars=120),
+            config=SimpleNamespace(max_content_chars=1_200),
             detail=lambda source_key: detail,
+            catalog=SimpleNamespace(
+                row_for_key=lambda source_key: {
+                    "source_ref": "runs/default/agent/session/trial",
+                    "artifact_revision": "artifact-revision",
+                    "analysis_count": 0,
+                    "last_status": "ok",
+                }
+            ),
         )
         context = {"kind": "source", "source_key": "source-7", "step_id": "4"}
 
-        embedded = acp_context_item(None, runtime, context, embedded_context=True)
+        embedded = acp_context_items(None, runtime, [context], embedded_context=True)[0]
         self.assertEqual(embedded["id"], "source:source-7:4")
         self.assertEqual(embedded["label"], "source-7 · Step 4")
         block = embedded["content"][0]
         self.assertEqual(block["type"], "resource")
         self.assertEqual(block["resource"]["uri"], "peval://source/source-7")
-        self.assertLessEqual(len(block["resource"]["text"]), 120)
+        self.assertLessEqual(len(block["resource"]["text"]), 1_200)
+        payload = json.loads(block["resource"]["text"])
+        self.assertEqual(
+            payload["value"]["source_ref"], "runs/default/agent/session/trial"
+        )
+        self.assertEqual(payload["value"]["evidence_revision"], "artifact-revision")
+        self.assertEqual(
+            [
+                step["step_id"]
+                for step in payload["value"]["evidence"]["trajectory"]["steps"]
+            ],
+            [4],
+        )
+        self.assertTrue(payload["value"]["omissions"])
 
-        fallback = acp_context_item(None, runtime, context, embedded_context=False)
+        fallback = acp_context_items(None, runtime, [context], embedded_context=False)[
+            0
+        ]
         self.assertEqual(fallback["content"][0]["type"], "text")
         self.assertIn("Psycheval evaluation context", fallback["content"][0]["text"])
+
+    def test_context_batch_preserves_order_and_shares_one_valid_json_budget(
+        self,
+    ) -> None:
+        detail = SimpleNamespace(
+            to_dict=lambda: {
+                "artifact_revision": "revision",
+                "report": {
+                    "trajectory": [
+                        {
+                            "session_id": "session",
+                            "steps": [
+                                {
+                                    "step_id": 1,
+                                    "source": "agent",
+                                    "message": "large " * 2_000,
+                                }
+                            ],
+                        }
+                    ],
+                    "trajectory_meta": [{"status": "completed"}],
+                },
+            }
+        )
+        runtime = SimpleNamespace(
+            config=SimpleNamespace(max_content_chars=1_800),
+            detail=lambda source_key: detail,
+            catalog=SimpleNamespace(
+                row_for_key=lambda source_key: {
+                    "source_ref": f"runs/default/agent/session/{source_key}",
+                    "artifact_revision": f"revision-{source_key}",
+                    "analysis_count": 0,
+                    "last_status": "ok",
+                }
+            ),
+        )
+
+        items = acp_context_items(
+            None,
+            runtime,
+            [
+                {"kind": "source", "source_key": "first"},
+                {"kind": "source", "source_key": "second"},
+            ],
+            embedded_context=True,
+        )
+
+        self.assertEqual([item["label"] for item in items], ["first", "second"])
+        texts = [item["content"][0]["resource"]["text"] for item in items]
+        self.assertLessEqual(sum(map(len, texts)), 1_800)
+        payloads = [json.loads(text) for text in texts]
+        self.assertEqual(
+            [payload["value"]["source_ref"] for payload in payloads],
+            [
+                "runs/default/agent/session/first",
+                "runs/default/agent/session/second",
+            ],
+        )
+        self.assertTrue(all(payload["value"]["omissions"] for payload in payloads))
+
+    def test_context_batch_reuses_one_trial_analysis_service(self) -> None:
+        instances = []
+
+        class FakeTrialAnalysisService:
+            def __init__(self, _root: Path) -> None:
+                self.closed = False
+                self.sources = SimpleNamespace(
+                    load=lambda _candidate: SimpleNamespace(
+                        harbor_analysis_markdown="# Live analysis",
+                        analysis_revision="live-analysis-revision",
+                    )
+                )
+                instances.append(self)
+
+            def resolve(self, source_ref: str) -> SimpleNamespace:
+                return SimpleNamespace(
+                    requested_ref=source_ref,
+                    trial_ref=f"canonical:{source_ref}",
+                    phase_refs=(),
+                    evidence_revision=f"revision:{source_ref}",
+                    candidates=(SimpleNamespace(step_name=None),),
+                )
+
+            def close(self) -> None:
+                self.closed = True
+
+        runtime = SimpleNamespace(
+            config=SimpleNamespace(max_content_chars=10_000),
+            detail=lambda source_key: SimpleNamespace(
+                to_dict=lambda: {
+                    "report": {
+                        "trajectory_meta": [
+                            {
+                                "status": "completed",
+                                "score": 1.0,
+                                "rewards": {"reward": 1.0},
+                                "task_name": f"live-task:{source_key}",
+                                "task_metadata": {"status": "live"},
+                                "harbor_provenance": {"task_digest": "live-digest"},
+                            }
+                        ]
+                    }
+                }
+            ),
+            catalog=SimpleNamespace(
+                row_for_key=lambda source_key: {
+                    "source_ref": f"harbor/jobs/job-a/{source_key}",
+                    "analysis_count": 0,
+                    "last_status": "running",
+                    "task_name": "stale-task",
+                    "task_metadata": {"status": "stale"},
+                    "harbor_provenance": {"task_digest": "stale-digest"},
+                }
+            ),
+        )
+        store = SimpleNamespace(paths=SimpleNamespace(root=Path("/workspace")))
+
+        with patch(
+            "psycheval.trial_analysis.TrialAnalysisService",
+            FakeTrialAnalysisService,
+        ):
+            items = acp_context_items(
+                store,
+                runtime,
+                [
+                    {"kind": "source", "source_key": "trial-a"},
+                    {"kind": "source", "source_key": "trial-b"},
+                ],
+                embedded_context=True,
+            )
+
+        self.assertEqual([item["label"] for item in items], ["trial-a", "trial-b"])
+        payloads = [
+            json.loads(item["content"][0]["resource"]["text"])["value"]
+            for item in items
+        ]
+        self.assertEqual(
+            [payload["trial_ref"] for payload in payloads],
+            [
+                "canonical:harbor/jobs/job-a/trial-a",
+                "canonical:harbor/jobs/job-a/trial-b",
+            ],
+        )
+        self.assertEqual(
+            [payload["analysis"]["revision"] for payload in payloads],
+            ["live-analysis-revision", "live-analysis-revision"],
+        )
+        self.assertEqual(
+            [payload["outcome"] for payload in payloads],
+            [
+                {
+                    "status": "completed",
+                    "score": 1.0,
+                    "rewards": {"reward": 1.0},
+                },
+                {
+                    "status": "completed",
+                    "score": 1.0,
+                    "rewards": {"reward": 1.0},
+                },
+            ],
+        )
+        self.assertEqual(
+            [payload["task"] for payload in payloads],
+            [
+                {
+                    "name": "live-task:trial-a",
+                    "status": "live",
+                    "recorded_digest": "live-digest",
+                },
+                {
+                    "name": "live-task:trial-b",
+                    "status": "live",
+                    "recorded_digest": "live-digest",
+                },
+            ],
+        )
+        self.assertEqual(len(instances), 1)
+        self.assertTrue(instances[0].closed)
+
+    def test_context_maps_routine_harbor_resolution_failures_to_bad_request(
+        self,
+    ) -> None:
+        class FailingTrialAnalysisService:
+            def __init__(self, _root: Path) -> None:
+                pass
+
+            def resolve(self, _source_ref: str) -> None:
+                raise ValueError("Harbor mount is temporarily unavailable")
+
+            def close(self) -> None:
+                pass
+
+        runtime = SimpleNamespace(
+            config=SimpleNamespace(max_content_chars=10_000),
+            detail=lambda _source_key: SimpleNamespace(to_dict=lambda: {"report": {}}),
+            catalog=SimpleNamespace(
+                row_for_key=lambda _source_key: {
+                    "source_ref": "harbor/jobs/job-a/trial-a",
+                    "analysis_count": 0,
+                    "last_status": "error",
+                }
+            ),
+        )
+        store = SimpleNamespace(paths=SimpleNamespace(root=Path("/workspace")))
+
+        with patch(
+            "psycheval.trial_analysis.TrialAnalysisService",
+            FailingTrialAnalysisService,
+        ):
+            with self.assertRaises(HttpError) as raised:
+                acp_context_items(
+                    store,
+                    runtime,
+                    [{"kind": "source", "source_key": "trial-a"}],
+                    embedded_context=True,
+                )
+
+        self.assertEqual(raised.exception.status, 400)
+        self.assertEqual(
+            raised.exception.message, "Harbor mount is temporarily unavailable"
+        )
+
+    def test_context_compaction_consumes_only_the_retained_mapping_items(
+        self,
+    ) -> None:
+        class BoundedItemsDict(dict[str, str]):
+            def items(self):  # type: ignore[override]
+                for index in range(32):
+                    yield str(index), "value"
+                raise AssertionError("compaction consumed a discarded mapping item")
+
+        compacted = _compact_acp_value(
+            BoundedItemsDict(),
+            string_limit=10,
+            list_limit=10,
+        )
+
+        self.assertEqual(len(compacted), 32)
+
+    def test_context_compaction_uses_the_available_budget_for_long_strings(
+        self,
+    ) -> None:
+        item = _ResolvedAcpContext(
+            item_id="report:test",
+            label="test",
+            uri="peval://report/test",
+            reference={"kind": "report", "report_id": "test"},
+            identity={"report_id": "test", "omissions": []},
+            optional={"content": "x" * 30_000},
+            omission="report content was compacted",
+        )
+
+        rendered = _render_acp_context(
+            item,
+            limit=20_000,
+            embedded_context=True,
+        )
+        text = rendered["content"][0]["resource"]["text"]
+        payload = json.loads(text)
+
+        self.assertLessEqual(len(text), 20_000)
+        self.assertGreater(len(payload["value"]["evidence"]["content"]), 15_000)
 
     def test_gateway_reservations_enforce_per_agent_and_global_capacity(
         self,

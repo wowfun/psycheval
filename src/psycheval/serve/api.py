@@ -117,7 +117,7 @@ from psycheval.serve.api_models import (
 from psycheval.serve.api_support import (
     REPORT_PREVIEW_CSP,
     REPORT_READER_CSP,
-    acp_context_item,
+    acp_context_items,
     add_source_result_payload,
     catalog_query,
     catalog_query_payload,
@@ -1884,10 +1884,10 @@ def _register_acp_routes(app: FastAPI) -> None:
     @access(ADMIN_ACCESS)
     def resolve_acp_context(request: Request, body: AcpContextRequest) -> JSONResponse:
         runtime: ServeRuntime = request.app.state.runtime
-        item = acp_context_item(
+        items = acp_context_items(
             runtime.store,
             runtime,
-            body.context,
+            body.contexts,
             embedded_context=body.embedded_context,
         )
-        return _json({"items": [item]})
+        return _json({"items": items})

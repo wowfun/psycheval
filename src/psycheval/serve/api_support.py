@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote
@@ -439,13 +441,95 @@ def update_harbor_mount_config(
     return workspace_config_payload(store, runtime)
 
 
-def acp_context_item(
+@dataclass(frozen=True)
+class _ResolvedAcpContext:
+    item_id: str
+    label: str
+    uri: str
+    reference: dict[str, Any]
+    identity: dict[str, Any]
+    optional: dict[str, Any]
+    omission: str
+
+
+class _AcpHarborContextResolver:
+    def __init__(self, store: ServeStateStore | None) -> None:
+        self.store = store
+        self.service: Any | None = None
+
+    def resolve(self, source_ref: str) -> tuple[Any, Any]:
+        if self.store is None:
+            raise HttpError(500, "workspace state is unavailable")
+        try:
+            if self.service is None:
+                from psycheval.trial_analysis import TrialAnalysisService
+
+                self.service = TrialAnalysisService(self.store.paths.root)
+            target = self.service.resolve(source_ref)
+            document = self.service.sources.load(target.candidates[0])
+        except ValueError as exc:
+            raise HttpError(400, str(exc)) from exc
+        return target, document
+
+    def close(self) -> None:
+        if self.service is not None:
+            self.service.close()
+
+
+def acp_context_items(
+    store: ServeStateStore | None,
+    runtime: ServeRuntime,
+    raw_contexts: list[Any],
+    *,
+    embedded_context: bool,
+) -> list[dict[str, Any]]:
+    harbor_resolver = _AcpHarborContextResolver(store)
+    try:
+        resolved = [
+            _resolve_acp_context(
+                store,
+                runtime,
+                raw_context,
+                harbor_resolver=harbor_resolver,
+            )
+            for raw_context in raw_contexts
+        ]
+    finally:
+        harbor_resolver.close()
+    limit = max(1, runtime.config.max_content_chars)
+    minimums = [
+        _acp_rendered_length(item, embedded_context=embedded_context)
+        for item in resolved
+    ]
+    if sum(minimums) > limit:
+        raise HttpError(
+            413,
+            "ACP context budget is too small to preserve all selected identities",
+        )
+    remaining = limit
+    items: list[dict[str, Any]] = []
+    for index, item in enumerate(resolved):
+        future_minimum = sum(minimums[index + 1 :])
+        count = len(resolved) - index
+        fair_share = max(minimums[index], remaining // count)
+        item_limit = min(fair_share, remaining - future_minimum)
+        rendered = _render_acp_context(
+            item,
+            limit=item_limit,
+            embedded_context=embedded_context,
+        )
+        remaining -= _acp_item_text_length(rendered)
+        items.append(rendered)
+    return items
+
+
+def _resolve_acp_context(
     store: ServeStateStore | None,
     runtime: ServeRuntime,
     raw_context: Any,
     *,
-    embedded_context: bool,
-) -> dict[str, Any]:
+    harbor_resolver: _AcpHarborContextResolver,
+) -> _ResolvedAcpContext:
     if not isinstance(raw_context, dict):
         raise HttpError(400, "ACP context must be an object")
     kind = _bounded_acp_context_field(raw_context, "kind", maximum=32)
@@ -457,9 +541,133 @@ def acp_context_item(
             if not isinstance(step_id, str) or not step_id or len(step_id) > 128:
                 raise HttpError(400, "step_id must be a non-empty bounded string")
         try:
-            context_payload: Any = runtime.detail(source_key).to_dict()
+            detail = runtime.detail(source_key).to_dict()
         except ValueError as exc:
             raise HttpError(400, str(exc)) from exc
+        report = detail.get("report") if isinstance(detail.get("report"), dict) else {}
+        trajectories = (
+            report.get("trajectory")
+            if isinstance(report.get("trajectory"), list)
+            else []
+        )
+        metas = (
+            report.get("trajectory_meta")
+            if isinstance(report.get("trajectory_meta"), list)
+            else []
+        )
+        trajectory = (
+            trajectories[0]
+            if trajectories and isinstance(trajectories[0], dict)
+            else {}
+        )
+        meta = metas[0] if metas and isinstance(metas[0], dict) else {}
+        if step_id is not None:
+            steps = (
+                trajectory.get("steps")
+                if isinstance(trajectory.get("steps"), list)
+                else []
+            )
+            selected_steps = [
+                step
+                for step in steps
+                if isinstance(step, dict) and str(step.get("step_id")) == step_id
+            ]
+            if not selected_steps:
+                raise HttpError(400, f"unknown ATIF step_id for source: {step_id}")
+            trajectory = {**trajectory, "steps": selected_steps}
+        row = runtime.catalog.row_for_key(source_key)
+        source_ref = str(row.get("source_ref") or row.get("artifact_dir") or "")
+        trial_ref = source_ref
+        phase = None
+        evidence_revision = str(
+            row.get("artifact_revision") or detail.get("artifact_revision") or ""
+        )
+        analysis_present = bool(row.get("analysis_count"))
+        analysis_revision = None
+        resolved_harbor = False
+        if source_ref.startswith("harbor/"):
+            target, document = harbor_resolver.resolve(source_ref)
+            resolved_harbor = True
+            trial_ref = target.trial_ref
+            phase = (
+                target.candidates[0].step_name
+                if target.requested_ref != target.trial_ref
+                and len(target.candidates) == 1
+                else None
+            )
+            evidence_revision = target.evidence_revision
+            analysis_present = document.analysis_revision is not None
+            analysis_revision = document.analysis_revision
+        live_task_metadata = meta.get("task_metadata") if resolved_harbor else None
+        task_metadata = (
+            live_task_metadata
+            if isinstance(live_task_metadata, dict)
+            else row.get("task_metadata")
+            if isinstance(row.get("task_metadata"), dict)
+            else {}
+        )
+        live_provenance = meta.get("harbor_provenance") if resolved_harbor else None
+        provenance = (
+            live_provenance
+            if isinstance(live_provenance, dict)
+            else row.get("harbor_provenance")
+            if isinstance(row.get("harbor_provenance"), dict)
+            else {}
+        )
+        live_status = meta.get("status") if resolved_harbor else None
+        live_score = meta.get("score") if resolved_harbor else None
+        live_rewards = meta.get("rewards") if resolved_harbor else None
+        identity = {
+            "source_ref": source_ref,
+            "trial_ref": trial_ref,
+            "phase": phase,
+            "task": {
+                key: value
+                for key, value in {
+                    "name": meta.get("task_name")
+                    if resolved_harbor
+                    else row.get("task_name"),
+                    "status": task_metadata.get("status"),
+                    "recorded_digest": provenance.get("task_digest"),
+                    "recorded_digest_source": provenance.get("task_digest_source"),
+                    "live_digest": task_metadata.get("live_digest"),
+                    "digest_matches": task_metadata.get("digest_matches"),
+                    "digest_comparison": task_metadata.get("digest_comparison"),
+                }.items()
+                if value is not None
+            },
+            "outcome": {
+                key: value
+                for key, value in {
+                    "status": live_status
+                    or row.get("status")
+                    or row.get("last_status"),
+                    "score": live_score if resolved_harbor else row.get("score"),
+                    "rewards": live_rewards
+                    if isinstance(live_rewards, dict)
+                    else row.get("rewards"),
+                    "failure_class": meta.get("failure_class"),
+                    "exception": meta.get("exception"),
+                    "diagnostic": None if resolved_harbor else row.get("last_error"),
+                }.items()
+                if value is not None
+            },
+            "evidence_revision": evidence_revision,
+            "analysis": {
+                "present": analysis_present,
+                "revision": analysis_revision,
+            },
+            "omissions": [],
+        }
+        context_payload = {
+            "trajectory": trajectory,
+            "meta": {
+                key: value
+                for key, value in meta.items()
+                if key not in {"data_ref"} and value is not None
+            },
+            **({"step_filter": step_id} if step_id is not None else {}),
+        }
         reference = {
             "kind": kind,
             "source_key": source_key,
@@ -468,6 +676,9 @@ def acp_context_item(
         item_id = f"source:{source_key}:{step_id or ''}"
         label = f"{source_key} · Step {step_id}" if step_id else source_key
         uri = f"peval://source/{quote(source_key, safe='')}"
+        omission = (
+            "trajectory evidence was compacted to fit the shared ACP context budget"
+        )
     elif kind == "dataset_task":
         _require_acp_context_keys(raw_context, {"kind", "dataset_id", "task"})
         dataset_id = _bounded_acp_context_field(raw_context, "dataset_id")
@@ -475,10 +686,17 @@ def acp_context_item(
         if store is None:
             raise HttpError(500, "workspace state is unavailable")
         context_payload = harbor_workspace(store, runtime).task_detail(dataset_id, task)
+        identity = {
+            "dataset_id": dataset_id,
+            "task": task,
+            "revision": context_payload.get("revision"),
+            "omissions": [],
+        }
         reference = {"kind": kind, "dataset_id": dataset_id, "task": task}
         item_id = f"dataset:{dataset_id}:{task}"
         label = f"{dataset_id} / {task}"
         uri = f"peval://dataset/{quote(dataset_id, safe='')}/{quote(task, safe='')}"
+        omission = "Task detail was compacted to fit the shared ACP context budget"
     elif kind == "report":
         _require_acp_context_keys(raw_context, {"kind", "report_id"})
         report_id = _bounded_acp_context_field(raw_context, "report_id")
@@ -486,45 +704,141 @@ def acp_context_item(
             report = runtime.workspace_reports.read(report_id)
         except ValueError as exc:
             raise HttpError(404, str(exc)) from exc
-        context_payload = {
+        identity = {
             "report_id": report.report_id,
             "filename": report.filename,
             "format": report.format,
             "source_refs": list(report.source_refs),
-            "content": report.content.decode("utf-8", errors="replace"),
+            "omissions": [],
         }
+        context_payload = {"content": report.content.decode("utf-8", errors="replace")}
         reference = {"kind": kind, "report_id": report_id}
         item_id = f"report:{report_id}"
         label = report.filename or report_id
         uri = f"peval://report/{quote(report_id, safe='')}"
+        omission = "report content was compacted to fit the shared ACP context budget"
     else:
         raise HttpError(400, "ACP context kind must be source, dataset_task, or report")
-    serialized = json.dumps(
-        {"reference": reference, "value": context_payload},
-        ensure_ascii=False,
-        separators=(",", ":"),
+    return _ResolvedAcpContext(
+        item_id=item_id,
+        label=label,
+        uri=uri,
+        reference=reference,
+        identity=identity,
+        optional=context_payload,
+        omission=omission,
     )
-    limit = max(1, runtime.config.max_content_chars)
-    mime_type = "application/json"
-    if len(serialized) > limit:
-        marker = "\n[peval context truncated]"
-        serialized = (serialized[: max(0, limit - len(marker))] + marker)[:limit]
-        mime_type = "text/plain"
+
+
+def _render_acp_context(
+    item: _ResolvedAcpContext,
+    *,
+    limit: int,
+    embedded_context: bool,
+) -> dict[str, Any]:
+    prefix = (
+        "" if embedded_context else f"Psycheval evaluation context ({item.label}):\n"
+    )
+    serialized_limit = limit - len(prefix)
+    value = {**item.identity, "evidence": item.optional}
+    serialized = _acp_json(item.reference, value)
+    if len(serialized) > serialized_limit:
+        best = None
+        for list_limit in (32, 16, 8, 4, 2, 1, 0):
+            low, high = 0, max(0, serialized_limit)
+            while low <= high:
+                string_limit = (low + high) // 2
+                compacted = _compact_acp_value(
+                    item.optional,
+                    string_limit=string_limit,
+                    list_limit=list_limit,
+                )
+                candidate_value = {
+                    **item.identity,
+                    "omissions": [item.omission],
+                    "evidence": compacted,
+                }
+                candidate = _acp_json(item.reference, candidate_value)
+                if len(candidate) <= serialized_limit:
+                    best = candidate
+                    low = string_limit + 1
+                else:
+                    high = string_limit - 1
+            if best is not None:
+                break
+        serialized = best or _acp_json(
+            item.reference,
+            {**item.identity, "omissions": [item.omission]},
+        )
     if embedded_context:
         block: dict[str, Any] = {
             "type": "resource",
             "resource": {
-                "uri": uri,
-                "mimeType": mime_type,
+                "uri": item.uri,
+                "mimeType": "application/json",
                 "text": serialized,
             },
         }
     else:
-        prefix = f"Psycheval evaluation context ({label}):\n"
-        available = max(0, limit - len(prefix))
-        text = prefix[:limit] + serialized[:available]
-        block = {"type": "text", "text": text[:limit]}
-    return {"id": item_id, "label": label, "content": [block]}
+        block = {"type": "text", "text": prefix + serialized}
+    return {"id": item.item_id, "label": item.label, "content": [block]}
+
+
+def _acp_rendered_length(
+    item: _ResolvedAcpContext,
+    *,
+    embedded_context: bool,
+) -> int:
+    prefix = (
+        "" if embedded_context else f"Psycheval evaluation context ({item.label}):\n"
+    )
+    return len(prefix) + len(
+        _acp_json(item.reference, {**item.identity, "omissions": [item.omission]})
+    )
+
+
+def _acp_item_text_length(item: dict[str, Any]) -> int:
+    block = item["content"][0]
+    if block["type"] == "resource":
+        return len(block["resource"]["text"])
+    return len(block["text"])
+
+
+def _acp_json(reference: dict[str, Any], value: dict[str, Any]) -> str:
+    return json.dumps(
+        {"reference": reference, "value": value},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _compact_acp_value(
+    value: Any,
+    *,
+    string_limit: int,
+    list_limit: int,
+) -> Any:
+    if isinstance(value, str):
+        return value if len(value) <= string_limit else value[:string_limit]
+    if isinstance(value, list):
+        return [
+            _compact_acp_value(
+                item,
+                string_limit=string_limit,
+                list_limit=list_limit,
+            )
+            for item in value[:list_limit]
+        ]
+    if isinstance(value, dict):
+        return {
+            str(key): _compact_acp_value(
+                item,
+                string_limit=string_limit,
+                list_limit=list_limit,
+            )
+            for key, item in islice(value.items(), 32)
+        }
+    return value
 
 
 def _bounded_acp_context_field(

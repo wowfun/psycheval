@@ -5,6 +5,7 @@ import {
   mountChat,
 } from "../vendor/pretty-aui/pretty-aui.js";
 import {
+  refreshWorkspace,
   snapshotWorkspace,
   subscribeWorkspaceInvalidation,
 } from "../app/workspace-runtime.js";
@@ -31,6 +32,7 @@ const acpState = {
 };
 
 const contextListeners = new Set();
+let promptAssetSelectionExplicit = false;
 const contextProvider = {
   getSelection: () =>
     acpState.contexts.map(context => ({ id: context.id, label: context.label })),
@@ -133,8 +135,18 @@ function applyAgentCatalog(agentPayload) {
 function applyPromptCatalog(promptPayload) {
   acpState.prompts = listValue(promptPayload);
   if (!acpState.prompts.some(prompt => prompt.id === acpState.promptAssetId)) {
-    acpState.promptAssetId = acpState.prompts[0]?.id || "";
+    promptAssetSelectionExplicit = false;
+    acpState.promptAssetId =
+      localizedPromptId("evaluation-review") || acpState.prompts[0]?.id || "";
   }
+}
+
+function localizedPromptId(promptId) {
+  const localized = document.documentElement.lang.toLowerCase() === "zh-cn"
+    ? `${promptId}-zh-cn`
+    : promptId;
+  if (acpState.prompts.some(prompt => prompt.id === localized)) return localized;
+  return acpState.prompts.some(prompt => prompt.id === promptId) ? promptId : "";
 }
 
 async function refreshPromptCatalog() {
@@ -181,7 +193,11 @@ function bindControls() {
   document.querySelector("[data-acp-prompt-asset]")?.addEventListener("change", event => {
     const target = /** @type {HTMLSelectElement} */ (event.target);
     acpState.promptAssetId = String(target.value || "");
-    persistUiState({ prompt_asset_id: acpState.promptAssetId });
+    promptAssetSelectionExplicit = true;
+    persistUiState({
+      prompt_asset_id: acpState.promptAssetId,
+      prompt_asset_explicit: true,
+    });
     renderPromptAssets();
   });
   document
@@ -252,6 +268,7 @@ async function connectAcpAgent(options = {}) {
       initialSession: savedSessionId
         ? { type: "open", sessionId: savedSessionId }
         : { type: "new" },
+      newSessionMode: "plan",
       modelPreference: {
         get: () => savedModel(agentId),
         set: value => saveModel(agentId, value),
@@ -330,6 +347,17 @@ function handleChatEvent(event, agentId, generation) {
     saveSession(agentId, event.sessionId);
     return;
   }
+  if (event.type === "turn_completed") {
+    if (
+      event.stopReason !== "cancelled"
+      && acpState.contexts.some(context => context.value?.kind === "source")
+    ) {
+      void refreshWorkspace("catalog").catch(error => {
+        console.error("peval: workspace refresh after ACP turn failed", error);
+      });
+    }
+    return;
+  }
   if (event.type === "error") {
     showNotice(
       event.error?.message || t("error", "Error"),
@@ -340,24 +368,24 @@ function handleChatEvent(event, agentId, generation) {
 }
 
 async function resolveCapturedContexts(request) {
+  if (!request.selection.length) return [];
   const contextsById = new Map(
     acpState.contexts.map(context => [context.id, context]),
   );
-  const payloads = await Promise.all(
-    request.selection.map(async selection => {
-      const context = contextsById.get(selection.id);
-      if (!context) throw new Error(`Selected context is unavailable: ${selection.label}`);
-      return serveApi("/api/acp/context-resolutions", {
-        method: "POST",
-        body: {
-          context: context.value,
-          embedded_context: Boolean(request.capabilities?.embeddedContext),
-        },
-        signal: request.signal,
-      });
-    }),
-  );
-  return payloads.flatMap(payload => listValue(payload?.items));
+  const contexts = request.selection.map(selection => {
+    const context = contextsById.get(selection.id);
+    if (!context) throw new Error(`Selected context is unavailable: ${selection.label}`);
+    return context.value;
+  });
+  const payload = await serveApi("/api/acp/context-resolutions", {
+    method: "POST",
+    body: {
+      contexts,
+      embedded_context: Boolean(request.capabilities?.embeddedContext),
+    },
+    signal: request.signal,
+  });
+  return listValue(payload?.items);
 }
 
 function captureContext() {
@@ -381,8 +409,11 @@ function captureContext() {
     dataset_task: "task-audit",
     report: "report-review",
   }[next.value?.kind];
-  if (suggestedPromptId && acpState.prompts.some(prompt => prompt.id === suggestedPromptId)) {
-    acpState.promptAssetId = suggestedPromptId;
+  const localizedSuggestion = suggestedPromptId
+    ? localizedPromptId(suggestedPromptId)
+    : "";
+  if (localizedSuggestion && !promptAssetSelectionExplicit) {
+    acpState.promptAssetId = localizedSuggestion;
   }
   showNotice(t("acp_context_attached", "Current evaluation context attached"));
   notifyContextSelection();
@@ -487,6 +518,7 @@ function prettyLabels() {
     historyGap: t("acp_history_gap", "Earlier messages are unavailable for this session."),
     historyGapTitle: t("acp_history_gap_title", "Partial history"),
     loadMore: t("acp_load_more", "Load more"),
+    mode: t("acp_mode", "Mode"),
     newChat: t("acp_new_session", "New session"),
     noSessions: t("acp_no_session", "No session yet"),
     openLink: t("acp_open_link", "Open link"),
@@ -710,8 +742,12 @@ function readSavedUi(throwOnError = false) {
 function restoreUiState() {
   const saved = readSavedUi();
   acpState.agentId = typeof saved.agent_id === "string" ? saved.agent_id : "";
-  acpState.promptAssetId =
+  const savedPromptAssetId =
     typeof saved.prompt_asset_id === "string" ? saved.prompt_asset_id : "";
+  promptAssetSelectionExplicit = typeof saved.prompt_asset_explicit === "boolean"
+    ? saved.prompt_asset_explicit
+    : Boolean(savedPromptAssetId);
+  acpState.promptAssetId = promptAssetSelectionExplicit ? savedPromptAssetId : "";
   acpState.contexts = restoredContexts(saved.contexts);
   persistUiState({ contexts: acpState.contexts });
 }
@@ -751,6 +787,7 @@ function persistUiState(extra = {}, throwOnError = false) {
         ...readSavedUi(throwOnError),
         agent_id: acpState.agentId,
         prompt_asset_id: acpState.promptAssetId,
+        prompt_asset_explicit: promptAssetSelectionExplicit,
         contexts: acpState.contexts,
         ...extra,
       }),
