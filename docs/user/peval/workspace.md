@@ -88,6 +88,14 @@ filesystem changes; a related mutation made in another page refreshes the stale
 page when it is next activated. Reloading or closing the browser still warns
 before discarding an unsaved draft.
 
+The **Reports** page keeps canonical evaluation reports separate from imported
+report packages. **Evaluation reports** is a read-only catalog projection with
+Preview, Open, and View source actions. It reads each report from the current
+source `analysis.md` and does not copy the body into `reports/`. **Imported
+reports** retains package binding and deletion controls for administrators.
+Guests can preview either kind through the same bounded renderer, but do not
+receive source paths or revision metadata.
+
 ## Psycheval Copilot
 
 After adding an allowlisted Agent such as OpenCode in Configuration, use
@@ -105,7 +113,10 @@ effect. The drawer stays open when you switch Workspace pages; close it
 explicitly with its close control, backdrop, or Escape. Page selection changes
 do not silently alter attached references. Every attached reference is resolved
 again for each prompt, so the Agent receives current bounded content in the
-visible chip order.
+visible chip order. A source context also includes its current canonical report
+when one exists. That report is analysis material, not a publication guard.
+After any terminal turn, including a cancelled turn, the Workspace refreshes
+its catalog because an Agent tool may already have committed a report.
 
 Connection success, context attachment, duplicate attachment, removal, and
 related errors appear as ordered, low-emphasis rows in the session transcript.
@@ -128,12 +139,13 @@ user content cannot be separated safely.
 
 When no Agent is configured, the connection control links directly to the ACP
 Agent form in **Configuration**.
-The composer can load any configured Markdown prompt asset; adding a source,
-Task, or report selects the corresponding suggested asset without sending it.
-All eight language variants remain available. A fresh Chinese page starts with
-the Chinese evaluation-review prompt and recommends Chinese context prompts;
-other locales use English. An existing valid saved selection always wins over
-that locale default.
+The composer can load any configured Markdown prompt asset. Attaching context
+does not fill or send a message, and attaching a source does not select a
+diagnosis prompt. Send remains disabled until the user enters a non-blank
+message. All eight language variants remain available. A fresh Chinese page
+starts with the Chinese evaluation-review prompt and recommends Chinese context
+prompts; other locales use English. An existing valid saved selection always
+wins over that locale default.
 
 Provision the Agent outside Psycheval first. For OpenCode, use `opencode auth
 login` in a terminal when its provider needs authentication. The panel shows
@@ -147,7 +159,7 @@ Expand a tool row to inspect its structured result. Recognized Execute, Read,
 and file-change calls use terminal, source, and diff cards; other calls retain
 separate input and output sections. Long source and diff bodies keep their head
 and tail visible until expanded. Each available Copy control copies the semantic
-body for its section—such as raw command output or file text—without card labels,
+body for its section, such as raw command output or file text, without card labels,
 line-number gutters, or command chrome.
 
 ACP Agents inherit the serve process environment and OS permissions. Only
@@ -155,23 +167,44 @@ configure executables you trust, and do not treat a permission card in the
 drawer as a filesystem or process sandbox. The exact access and persistence
 rules are in the [workspace reference](../../reference/workspace.md).
 
-## Skill-based Trial evaluation
+## Free-form evaluation reports
 
 From the Psycheval checkout root, explicitly install the repository Skill with
 `peval init -r .local/evaluation --skill skills/peval`. The option replaces the
 complete same-name workspace copy; plain `peval init` does not install a Skill.
-Start a new Copilot session after an install or replacement, attach one or more
-Harbor Trials, and name the Task skill to evaluate. The Copilot reads each Trial
-through its source reference and reads the named live Task criterion from
-`environment/skills/<name>`.
+Start a new Copilot session after an install or replacement and attach a Harbor
+Trial or imported local session. Enter a non-blank evaluation brief and supply
+any useful basis through the message or attached context, such as a Task, a
+report, a live Task context, or a Skill path. Psycheval does not discover,
+validate, or rank those materials as authoritative evaluation criteria. When a
+turn contains more than one source and the publication target is unclear, the
+Skill asks which source to use. Batch work is reviewed and published one report
+at a time.
 
-The skill drafts one standard Markdown report per parent Trial while the session
-is in plan mode. Review the draft and displayed evidence, skill, and current
-analysis revisions. Then manually switch to execute/build mode and confirm
-publication. The write is revision-bound and no-clobber; replacing an existing
-report also requires its exact current revision. Single-step and MultiStep
-phases share `<trial-dir>/analysis.md`, which the Trial detail view reads after
-the completed turn refreshes the catalog.
+The Skill drafts the standard Markdown report in plan mode. Its template covers
+the evaluation brief and supplied basis, executive conclusion, evaluation
+questions and coverage, findings, observed strengths, recommendations, metrics,
+and limitations and confidence. It distinguishes retained Trial evidence,
+live context observed during analysis, user-supplied material, and inference;
+it does not claim that live content records the Trial-time state.
+
+Review the complete draft after every revision. To publish it, manually switch
+to execute/build mode and explicitly confirm the exact draft. This review is a
+Skill workflow, not a server-side approval token. The publisher stores the
+reviewed Markdown unchanged:
+
+```console
+peval publish evaluation-report -r .local/evaluation \
+  --source-ref <ref> -p <approved-draft.md>
+```
+
+Harbor parent and MultiStep phase references share the parent Trial
+`analysis.md`; imported local sessions use their cell `analysis.md`. Publication
+does not use revisions or a separate replace flag. If a report already exists,
+the confirmed publication replaces it atomically; concurrent publications are
+serialized and the last completed write wins. The Home Trial detail and the
+read-only **Evaluation reports** inventory read this canonical file after the
+catalog refreshes.
 
 ## Serve access
 

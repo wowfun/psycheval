@@ -6,9 +6,10 @@ rebuildable projections.
 | Data | Authority | Mutation rule |
 | --- | --- | --- |
 | Task, Job, Trial, result, reward, artifacts | Harbor files | Read-only to ordinary CLI views |
-| Trial evaluation report | Harbor Trial-root `analysis.md` | Publish only through `peval publish trial-analysis` |
+| Canonical evaluation report | Harbor parent Trial or local source-cell `analysis.md` | Atomic source-scoped upsert through EvaluationReports; local Markdown imports use the same writer |
 | Portable steps, calls, observations, timestamps, usage | ATIF trajectory | Strictly validate before writing |
-| Aliases, state, notes, local-source analysis, report bindings | Workspace overlay | Explicit user mutation |
+| Aliases, state, notes, local analysis JSON, report bindings | Workspace overlay | Explicit user mutation |
+| Imported report package | Workspace `reports/` directory | Explicit package mutation through WorkspaceReportLibrary |
 | Catalog rows, summaries, JSON/XLSX exports | Derived data | Rebuildable from authorities |
 
 ## Trajectories and sidecars
@@ -30,12 +31,10 @@ interface. Task configuration, required instruction files, and Task ignore
 rules are strict UTF-8, independent of the host locale. Task text is not copied
 into reports, catalog summaries, search documents, or exports; live detail may
 expose only a safe Dataset/Task reference. Task file-tree responses omit
-`__pycache__` directories and their descendants as generated presentation noise;
-named Task-skill snapshots also omit that generated cache from their readable
-file set, size budget, and criterion revision. A named Task-skill snapshot is
-limited to 1,000 authored files in addition to its per-file and aggregate byte
-budgets. Authored Task files remain visible to validation, revision, copy, and
-publish ownership.
+`__pycache__` directories and their descendants as generated presentation
+noise. A Task attached to Copilot is user-supplied analysis context. Psycheval
+does not treat it, a Task Skill path, or any other attachment as authoritative
+evaluation criteria.
 The Workspace is the only browser presentation surface. It fetches derived data
 through local HTTP interfaces and does not serialize that state into offline HTML
 reports or Workspace snapshots.
@@ -73,25 +72,37 @@ mutations return or produce a generation; clients reconcile by generation and
 stable key. Rebuilding a catalog or report never silently deletes original
 inputs or Harbor-owned evidence.
 
-## Harbor Trial analysis
+## Evaluation reports
 
-A Harbor evaluation report has one authority: `<trial-dir>/analysis.md`.
-Single-step and MultiStep Trial projections share that parent report. Step
-directories, collected artifacts, nested log files, and the legacy workspace
-`harbor/.../analysis.md` overlay are not report authorities and are not shown as
-Trial analysis. Workspace report packages under `reports/` remain independent.
+Each source has at most one canonical Markdown evaluation report. A Harbor
+source uses `<trial-dir>/analysis.md` at the parent Trial root. Single-step and
+MultiStep phase references resolve to that parent, so every phase shares one
+report. A local source uses `analysis.md` in its existing
+`runs/.../<cell>/` directory. Step directories, collected artifacts, nested log
+files, and the legacy workspace `harbor/.../analysis.md` overlay are not report
+authorities. Workspace report packages under `reports/` remain independent.
 
-Publication is no-clobber by default. Creation binds the current Trial evidence
-revision and named live Task-skill revision. Replacement additionally requires
-the exact current analysis revision. The publisher recomputes every revision
-under the workspace writer lease and a persistent Trial-root coordination lock
-shared by workspaces that mount the same Trial. It rejects active Trials and
-stale inputs, then atomically replaces only the Trial-root Markdown file. The
-coordination lock is not report evidence and is excluded from source revisions.
-A recorded/live Task digest mismatch remains analyzable but must be preserved as
-prominent report provenance; a missing, ambiguous, invalid, or unreadable Task
-or skill is an error.
+EvaluationReports accepts only an existing readable local source or a finished
+Harbor Trial. It validates the reviewed draft as a safe, bounded, non-empty
+UTF-8 Markdown file, then serializes writers with the source coordination lock
+and atomically replaces only canonical `analysis.md`. The stored bytes match
+the reviewed draft; the publisher does not add provenance or other hidden
+content. Publication does not read or compare evidence, evaluation-criteria, or
+current-report revisions, and has no create, replace, force, or no-clobber
+branch. Concurrent valid publications complete in lock order, and the last
+completed write is authoritative. Local Markdown import uses the same lock and
+atomic writer; local JSON import remains a separate overlay mutation.
 
-For MultiStep Trials, catalog phase rows retain phase-scoped evidence revisions
-for projection invalidation. Trial analysis publication and ACP context use the
-parent Trial aggregate revision because every phase shares the same report.
+Catalog fingerprints and generations are rebuildable invalidation details, not
+publication guards. The canonical-report projection stores listing and lookup
+metadata only. It indexes safe, non-empty UTF-8 Markdown, merges MultiStep
+phases into one parent report, and never stores the report body. JSON-only,
+blank, oversized, symlinked, or otherwise unsafe reports do not enter this
+projection.
+
+The read-only ReportLibrary combines this canonical adapter with the existing
+workspace-package adapter. Canonical reads always return the current source
+file; package reads delegate to WorkspaceReportLibrary. Stable opaque report
+references identify the two kinds without encoding paths. Report replacement
+does not change a reference, and browser or ACP projections do not disclose
+source paths or revisions.

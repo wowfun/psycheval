@@ -8,9 +8,9 @@ is not a Python module and does not run Agents or score Tasks.
 
 `psycheval.cli.main(argv) -> int` is the programmatic interface and
 `psycheval.cli.app` is its Typer application. The editable tool installation
-exposes the `peval` command with `init`, `view trajectory`, `view task-skill`,
-`publish trial-analysis`, `export trajectory`, `import analysis`, and `serve`;
-`tr` is the trajectory alias.
+exposes the `peval` command with `init`, `view trajectory`, `publish
+evaluation-report`, `export trajectory`, `import analysis`, and `serve`; `tr`
+is the trajectory alias.
 
 Help and errors are plain terminal text. `-h` and `--help` are equivalent.
 Root completion options emit or explicitly install shell completion; ordinary
@@ -49,19 +49,34 @@ MultiStepTrial roots expand to one source per Harbor step in recorded result
 order. A source without a trajectory remains visible as an inspect diagnostic,
 but complete report mode fails rather than synthesizing ATIF evidence.
 
-With an initialized workspace, `view tr -r <root> --source-ref <ref>` resolves a
-Harbor source without requiring its mount path as input; administrator CLI
-output may still contain the resolved source path. A parent Trial reference
-expands all phases; a `/steps/<name>` reference selects one phase. `view task-skill`
-resolves the parent Trial and reads one explicitly named
-`environment/skills/<name>` criterion from the live Task. Supporting files are
-requested individually and are never executed.
+With an initialized workspace, `view tr -r <root> --source-ref <ref>` resolves
+either an existing local source or a Harbor source without requiring its path
+as input; administrator CLI output may still contain the resolved source path.
+A Harbor parent Trial reference expands all phases, while a `/steps/<name>`
+reference selects one phase. A local source reference selects its one retained
+cell.
 
-`publish trial-analysis` is the only CLI mutation for Harbor analysis. It
-accepts a reviewed Markdown draft plus the evidence and skill revisions emitted
-by `view task-skill`. Existing reports require an explicit matching analysis
-revision; there is no force-overwrite mode. `import analysis` remains the
-local-source annotation command and rejects Harbor source references.
+`publish evaluation-report` accepts one reviewed Markdown draft and resolves
+its `--source-ref` to the canonical report location:
+
+```console
+peval publish evaluation-report -r <workspace> \
+  --source-ref <ref> -p <approved-draft.md> [--json]
+```
+
+Harbor parent and phase references write the parent Trial `analysis.md`; local
+references write the existing cell `analysis.md`. A Harbor Trial must be
+finished. Publication is an atomic upsert with no evidence, criterion, or
+current-report revision arguments and no replace or force option. Repeated and
+concurrent valid publications are serialized, and the last completed write
+wins. JSON output identifies the normalized source, stable opaque report
+reference, relative report location, replacement status, and catalog
+reconciliation result without exposing a publication revision.
+
+`import analysis` remains the local-source annotation command and rejects
+Harbor source references. Its Markdown import shares the evaluation-report
+lock, atomic writer, and catalog reconciliation; JSON import retains its
+independent overlay behavior.
 
 ## Outputs
 

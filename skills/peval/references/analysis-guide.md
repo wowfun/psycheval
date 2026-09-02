@@ -1,21 +1,25 @@
-# Trajectory Analysis
+# Evaluation Analysis
 
-Analyze retained evidence against the named Task skill and the Task's evaluated
-deliverable. Prefer concrete findings over a fixed scorecard.
+Analyze the canonical source using the user's evaluation brief and the material
+they supplied. Prefer concrete findings over a fixed scorecard. Do not promote
+an attached Task, skill, path, report, or live context into an authoritative
+criterion unless the brief explicitly establishes that role.
 
 ## Method
 
-1. Establish the Task, skill contract, expected deliverable, constraints, and
-   Harbor outcome.
+1. Restate the evaluation questions, target source, supplied basis, expected
+   deliverable, constraints, and observable outcome.
 2. Read the final response and reward or failure first, then trace backward to
    the events that explain the outcome.
-3. Map the skill's requirements to observable coverage, partial coverage, or a
-   supported gap. The mere presence of a skill in context does not prove it was
-   used.
+3. Map each evaluation question to observable coverage, partial coverage, a
+   supported gap, or unknown. The presence of material in context does not prove
+   the Agent used it or that it existed in the same form during the run.
 4. Narrow to relevant ATIF step IDs and tool calls instead of loading every
    large event body.
-5. Separate observed behavior from inference. Record missing, redacted, or
-   conversion-limited evidence.
+5. Separate retained source evidence, live context observed during analysis,
+   user-supplied material, and inference. Record missing, redacted, or
+   conversion-limited evidence and never describe live material as Trial-time
+   evidence without direct support.
 6. Tie every material finding to a phase, retained step, tool call, warning,
    metric, reward, or provenance field.
 7. Recommend a concrete change to the skill contract, prompt, orchestration,
@@ -25,7 +29,7 @@ deliverable. Prefer concrete findings over a fixed scorecard.
 
 | Dimension | Evidence to inspect |
 | --- | --- |
-| Skill coverage | Named requirements, triggers, constraints, workflow, outputs, and prohibited actions. |
+| Evaluation coverage | Questions and expectations stated in the brief, with the supplied basis used only in its stated role. |
 | Task success | Deliverable, final response, verifier outcome, reward dimensions, and failure state. |
 | Trajectory quality | Plan coherence, unnecessary detours, repeated work, and use of gathered evidence. |
 | Tool use | Tool choice, arguments, ordering, results, missing calls, and redundant calls. |
@@ -51,10 +55,11 @@ content. All phases share one parent Trial report.
 
 ## Comparisons
 
-Hold the Task, skill revision, and evaluation bar constant where possible.
+Hold the Task, evaluation basis, and evaluation bar constant where possible.
 Identify the first meaningful divergence before attributing a regression to the
 Agent, model, prompt, skill, or tools. Without a controlled comparison, describe
 association rather than causation.
 
-Call out changed Task digests, skill revisions, agents, models, providers, or
-regrade provenance. These differences can invalidate a direct ranking.
+Call out changed Tasks, supplied materials, Agents, models, providers, or
+regrade provenance when the available evidence supports those differences.
+They can invalidate a direct ranking.

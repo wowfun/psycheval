@@ -134,7 +134,7 @@ def test_user_facing_peval_examples_do_not_use_python_or_uv_wrappers() -> None:
         assert "python -m psycheval.cli" not in text, path
 
 
-def test_peval_skill_owns_review_then_revision_bound_publication() -> None:
+def test_single_peval_skill_owns_freeform_review_then_publication() -> None:
     skill_root = ROOT / "skills/peval"
     assert not (ROOT / "src/psycheval/assets/agent_skills").exists()
     files = {
@@ -144,9 +144,9 @@ def test_peval_skill_owns_review_then_revision_bound_publication() -> None:
     }
     assert files == {
         "SKILL.md",
-        "assets/trial-analysis-template.md",
+        "assets/evaluation-report-template.md",
         "references/analysis-guide.md",
-        "references/trial-analysis-workflow.md",
+        "references/evaluation-report-workflow.md",
         "references/view-tr.md",
     }
 
@@ -155,8 +155,14 @@ def test_peval_skill_owns_review_then_revision_bound_publication() -> None:
         for relative in sorted(files)
     )
     assert "peval view tr -r <workspace> --source-ref <ref>" in text
-    assert "peval view task-skill" in text
-    assert "peval publish trial-analysis" in text
-    assert "--replace-revision" in text
-    assert "Do not publish in plan mode" in text
+    assert "peval publish evaluation-report" in text
+    assert "complete current Markdown draft" in text
+    assert "execute/build mode" in text
+    assert "user's evaluation brief" in text
+    assert "peval view task-skill" not in text
+    assert "peval publish trial-analysis" not in text
+    assert "--replace-revision" not in text
+    assert "--expected-evidence-revision" not in text
+    assert "--expected-skill-revision" not in text
+    assert "--skill <skill-name>" not in text
     assert "trajectory_available" in text

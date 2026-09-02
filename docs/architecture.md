@@ -22,11 +22,12 @@ recognition and projection for both direct CLI paths and workspace mounts;
 one internal Harbor Task loader owns validated Task configuration, text
 decoding, and publishable file selection for both workspace state and the
 Dataset workbench. Workspace state owns only discovery, overlays, and derived
-catalog records. One Trial-analysis module resolves normalized Harbor source
-references, exposes a named live Task skill as evaluation criteria, and
-publishes a reviewed Markdown report through an optimistic, cross-process
-serialized write. It is the only Psycheval module allowed to create or replace
-Harbor Trial-root `analysis.md`.
+catalog records. One EvaluationReports module resolves normalized Harbor and
+local source references, reads their canonical evaluation reports, and
+atomically upserts reviewed Markdown under a cross-process lock. It is the only
+Psycheval module allowed to create or replace canonical source `analysis.md`.
+It validates the source and document, but does not infer evaluation criteria
+from a live Task or any other Copilot context.
 `psycheval.harbor` is the adapter module for Harbor's Agent, Environment,
 trajectory, and verifier seams; it owns host execution, harness integration,
 and evidence scoring.
@@ -79,6 +80,14 @@ HTML remains `no-store`, browser modules use strong ETags, and ECharts is loaded
 only from the versioned immutable workspace asset rather than from a browser-side
 third-party fallback.
 
+One read-only ReportLibrary presents canonical source reports and imported
+workspace report packages through separate adapters. Its canonical adapter
+reads the current source `analysis.md`; its package adapter delegates to the
+WorkspaceReportLibrary that owns `reports/`. The catalog contains only the
+rebuildable canonical-report projection needed for listing and lookup, never a
+second copy of the report body. Reports and ACP context use opaque report
+references, so transport responses do not expose source paths or revisions.
+
 The serve-owned ACP seam launches only administrator-configured local child
 processes and carries bounded JSON-RPC frames through an authenticated,
 same-origin WebSocket. An authenticated bridge remains bound to the exact
@@ -110,19 +119,24 @@ rather than duplicating resolved content in serve-owned browser state.
 `pretty-aui` also owns the model-facing user-message envelope and full-history
 recovery that keep resolved context out of a restored user bubble and project
 recoverable prompt prefixes as historical Context injection activities.
+Attaching a source does not select a diagnosis prompt, fill the composer, or
+send a message. The shared composer and controller reject blank prompts.
 Its default React renderer also owns bounded tool presentation: trustworthy
 Execute, Read, and ACP Diff payloads become semantic cards, while ambiguous
 payloads remain lossless generic input/output sections. Psycheval supplies only
 localized chrome and does not parse tool payloads or duplicate the renderer.
 Psycheval neither parses Agent transcripts nor renews those recovered activities
-as live host context references after a page load. A selected Harbor source is
-resolved from its normalized mount, Job, Trial, and optional step identity; live
-detail reads validate and load only that target rather than rediscovering every
-configured Harbor Trial. The context adapter resolves an ordered batch under
-one global character budget; stable Trial identity and revision fields are
-never displaced by large trajectory content. A completed ACP turn only asks
-the Psycheval host to refresh current catalog/detail projections. Generic chat
-event behavior remains owned by `pretty-aui`.
+as live host context references after a page load. A selected source is
+resolved from its normalized local identity or Harbor mount, Job, Trial, and
+optional step identity; live detail reads validate and load only that target
+rather than rediscovering every configured source. When present, its current
+canonical report is included as bounded context for review, not as a
+publication guard. The context adapter resolves an ordered batch under one
+global character budget; stable source identity is never displaced by large
+trajectory content. Any terminal ACP turn asks the Psycheval host to refresh
+current catalog/detail projections because a tool may have committed a report
+before the turn completed or was cancelled. Generic chat event behavior
+remains owned by `pretty-aui`.
 
 ## Repository topology
 
