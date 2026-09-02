@@ -35,6 +35,7 @@ from psycheval.config import (
     write_workspace_locale,
 )
 from psycheval.html import render_serve_html
+from psycheval.report_library import ReportNotFound
 from psycheval.serve.access import (
     ADMIN_ROLE,
     GUEST_ROLE,
@@ -125,6 +126,7 @@ from psycheval.serve.api_support import (
     catalog_view_names_payload,
     delete_harbor_task,
     delete_source_operation,
+    evaluation_report_query,
     harbor_config_payload,
     harbor_error_status,
     harbor_workspace,
@@ -172,8 +174,8 @@ from psycheval.serve.visibility import (
 from psycheval.state import CatalogBusyError, CatalogSummaryCapacityError
 from psycheval.workspace_reports import (
     WorkspaceReportNotFound,
-    render_workspace_report_preview,
-    render_workspace_report_reader_page,
+    render_report_preview,
+    render_report_reader_page,
 )
 from psycheval.workspace_views import WorkspaceViewConflict, WorkspaceViewNotFound
 
@@ -1229,6 +1231,19 @@ def _register_view_report_routes(app: FastAPI) -> None:
         runtime: ServeRuntime = request.app.state.runtime
         return _json(runtime.workspace_report_catalog())
 
+    @app.get("/api/evaluation-reports")
+    @access(GUEST_ACCESS)
+    def evaluation_reports(request: Request) -> JSONResponse:
+        runtime: ServeRuntime = request.app.state.runtime
+        page, page_size, search = evaluation_report_query(request.url.query)
+        return _json(
+            runtime.evaluation_report_catalog(
+                page=page,
+                page_size=page_size,
+                search=search,
+            )
+        )
+
     @app.post(
         "/api/reports",
         dependencies=[Depends(require_admin), Depends(mutation_guard)],
@@ -1292,16 +1307,16 @@ def _register_view_report_routes(app: FastAPI) -> None:
             raise ProblemException(404, str(exc)) from exc
         return Response(status_code=204)
 
-    @app.get("/api/reports/{report_id}/preview")
+    @app.get("/api/report-library/{report_ref}/preview")
     @access(GUEST_ACCESS)
-    def report_preview(request: Request, report_id: str) -> Response:
+    def report_preview(request: Request, report_ref: str) -> Response:
         runtime: ServeRuntime = request.app.state.runtime
         try:
-            report = runtime.workspace_reports.read(report_id)
-        except ValueError as exc:
+            report = runtime.report_library.read(report_ref)
+        except ReportNotFound as exc:
             raise ProblemException(404, str(exc)) from exc
         return Response(
-            render_workspace_report_preview(report),
+            render_report_preview(report),
             media_type="text/html",
             headers={
                 "Content-Security-Policy": REPORT_PREVIEW_CSP,
@@ -1311,16 +1326,16 @@ def _register_view_report_routes(app: FastAPI) -> None:
             },
         )
 
-    @app.get("/api/reports/{report_id}/reader")
+    @app.get("/api/report-library/{report_ref}/reader")
     @access(GUEST_ACCESS)
-    def report_reader(request: Request, report_id: str) -> Response:
+    def report_reader(request: Request, report_ref: str) -> Response:
         runtime: ServeRuntime = request.app.state.runtime
         try:
-            report = runtime.workspace_reports.read(report_id)
-        except ValueError as exc:
+            report = runtime.report_library.read(report_ref)
+        except ReportNotFound as exc:
             raise ProblemException(404, str(exc)) from exc
         return Response(
-            render_workspace_report_reader_page(report),
+            render_report_reader_page(report),
             media_type="text/html",
             headers={
                 "Content-Security-Policy": REPORT_READER_CSP,

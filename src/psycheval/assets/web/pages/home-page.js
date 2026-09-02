@@ -5,6 +5,7 @@ import { RENDER_OPTIONS, render, state } from "../modules/runtime.js";
 import {
   loadCatalogPage,
   loadServeWorkspace,
+  selectServeDetail,
 } from "../modules/serve-catalog.js";
 import { refreshWorkspaceReports } from "../modules/workspace-reports.js";
 
@@ -20,12 +21,13 @@ const EMPTY_REPORT = Object.freeze({
 function createHomePage(_context) {
   let initialized = false;
   return {
-    async activate(changes) {
+    async activate(changes, hash) {
       if (!initialized) {
         await ensureEcharts();
         render(EMPTY_REPORT);
         await loadServeWorkspace();
         initialized = true;
+        await selectSourceFromHash(hash);
         return;
       }
       const requests = [];
@@ -39,6 +41,7 @@ function createHomePage(_context) {
       }
       const results = await Promise.all(requests);
       if (results.some(result => result === null)) throw new Error("Workspace data is stale");
+      await selectSourceFromHash(hash);
     },
     snapshot() {
       return {
@@ -55,4 +58,21 @@ function createHomePage(_context) {
   };
 }
 
-export { createHomePage };
+async function selectSourceFromHash(hash) {
+  const sourceKey = sourceKeyFromHash(hash);
+  if (sourceKey) await selectServeDetail(sourceKey);
+}
+
+function sourceKeyFromHash(hash) {
+  const prefix = "#source=";
+  if (!String(hash || "").startsWith(prefix)) return null;
+  let sourceKey;
+  try {
+    sourceKey = decodeURIComponent(String(hash).slice(prefix.length));
+  } catch {
+    return null;
+  }
+  return sourceKey || null;
+}
+
+export { createHomePage, sourceKeyFromHash };

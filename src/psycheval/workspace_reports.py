@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from threading import Lock
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -17,6 +17,7 @@ from markdown_it import MarkdownIt
 
 REPORT_MAX_BYTES = 20 * 1024 * 1024
 REPORT_STATE_FILENAME = "state.json"
+PACKAGE_REPORT_REF_PREFIX = "package:"
 REPORT_ID_RE = re.compile(
     r"^(?P<timestamp>\d{8}-\d{6}-\d{6})(?:-(?P<collision>[2-9]|[1-9]\d+))?$"
 )
@@ -28,8 +29,23 @@ REPORT_FORMATS = {
 }
 
 
+class RenderableReport(Protocol):
+    @property
+    def report_ref(self) -> str: ...
+
+    @property
+    def filename(self) -> str: ...
+
+    @property
+    def format(self) -> str: ...
+
+    @property
+    def content(self) -> bytes: ...
+
+
 @dataclass(frozen=True)
 class WorkspaceReport:
+    report_ref: str
     report_id: str
     filename: str
     format: str
@@ -117,6 +133,7 @@ class WorkspaceReportLibrary:
         )
         return [
             {
+                "report_ref": workspace_report_ref(report.report_id),
                 "report_id": report.report_id,
                 "filename": report.filename,
                 "format": report.format,
@@ -154,6 +171,7 @@ class WorkspaceReportLibrary:
         metadata = self._read_package_metadata(report_id)
         content = self._read_content(metadata.report_path)
         return WorkspaceReport(
+            report_ref=workspace_report_ref(metadata.report_id),
             report_id=metadata.report_id,
             filename=metadata.filename,
             format=metadata.format,
@@ -434,7 +452,11 @@ class WorkspaceReportLibrary:
         )
 
 
-def render_workspace_report_preview(report: WorkspaceReport) -> bytes:
+def workspace_report_ref(report_id: str) -> str:
+    return f"{PACKAGE_REPORT_REF_PREFIX}{report_id}"
+
+
+def render_report_preview(report: RenderableReport) -> bytes:
     if report.format == "html":
         return report.content
     markdown = report.content.decode("utf-8")
@@ -459,10 +481,12 @@ def render_workspace_report_preview(report: WorkspaceReport) -> bytes:
     ).encode("utf-8")
 
 
-def render_workspace_report_reader_page(report: WorkspaceReport) -> bytes:
+def render_report_reader_page(report: RenderableReport) -> bytes:
     """Render a top-level shell that preserves the preview iframe sandbox."""
     title = html.escape(report.filename)
-    preview_path = f"/api/reports/{quote(report.report_id, safe='')}/preview"
+    preview_path = (
+        f"/api/report-library/{quote(str(report.report_ref), safe='')}/preview"
+    )
     return (
         "<!doctype html>\n"
         '<html><head><meta charset="utf-8">'

@@ -24,6 +24,11 @@ const fetchStub = async (path, options = {}) => {
   if (value === "/api/prompts") {
     return response([
       {
+        id: "evaluation-review",
+        title: "Evaluation review",
+        content: "Review this evaluation.",
+      },
+      {
         id: "failure-diagnosis",
         title: "Failure diagnosis",
         content: "Trace the first mistake.",
@@ -36,20 +41,27 @@ const fetchStub = async (path, options = {}) => {
     return response({
       items: body.contexts.map(context => {
         const source = context.kind === "source";
+        const report = context.kind === "report";
         return {
           id: source
             ? `source:${context.source_key}:${context.step_id || ""}`
-            : `dataset:${context.dataset_id}:${context.task}`,
+            : report
+              ? `report:${context.report_ref}`
+              : `dataset:${context.dataset_id}:${context.task}`,
           label: source
             ? `${context.source_key} · Step ${context.step_id}`
-            : `${context.dataset_id} / ${context.task}`,
+            : report
+              ? context.report_ref
+              : `${context.dataset_id} / ${context.task}`,
           content: [
             {
               type: "resource",
               resource: {
                 uri: source
                   ? `peval://source/${context.source_key}`
-                  : `peval://dataset/${context.dataset_id}/${context.task}`,
+                  : report
+                    ? `peval://report/${context.report_ref}`
+                    : `peval://dataset/${context.dataset_id}/${context.task}`,
                 mimeType: "application/json",
                 text: JSON.stringify({ reference: context }),
               },
@@ -171,7 +183,8 @@ class SyntheticAcpSocket extends window.EventTarget {
           },
         },
       });
-      this.#result(message.id, { stopReason: "end_turn" });
+      const cancelled = JSON.stringify(message.params.prompt).includes("cancelled terminal");
+      this.#result(message.id, { stopReason: cancelled ? "cancelled" : "end_turn" });
     }
   }
 
@@ -299,6 +312,8 @@ test("Psycheval composes the vendored controller through its gateway and context
   );
   addContext.click();
   await waitFor(() => acp.acpState.contexts.length === 1);
+  assert.equal(acp.acpState.promptAssetId, "evaluation-review");
+  assert.equal(host.shadowRoot.querySelector("textarea").value, "");
   await waitFor(
     () =>
       host.shadowRoot.querySelectorAll(
@@ -341,7 +356,7 @@ test("Psycheval composes the vendored controller through its gateway and context
   assert.match(host.shadowRoot.textContent, /bench-v1\.0 \/ trend-digest-01/);
   document.querySelector("[data-acp-use-prompt]").click();
   const textarea = host.shadowRoot.querySelector("textarea");
-  assert.equal(textarea.value, "Trace the first mistake.");
+  assert.equal(textarea.value, "Review this evaluation.");
   await waitFor(() => !host.shadowRoot.querySelector(".paui-send").disabled);
   host.shadowRoot.querySelector(".paui-send").click();
 
@@ -370,7 +385,7 @@ test("Psycheval composes the vendored controller through its gateway and context
     /^\n\n<pretty-aui-user-message-v1-([a-f0-9]{32})>\n$/,
   );
   assert.ok(envelope);
-  assert.equal(prompts[0][3].text, "Trace the first mistake.");
+  assert.equal(prompts[0][3].text, "Review this evaluation.");
   assert.equal(
     prompts[0][4].text,
     `\n</pretty-aui-user-message-v1-${envelope[1]}>`,
@@ -477,6 +492,50 @@ test("Psycheval composes the vendored controller through its gateway and context
   );
   assert.equal(document.activeElement, opener);
   assert.ok(acp.acpState.mounted, "closing the drawer keeps background sessions alive");
+});
+
+test("every terminal turn refreshes catalog even when cancelled without source context", async () => {
+  const workspaceRefreshes = [];
+  workspaceRuntime.setWorkspaceApp({
+    invalidate(changes) {
+      workspaceRefreshes.push(["invalidate", changes]);
+    },
+    async navigate(page, options) {
+      workspaceRefreshes.push(["navigate", page, options]);
+    },
+  });
+  workspaceRuntime.setWorkspaceSnapshotProvider(() => ({
+    context: { page: "reports", report_ref: "package:report-1", report_name: "Report one" },
+    dirty: false,
+  }));
+  const host = document.querySelector("[data-acp-chat]");
+  host.shadowRoot
+    .querySelector('[aria-label="Remove context: bench-v1.0 / trend-digest-01"]')
+    .click();
+  await waitFor(() => acp.acpState.contexts.length === 0);
+  const addContext = host.shadowRoot.querySelector('[aria-label="Add context"]');
+  await waitFor(() => addContext.disabled === false);
+  addContext.click();
+  await waitFor(() => acp.acpState.contexts.length === 1);
+  assert.deepEqual(acp.acpState.contexts[0].value, {
+    kind: "report",
+    report_ref: "package:report-1",
+  });
+
+  const controller = acp.acpState.mounted.controller;
+  await controller.newSession();
+  const turn = controller.send("cancelled terminal");
+  await turn.done;
+  await waitFor(() => workspaceRefreshes.length === 2);
+
+  assert.deepEqual(workspaceRefreshes, [
+    ["invalidate", "catalog"],
+    ["navigate", "reports", { focus: false, history: false }],
+  ]);
+  assert.deepEqual(contextRequests.at(-1).contexts, [{
+    kind: "report",
+    report_ref: "package:report-1",
+  }]);
 });
 
 test("prompt asset invalidation refreshes presets without replacing live chat", async () => {

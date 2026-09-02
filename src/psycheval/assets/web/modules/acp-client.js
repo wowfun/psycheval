@@ -348,14 +348,9 @@ function handleChatEvent(event, agentId, generation) {
     return;
   }
   if (event.type === "turn_completed") {
-    if (
-      event.stopReason !== "cancelled"
-      && acpState.contexts.some(context => context.value?.kind === "source")
-    ) {
-      void refreshWorkspace("catalog").catch(error => {
-        console.error("peval: workspace refresh after ACP turn failed", error);
-      });
-    }
+    void refreshWorkspace("catalog").catch(error => {
+      console.error("peval: workspace refresh after ACP turn failed", error);
+    });
     return;
   }
   if (event.type === "error") {
@@ -405,7 +400,6 @@ function captureContext() {
   acpState.contexts = [...acpState.contexts, next];
   persistUiState({ contexts: acpState.contexts });
   const suggestedPromptId = {
-    source: "failure-diagnosis",
     dataset_task: "task-audit",
     report: "report-review",
   }[next.value?.kind];
@@ -466,11 +460,11 @@ function currentContext() {
       },
     };
   }
-  if (context.page === "reports" && context.report_id) {
+  if (context.page === "reports" && context.report_ref) {
     return {
-      id: `report:${context.report_id}`,
-      label: context.report_name || context.report_id,
-      value: { kind: "report", report_id: context.report_id },
+      id: `report:${context.report_ref}`,
+      label: context.report_name || context.report_ref,
+      value: { kind: "report", report_ref: context.report_ref },
     };
   }
   return null;

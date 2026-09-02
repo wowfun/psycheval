@@ -155,6 +155,24 @@ def catalog_query(raw_query: str) -> CatalogQuery:
         raise HttpError(400, str(exc)) from exc
 
 
+def evaluation_report_query(raw_query: str) -> tuple[int, int, str]:
+    values = parse_qs(raw_query, keep_blank_values=True)
+
+    def integer(key: str, default: int) -> int:
+        raw = values.get(key)
+        value = str(raw[0]) if raw else str(default)
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise HttpError(400, f"{key} must be an integer") from exc
+
+    return (
+        integer("page", 1),
+        integer("page_size", 100),
+        str((values.get("search") or [""])[0]),
+    )
+
+
 def catalog_query_payload(value: Any) -> CatalogQuery:
     if value is None:
         return CatalogQuery()
@@ -452,30 +470,6 @@ class _ResolvedAcpContext:
     omission: str
 
 
-class _AcpHarborContextResolver:
-    def __init__(self, store: ServeStateStore | None) -> None:
-        self.store = store
-        self.service: Any | None = None
-
-    def resolve(self, source_ref: str) -> tuple[Any, Any]:
-        if self.store is None:
-            raise HttpError(500, "workspace state is unavailable")
-        try:
-            if self.service is None:
-                from psycheval.trial_analysis import TrialAnalysisService
-
-                self.service = TrialAnalysisService(self.store.paths.root)
-            target = self.service.resolve(source_ref)
-            document = self.service.sources.load(target.candidates[0])
-        except ValueError as exc:
-            raise HttpError(400, str(exc)) from exc
-        return target, document
-
-    def close(self) -> None:
-        if self.service is not None:
-            self.service.close()
-
-
 def acp_context_items(
     store: ServeStateStore | None,
     runtime: ServeRuntime,
@@ -483,19 +477,10 @@ def acp_context_items(
     *,
     embedded_context: bool,
 ) -> list[dict[str, Any]]:
-    harbor_resolver = _AcpHarborContextResolver(store)
-    try:
-        resolved = [
-            _resolve_acp_context(
-                store,
-                runtime,
-                raw_context,
-                harbor_resolver=harbor_resolver,
-            )
-            for raw_context in raw_contexts
-        ]
-    finally:
-        harbor_resolver.close()
+    resolved = [
+        _resolve_acp_context(store, runtime, raw_context)
+        for raw_context in raw_contexts
+    ]
     limit = max(1, runtime.config.max_content_chars)
     minimums = [
         _acp_rendered_length(item, embedded_context=embedded_context)
@@ -527,8 +512,6 @@ def _resolve_acp_context(
     store: ServeStateStore | None,
     runtime: ServeRuntime,
     raw_context: Any,
-    *,
-    harbor_resolver: _AcpHarborContextResolver,
 ) -> _ResolvedAcpContext:
     if not isinstance(raw_context, dict):
         raise HttpError(400, "ACP context must be an object")
@@ -577,28 +560,21 @@ def _resolve_acp_context(
             trajectory = {**trajectory, "steps": selected_steps}
         row = runtime.catalog.row_for_key(source_key)
         source_ref = str(row.get("source_ref") or row.get("artifact_dir") or "")
-        trial_ref = source_ref
-        phase = None
-        evidence_revision = str(
-            row.get("artifact_revision") or detail.get("artifact_revision") or ""
+        try:
+            evaluation_report = runtime.evaluation_reports.read(source_ref)
+        except ValueError as exc:
+            raise HttpError(400, str(exc)) from exc
+        trial_ref = (
+            source_ref.split("/steps/", 1)[0]
+            if source_ref.startswith("harbor/")
+            else source_ref
         )
-        analysis_present = bool(row.get("analysis_count"))
-        analysis_revision = None
-        resolved_harbor = False
-        if source_ref.startswith("harbor/"):
-            target, document = harbor_resolver.resolve(source_ref)
-            resolved_harbor = True
-            trial_ref = target.trial_ref
-            phase = (
-                target.candidates[0].step_name
-                if target.requested_ref != target.trial_ref
-                and len(target.candidates) == 1
-                else None
-            )
-            evidence_revision = target.evidence_revision
-            analysis_present = document.analysis_revision is not None
-            analysis_revision = document.analysis_revision
-        live_task_metadata = meta.get("task_metadata") if resolved_harbor else None
+        phase = (
+            source_ref.rsplit("/", 1)[-1]
+            if source_ref.startswith("harbor/") and "/steps/" in source_ref
+            else None
+        )
+        live_task_metadata = meta.get("task_metadata")
         task_metadata = (
             live_task_metadata
             if isinstance(live_task_metadata, dict)
@@ -606,7 +582,7 @@ def _resolve_acp_context(
             if isinstance(row.get("task_metadata"), dict)
             else {}
         )
-        live_provenance = meta.get("harbor_provenance") if resolved_harbor else None
+        live_provenance = meta.get("harbor_provenance")
         provenance = (
             live_provenance
             if isinstance(live_provenance, dict)
@@ -614,9 +590,9 @@ def _resolve_acp_context(
             if isinstance(row.get("harbor_provenance"), dict)
             else {}
         )
-        live_status = meta.get("status") if resolved_harbor else None
-        live_score = meta.get("score") if resolved_harbor else None
-        live_rewards = meta.get("rewards") if resolved_harbor else None
+        live_status = meta.get("status")
+        live_score = meta.get("score")
+        live_rewards = meta.get("rewards")
         identity = {
             "source_ref": source_ref,
             "trial_ref": trial_ref,
@@ -624,9 +600,7 @@ def _resolve_acp_context(
             "task": {
                 key: value
                 for key, value in {
-                    "name": meta.get("task_name")
-                    if resolved_harbor
-                    else row.get("task_name"),
+                    "name": meta.get("task_name") or row.get("task_name"),
                     "status": task_metadata.get("status"),
                     "recorded_digest": provenance.get("task_digest"),
                     "recorded_digest_source": provenance.get("task_digest_source"),
@@ -642,20 +616,23 @@ def _resolve_acp_context(
                     "status": live_status
                     or row.get("status")
                     or row.get("last_status"),
-                    "score": live_score if resolved_harbor else row.get("score"),
+                    "score": live_score if live_score is not None else row.get("score"),
                     "rewards": live_rewards
                     if isinstance(live_rewards, dict)
                     else row.get("rewards"),
                     "failure_class": meta.get("failure_class"),
                     "exception": meta.get("exception"),
-                    "diagnostic": None if resolved_harbor else row.get("last_error"),
+                    "diagnostic": row.get("last_error"),
                 }.items()
                 if value is not None
             },
-            "evidence_revision": evidence_revision,
-            "analysis": {
-                "present": analysis_present,
-                "revision": analysis_revision,
+            "evaluation_report": {
+                "present": evaluation_report is not None,
+                **(
+                    {"report_ref": evaluation_report.report_ref}
+                    if evaluation_report is not None
+                    else {}
+                ),
             },
             "omissions": [],
         }
@@ -666,6 +643,16 @@ def _resolve_acp_context(
                 for key, value in meta.items()
                 if key not in {"data_ref"} and value is not None
             },
+            **(
+                {
+                    "evaluation_report": {
+                        "report_ref": evaluation_report.report_ref,
+                        "content": evaluation_report.content,
+                    }
+                }
+                if evaluation_report is not None
+                else {}
+            ),
             **({"step_filter": step_id} if step_id is not None else {}),
         }
         reference = {
@@ -698,24 +685,25 @@ def _resolve_acp_context(
         uri = f"peval://dataset/{quote(dataset_id, safe='')}/{quote(task, safe='')}"
         omission = "Task detail was compacted to fit the shared ACP context budget"
     elif kind == "report":
-        _require_acp_context_keys(raw_context, {"kind", "report_id"})
-        report_id = _bounded_acp_context_field(raw_context, "report_id")
+        _require_acp_context_keys(raw_context, {"kind", "report_ref"})
+        report_ref = _bounded_acp_context_field(raw_context, "report_ref")
         try:
-            report = runtime.workspace_reports.read(report_id)
+            report = runtime.report_library.read(report_ref)
         except ValueError as exc:
             raise HttpError(404, str(exc)) from exc
         identity = {
-            "report_id": report.report_id,
+            "report_ref": report.report_ref,
+            "title": report.title,
             "filename": report.filename,
             "format": report.format,
-            "source_refs": list(report.source_refs),
+            "source_keys": list(report.source_keys),
             "omissions": [],
         }
-        context_payload = {"content": report.content.decode("utf-8", errors="replace")}
-        reference = {"kind": kind, "report_id": report_id}
-        item_id = f"report:{report_id}"
-        label = report.filename or report_id
-        uri = f"peval://report/{quote(report_id, safe='')}"
+        context_payload = {"content": report.content.decode("utf-8")}
+        reference = {"kind": kind, "report_ref": report_ref}
+        item_id = f"report:{report_ref}"
+        label = report.title or report.filename or report_ref
+        uri = f"peval://report/{quote(report_ref, safe='')}"
         omission = "report content was compacted to fit the shared ACP context budget"
     else:
         raise HttpError(400, "ACP context kind must be source, dataset_task, or report")

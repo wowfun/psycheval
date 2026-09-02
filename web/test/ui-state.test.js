@@ -1148,6 +1148,7 @@ test("serve startup loads existing report bindings for Leaderboard cells", async
       statusText: "OK",
       text: async () => JSON.stringify([{
           report_id: "20260720-120000-000000",
+          report_ref: "package:20260720-120000-000000",
           filename: "startup-analysis.md",
           format: "markdown",
           source_keys: ["session-1"],
@@ -1177,12 +1178,14 @@ test("a session with multiple reports lets each report open from the Leaderboard
     runtime.state.workspaceReports = [
       {
         report_id: "20260725-130000-000000",
+        report_ref: "package:20260725-130000-000000",
         filename: "newer-analysis.md",
         format: "markdown",
         source_keys: ["session-1"],
       },
       {
         report_id: "20260725-120000-000000",
+        report_ref: "package:20260725-120000-000000",
         filename: "older-analysis.html",
         format: "html",
         source_keys: ["session-1"],
@@ -1208,6 +1211,10 @@ test("a session with multiple reports lets each report open from the Leaderboard
 
       assert.equal(runtime.state.reportReader.openId, reportId);
       assert.equal(document.querySelector("#workspace-report-reader h2").textContent, filename);
+      assert.equal(
+        document.querySelector("#workspace-report-reader iframe").getAttribute("src"),
+        `/api/report-library/${encodeURIComponent(`package:${reportId}`)}/preview`,
+      );
       assert.equal(picker.value, "");
       reports.closeWorkspaceReportReader({ restoreFocus: false });
     }
@@ -1232,6 +1239,7 @@ test("HTML report previews fit an 1180px design viewport into the reader pane", 
 
   runtime.state.workspaceReports = [{
     report_id: "20260719-130000-000000",
+    report_ref: "package:20260719-130000-000000",
     filename: "wide-report.html",
     format: "html",
     source_keys: ["session-1"],

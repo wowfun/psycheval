@@ -91,12 +91,12 @@
   grid-row:3;
   min-height:0;
   display:grid;
-  grid-template-columns:minmax(280px,360px) minmax(0,1fr);
+  grid-template-columns:minmax(240px,300px) minmax(240px,300px) minmax(0,1fr);
 }
 .report-manager-body.readonly {
-  grid-template-columns:minmax(0,1fr);
+  grid-template-columns:repeat(2,minmax(0,1fr));
 }
-.report-manager-body.readonly .report-inventory-panel {
+.report-manager-body.readonly .imported-report-panel {
   border-right:0;
 }
 .report-inventory-panel,
@@ -114,6 +114,13 @@
 .report-inventory-panel {
   border-right:1px solid var(--rule);
   background:color-mix(in oklch,var(--surface),var(--surface-2) 18%);
+}
+.evaluation-report-panel {
+  grid-template-rows:auto auto minmax(0,1fr) auto;
+  gap:10px;
+}
+.evaluation-report-panel .report-manager-section-head {
+  margin-bottom:0;
 }
 .report-manager-section-head {
   display:flex;
@@ -156,7 +163,7 @@
   color:var(--ink);
   padding:11px;
   text-align:left;
-  cursor:pointer;
+  cursor:default;
 }
 .report-inventory-item:hover,
 .report-inventory-item.selected {
@@ -165,6 +172,36 @@
 }
 .report-inventory-item.selected {
   box-shadow:inset 3px 0 0 var(--focus);
+}
+.report-inventory-card {
+  padding:7px;
+}
+.report-inventory-select {
+  width:100%;
+  min-width:0;
+  display:grid;
+  gap:4px;
+  border:0;
+  border-radius:6px;
+  background:transparent;
+  color:inherit;
+  padding:4px;
+  text-align:left;
+  cursor:pointer;
+}
+.report-inventory-actions {
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  padding:4px;
+}
+.report-inventory-actions .action-button {
+  flex:none;
+  text-decoration:none;
+}
+.report-inventory-pagination {
+  justify-content:center;
+  min-height:30px;
 }
 .report-inventory-item strong {
   overflow:hidden;
@@ -449,7 +486,8 @@
   min-height:620px;
 }
 .report-manager-page button:focus-visible,
-.report-manager-page input:focus-visible {
+.report-manager-page input:focus-visible,
+.report-manager-page a:focus-visible {
   outline:2px solid color-mix(in oklch,var(--focus),transparent 32%);
   outline-offset:2px;
 }
@@ -457,6 +495,9 @@
   .serve-page-reports .report-manager-body {
     min-height:0;
     grid-template-columns:1fr;
-    grid-template-rows:minmax(220px,34vh) minmax(420px,1fr);
+    grid-template-rows:minmax(260px,38vh) minmax(220px,34vh) minmax(420px,1fr);
+  }
+  .serve-page-reports .report-manager-body.readonly {
+    grid-template-rows:minmax(260px,46vh) minmax(220px,1fr);
   }
 }

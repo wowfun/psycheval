@@ -21,6 +21,10 @@ test("Reports page ignores an older load that finishes after the latest request"
     <script type="application/json" id="peval-render-options">{"role":"admin"}</script>
     <div data-report-manager>
       <p data-report-manager-status hidden></p>
+      <input type="search" data-evaluation-report-search>
+      <div data-evaluation-report-inventory></div>
+      <span data-evaluation-report-count></span>
+      <div data-evaluation-report-pagination></div>
       <div data-report-inventory></div>
       <span data-report-count></span>
       <label data-report-page-search-control hidden><input type="search" data-report-page-search></label>
@@ -35,15 +39,15 @@ test("Reports page ignores an older load that finishes after the latest request"
     },
   });
   try {
-    const { loadReportManagerPage } = await import(
+    const { loadImportedReports } = await import(
       "../../src/psycheval/assets/web/modules/report-manager-page.js"
     );
     const { reportStore } = await import(
       "../../src/psycheval/assets/web/modules/report-store.js"
     );
 
-    const first = loadReportManagerPage({ page: 1 });
-    const second = loadReportManagerPage({ page: 2 });
+    const first = loadImportedReports({ page: 1 });
+    const second = loadImportedReports({ page: 2 });
     pages.get(2).resolve(response({
       page: 2,
       page_size: 100,

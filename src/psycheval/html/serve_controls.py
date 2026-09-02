@@ -151,7 +151,9 @@ def render_serve_report_page(messages: dict[str, str], *, role: str = "admin") -
         {
             "REPORTS": escape(messages["workspace_reports"]),
             "RELOAD": escape(messages["serve_reload"]),
-            "REPORT_INVENTORY": escape(messages["report_inventory"]),
+            "EVALUATION_REPORTS": escape(messages["evaluation_reports"]),
+            "EVALUATION_REPORT_SEARCH": escape(messages["evaluation_report_search"]),
+            "IMPORTED_REPORTS": escape(messages["imported_reports"]),
             "REPORT_BINDINGS": escape(messages["report_bindings"]),
             "REPORT_SEARCH_SESSIONS": escape(messages["report_search_sessions"]),
             "REPORT_BINDINGS_HIDDEN": " hidden" if role != "admin" else "",

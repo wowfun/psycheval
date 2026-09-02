@@ -12,7 +12,6 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 from websockets.exceptions import ConnectionClosedError, InvalidStatus
 from websockets.sync.client import connect
@@ -355,6 +354,7 @@ class AcpContextTests(unittest.TestCase):
         runtime = SimpleNamespace(
             config=SimpleNamespace(max_content_chars=1_200),
             detail=lambda source_key: detail,
+            evaluation_reports=SimpleNamespace(read=lambda _source_ref: None),
             catalog=SimpleNamespace(
                 row_for_key=lambda source_key: {
                     "source_ref": "runs/default/agent/session/trial",
@@ -377,7 +377,7 @@ class AcpContextTests(unittest.TestCase):
         self.assertEqual(
             payload["value"]["source_ref"], "runs/default/agent/session/trial"
         )
-        self.assertEqual(payload["value"]["evidence_revision"], "artifact-revision")
+        self.assertNotIn("evidence_revision", payload["value"])
         self.assertEqual(
             [
                 step["step_id"]
@@ -419,6 +419,7 @@ class AcpContextTests(unittest.TestCase):
         runtime = SimpleNamespace(
             config=SimpleNamespace(max_content_chars=1_800),
             detail=lambda source_key: detail,
+            evaluation_reports=SimpleNamespace(read=lambda _source_ref: None),
             catalog=SimpleNamespace(
                 row_for_key=lambda source_key: {
                     "source_ref": f"runs/default/agent/session/{source_key}",
@@ -452,34 +453,21 @@ class AcpContextTests(unittest.TestCase):
         )
         self.assertTrue(all(payload["value"]["omissions"] for payload in payloads))
 
-    def test_context_batch_reuses_one_trial_analysis_service(self) -> None:
-        instances = []
+    def test_source_context_includes_current_report_without_a_revision_guard(
+        self,
+    ) -> None:
+        report_reads: list[str] = []
 
-        class FakeTrialAnalysisService:
-            def __init__(self, _root: Path) -> None:
-                self.closed = False
-                self.sources = SimpleNamespace(
-                    load=lambda _candidate: SimpleNamespace(
-                        harbor_analysis_markdown="# Live analysis",
-                        analysis_revision="live-analysis-revision",
-                    )
-                )
-                instances.append(self)
-
-            def resolve(self, source_ref: str) -> SimpleNamespace:
-                return SimpleNamespace(
-                    requested_ref=source_ref,
-                    trial_ref=f"canonical:{source_ref}",
-                    phase_refs=(),
-                    evidence_revision=f"revision:{source_ref}",
-                    candidates=(SimpleNamespace(step_name=None),),
-                )
-
-            def close(self) -> None:
-                self.closed = True
+        def read_report(source_ref: str) -> SimpleNamespace:
+            report_reads.append(source_ref)
+            return SimpleNamespace(
+                report_ref=f"analysis:{source_ref}",
+                content=f"# Current report for {source_ref}",
+            )
 
         runtime = SimpleNamespace(
             config=SimpleNamespace(max_content_chars=10_000),
+            evaluation_reports=SimpleNamespace(read=read_report),
             detail=lambda source_key: SimpleNamespace(
                 to_dict=lambda: {
                     "report": {
@@ -507,21 +495,15 @@ class AcpContextTests(unittest.TestCase):
                 }
             ),
         )
-        store = SimpleNamespace(paths=SimpleNamespace(root=Path("/workspace")))
-
-        with patch(
-            "psycheval.trial_analysis.TrialAnalysisService",
-            FakeTrialAnalysisService,
-        ):
-            items = acp_context_items(
-                store,
-                runtime,
-                [
-                    {"kind": "source", "source_key": "trial-a"},
-                    {"kind": "source", "source_key": "trial-b"},
-                ],
-                embedded_context=True,
-            )
+        items = acp_context_items(
+            None,
+            runtime,
+            [
+                {"kind": "source", "source_key": "trial-a"},
+                {"kind": "source", "source_key": "trial-b"},
+            ],
+            embedded_context=True,
+        )
 
         self.assertEqual([item["label"] for item in items], ["trial-a", "trial-b"])
         payloads = [
@@ -531,13 +513,26 @@ class AcpContextTests(unittest.TestCase):
         self.assertEqual(
             [payload["trial_ref"] for payload in payloads],
             [
-                "canonical:harbor/jobs/job-a/trial-a",
-                "canonical:harbor/jobs/job-a/trial-b",
+                "harbor/jobs/job-a/trial-a",
+                "harbor/jobs/job-a/trial-b",
             ],
         )
         self.assertEqual(
-            [payload["analysis"]["revision"] for payload in payloads],
-            ["live-analysis-revision", "live-analysis-revision"],
+            [payload["evaluation_report"]["present"] for payload in payloads],
+            [True, True],
+        )
+        self.assertTrue(
+            all("revision" not in payload["evaluation_report"] for payload in payloads)
+        )
+        self.assertEqual(
+            [
+                payload["evidence"]["evaluation_report"]["content"]
+                for payload in payloads
+            ],
+            [
+                "# Current report for harbor/jobs/job-a/trial-a",
+                "# Current report for harbor/jobs/job-a/trial-b",
+            ],
         )
         self.assertEqual(
             [payload["outcome"] for payload in payloads],
@@ -569,24 +564,24 @@ class AcpContextTests(unittest.TestCase):
                 },
             ],
         )
-        self.assertEqual(len(instances), 1)
-        self.assertTrue(instances[0].closed)
+        self.assertEqual(
+            report_reads,
+            [
+                "harbor/jobs/job-a/trial-a",
+                "harbor/jobs/job-a/trial-b",
+            ],
+        )
 
     def test_context_maps_routine_harbor_resolution_failures_to_bad_request(
         self,
     ) -> None:
-        class FailingTrialAnalysisService:
-            def __init__(self, _root: Path) -> None:
-                pass
-
-            def resolve(self, _source_ref: str) -> None:
+        class FailingEvaluationReports:
+            def read(self, _source_ref: str) -> None:
                 raise ValueError("Harbor mount is temporarily unavailable")
-
-            def close(self) -> None:
-                pass
 
         runtime = SimpleNamespace(
             config=SimpleNamespace(max_content_chars=10_000),
+            evaluation_reports=FailingEvaluationReports(),
             detail=lambda _source_key: SimpleNamespace(to_dict=lambda: {"report": {}}),
             catalog=SimpleNamespace(
                 row_for_key=lambda _source_key: {
@@ -596,24 +591,58 @@ class AcpContextTests(unittest.TestCase):
                 }
             ),
         )
-        store = SimpleNamespace(paths=SimpleNamespace(root=Path("/workspace")))
-
-        with patch(
-            "psycheval.trial_analysis.TrialAnalysisService",
-            FailingTrialAnalysisService,
-        ):
-            with self.assertRaises(HttpError) as raised:
-                acp_context_items(
-                    store,
-                    runtime,
-                    [{"kind": "source", "source_key": "trial-a"}],
-                    embedded_context=True,
-                )
+        with self.assertRaises(HttpError) as raised:
+            acp_context_items(
+                None,
+                runtime,
+                [{"kind": "source", "source_key": "trial-a"}],
+                embedded_context=True,
+            )
 
         self.assertEqual(raised.exception.status, 400)
         self.assertEqual(
             raised.exception.message, "Harbor mount is temporarily unavailable"
         )
+
+    def test_report_context_uses_opaque_report_ref_without_source_paths(self) -> None:
+        runtime = SimpleNamespace(
+            config=SimpleNamespace(max_content_chars=10_000),
+            report_library=SimpleNamespace(
+                read=lambda report_ref: SimpleNamespace(
+                    report_ref=report_ref,
+                    title="Reviewed trial",
+                    filename="analysis.md",
+                    format="markdown",
+                    source_keys=("source-1",),
+                    content=b"# Reviewed\n",
+                )
+            ),
+        )
+
+        item = acp_context_items(
+            None,
+            runtime,
+            [{"kind": "report", "report_ref": "analysis:" + "a" * 64}],
+            embedded_context=True,
+        )[0]
+
+        payload = json.loads(item["content"][0]["resource"]["text"])
+        self.assertEqual(
+            payload["reference"],
+            {"kind": "report", "report_ref": "analysis:" + "a" * 64},
+        )
+        self.assertEqual(payload["value"]["source_keys"], ["source-1"])
+        self.assertEqual(payload["value"]["evidence"]["content"], "# Reviewed\n")
+        for private in ("report_id", "source_ref", "source_refs", "revision", "path"):
+            self.assertNotIn(private, payload["value"])
+        with self.assertRaises(HttpError) as legacy:
+            acp_context_items(
+                None,
+                runtime,
+                [{"kind": "report", "report_id": "legacy"}],
+                embedded_context=True,
+            )
+        self.assertEqual(legacy.exception.status, 400)
 
     def test_context_compaction_consumes_only_the_retained_mapping_items(
         self,
@@ -639,8 +668,8 @@ class AcpContextTests(unittest.TestCase):
             item_id="report:test",
             label="test",
             uri="peval://report/test",
-            reference={"kind": "report", "report_id": "test"},
-            identity={"report_id": "test", "omissions": []},
+            reference={"kind": "report", "report_ref": "package:test"},
+            identity={"report_ref": "package:test", "omissions": []},
             optional={"content": "x" * 30_000},
             omission="report content was compacted",
         )

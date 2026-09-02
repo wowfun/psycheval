@@ -479,10 +479,15 @@ class ServeAccessHttpTests(unittest.TestCase):
     def test_guest_report_view_and_summary_export_routes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            cell = root / "runs/default/psychevo/session/trial"
             write_trial_cell_artifacts(
-                root / "runs/default/psychevo/session/trial",
+                cell,
                 session_id="session",
                 trial_key="trial",
+            )
+            (cell / "analysis.md").write_text(
+                "# Canonical guest report\n",
+                encoding="utf-8",
             )
             store, runtime, server, thread = self.running_server(root)
             try:
@@ -499,9 +504,26 @@ class ServeAccessHttpTests(unittest.TestCase):
 
                 reports = json.loads(body)
                 self.assertEqual([item["report_id"] for item in reports], [report_id])
+                report_ref = reports[0]["report_ref"]
+
+                status, _headers, body = self.request(
+                    server,
+                    "GET",
+                    "/api/evaluation-reports",
+                )
+                self.assertEqual(status, 200, body)
+                evaluation_item = json.loads(body)["items"][0]
+                self.assertNotIn(str(root), json.dumps(evaluation_item))
+                status, _headers, body = self.request(
+                    server,
+                    "GET",
+                    f"/api/report-library/{evaluation_item['report_ref']}/preview",
+                )
+                self.assertEqual(status, 200, body)
+                self.assertIn(b"Canonical guest report", body)
 
                 status, headers, body = self.request(
-                    server, "GET", f"/api/reports/{report_id}/preview"
+                    server, "GET", f"/api/report-library/{report_ref}/preview"
                 )
                 self.assertEqual(status, 200, body)
                 self.assertEqual(headers["x-content-type-options"], "nosniff")
@@ -509,7 +531,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                 self.assertNotIn(b"<script>blocked()", body)
 
                 status, headers, body = self.request(
-                    server, "GET", f"/api/reports/{report_id}/reader"
+                    server, "GET", f"/api/report-library/{report_ref}/reader"
                 )
                 self.assertEqual(status, 200, body)
                 self.assertIn('sandbox="allow-scripts"', body.decode())

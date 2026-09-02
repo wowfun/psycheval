@@ -11,7 +11,7 @@ from unittest.mock import patch
 from psycheval.workspace_reports import (
     REPORT_MAX_BYTES,
     WorkspaceReportLibrary,
-    render_workspace_report_preview,
+    render_report_preview,
 )
 
 
@@ -301,7 +301,7 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
                 "<script>alert('unsafe')</script>\n"
             )
             report = library.read(library.import_file(markdown_path, ["cell_a"]))
-            preview = render_workspace_report_preview(report).decode()
+            preview = render_report_preview(report).decode()
             self.assertIn("<blockquote>", preview)
             self.assertIn("<table>", preview)
             self.assertIn("<s>gone</s>", preview)
@@ -313,7 +313,7 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             html_bytes = b"<!doctype html><script>window.ok = true;</script>"
             html_path.write_bytes(html_bytes)
             html_report = library.read(library.import_file(html_path, ["cell_a"]))
-            self.assertEqual(render_workspace_report_preview(html_report), html_bytes)
+            self.assertEqual(render_report_preview(html_report), html_bytes)
 
 
 if __name__ == "__main__":

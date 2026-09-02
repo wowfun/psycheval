@@ -1,10 +1,12 @@
 // @ts-check
 
 import {
+  activeReportSnapshot,
   initializeReportManagerPage,
-  loadReportManagerPage,
+  loadEvaluationReports,
+  loadImportedReports,
 } from "../modules/report-manager-page.js";
-import { reportBindingsChanged, reportStore } from "../modules/report-store.js";
+import { reportBindingsChanged } from "../modules/report-store.js";
 
 /** @param {import("../app/workspace-app.js").PageLoaderContext} _context */
 function createReportsPage(_context) {
@@ -16,18 +18,18 @@ function createReportsPage(_context) {
         initialized = true;
         return;
       }
-      if (changes.has("catalog") || changes.has("reports")) {
-        await loadReportManagerPage();
-      }
+      const requests = [];
+      if (changes.has("catalog")) requests.push(loadEvaluationReports());
+      if (changes.has("reports")) requests.push(loadImportedReports());
+      await Promise.all(requests);
     },
     snapshot() {
+      const active = activeReportSnapshot();
       return {
         context: {
           page: "reports",
-          report_id: reportStore.manager.selectedId || null,
-          report_name: reportStore.reports.find(
-            report => report.report_id === reportStore.manager.selectedId,
-          )?.filename || null,
+          report_ref: active.report_ref,
+          report_name: active.report_name,
         },
         dirty: reportBindingsChanged(),
       };

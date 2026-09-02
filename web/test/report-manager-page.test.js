@@ -14,6 +14,10 @@ const browser = installBrowserDom(`
   <div data-report-manager>
     <button data-report-manager-reload>Reload</button>
     <p data-report-manager-status hidden></p>
+    <input type="search" data-evaluation-report-search>
+    <div data-evaluation-report-inventory></div>
+    <span data-evaluation-report-count></span>
+    <div data-evaluation-report-pagination></div>
     <div data-report-inventory></div>
     <span data-report-count></span>
     <label data-report-page-search-control hidden><input type="search" data-report-page-search></label>
@@ -24,7 +28,22 @@ const browser = installBrowserDom(`
   fetch: async (path, options = {}) => {
     requests.push({ path: String(path), options });
     if (String(path) === "/api/reports") {
-      return response([{ report_id: "report-1", filename: "report.md", format: "markdown", source_keys: ["source-1"] }]);
+      return response([{ report_id: "report-1", report_ref: "package:report-1", filename: "report.md", format: "markdown", source_keys: ["source-1"] }]);
+    }
+    if (String(path).startsWith("/api/evaluation-reports?")) {
+      return response({
+        page: 1,
+        page_size: 100,
+        total: 1,
+        items: [{
+          report_ref: "analysis:evaluation-1",
+          title: "Run one evaluation",
+          filename: "analysis.md",
+          source_keys: ["source-1"],
+          primary_source_key: "source-1",
+          source_label: "Run one",
+        }],
+      });
     }
     if (String(path).startsWith("/api/catalog?")) {
       return response({
@@ -36,19 +55,20 @@ const browser = installBrowserDom(`
     }
     if (String(path) === "/api/sources/source-1" && options.method === "PATCH") return response({});
     if (String(path) === "/api/reports/report-1/bindings" && options.method === "PUT") {
-      return response({ report_id: "report-1", filename: "report.md", format: "markdown", source_keys: [] });
+      return response({ report_id: "report-1", report_ref: "package:report-1", filename: "report.md", format: "markdown", source_keys: [] });
     }
     throw new Error(`unexpected request: ${path}`);
   },
 });
 
 const managerPage = await import("../../src/psycheval/assets/web/modules/report-manager-page.js");
+const { sourceKeyFromHash } = await import("../../src/psycheval/assets/web/pages/home-page.js");
 const { reportStore } = await import("../../src/psycheval/assets/web/modules/report-store.js");
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());
 
-test("Reports page edits Category without losing its binding draft or local state", async () => {
+test("evaluation catalog refreshes and Category edits preserve the imported binding draft", async () => {
   await managerPage.initializeReportManagerPage();
 
   const checkbox = document.querySelector("[data-report-page-binding]");
@@ -76,6 +96,29 @@ test("Reports page edits Category without losing its binding draft or local stat
   assert.equal(list.scrollTop, 37);
   assert.match(category.textContent, /candidate/);
   assert.equal(document.activeElement, category);
+
+  await managerPage.loadEvaluationReports();
+  assert.deepEqual([...reportStore.manager.draftBindings], []);
+  assert.equal(reportStore.manager.dirty, true);
+  assert.equal(reportStore.manager.selectedId, "report-1");
+});
+
+test("Reports page keeps canonical evaluations separate and uses opaque library refs", () => {
+  const canonical = document.querySelector('[data-evaluation-report-select="analysis:evaluation-1"]');
+  assert.ok(canonical);
+  assert.match(canonical.textContent, /Run one evaluation/);
+  assert.equal(
+    document.querySelector('[data-report-open="analysis:evaluation-1"]').getAttribute("href"),
+    "/api/report-library/analysis%3Aevaluation-1/reader",
+  );
+  assert.equal(
+    document.querySelector('[data-report-view-source="analysis:evaluation-1"]').getAttribute("href"),
+    "/#source=source-1",
+  );
+  assert.equal(document.querySelectorAll('[data-report-page-select="report-1"]').length, 1);
+  assert.equal(sourceKeyFromHash("#source=source-1"), "source-1");
+  assert.equal(sourceKeyFromHash("#source=harbor%2Fmount%2Fjob%2Ftrial"), "harbor/mount/job/trial");
+  assert.equal(sourceKeyFromHash("#analysis"), null);
 });
 
 test("Reports search keeps the focused input node while debounced results load", async () => {
@@ -112,9 +155,13 @@ test("Reports page persists an empty binding set through its owned API path", as
 
 test("Reports preview shares resize, focus, Escape, and navigation behavior", async () => {
   managerPage.renderReportManagerPage();
-  const opener = document.querySelector("[data-report-page-preview]");
-  assert.equal(managerPage.openReportPreview("report-1", { opener }), true);
+  const opener = document.querySelector('[data-report-page-preview="package:report-1"]');
+  assert.equal(managerPage.openReportPreview("package:report-1", { opener }), true);
   const preview = document.getElementById("workspace-report-reader");
+  assert.equal(
+    preview.querySelector("iframe").getAttribute("src"),
+    "/api/report-library/package%3Areport-1/preview",
+  );
   const resize = preview.querySelector("[data-sidebar-resize]");
   assert.ok(resize);
   assert.equal(resize.getAttribute("aria-label"), "Resize report reader");
@@ -129,7 +176,7 @@ test("Reports preview shares resize, focus, Escape, and navigation behavior", as
   assert.equal(document.body.classList.contains("workspace-sidebar-left-open"), false);
   assert.equal(document.activeElement, opener);
 
-  assert.equal(managerPage.openReportPreview("report-1", { opener }), true);
+  assert.equal(managerPage.openReportPreview("package:report-1", { opener }), true);
   const search = document.querySelector("[data-report-page-search]");
   search.focus();
   window.dispatchEvent(new window.CustomEvent("peval:workspace-navigate"));

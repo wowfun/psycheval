@@ -41,9 +41,10 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({
     (await import("/assets/peval/modules/acp-client.js")).currentContext()?.value?.kind,
   )).toBe("source");
   await addContext.click();
-  await expect(presets).toHaveValue("failure-diagnosis-zh-cn");
+  await expect(presets).toHaveValue("evaluation-review-zh-cn");
+  await expect(chat.locator("textarea")).toHaveValue("");
   await drawer.getByRole("button", { name: "使用", exact: true }).click();
-  await expect(chat.locator("textarea")).toHaveValue(/追溯最早造成实质影响的错误/);
+  await expect(chat.locator("textarea")).toHaveValue(/审阅附带的评测证据/);
   await chat.locator("textarea").fill("检查复制标签");
   await chat.locator(".paui-send").click();
   await expect(chat).toContainText("Synthetic response");
@@ -87,7 +88,7 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({
   await expect(actions).toBeFocused();
 });
 
-test("a saved preset wins over the Chinese context recommendation", async ({
+test("a saved preset remains selected when source context is attached", async ({
   page,
 }) => {
   await page.goto(fixture.origin);

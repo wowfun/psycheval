@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 
+from psycheval.evaluation_reports import evaluation_report_ref
 from tests.peval.serve_state_support import (
     LocalHTTPServer,
     Path,
@@ -292,6 +293,84 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                 thread.join(timeout=5)
                 store.close()
 
+    def test_canonical_evaluation_reports_are_paged_and_read_live_by_opaque_ref(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = peval_workspace(Path(tmp))
+            source_ref = "runs/default/psychevo/s1/s1_t001"
+            cell = root / source_ref
+            write_trial_cell_artifacts(cell, session_id="s1", trial_key="s1_t001")
+            report_path = cell / "analysis.md"
+            report_path.write_text(
+                "# Canonical\n\n<script>blocked()</script>\n",
+                encoding="utf-8",
+            )
+            config = ToolConfig(adapter="psychevo", workspace_root=str(root))
+            store = open_workspace_state(str(root))
+            runtime = ServeRuntime(store, config)
+            server = LocalHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            port = server.server_port
+            try:
+                status, headers, body = request_bytes(
+                    port,
+                    "/api/evaluation-reports?page=1&page_size=1",
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["cache-control"], "no-store")
+                page = json.loads(body)
+                self.assertEqual((page["total"], page["page_size"]), (1, 1))
+                item = page["items"][0]
+                report_ref = evaluation_report_ref(source_ref)
+                self.assertEqual(item["report_ref"], report_ref)
+                self.assertEqual(item["format"], "markdown")
+                self.assertEqual(item["filename"], "analysis.md")
+                self.assertEqual(item["source_keys"], [item["primary_source_key"]])
+                serialized = json.dumps(item)
+                for private in (source_ref, str(root), "revision", "report_path"):
+                    self.assertNotIn(private, serialized)
+
+                status, headers, preview = request_bytes(
+                    port,
+                    f"/api/report-library/{report_ref}/preview",
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["cache-control"], "no-store")
+                self.assertIn(b"<h1>Canonical</h1>", preview)
+                self.assertNotIn(b"<script>blocked()", preview)
+
+                report_path.write_text("# Current body\n", encoding="utf-8")
+                status, _, preview = request_bytes(
+                    port,
+                    f"/api/report-library/{report_ref}/preview",
+                )
+                self.assertEqual(status, 200)
+                self.assertIn(b"<h1>Current body</h1>", preview)
+
+                status, _, reader = request_bytes(
+                    port,
+                    f"/api/report-library/{report_ref}/reader",
+                )
+                self.assertEqual(status, 200)
+                self.assertIn(
+                    f"/api/report-library/analysis%3A{report_ref.split(':', 1)[1]}/preview".encode(),
+                    reader,
+                )
+
+                status, _, body = request_bytes(
+                    port,
+                    "/api/evaluation-reports?page=not-an-integer",
+                )
+                self.assertEqual(status, 400)
+                self.assertIn(b"page must be an integer", body)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                store.close()
+
     def test_report_previews_are_isolated_and_null_or_malformed_origins_are_rejected(
         self,
     ) -> None:
@@ -357,9 +436,10 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 201)
                 markdown_id = body["report_id"]
+                markdown_ref = body["report_ref"]
                 status, headers, preview = request_bytes(
                     port,
-                    f"/api/reports/{markdown_id}/preview",
+                    f"/api/report-library/{markdown_ref}/preview",
                 )
                 self.assertEqual(status, 200)
                 self.assertIn("text/html", headers["content-type"])
@@ -376,6 +456,11 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                 self.assertIn("<s>removed</s>", preview_text)
                 self.assertIn("&lt;script&gt;", preview_text)
                 self.assertNotIn("<script>alert", preview_text)
+                legacy_status, _, _ = request_bytes(
+                    port,
+                    f"/api/reports/{markdown_id}/preview",
+                )
+                self.assertEqual(legacy_status, 404)
 
                 status, _, body = request_json(
                     port,
@@ -386,9 +471,10 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 201)
                 html_id = body["report_id"]
+                html_ref = body["report_ref"]
                 status, headers, preview = request_bytes(
                     port,
-                    f"/api/reports/{html_id}/preview",
+                    f"/api/report-library/{html_ref}/preview",
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(preview, html_bytes)
@@ -399,7 +485,7 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
 
                 status, headers, opened = request_bytes(
                     port,
-                    f"/api/reports/{html_id}/reader",
+                    f"/api/report-library/{html_ref}/reader",
                 )
                 self.assertEqual(status, 200)
                 self.assertIn("text/html", headers["content-type"])
@@ -410,7 +496,7 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                 self.assertIn("frame-src 'self'", headers["content-security-policy"])
                 opened_text = opened.decode()
                 self.assertIn(
-                    f'<iframe src="/api/reports/{html_id}/preview"',
+                    f'<iframe src="/api/report-library/package%3A{html_id}/preview"',
                     opened_text,
                 )
                 self.assertIn('sandbox="allow-scripts"', opened_text)
@@ -419,7 +505,7 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
 
                 status, _, missing = request_bytes(
                     port,
-                    "/api/reports/20260710-000000-000000/preview",
+                    "/api/report-library/package:20260710-000000-000000/preview",
                 )
                 self.assertEqual(status, 404)
                 self.assertIn(b"unknown report", missing)

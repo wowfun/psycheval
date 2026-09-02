@@ -5,7 +5,9 @@ from threading import Event, Lock, Thread
 from typing import Any, Callable, Sequence
 
 from psycheval.config import ToolConfig
+from psycheval.evaluation_reports import EvaluationReports
 from psycheval.inputs import AdapterAssignments
+from psycheval.report_library import ReportLibrary
 from psycheval.serve.acp import AcpGateway
 from psycheval.serve.prompt_assets import PromptAssetLibrary
 from psycheval.serve.sources import load_serve_inputs
@@ -44,6 +46,17 @@ class ServeRuntime:
         self.workspace_reports = WorkspaceReportLibrary(
             store.paths.root,
             self._all_catalog_rows,
+        )
+        self.evaluation_reports = EvaluationReports(store.paths.root)
+        self.evaluation_reports.config = config
+        self.evaluation_reports.sources = WorkspaceSources(
+            self.evaluation_reports.store,
+            config,
+        )
+        self.report_library = ReportLibrary(
+            self.catalog,
+            self.evaluation_reports,
+            self.workspace_reports,
         )
         self.workspace_views = WorkspaceViewLibrary(store.paths.root)
         self.workspace_id = hashlib.sha256(
@@ -131,6 +144,11 @@ class ServeRuntime:
             self.config = config
             self.catalog.config = config
             self.catalog.sources = WorkspaceSources(self.store, config)
+            self.evaluation_reports.config = config
+            self.evaluation_reports.sources = WorkspaceSources(
+                self.evaluation_reports.store,
+                config,
+            )
 
     def config_with_acp_status(self) -> tuple[ToolConfig, dict[str, Any]]:
         with self._lock:
@@ -138,6 +156,7 @@ class ServeRuntime:
 
     def close(self) -> None:
         self.acp.close()
+        self.evaluation_reports.close()
 
     def catalog_page(
         self,
@@ -365,6 +384,19 @@ class ServeRuntime:
 
     def workspace_report_catalog(self) -> list[dict[str, Any]]:
         return self.workspace_reports.catalog()
+
+    def evaluation_report_catalog(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+        search: str = "",
+    ) -> dict[str, Any]:
+        return self.report_library.evaluation_catalog(
+            page=page,
+            page_size=page_size,
+            search=search,
+        )
 
     def empty_envelope(
         self,

@@ -30,11 +30,11 @@ function reportReaderSurface() {
 }
 
 function workspaceReportPreviewPath(report) {
-  return `/api/reports/${encodeURIComponent(report.report_id)}/preview`;
+  return `/api/report-library/${encodeURIComponent(report.report_ref)}/preview`;
 }
 
 function workspaceReportOpenPath(report) {
-  return `/api/reports/${encodeURIComponent(report.report_id)}/reader`;
+  return `/api/report-library/${encodeURIComponent(report.report_ref)}/reader`;
 }
 
 function normalizedWorkspaceReports(reports = reportStore.reports) {

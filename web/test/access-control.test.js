@@ -119,6 +119,7 @@ test("Home report refresh does not render into the Reports page-owned manager", 
 
   reports.applyWorkspaceReportCatalog([{
     report_id: "report-2",
+    report_ref: "package:report-2",
     filename: "new-report.md",
     format: "markdown",
     source_keys: [],

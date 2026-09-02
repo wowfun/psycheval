@@ -24,9 +24,10 @@ const reportStore = {
 
 function normalizedReports(reports = reportStore.reports) {
   return (Array.isArray(reports) ? reports : [])
-    .filter(report => report && report.report_id && report.filename)
+    .filter(report => report && report.report_id && report.report_ref && report.filename)
     .map(report => ({
       report_id: String(report.report_id),
+      report_ref: String(report.report_ref),
       filename: String(report.filename),
       format: String(report.format || "").toLowerCase() === "html" ? "html" : "markdown",
       source_keys: Array.from(new Set(
