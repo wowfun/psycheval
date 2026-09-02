@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,33 +42,70 @@ def import_analysis_artifacts(
     if str(source_ref).startswith("harbor/"):
         raise ValueError(
             "import analysis does not write Harbor Trial reports; use "
-            "`peval publish trial-analysis` with expected revisions"
+            "`peval publish evaluation-report`"
         )
     inputs = read_analysis_import_inputs(input_paths)
     cell = resolve_import_source_ref(root, source_ref)
-    written_payloads: dict[str, str] = {}
     warnings: list[dict[str, str]] = []
+    compiled_json: dict[str, Any] | None = None
 
     if inputs.get("json") is not None:
         warnings.extend(analysis_input_warnings(inputs["json"]))
-        compiled = compile_analysis_json_input(
+        compiled_json = compile_analysis_json_input(
             inputs["json"],
             eval_slug=cell.eval_slug,
             agent_id=cell.agent_id,
             session_id=cell.session_id,
             cell_key=cell.cell_key,
         )
-        if cell.harbor:
-            compiled["subject"] = {"source_ref": cell.relative_path.as_posix()}
-        write_json_artifact(cell.absolute / ANALYSIS_JSON_FILENAME, compiled)
-        written_payloads["analysis_json"] = (
-            cell.relative_path / ANALYSIS_JSON_FILENAME
-        ).as_posix()
-    if inputs.get("md") is not None:
-        write_text_artifact(cell.absolute / ANALYSIS_MD_FILENAME, inputs["md"])
-        written_payloads["analysis_md"] = (
-            cell.relative_path / ANALYSIS_MD_FILENAME
-        ).as_posix()
+    markdown = inputs.get("md")
+
+    from psycheval.config import load_config
+    from psycheval.evaluation_reports import (
+        _atomic_replace_text,
+        _evaluation_report_lease,
+    )
+    from psycheval.state.catalog import WorkspaceCatalog
+    from psycheval.state.paths import workspace_paths
+    from psycheval.state.store import ServeStateStore
+
+    store = ServeStateStore(workspace_paths(root), initialize=False)
+    try:
+
+        def write_artifacts() -> dict[str, str]:
+            written_payloads: dict[str, str] = {}
+            if compiled_json is not None:
+                write_json_artifact(
+                    cell.absolute / ANALYSIS_JSON_FILENAME,
+                    compiled_json,
+                )
+                written_payloads["analysis_json"] = (
+                    cell.relative_path / ANALYSIS_JSON_FILENAME
+                ).as_posix()
+            if markdown is not None:
+                _atomic_replace_text(
+                    cell.absolute,
+                    cell.absolute / ANALYSIS_MD_FILENAME,
+                    markdown,
+                )
+                written_payloads["analysis_md"] = (
+                    cell.relative_path / ANALYSIS_MD_FILENAME
+                ).as_posix()
+            return written_payloads
+
+        lease = (
+            _evaluation_report_lease(cell.absolute)
+            if markdown is not None
+            else nullcontext()
+        )
+        with lease:
+            catalog = WorkspaceCatalog(store, load_config(workspace_root=str(root)))
+            try:
+                _, written_payloads = catalog.mutate(write_artifacts)
+            finally:
+                catalog.close()
+    finally:
+        store.close()
 
     return AnalysisImportResult(
         source_ref=cell.relative_path.as_posix(),
@@ -84,7 +122,6 @@ class AnalysisImportTarget:
     agent_id: str
     session_id: str
     cell_key: str
-    harbor: bool = False
 
 
 def ensure_import_workspace_root(value: str | Path) -> Path:
@@ -104,26 +141,38 @@ def resolve_import_source_ref(root: Path, source_ref: str) -> AnalysisImportTarg
     from psycheval.state.workspace_sources import WorkspaceSources
 
     store = ServeStateStore(workspace_paths(root), initialize=False)
-    sources = WorkspaceSources(store, load_config(workspace_root=str(root)))
-    absolute = sources.annotation_dir(source_ref)
-    parts = Path(source_ref).parts
-    harbor = source_ref.startswith("harbor/")
-    if harbor:
-        eval_slug = "harbor"
-        agent_id = parts[1]
-        session_id = parts[2]
-        cell_key = parts[5] if len(parts) == 6 else parts[3]
-    else:
+    try:
+        sources = WorkspaceSources(store, load_config(workspace_root=str(root)))
+        absolute = sources.annotation_dir(source_ref)
+        document = sources.load_ref(
+            source_ref,
+            include_evaluation_report=False,
+        )
+        if document.source.get("kind") == "harbor-trial":
+            raise ValueError(
+                "import analysis does not write Harbor Trial reports; use "
+                "`peval publish evaluation-report`"
+            )
+        if (
+            not document.readable
+            or document.trajectory is None
+            or document.meta is None
+        ):
+            raise ValueError(
+                document.last_error or f"local source is not readable: {source_ref}"
+            )
+        parts = Path(document.source_ref).parts
         _, eval_slug, agent_id, session_id, cell_key = parts
-    return AnalysisImportTarget(
-        absolute=absolute,
-        relative_path=Path(*parts),
-        eval_slug=eval_slug,
-        agent_id=agent_id,
-        session_id=session_id,
-        cell_key=cell_key,
-        harbor=harbor,
-    )
+        return AnalysisImportTarget(
+            absolute=absolute,
+            relative_path=Path(*parts),
+            eval_slug=eval_slug,
+            agent_id=agent_id,
+            session_id=session_id,
+            cell_key=cell_key,
+        )
+    finally:
+        store.close()
 
 
 def read_analysis_import_inputs(input_paths: list[str]) -> dict[str, Any]:
@@ -317,13 +366,6 @@ def write_json_artifact(path: Path, value: Any) -> None:
         json.dumps(value, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    tmp.replace(path)
-
-
-def write_text_artifact(path: Path, value: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(value, encoding="utf-8")
     tmp.replace(path)
 
 

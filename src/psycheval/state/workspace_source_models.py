@@ -103,6 +103,7 @@ class SourceDocument:
     last_error: str | None
     harbor_analysis_markdown: str | None = None
     harbor_analysis_relative_path: str | None = None
+    evaluation_report_markdown: str | None = None
     evidence_revision: str | None = None
     analysis_revision: str | None = None
 

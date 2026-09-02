@@ -113,31 +113,38 @@ def load_sessions(
     available = set(available_adapter_ids())
     sessions: list[LoadedSession] = []
     if source_refs:
-        from psycheval.trial_analysis import TrialAnalysisService
+        from psycheval.evaluation_reports import EvaluationReports
 
         if not isinstance(config, ToolConfig) or not config.workspace_root:
             raise ValueError("--source-ref requires an initialized workspace root")
-        service = TrialAnalysisService(config.workspace_root)
+        reports = EvaluationReports(config.workspace_root)
         try:
-            documents = service.documents(source_refs)
+            documents = reports.documents(source_refs)
         finally:
-            service.close()
+            reports.close()
         for document in documents:
             if document.trajectory is None or document.meta is None:
                 raise ValueError(
-                    "raw Harbor Trial view requires a trajectory for every source: "
+                    "raw workspace source view requires a trajectory for every source: "
                     f"{document.last_error or document.source_ref}"
                 )
+            harbor = document.source.get("kind") == "harbor-trial"
             sessions.append(
                 LoadedSession(
                     records=None,
                     input_label=str(
                         document.source.get("label") or document.source_ref
                     ),
-                    adapter_id="harbor",
+                    adapter_id=str(
+                        "harbor"
+                        if harbor
+                        else document.meta.get("adapter")
+                        or document.source.get("adapter")
+                        or "artifact"
+                    ),
                     input_path=document.source_ref,
                     session_hint=optional_text(document.trajectory.get("session_id")),
-                    source_kind="harbor-trial",
+                    source_kind="harbor-trial" if harbor else "trial-artifact",
                     snapshot_trajectory=document.trajectory,
                     snapshot_meta=document.meta,
                 )

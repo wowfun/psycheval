@@ -29,12 +29,12 @@ class PevalTyperCliTests(unittest.TestCase):
         self.assertIn("--show-completion", root_options)
 
         view = root.commands["view"]
-        self.assertEqual(set(view.commands), {"trajectory", "tr", "task-skill"})
+        self.assertEqual(set(view.commands), {"trajectory", "tr"})
         self.assertFalse(view.commands["trajectory"].hidden)
         self.assertTrue(view.commands["tr"].hidden)
         self.assertEqual(
             set(root.commands["publish"].commands),
-            {"trial-analysis"},
+            {"evaluation-report"},
         )
         view_options = {
             option
@@ -59,6 +59,11 @@ class PevalTyperCliTests(unittest.TestCase):
                 self.assertNotRegex(result.output, "[╭╰│]")
         self.assertEqual(runner.invoke(app, ["--help"]).exit_code, 0)
         self.assertEqual(runner.invoke(app, ["view", "tr", "--unknown"]).exit_code, 2)
+
+        import_help = runner.invoke(app, ["import", "analysis", "--help"])
+        self.assertEqual(import_help.exit_code, 0)
+        self.assertIn("runs/<evaluation>/<agent>/<session>/<cell>", import_help.output)
+        self.assertNotIn("harbor/<mount-id>", import_help.output)
 
     def test_show_completion_does_not_install_shell_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

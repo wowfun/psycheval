@@ -16,6 +16,11 @@ from psycheval._state.annotations import optional_int, optional_str
 from psycheval.config import ToolConfig
 from psycheval.report.inference import inference_row_metrics
 from psycheval.report.metrics import final_metric, token_total
+from psycheval.state.evaluation_report_catalog import (
+    evaluation_report_location,
+    query_evaluation_report_page,
+    replace_evaluation_report_projection,
+)
 from psycheval.state.store import ServeStateStore
 from psycheval.state.workspace_sources import (
     HARBOR_SOURCE_KIND,
@@ -23,7 +28,7 @@ from psycheval.state.workspace_sources import (
     WorkspaceSources,
 )
 
-CATALOG_SCHEMA_VERSION = 15
+CATALOG_SCHEMA_VERSION = 16
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 SUMMARY_CACHE_ENTRY_LIMIT = 128
@@ -549,6 +554,31 @@ class WorkspaceCatalog:
                 )
             ]
 
+    def evaluation_report_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = DEFAULT_PAGE_SIZE,
+        search: str = "",
+    ) -> dict[str, Any]:
+        page = max(1, int(page))
+        page_size = min(MAX_PAGE_SIZE, max(1, int(page_size)))
+        search = str(search or "").strip()
+        with self._connect(readonly=True) as connection:
+            return query_evaluation_report_page(
+                connection,
+                generation=self._meta_int(connection, "generation", 0),
+                checking=self.checking,
+                valid=self._meta_int(connection, "valid_generation", 0) == 1,
+                page=page,
+                page_size=page_size,
+                search=search,
+            )
+
+    def evaluation_report_location(self, report_ref: str) -> dict[str, Any]:
+        with self._connect(readonly=True) as connection:
+            return evaluation_report_location(connection, report_ref)
+
     def start_operation(
         self,
         operation_type: str,
@@ -839,6 +869,7 @@ class WorkspaceCatalog:
                     connection.execute(
                         "DELETE FROM cell_search WHERE source_key = ?", (source_key,)
                     )
+            replace_evaluation_report_projection(connection)
             generation = self._meta_int(connection, "generation", 0) + 1
             self._set_meta(connection, "generation", str(generation))
             self._set_meta(connection, "valid_generation", "1")
@@ -892,6 +923,8 @@ class WorkspaceCatalog:
             row["evidence_revision"] = document.evidence_revision
         if document.analysis_revision is not None:
             row["analysis_revision"] = document.analysis_revision
+        if document.evaluation_report_markdown is not None:
+            row["evaluation_report_present"] = True
         return row, document.readable, _search_document(row, trajectory)
 
     def _analysis_count(self, document: SourceDocument) -> int:
@@ -1109,6 +1142,19 @@ class WorkspaceCatalog:
             CREATE INDEX IF NOT EXISTS cells_task ON cells(task);
             CREATE INDEX IF NOT EXISTS cells_job ON cells(job);
             CREATE INDEX IF NOT EXISTS cells_provider ON cells(provider);
+            CREATE TABLE IF NOT EXISTS evaluation_reports (
+                report_ref TEXT PRIMARY KEY,
+                source_ref TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                source_label TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                format TEXT NOT NULL,
+                source_keys_json TEXT NOT NULL,
+                primary_source_key TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS evaluation_reports_updated_ref
+                ON evaluation_reports(updated_at_ms DESC, report_ref);
             """
         )
         connection.execute(

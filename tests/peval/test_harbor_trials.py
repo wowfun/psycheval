@@ -1309,7 +1309,10 @@ class HarborTrialTests(unittest.TestCase):
             analysis = base / "analysis.json"
             analysis.write_text(json.dumps({"summary": "direct"}), encoding="utf-8")
             try:
-                with self.assertRaisesRegex(ValueError, "peval publish trial-analysis"):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "peval publish evaluation-report",
+                ):
                     import_analysis_artifacts(
                         workspace_root=workspace,
                         source_ref="harbor/jobs-2026-08-08/job-a/trial-a",

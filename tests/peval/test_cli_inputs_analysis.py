@@ -6,12 +6,30 @@ from tests.peval.cli_inputs_support import (
     contextlib,
     io,
     json,
+    patch,
     tempfile,
     unittest,
     write_cli_cached_analysis,
     write_cli_cached_markdown,
     write_peval_workspace,
+    write_trial_cell_artifacts,
 )
+
+
+def write_import_source(
+    workspace: Path,
+    *,
+    cell_key: str = "session_t001",
+) -> Path:
+    cell = workspace / "runs" / "default" / "agent-a" / "common_session" / cell_key
+    write_trial_cell_artifacts(
+        cell,
+        session_id="common_session",
+        trial_key=cell_key,
+        agent_id="agent-a",
+        adapter="opencode",
+    )
+    return cell
 
 
 class PevalCliInputAnalysisTests(unittest.TestCase):
@@ -75,6 +93,7 @@ class PevalCliInputAnalysisTests(unittest.TestCase):
             root = Path(tmp)
             workspace = root / "workspace"
             write_peval_workspace(workspace)
+            write_import_source(workspace)
             analysis_report = root / "analysis-report.json"
             analysis_report.write_text(
                 json.dumps(
@@ -183,6 +202,7 @@ class PevalCliInputAnalysisTests(unittest.TestCase):
             root = Path(tmp)
             workspace = root / "workspace"
             write_peval_workspace(workspace)
+            write_import_source(workspace)
             analysis_report = root / "analysis-report.markdown"
             analysis_report.write_text(
                 "# Analysis\n\nMarkdown-only body.\n",
@@ -230,6 +250,7 @@ class PevalCliInputAnalysisTests(unittest.TestCase):
                 (run_cell / "analysis.md").read_text(encoding="utf-8"),
                 "# Analysis\n\nMarkdown-only body.\n",
             )
+            self.assertTrue((run_cell / ".peval-analysis.lock").is_file())
             self.assertFalse((run_cell / "analysis.json").exists())
             self.assertEqual(payload["warnings"], [])
 
@@ -240,6 +261,7 @@ class PevalCliInputAnalysisTests(unittest.TestCase):
             root = Path(tmp)
             workspace = root / "workspace"
             write_peval_workspace(workspace)
+            write_import_source(workspace)
             analysis_report = root / "analysis-report.json"
             analysis_report.write_text(
                 json.dumps(
@@ -401,11 +423,15 @@ class PevalCliInputAnalysisTests(unittest.TestCase):
 
     def test_cli_import_analysis_json_and_markdown_write_both(self) -> None:
         from psycheval.cli import main
+        from psycheval.config import load_config
+        from psycheval.state import ServeStateStore, workspace_paths
+        from psycheval.state.catalog import CatalogQuery, WorkspaceCatalog
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             workspace = root / "workspace"
             write_peval_workspace(workspace)
+            write_import_source(workspace)
             json_report = root / "analysis-report.json"
             json_report.write_text(
                 json.dumps({"summary": "Structured import.", "status": "reviewed"}),
@@ -415,7 +441,28 @@ class PevalCliInputAnalysisTests(unittest.TestCase):
             md_report.write_text("Narrative import.\n", encoding="utf-8")
             run_path = "runs/default/agent-a/common_session/session_t001"
 
-            with contextlib.redirect_stdout(io.StringIO()):
+            mutate_calls: list[None] = []
+            reconcile_calls: list[None] = []
+            original_mutate = WorkspaceCatalog.mutate
+            original_reconcile = WorkspaceCatalog._reconcile_locked
+
+            def counted_mutate(catalog, action):
+                mutate_calls.append(None)
+                return original_mutate(catalog, action)
+
+            def counted_reconcile(catalog):
+                reconcile_calls.append(None)
+                return original_reconcile(catalog)
+
+            with (
+                patch.object(WorkspaceCatalog, "mutate", counted_mutate),
+                patch.object(
+                    WorkspaceCatalog,
+                    "_reconcile_locked",
+                    counted_reconcile,
+                ),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
                 result = main(
                     [
                         "import",
@@ -431,6 +478,8 @@ class PevalCliInputAnalysisTests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(result, 0)
+            self.assertEqual(len(mutate_calls), 1)
+            self.assertEqual(len(reconcile_calls), 1)
             cell = workspace / run_path
             analysis_json = json.loads(
                 (cell / "analysis.json").read_text(encoding="utf-8")
@@ -440,6 +489,75 @@ class PevalCliInputAnalysisTests(unittest.TestCase):
                 (cell / "analysis.md").read_text(encoding="utf-8"),
                 "Narrative import.\n",
             )
+            store = ServeStateStore(workspace_paths(workspace), initialize=False)
+            catalog = WorkspaceCatalog(
+                store,
+                load_config(workspace_root=str(workspace)),
+            )
+            try:
+                page = catalog.query(CatalogQuery())
+                self.assertGreater(page.generation, 0)
+                self.assertEqual(page.total, 1)
+                self.assertEqual(page.items[0].to_dict()["analysis_count"], 1)
+            finally:
+                catalog.close()
+                store.close()
+
+    def test_cli_import_analysis_requires_existing_readable_local_source(self) -> None:
+        from psycheval.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            write_peval_workspace(workspace)
+            input_path = root / "analysis-report.md"
+            input_path.write_text("Narrative import.\n", encoding="utf-8")
+            missing_ref = "runs/default/agent-a/common_session/session_missing"
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                result = main(
+                    [
+                        "import",
+                        "analysis",
+                        "-r",
+                        str(workspace),
+                        "--source-ref",
+                        missing_ref,
+                        "-p",
+                        str(input_path),
+                    ]
+                )
+            self.assertNotEqual(result, 0)
+            self.assertIn("unknown source reference", stderr.getvalue())
+            self.assertFalse((workspace / missing_ref).exists())
+
+            unreadable_ref = "runs/default/agent-a/common_session/session_unreadable"
+            unreadable = write_import_source(
+                workspace,
+                cell_key="session_unreadable",
+            )
+            (unreadable / "agent" / "trajectory.json").write_text(
+                "{",
+                encoding="utf-8",
+            )
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                result = main(
+                    [
+                        "import",
+                        "analysis",
+                        "-r",
+                        str(workspace),
+                        "--source-ref",
+                        unreadable_ref,
+                        "-p",
+                        str(input_path),
+                    ]
+                )
+            self.assertNotEqual(result, 0)
+            self.assertFalse((unreadable / "analysis.md").exists())
 
     def test_cli_import_analysis_rejects_invalid_inputs_without_partial_writes(
         self,

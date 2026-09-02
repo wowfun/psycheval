@@ -917,26 +917,32 @@ def _read_bytes_no_follow(
     path: Path,
     *,
     max_bytes: int | None = None,
+    label: str = "Harbor source",
 ) -> bytes:
-    _assert_safe_descendant(containment_root, path, label="Harbor source")
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    _assert_safe_descendant(containment_root, path, label=label)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
-        raise ValueError(f"cannot read Harbor source file {path}: {exc}") from exc
+        raise ValueError(f"cannot read {label} file {path}: {exc}") from exc
     try:
         opened_stat = os.fstat(descriptor)
         if not stat.S_ISREG(opened_stat.st_mode):
-            raise ValueError(f"Harbor source file must be a regular file: {path}")
+            raise ValueError(f"{label} file must be a regular file: {path}")
         if max_bytes is not None and opened_stat.st_size > max_bytes:
-            raise ValueError(f"Harbor source file exceeds {max_bytes} bytes: {path}")
+            raise ValueError(f"{label} file exceeds {max_bytes} bytes: {path}")
         with os.fdopen(descriptor, "rb", closefd=False) as handle:
             content = handle.read() if max_bytes is None else handle.read(max_bytes + 1)
         if max_bytes is not None and len(content) > max_bytes:
-            raise ValueError(f"Harbor source file exceeds {max_bytes} bytes: {path}")
+            raise ValueError(f"{label} file exceeds {max_bytes} bytes: {path}")
     finally:
         os.close(descriptor)
-    _assert_safe_descendant(containment_root, path, label="Harbor source")
+    _assert_safe_descendant(containment_root, path, label=label)
     return content
 
 

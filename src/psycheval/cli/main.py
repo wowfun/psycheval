@@ -50,61 +50,34 @@ def run_cli_args(args: CliArgs) -> int:
 
             run_init_command(args)
             return 0
-        if args.command == "view-task-skill":
-            from psycheval.trial_analysis import TrialAnalysisService, render_json
+        if args.command == "publish-evaluation-report":
+            import json
 
-            service = TrialAnalysisService(str(args.root or ""))
-            try:
-                snapshot = service.task_skill(
-                    str(args.source_ref or ""),
-                    str(args.skill_name or ""),
-                    relative_file=args.relative_file,
-                )
-                payload = snapshot.to_jsonable()
-                if args.json:
-                    print(render_json(payload), end="")
-                else:
-                    print(
-                        snapshot.content,
-                        end="" if snapshot.content.endswith("\n") else "\n",
-                    )
-                return 0
-            finally:
-                service.close()
-        if args.command == "publish-trial-analysis":
-            from psycheval.trial_analysis import (
-                TrialAnalysisReconcileError,
-                TrialAnalysisService,
-                render_json,
+            from psycheval.evaluation_reports import (
+                EvaluationReportCommittedError,
+                EvaluationReports,
             )
 
-            service = TrialAnalysisService(str(args.root or ""))
+            reports = EvaluationReports(str(args.root or ""))
             try:
                 try:
-                    receipt = service.publish(
+                    receipt = reports.publish(
                         source_ref=str(args.source_ref or ""),
-                        skill_name=str(args.skill_name or ""),
-                        expected_evidence_revision=str(
-                            args.expected_evidence_revision or ""
-                        ),
-                        expected_skill_revision=str(args.expected_skill_revision or ""),
                         draft_path=str((args.path or ("",))[0]),
-                        replace_revision=args.replace_revision,
                     )
-                except TrialAnalysisReconcileError as exc:
+                except EvaluationReportCommittedError as exc:
                     if args.json:
-                        print(render_json(exc.receipt), end="")
+                        print(json.dumps(exc.receipt, ensure_ascii=False, indent=2))
                     raise
                 if args.json:
-                    print(render_json(receipt), end="")
-                else:
                     print(
-                        "published Trial analysis "
-                        f"{receipt['trial_ref']} ({receipt['analysis_revision']})"
+                        json.dumps(receipt.to_jsonable(), ensure_ascii=False, indent=2)
                     )
+                else:
+                    print(f"published evaluation report for {receipt.source_ref}")
                 return 0
             finally:
-                service.close()
+                reports.close()
         if args.command == "import":
             from psycheval.analysis import run_import_analysis_command
 

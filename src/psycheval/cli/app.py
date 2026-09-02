@@ -44,7 +44,7 @@ app = make_app(help=APP_HELP, add_completion=True)
 view_app = make_app(help="Render a peval-style report for a supported scenario.")
 export_app = make_app(help="Export normalized data for a supported scenario.")
 import_app = make_app(help="Import analysis files into peval workspace artifacts.")
-publish_app = make_app(help="Publish revision-bound evaluation artifacts.")
+publish_app = make_app(help="Publish reviewed evaluation reports.")
 
 
 AdapterOption = Annotated[
@@ -267,7 +267,7 @@ def view_trajectory(
         typer.Option(
             "--source-ref",
             metavar="REF",
-            help="Workspace Harbor source reference; repeatable",
+            help="Workspace source reference; repeatable",
         ),
     ] = None,
     mode: Annotated[
@@ -365,49 +365,6 @@ def view_trajectory(
     )
 
 
-@view_app.command(
-    "task-skill",
-    help="Read one named live Task skill as revision-bound evaluation criteria.",
-    short_help="Read a Harbor Task skill",
-)
-def view_task_skill(
-    root: Annotated[
-        str,
-        typer.Option("-r", "--root", metavar="DIR", help="Existing peval workspace"),
-    ],
-    source_ref: Annotated[
-        str,
-        typer.Option(
-            "--source-ref", metavar="REF", help="Workspace Harbor source reference"
-        ),
-    ],
-    name: Annotated[
-        str,
-        typer.Option("--name", metavar="NAME", help="Task skill directory name"),
-    ],
-    relative_file: Annotated[
-        str | None,
-        typer.Option(
-            "--file", metavar="PATH", help="One supporting file relative to the skill"
-        ),
-    ] = None,
-    json_output: Annotated[
-        bool,
-        typer.Option("--json", help="Print the structured criterion snapshot"),
-    ] = False,
-) -> None:
-    execute(
-        CliArgs(
-            command="view-task-skill",
-            root=root,
-            source_ref=source_ref,
-            skill_name=name,
-            relative_file=relative_file,
-            json=json_output,
-        )
-    )
-
-
 @export_app.command("tr", hidden=True)
 @export_app.command(
     "trajectory",
@@ -475,9 +432,8 @@ def import_analysis(
             "--source-ref",
             metavar="REF",
             help=(
-                "Workspace source reference, such as "
-                "runs/default/psychevo/<session-id>/<cell-key> or "
-                "harbor/<mount-id>/<job>/<trial>"
+                "Existing local source reference with form "
+                "runs/<evaluation>/<agent>/<session>/<cell>"
             ),
         ),
     ],
@@ -508,41 +464,23 @@ def import_analysis(
 
 
 @publish_app.command(
-    "trial-analysis",
-    help="Atomically publish a reviewed Markdown report to a Harbor Trial root.",
-    short_help="Publish a Harbor Trial report",
+    "evaluation-report",
+    help="Atomically publish a reviewed Markdown report for one workspace source.",
+    short_help="Publish an evaluation report",
 )
-def publish_trial_analysis(
+def publish_evaluation_report(
     root: Annotated[
         str,
         typer.Option("-r", "--root", metavar="DIR", help="Existing peval workspace"),
     ],
     source_ref: Annotated[
         str,
-        typer.Option(
-            "--source-ref", metavar="REF", help="Workspace Harbor source reference"
-        ),
-    ],
-    skill: Annotated[
-        str,
-        typer.Option("--skill", metavar="NAME", help="Task skill used as criteria"),
-    ],
-    expected_evidence_revision: Annotated[
-        str,
-        typer.Option(help="Evidence revision shown during draft review"),
-    ],
-    expected_skill_revision: Annotated[
-        str,
-        typer.Option(help="Task skill revision shown during draft review"),
+        typer.Option("--source-ref", metavar="REF", help="Workspace source reference"),
     ],
     path: Annotated[
         str,
         typer.Option("-p", "--path", metavar="PATH", help="Reviewed Markdown draft"),
     ],
-    replace_revision: Annotated[
-        str | None,
-        typer.Option(help="Exact current analysis revision approved for replacement"),
-    ] = None,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Print a structured publication receipt"),
@@ -550,14 +488,10 @@ def publish_trial_analysis(
 ) -> None:
     execute(
         CliArgs(
-            command="publish-trial-analysis",
+            command="publish-evaluation-report",
             root=root,
             source_ref=source_ref,
-            skill_name=skill,
-            expected_evidence_revision=expected_evidence_revision,
-            expected_skill_revision=expected_skill_revision,
             path=(path,),
-            replace_revision=replace_revision,
             json=json_output,
         )
     )

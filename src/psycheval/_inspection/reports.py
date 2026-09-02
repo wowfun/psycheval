@@ -12,9 +12,9 @@ from psycheval._harbor_trials import (
 from psycheval._inspection.validation import validate_inspect_raw_only_args
 from psycheval.cli.arguments import CliArgs
 from psycheval.config import ToolConfig
+from psycheval.evaluation_reports import EvaluationReports
 from psycheval.inputs import AdapterAssignments, load_inputs
 from psycheval.pipeline import build_report_from_loaded_inputs
-from psycheval.trial_analysis import TrialAnalysisService
 
 
 def inspect_report_for_args(
@@ -89,11 +89,11 @@ def inspect_source_ref_report(
     if not isinstance(config, ToolConfig) or not config.workspace_root:
         raise ValueError("--source-ref requires an initialized workspace root")
 
-    service = TrialAnalysisService(config.workspace_root)
+    reports = EvaluationReports(config.workspace_root)
     try:
-        documents = service.documents(source_refs)
+        documents = reports.documents(source_refs)
     finally:
-        service.close()
+        reports.close()
     trajectories: list[dict[str, Any]] = []
     metas: list[dict[str, Any]] = []
     for document in documents:

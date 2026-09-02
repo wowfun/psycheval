@@ -27,6 +27,7 @@ from psycheval.state.harbor_evidence import (
     read_harbor_task_index,
 )
 from psycheval.state.workspace_harbor import (
+    HARBOR_ANALYSIS_MAX_BYTES,
     _assert_safe_descendant,
     _child_dirs,
     _combined_revision,
@@ -46,6 +47,7 @@ from psycheval.state.workspace_harbor import (
     _normalized_tags,
     _path_has_symlink,
     _project_harbor_metrics,
+    _read_bytes_no_follow,
     _read_harbor_analysis_markdown,
     _read_harbor_entry_trajectory,
     _regular_file,
@@ -74,6 +76,10 @@ from psycheval.state.workspace_source_models import (
 if TYPE_CHECKING:
     from psycheval._harbor_trials import HarborTrialBundle, HarborTrialEntry
 
+_LOCAL_SOURCE_FILES_WITHOUT_REPORT = tuple(
+    name for name in LOCAL_FINGERPRINT_FILES if name != HARBOR_ANALYSIS_MD_FILE
+)
+
 
 class WorkspaceSources:
     """Own discovery, direct reads, and minimal overlays for workspace sources."""
@@ -101,22 +107,58 @@ class WorkspaceSources:
             if candidate.kind == HARBOR_SOURCE_KIND and candidate.source_key
         ]
 
-    def load(self, candidate: SourceCandidate) -> SourceDocument:
+    def load(
+        self,
+        candidate: SourceCandidate,
+        *,
+        include_evaluation_report: bool = True,
+    ) -> SourceDocument:
         if candidate.kind == "artifact-cell":
-            return self._load_local(candidate)
-        return self._load_harbor(candidate)
+            return self._load_local(
+                candidate,
+                include_evaluation_report=include_evaluation_report,
+            )
+        return self._load_harbor(
+            candidate,
+            include_evaluation_report=include_evaluation_report,
+        )
 
-    def load_ref(self, source_ref: str) -> SourceDocument:
+    def load_ref(
+        self,
+        source_ref: str,
+        *,
+        include_evaluation_report: bool = True,
+    ) -> SourceDocument:
         wanted = str(source_ref or "").strip()
         if wanted.startswith(f"{HARBOR_OVERLAY_ROOT}/"):
-            return self.load(self._harbor_candidate_for_ref(wanted))
+            return self.load(
+                self._harbor_candidate_for_ref(
+                    wanted,
+                    include_evaluation_report=include_evaluation_report,
+                ),
+                include_evaluation_report=include_evaluation_report,
+            )
+        if not include_evaluation_report:
+            candidate = self._local_candidate_for_ref(wanted)
+            return self.load(candidate, include_evaluation_report=False)
         for candidate in self.discover():
             if candidate.source_ref == wanted:
-                return self.load(candidate)
+                return self.load(
+                    candidate,
+                    include_evaluation_report=include_evaluation_report,
+                )
         raise ValueError(f"unknown source reference: {wanted}")
 
-    def _harbor_candidate_for_ref(self, source_ref: str) -> SourceCandidate:
-        candidates = self.harbor_candidates_for_ref(source_ref)
+    def _harbor_candidate_for_ref(
+        self,
+        source_ref: str,
+        *,
+        include_evaluation_report: bool = True,
+    ) -> SourceCandidate:
+        candidates = self.harbor_candidates_for_ref(
+            source_ref,
+            include_evaluation_report=include_evaluation_report,
+        )
         if len(candidates) != 1:
             raise ValueError(
                 "parent MultiStep Harbor source reference identifies multiple phases; "
@@ -124,7 +166,12 @@ class WorkspaceSources:
             )
         return candidates[0]
 
-    def harbor_candidates_for_ref(self, source_ref: str) -> list[SourceCandidate]:
+    def harbor_candidates_for_ref(
+        self,
+        source_ref: str,
+        *,
+        include_evaluation_report: bool = True,
+    ) -> list[SourceCandidate]:
         self._reject_legacy_harbor_projections()
         overlay_root = self.workspace_root / HARBOR_OVERLAY_ROOT
         if overlay_root.is_symlink():
@@ -170,6 +217,7 @@ class WorkspaceSources:
             root,
             task_index,
             dataset_paths,
+            include_evaluation_report=include_evaluation_report,
         )
         if len(parts) == 4:
             return candidates
@@ -177,6 +225,29 @@ class WorkspaceSources:
             if candidate.source_ref == source_ref:
                 return [candidate]
         raise ValueError(f"unknown source reference: {source_ref}")
+
+    def _local_candidate_for_ref(self, source_ref: str) -> SourceCandidate:
+        path = self.annotation_dir(source_ref)
+        parts = Path(source_ref).parts
+        if (
+            parts[1] != self.config.analysis_eval_slug
+            or not path.is_dir()
+            or _path_has_symlink(path)
+        ):
+            raise ValueError(f"unknown source reference: {source_ref}")
+        artifacts = trial_artifacts(path)
+        state_path = path / SOURCE_STATE_DIR / SOURCE_STATE_FILENAME
+        if not (
+            _regular_file(artifacts.trajectory_path)
+            and _regular_file(artifacts.meta_path)
+        ) and not _regular_file(state_path):
+            raise ValueError(f"unknown source reference: {source_ref}")
+        return SourceCandidate(
+            source_ref=source_ref,
+            kind="artifact-cell",
+            path=path,
+            fingerprint=_fingerprint(path, _LOCAL_SOURCE_FILES_WITHOUT_REPORT),
+        )
 
     @staticmethod
     def _direct_harbor_directory(root: Path, name: str, kind: str) -> Path:
@@ -371,6 +442,8 @@ class WorkspaceSources:
         mount_root: Path,
         task_index: HarborTaskIndex,
         dataset_paths: tuple[str, ...],
+        *,
+        include_evaluation_report: bool = True,
     ) -> list[SourceCandidate]:
         from psycheval._harbor_trials import load_harbor_trial_bundle
 
@@ -408,20 +481,36 @@ class WorkspaceSources:
                 )
             ]
         return [
-            self._candidate_for_harbor_entry(bundle, entry) for entry in bundle.entries
+            self._candidate_for_harbor_entry(
+                bundle,
+                entry,
+                include_evaluation_report=include_evaluation_report,
+            )
+            for entry in bundle.entries
         ]
 
     def _candidate_for_harbor_entry(
         self,
         bundle: HarborTrialBundle,
         entry: HarborTrialEntry,
+        *,
+        include_evaluation_report: bool = True,
     ) -> SourceCandidate:
         assert entry.source_ref is not None
         job_name = bundle.trial_dir.parent.name
         trial_name = bundle.trial_dir.name
         overlay_dir = self.overlay_dir(entry.source_ref)
-        analysis_relative_path = _harbor_analysis_relative_path(bundle.trial_dir)
+        analysis_relative_path = (
+            _harbor_analysis_relative_path(bundle.trial_dir)
+            if include_evaluation_report
+            else None
+        )
         source_files = _harbor_entry_source_files(entry, None)
+        fingerprint_files = (
+            (*source_files, HARBOR_ANALYSIS_MD_FILE)
+            if include_evaluation_report
+            else source_files
+        )
         return SourceCandidate(
             source_ref=entry.source_ref,
             kind=HARBOR_SOURCE_KIND,
@@ -430,7 +519,7 @@ class WorkspaceSources:
             fingerprint=_combined_revision(
                 _fingerprint(
                     bundle.trial_dir,
-                    (*source_files, HARBOR_ANALYSIS_MD_FILE),
+                    fingerprint_files,
                     extra_root=overlay_dir,
                     extra_files=HARBOR_OVERLAY_FILES,
                 ),
@@ -551,7 +640,12 @@ class WorkspaceSources:
                 source_refs.add(ref)
         return source_refs
 
-    def _load_local(self, candidate: SourceCandidate) -> SourceDocument:
+    def _load_local(
+        self,
+        candidate: SourceCandidate,
+        *,
+        include_evaluation_report: bool = True,
+    ) -> SourceDocument:
         cell_dir = candidate.path
         identity = self.store.cell_path_identity(cell_dir)
         state = self.store.read_source_state(cell_dir)
@@ -566,8 +660,13 @@ class WorkspaceSources:
             )
         )
         artifacts = trial_artifacts(cell_dir)
-        timestamp = _updated_at_ms(cell_dir, LOCAL_FINGERPRINT_FILES)
-        input_bytes = _input_bytes(cell_dir, LOCAL_FINGERPRINT_FILES)
+        presentation_files = (
+            LOCAL_FINGERPRINT_FILES
+            if include_evaluation_report
+            else _LOCAL_SOURCE_FILES_WITHOUT_REPORT
+        )
+        timestamp = _updated_at_ms(cell_dir, presentation_files)
+        input_bytes = _input_bytes(cell_dir, presentation_files)
         try:
             if not (
                 _regular_file(artifacts.trajectory_path)
@@ -586,6 +685,11 @@ class WorkspaceSources:
             source_key = source_key_for_trial(
                 self.config.analysis_eval_slug, source, trajectory, meta
             )
+            evaluation_report_markdown = (
+                _read_local_evaluation_report(candidate)
+                if include_evaluation_report
+                else None
+            )
             return SourceDocument(
                 source_ref=candidate.source_ref,
                 source_key=source_key,
@@ -601,6 +705,7 @@ class WorkspaceSources:
                 active=bool(state.get("active", True)),
                 last_status=optional_str(state.get("last_status")) or "ok",
                 last_error=optional_str(state.get("last_error")),
+                evaluation_report_markdown=evaluation_report_markdown,
             )
         except Exception as exc:  # noqa: BLE001 - retain a diagnostic catalog row.
             source = self.store.missing_source_row(
@@ -640,9 +745,14 @@ class WorkspaceSources:
         candidate: SourceCandidate,
         *,
         direct: bool = False,
+        include_evaluation_report: bool = True,
     ) -> SourceDocument:
         assert candidate.source_key is not None
-        harbor_analysis_markdown = _read_harbor_analysis_markdown(candidate)
+        harbor_analysis_markdown = (
+            _read_harbor_analysis_markdown(candidate)
+            if include_evaluation_report
+            else None
+        )
         analysis_revision = (
             hashlib.sha256(harbor_analysis_markdown.encode("utf-8")).hexdigest()
             if harbor_analysis_markdown is not None
@@ -664,7 +774,11 @@ class WorkspaceSources:
             )
         source = _harbor_source(candidate, overlay)
         source_files = _harbor_candidate_source_files(candidate)
-        presentation_files = (*source_files, HARBOR_ANALYSIS_MD_FILE)
+        presentation_files = (
+            (*source_files, HARBOR_ANALYSIS_MD_FILE)
+            if include_evaluation_report
+            else source_files
+        )
         timestamp = _updated_at_ms(candidate.path, presentation_files)
 
         def current_fingerprint(*, revision: str | None = None) -> str:
@@ -697,6 +811,7 @@ class WorkspaceSources:
                 active=bool(overlay.get("active", True)),
                 last_status="missing" if candidate.missing else "error",
                 last_error=candidate.diagnostic,
+                evaluation_report_markdown=harbor_analysis_markdown,
             )
         values: dict[str, dict[str, Any] | None] = {}
         try:
@@ -771,6 +886,7 @@ class WorkspaceSources:
                         if harbor_analysis_markdown
                         else None
                     ),
+                    evaluation_report_markdown=harbor_analysis_markdown,
                     evidence_revision=evidence_revision,
                     analysis_revision=analysis_revision,
                 )
@@ -835,6 +951,7 @@ class WorkspaceSources:
                     if harbor_analysis_markdown
                     else None
                 ),
+                evaluation_report_markdown=harbor_analysis_markdown,
                 evidence_revision=evidence_revision,
                 analysis_revision=analysis_revision,
             )
@@ -866,6 +983,7 @@ class WorkspaceSources:
                 active=bool(overlay.get("active", True)),
                 last_status="error",
                 last_error=str(exc),
+                evaluation_report_markdown=harbor_analysis_markdown,
             )
 
     def _mount_diagnostic(self, root: Path) -> str | None:
@@ -915,3 +1033,19 @@ class WorkspaceSources:
                 root.rmdir()
             except OSError:
                 pass
+
+
+def _read_local_evaluation_report(candidate: SourceCandidate) -> str | None:
+    path = candidate.path / HARBOR_ANALYSIS_MD_FILE
+    if not _regular_file(path):
+        return None
+    try:
+        content = _read_bytes_no_follow(
+            candidate.path,
+            path,
+            max_bytes=HARBOR_ANALYSIS_MAX_BYTES,
+        )
+        markdown = content.decode("utf-8")
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    return markdown if markdown.strip() else None
