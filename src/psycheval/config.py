@@ -8,7 +8,7 @@ import stat
 import tempfile
 import tomllib
 from pathlib import Path, PureWindowsPath
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 from pydantic import (
     BaseModel,
@@ -76,6 +76,7 @@ class DbMapping(_FrozenConfigModel):
 class HarborDataset(_FrozenConfigModel):
     id: str
     path: str
+    format: Literal["harbor", "workbuddy.v1"] = "harbor"
 
     @field_validator("id")
     @classmethod
@@ -265,6 +266,7 @@ class _AcpDocument(_RawConfigModel):
 class _HarborDatasetDocument(_RawConfigModel):
     id: str
     path: str
+    format: Literal["harbor", "workbuddy.v1"] = "harbor"
 
 
 class _HarborMountDocument(_RawConfigModel):
@@ -402,7 +404,7 @@ def apply_toml_config(
             for index, raw_dataset in enumerate(raw_datasets):
                 if not isinstance(raw_dataset, dict):
                     raise ValueError(f"harbor.datasets[{index}] must be a TOML table")
-                dataset_unknown = sorted(set(raw_dataset) - {"id", "path"})
+                dataset_unknown = sorted(set(raw_dataset) - {"format", "id", "path"})
                 if dataset_unknown:
                     raise ValueError(
                         f"unknown harbor dataset field: {dataset_unknown[0]}"
@@ -419,7 +421,13 @@ def apply_toml_config(
                     raise ValueError(f"duplicate harbor dataset path: {dataset_path}")
                 seen_dataset_ids.add(dataset_id)
                 seen_dataset_paths.add(path_identity)
-                datasets.append(HarborDataset(id=dataset_id, path=dataset_path))
+                datasets.append(
+                    HarborDataset(
+                        id=dataset_id,
+                        path=dataset_path,
+                        format=raw_dataset.get("format", "harbor"),
+                    )
+                )
 
         raw_mounts = harbor.get("mounts")
         if raw_mounts is None:
@@ -727,6 +735,8 @@ def write_workspace_harbor_config(
                     f"path = {json.dumps(_stored_harbor_path(dataset.path, path.parent))}\n",
                 ]
             )
+            if dataset.format != "harbor":
+                lines.append(f"format = {json.dumps(dataset.format)}\n")
         if datasets and mounts:
             lines.append("\n")
         for index, mount in enumerate(mounts):
@@ -797,19 +807,15 @@ def validate_harbor_mount_paths(
                 )
 
 
-def harbor_dataset_paths_for_mount(
-    config: ToolConfig,
-    mount: HarborMount,
-) -> tuple[str, ...]:
-    datasets_by_id = {dataset.id: dataset.path for dataset in config.harbor_datasets}
-    return tuple(datasets_by_id[dataset_id] for dataset_id in mount.dataset_ids)
-
-
 def _validate_harbor_dataset_directory(dataset: HarborDataset) -> None:
     _validate_existing_unlinked_directory(
         dataset.path,
         label=f"Harbor Dataset path for {dataset.id}",
     )
+    if dataset.format == "workbuddy.v1":
+        from psycheval.harbor.datasets import resolve_harbor_dataset
+
+        resolve_harbor_dataset(dataset)
 
 
 def _validate_existing_unlinked_directory(value: str, *, label: str) -> Path:

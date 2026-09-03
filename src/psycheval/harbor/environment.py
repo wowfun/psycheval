@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import getpass
+import hashlib
 import os
 import platform
 import re
@@ -9,13 +10,17 @@ import secrets
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path, PurePath, PurePosixPath
 from uuid import uuid4
 
+import yaml
 from harbor.environments.base import BaseEnvironment, ExecResult, OutputStream
 from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.models.task.config import TaskOS
@@ -32,6 +37,7 @@ from psycheval.harbor.runtime_config import (
 )
 
 _VIRTUAL_WORKDIR = "/app"
+_WORKBUDDY_VIRTUAL_WORKDIR = "/workspace"
 _VIRTUAL_TESTS = "/tests"
 _VIRTUAL_SOLUTION = "/solution"
 _VIRTUAL_LOGS = "/logs"
@@ -56,6 +62,15 @@ _WORKSPACE_RESERVED_ROOTS = (
 _SHORTUUID_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 _SHORTUUID_LENGTH = 7
 _LEGACY_RUNTIME_ENV_PREFIX = "PSYCHEVAL_"
+_WORKBUDDY_COMPOSE_METADATA = {
+    "services": {
+        "main": {"extra_hosts": ["host.docker.internal:host-gateway"]},
+    },
+}
+_WORKBUDDY_COMPOSE_LIMIT = 64 * 1024
+_WORKBUDDY_ARCHIVE_FILE_LIMIT = 64 * 1024 * 1024
+_WORKBUDDY_ARCHIVE_TOTAL_LIMIT = 256 * 1024 * 1024
+_WORKBUDDY_ARCHIVE_ENTRY_LIMIT = 100_000
 
 
 def _truthy(value: object) -> bool:
@@ -64,6 +79,178 @@ def _truthy(value: object) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return False
+
+
+def _read_regular_nofollow(path: Path, *, max_bytes: int) -> bytes:
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError("file is not regular")
+        if opened.st_size > max_bytes:
+            raise ValueError(f"file exceeds {max_bytes} bytes")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            content = handle.read(max_bytes + 1)
+        if len(content) > max_bytes:
+            raise ValueError(f"file exceeds {max_bytes} bytes")
+        return content
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def _open_workbuddy_archive(archive: Path) -> Iterator[tarfile.TarFile]:
+    descriptor = -1
+    try:
+        before = archive.stat(follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("WorkBuddy workspace archive cannot be extracted")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        descriptor = os.open(archive, flags)
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or (
+            before.st_ino
+            and opened.st_ino
+            and (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            raise ValueError("WorkBuddy workspace archive cannot be extracted")
+        raw = os.fdopen(descriptor, "rb")
+        descriptor = -1
+        with raw:
+            try:
+                stream = tarfile.open(fileobj=raw, mode="r:gz")
+            except (OSError, tarfile.TarError) as exc:
+                raise ValueError(
+                    "WorkBuddy workspace archive cannot be extracted"
+                ) from exc
+            with stream:
+                yield stream
+    except OSError as exc:
+        raise ValueError("WorkBuddy workspace archive cannot be extracted") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _extract_workbuddy_workspace(archive: Path, destination: Path) -> None:
+    total = 0
+    seen: dict[PurePosixPath, tuple[str, int, int, bytes]] = {}
+    try:
+        with _open_workbuddy_archive(archive) as stream:
+            for index, member in enumerate(stream, start=1):
+                if index > _WORKBUDDY_ARCHIVE_ENTRY_LIMIT:
+                    raise ValueError(
+                        "WorkBuddy workspace archive exceeds 100000 entries"
+                    )
+                relative = PurePosixPath(member.name)
+                if (
+                    relative.is_absolute()
+                    or "\\" in member.name
+                    or not relative.parts
+                    or any(part in {"", ".", ".."} for part in relative.parts)
+                    or ".git" in relative.parts
+                ):
+                    raise ValueError("WorkBuddy workspace archive path is unsafe")
+                if (
+                    member.issym()
+                    or member.islnk()
+                    or not (member.isdir() or member.isfile())
+                ):
+                    raise ValueError("WorkBuddy workspace archive has unsafe entries")
+                target = destination.joinpath(*relative.parts)
+                if member.isdir():
+                    identity = ("directory", member.mode & 0o777, 0, b"")
+                    previous = seen.get(relative)
+                    if previous is not None and previous != identity:
+                        raise ValueError(
+                            "WorkBuddy workspace archive has conflicting duplicate paths"
+                        )
+                    seen[relative] = identity
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                if member.size > _WORKBUDDY_ARCHIVE_FILE_LIMIT:
+                    raise ValueError("WorkBuddy workspace archive file exceeds 64 MiB")
+                total += member.size
+                if total > _WORKBUDDY_ARCHIVE_TOTAL_LIMIT:
+                    raise ValueError("WorkBuddy workspace archive exceeds 256 MiB")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source = stream.extractfile(member)
+                if source is None:
+                    raise ValueError("WorkBuddy workspace archive file cannot be read")
+                content = source.read(_WORKBUDDY_ARCHIVE_FILE_LIMIT + 1)
+                if len(content) != member.size:
+                    raise ValueError("WorkBuddy workspace archive file is truncated")
+                identity = (
+                    "file",
+                    member.mode & 0o777,
+                    member.size,
+                    hashlib.sha256(content).digest(),
+                )
+                previous = seen.get(relative)
+                if previous is not None:
+                    if previous != identity:
+                        raise ValueError(
+                            "WorkBuddy workspace archive has conflicting duplicate paths"
+                        )
+                    continue
+                seen[relative] = identity
+                target.write_bytes(content)
+                target.chmod(member.mode & 0o777)
+    except (OSError, tarfile.TarError) as exc:
+        raise ValueError("WorkBuddy workspace archive cannot be extracted") from exc
+
+
+def _initialize_workbuddy_git(workspace: Path) -> None:
+    commands = (
+        ("init", "-q", "-b", "main"),
+        ("config", "user.email", "dev@project"),
+        ("config", "user.name", "Developer"),
+        ("add", "-A"),
+        ("commit", "--no-verify", "-q", "-m", "initial setup"),
+    )
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("GIT_")
+    }
+    for arguments in commands:
+        try:
+            result = subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-C",
+                    str(workspace),
+                    *arguments,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ValueError(
+                "WorkBuddy host bootstrap could not create its Git baseline"
+            ) from exc
+        if result.returncode != 0:
+            diagnostic = (result.stderr or result.stdout).strip()
+            raise ValueError(
+                "WorkBuddy host bootstrap could not create its Git baseline"
+                + (f": {diagnostic}" if diagnostic else "")
+            )
 
 
 def _split_virtual_path(
@@ -149,7 +336,13 @@ def _translate_posix_command(command: str, mappings: dict[str, Path]) -> str:
         if translated_literal is not None and not (
             quote == '"' and any(char in content for char in ("$", "`", "\\"))
         ):
-            pieces.append(shlex.quote(translated_literal))
+            if quote not in translated_literal and not (
+                quote == '"'
+                and any(char in translated_literal for char in ("$", "`", "\\"))
+            ):
+                pieces.append(f"{quote}{translated_literal}{quote}")
+            else:
+                pieces.append(shlex.quote(translated_literal))
         else:
             pieces.append(command[index : end + 1])
         index = end + 1
@@ -354,13 +547,20 @@ class _WindowsProcessAdapter(_HostProcessAdapter):
 class HostEnvironment(BaseEnvironment):
     """Run a trusted Harbor Task as native Linux or Windows host subprocesses."""
 
-    def __init__(self, *args, allow_host_execution: object = False, **kwargs):
+    def __init__(
+        self,
+        *args,
+        allow_host_execution: object = False,
+        bootstrap_workbuddy_workspace: object = False,
+        **kwargs,
+    ):
         if "workdir_root" in kwargs:
             raise ValueError(
                 "HostEnvironment workdir_root is configured through PEVAL_CONFIG, "
                 "not an Environment kwarg"
             )
         self._allow_host_execution = _truthy(allow_host_execution)
+        self._bootstrap_workbuddy_workspace = _truthy(bootstrap_workbuddy_workspace)
         self._runtime_root: Path | None = None
         self._automatic_workspace: Path | None = None
         self._host_settings: HostSettings | None = None
@@ -412,12 +612,46 @@ class HostEnvironment(BaseEnvironment):
             raise FileNotFoundError(
                 f"Task environment directory not found: {self.environment_dir}"
             )
-        if (self.environment_dir / "docker-compose.yaml").exists() or (
-            self.environment_dir / "docker-compose.yml"
-        ).exists():
-            raise ValueError("HostEnvironment does not support Docker Compose Tasks")
+        compose_paths = tuple(
+            path
+            for path in (
+                self.environment_dir / "docker-compose.yaml",
+                self.environment_dir / "docker-compose.yml",
+            )
+            if os.path.lexists(path)
+        )
+        if compose_paths:
+            if not self._bootstrap_workbuddy_workspace:
+                raise ValueError(
+                    "HostEnvironment does not support Docker Compose Tasks"
+                )
+            if len(compose_paths) != 1:
+                raise ValueError("WorkBuddy Compose metadata is ambiguous")
+            try:
+                compose_bytes = _read_regular_nofollow(
+                    compose_paths[0], max_bytes=_WORKBUDDY_COMPOSE_LIMIT
+                )
+                compose = yaml.safe_load(compose_bytes.decode("utf-8"))
+            except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
+                raise ValueError("WorkBuddy Compose metadata is not readable") from exc
+            if compose != _WORKBUDDY_COMPOSE_METADATA:
+                raise ValueError(
+                    "HostEnvironment accepts only the inert WorkBuddy Compose metadata"
+                )
+        if self._bootstrap_workbuddy_workspace:
+            archive = self.environment_dir / "workspace.tar.gz"
+            try:
+                archive_info = archive.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise ValueError("WorkBuddy workspace archive is missing") from exc
+            if not stat.S_ISREG(archive_info.st_mode):
+                raise ValueError("WorkBuddy workspace archive must be a regular file")
         self._task_workdir = _canonical_virtual_path(
-            self.task_env_config.workdir or _VIRTUAL_WORKDIR,
+            (
+                _WORKBUDDY_VIRTUAL_WORKDIR
+                if self._bootstrap_workbuddy_workspace
+                else self.task_env_config.workdir or _VIRTUAL_WORKDIR
+            ),
             self.os,
             label="HostEnvironment [environment].workdir",
         )
@@ -498,6 +732,10 @@ class HostEnvironment(BaseEnvironment):
             workspace_mounts.append((workspace_target, workspace_source))
         if len(workspace_mounts) > 1:
             raise ValueError("HostEnvironment supports only one workspace mount")
+        if self._bootstrap_workbuddy_workspace and workspace_mounts:
+            raise ValueError(
+                "WorkBuddy host bootstrap does not accept an external workspace mount"
+            )
         self._workspace_mount = workspace_mounts[0] if workspace_mounts else None
         seen_targets: set[str] = set()
         for mount, logical_target in managed_mounts:
@@ -542,7 +780,14 @@ class HostEnvironment(BaseEnvironment):
             )
             environment_source = self.environment_dir.resolve()
             context_target = context_target.resolve()
-            if context_target != environment_source:
+            if self._bootstrap_workbuddy_workspace:
+                await asyncio.to_thread(
+                    _extract_workbuddy_workspace,
+                    environment_source / "workspace.tar.gz",
+                    context_target,
+                )
+                await asyncio.to_thread(_initialize_workbuddy_git, context_target)
+            elif context_target != environment_source:
                 if context_target.is_relative_to(environment_source):
                     raise ValueError(
                         "HostEnvironment workspace context target cannot be inside "
@@ -858,6 +1103,8 @@ class HostEnvironment(BaseEnvironment):
             if key != PEVAL_CONFIG_ENV
             and not key.startswith(_LEGACY_RUNTIME_ENV_PREFIX)
         }
+        if "HOME" in merged_env and "NVM_DIR" not in merged_env:
+            process_env.pop("NVM_DIR", None)
         process_env.update(self._translate_env(merged_env))
         python_dir = str(Path(sys.executable).parent)
         inherited_path = process_env.get("PATH", "")

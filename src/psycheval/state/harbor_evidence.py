@@ -11,6 +11,7 @@ from typing import Any, Iterable
 
 from psycheval._harbor_tasks import load_harbor_task, select_publishable_task_files
 from psycheval._state.annotations import optional_str
+from psycheval.harbor.datasets import DatasetFormat
 
 TRIAL_JSON_FILES = (
     "agent/trajectory.json",
@@ -31,6 +32,7 @@ class HarborEvidence:
     model_provider: str | None
     task_keywords: tuple[str, ...]
     task_metadata: dict[str, Any]
+    dataset_format: DatasetFormat
     provenance: dict[str, Any]
     phase_timing: dict[str, Any]
     source_revision: str
@@ -44,12 +46,14 @@ class _TaskCandidate:
     metadata: dict[str, Any] | None
     error: str | None
     config_bytes: bytes | None
+    dataset_format: DatasetFormat
 
 
 @dataclass(frozen=True)
 class HarborTaskIndex:
     candidates: tuple[_TaskCandidate, ...]
     revision: str
+    dataset_formats: tuple[DatasetFormat, ...] = ()
     content_digests: dict[Path, tuple[str, str] | Exception] = field(
         default_factory=dict,
         compare=False,
@@ -130,7 +134,7 @@ def _read_once(
         config_task,
     )
     index = task_index or read_harbor_task_index(task_paths)
-    task_metadata, selected_revision = _resolve_task_metadata(
+    task_metadata, selected_revision, dataset_format = _resolve_task_metadata(
         index,
         task_name=task_name,
         task_paths=(lock_task.get("path"), config_task.get("path")),
@@ -194,6 +198,7 @@ def _read_once(
         model_provider=model_provider,
         task_keywords=task_keywords,
         task_metadata=task_metadata,
+        dataset_format=dataset_format,
         provenance=provenance,
         phase_timing=phase_timing,
         source_revision=source_revision,
@@ -343,13 +348,20 @@ def _iso_duration_ms(started: str | None, finished: str | None) -> int | None:
 
 def _task_candidates(
     task_paths: Iterable[str],
+    dataset_formats: Iterable[DatasetFormat] = (),
 ) -> tuple[list[_TaskCandidate], str]:
     roots = tuple(Path(raw_root) for raw_root in task_paths)
+    formats = tuple(dataset_formats)
+    if not formats:
+        formats = ("harbor",) * len(roots)
+    if len(formats) != len(roots):
+        raise ValueError("Harbor Dataset formats do not match Task allowlist roots")
+    datasets = tuple(zip(roots, formats, strict=True))
     last_error: Exception | None = None
     for _attempt in range(3):
         try:
             before = _task_index_signatures(roots)
-            candidates, revision = _task_candidates_once(roots)
+            candidates, revision = _task_candidates_once(datasets)
             if before == _task_index_signatures(roots):
                 return candidates, revision
         except Exception as exc:  # noqa: BLE001 - bounded consistency retry.
@@ -359,18 +371,32 @@ def _task_candidates(
     raise ValueError("Harbor Task allowlist changed while it was being read")
 
 
-def read_harbor_task_index(task_paths: Iterable[str]) -> HarborTaskIndex:
-    candidates, revision = _task_candidates(task_paths)
-    return HarborTaskIndex(candidates=tuple(candidates), revision=revision)
+def read_harbor_task_index(
+    task_paths: Iterable[str],
+    *,
+    dataset_formats: Iterable[DatasetFormat] = (),
+) -> HarborTaskIndex:
+    roots = tuple(task_paths)
+    formats = tuple(dataset_formats)
+    if not formats:
+        formats = ("harbor",) * len(roots)
+    candidates, revision = _task_candidates(roots, formats)
+    return HarborTaskIndex(
+        candidates=tuple(candidates),
+        revision=revision,
+        dataset_formats=formats,
+    )
 
 
 def _task_candidates_once(
-    task_paths: Iterable[Path],
+    datasets: Iterable[tuple[Path, DatasetFormat]],
 ) -> tuple[list[_TaskCandidate], str]:
     candidates: list[_TaskCandidate] = []
     index_digest = hashlib.sha256()
-    for root in task_paths:
+    for root, dataset_format in datasets:
         _assert_safe_descendant(root, root)
+        index_digest.update(str(root).encode("utf-8") + b"\0")
+        index_digest.update(dataset_format.encode("ascii") + b"\0")
         task_dirs = (
             [root] if _regular_file(root / "task.toml") else _child_task_dirs(root)
         )
@@ -406,6 +432,7 @@ def _task_candidates_once(
                         metadata=metadata,
                         error=error,
                         config_bytes=config_bytes,
+                        dataset_format=dataset_format,
                     )
                 )
     return candidates, index_digest.hexdigest()
@@ -418,10 +445,15 @@ def _resolve_task_metadata(
     task_paths: Iterable[Any],
     recorded_digest: str | None,
     recorded_digest_source: str | None,
-) -> tuple[dict[str, Any], str]:
+) -> tuple[dict[str, Any], str, DatasetFormat]:
     candidates = index.candidates
+    covering_format = _covering_dataset_format(index)
     if not candidates:
-        return {"status": "not_configured", "live": True}, "not-configured"
+        return (
+            {"status": "not_configured", "live": True},
+            "not-configured",
+            covering_format,
+        )
     selected: _TaskCandidate | None = None
     for raw_path in task_paths:
         if raw_path is None:
@@ -432,11 +464,15 @@ def _resolve_task_metadata(
             if _task_path_matches(candidate.path, raw_path)
         ]
         if len(matches) > 1:
-            return {
-                "status": "ambiguous",
-                "live": True,
-                "diagnostic": f"Task path matched {len(matches)} allowlisted Tasks",
-            }, "ambiguous-path"
+            return (
+                {
+                    "status": "ambiguous",
+                    "live": True,
+                    "diagnostic": f"Task path matched {len(matches)} allowlisted Tasks",
+                },
+                "ambiguous-path",
+                _candidate_dataset_format(matches, covering_format),
+            )
         if len(matches) == 1:
             selected = matches[0]
             break
@@ -448,26 +484,38 @@ def _resolve_task_metadata(
             and candidate.metadata.get("name") == task_name
         ]
         if len(matches) > 1:
-            return {
-                "status": "ambiguous",
-                "live": True,
-                "diagnostic": f"Task name matched {len(matches)} allowlisted Tasks",
-            }, "ambiguous-name"
+            return (
+                {
+                    "status": "ambiguous",
+                    "live": True,
+                    "diagnostic": f"Task name matched {len(matches)} allowlisted Tasks",
+                },
+                "ambiguous-name",
+                _candidate_dataset_format(matches, covering_format),
+            )
         if len(matches) == 1:
             selected = matches[0]
     if selected is None:
-        return {
-            "status": "not_found",
-            "live": True,
-            **({"requested_name": task_name} if task_name else {}),
-        }, "not-found"
+        return (
+            {
+                "status": "not_found",
+                "live": True,
+                **({"requested_name": task_name} if task_name else {}),
+            },
+            "not-found",
+            covering_format,
+        )
     if selected.metadata is None:
-        return {
-            "status": "invalid",
-            "live": True,
-            "path": str(selected.path),
-            "diagnostic": selected.error or "invalid task.toml",
-        }, hashlib.sha256((selected.error or "invalid").encode()).hexdigest()
+        return (
+            {
+                "status": "invalid",
+                "live": True,
+                "path": str(selected.path),
+                "diagnostic": selected.error or "invalid task.toml",
+            },
+            hashlib.sha256((selected.error or "invalid").encode()).hexdigest(),
+            selected.dataset_format,
+        )
     try:
         cached = index.content_digests.get(selected.path)
         if cached is None:
@@ -480,13 +528,17 @@ def _resolve_task_metadata(
             raise cached
         live_digest, revision = cached
     except (OSError, ValueError) as exc:
-        return {
-            "status": "invalid",
-            "live": True,
-            "path": str(selected.path),
-            "diagnostic": str(exc),
-            **selected.metadata,
-        }, hashlib.sha256(str(exc).encode()).hexdigest()
+        return (
+            {
+                "status": "invalid",
+                "live": True,
+                "path": str(selected.path),
+                "diagnostic": str(exc),
+                **selected.metadata,
+            },
+            hashlib.sha256(str(exc).encode()).hexdigest(),
+            selected.dataset_format,
+        )
     digest_comparable = recorded_digest_source != "config.ref"
     digest_matches = (
         recorded_digest == live_digest
@@ -494,19 +546,38 @@ def _resolve_task_metadata(
         else None
     )
     status = "digest_mismatch" if digest_matches is False else "resolved"
-    return {
-        "status": status,
-        "live": True,
-        "path": str(selected.path),
-        **selected.metadata,
-        "live_digest": live_digest,
-        "digest_matches": digest_matches,
-        **(
-            {"digest_comparison": "not_comparable"}
-            if recorded_digest and not digest_comparable
-            else {}
-        ),
-    }, revision
+    return (
+        {
+            "status": status,
+            "live": True,
+            "path": str(selected.path),
+            **selected.metadata,
+            "live_digest": live_digest,
+            "digest_matches": digest_matches,
+            **(
+                {"digest_comparison": "not_comparable"}
+                if recorded_digest and not digest_comparable
+                else {}
+            ),
+        },
+        revision,
+        selected.dataset_format,
+    )
+
+
+def _covering_dataset_format(index: HarborTaskIndex) -> DatasetFormat:
+    formats = set(index.dataset_formats)
+    if not formats:
+        formats = {candidate.dataset_format for candidate in index.candidates}
+    return formats.pop() if len(formats) == 1 else "harbor"
+
+
+def _candidate_dataset_format(
+    candidates: Iterable[_TaskCandidate],
+    fallback: DatasetFormat,
+) -> DatasetFormat:
+    formats = {candidate.dataset_format for candidate in candidates}
+    return formats.pop() if len(formats) == 1 else fallback
 
 
 def _task_path_matches(candidate: Path, raw_path: Any) -> bool:

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 import platform
+import shlex
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -240,6 +243,294 @@ def test_start_failure_removes_owned_automatic_workspace(
 
 
 @_LINUX_ONLY
+def test_workbuddy_bootstrap_safely_expands_workspace_and_creates_git_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    environment_dir = tmp_path / "task" / "environment"
+    environment_dir.mkdir(parents=True)
+    environment_dir.joinpath("Dockerfile").write_text("FROM python:3.12-slim\n")
+    environment_dir.joinpath("docker-compose.yaml").write_text(
+        "services:\n  main:\n    extra_hosts:\n      - host.docker.internal:host-gateway\n"
+    )
+    source = tmp_path / "source"
+    (source / "input" / "workspace").mkdir(parents=True)
+    (source / "input" / "workspace" / "brief.txt").write_text("fixture\n")
+    with tarfile.open(environment_dir / "workspace.tar.gz", "w:gz") as stream:
+        stream.add(source / "input", arcname="input")
+    real_open = os.open
+    archive_flags: list[int] = []
+
+    def recording_open(
+        path: str | bytes | os.PathLike[str],
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        if Path(path) == environment_dir / "workspace.tar.gz":
+            archive_flags.append(flags)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr("psycheval.harbor.environment.os.open", recording_open)
+    hook_dir = tmp_path / "inherited-hooks"
+    hook_dir.mkdir()
+    hook_marker = tmp_path / "hook-ran"
+    hook = hook_dir / "post-commit"
+    hook.write_text(
+        f"#!/bin/sh\ntouch {shlex.quote(str(hook_marker))}\n", encoding="utf-8"
+    )
+    hook.chmod(0o755)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(hook_dir))
+    trial_paths = TrialPaths(tmp_path / "office__YfQLWrD")
+    trial_paths.mkdir()
+    environment = HostEnvironment(
+        environment_dir=environment_dir,
+        environment_name="test",
+        session_id="test-env",
+        trial_paths=trial_paths,
+        task_env_config=EnvironmentConfig(workdir=None),
+        logger=logging.getLogger("test"),
+        mounts=[],
+        allow_host_execution=True,
+        bootstrap_workbuddy_workspace=True,
+    )
+
+    async def scenario() -> None:
+        await environment.start(force_build=False)
+        try:
+            result = await environment.exec(
+                "test -f input/workspace/brief.txt && "
+                "test -f /workspace/input/workspace/brief.txt && "
+                "test ! -e Dockerfile && git status --porcelain && pwd"
+            )
+            assert result.return_code == 0
+            assert (result.stdout or "").strip() == str(
+                Path(os.environ["HOME"]) / "workspaces" / "YfQLWrD"
+            )
+            assert not hook_marker.exists()
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
+    if getattr(os, "O_NONBLOCK", 0):
+        assert archive_flags
+        assert all(flags & os.O_NONBLOCK for flags in archive_flags)
+
+
+def test_workbuddy_bootstrap_rejects_non_metadata_compose(tmp_path: Path) -> None:
+    environment_dir = tmp_path / "task" / "environment"
+    environment_dir.mkdir(parents=True)
+    (environment_dir / "docker-compose.yaml").write_text(
+        "services:\n  database:\n    image: postgres\n"
+    )
+    trial_paths = TrialPaths(tmp_path / "trial")
+    trial_paths.mkdir()
+    with pytest.raises(ValueError, match="WorkBuddy Compose metadata"):
+        HostEnvironment(
+            environment_dir=environment_dir,
+            environment_name="test",
+            session_id="test-env",
+            trial_paths=trial_paths,
+            task_env_config=EnvironmentConfig(),
+            logger=logging.getLogger("test"),
+            mounts=[],
+            allow_host_execution=True,
+            bootstrap_workbuddy_workspace=True,
+        )
+
+
+def test_workbuddy_bootstrap_accepts_semantically_identical_compose(
+    tmp_path: Path,
+) -> None:
+    environment_dir = tmp_path / "task" / "environment"
+    environment_dir.mkdir(parents=True)
+    (environment_dir / "docker-compose.yaml").write_text(
+        "# WorkBuddy's inert compatibility metadata.\n"
+        "services:\n"
+        "  main:\n"
+        "    extra_hosts: [host.docker.internal:host-gateway]\n",
+        encoding="utf-8",
+    )
+    with tarfile.open(environment_dir / "workspace.tar.gz", "w:gz"):
+        pass
+    trial_paths = TrialPaths(tmp_path / "trial")
+    trial_paths.mkdir()
+
+    HostEnvironment(
+        environment_dir=environment_dir,
+        environment_name="test",
+        session_id="test-env",
+        trial_paths=trial_paths,
+        task_env_config=EnvironmentConfig(),
+        logger=logging.getLogger("test"),
+        mounts=[],
+        allow_host_execution=True,
+        bootstrap_workbuddy_workspace=True,
+    )
+
+
+def test_workbuddy_bootstrap_rejects_oversized_compose_metadata(
+    tmp_path: Path,
+) -> None:
+    environment_dir = tmp_path / "task" / "environment"
+    environment_dir.mkdir(parents=True)
+    (environment_dir / "docker-compose.yaml").write_bytes(b"#" * (64 * 1024 + 1))
+    with tarfile.open(environment_dir / "workspace.tar.gz", "w:gz"):
+        pass
+    trial_paths = TrialPaths(tmp_path / "trial")
+    trial_paths.mkdir()
+
+    with pytest.raises(ValueError, match="Compose metadata is not readable"):
+        HostEnvironment(
+            environment_dir=environment_dir,
+            environment_name="test",
+            session_id="test-env",
+            trial_paths=trial_paths,
+            task_env_config=EnvironmentConfig(),
+            logger=logging.getLogger("test"),
+            mounts=[],
+            allow_host_execution=True,
+            bootstrap_workbuddy_workspace=True,
+        )
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
+def test_workbuddy_bootstrap_does_not_follow_replaced_archive(
+    tmp_path: Path,
+) -> None:
+    environment_dir = tmp_path / "task" / "environment"
+    environment_dir.mkdir(parents=True)
+    (environment_dir / "docker-compose.yaml").write_text(
+        "services:\n  main:\n    extra_hosts:\n"
+        "      - host.docker.internal:host-gateway\n"
+    )
+    archive = environment_dir / "workspace.tar.gz"
+    with tarfile.open(archive, "w:gz") as stream:
+        info = tarfile.TarInfo("input/initial.txt")
+        info.size = 0
+        stream.addfile(info, io.BytesIO())
+    trial_paths = TrialPaths(tmp_path / "replaced__YfQLWrD")
+    trial_paths.mkdir()
+    environment = HostEnvironment(
+        environment_dir=environment_dir,
+        environment_name="test",
+        session_id="test-env",
+        trial_paths=trial_paths,
+        task_env_config=EnvironmentConfig(workdir=None),
+        logger=logging.getLogger("test"),
+        mounts=[],
+        allow_host_execution=True,
+        bootstrap_workbuddy_workspace=True,
+    )
+    replacement = tmp_path / "replacement.tar.gz"
+    with tarfile.open(replacement, "w:gz") as stream:
+        info = tarfile.TarInfo("input/replacement.txt")
+        info.size = 0
+        stream.addfile(info, io.BytesIO())
+    archive.unlink()
+    archive.symlink_to(replacement)
+
+    async def scenario() -> None:
+        with pytest.raises(ValueError, match="archive cannot be extracted"):
+            await environment.start(force_build=False)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("member_name", ("../escape.txt", ".git/config"))
+def test_workbuddy_bootstrap_rejects_unsafe_workspace_archive_paths(
+    tmp_path: Path, member_name: str
+) -> None:
+    environment_dir = tmp_path / "task" / "environment"
+    environment_dir.mkdir(parents=True)
+    (environment_dir / "docker-compose.yaml").write_text(
+        "services:\n  main:\n    extra_hosts:\n"
+        "      - host.docker.internal:host-gateway\n"
+    )
+    payload = b"private\n"
+    info = tarfile.TarInfo(member_name)
+    info.size = len(payload)
+    with tarfile.open(environment_dir / "workspace.tar.gz", "w:gz") as stream:
+        stream.addfile(info, io.BytesIO(payload))
+    trial_paths = TrialPaths(tmp_path / "unsafe__YfQLWrD")
+    trial_paths.mkdir()
+    environment = HostEnvironment(
+        environment_dir=environment_dir,
+        environment_name="test",
+        session_id="test-env",
+        trial_paths=trial_paths,
+        task_env_config=EnvironmentConfig(workdir=None),
+        logger=logging.getLogger("test"),
+        mounts=[],
+        allow_host_execution=True,
+        bootstrap_workbuddy_workspace=True,
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(ValueError, match="archive path is unsafe"):
+            await environment.start(force_build=False)
+
+    asyncio.run(scenario())
+    assert not (tmp_path / "escape.txt").exists()
+
+
+@_LINUX_ONLY
+@pytest.mark.parametrize(
+    ("payloads", "expected_error"),
+    (
+        ((b"same\n", b"same\n"), None),
+        ((b"first\n", b"second\n"), "conflicting duplicate"),
+    ),
+)
+def test_workbuddy_bootstrap_handles_duplicate_workspace_archive_paths(
+    tmp_path: Path,
+    payloads: tuple[bytes, bytes],
+    expected_error: str | None,
+) -> None:
+    environment_dir = tmp_path / "task" / "environment"
+    environment_dir.mkdir(parents=True)
+    (environment_dir / "docker-compose.yaml").write_text(
+        "services:\n  main:\n    extra_hosts:\n"
+        "      - host.docker.internal:host-gateway\n"
+    )
+    with tarfile.open(environment_dir / "workspace.tar.gz", "w:gz") as stream:
+        for payload in payloads:
+            info = tarfile.TarInfo("input/workspace/brief.txt")
+            info.mode = 0o644
+            info.size = len(payload)
+            stream.addfile(info, io.BytesIO(payload))
+    trial_paths = TrialPaths(tmp_path / "duplicate__YfQLWrD")
+    trial_paths.mkdir()
+    environment = HostEnvironment(
+        environment_dir=environment_dir,
+        environment_name="test",
+        session_id="test-env",
+        trial_paths=trial_paths,
+        task_env_config=EnvironmentConfig(workdir=None),
+        logger=logging.getLogger("test"),
+        mounts=[],
+        allow_host_execution=True,
+        bootstrap_workbuddy_workspace=True,
+    )
+
+    async def scenario() -> None:
+        if expected_error is not None:
+            with pytest.raises(ValueError, match=expected_error):
+                await environment.start(force_build=False)
+            return
+        await environment.start(force_build=False)
+        try:
+            result = await environment.exec("cat input/workspace/brief.txt")
+            assert result.return_code == 0
+            assert result.stdout == "same\n"
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
+
+
+@_LINUX_ONLY
 def test_empty_configured_root_restores_trial_temporary_workdir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -306,6 +597,14 @@ def test_exec_translates_paths_and_sets_effective_runtime_config(
             source = tmp_path / "source.txt"
             source.write_text("fixture", encoding="utf-8")
             await environment.upload_file(source, "/tests/source.txt")
+            heredoc = await environment.exec(
+                "python - <<'PY'\n"
+                "from pathlib import Path\n"
+                'print(Path("/tests/source.txt").read_text())\n'
+                "PY"
+            )
+            assert heredoc.return_code == 0
+            assert heredoc.stdout == "fixture\n"
             result = await environment.exec(
                 "printf '%s|' \"$PEVAL_CONFIG\"; cat /tests/source.txt",
                 env={"CALL_ENV": "present", "PSYCHEVAL_LEGACY": "hidden"},
@@ -369,6 +668,40 @@ def test_exec_translates_complete_virtual_paths_in_environment_values(
             )
             assert Path(data_home).is_dir()
             assert unchanged == "prefix:/logs/agent"
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
+
+
+@_LINUX_ONLY
+def test_home_override_does_not_inherit_a_stale_host_nvm_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NVM_DIR", str(tmp_path / "host-home" / ".nvm"))
+
+    async def scenario() -> None:
+        environment = make_environment(tmp_path)
+        await environment.start(force_build=False)
+        try:
+            result = await environment.exec(
+                'printf "%s|%s" "$HOME" "${NVM_DIR-unset}"',
+                env={"HOME": str(tmp_path / "agent-home")},
+            )
+            assert result.return_code == 0
+            assert result.stdout == f"{tmp_path / 'agent-home'}|unset"
+
+            explicit = await environment.exec(
+                'printf "%s" "$NVM_DIR"',
+                env={
+                    "HOME": str(tmp_path / "agent-home"),
+                    "NVM_DIR": "/logs/agent/nvm",
+                },
+            )
+            assert explicit.return_code == 0
+            assert Path(explicit.stdout or "") == (
+                environment.trial_paths.agent_dir / "nvm"
+            )
         finally:
             await environment.stop(delete=True)
 

@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from psycheval._state.annotations import optional_str
-from psycheval.config import (
-    HarborMount,
-    ToolConfig,
-    harbor_dataset_paths_for_mount,
+from psycheval.config import HarborMount, ToolConfig
+from psycheval.harbor.datasets import (
+    DatasetFormat,
+    resolve_harbor_datasets_for_mount,
 )
 from psycheval.state.harbor_evidence import (
     HarborTaskIndex,
@@ -90,6 +90,7 @@ def load_harbor_trial_bundle(
     mount_id: str | None = None,
     source_ref: str | None = None,
     task_paths: Iterable[str] = (),
+    dataset_formats: Iterable[DatasetFormat] = (),
     task_index: HarborTaskIndex | None = None,
 ) -> HarborTrialBundle:
     """Read one Harbor Trial and expose its sources in authoritative order."""
@@ -111,7 +112,9 @@ def load_harbor_trial_bundle(
             f"Harbor Trial is outside its jobs root: {resolved_trial}"
         ) from exc
     normalized_task_paths = tuple(str(path) for path in task_paths)
-    index = task_index or read_harbor_task_index(normalized_task_paths)
+    index = task_index or read_harbor_task_index(
+        normalized_task_paths, dataset_formats=dataset_formats
+    )
     evidence = read_harbor_evidence(
         resolved_trial,
         jobs_root=resolved_jobs,
@@ -158,7 +161,8 @@ def load_direct_harbor_trial_bundle(
     mount = _matching_mount(path, config.harbor_mounts)
     if mount is None:
         return load_harbor_trial_bundle(path)
-    task_paths = harbor_dataset_paths_for_mount(config, mount)
+    resolved_datasets = resolve_harbor_datasets_for_mount(config, mount)
+    task_paths = tuple(str(item.task_root) for item in resolved_datasets)
     source_ref = f"harbor/{mount.id}/{path.parent.name}/{path.name}"
     return load_harbor_trial_bundle(
         path,
@@ -166,6 +170,7 @@ def load_direct_harbor_trial_bundle(
         mount_id=mount.id,
         source_ref=source_ref,
         task_paths=task_paths,
+        dataset_formats=(item.format for item in resolved_datasets),
     )
 
 
