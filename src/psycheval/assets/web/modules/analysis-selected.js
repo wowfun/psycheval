@@ -13,6 +13,42 @@ function renderSelectedEvidence(trajectory, meta) {
   const blocks = [renderSelectedUsage(trajectory), renderSelectedWarnings(meta), renderSelectedSource(meta)].filter(Boolean);
   return blocks.length ? `<section class="selected-extra selected-evidence"><h3>${esc(t("evidence", "Evidence"))}</h3><div class="selected-evidence-list">${blocks.join("")}</div></section>` : "";
 }
+function renderVerifierEvidence(meta) {
+  const evidence = meta?.verifier_evidence;
+  if (!evidence || typeof evidence !== "object") return "";
+  const tests = evidence.tests && typeof evidence.tests === "object" ? evidence.tests : {};
+  const judge = evidence.llm_judge && typeof evidence.llm_judge === "object" ? evidence.llm_judge : {};
+  const rows = [
+    [t("workbuddy_score", "Canonical score"), evidence.score ?? "-"],
+    [t("workbuddy_score_source", "Score source"), evidence.score_source || "-"],
+    [t("harbor_reward", "Harbor reward"), evidence.harbor_reward ?? "-"],
+    [t("reward_consistency", "Reward consistency"), evidence.reward_consistency || "-"],
+    [t("test_status", "Test status"), tests.status || "-"],
+    [t("tests_passed_total", "Tests passed / total"), tests.passed !== undefined || tests.total !== undefined ? `${tests.passed ?? "-"} / ${tests.total ?? "-"}` : "-"],
+    [t("llm_judge_status", "LLM judge status"), judge.status || "-"],
+    [t("llm_judge_score", "LLM judge score"), judge.score ?? "-"],
+  ];
+  const sourceKey = String(evidence.source_key || "");
+  const artifacts = listValue(evidence.artifacts);
+  const artifactHtml = artifacts.length ? `<div class="verifier-artifact-list">${artifacts.map(artifact => {
+    const artifactId = String(artifact?.id || "");
+    const name = String(artifact?.name || t("artifact", "Artifact"));
+    const base = sourceKey && artifactId
+      ? `/api/harbor/verifier-artifacts/${encodeURIComponent(sourceKey)}/${encodeURIComponent(artifactId)}`
+      : "";
+    const preview = artifact?.preview && typeof artifact.preview === "object" ? artifact.preview : {};
+    const previewHtml = preview.kind === "text"
+      ? (base ? `<a class="action-button verifier-artifact-preview" href="${esc(base)}" target="_blank" rel="noreferrer">${esc(t("preview", "Preview"))}</a>` : "")
+      : preview.kind === "image" && base
+        ? `<img class="verifier-artifact-image" src="${esc(base)}" alt="${esc(name)}" loading="lazy">`
+        : "";
+    const download = base && artifact?.download_available
+      ? `<a class="action-button verifier-artifact-download" href="${esc(base)}?download=true">${esc(t("download", "Download"))}</a>`
+      : "";
+    return `<section class="verifier-artifact"><div class="verifier-artifact-head"><strong>${esc(name)}</strong>${download}</div>${previewHtml}</section>`;
+  }).join("")}</div>` : "";
+  return `<article class="selected-evidence-card"><h4>${esc(t("workbuddy_verifier", "WorkBuddy verifier"))}</h4>${infoGrid(rows)}${artifactHtml}</article>`;
+}
 function renderHarborEvidence(meta) {
   const provenance = meta?.harbor_provenance;
   if (!provenance || typeof provenance !== "object") return "";
@@ -56,6 +92,7 @@ function renderHarborEvidence(meta) {
     <article class="selected-evidence-card"><h4>${esc(t("identity", "Identity"))}</h4>${infoGrid(identity)}</article>
     <article class="selected-evidence-card"><h4>${esc(t("reward_dimensions", "Reward dimensions"))}</h4>${rewardRows.length ? infoGrid(rewardRows) : `<p class="muted">-</p>`}</article>
     <article class="selected-evidence-card"><h4>${esc(t("phase_timing", "Phase timing"))}</h4>${phaseRows.length ? infoGrid(phaseRows) : `<p class="muted">-</p>`}</article>
+    ${renderVerifierEvidence(meta)}
     <article class="selected-evidence-card"><h4>${esc(t("recorded_provenance", "Recorded provenance"))}</h4>${infoGrid(history)}</article>
     <article class="selected-evidence-card"><h4>${esc(t("live_task_metadata", "Live Task metadata"))}</h4>${infoGrid(live)}</article>
   </div></section>`;
@@ -89,6 +126,7 @@ function renderSelectedSource(meta) {
 export {
   renderAnalysisPaths,
   renderHarborEvidence,
+  renderVerifierEvidence,
   renderSelectedEvidence,
   renderSelectedSource,
   renderSelectedUsage,

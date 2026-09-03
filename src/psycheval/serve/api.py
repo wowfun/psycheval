@@ -22,7 +22,9 @@ from fastapi import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import StreamingResponse
 
 from psycheval.adapters import available_adapter_ids, normalize_adapter_id
 from psycheval.config import (
@@ -595,6 +597,13 @@ def _serve_page(request: Request, page: str) -> HTMLResponse:
 _CSP_HOST = re.compile(
     r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::[0-9]{1,5})?"
 )
+_HARBOR_ARTIFACT_ID_RE = re.compile(r"[0-9a-f]{24}")
+_UNSAFE_HEADER_FILENAME_RE = re.compile(r"[^A-Za-z0-9_.:-]")
+
+
+def _content_disposition(disposition: str, filename: str) -> str:
+    safe_filename = _UNSAFE_HEADER_FILENAME_RE.sub("_", filename)[:145] or "artifact"
+    return f'{disposition}; filename="{safe_filename}"'
 
 
 def _workspace_csp(request: Request, nonce: str) -> str:
@@ -818,6 +827,64 @@ def _register_catalog_routes(app: FastAPI) -> None:
 
 
 def _register_source_routes(app: FastAPI) -> None:
+    @app.get(
+        "/api/harbor/verifier-artifacts/{source_key}/{artifact_id}",
+        dependencies=[Depends(require_admin)],
+    )
+    @access(ADMIN_ACCESS)
+    def harbor_verifier_artifact(
+        request: Request,
+        source_key: str,
+        artifact_id: str,
+        download: bool = False,
+    ) -> Response:
+        runtime: ServeRuntime = request.app.state.runtime
+        if (
+            len(source_key) > 512
+            or _HARBOR_ARTIFACT_ID_RE.fullmatch(artifact_id) is None
+        ):
+            raise ProblemException(404, "unknown verifier artifact")
+        try:
+            row = runtime.catalog.row_for_key(source_key)
+            source_ref = row.get("source_ref")
+            if row.get("kind") != "harbor-trial" or not isinstance(source_ref, str):
+                raise ValueError("unknown Harbor Trial source")
+            artifact = (
+                runtime.catalog.sources.open_harbor_verifier_artifact_download(
+                    source_ref,
+                    artifact_id,
+                )
+                if download
+                else runtime.catalog.sources.read_harbor_verifier_artifact(
+                    source_ref,
+                    artifact_id,
+                    purpose="preview",
+                )
+            )
+        except (OSError, ValueError) as exc:
+            raise ProblemException(404, str(exc)) from exc
+        disposition = "attachment" if download else "inline"
+        headers = {
+            "Content-Disposition": _content_disposition(disposition, artifact.filename),
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "sandbox",
+        }
+        if download:
+            headers["Content-Length"] = str(artifact.size)
+            return StreamingResponse(
+                artifact.chunks,
+                media_type=artifact.media_type,
+                headers=headers,
+                background=BackgroundTask(artifact.close),
+            )
+        return Response(
+            content=artifact.content,
+            media_type=artifact.media_type,
+            headers=headers,
+        )
+
     @app.get("/api/sources", dependencies=[Depends(require_admin)])
     @access(ADMIN_ACCESS)
     def sources(request: Request) -> JSONResponse:

@@ -6,10 +6,34 @@ from psycheval.serve.visibility import (
     project_catalog_payload,
     project_detail_payload,
     project_guest_error,
+    project_harbor_inventory,
 )
 
 
 class ServeGuestVisibilityTests(unittest.TestCase):
+    def test_harbor_summary_projection_has_an_explicit_guest_allowlist(self) -> None:
+        payload = {
+            "datasets": [],
+            "workbuddy_summaries": [
+                {
+                    "plan_id": "plan-a",
+                    "dataset_id": "office",
+                    "generated_at": "2026-09-03T00:00:00+00:00",
+                    "provisional": True,
+                    "pending_jobs": ["job-a"],
+                    "metrics": {"reward": 0.5},
+                    "warnings": ["public warning"],
+                    "run_dir": "/private/jobs",
+                }
+            ],
+        }
+
+        guest = project_harbor_inventory(payload, "guest")
+
+        self.assertNotIn("run_dir", guest["workbuddy_summaries"][0])
+        self.assertEqual(guest["workbuddy_summaries"][0]["plan_id"], "plan-a")
+        self.assertIs(project_harbor_inventory(payload, "admin"), payload)
+
     def test_internal_error_projection_is_generic_for_guests(self) -> None:
         detail = "failed to read /srv/private/workspace/state.db"
         self.assertEqual(
@@ -57,6 +81,19 @@ class ServeGuestVisibilityTests(unittest.TestCase):
                         "trial_id": "trial-a",
                     }
                 },
+                "verifier_evidence": {
+                    "status": "present",
+                    "score": 0.7,
+                    "score_source": "reward",
+                    "harbor_reward": 0.6,
+                    "reward_consistency": "drifted",
+                    "tests": {"passed": 3, "total": 4},
+                    "components": {"overall": 0.7},
+                    "llm_judge": {"rubrics": [{"id": "private"}]},
+                    "warnings": ["private path /srv/secret"],
+                    "revision": "private-revision",
+                    "artifacts": [{"id": "private-artifact"}],
+                },
             },
             {
                 "source_key": "windows",
@@ -94,6 +131,18 @@ class ServeGuestVisibilityTests(unittest.TestCase):
         self.assertEqual(
             guest["items"][0]["harbor_provenance"]["regrade"],
             {"trial_id": "trial-a"},
+        )
+        self.assertEqual(
+            guest["items"][0]["verifier_evidence"],
+            {
+                "status": "present",
+                "score": 0.7,
+                "score_source": "reward",
+                "harbor_reward": 0.6,
+                "reward_consistency": "drifted",
+                "tests": {"passed": 3, "total": 4},
+                "components": {"overall": 0.7},
+            },
         )
         self.assertIs(guest["facets"], payload["facets"])
         self.assertIn("path", rows[0]["task_metadata"])
@@ -140,6 +189,14 @@ class ServeGuestVisibilityTests(unittest.TestCase):
                             "path": "/srv/regrade/source",
                             "trial_id": "original",
                         }
+                    },
+                    "verifier_evidence": {
+                        "status": "present",
+                        "score": 0.7,
+                        "score_source": "reward",
+                        "reward_consistency": "matched",
+                        "artifacts": [{"id": "secret"}],
+                        "warnings": ["private"],
                     },
                 }
             ],
@@ -197,6 +254,15 @@ class ServeGuestVisibilityTests(unittest.TestCase):
         self.assertEqual(
             guest["trajectory_meta"][0]["harbor_provenance"]["regrade"],
             {"trial_id": "original"},
+        )
+        self.assertEqual(
+            guest["trajectory_meta"][0]["verifier_evidence"],
+            {
+                "status": "present",
+                "score": 0.7,
+                "score_source": "reward",
+                "reward_consistency": "matched",
+            },
         )
         self.assertEqual(
             guest["annotations"]["analysis"],

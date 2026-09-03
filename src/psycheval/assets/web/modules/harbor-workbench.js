@@ -31,6 +31,24 @@ function selectedDataset() {
     .find(dataset => dataset?.id === workbenchState.datasetId) || null;
 }
 
+function datasetForId(datasetId) {
+  return listValue(workbenchState.inventory?.datasets)
+    .find(dataset => dataset?.id === datasetId) || null;
+}
+
+function datasetIsReadOnly(dataset = selectedDataset()) {
+  return Boolean(dataset?.read_only);
+}
+
+function canMutateSelectedTask() {
+  const dataset = selectedDataset();
+  const detail = workbenchState.taskDetail;
+  return adminMode()
+    && Boolean(dataset && workbenchState.taskName && detail)
+    && !datasetIsReadOnly(dataset)
+    && !detail.read_only;
+}
+
 function selectedTask() {
   const dataset = selectedDataset();
   return listValue(dataset?.tasks)
@@ -53,9 +71,9 @@ function workbenchTaskBrowser() {
   if (!taskBrowser) {
     taskBrowser = createTaskBrowser({
       root,
-      editable: adminMode(),
+      editable: canMutateSelectedTask(),
       readFile: (taskRef, path) => serveApi(`/api/harbor/datasets/${encodeURIComponent(taskRef.dataset_id)}/tasks/${encodeURIComponent(taskRef.task)}/files/${encodeURIComponent(path)}`),
-      onContextMenu: adminMode() ? item => fileActionMenu(item) : null,
+      onContextMenu: canMutateSelectedTask() ? fileActionMenu : null,
       onError: error => setWorkbenchStatus(error?.message || String(error), true),
     });
   } else if (taskBrowser.state.root !== root) taskBrowser.attach(root);
@@ -118,7 +136,7 @@ function harborColumns() {
       key: "__task_select",
       selectionKey: overviewRowKey,
       selectionSet: () => workbenchState.taskSelection,
-      selectable: row => row.kind !== "empty",
+      selectable: row => row.kind !== "empty" && !datasetIsReadOnly(row.dataset),
       rowAriaLabel: (_key, row) => `${t("select_row", "Select row")}: ${rowTaskName(row)}`,
     })] : []),
     { key: "dataset", label: t("harbor_dataset", "Dataset"), valueType: "identity", sortable: true, filterable: true, value: row => row.dataset?.id || "-" },
@@ -129,7 +147,7 @@ function harborColumns() {
       sortable: true,
       filterable: true,
       value: row => rowTaskName(row) || "-",
-      edit: row => adminMode() && row.kind !== "empty" ? {
+      edit: row => adminMode() && row.kind !== "empty" && !datasetIsReadOnly(row.dataset) ? {
         value: rowTaskName(row),
         commit: (_current, value) => renameOverviewTask(row, value),
       } : null,
@@ -233,12 +251,15 @@ function renderHarborOverview(surface, rows) {
 function renderHarborWorkbench() {
   const surface = workbenchRoot();
   if (!surface) return { row: null, changed: false };
-  const availableKeys = new Set(overviewRows().filter(row => row.kind !== "empty").map(overviewRowKey));
+  const availableKeys = new Set(overviewRows()
+    .filter(row => row.kind !== "empty" && !datasetIsReadOnly(row.dataset))
+    .map(overviewRowKey));
   Array.from(workbenchState.taskSelection).forEach(key => {
     if (!availableKeys.has(key)) workbenchState.taskSelection.delete(key);
   });
   const rows = visibleOverviewRows();
   const selection = reconcileOverviewSelection(rows);
+  renderWorkBuddySummaries(surface);
   renderHarborOverview(surface, rows);
   renderContextControls(surface);
   renderSelectedTaskHeading(surface);
@@ -247,6 +268,23 @@ function renderHarborWorkbench() {
   syncWorkbenchBusy(surface);
   workbenchState.tableSnapshot = cloneTableControls();
   return selection;
+}
+
+function renderWorkBuddySummaries(surface) {
+  const container = surface.querySelector("[data-workbuddy-summaries]");
+  if (!container) return;
+  const summaries = listValue(workbenchState.inventory?.workbuddy_summaries);
+  container.hidden = !summaries.length;
+  container.innerHTML = summaries.map(summary => {
+    const metrics = summary?.metrics && typeof summary.metrics === "object" ? summary.metrics : {};
+    const status = summary?.provisional
+      ? t("workbuddy_provisional", "Provisional")
+      : t("workbuddy_terminal", "Terminal");
+    return `<article class="workbuddy-summary-card">
+      <div><p class="eyebrow">${esc(t("workbuddy_benchmark_summary", "WorkBuddy Benchmark Summary"))}</p><strong>${esc(summary?.plan_id || "-")}</strong><small>${esc(summary?.generated_at || "-")} · ${esc(status)}</small></div>
+      <dl><div><dt>${esc(t("reward", "Reward"))}</dt><dd>${esc(metrics.reward ?? "-")}</dd></div><div><dt>${esc(t("pass_rate", "Pass rate"))}</dt><dd>${esc(metrics.pass_rate ?? "-")}</dd></div><div><dt>${esc(t("tasks", "Tasks"))}</dt><dd>${esc(metrics.n_tasks ?? "-")}</dd></div><div><dt>${esc(t("trials", "Trials"))}</dt><dd>${esc(metrics.n_trials ?? "-")}</dd></div><div><dt>${esc(t("missing", "Missing"))}</dt><dd>${esc(metrics.missing_task_count ?? 0)}</dd></div></dl>
+    </article>`;
+  }).join("");
 }
 
 function cloneTableControls() {
@@ -261,8 +299,8 @@ function restoreTableControls() {
 
 function renderContextControls(surface) {
   const dataset = selectedDataset();
-  setDisabled(surface, "[data-harbor-create-task]", workbenchState.busy || !dataset || workbenchState.showTrash);
-  setDisabled(surface, "[data-harbor-sync-manifest]", workbenchState.busy || !dataset || workbenchState.showTrash);
+  setDisabled(surface, "[data-harbor-create-task]", workbenchState.busy || !dataset || datasetIsReadOnly(dataset) || workbenchState.showTrash);
+  setDisabled(surface, "[data-harbor-sync-manifest]", workbenchState.busy || !dataset || datasetIsReadOnly(dataset) || workbenchState.showTrash);
   setDisabled(surface, "[data-harbor-state-selected]", workbenchState.busy || workbenchState.taskSelection.size < 1);
   setDisabled(surface, "[data-harbor-delete-selected]", workbenchState.busy || workbenchState.taskSelection.size < 1);
   setDisabled(surface, "[data-harbor-show-trash]", workbenchState.busy || !listValue(workbenchState.inventory?.datasets).length);
@@ -305,12 +343,13 @@ function setDisabled(surface, selector, disabled) {
 function renderSelectedTaskHeading(surface) {
   const title = surface.querySelector("[data-harbor-selected-title]");
   const meta = surface.querySelector("[data-harbor-selected-meta]");
-  const task = selectedTask();
+  const dataset = selectedDataset();
+  const task = workbenchState.taskDetail?.task || selectedTask();
   const trash = selectedTrashEntry();
   if (title) title.textContent = task?.directory || trash?.directory || t("harbor_task_detail_empty", "Select a Task");
   if (meta) {
     meta.textContent = task
-      ? `${workbenchState.datasetId} · ${task.package_name || "-"} · ${t(`harbor_status_${task.status || "draft"}`, task.status || "draft")}`
+      ? `${workbenchState.datasetId} · ${dataset?.format || "harbor"} · ${datasetIsReadOnly(dataset) ? t("read_only", "Read-only") : t("editable", "Editable")} · ${task.package_name || "-"} · ${t(`harbor_status_${task.status || "draft"}`, task.status || "draft")}`
       : trash
         ? `${workbenchState.datasetId} · ${trash.package_name || "-"} · ${t("harbor_trash", "Archived")}`
         : "";
@@ -319,8 +358,11 @@ function renderSelectedTaskHeading(surface) {
 
 function renderFileTree(surface = workbenchRoot()) {
   const actions = surface?.querySelector?.("[data-harbor-file-actions]");
-  if (actions) actions.hidden = !adminMode() || !workbenchState.taskDetail || workbenchState.showTrash;
-  workbenchTaskBrowser();
+  const mutable = canMutateSelectedTask();
+  if (actions) actions.hidden = !mutable || !workbenchState.taskDetail || workbenchState.showTrash;
+  const browser = workbenchTaskBrowser();
+  browser?.setEditable(mutable);
+  browser?.setContextMenu(mutable ? fileActionMenu : null);
 }
 
 function renderDiagnostics(surface = workbenchRoot()) {
@@ -427,7 +469,7 @@ function clearEditor() {
 
 async function saveFile() {
   const file = workbenchTaskBrowser()?.currentFile();
-  if (!adminMode() || !file?.dirty || !file.path) return;
+  if (!canMutateSelectedTask() || !file?.dirty || !file.path) return;
   if (workbenchState.busy) {
     setWorkbenchStatus(t("harbor_operation_in_progress", "Another Task operation is still running"), true);
     return;
@@ -438,7 +480,7 @@ async function saveFile() {
 }
 
 async function mutateFiles(body, options = {}) {
-  if (!adminMode() || workbenchState.busy) return null;
+  if (!canMutateSelectedTask() || workbenchState.busy) return null;
   setWorkbenchBusy(true);
   try {
     const base = `/api/harbor/datasets/${encodeURIComponent(workbenchState.datasetId)}/tasks/${encodeURIComponent(workbenchState.taskName)}`;
@@ -478,7 +520,7 @@ async function mutateFiles(body, options = {}) {
 }
 
 async function mutateTasks(body, datasetId = workbenchState.datasetId, options = {}) {
-  if (!adminMode() || workbenchState.busy) return null;
+  if (!adminMode() || datasetIsReadOnly(datasetForId(datasetId)) || workbenchState.busy) return null;
   setWorkbenchBusy(true);
   try {
     const base = `/api/harbor/datasets/${encodeURIComponent(datasetId)}`;
@@ -534,7 +576,7 @@ async function mutateTasks(body, datasetId = workbenchState.datasetId, options =
 async function createTask() {
   if (!adminMode() || !confirmDiscard()) return;
   const dataset = selectedDataset();
-  if (!dataset) return;
+  if (!dataset || datasetIsReadOnly(dataset)) return;
   const directory = window.prompt(t("harbor_task_directory_prompt", "Task directory"));
   if (!directory) return;
   const packageName = window.prompt(t("harbor_task_package_prompt", "Task package name (org/name)"), `local/${directory.trim()}`);
@@ -554,6 +596,9 @@ async function createTask() {
 }
 
 async function renameOverviewTask(row, value) {
+  if (datasetIsReadOnly(row?.dataset)) {
+    throw new Error(t("harbor_dataset_read_only", "Dataset is read-only"));
+  }
   if (workbenchState.busy) throw new Error(t("saving", "Saving..."));
   const newDirectory = String(value || "").trim();
   const oldKey = overviewRowKey(row);
@@ -591,7 +636,8 @@ async function renameOverviewTask(row, value) {
 
 function selectedTaskRows() {
   const selected = workbenchState.taskSelection;
-  return overviewRows().filter(row => selected.has(overviewRowKey(row)) && row.kind !== "empty");
+  return overviewRows().filter(row => selected.has(overviewRowKey(row))
+    && row.kind !== "empty" && !datasetIsReadOnly(row.dataset));
 }
 
 function taskOperationItem(row) {
@@ -638,7 +684,7 @@ async function deleteSelectedTasks() {
 
 async function syncManifest() {
   const dataset = selectedDataset();
-  if (!adminMode() || !dataset) return;
+  if (!adminMode() || !dataset || datasetIsReadOnly(dataset)) return;
   setWorkbenchBusy(true);
   try {
     const summary = await serveApi(`/api/harbor/datasets/${encodeURIComponent(dataset.id)}/manifest`, {
@@ -658,7 +704,7 @@ async function syncManifest() {
 }
 
 async function createFile(kind) {
-  if (!adminMode()) return;
+  if (!canMutateSelectedTask()) return;
   const task = selectedTask();
   if (!task) return;
   const path = window.prompt(kind === "directory"
@@ -669,7 +715,7 @@ async function createFile(kind) {
 }
 
 async function uploadFile(file) {
-  if (!adminMode()) return;
+  if (!canMutateSelectedTask()) return;
   const task = selectedTask();
   if (!task || !file) return;
   if (Number(file.size) > 16 * 1024 * 1024) {
@@ -685,7 +731,7 @@ async function uploadFile(file) {
 }
 
 async function fileActionMenu(item) {
-  if (!adminMode()) return;
+  if (!canMutateSelectedTask()) return;
   const task = selectedTask();
   if (!task) return;
   const action = window.prompt(t("harbor_file_action_prompt", "File action: rename or delete"), "rename");

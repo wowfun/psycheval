@@ -123,6 +123,64 @@ def write_evidence_trial(
 
 
 class HarborEvidenceTests(unittest.TestCase):
+    def test_verifier_artifact_lookup_rejects_a_malformed_source_reference(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = open_workspace_state(str(root))
+            try:
+                sources = WorkspaceSources(store, ToolConfig(workspace_root=str(root)))
+                with self.assertRaisesRegex(
+                    ValueError, "invalid Harbor source reference"
+                ):
+                    sources.read_harbor_verifier_artifact(
+                        "harbor/jobs", "a" * 24, purpose="preview"
+                    )
+            finally:
+                store.close()
+
+    def test_task_index_uses_registered_dataset_format_in_its_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            task_root = Path(tmp) / "bundle" / "nested" / "tasks"
+            write_task(task_root / "office", "workbuddy/office")
+
+            generic = read_harbor_task_index(
+                (str(task_root),), dataset_formats=("harbor",)
+            )
+            workbuddy = read_harbor_task_index(
+                (str(task_root),), dataset_formats=("workbuddy.v1",)
+            )
+
+            self.assertEqual(generic.candidates[0].dataset_format, "harbor")
+            self.assertEqual(workbuddy.candidates[0].dataset_format, "workbuddy.v1")
+            self.assertNotEqual(generic.revision, workbuddy.revision)
+
+    def test_workbuddy_format_survives_an_unmatched_task(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            task_root = root / "dataset"
+            write_task(task_root / "other", "workbuddy/other")
+            trial = root / "jobs" / "job" / "trial"
+            write_evidence_trial(
+                trial,
+                config_task={"name": "wanted", "source": "workbuddy"},
+            )
+            index = read_harbor_task_index(
+                (str(task_root),), dataset_formats=("workbuddy.v1",)
+            )
+
+            evidence = read_harbor_evidence(
+                trial,
+                jobs_root=root / "jobs",
+                task_paths=(str(task_root),),
+                mount_id="jobs",
+                task_index=index,
+            )
+
+            self.assertEqual(evidence.task_metadata["status"], "not_found")
+            self.assertEqual(evidence.dataset_format, "workbuddy.v1")
+
     def read(self, trial: Path, task_paths: tuple[Path, ...] = ()):
         return read_harbor_evidence(
             trial,
@@ -616,6 +674,125 @@ class HarborEvidenceTests(unittest.TestCase):
                 self.assertNotEqual(second["artifact_revision"], first_revision)
                 self.assertEqual(second["job_name"], "renamed-job")
                 self.assertEqual(second["display_tags"], ["changed"])
+            finally:
+                store.close()
+
+    def test_workbuddy_score_json_overrides_harbor_reward_in_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = root / "workbuddy"
+            tasks = bundle / "tasks"
+            task = tasks / "office-task"
+            bundle.mkdir()
+            (bundle / "dataset.toml").write_text(
+                "[dataset]\n"
+                'id = "wb-bench-office-v1.0"\n'
+                'schema = "workbuddy.dataset.v1"\n'
+                'version = "1.0"\n'
+                "task_count = 1\n\n"
+                "[verifier]\n"
+                'schema = "workbuddy.verifier.v1"\n'
+                'engine = "composite"\n\n'
+                "[layout]\n"
+                'task_root = "tasks"\n'
+                'workspace_archive = "environment/workspace.tar.gz"\n',
+                encoding="utf-8",
+            )
+            shared = bundle / "shared" / "verifier"
+            shared.mkdir(parents=True)
+            for filename in ("plugin.py", "manifest.py", "scoring.py"):
+                (shared / filename).write_text("# fixture\n", encoding="utf-8")
+            write_task(task, "workbuddy/office-task")
+            (task / "environment" / "workspace.tar.gz").write_bytes(b"fixture")
+            flat_task = root / "flat" / "plain-task"
+            write_task(flat_task, "plain/task")
+            jobs = root / "jobs"
+            trial = jobs / "job" / "office-task__1"
+            write_evidence_trial(
+                trial,
+                config_task={
+                    "name": "office-task",
+                    "source": "workbuddy",
+                    "path": str(task),
+                },
+                result={
+                    "task_name": "workbuddy/office-task",
+                    "verifier_result": {"rewards": {"reward": 0.9}},
+                },
+            )
+            write_json(
+                trial / "verifier" / "score.json",
+                {
+                    "reward": 0.4,
+                    "tests_passed": 2,
+                    "tests_total": 5,
+                    "test_status": "passed",
+                },
+            )
+            artifact = trial / "verifier" / "artifact_text" / "report.md"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("# Evidence\n", encoding="utf-8")
+            write_json(
+                trial / "verifier" / "artifact_manifest.json",
+                {
+                    "artifacts": [
+                        {"id": "report", "text_path": "artifact_text/report.md"}
+                    ]
+                },
+            )
+            workspace = root / "workspace"
+            store = open_workspace_state(str(workspace))
+            config = ToolConfig(
+                workspace_root=str(workspace),
+                harbor_datasets=(
+                    HarborDataset(id="tasks", path=str(bundle), format="workbuddy.v1"),
+                    HarborDataset(id="flat", path=str(flat_task.parent)),
+                ),
+                harbor_mounts=(
+                    HarborMount(
+                        id="jobs",
+                        path=str(jobs),
+                        dataset_ids=("tasks", "flat"),
+                    ),
+                ),
+            )
+            try:
+                catalog = WorkspaceCatalog(store, config)
+                catalog.reconcile()
+                row = catalog.query(CatalogQuery()).items[0].to_dict()
+                self.assertEqual(row["score"], 0.4)
+                self.assertEqual(row["rewards"], {"reward": 0.9})
+                self.assertEqual(
+                    row["verifier_evidence"]["reward_consistency"], "drifted"
+                )
+                meta = catalog.load_detail(row["source_key"]).report["trajectory_meta"][
+                    0
+                ]
+                self.assertEqual(meta["evaluation"]["score"], 0.4)
+                self.assertEqual(meta["evaluation"]["harbor_score"], 0.9)
+                self.assertEqual(meta["verifier_evidence"]["tests"]["total"], 5)
+                artifact_id = meta["verifier_evidence"]["artifacts"][0]["id"]
+                with patch(
+                    "psycheval.state.workspace_sources.read_harbor_task_index",
+                    side_effect=AssertionError("artifact lookup built a Task index"),
+                ):
+                    loaded = catalog.sources.read_harbor_verifier_artifact(
+                        row["source_ref"], artifact_id, purpose="preview"
+                    )
+                self.assertEqual(loaded.content, b"# Evidence\n")
+                write_json(
+                    trial / "config.json",
+                    {
+                        "trial_name": trial.name,
+                        "task": {"path": str(flat_task)},
+                    },
+                )
+                with self.assertRaisesRegex(
+                    ValueError, "no WorkBuddy verifier artifacts"
+                ):
+                    catalog.sources.read_harbor_verifier_artifact(
+                        row["source_ref"], artifact_id, purpose="preview"
+                    )
             finally:
                 store.close()
 

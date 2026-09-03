@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from pathlib import Path, PurePath
+from typing import TYPE_CHECKING, Any, Literal
 
 from psycheval._state.annotations import optional_str
 from psycheval._state.artifacts import (
@@ -14,17 +15,23 @@ from psycheval._state.artifacts import (
     write_json_file,
 )
 from psycheval.atif import validate_atif_trajectory
-from psycheval.config import (
-    HarborMount,
-    ToolConfig,
-    harbor_dataset_paths_for_mount,
-    validate_harbor_mount_paths,
+from psycheval.config import HarborMount, ToolConfig, validate_harbor_mount_paths
+from psycheval.harbor.datasets import (
+    ResolvedHarborDataset,
+    resolve_harbor_datasets_for_mount,
 )
 from psycheval.state.constants import SOURCE_STATE_DIR, SOURCE_STATE_FILENAME
 from psycheval.state.harbor_evidence import (
     HarborTaskIndex,
     read_harbor_evidence,
     read_harbor_task_index,
+)
+from psycheval.state.harbor_verifier_evidence import (
+    HarborVerifierArtifact,
+    HarborVerifierArtifactStream,
+    open_harbor_verifier_artifact_download,
+    read_harbor_verifier_artifact,
+    read_harbor_verifier_evidence,
 )
 from psycheval.state.workspace_harbor import (
     HARBOR_ANALYSIS_MAX_BYTES,
@@ -33,6 +40,7 @@ from psycheval.state.workspace_harbor import (
     _combined_revision,
     _compatible_harbor_trajectory,
     _direct_harbor_candidate,
+    _evaluation,
     _fingerprint,
     _harbor_analysis_relative_path,
     _harbor_candidate_source_files,
@@ -79,6 +87,7 @@ if TYPE_CHECKING:
 _LOCAL_SOURCE_FILES_WITHOUT_REPORT = tuple(
     name for name in LOCAL_FINGERPRINT_FILES if name != HARBOR_ANALYSIS_MD_FILE
 )
+_HARBOR_IDENTITY_JSON_MAX_BYTES = 4 * 1024 * 1024
 
 
 class WorkspaceSources:
@@ -106,6 +115,76 @@ class WorkspaceSources:
             for candidate in self.discover()
             if candidate.kind == HARBOR_SOURCE_KIND and candidate.source_key
         ]
+
+    def read_harbor_verifier_artifact(
+        self,
+        source_ref: str,
+        artifact_id: str,
+        *,
+        purpose: Literal["preview", "download"],
+    ) -> HarborVerifierArtifact:
+        if purpose not in {"preview", "download"}:
+            raise ValueError("unsupported verifier artifact purpose")
+        data_dir, containment_root = self._workbuddy_artifact_location(source_ref)
+        return read_harbor_verifier_artifact(
+            data_dir,
+            containment_root=containment_root,
+            artifact_id=artifact_id,
+            purpose=purpose,
+        )
+
+    def open_harbor_verifier_artifact_download(
+        self,
+        source_ref: str,
+        artifact_id: str,
+    ) -> HarborVerifierArtifactStream:
+        data_dir, containment_root = self._workbuddy_artifact_location(source_ref)
+        return open_harbor_verifier_artifact_download(
+            data_dir,
+            containment_root=containment_root,
+            artifact_id=artifact_id,
+        )
+
+    def _workbuddy_artifact_location(self, source_ref: str) -> tuple[Path, Path]:
+        self._reject_legacy_harbor_projections()
+        self.overlay_dir(source_ref)
+        parts = Path(source_ref).parts
+        mount_id, job_name, trial_name = parts[1:4]
+        mount = next(
+            (item for item in self.config.harbor_mounts if item.id == mount_id),
+            None,
+        )
+        if mount is None:
+            raise ValueError("unknown Harbor Trial source")
+        datasets_by_id = {
+            dataset.id: dataset for dataset in self.config.harbor_datasets
+        }
+        mount_datasets = tuple(
+            datasets_by_id[dataset_id]
+            for dataset_id in mount.dataset_ids
+            if dataset_id in datasets_by_id
+        )
+        validate_harbor_mount_paths((mount,), mount_datasets)
+        lexical_root = Path(os.path.abspath(Path(mount.path).expanduser()))
+        diagnostic = self._mount_diagnostic(lexical_root)
+        if diagnostic is not None:
+            raise ValueError(diagnostic)
+        root = lexical_root.resolve()
+        job_dir = self._direct_harbor_directory(root, job_name, "Job")
+        trial_dir = self._direct_harbor_directory(job_dir, trial_name, "Trial")
+        if not _looks_like_trial(trial_dir):
+            raise ValueError("unknown Harbor Trial source")
+        resolved = resolve_harbor_datasets_for_mount(self.config, mount)
+        formats = {dataset.format for dataset in resolved}
+        if "workbuddy.v1" not in formats:
+            raise ValueError("Harbor Trial has no WorkBuddy verifier artifacts")
+        if len(formats) > 1 and not _trial_records_workbuddy_task(trial_dir, resolved):
+            raise ValueError("Harbor Trial has no WorkBuddy verifier artifacts")
+        data_dir = trial_dir
+        if len(parts) == 6:
+            steps_dir = self._direct_harbor_directory(trial_dir, "steps", "Steps")
+            data_dir = self._direct_harbor_directory(steps_dir, parts[5], "Step")
+        return data_dir, root
 
     def load(
         self,
@@ -207,8 +286,12 @@ class WorkspaceSources:
         trial_dir = self._direct_harbor_directory(job_dir, trial_name, "Trial")
         if not _looks_like_trial(trial_dir):
             raise ValueError(f"unknown source reference: {source_ref}")
-        dataset_paths = harbor_dataset_paths_for_mount(self.config, mount)
-        task_index = read_harbor_task_index(dataset_paths)
+        resolved_datasets = resolve_harbor_datasets_for_mount(self.config, mount)
+        dataset_paths = tuple(str(item.task_root) for item in resolved_datasets)
+        task_index = read_harbor_task_index(
+            dataset_paths,
+            dataset_formats=(item.format for item in resolved_datasets),
+        )
         candidates = self._harbor_trial_candidates(
             mount,
             job_name,
@@ -411,8 +494,12 @@ class WorkspaceSources:
                 raise ValueError(f"duplicate Harbor mount path: {root}")
             resolved_mounts.add(root)
             _reject_linked_directories(root, "Job")
-            dataset_paths = harbor_dataset_paths_for_mount(self.config, mount)
-            task_index = read_harbor_task_index(dataset_paths)
+            resolved_datasets = resolve_harbor_datasets_for_mount(self.config, mount)
+            dataset_paths = tuple(str(item.task_root) for item in resolved_datasets)
+            task_index = read_harbor_task_index(
+                dataset_paths,
+                dataset_formats=(item.format for item in resolved_datasets),
+            )
             for job_dir in _child_dirs(root):
                 _reject_linked_directories(job_dir, "Trial")
                 for trial_dir in _child_dirs(job_dir):
@@ -835,6 +922,18 @@ class WorkspaceSources:
                 if candidate.step_name is not None
                 else trial_result_json
             )
+            verifier_evidence = None
+            if evidence.dataset_format == "workbuddy.v1":
+                verifier_evidence = read_harbor_verifier_evidence(
+                    candidate.data_path or candidate.path,
+                    containment_root=candidate.containment_root or candidate.path,
+                    dataset_format=evidence.dataset_format,
+                    harbor_reward=_evaluation(result_json).get("score"),
+                )
+                revision = _combined_revision(revision, verifier_evidence.revision)
+                evidence_revision = _combined_revision(
+                    evidence_revision, verifier_evidence.revision
+                )
             raw_trajectory = (
                 _read_harbor_entry_trajectory(candidate)
                 if candidate.step_name is not None
@@ -848,6 +947,7 @@ class WorkspaceSources:
                     result_json,
                     revision,
                     evidence,
+                    verifier_evidence,
                     trial_result_json=trial_result_json,
                 )
                 source = _harbor_source(
@@ -858,6 +958,7 @@ class WorkspaceSources:
                     result_json=result_json,
                     trial_result_json=trial_result_json,
                     evidence=evidence,
+                    verifier_evidence=verifier_evidence,
                 )
                 lifecycle_status = str(meta.get("status") or "error")
                 last_status = (
@@ -871,7 +972,7 @@ class WorkspaceSources:
                     source=source,
                     trajectory=None,
                     meta=meta,
-                    fingerprint=current_fingerprint(revision=evidence.revision),
+                    fingerprint=current_fingerprint(revision=revision),
                     updated_at_ms=_updated_at_ms(candidate.path, presentation_files),
                     input_bytes=_input_bytes(candidate.path, presentation_files),
                     readable=False,
@@ -918,6 +1019,7 @@ class WorkspaceSources:
                 telemetry=telemetry,
                 telemetry_warning=telemetry_warning,
                 evidence=evidence,
+                verifier_evidence=verifier_evidence,
                 trial_result_json=trial_result_json,
             )
             source = _harbor_source(
@@ -929,6 +1031,7 @@ class WorkspaceSources:
                 result_json=result_json,
                 trial_result_json=trial_result_json,
                 evidence=evidence,
+                verifier_evidence=verifier_evidence,
             )
             return SourceDocument(
                 source_ref=candidate.source_ref,
@@ -936,7 +1039,7 @@ class WorkspaceSources:
                 source=source,
                 trajectory=trajectory,
                 meta=meta,
-                fingerprint=current_fingerprint(revision=evidence.revision),
+                fingerprint=current_fingerprint(revision=revision),
                 updated_at_ms=_updated_at_ms(candidate.path, presentation_files),
                 input_bytes=_input_bytes(candidate.path, presentation_files),
                 readable=True,
@@ -1049,3 +1152,60 @@ def _read_local_evaluation_report(candidate: SourceCandidate) -> str | None:
     except (OSError, UnicodeDecodeError, ValueError):
         return None
     return markdown if markdown.strip() else None
+
+
+def _trial_records_workbuddy_task(
+    trial_dir: Path,
+    datasets: tuple[ResolvedHarborDataset, ...],
+) -> bool:
+    recorded_paths: list[str] = []
+    for filename in ("config.json", "lock.json", "result.json"):
+        try:
+            content = _read_bytes_no_follow(
+                trial_dir.parent.parent,
+                trial_dir / filename,
+                max_bytes=_HARBOR_IDENTITY_JSON_MAX_BYTES,
+                label="Harbor Trial identity",
+            )
+            value = json.loads(content.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(value, dict):
+            continue
+        for key in ("task", "task_id"):
+            task = value.get(key)
+            if isinstance(task, dict) and isinstance(task.get("path"), str):
+                recorded_paths.append(task["path"])
+    for recorded in recorded_paths:
+        matches = {
+            dataset.format
+            for dataset in datasets
+            for task_name in dataset.task_names
+            if _recorded_task_path_matches(
+                dataset.task_root / task_name,
+                recorded,
+            )
+        }
+        if matches == {"workbuddy.v1"}:
+            return True
+    return False
+
+
+def _recorded_task_path_matches(candidate: Path, recorded: str) -> bool:
+    text = recorded.strip().replace("\\", "/")
+    if not text:
+        return False
+    requested = Path(text)
+    if requested.is_absolute():
+        return os.path.normcase(os.path.normpath(candidate)) == os.path.normcase(
+            os.path.normpath(requested)
+        )
+    requested_parts = tuple(
+        os.path.normcase(part)
+        for part in PurePath(text).parts
+        if part not in {"", ".", ".."} and not part.endswith(":")
+    )
+    candidate_parts = tuple(os.path.normcase(part) for part in candidate.parts)
+    return bool(requested_parts) and candidate_parts[-len(requested_parts) :] == (
+        requested_parts
+    )

@@ -28,6 +28,7 @@ from psycheval.report.builder import iso_timestamp_ms
 from psycheval.report.metrics import final_metric
 from psycheval.report.timing import step_meta_reports, trial_active_duration_ms
 from psycheval.state.harbor_evidence import HarborEvidence
+from psycheval.state.harbor_verifier_evidence import HarborVerifierEvidence
 from psycheval.state.workspace_source_models import (
     HARBOR_ADAPTER,
     HARBOR_ANALYSIS_MD_FILE,
@@ -477,10 +478,11 @@ def _result_only_meta(
     result_json: dict[str, Any] | None,
     revision: str,
     evidence: HarborEvidence,
+    verifier_evidence: HarborVerifierEvidence | None = None,
     *,
     trial_result_json: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    evaluation = _evaluation(result_json)
+    evaluation = _effective_evaluation(result_json, verifier_evidence)
     identity_hash = hashlib.sha256(candidate.source_ref.encode("utf-8")).hexdigest()[
         :10
     ]
@@ -511,6 +513,7 @@ def _result_only_meta(
         "score_message": evaluation.get("score_message"),
         "warnings": [
             *candidate.entry_warnings,
+            *(verifier_evidence.warnings if verifier_evidence else ()),
             "Harbor Trial has no agent/trajectory.json",
         ],
         "data_ref": data_ref,
@@ -546,6 +549,10 @@ def _result_only_meta(
         },
         "source_metrics": _result_final_metrics(result_json),
     }
+    if verifier_evidence is not None:
+        meta["verifier_evidence"] = _verifier_evidence_payload(
+            candidate, verifier_evidence
+        )
     _apply_harbor_step_meta(meta, candidate, trial_result_json)
     active = _result_duration_ms(result_json, "agent_execution")
     wall = _result_duration_ms(result_json)
@@ -582,6 +589,7 @@ def _harbor_source(
     result_json: dict[str, Any] | None = None,
     trial_result_json: dict[str, Any] | None = None,
     evidence: HarborEvidence | None = None,
+    verifier_evidence: HarborVerifierEvidence | None = None,
 ) -> dict[str, Any]:
     agent = (
         trajectory.get("agent")
@@ -635,6 +643,11 @@ def _harbor_source(
         "model_provider": evidence.model_provider if evidence is not None else None,
         "task_keywords": task_keywords,
         "rewards": _evaluation(result_json)["rewards"],
+        "verifier_evidence": (
+            verifier_evidence.to_dict(include_artifacts=False)
+            if verifier_evidence is not None
+            else None
+        ),
         "step_name": candidate.step_name,
         "step_index": candidate.step_index,
         "step_count": candidate.step_count,
@@ -666,9 +679,10 @@ def _trajectory_meta(
     telemetry: HarborTelemetry | None,
     telemetry_warning: str | None,
     evidence: HarborEvidence,
+    verifier_evidence: HarborVerifierEvidence | None = None,
     trial_result_json: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    evaluation = _evaluation(result_json)
+    evaluation = _effective_evaluation(result_json, verifier_evidence)
     result_active = _result_duration_ms(result_json, "agent_execution")
     active_duration = (
         telemetry.duration_ms
@@ -717,6 +731,7 @@ def _trajectory_meta(
         "warnings": [
             *candidate.entry_warnings,
             *([telemetry_warning] if telemetry_warning else []),
+            *(verifier_evidence.warnings if verifier_evidence else ()),
         ],
         "data_ref": data_ref,
         "total_events": len(trajectory.get("steps") or []),
@@ -770,6 +785,10 @@ def _trajectory_meta(
             },
         },
     }
+    if verifier_evidence is not None:
+        meta["verifier_evidence"] = _verifier_evidence_payload(
+            candidate, verifier_evidence
+        )
     if telemetry is not None:
         meta["steps"] = telemetry.steps
     _apply_harbor_step_meta(meta, candidate, trial_result_json)
@@ -909,6 +928,33 @@ def _evaluation(result: dict[str, Any] | None) -> dict[str, Any]:
             optional_str(exception.get("exception_type")) or "harbor-trial"
         )
         payload["exception"] = exception
+    return payload
+
+
+def _effective_evaluation(
+    result: dict[str, Any] | None,
+    verifier_evidence: HarborVerifierEvidence | None,
+) -> dict[str, Any]:
+    evaluation = _evaluation(result)
+    if verifier_evidence is None:
+        return evaluation
+    evaluation["harbor_score"] = evaluation.get("score")
+    evaluation["harbor_score_message"] = evaluation.get("score_message")
+    evaluation["score"] = verifier_evidence.score
+    evaluation["score_message"] = "WorkBuddy verifier score.json" + (
+        f": {verifier_evidence.score_source}" if verifier_evidence.score_source else ""
+    )
+    evaluation["reward_consistency"] = verifier_evidence.reward_consistency
+    return evaluation
+
+
+def _verifier_evidence_payload(
+    candidate: SourceCandidate,
+    evidence: HarborVerifierEvidence,
+) -> dict[str, Any]:
+    payload = evidence.to_dict(include_artifacts=True)
+    if candidate.source_key:
+        payload["source_key"] = candidate.source_key
     return payload
 
 

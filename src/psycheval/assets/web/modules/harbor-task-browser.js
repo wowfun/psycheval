@@ -273,7 +273,7 @@ function createTaskBrowser(options = {}) {
     if (!editor) return;
     editor.readOnly = !browser.editable || browser.previewStatus !== "ready";
     editor.disabled = browser.previewStatus === "empty";
-    if (browser.previewStatus === "ready") editor.value = browser.savedText;
+    if (browser.previewStatus === "ready" && !browser.dirty) editor.value = browser.savedText;
     else if (browser.previewStatus === "loading") editor.value = browser.previewMessage;
     else if (browser.previewStatus === "unavailable") editor.value = browser.previewMessage;
     else editor.value = "";
@@ -289,6 +289,20 @@ function createTaskBrowser(options = {}) {
   function setBusy(value) {
     browser.busy = Boolean(value);
     syncControls();
+  }
+
+  function setEditable(value) {
+    const next = Boolean(value);
+    if (browser.editable === next) return;
+    browser.editable = next;
+    render();
+  }
+
+  function setContextMenu(handler) {
+    const next = typeof handler === "function" ? handler : null;
+    if (browser.onContextMenu === next) return;
+    browser.onContextMenu = next;
+    render();
   }
 
   function setDirty(value) {
@@ -323,6 +337,8 @@ function createTaskBrowser(options = {}) {
     openPath,
     replaceDetail,
     setBusy,
+    setContextMenu,
+    setEditable,
     setTaskDetail,
     state: browser,
   };

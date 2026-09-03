@@ -6,6 +6,8 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
@@ -15,6 +17,7 @@ from psycheval.serve import ServeRuntime
 from psycheval.serve.api import ADMIN_ACCESS, _verify_route_access, access
 from psycheval.serve.constants import MAX_JSON_BODY_BYTES
 from psycheval.state import open_workspace_state
+from psycheval.state.harbor_verifier_evidence import HarborVerifierArtifact
 from tests.peval.asgi_server import LocalHTTPServer, make_handler
 
 
@@ -99,6 +102,100 @@ class ServeApiContractTests(unittest.TestCase):
         self.assertEqual(headers["cache-control"], "no-store")
         self.assertEqual(headers["x-content-type-options"], "nosniff")
         self.assertNotIn("server", headers)
+
+    def test_workbuddy_verifier_artifact_route_sets_safe_response_headers(self) -> None:
+        artifact_id = "a" * 24
+        artifact = HarborVerifierArtifact(
+            filename='report"\r\nX-Evil.md',
+            media_type="text/markdown; charset=utf-8",
+            content=b"# report\n",
+        )
+        stream_closed = threading.Event()
+        stream = SimpleNamespace(
+            filename="report.md",
+            media_type="text/markdown; charset=utf-8",
+            size=9,
+            chunks=iter((b"# report\n",)),
+            close=Mock(side_effect=stream_closed.set),
+        )
+        with (
+            patch.object(
+                self.runtime.catalog.sources,
+                "read_harbor_verifier_artifact",
+                return_value=artifact,
+            ) as read,
+            patch.object(
+                self.runtime.catalog,
+                "row_for_key",
+                return_value={
+                    "kind": "harbor-trial",
+                    "source_ref": "harbor/jobs/job/trial",
+                },
+            ) as lookup,
+        ):
+            status, headers, body = self.request(
+                "GET", f"/api/harbor/verifier-artifacts/source-key/{artifact_id}"
+            )
+            self.assertEqual(status, 200, body)
+            self.assertEqual(body, b"# report\n")
+            self.assertEqual(headers["content-type"], "text/markdown; charset=utf-8")
+            self.assertEqual(
+                headers["content-disposition"],
+                'inline; filename="report___X-Evil.md"',
+            )
+            self.assertEqual(headers["cache-control"], "no-store")
+            self.assertEqual(headers["referrer-policy"], "no-referrer")
+            self.assertEqual(headers["x-content-type-options"], "nosniff")
+            self.assertEqual(headers["content-security-policy"], "sandbox")
+            lookup.assert_called_once_with("source-key")
+            read.assert_called_once_with(
+                "harbor/jobs/job/trial", artifact_id, purpose="preview"
+            )
+
+        with (
+            patch.object(
+                self.runtime.catalog.sources,
+                "read_harbor_verifier_artifact",
+                side_effect=AssertionError("download must not be buffered"),
+            ),
+            patch.object(
+                self.runtime.catalog.sources,
+                "open_harbor_verifier_artifact_download",
+                create=True,
+                return_value=stream,
+            ) as open_download,
+            patch.object(
+                self.runtime.catalog,
+                "row_for_key",
+                return_value={
+                    "kind": "harbor-trial",
+                    "source_ref": "harbor/jobs/job/trial",
+                },
+            ) as lookup,
+        ):
+            status, headers, body = self.request(
+                "GET",
+                f"/api/harbor/verifier-artifacts/source-key/{artifact_id}?download=true",
+            )
+            self.assertEqual(status, 200, body)
+            self.assertEqual(
+                headers["content-disposition"], 'attachment; filename="report.md"'
+            )
+            lookup.assert_called_once_with("source-key")
+            open_download.assert_called_once_with("harbor/jobs/job/trial", artifact_id)
+            self.assertTrue(stream_closed.wait(timeout=5))
+            stream.close.assert_called_once_with()
+
+        with patch.object(
+            self.runtime.catalog.sources,
+            "read_harbor_verifier_artifact",
+            return_value=artifact,
+        ) as read:
+            status, _headers, _body = self.request(
+                "GET", "/api/harbor/verifier-artifacts/source-key/not-an-opaque-id"
+            )
+            self.assertEqual(status, 404)
+            read.assert_not_called()
 
     def test_problem_validation_media_type_and_preconditions(self) -> None:
         _config, config_headers = self.config()

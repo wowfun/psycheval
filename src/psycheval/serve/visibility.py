@@ -41,6 +41,24 @@ HARBOR_PROVENANCE_PUBLIC_FIELDS = {
     "task_source",
     "task_version",
 }
+VERIFIER_EVIDENCE_PUBLIC_FIELDS = {
+    "components",
+    "harbor_reward",
+    "reward_consistency",
+    "score",
+    "score_source",
+    "status",
+    "tests",
+}
+WORKBUDDY_SUMMARY_PUBLIC_FIELDS = {
+    "dataset_id",
+    "generated_at",
+    "metrics",
+    "pending_jobs",
+    "plan_id",
+    "provisional",
+    "warnings",
+}
 REGRADE_PUBLIC_FIELDS = {"action", "task_digest", "trial_id", "type"}
 DATA_REF_PUBLIC_FIELDS = {
     "job_name",
@@ -94,6 +112,9 @@ def project_catalog_row(row: dict[str, Any]) -> dict[str, Any]:
     harbor_provenance = row.get("harbor_provenance")
     if isinstance(harbor_provenance, dict):
         projected["harbor_provenance"] = _project_harbor_provenance(harbor_provenance)
+    verifier_evidence = row.get("verifier_evidence")
+    if isinstance(verifier_evidence, dict):
+        projected["verifier_evidence"] = _project_verifier_evidence(verifier_evidence)
     return projected
 
 
@@ -111,13 +132,25 @@ def project_harbor_inventory(payload: dict[str, Any], role: str) -> dict[str, An
     if role == ADMIN_ROLE:
         return payload
     datasets = payload.get("datasets")
-    return {
+    projected = {
         "datasets": [
             _project_harbor_dataset(item) for item in datasets if isinstance(item, dict)
         ]
         if isinstance(datasets, list)
         else []
     }
+    summaries = payload.get("workbuddy_summaries")
+    if isinstance(summaries, list):
+        projected["workbuddy_summaries"] = [
+            {
+                key: value
+                for key, value in item.items()
+                if key in WORKBUDDY_SUMMARY_PUBLIC_FIELDS
+            }
+            for item in summaries
+            if isinstance(item, dict)
+        ]
+    return projected
 
 
 def project_harbor_task(payload: dict[str, Any], role: str) -> dict[str, Any]:
@@ -127,6 +160,8 @@ def project_harbor_task(payload: dict[str, Any], role: str) -> dict[str, Any]:
     tree = payload.get("tree")
     return {
         "dataset_id": str(payload.get("dataset_id") or ""),
+        "format": str(payload.get("format") or "harbor"),
+        "read_only": bool(payload.get("read_only")),
         "task": _project_harbor_task_summary(task) if isinstance(task, dict) else {},
         "tree": [_project_harbor_file(item) for item in tree if isinstance(item, dict)]
         if isinstance(tree, list)
@@ -176,6 +211,11 @@ def project_report(report: dict[str, Any]) -> dict[str, Any]:
             if isinstance(harbor_provenance, dict):
                 meta["harbor_provenance"] = _project_harbor_provenance(
                     harbor_provenance
+                )
+            verifier_evidence = original_meta.get("verifier_evidence")
+            if isinstance(verifier_evidence, dict):
+                meta["verifier_evidence"] = _project_verifier_evidence(
+                    verifier_evidence
                 )
             projected_meta.append(meta)
         projected["trajectory_meta"] = projected_meta
@@ -230,6 +270,8 @@ def _project_harbor_dataset(value: dict[str, Any]) -> dict[str, Any]:
     tasks = value.get("tasks")
     return {
         "id": str(value.get("id") or ""),
+        "format": str(value.get("format") or "harbor"),
+        "read_only": bool(value.get("read_only")),
         "tasks": [
             _project_harbor_task_summary(item)
             for item in tasks
@@ -288,6 +330,14 @@ def _project_harbor_provenance(value: dict[str, Any]) -> dict[str, Any]:
         }
         projected["regrade"] = projected_regrade
     return projected
+
+
+def _project_verifier_evidence(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: item
+        for key, item in value.items()
+        if key in VERIFIER_EVIDENCE_PUBLIC_FIELDS
+    }
 
 
 def _project_task_metadata(

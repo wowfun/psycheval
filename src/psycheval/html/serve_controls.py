@@ -392,6 +392,7 @@ def render_harbor_dataset_page(messages: dict[str, str], *, role: str = "admin")
         load_asset_text("serve_harbor_datasets.html"),
         {
             "DATASETS": escape(messages["harbor_datasets"]),
+            "WORKBUDDY_SUMMARY": escape(messages["workbuddy_benchmark_summary"]),
             "DATASET_EMPTY": escape(messages["harbor_dataset_empty"]),
             "FILE_EMPTY": escape(messages["harbor_file_empty"]),
             "EDITOR_EMPTY": escape(messages["harbor_editor_empty"]),

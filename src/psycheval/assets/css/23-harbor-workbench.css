@@ -89,6 +89,44 @@
   padding:8px 16px;
   font:700 12px/1.35 var(--mono);
 }
+.workbuddy-summary-strip {
+  flex:0 0 auto;
+  display:grid;
+  gap:8px;
+  max-height:180px;
+  overflow:auto;
+  padding:10px 16px;
+  border-bottom:1px solid var(--rule);
+  background:color-mix(in oklch,var(--surface),var(--focus) 4%);
+}
+.workbuddy-summary-strip[hidden] { display:none; }
+.workbuddy-summary-card {
+  display:grid;
+  grid-template-columns:minmax(220px,1fr) minmax(420px,2fr);
+  gap:18px;
+  align-items:center;
+}
+.workbuddy-summary-card>div {
+  display:grid;
+  gap:3px;
+}
+.workbuddy-summary-card small { color:var(--muted); }
+.workbuddy-summary-card dl {
+  display:grid;
+  grid-template-columns:repeat(5,minmax(70px,1fr));
+  gap:8px;
+  margin:0;
+}
+.workbuddy-summary-card dl div { display:grid; gap:2px; }
+.workbuddy-summary-card dt {
+  color:var(--muted);
+  font:700 11px/1.2 var(--mono);
+  text-transform:uppercase;
+}
+.workbuddy-summary-card dd {
+  margin:0;
+  font:700 16px/1.2 var(--mono);
+}
 .harbor-workbench-grid {
   flex:1 1 auto;
   width:100%;
@@ -159,7 +197,8 @@
   background:var(--muted);
   content:"";
 }
-.harbor-task-row.status-valid::before { background:var(--pass); }
+.harbor-task-row.status-valid::before,
+.harbor-task-row.status-registered::before { background:var(--pass); }
 .harbor-task-row.status-draft::before { background:#bd7b20; }
 .harbor-task-row.status-conflict::before,
 .harbor-task-row.status-trash::before { background:var(--fail); }
@@ -387,7 +426,8 @@
   background:var(--muted);
   content:"";
 }
-.harbor-status-rail.valid::before { background:var(--pass); }
+.harbor-status-rail.valid::before,
+.harbor-status-rail.registered::before { background:var(--pass); }
 .harbor-status-rail.draft::before { background:#bf7a23; }
 .harbor-status-rail.conflict::before,
 .harbor-status-rail.trash::before { background:var(--fail); }
@@ -414,6 +454,12 @@
   cursor:text;
 }
 @media (max-width:760px) {
+  .workbuddy-summary-card {
+    grid-template-columns:1fr;
+  }
+  .workbuddy-summary-card dl {
+    grid-template-columns:repeat(2,minmax(70px,1fr));
+  }
   .serve-page-datasets .harbor-workbench {
     width:100%;
     min-height:0;

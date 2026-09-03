@@ -28,6 +28,13 @@ from psycheval.config import (
     ToolConfig,
     write_workspace_harbor_config,
 )
+from psycheval.harbor.datasets import (
+    HarborDatasetError,
+    ResolvedHarborDataset,
+    detect_harbor_dataset_format,
+    resolve_harbor_dataset,
+    validate_harbor_dataset,
+)
 
 TEXT_EDIT_LIMIT = 2 * 1024 * 1024
 UPLOAD_LIMIT = 16 * 1024 * 1024
@@ -68,12 +75,21 @@ class HarborWorkspace:
         self.config = config
 
     def inventory(self) -> dict[str, Any]:
-        return {
+        payload = {
             "revision": config_revision(self.config_path),
             "datasets": [
                 self._dataset_summary(item) for item in self.config.harbor_datasets
             ],
         }
+        from psycheval.harbor.workbuddy import discover_workbuddy_summaries
+
+        summaries = discover_workbuddy_summaries(
+            self.config_path.parent.resolve(),
+            {item.id for item in self.config.harbor_datasets},
+        )
+        if summaries:
+            payload["workbuddy_summaries"] = summaries
+        return payload
 
     def task_inventory(self, dataset_id: str | None = None) -> dict[str, Any]:
         datasets = self.config.harbor_datasets
@@ -147,13 +163,20 @@ class HarborWorkspace:
         self._validate_dataset_id(dataset_id)
         if any(item.id == dataset_id for item in self.config.harbor_datasets):
             raise HarborConflictError(f"Dataset id already exists: {dataset_id}")
-        root = self._config_path(path)
+        root = self._existing_registration_path(path)
         self._ensure_unique_dataset_path(root)
-        self._validate_dataset_directory(root)
+        detected_format = detect_harbor_dataset_format(root)
+        registered = HarborDataset(
+            id=dataset_id, path=str(root), format=detected_format
+        )
+        try:
+            validate_harbor_dataset(registered)
+        except HarborDatasetError as exc:
+            raise HarborWorkspaceError(str(exc)) from exc
         return self._save_config(
             (
                 *self.config.harbor_datasets,
-                HarborDataset(id=dataset_id, path=str(root)),
+                registered,
             ),
             self.config.harbor_mounts,
         )
@@ -174,9 +197,16 @@ class HarborWorkspace:
             item.id == new_id for item in self.config.harbor_datasets
         ):
             raise HarborConflictError(f"Dataset id already exists: {new_id}")
-        root = self._config_path(path)
+        root = self._existing_registration_path(path)
         self._ensure_unique_dataset_path(root, excluding=dataset_id)
-        self._validate_dataset_directory(root)
+        detected_format = detect_harbor_dataset_format(root)
+        updated_dataset = HarborDataset(
+            id=new_id, path=str(root), format=detected_format
+        )
+        try:
+            validate_harbor_dataset(updated_dataset)
+        except HarborDatasetError as exc:
+            raise HarborWorkspaceError(str(exc)) from exc
         selected_mount_ids = tuple(str(value).strip() for value in mount_ids)
         if any(not value for value in selected_mount_ids):
             raise HarborWorkspaceError("mount_ids must contain only non-empty strings")
@@ -194,7 +224,7 @@ class HarborWorkspace:
             )
         selected_mount_id_set = set(selected_mount_ids)
         datasets = tuple(
-            HarborDataset(id=new_id, path=str(root)) if item.id == current.id else item
+            updated_dataset if item.id == current.id else item
             for item in self.config.harbor_datasets
         )
         mounts = []
@@ -259,7 +289,7 @@ class HarborWorkspace:
         expected_revision: str,
     ) -> dict[str, Any]:
         dataset = self._dataset(dataset_id)
-        root = self._dataset_root(dataset)
+        root = self._mutable_dataset_root(dataset)
         self._expect_revision(root, expected_revision)
         task_name = self._task_directory(directory)
         target = root / task_name
@@ -289,7 +319,7 @@ class HarborWorkspace:
         expected_revision: str,
     ) -> dict[str, Any]:
         dataset = self._dataset(dataset_id)
-        root = self._dataset_root(dataset)
+        root = self._mutable_dataset_root(dataset)
         source = self._task_path(root, task)
         self._expect_revision(source, expected_revision)
         new_name = self._task_directory(new_directory)
@@ -308,7 +338,7 @@ class HarborWorkspace:
         expected_revision: str,
     ) -> dict[str, Any]:
         dataset = self._dataset(dataset_id)
-        root = self._dataset_root(dataset)
+        root = self._mutable_dataset_root(dataset)
         entry = self._trash_entry(root, entry_id)
         self._expect_revision(entry, expected_revision)
         metadata = self._trash_metadata(entry)
@@ -327,7 +357,7 @@ class HarborWorkspace:
         expected_revision: str,
     ) -> dict[str, Any]:
         dataset = self._dataset(dataset_id)
-        root = self._dataset_root(dataset)
+        root = self._mutable_dataset_root(dataset)
         source = self._task_path(root, task)
         self._expect_revision(source, expected_revision)
         package_name = self._task_package_name(source)
@@ -364,7 +394,7 @@ class HarborWorkspace:
         expected_revision: str,
     ) -> dict[str, Any]:
         dataset = self._dataset(dataset_id)
-        root = self._dataset_root(dataset)
+        root = self._mutable_dataset_root(dataset)
         entry = self._trash_entry(root, entry_id)
         self._expect_revision(entry, expected_revision)
         metadata = self._trash_metadata(entry)
@@ -401,7 +431,7 @@ class HarborWorkspace:
         expected_revision: str,
     ) -> dict[str, Any]:
         dataset = self._dataset(dataset_id)
-        root = self._dataset_root(dataset)
+        root = self._mutable_dataset_root(dataset)
         entry = self._trash_entry(root, entry_id)
         self._expect_revision(entry, expected_revision)
         shutil.rmtree(entry)
@@ -415,7 +445,7 @@ class HarborWorkspace:
         expected_revision: str,
     ) -> dict[str, Any]:
         dataset = self._dataset(dataset_id)
-        root = self._dataset_root(dataset)
+        root = self._mutable_dataset_root(dataset)
         task_dir = self._task_path(root, task)
         self._expect_revision(task_dir, expected_revision)
         shutil.rmtree(task_dir)
@@ -423,19 +453,25 @@ class HarborWorkspace:
 
     def task_detail(self, dataset_id: str, task: str) -> dict[str, Any]:
         dataset = self._dataset(dataset_id)
-        root = self._dataset_root(dataset)
+        resolved = self._resolved_dataset(dataset)
+        root = resolved.task_root
         task_dir = self._task_path(root, task)
-        summary = next(
-            (
-                item
-                for item in self._task_summaries(root)
-                if item["directory"] == task_dir.name
-            ),
-            self._task_summary(task_dir),
-        )
-        tree = self._file_tree(task_dir)
+        if resolved.read_only:
+            summary = self._task_summary(task_dir, metadata_revision=True)
+        else:
+            summary = next(
+                (
+                    item
+                    for item in self._task_summaries(root)
+                    if item["directory"] == task_dir.name
+                ),
+                self._task_summary(task_dir),
+            )
+        tree = self._file_tree(task_dir, editable=not resolved.read_only)
         return {
             "dataset_id": dataset_id,
+            "format": resolved.format,
+            "read_only": resolved.read_only,
             "task": summary,
             "tree": tree,
             "default_file_path": _default_task_file_path(task_dir, tree),
@@ -444,7 +480,8 @@ class HarborWorkspace:
     def read_file(
         self, dataset_id: str, task: str, relative_path: str
     ) -> dict[str, Any]:
-        task_dir = self._task_path(self._dataset_root(self._dataset(dataset_id)), task)
+        resolved = self._resolved_dataset(self._dataset(dataset_id))
+        task_dir = self._task_path(resolved.task_root, task)
         path = self._safe_task_file(task_dir, relative_path, must_exist=True)
         content = _read_regular_file(path, limit=TEXT_EDIT_LIMIT)
         revision = _file_revision(content)
@@ -456,14 +493,18 @@ class HarborWorkspace:
             "path": relative_path,
             "content": text,
             "revision": revision,
-            "task_revision": _directory_revision(task_dir),
+            "task_revision": (
+                _tree_metadata_revision(task_dir)
+                if resolved.read_only
+                else _directory_revision(task_dir)
+            ),
         }
 
     def mutate_file(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         dataset_id = _required_string(payload, "dataset_id")
         task_name = _required_string(payload, "task")
         task_dir = self._task_path(
-            self._dataset_root(self._dataset(dataset_id)), task_name
+            self._mutable_dataset_root(self._dataset(dataset_id)), task_name
         )
         self._expect_revision(task_dir, _required_string(payload, "expected_revision"))
         relative = _required_string(payload, "path")
@@ -529,7 +570,7 @@ class HarborWorkspace:
         self, *, dataset_id: str, expected_revision: str
     ) -> dict[str, Any]:
         dataset = self._dataset(dataset_id)
-        root = self._dataset_root(dataset)
+        root = self._mutable_dataset_root(dataset)
         self._expect_revision(root, expected_revision)
         manifest_path = root / "dataset.toml"
         try:
@@ -562,19 +603,30 @@ class HarborWorkspace:
         return self._dataset_summary(dataset)
 
     def _dataset_summary(self, dataset: HarborDataset) -> dict[str, Any]:
-        root = self._dataset_root(dataset)
-        tasks = self._task_summaries(root)
-        trash_root = root / TRASH_DIRNAME
-        trash = []
-        if trash_root.exists():
-            _assert_safe_directory(root, trash_root)
-            trash = [
-                self._trash_summary(dataset, entry) for entry in _child_dirs(trash_root)
-            ]
+        resolved = self._resolved_dataset(dataset)
+        root = resolved.task_root
+        if resolved.read_only:
+            tasks = self._registered_task_summaries(resolved)
+            revision = _registered_dataset_revision(resolved, tasks)
+            trash: list[dict[str, Any]] = []
+        else:
+            tasks = self._task_summaries(root)
+            revision = _directory_revision(root)
+            trash_root = root / TRASH_DIRNAME
+            trash = []
+            if trash_root.exists():
+                _assert_safe_directory(root, trash_root)
+                trash = [
+                    self._trash_summary(dataset, entry)
+                    for entry in _child_dirs(trash_root)
+                ]
         return {
             "id": dataset.id,
             "path": dataset.path,
-            "revision": _directory_revision(root),
+            "format": resolved.format,
+            "read_only": resolved.read_only,
+            "manifest": dict(resolved.manifest),
+            "revision": revision,
             "root_files": {
                 name: _regular_path(root / name)
                 for name in ("dataset.toml", "README.md", "metric.py")
@@ -583,9 +635,35 @@ class HarborWorkspace:
             "trash": trash,
         }
 
-    def _task_summary(self, task_dir: Path) -> dict[str, Any]:
+    def _registered_task_summaries(
+        self, resolved: ResolvedHarborDataset
+    ) -> list[dict[str, Any]]:
+        result = []
+        for task_name in resolved.task_names:
+            task_dir = resolved.task_root / task_name
+            package_name = self._task_package_name(task_dir)
+            result.append(
+                {
+                    "directory": task_name,
+                    "status": "registered",
+                    "revision": _registered_task_revision(
+                        task_dir, package_name=package_name
+                    ),
+                    "diagnostics": [],
+                    "package_name": package_name,
+                }
+            )
+        return result
+
+    def _task_summary(
+        self, task_dir: Path, *, metadata_revision: bool = False
+    ) -> dict[str, Any]:
         try:
-            revision = _directory_revision(task_dir)
+            revision = (
+                _tree_metadata_revision(task_dir)
+                if metadata_revision
+                else _directory_revision(task_dir)
+            )
         except HarborWorkspaceError as exc:
             return {
                 "directory": task_dir.name,
@@ -651,7 +729,9 @@ class HarborWorkspace:
             return ()
         return tuple(self._trash_metadata(entry) for entry in _child_dirs(trash_root))
 
-    def _file_tree(self, task_dir: Path) -> list[dict[str, Any]]:
+    def _file_tree(
+        self, task_dir: Path, *, editable: bool = True
+    ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for path in _walk_tree(task_dir):
             relative_path = path.relative_to(task_dir)
@@ -665,7 +745,9 @@ class HarborWorkspace:
                 "size": value.st_size if stat.S_ISREG(value.st_mode) else None,
             }
             if stat.S_ISREG(value.st_mode):
-                item["editable"] = value.st_size <= TEXT_EDIT_LIMIT and _is_utf8(path)
+                item["editable"] = (
+                    editable and value.st_size <= TEXT_EDIT_LIMIT and _is_utf8(path)
+                )
             result.append(item)
         return result
 
@@ -693,10 +775,24 @@ class HarborWorkspace:
                 return dataset
         raise HarborNotFoundError(f"Dataset not found: {dataset_id}")
 
-    def _dataset_root(self, dataset: HarborDataset) -> Path:
+    def _task_root(self, dataset: HarborDataset) -> Path:
+        return self._resolved_dataset(dataset).task_root
+
+    def _mutable_dataset_root(self, dataset: HarborDataset) -> Path:
+        resolved = self._resolved_dataset(dataset)
+        if resolved.read_only:
+            raise HarborWorkspaceError(
+                f"Dataset {dataset.id} is read-only ({resolved.format})"
+            )
+        return resolved.task_root
+
+    def _resolved_dataset(self, dataset: HarborDataset) -> ResolvedHarborDataset:
         root = Path(dataset.path)
         self._validate_dataset_directory(root)
-        return root
+        try:
+            return resolve_harbor_dataset(dataset)
+        except HarborDatasetError as exc:
+            raise HarborWorkspaceError(str(exc)) from exc
 
     def _validate_dataset_directory(self, root: Path) -> None:
         _assert_safe_directory(root, root)
@@ -770,6 +866,13 @@ class HarborWorkspace:
         if not path.is_absolute():
             path = self.config_path.parent / path
         return Path(os.path.abspath(path))
+
+    def _existing_registration_path(self, value: str) -> Path:
+        path = self._config_path(value)
+        try:
+            return path.resolve(strict=True)
+        except OSError as exc:
+            raise HarborNotFoundError(f"Dataset path not found: {path}") from exc
 
     def _validate_dataset_id(self, value: str) -> None:
         if HARBOR_ID_RE.fullmatch(value) is None:
@@ -997,6 +1100,52 @@ def _child_dirs(root: Path) -> list[Path]:
     return result
 
 
+def _registered_task_revision(task_dir: Path, *, package_name: str | None) -> str:
+    digest = hashlib.sha256()
+    digest.update(task_dir.name.encode("utf-8", errors="surrogateescape"))
+    digest.update(b"\0")
+    digest.update((package_name or "").encode("utf-8"))
+    config_path = task_dir / "task.toml"
+    try:
+        value = config_path.stat(follow_symlinks=False)
+    except OSError as exc:
+        digest.update(f"\0unavailable\0{type(exc).__name__}".encode())
+        return digest.hexdigest()
+    digest.update(
+        (
+            f"\0{value.st_dev}\0{value.st_ino}\0{value.st_mode}\0{value.st_size}"
+            f"\0{value.st_mtime_ns}\0{value.st_ctime_ns}"
+        ).encode()
+    )
+    return digest.hexdigest()
+
+
+def _registered_dataset_revision(
+    resolved: ResolvedHarborDataset, tasks: list[dict[str, Any]]
+) -> str:
+    payload = {
+        "format": resolved.format,
+        "manifest": dict(resolved.manifest),
+        "tasks": [
+            {
+                "directory": item["directory"],
+                "package_name": item["package_name"],
+                "revision": item["revision"],
+            }
+            for item in tasks
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _directory_revision(root: Path) -> str:
     digest = hashlib.sha256()
     for path in _walk_tree(root):
@@ -1006,16 +1155,41 @@ def _directory_revision(root: Path) -> str:
             digest.update(f"d\0{relative}\0".encode())
             continue
         digest.update(f"f\0{relative}\0{value.st_size}\0".encode())
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
+        for chunk in _regular_file_chunks(path):
+            digest.update(chunk)
         digest.update(b"\0")
     return digest.hexdigest()
 
 
+def _tree_metadata_revision(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in _walk_tree(root):
+        relative = path.relative_to(root).as_posix()
+        value = path.stat(follow_symlinks=False)
+        kind = "d" if stat.S_ISDIR(value.st_mode) else "f"
+        digest.update(
+            (
+                f"{kind}\0{relative}\0{value.st_dev}\0{value.st_ino}"
+                f"\0{value.st_mode}\0{value.st_size}\0{value.st_mtime_ns}"
+                f"\0{value.st_ctime_ns}\0"
+            ).encode()
+        )
+    return digest.hexdigest()
+
+
 def _read_regular_file(path: Path, *, limit: int | None) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise HarborWorkspaceError("Path cannot be opened as a regular file") from exc
     try:
         value = os.fstat(descriptor)
         if not stat.S_ISREG(value.st_mode):
@@ -1036,17 +1210,30 @@ def _read_regular_file(path: Path, *, limit: int | None) -> bytes:
 
 
 def _regular_file_hash(path: Path) -> str:
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
+    digest = hashlib.sha256()
+    for chunk in _regular_file_chunks(path):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _regular_file_chunks(path: Path) -> Iterable[bytes]:
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise HarborWorkspaceError("Path cannot be opened as a regular file") from exc
     try:
         value = os.fstat(descriptor)
         if not stat.S_ISREG(value.st_mode):
             raise HarborWorkspaceError("Path is not a regular file")
-        digest = hashlib.sha256()
         with os.fdopen(descriptor, "rb", closefd=False) as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
+                yield chunk
     finally:
         os.close(descriptor)
 
@@ -1077,16 +1264,22 @@ def _default_task_file_path(task_dir: Path, tree: list[dict[str, Any]]) -> str |
             relative = f"steps/{config.steps[0].name}/instruction.md"
     except (OSError, UnicodeDecodeError, HarborWorkspaceError, ValueError):
         pass
-    return (
-        relative
-        if any(
-            item.get("path") == relative
-            and item.get("kind") == "file"
-            and item.get("editable") is True
+    candidate = next(
+        (
+            item
             for item in tree
-        )
-        else None
+            if item.get("path") == relative and item.get("kind") == "file"
+        ),
+        None,
     )
+    if (
+        candidate is None
+        or not isinstance(candidate.get("size"), int)
+        or candidate["size"] > TEXT_EDIT_LIMIT
+        or not _is_utf8(task_dir / relative)
+    ):
+        return None
+    return relative
 
 
 def _file_revision(content: bytes) -> str:

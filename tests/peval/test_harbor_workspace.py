@@ -1048,8 +1048,8 @@ class HarborWorkspaceTests(unittest.TestCase):
                         {"source": "existing", "path": str(linked)},
                         request_headers={"If-Match": headers["etag"]},
                     )
-                    self.assertEqual(status, 400, symlinked)
-                    self.assertIn("symbolic link", symlinked["detail"])
+                    self.assertEqual(status, 409, symlinked)
+                    self.assertIn("already registered", symlinked["detail"])
 
                 status, headers, inventory = self._get_json(
                     server, "/api/harbor/datasets"
@@ -1792,8 +1792,10 @@ class HarborWorkspaceTests(unittest.TestCase):
                 public_dataset = inventory["datasets"][0]
                 self.assertEqual(
                     set(public_dataset),
-                    {"id", "tasks"},
+                    {"format", "id", "read_only", "tasks"},
                 )
+                self.assertEqual(public_dataset["format"], "harbor")
+                self.assertFalse(public_dataset["read_only"])
                 self.assertNotIn(str(root), json.dumps(inventory))
                 self.assertNotIn("revision", json.dumps(inventory))
                 self.assertNotIn("trash", json.dumps(inventory))

@@ -143,3 +143,36 @@ test("a strict step instruction never falls back and read-only mode exposes no e
   assert.match(document.querySelector("[data-harbor-editor]").value, /unavailable/i);
   assert.equal(document.querySelector("[data-harbor-editor]").readOnly, true);
 });
+
+test("capability re-renders preserve an unsaved editor value", async () => {
+  const root = document.createElement("div");
+  root.innerHTML = `
+    <div data-harbor-file-tree></div>
+    <strong data-harbor-editor-path></strong>
+    <span data-harbor-editor-meta></span>
+    <button data-harbor-save disabled>Save</button>
+    <textarea data-harbor-editor disabled></textarea>
+  `;
+  document.body.append(root);
+  const taskBrowser = createTaskBrowser({
+    root,
+    editable: true,
+    readFile: async (_taskRef, path) => ({
+      path,
+      content: "Saved",
+      revision: "r1",
+    }),
+  });
+  await taskBrowser.setTaskDetail(detail(), {
+    taskRef: { dataset_id: "dataset", task: "task" },
+  });
+  const editor = root.querySelector("[data-harbor-editor]");
+  editor.value = "Unsaved";
+  editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+
+  taskBrowser.setEditable(true);
+  taskBrowser.setContextMenu(null);
+
+  assert.equal(taskBrowser.isDirty(), true);
+  assert.equal(editor.value, "Unsaved");
+});

@@ -15,6 +15,7 @@ const browser = installBrowserDom(`
       <button data-harbor-delete-selected>Delete selected</button>
       <button data-harbor-show-trash>Show archived</button>
       <p data-harbor-workbench-status hidden></p>
+      <section data-workbuddy-summaries hidden></section>
       <span data-harbor-operation-status></span>
       <input data-harbor-search type="search">
       <span data-harbor-overview-count></span>
@@ -601,6 +602,85 @@ test("invalid step counts and oversized uploads stop before request or file read
       document.querySelector("[data-harbor-workbench-status]").textContent,
       /16 MiB/,
     );
+  } finally {
+    window.prompt = previousPrompt;
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("WorkBuddy Datasets remain browsable while every editing surface is disabled", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousPrompt = window.prompt;
+  const calls = [];
+  const readonlyInventory = {
+    revision: "config-r2",
+    workbuddy_summaries: [{
+      plan_id: "office-plan",
+      generated_at: "2026-09-03T00:00:00Z",
+      provisional: false,
+      metrics: { reward: 0.5, pass_rate: 0.25, n_tasks: 50, n_trials: 150, missing_task_count: 0 },
+    }],
+    datasets: [{
+      id: "wb-office",
+      format: "workbuddy.v1",
+      read_only: true,
+      revision: "dataset-r2",
+      tasks: [task("office-task", "registered", "task-r2")],
+      trash: [],
+    }],
+  };
+  const readonlyDetail = {
+    dataset_id: "wb-office",
+    format: "workbuddy.v1",
+    read_only: true,
+    task: task("office-task", "valid", "task-r2"),
+    default_file_path: "instruction.md",
+    tree: [{ path: "instruction.md", kind: "file", size: 11, editable: true }],
+  };
+  globalThis.fetch = async (path, options = {}) => {
+    calls.push({ path: String(path), method: options.method || "GET" });
+    const requestPath = String(path);
+    const payload = requestPath === "/api/harbor/datasets"
+      ? readonlyInventory
+      : requestPath === "/api/harbor/datasets/wb-office/tasks/office-task"
+        ? readonlyDetail
+        : requestPath.endsWith("/files/instruction.md")
+          ? { path: "instruction.md", content: "Read me only", revision: "file-r2" }
+          : {};
+    return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(payload) };
+  };
+  window.prompt = () => {
+    throw new Error("read-only actions must not prompt");
+  };
+  try {
+    harbor.workbenchState.taskSelection.clear();
+    harbor.workbenchState.busy = false;
+    harbor.workbenchState.showTrash = false;
+    harbor.workbenchState.search = "";
+    await harbor.openHarborWorkbench();
+
+    assert.equal(document.querySelectorAll("[data-table-row-select]").length, 0);
+    assert.equal(document.querySelector("[data-harbor-create-task]").disabled, true);
+    assert.equal(document.querySelector("[data-harbor-sync-manifest]").disabled, true);
+    assert.equal(document.querySelector("[data-harbor-file-actions]").hidden, true);
+    assert.match(document.querySelector("[data-workbuddy-summaries]").textContent, /office-plan/);
+    assert.match(document.querySelector("[data-workbuddy-summaries]").textContent, /150/);
+    assert.match(document.querySelector("[data-harbor-selected-meta]").textContent, /workbuddy\.v1/);
+    assert.match(document.querySelector("[data-harbor-selected-meta]").textContent, /Read-only/);
+    assert.match(document.querySelector("[data-harbor-selected-meta]").textContent, /valid/);
+    assert.equal(document.querySelectorAll(".status-registered").length, 1);
+    const editor = document.querySelector("[data-harbor-editor]");
+    assert.equal(editor.value, "Read me only");
+    assert.equal(editor.readOnly, true);
+    assert.equal(document.querySelector("[data-harbor-save]").disabled, true);
+
+    const taskCell = document.querySelector('[data-table-column-key="task"]');
+    taskCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    assert.equal(taskCell.querySelector(".table-cell-editor-control"), null);
+    await harbor.createTask();
+    await harbor.createFile("file");
+    await harbor.saveFile();
+    assert.ok(calls.every(call => call.method === "GET"));
   } finally {
     window.prompt = previousPrompt;
     globalThis.fetch = previousFetch;

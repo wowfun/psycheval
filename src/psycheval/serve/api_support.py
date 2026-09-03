@@ -250,7 +250,7 @@ def harbor_config_payload(
     return {
         "revision": config_revision(store.paths.config_path),
         "datasets": [
-            {"id": dataset.id, "path": dataset.path}
+            {"id": dataset.id, "path": dataset.path, "format": dataset.format}
             for dataset in current.harbor_datasets
         ],
         "mounts": [harbor_mount_payload(mount) for mount in current.harbor_mounts],
@@ -907,7 +907,12 @@ def harbor_mounts_from_payload(
             {
                 "harbor": {
                     "datasets": [
-                        {"id": dataset.id, "path": dataset.path} for dataset in datasets
+                        {
+                            "id": dataset.id,
+                            "path": dataset.path,
+                            "format": dataset.format,
+                        }
+                        for dataset in datasets
                     ],
                     "mounts": raw_mounts,
                 }
