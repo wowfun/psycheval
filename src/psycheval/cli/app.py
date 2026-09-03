@@ -45,6 +45,7 @@ view_app = make_app(help="Render a peval-style report for a supported scenario."
 export_app = make_app(help="Export normalized data for a supported scenario.")
 import_app = make_app(help="Import analysis files into peval workspace artifacts.")
 publish_app = make_app(help="Publish reviewed evaluation reports.")
+harbor_app = make_app(help="Prepare and summarize external Harbor evaluations.")
 
 
 AdapterOption = Annotated[
@@ -517,6 +518,55 @@ app.add_typer(
     name="publish",
     short_help="Publish evaluation artifacts",
 )
+app.add_typer(
+    harbor_app,
+    name="harbor",
+    short_help="Prepare and summarize Harbor evaluations",
+)
+
+
+@harbor_app.command(
+    "prepare",
+    help="Prepare a registered WorkBuddy Office Dataset for Harbor 0.21.",
+)
+def harbor_prepare(
+    dataset: Annotated[
+        str, typer.Option("--dataset", help="Registered WorkBuddy Dataset id")
+    ],
+    config: Annotated[
+        str, typer.Option("--config", metavar="PATH", help="Base Harbor Job YAML")
+    ],
+    root: RootOption = None,
+) -> None:
+    execute(
+        CliArgs(
+            command="harbor-prepare",
+            root=root,
+            dataset_id=dataset,
+            config_path=config,
+        )
+    )
+
+
+@harbor_app.command(
+    "summarize",
+    help="Compute the official WorkBuddy aggregate for a prepared plan.",
+)
+def harbor_summarize(
+    plan: Annotated[str, typer.Option("--plan", help="Prepared run plan id")],
+    root: RootOption = None,
+    provisional: Annotated[
+        bool, typer.Option("--provisional", help="Allow unfinished Jobs")
+    ] = False,
+) -> None:
+    execute(
+        CliArgs(
+            command="harbor-summarize",
+            root=root,
+            plan_id=plan,
+            provisional=provisional,
+        )
+    )
 
 
 @app.command(

@@ -18,7 +18,7 @@ class PevalTyperCliTests(unittest.TestCase):
         root = get_command(app)
         self.assertEqual(
             set(root.commands),
-            {"init", "view", "export", "import", "publish", "serve"},
+            {"init", "view", "export", "import", "publish", "harbor", "serve"},
         )
         root_options = {
             option
@@ -35,6 +35,10 @@ class PevalTyperCliTests(unittest.TestCase):
         self.assertEqual(
             set(root.commands["publish"].commands),
             {"evaluation-report"},
+        )
+        self.assertEqual(
+            set(root.commands["harbor"].commands),
+            {"prepare", "summarize"},
         )
         view_options = {
             option
@@ -64,6 +68,19 @@ class PevalTyperCliTests(unittest.TestCase):
         self.assertEqual(import_help.exit_code, 0)
         self.assertIn("runs/<evaluation>/<agent>/<session>/<cell>", import_help.output)
         self.assertNotIn("harbor/<mount-id>", import_help.output)
+
+    def test_harbor_commands_require_their_contract_inputs(self) -> None:
+        runner = CliRunner()
+        cases = (
+            (["harbor", "prepare"], "--dataset"),
+            (["harbor", "prepare", "--dataset", "office"], "--config"),
+            (["harbor", "summarize"], "--plan"),
+        )
+        for arguments, option in cases:
+            with self.subTest(arguments=arguments):
+                result = runner.invoke(app, arguments)
+                self.assertEqual(result.exit_code, 2)
+                self.assertIn(f"Missing option '{option}'", result.output)
 
     def test_show_completion_does_not_install_shell_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
