@@ -21,6 +21,65 @@ peval view tr -p <harbor-trial-dir>
 运行中 step；完整报告要求选中的每个 source 都具有 ATIF 证据。直接传入
 `agent/trajectory.json` 时只读取该 ATIF 文件，不推断其父 Trial。
 
+## 通过 Harbor 运行 WorkBuddy Office
+
+WorkBuddy Office v1.0 bundle 的 `tasks/` 已包含 50 个原生 Harbor Task 目录，
+无需转换或复制。可在 **Configuration** 页面注册 bundle 根目录，也可在
+`peval.toml` 中加入只读注册：
+
+```toml
+[[harbor.datasets]]
+id = "workbuddy-office"
+path = "/path/to/wb-bench-office-v1.0"
+format = "workbuddy.v1"
+```
+
+在 Psycheval 所在环境中安装受支持的外部 `workbuddy-bench` 源码版本：
+
+```console
+uv pip install --no-deps \
+  "workbuddy-bench @ git+https://github.com/Tencent/workbuddy-bench.git@625b2233093ae4f23e76be28c1f341d41cc70373"
+```
+
+`--no-deps` 会保留 Psycheval 的 Harbor 0.21.0 runtime，避免安装 benchmark
+仓库中较旧的开发 pin。
+
+然后创建仅含一个 Agent 的 Harbor Job 基础配置。下面的例子显式选择
+Psycheval 的可信 Linux host environment，并使用 OpenCode：
+
+```yaml
+job_name: workbuddy-base
+n_concurrent_trials: 1
+agents:
+  - name: opencode
+    model_name: xiaomi-token-plan-cn/mimo-v2.5-pro
+environment:
+  import_path: psycheval.harbor.environment:HostEnvironment
+  kwargs:
+    allow_host_execution: true
+```
+
+生成相互隔离的两个 Job 配置，运行命令输出中的两个 Harbor 命令，并在两者
+结束后计算官方聚合指标：
+
+```console
+peval harbor prepare -r .local/evaluation \
+  --dataset workbuddy-office --config workbuddy-base.yaml
+PEVAL_CONFIG=.local/evaluation/peval.toml harbor run -c <输出的-normal-config>
+PEVAL_CONFIG=.local/evaluation/peval.toml harbor run -c <输出的-special-config>
+peval harbor summarize -r .local/evaluation --plan <输出的-plan-id>
+```
+
+Host execution 会展开每个 Task 的 workspace archive 并建立干净的 Git
+baseline，但它不是 sandbox，也不能复现容器的资源和网络隔离。仅应在 Linux
+上对可信 Task 使用；可运行 Docker 的 Harbor environment 仍是可移植路径。
+特殊 recruiting Task 虽有已知的缺少输入、网络契约和 sanity-check 源数据
+缺陷，仍保留在官方分母中；prepare 会输出相应警告。**Datasets** 页面允许
+浏览此注册，但不提供任何修改操作。Trial 详情以 `verifier/score.json` 作为
+WorkBuddy 分数，单独保留 Harbor reward，并且只展示有界的 verifier 证据。
+精确的 runtime、verifier LLM 与聚合契约见
+[Harbor reference](../../../../reference/harbor.md)。
+
 ```console
 peval export tr -a opencode -p session.jsonl -o
 peval view tr -m raw -p trajectory-opencode-session.json -o

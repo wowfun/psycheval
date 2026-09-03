@@ -29,7 +29,9 @@ Invalid, linked, special-file, or source/destination-overlapping Skill trees
 fail before workspace initialization writes.
 
 The Psycheval CLI owns top-level workspace presentation, `[adapters.*]`,
-`[[acp.agents]]`, `[[harbor.datasets]]`, and `[[harbor.mounts]]`. `psycheval.harbor` owns
+`[[acp.agents]]`, `[[harbor.datasets]]`, and `[[harbor.mounts]]`. Each Dataset
+registration has a resolved format: `harbor` for immediate-child Task
+directories or `workbuddy.v1` for a validated WorkBuddy bundle. `psycheval.harbor` owns
 `[harbor.host]`; each parser accepts the sibling section without copying its
 semantics. Harbor host callers name the file with `PEVAL_CONFIG`.
 
@@ -44,6 +46,18 @@ requested Dataset IDs, preserves their
 directories, and fails if any requested ID is still mounted. Task archive,
 restore, rename, and permanent deletion do not rewrite `dataset.toml`; manifest
 contents change only through explicit synchronization.
+WorkBuddy registrations expose their manifest metadata and nested Tasks in the
+same inventory, but the entire Dataset workbench is read-only: Task creation,
+rename, archive, restore, deletion, file writes, and manifest synchronization are
+rejected at the server boundary. A Dataset selected through a symlink is stored
+as its strict physical directory; hand-authored configured paths still reject
+symlink traversal. Read-only capability is also carried by each Task tree entry,
+so clients never advertise an editable text node that the server will reject.
+WorkBuddy inventory rows report registration identity without recursively
+validating or hashing every Task tree. Opening a Task detail validates that
+selected Task against its current files and exposes the resulting diagnostic
+status; explicit Dataset registration and preparation remain the full-bundle
+validation gates.
 Mount removal is likewise atomic across the requested Mount IDs and preserves
 the referenced Jobs directories. Dataset-to-Mount membership edits update the
 Mount-owned `dataset_ids`; adding a Dataset through the reverse Dataset view

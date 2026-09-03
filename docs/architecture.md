@@ -29,8 +29,9 @@ Psycheval module allowed to create or replace canonical source `analysis.md`.
 It validates the source and document, but does not infer evaluation criteria
 from a live Task or any other Copilot context.
 `psycheval.harbor` is the adapter module for Harbor's Agent, Environment,
-trajectory, and verifier seams; it owns host execution, harness integration,
-and evidence scoring.
+trajectory, verifier, and external-Dataset seams. It owns host execution,
+harness integration, evidence scoring, non-executing Dataset resolution, and
+the public WorkBuddy run-plan service.
 
 The CLI and Harbor adapter share formats and one `peval.toml`, but not parser
 ownership: the CLI reads workspace, adapter, Dataset, and mount fields; Harbor
@@ -156,9 +157,10 @@ remains owned by `pretty-aui`.
 
 ## Dependency direction
 
-Core CLI implementation may consume pinned Harbor interfaces but not
-`psycheval.harbor` internals. The two implementations exchange only owned
-configuration sections and explicit formats. Tasks invoke the installed
+Core CLI implementation may consume pinned Harbor interfaces and the explicit
+`psycheval.harbor.datasets` and `psycheval.harbor.workbuddy` services, but not
+Agent, Environment, or harness internals. The implementations exchange only
+owned configuration sections and explicit formats. Tasks invoke the installed
 verifier rather than checkout-relative Python paths. Documentation and skills
 consume public interfaces; runtime code reads a Skill only when its local
 directory is explicitly supplied to `peval init --skill`.
