@@ -3,9 +3,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
-from harbor.models.agent.context import AgentContext
+if TYPE_CHECKING:
+    from harbor.models.agent.context import AgentContext
 
 MODEL_INFERENCE_KEY = "model_inference"
 MODEL_INFERENCE_SCHEMA_VERSION = 1

@@ -5,7 +5,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 
-from psycheval.harbor.inference_telemetry import (
+from .inference_telemetry import (
     finalize_trajectory_metrics,
     metrics_from_observations,
     observation_from_usage,

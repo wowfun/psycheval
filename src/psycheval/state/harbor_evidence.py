@@ -9,9 +9,9 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from typing import Any, Iterable
 
-from psycheval._harbor_tasks import load_harbor_task, select_publishable_task_files
 from psycheval._state.annotations import optional_str
 from psycheval.harbor.datasets import DatasetFormat
+from psycheval.harbor.tasks import load_harbor_task, select_publishable_task_files
 
 TRIAL_JSON_FILES = (
     "agent/trajectory.json",

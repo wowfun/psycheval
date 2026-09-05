@@ -6,6 +6,7 @@ import os
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, Literal
 
+from psycheval._harbor_datasets import resolve_harbor_datasets_for_mount
 from psycheval._state.annotations import optional_str
 from psycheval._state.artifacts import (
     read_json_object,
@@ -16,10 +17,7 @@ from psycheval._state.artifacts import (
 )
 from psycheval.atif import validate_atif_trajectory
 from psycheval.config import HarborMount, ToolConfig, validate_harbor_mount_paths
-from psycheval.harbor.datasets import (
-    ResolvedHarborDataset,
-    resolve_harbor_datasets_for_mount,
-)
+from psycheval.harbor.datasets import ResolvedHarborDataset
 from psycheval.state.constants import SOURCE_STATE_DIR, SOURCE_STATE_FILENAME
 from psycheval.state.harbor_evidence import (
     HarborTaskIndex,

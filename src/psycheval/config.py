@@ -19,10 +19,10 @@ from pydantic import (
     model_validator,
 )
 
+from psycheval.harbor.identifiers import HARBOR_ID_RE, validate_harbor_id
 from psycheval.i18n import normalize_locale
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-HARBOR_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$")
 ACP_AGENT_ID_RE = HARBOR_ID_RE
 DEFAULT_DB_PATH_RE = re.compile(r"^\s*default_db_path\s*=")
 TABLE_HEADER_RE = re.compile(r"^\s*\[([^\]\n]+)\]\s*(?:#.*)?$")
@@ -81,7 +81,7 @@ class HarborDataset(_FrozenConfigModel):
     @field_validator("id")
     @classmethod
     def validate_id(cls, value: str) -> str:
-        return _harbor_id(value, kind="dataset")
+        return validate_harbor_id(value, kind="dataset")
 
     @field_validator("path")
     @classmethod
@@ -99,7 +99,7 @@ class HarborMount(_FrozenConfigModel):
     @field_validator("id")
     @classmethod
     def validate_id(cls, value: str) -> str:
-        return _harbor_id(value, kind="mount")
+        return validate_harbor_id(value, kind="mount")
 
     @field_validator("path")
     @classmethod
@@ -111,7 +111,7 @@ class HarborMount(_FrozenConfigModel):
     @field_validator("dataset_ids")
     @classmethod
     def validate_dataset_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        validated = tuple(_harbor_id(item, kind="dataset") for item in value)
+        validated = tuple(validate_harbor_id(item, kind="dataset") for item in value)
         if len(set(validated)) != len(validated):
             raise ValueError("harbor mount dataset_ids must not contain duplicates")
         return validated
@@ -409,7 +409,7 @@ def apply_toml_config(
                     raise ValueError(
                         f"unknown harbor dataset field: {dataset_unknown[0]}"
                     )
-                dataset_id = _harbor_id(raw_dataset.get("id"), kind="dataset")
+                dataset_id = validate_harbor_id(raw_dataset.get("id"), kind="dataset")
                 raw_path = raw_dataset.get("path")
                 if not isinstance(raw_path, str) or not raw_path.strip():
                     raise ValueError("harbor dataset path must be a non-empty string")
@@ -453,7 +453,7 @@ def apply_toml_config(
             mount_unknown = sorted(set(raw_mount) - {"id", "path", "dataset_ids"})
             if mount_unknown:
                 raise ValueError(f"unknown harbor mount field: {mount_unknown[0]}")
-            mount_id = _harbor_id(raw_mount.get("id"), kind="mount")
+            mount_id = validate_harbor_id(raw_mount.get("id"), kind="mount")
             raw_path = raw_mount.get("path")
             if not isinstance(raw_path, str) or not raw_path.strip():
                 raise ValueError("harbor mount path must be a non-empty string")
@@ -467,7 +467,7 @@ def apply_toml_config(
             dataset_ids: list[str] = []
             seen_mount_dataset_ids: set[str] = set()
             for raw_dataset_id in raw_dataset_ids:
-                dataset_id = _harbor_id(raw_dataset_id, kind="dataset")
+                dataset_id = validate_harbor_id(raw_dataset_id, kind="dataset")
                 if dataset_id in seen_mount_dataset_ids:
                     raise ValueError(
                         f"duplicate dataset id {dataset_id} in harbor mount {mount_id}"
@@ -815,7 +815,9 @@ def _validate_harbor_dataset_directory(dataset: HarborDataset) -> None:
     if dataset.format == "workbuddy.v1":
         from psycheval.harbor.datasets import resolve_harbor_dataset
 
-        resolve_harbor_dataset(dataset)
+        resolve_harbor_dataset(
+            dataset_id=dataset.id, path=dataset.path, format=dataset.format
+        )
 
 
 def _validate_existing_unlinked_directory(value: str, *, label: str) -> Path:
@@ -865,13 +867,6 @@ def _acp_table_ranges(lines: list[str]) -> list[tuple[int, int]]:
                 break
         ranges.append((start, end))
     return ranges
-
-
-def _harbor_id(value: object, *, kind: str) -> str:
-    identifier = str(value or "").strip()
-    if HARBOR_ID_RE.fullmatch(identifier) is None:
-        raise ValueError(f"harbor {kind} id must be a lowercase path-safe identifier")
-    return identifier
 
 
 def unique_harbor_id_from_path(

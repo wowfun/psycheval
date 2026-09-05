@@ -83,7 +83,11 @@ def select_publishable_task_files(
     files: Iterable[Path],
     read_bytes: TaskFileReader,
 ) -> list[Path]:
-    """Apply Harbor's package layout and UTF-8 ignore rules to safe files."""
+    """Select contained files using Harbor's package layout and UTF-8 ignores.
+
+    Callers supply safely discovered paths. Relative paths are cwd-relative;
+    paths outside task_dir raise ValueError before any file is read.
+    """
 
     paths = TaskPaths(task_dir)
     by_relative: dict[str, Path] = {}

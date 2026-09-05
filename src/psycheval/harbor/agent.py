@@ -11,12 +11,12 @@ from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.scripts import quote_shell_arg
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
-from psycheval import __version__
-from psycheval.harbor.inference_telemetry import (
+from . import __version__
+from .inference_telemetry import (
     load_trajectory,
     populate_context_from_trajectory,
 )
-from psycheval.harbor.runtime_config import (
+from .runtime_config import (
     PEVAL_CONFIG_ENV,
     EffectiveRuntimeConfig,
     HarnessInvocation,

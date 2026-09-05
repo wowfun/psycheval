@@ -90,7 +90,7 @@ def run_cli_args(args: CliArgs) -> int:
             run_serve_command(args)
             return 0
         if args.command == "harbor-prepare":
-            from psycheval.harbor.workbuddy import prepare_workbuddy_plan
+            from psycheval.cli.harbor import prepare_workbuddy_plan
 
             prepare_workbuddy_plan(
                 workspace_root=args.root,
@@ -99,7 +99,7 @@ def run_cli_args(args: CliArgs) -> int:
             )
             return 0
         if args.command == "harbor-summarize":
-            from psycheval.harbor.workbuddy import summarize_workbuddy_plan
+            from psycheval.cli.harbor import summarize_workbuddy_plan
 
             summarize_workbuddy_plan(
                 workspace_root=args.root,

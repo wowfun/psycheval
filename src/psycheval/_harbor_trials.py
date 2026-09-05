@@ -5,12 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from psycheval._harbor_datasets import resolve_harbor_datasets_for_mount
 from psycheval._state.annotations import optional_str
 from psycheval.config import HarborMount, ToolConfig
-from psycheval.harbor.datasets import (
-    DatasetFormat,
-    resolve_harbor_datasets_for_mount,
-)
+from psycheval.harbor.datasets import DatasetFormat
 from psycheval.state.harbor_evidence import (
     HarborTaskIndex,
     read_harbor_evidence,

@@ -22,6 +22,22 @@ from tests.peval.peval_test_support import (
 
 
 class PevalConfigAdapterTests(unittest.TestCase):
+    def test_harbor_identifiers_in_toml_must_be_strings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for table in ("datasets", "mounts"):
+                root.joinpath("peval.toml").write_text(
+                    f'[[harbor.{table}]]\nid = 1\npath = "."\n', encoding="utf-8"
+                )
+                with (
+                    self.subTest(table=table),
+                    self.assertRaisesRegex(
+                        ValueError,
+                        rf"harbor\.{table}\.0\.id: Input should be a valid string",
+                    ),
+                ):
+                    load_config(workspace_root=root)
+
     def test_config_discovery_honors_peval_root_outside_the_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

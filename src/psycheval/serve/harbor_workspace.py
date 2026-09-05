@@ -17,11 +17,6 @@ from uuid import uuid4
 from harbor.models.dataset.manifest import DatasetInfo, DatasetManifest, DatasetTaskRef
 from harbor.models.task.config import PackageInfo, TaskConfig
 
-from psycheval._harbor_tasks import (
-    load_harbor_task,
-    load_harbor_task_config,
-    select_publishable_task_files,
-)
 from psycheval.config import (
     HARBOR_ID_RE,
     HarborDataset,
@@ -34,6 +29,11 @@ from psycheval.harbor.datasets import (
     detect_harbor_dataset_format,
     resolve_harbor_dataset,
     validate_harbor_dataset,
+)
+from psycheval.harbor.tasks import (
+    load_harbor_task,
+    load_harbor_task_config,
+    select_publishable_task_files,
 )
 
 TEXT_EDIT_LIMIT = 2 * 1024 * 1024
@@ -170,7 +170,9 @@ class HarborWorkspace:
             id=dataset_id, path=str(root), format=detected_format
         )
         try:
-            validate_harbor_dataset(registered)
+            validate_harbor_dataset(
+                dataset_id=registered.id, path=registered.path, format=registered.format
+            )
         except HarborDatasetError as exc:
             raise HarborWorkspaceError(str(exc)) from exc
         return self._save_config(
@@ -204,7 +206,11 @@ class HarborWorkspace:
             id=new_id, path=str(root), format=detected_format
         )
         try:
-            validate_harbor_dataset(updated_dataset)
+            validate_harbor_dataset(
+                dataset_id=updated_dataset.id,
+                path=updated_dataset.path,
+                format=updated_dataset.format,
+            )
         except HarborDatasetError as exc:
             raise HarborWorkspaceError(str(exc)) from exc
         selected_mount_ids = tuple(str(value).strip() for value in mount_ids)
@@ -790,7 +796,9 @@ class HarborWorkspace:
         root = Path(dataset.path)
         self._validate_dataset_directory(root)
         try:
-            return resolve_harbor_dataset(dataset)
+            return resolve_harbor_dataset(
+                dataset_id=dataset.id, path=dataset.path, format=dataset.format
+            )
         except HarborDatasetError as exc:
             raise HarborWorkspaceError(str(exc)) from exc
 

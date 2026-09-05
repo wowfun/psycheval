@@ -67,6 +67,15 @@ def test_distribution_declares_the_repository_license() -> None:
     assert (ROOT / "LICENSE").read_text(encoding="utf-8").startswith("MIT License\n")
 
 
+def test_installed_metadata_and_copied_adapter_share_the_package_version() -> None:
+    from importlib.metadata import version
+
+    import psycheval
+    from psycheval import harbor
+
+    assert version("psycheval") == psycheval.__version__ == harbor.__version__
+
+
 def test_vendored_pretty_aui_consolidates_third_party_licenses() -> None:
     standalone = ROOT / GENERATED_WEB_VENDOR / "pretty-aui"
     assert standalone.joinpath("LICENSE").is_file()

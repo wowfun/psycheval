@@ -12,7 +12,7 @@ from harbor.agents.installed import hermes as harbor_hermes
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from psycheval.harbor.inference_telemetry import (
+from .inference_telemetry import (
     finalize_trajectory_metrics,
     metrics_from_observations,
     observation_from_usage,

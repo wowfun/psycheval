@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import importlib
 import importlib.metadata
 import importlib.util
@@ -11,11 +12,11 @@ import math
 import os
 import re
 import secrets
-import shlex
 import shutil
 import stat
 import subprocess
 import tarfile
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import deepcopy
@@ -26,14 +27,8 @@ from typing import Any, Callable
 import yaml
 from harbor.models.job.config import JobConfig
 
-from psycheval.config import (
-    HARBOR_ID_RE,
-    HarborMount,
-    ToolConfig,
-    load_config,
-    write_workspace_harbor_config,
-)
-from psycheval.harbor.datasets import ResolvedHarborDataset, validate_harbor_dataset
+from .datasets import ResolvedHarborDataset, validate_harbor_dataset
+from .identifiers import HARBOR_ID_RE
 
 PLAN_SCHEMA = "psycheval.workbuddy-run-plan.v1"
 OFFICE_DATASET_ID = "wb-bench-office-v1.0"
@@ -61,16 +56,16 @@ class WorkBuddyPlanError(ValueError):
 
 
 def prepare_workbuddy_plan(
-    *, workspace_root: str | Path | None, dataset_id: str, base_config: str | Path
+    *,
+    output_root: str | Path,
+    dataset_id: str,
+    dataset_path: str | Path,
+    base_config: str | Path,
 ) -> dict[str, Any]:
-    root, config = _workspace(workspace_root)
-    registered = next(
-        (dataset for dataset in config.harbor_datasets if dataset.id == dataset_id),
-        None,
+    root = _output_root(output_root)
+    resolved = validate_harbor_dataset(
+        dataset_id=dataset_id, path=dataset_path, format="workbuddy.v1"
     )
-    if registered is None:
-        raise WorkBuddyPlanError(f"registered Dataset not found: {dataset_id}")
-    resolved = validate_harbor_dataset(registered)
     _validate_office_dataset(resolved)
     runtime = validate_workbuddy_runtime()
     base = _load_base_config(Path(base_config).expanduser().resolve())
@@ -110,7 +105,7 @@ def prepare_workbuddy_plan(
         "schema": PLAN_SCHEMA,
         "plan_id": plan_id,
         "created_at": datetime.now(UTC).isoformat(),
-        "dataset_id": dataset_id,
+        "dataset_id": resolved.id,
         "dataset_root": str(resolved.source_root),
         "task_root": str(resolved.task_root),
         "jobs_root": str(jobs_root),
@@ -129,42 +124,17 @@ def prepare_workbuddy_plan(
         "warnings": warnings,
     }
     _atomic_write_json(plan_dir / "workbuddy-run-plan.json", plan)
-    mount = HarborMount(id=plan_id, path=str(jobs_root), dataset_ids=(dataset_id,))
-    write_workspace_harbor_config(
-        root / "peval.toml",
-        config.harbor_datasets,
-        (*config.harbor_mounts, mount),
-    )
-    for warning in warnings:
-        print(f"warning: {warning}")
-    for item in plan["jobs"]:
-        command = ["harbor", "run", "-c", str(item["config"])]
-        if host_mode:
-            command = ["env", f"PEVAL_CONFIG={root / 'peval.toml'}", *command]
-        print(shlex.join(command))
-    print(
-        shlex.join(
-            [
-                "peval",
-                "harbor",
-                "summarize",
-                "--root",
-                str(root),
-                "--plan",
-                plan_id,
-            ]
-        )
-    )
     return plan
 
 
 def summarize_workbuddy_plan(
-    *, workspace_root: str | Path | None, plan_id: str, provisional: bool = False
+    *, output_root: str | Path, plan_id: str, provisional: bool = False
 ) -> dict[str, Any]:
-    root, _config = _workspace(workspace_root)
+    root = _output_root(output_root)
     if HARBOR_ID_RE.fullmatch(plan_id) is None:
         raise WorkBuddyPlanError("plan id is not path-safe")
     plan_dir = root / "harbor-plans" / plan_id
+    _require_unlinked_path(plan_dir, "plan directory")
     plan = _read_plan(plan_dir / "workbuddy-run-plan.json")
     if plan.get("plan_id") != plan_id:
         raise WorkBuddyPlanError("run plan identity does not match its directory")
@@ -216,30 +186,25 @@ def summarize_workbuddy_plan(
         "warnings": list(plan.get("warnings") or []),
     }
     _atomic_write_json(plan_dir / "workbuddy-summary.json", snapshot)
-    print("WorkBuddy Benchmark Summary")
-    print(f"reward: {float(metrics.get('reward', 0.0)):.4f}")
-    print(f"pass_rate: {float(metrics.get('pass_rate', 0.0)):.4f}")
-    print(f"tasks: {metrics.get('n_tasks', 0)}; trials: {metrics.get('n_trials', 0)}")
-    for warning in snapshot["warnings"]:
-        print(f"warning: {warning}")
     return snapshot
 
 
 def discover_workbuddy_summaries(
-    workspace_root: Path,
+    output_root: str | Path,
     registered_dataset_ids: set[str],
 ) -> list[dict[str, Any]]:
     """Project safe aggregate snapshots for the Workspace Dataset page."""
 
-    plans_root = workspace_root / "harbor-plans"
+    plans_root = _output_root(output_root) / "harbor-plans"
     if not plans_root.is_dir() or plans_root.is_symlink():
         return []
     summaries: list[dict[str, Any]] = []
     try:
-        entries = sorted(os.scandir(plans_root), key=lambda item: item.name)
+        with os.scandir(plans_root) as stream:
+            entries = heapq.nsmallest(256, stream, key=lambda item: item.name)
     except OSError:
         return []
-    for entry in entries[:256]:
+    for entry in entries:
         if (
             entry.is_symlink()
             or not entry.is_dir(follow_symlinks=False)
@@ -383,14 +348,6 @@ def compute_official_metrics(
     return metrics
 
 
-def _workspace(root: str | Path | None) -> tuple[Path, ToolConfig]:
-    config = load_config(workspace_root=root)
-    if config.workspace_root is None:
-        raise WorkBuddyPlanError("peval workspace not found; run peval init first")
-    workspace = Path(config.workspace_root).resolve()
-    return workspace, config
-
-
 def _validate_office_dataset(resolved: ResolvedHarborDataset) -> None:
     manifest_id = resolved.manifest.get("dataset", {}).get("id")
     if (
@@ -464,7 +421,7 @@ def _adapt_explicit_host_environment(base: dict[str, Any]) -> bool:
     environment = base.get("environment") or {}
     if not isinstance(environment, dict):
         return False
-    if environment.get("import_path") != "psycheval.harbor.environment:HostEnvironment":
+    if environment.get("import_path") != f"{__package__}.environment:HostEnvironment":
         return False
     kwargs = environment.get("kwargs") or {}
     if not isinstance(kwargs, dict):
@@ -599,7 +556,9 @@ def _extract_special_skill(
                 if path != prefix and prefix not in path.parents:
                     continue
                 relative = path.relative_to(prefix)
-                if any(part in {"", ".", "..", ".git"} for part in relative.parts):
+                if (path == prefix and not member.isdir()) or any(
+                    part.lower() in {"", ".", "..", ".git"} for part in relative.parts
+                ):
                     raise WorkBuddyPlanError("special Skill archive path is unsafe")
                 if (
                     member.issym()
@@ -645,7 +604,7 @@ def _extract_special_skill(
                 seen[relative] = identity
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(content)
-                target.chmod(member.mode & 0o777)
+                target.chmod(member.mode & 0o755)
                 found = True
     except (OSError, tarfile.TarError) as exc:
         raise WorkBuddyPlanError("special Skill archive cannot be read") from exc
@@ -706,12 +665,27 @@ def _new_plan_id() -> str:
     return f"workbuddy-office-{stamp}-{secrets.token_hex(3)}"
 
 
+def _output_root(value: str | Path) -> Path:
+    if not str(value).strip():
+        raise WorkBuddyPlanError("WorkBuddy output root must be nonempty")
+    return Path(value).expanduser().resolve()
+
+
+def _require_unlinked_path(path: Path, label: str) -> None:
+    if path.is_symlink() or path.resolve() != path:
+        raise WorkBuddyPlanError(f"WorkBuddy {label} traverses a symbolic link")
+
+
 def _reserve_plan_directories(root: Path) -> tuple[str, Path, Path]:
     plan_root = root / "harbor-plans"
     jobs_root = root / "harbor-jobs"
+    _require_unlinked_path(plan_root, "plan root")
+    _require_unlinked_path(jobs_root, "Jobs root")
     try:
         plan_root.mkdir(parents=True, exist_ok=True)
+        _require_unlinked_path(plan_root, "plan root")
         jobs_root.mkdir(parents=True, exist_ok=True)
+        _require_unlinked_path(jobs_root, "Jobs root")
     except OSError as exc:
         raise WorkBuddyPlanError("cannot create WorkBuddy plan directories") from exc
     for _attempt in range(PLAN_ID_ATTEMPTS):
@@ -724,6 +698,7 @@ def _reserve_plan_directories(root: Path) -> tuple[str, Path, Path]:
             continue
         except OSError as exc:
             raise WorkBuddyPlanError("cannot reserve a WorkBuddy run plan") from exc
+        _require_unlinked_path(plan_dir, "plan directory")
         try:
             job_dir.mkdir()
         except FileExistsError:
@@ -740,25 +715,38 @@ def _reserve_plan_directories(root: Path) -> tuple[str, Path, Path]:
             except OSError:
                 pass
             raise WorkBuddyPlanError("cannot reserve a WorkBuddy Jobs root") from exc
+        _require_unlinked_path(job_dir, "Jobs directory")
         return plan_id, plan_dir, job_dir
     raise WorkBuddyPlanError("cannot allocate a unique WorkBuddy run plan id")
 
 
 def _write_yaml(path: Path, value: dict[str, Any]) -> None:
-    path.write_text(
-        yaml.safe_dump(value, sort_keys=False, allow_unicode=True), encoding="utf-8"
-    )
+    _atomic_write_text(path, yaml.safe_dump(value, sort_keys=False, allow_unicode=True))
 
 
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
-    temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    _atomic_write_text(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    _require_unlinked_path(path, "output file")
+    temporary: Path | None = None
     try:
-        temporary.write_text(
-            json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        descriptor, name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
         )
+        temporary = Path(name)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _require_unlinked_path(path, "output file")
         temporary.replace(path)
+    except OSError as exc:
+        raise WorkBuddyPlanError(f"cannot write WorkBuddy output: {path}") from exc
     finally:
-        temporary.unlink(missing_ok=True)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _read_plan(path: Path) -> dict[str, Any]:
@@ -848,7 +836,7 @@ def _plan_contained_path(root: Path, value: object, label: str) -> Path:
     absolute = Path(os.path.abspath(path))
     allowed = root / "harbor-jobs"
     if allowed not in absolute.parents:
-        raise WorkBuddyPlanError(f"run plan {label} escapes the workspace")
+        raise WorkBuddyPlanError(f"run plan {label} escapes the output root")
     if absolute.resolve(strict=False) != absolute:
         raise WorkBuddyPlanError(f"run plan {label} traverses a symbolic link")
     return absolute

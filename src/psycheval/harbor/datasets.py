@@ -8,12 +8,10 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, Mapping
+from typing import Any, Literal, Mapping
 
-from psycheval._harbor_tasks import load_harbor_task
-
-if TYPE_CHECKING:
-    from psycheval.config import HarborDataset, HarborMount, ToolConfig
+from .identifiers import validate_harbor_id
+from .tasks import load_harbor_task
 
 DatasetFormat = Literal["harbor", "workbuddy.v1"]
 
@@ -66,13 +64,21 @@ def detect_harbor_dataset_format(root: Path) -> DatasetFormat:
     return "harbor"
 
 
-def resolve_harbor_dataset(dataset: HarborDataset) -> ResolvedHarborDataset:
+def resolve_harbor_dataset(
+    *, dataset_id: str, path: str | Path, format: DatasetFormat = "harbor"
+) -> ResolvedHarborDataset:
     """Resolve a Dataset's effective layout without walking every Task body."""
 
-    root = Path(dataset.path)
-    if dataset.format == "harbor":
+    try:
+        dataset_id = validate_harbor_id(dataset_id, kind="dataset")
+    except ValueError as exc:
+        raise HarborDatasetError(str(exc)) from exc
+    if not str(path).strip():
+        raise HarborDatasetError("harbor dataset path must be a non-empty string")
+    root = Path(path).expanduser().resolve()
+    if format == "harbor":
         return ResolvedHarborDataset(
-            id=dataset.id,
+            id=dataset_id,
             source_root=root,
             task_root=root,
             format="harbor",
@@ -80,15 +86,17 @@ def resolve_harbor_dataset(dataset: HarborDataset) -> ResolvedHarborDataset:
             task_names=tuple(path.name for path in _direct_task_dirs(root)),
             manifest=MappingProxyType({}),
         )
-    if dataset.format != "workbuddy.v1":
-        raise HarborDatasetError(f"unsupported Harbor Dataset format: {dataset.format}")
-    return _resolve_workbuddy(dataset.id, root)
+    if format != "workbuddy.v1":
+        raise HarborDatasetError(f"unsupported Harbor Dataset format: {format}")
+    return _resolve_workbuddy(dataset_id, root)
 
 
-def validate_harbor_dataset(dataset: HarborDataset) -> ResolvedHarborDataset:
+def validate_harbor_dataset(
+    *, dataset_id: str, path: str | Path, format: DatasetFormat = "harbor"
+) -> ResolvedHarborDataset:
     """Fully validate a Dataset at registration and execution-plan gates."""
 
-    resolved = resolve_harbor_dataset(dataset)
+    resolved = resolve_harbor_dataset(dataset_id=dataset_id, path=path, format=format)
     if resolved.format != "workbuddy.v1":
         return resolved
     for relative in REQUIRED_SHARED_VERIFIER_FILES:
@@ -118,31 +126,6 @@ def validate_harbor_dataset(dataset: HarborDataset) -> ResolvedHarborDataset:
                 f"workspace archive is a Git LFS pointer: {archive}"
             )
     return resolved
-
-
-def resolve_harbor_datasets_for_mount(
-    config: ToolConfig,
-    mount: HarborMount,
-) -> tuple[ResolvedHarborDataset, ...]:
-    """Resolve only the Datasets referenced by one validated mount."""
-
-    datasets_by_id = {dataset.id: dataset for dataset in config.harbor_datasets}
-    return tuple(
-        resolve_harbor_dataset(datasets_by_id[dataset_id])
-        for dataset_id in mount.dataset_ids
-    )
-
-
-def harbor_task_roots_for_mount(
-    config: ToolConfig,
-    mount: HarborMount,
-) -> tuple[str, ...]:
-    """Return effective Task allowlist roots for one validated mount."""
-
-    return tuple(
-        str(dataset.task_root)
-        for dataset in resolve_harbor_datasets_for_mount(config, mount)
-    )
 
 
 def _resolve_workbuddy(dataset_id: str, root: Path) -> ResolvedHarborDataset:

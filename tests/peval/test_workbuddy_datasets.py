@@ -5,9 +5,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
+from psycheval._harbor_datasets import harbor_task_roots_for_mount
 from psycheval.config import (
     HarborDataset,
     HarborMount,
@@ -17,7 +17,6 @@ from psycheval.config import (
 from psycheval.harbor.datasets import (
     HarborDatasetError,
     _walk_regular_tree,
-    harbor_task_roots_for_mount,
     resolve_harbor_dataset,
     validate_harbor_dataset,
 )
@@ -71,6 +70,38 @@ judge_config = "tests/judge.yaml"
 
 
 class WorkBuddyDatasetTests(unittest.TestCase):
+    def test_config_loading_is_lightweight_but_registration_validates_content(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = _write_workbuddy_bundle(root / "bundle")
+            (bundle / "shared" / "verifier" / "plugin.py").unlink()
+            config_path = root / "peval.toml"
+            config_path.write_text(
+                '[[harbor.datasets]]\nid = "office"\npath = "bundle"\n'
+                'format = "workbuddy.v1"\n',
+                encoding="utf-8",
+            )
+
+            config = load_config(workspace_root=root)
+            self.assertEqual(config.harbor_datasets[0].path, str(bundle.resolve()))
+            with self.assertRaisesRegex(HarborDatasetError, "plugin.py"):
+                validate_harbor_dataset(
+                    dataset_id="office", path=bundle, format="workbuddy.v1"
+                )
+
+            config_path.write_text("", encoding="utf-8")
+            with self.assertRaisesRegex(HarborWorkspaceError, "plugin.py"):
+                HarborWorkspace(
+                    config_path, ToolConfig(workspace_root=str(root))
+                ).register_dataset(
+                    dataset_id="office",
+                    path=str(bundle),
+                    expected_revision=config_revision(config_path),
+                )
+            self.assertEqual(config_path.read_text(encoding="utf-8"), "")
+
     def test_workbuddy_bundle_rejects_an_empty_dataset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             bundle = Path(tmp) / "bundle"
@@ -91,14 +122,14 @@ class WorkBuddyDatasetTests(unittest.TestCase):
                 HarborDatasetError, "task_count must be a positive integer"
             ):
                 resolve_harbor_dataset(
-                    HarborDataset(id="office", path=str(bundle), format="workbuddy.v1")
+                    dataset_id="office", path=str(bundle), format="workbuddy.v1"
                 )
 
     def test_resolver_exposes_nested_task_root_and_read_only_capabilities(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             bundle = _write_workbuddy_bundle(Path(tmp) / "bundle")
             resolved = resolve_harbor_dataset(
-                HarborDataset(id="office", path=str(bundle), format="workbuddy.v1")
+                dataset_id="office", path=str(bundle), format="workbuddy.v1"
             )
 
             self.assertEqual(resolved.source_root, bundle)
@@ -118,7 +149,7 @@ class WorkBuddyDatasetTests(unittest.TestCase):
                 HarborDatasetError, "invalid Harbor Task office-one"
             ):
                 validate_harbor_dataset(
-                    HarborDataset(id="office", path=str(bundle), format="workbuddy.v1")
+                    dataset_id="office", path=str(bundle), format="workbuddy.v1"
                 )
 
     def test_explicit_workbuddy_bundle_rejects_an_oversized_manifest(self) -> None:
@@ -129,7 +160,7 @@ class WorkBuddyDatasetTests(unittest.TestCase):
 
             with self.assertRaisesRegex(HarborDatasetError, "exceeds 262144 bytes"):
                 validate_harbor_dataset(
-                    HarborDataset(id="office", path=str(bundle), format="workbuddy.v1")
+                    dataset_id="office", path=str(bundle), format="workbuddy.v1"
                 )
 
     @unittest.skipUnless(
@@ -153,7 +184,7 @@ class WorkBuddyDatasetTests(unittest.TestCase):
 
             with patch("psycheval.harbor.datasets.os.open", recording_open):
                 validate_harbor_dataset(
-                    HarborDataset(id="office", path=str(bundle), format="workbuddy.v1")
+                    dataset_id="office", path=str(bundle), format="workbuddy.v1"
                 )
 
             self.assertTrue(opened_flags)
@@ -171,7 +202,7 @@ class WorkBuddyDatasetTests(unittest.TestCase):
             (bundle / "tasks" / "office-one" / "linked.txt").symlink_to(outside)
             with self.assertRaisesRegex(HarborDatasetError, "symbolic link"):
                 validate_harbor_dataset(
-                    HarborDataset(id="office", path=str(bundle), format="workbuddy.v1")
+                    dataset_id="office", path=str(bundle), format="workbuddy.v1"
                 )
 
     def test_registration_canonicalizes_symlink_and_persists_detected_format(
@@ -368,17 +399,12 @@ class WorkBuddyDatasetTests(unittest.TestCase):
             second = HarborDataset(id="second", path=str(root / "second"))
             mount = HarborMount(id="jobs", path=str(root), dataset_ids=("second",))
             config = ToolConfig(harbor_datasets=(first, second), harbor_mounts=(mount,))
+            (root / "second" / "only-task").mkdir(parents=True)
 
-            with patch(
-                "psycheval.harbor.datasets.resolve_harbor_dataset",
-                side_effect=lambda dataset: SimpleNamespace(
-                    task_root=Path(dataset.path) / "tasks"
-                ),
-            ) as resolve:
-                paths = harbor_task_roots_for_mount(config, mount)
+            paths = harbor_task_roots_for_mount(config, mount)
 
-            self.assertEqual(paths, (str(root / "second" / "tasks"),))
-            resolve.assert_called_once_with(second)
+            self.assertEqual(paths, (str(root / "second"),))
+            self.assertFalse((root / "first").exists())
 
     def test_task_tree_walk_is_not_limited_by_python_recursion_depth(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

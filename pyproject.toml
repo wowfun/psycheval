@@ -1,6 +1,6 @@
 [project]
 name = "psycheval"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Agent evaluation, Harbor integration, and trajectory analysis tools"
 readme = "README.md"
 license = "MIT"
@@ -32,6 +32,9 @@ dev = [
     "pytest>=8.4,<9",
     "ruff>=0.12,<1",
 ]
+
+[tool.hatch.version]
+path = "src/psycheval/harbor/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/psycheval"]

@@ -7,8 +7,8 @@ from typing import Any
 
 from harbor.models.trajectories import Trajectory
 
-from psycheval.harbor.runtime_config import optional_effective_runtime_config
-from psycheval.harbor.verifier import aggregate, evaluate
+from ..runtime_config import optional_effective_runtime_config
+from . import aggregate, evaluate
 
 
 def _parser() -> argparse.ArgumentParser:

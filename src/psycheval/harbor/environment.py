@@ -26,7 +26,7 @@ from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.models.task.config import TaskOS
 from harbor.utils.scripts import quote_windows_shell_arg
 
-from psycheval.harbor.runtime_config import (
+from .runtime_config import (
     PEVAL_CONFIG_ENV,
     EffectiveRuntimeConfig,
     HostSettings,

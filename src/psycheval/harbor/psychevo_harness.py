@@ -10,12 +10,12 @@ from pathlib import Path
 
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
-from psycheval.harbor.psychevo import (
+from .psychevo import (
     parse_ndjson,
     psychevo_events_to_atif,
     terminal_event,
 )
-from psycheval.harbor.runtime_config import (
+from .runtime_config import (
     PEVAL_CONFIG_ENV,
     RuntimeConfigError,
     load_effective_runtime_config,
