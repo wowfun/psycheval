@@ -1108,6 +1108,75 @@ def test_windows_host_reports_native_os_and_capability(
     assert environment.capabilities.mounted is True
 
 
+@pytest.mark.parametrize("mode", ["argv", "shell"])
+def test_exec_maps_declared_environment_with_per_call_and_scoped_precedence(
+    tmp_path, mode
+):
+    async def scenario():
+        environment = make_environment(
+            tmp_path / "space 中文",
+            config=EnvironmentConfig(
+                workdir="/app",
+                env={"TASK_FILE": "/app/task.txt", "OVERRIDE": "/app/task.txt"},
+            ),
+            environment_kwargs={
+                "persistent_env": {
+                    "PERSISTENT_FILE": "/app/persistent.txt",
+                    "OVERRIDE": "/app/persistent.txt",
+                }
+            },
+        )
+        await environment.start(force_build=False)
+        try:
+            for name in ("task", "persistent", "scoped"):
+                environment.native_path(f"/app/{name}.txt").write_text(name)
+            script = (
+                "import json,os; from pathlib import Path; "
+                "print(json.dumps([Path(os.environ['TASK_FILE']).read_text(), "
+                "Path(os.environ['PERSISTENT_FILE']).read_text(), os.environ['OVERRIDE']]))"
+            )
+
+            async def read(env=None):
+                argv = [sys.executable, "-c", script]
+                if mode == "argv":
+                    result = await environment.exec_argv(argv, env=env)
+                else:
+                    quote = (
+                        quote_windows_shell_arg
+                        if environment.os == TaskOS.WINDOWS
+                        else shlex.quote
+                    )
+                    result = await environment.exec(
+                        " ".join(quote(arg) for arg in argv), env=env
+                    )
+                assert result.return_code == 0, result.stderr
+                return json.loads(result.stdout)
+
+            assert await read() == [
+                "task",
+                "persistent",
+                str(environment.native_path("/app/persistent.txt")),
+            ]
+            literal = {"OVERRIDE": "/app/literal"}
+            expected = (
+                "/app/literal"
+                if mode == "argv"
+                else str(environment.native_path("/app/literal"))
+            )
+            assert await read(literal) == ["task", "persistent", expected]
+            with environment.scoped_exec_env({"OVERRIDE": "/app/scoped.txt"}):
+                assert await read(literal) == [
+                    "task",
+                    "persistent",
+                    str(environment.native_path("/app/scoped.txt")),
+                ]
+            assert await read(literal) == ["task", "persistent", expected]
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
+
+
 def test_windows_exec_uses_cmd_and_translates_runtime_aliases(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1117,11 +1186,13 @@ def test_windows_exec_uses_cmd_and_translates_runtime_aliases(
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
-    async def create_process(*args, **kwargs):
-        calls.append((args, kwargs))
+    async def create_process(adapter, args, **kwargs):
+        calls.append((tuple(args), {**kwargs, **adapter.process_kwargs()}))
         return _CompletedProcess()
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(
+        "psycheval.harbor.windows.WindowsProcessAdapter.spawn", create_process
+    )
 
     async def scenario() -> None:
         environment = make_environment(tmp_path / "jobs with spaces")
@@ -1133,7 +1204,11 @@ def test_windows_exec_uses_cmd_and_translates_runtime_aliases(
             result = await environment.exec(
                 "type C:/tests/source.txt > C:/logs/verifier/result.txt",
                 cwd="C:/app",
-                env={"XDG_DATA_HOME": "C:/logs/agent/opencode/xdg-data"},
+                env={
+                    "XDG_DATA_HOME": "C:/logs/agent/opencode/xdg-data",
+                    "PYTHONPATH": "C:/app;C:/tests/grading;F:/lib",
+                    "PATH": "C:/app/bin;F:/tools",
+                },
             )
             assert result.return_code == 0
             assert calls
@@ -1157,6 +1232,16 @@ def test_windows_exec_uses_cmd_and_translates_runtime_aliases(
             assert Path(kwargs["env"]["XDG_DATA_HOME"]) == (
                 environment.trial_paths.agent_dir / "opencode" / "xdg-data"
             )
+            assert kwargs["env"]["PYTHONPATH"] == ";".join(
+                (
+                    str(environment.native_path("/app")),
+                    str(environment.native_path("/tests/grading")),
+                    "F:/lib",
+                )
+            )
+            assert kwargs["env"]["PATH"].endswith(
+                str(environment.native_path("/app/bin")) + ";F:/tools"
+            )
         finally:
             await environment.stop(delete=True)
 
@@ -1172,12 +1257,14 @@ def test_windows_exec_preserves_a_leading_quoted_executable(
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
     calls: list[tuple[object, ...]] = []
 
-    async def create_process(*args, **kwargs):
+    async def create_process(adapter, args, **kwargs):
         del kwargs
-        calls.append(args)
+        calls.append(tuple(args))
         return _CompletedProcess()
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(
+        "psycheval.harbor.windows.WindowsProcessAdapter.spawn", create_process
+    )
 
     async def scenario() -> None:
         environment = make_environment(tmp_path)
@@ -1219,25 +1306,27 @@ def test_windows_rejects_every_explicit_user(
     asyncio.run(scenario())
 
 
-def test_windows_timeout_terminates_the_process_tree_with_taskkill(
+def test_windows_timeout_closes_the_owned_job(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
         "psycheval.harbor.environment.platform.system", lambda: "Windows"
     )
     target = _HangingProcess()
-    invocations: list[tuple[object, ...]] = []
+    closed = []
 
-    async def create_process(*args, **kwargs):
-        del kwargs
-        invocations.append(args)
-        if len(invocations) == 1:
-            return target
-        return _TaskkillProcess(target)
+    class Job:
+        def close(self):
+            closed.append(True)
+            target.returncode = 1
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    async def spawn(adapter, argv, **kwargs):
+        adapter._jobs[target] = Job()
+        return target
 
-    async def scenario() -> None:
+    monkeypatch.setattr("psycheval.harbor.windows.WindowsProcessAdapter.spawn", spawn)
+
+    async def scenario():
         environment = make_environment(tmp_path)
         await environment.start(force_build=False)
         try:
@@ -1247,14 +1336,8 @@ def test_windows_timeout_terminates_the_process_tree_with_taskkill(
             await environment.stop(delete=True)
 
     asyncio.run(scenario())
-    assert len(invocations) == 2
-    assert invocations[1] == (
-        "taskkill",
-        "/PID",
-        str(target.pid),
-        "/T",
-        "/F",
-    )
+    assert closed == [True]
+    assert target.returncode == 1
 
 
 def test_unsupported_native_host_fails_at_construction(
@@ -1334,17 +1417,3 @@ class _HangingProcess(_CompletedProcess):
         while self.returncode is None:
             await asyncio.sleep(3600)
         return self.returncode
-
-
-class _TaskkillProcess(_CompletedProcess):
-    def __init__(self, target: _HangingProcess) -> None:
-        super().__init__()
-        self._target = target
-
-    async def wait(self) -> int:
-        self._target.returncode = 1
-        return await super().wait()
-
-    async def communicate(self) -> tuple[bytes, bytes]:
-        await self.wait()
-        return b"", b""

@@ -18,6 +18,7 @@ import tempfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path, PurePath, PurePosixPath
+from typing import Protocol
 from uuid import uuid4
 
 import yaml
@@ -26,6 +27,7 @@ from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.models.task.config import TaskOS
 from harbor.utils.scripts import quote_windows_shell_arg
 
+from . import windows
 from .runtime_config import (
     PEVAL_CONFIG_ENV,
     EffectiveRuntimeConfig,
@@ -53,7 +55,6 @@ _VIRTUAL_ROOTS = (
     _VIRTUAL_TESTS,
     _VIRTUAL_LOGS,
 )
-_WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[/\\]")
 _WORKSPACE_RESERVED_ROOTS = (
     _VIRTUAL_LOGS,
     _VIRTUAL_TESTS,
@@ -230,7 +231,7 @@ def _initialize_workbuddy_git(workspace: Path) -> None:
                 [
                     "git",
                     "-c",
-                    "core.hooksPath=/dev/null",
+                    "core.hooksPath=" + os.devnull,
                     "-C",
                     str(workspace),
                     *arguments,
@@ -258,22 +259,16 @@ def _split_virtual_path(
     host_os: TaskOS,
     virtual_roots: Sequence[str] = _VIRTUAL_ROOTS,
 ) -> tuple[str, tuple[str, ...]] | None:
-    normalized = value.replace("\\", "/") if host_os == TaskOS.WINDOWS else value
+    if host_os == TaskOS.WINDOWS:
+        return windows.split_virtual_path(value, virtual_roots)
     for virtual in sorted(set(virtual_roots), key=len, reverse=True):
-        aliases = (virtual, f"C:{virtual}") if host_os == TaskOS.WINDOWS else (virtual,)
-        for alias in aliases:
-            windows_alias = alias.startswith("C:")
-            candidate = normalized.lower() if windows_alias else normalized
-            alias_comparison = alias.lower() if windows_alias else alias
-            if candidate == alias_comparison:
-                return virtual, ()
-            prefix = f"{alias_comparison}/"
-            if candidate.startswith(prefix):
-                suffix = normalized[len(alias) + 1 :]
-                parts = PurePosixPath(suffix).parts
-                if ".." in parts:
-                    raise ValueError(f"unsupported HostEnvironment path: {value}")
-                return virtual, tuple(part for part in parts if part != ".")
+        if value == virtual:
+            return virtual, ()
+        if value.startswith(virtual + "/"):
+            parts = PurePosixPath(value[len(virtual) + 1 :]).parts
+            if ".." in parts:
+                raise ValueError(f"unsupported HostEnvironment path: {value}")
+            return virtual, tuple(part for part in parts if part != ".")
     return None
 
 
@@ -351,71 +346,12 @@ def _translate_posix_command(command: str, mappings: dict[str, Path]) -> str:
     return "".join(pieces)
 
 
-def _translate_windows_command(command: str, mappings: dict[str, Path]) -> str:
-    aliases = sorted(
-        {
-            alias
-            for virtual in mappings
-            for alias in (
-                virtual,
-                f"C:{virtual}",
-                f"C:{virtual}".replace("/", "\\"),
-            )
-        },
-        key=len,
-        reverse=True,
-    )
-    alias_pattern = "|".join(re.escape(alias) for alias in aliases)
-    path_pattern = re.compile(
-        rf"(?<![A-Za-z0-9_:/\\.-])"
-        rf"(?P<path>(?:{alias_pattern})(?:[/\\][^\s;|&()<>\"']*)?)"
-        rf"(?=$|[\s;|&()<>])",
-        flags=re.IGNORECASE,
-    )
-
-    def translate_unquoted(value: str) -> str:
-        def replacement(match: re.Match[str]) -> str:
-            translated = _translate_literal(
-                match.group("path"), mappings, TaskOS.WINDOWS
-            )
-            if translated is None:
-                return match.group(0)
-            return quote_windows_shell_arg(translated)
-
-        return path_pattern.sub(replacement, value)
-
-    pieces: list[str] = []
-    unquoted_start = 0
-    index = 0
-    while index < len(command):
-        if command[index] != '"':
-            index += 1
-            continue
-        pieces.append(translate_unquoted(command[unquoted_start:index]))
-        end = command.find('"', index + 1)
-        if end < 0:
-            pieces.append(command[index:])
-            return "".join(pieces)
-        content = command[index + 1 : end]
-        translated_literal = _translate_literal(content, mappings, TaskOS.WINDOWS)
-        if translated_literal is None:
-            pieces.append(command[index : end + 1])
-        else:
-            pieces.append(quote_windows_shell_arg(translated_literal))
-        index = end + 1
-        unquoted_start = index
-    pieces.append(translate_unquoted(command[unquoted_start:]))
-    return "".join(pieces)
-
-
 def _canonical_virtual_path(value: str, host_os: TaskOS, *, label: str) -> str:
+    if host_os == TaskOS.WINDOWS:
+        return windows.normalize_environment_path(value, label=label)
     if "\x00" in value:
         raise ValueError(f"{label} contains NUL")
-    normalized = value.replace("\\", "/") if host_os == TaskOS.WINDOWS else value
-    if host_os == TaskOS.WINDOWS and _WINDOWS_ABSOLUTE.match(normalized):
-        if normalized[0].lower() != "c":
-            raise ValueError(f"{label} must use the C: environment drive")
-        normalized = normalized[2:]
+    normalized = value
     if not normalized.startswith("/") or normalized.startswith("//"):
         raise ValueError(f"{label} must be a non-root absolute environment path")
     if ".." in normalized.split("/"):
@@ -434,27 +370,36 @@ def _paths_overlap(left: str, right: str) -> bool:
     return _same_or_descendant(left, right) or _same_or_descendant(right, left)
 
 
-class _HostProcessAdapter:
+class _HostProcessAdapter(Protocol):
     os: TaskOS
 
-    def translate_command(self, command: str, mappings: dict[str, Path]) -> str:
-        raise NotImplementedError
+    def translate_command(self, command: str, mappings: dict[str, Path]) -> str: ...
 
-    def shell_argv(self, command: str) -> tuple[str, ...]:
-        raise NotImplementedError
+    def shell_argv(self, command: str) -> tuple[str, ...]: ...
 
-    def process_kwargs(self) -> dict[str, object]:
-        raise NotImplementedError
+    def process_kwargs(self) -> dict[str, object]: ...
 
-    def validate_user(self, resolved_user: str | int | None) -> None:
-        raise NotImplementedError
+    def validate_user(self, resolved_user: str | int | None) -> None: ...
 
-    async def terminate(self, process: asyncio.subprocess.Process) -> None:
-        raise NotImplementedError
+    async def terminate(self, process: asyncio.subprocess.Process) -> None: ...
+
+    async def spawn(
+        self, argv: Sequence[str], **kwargs
+    ) -> asyncio.subprocess.Process: ...
+
+    def release(self, process: asyncio.subprocess.Process) -> None: ...
 
 
-class _LinuxProcessAdapter(_HostProcessAdapter):
+class _LinuxProcessAdapter:
     os = TaskOS.LINUX
+
+    async def spawn(self, argv: Sequence[str], **kwargs) -> asyncio.subprocess.Process:
+        return await asyncio.create_subprocess_exec(
+            *argv, **kwargs, **self.process_kwargs()
+        )
+
+    def release(self, process: asyncio.subprocess.Process) -> None:
+        return None
 
     def translate_command(self, command: str, mappings: dict[str, Path]) -> str:
         return _translate_posix_command(command, mappings)
@@ -476,15 +421,13 @@ class _LinuxProcessAdapter(_HostProcessAdapter):
             )
 
     async def terminate(self, process: asyncio.subprocess.Process) -> None:
-        if process.returncode is not None:
-            return
+        # Descendants may still own the group and output pipes after the leader exits.
         try:
             os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             return
         try:
             await asyncio.wait_for(process.wait(), timeout=2)
-            return
         except asyncio.TimeoutError:
             pass
         try:
@@ -492,56 +435,6 @@ class _LinuxProcessAdapter(_HostProcessAdapter):
         except ProcessLookupError:
             return
         await process.wait()
-
-
-class _WindowsProcessAdapter(_HostProcessAdapter):
-    os = TaskOS.WINDOWS
-
-    def translate_command(self, command: str, mappings: dict[str, Path]) -> str:
-        return _translate_windows_command(command, mappings)
-
-    def shell_argv(self, command: str) -> tuple[str, ...]:
-        shell_command = f'"{command}"' if command.lstrip().startswith('"') else command
-        return (
-            os.environ.get("COMSPEC", "cmd.exe"),
-            "/D",
-            "/S",
-            "/C",
-            shell_command,
-        )
-
-    def process_kwargs(self) -> dict[str, object]:
-        return {
-            "creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-        }
-
-    def validate_user(self, resolved_user: str | int | None) -> None:
-        if resolved_user is not None:
-            raise ValueError(
-                "HostEnvironment on Windows does not support user switching; "
-                f"received {resolved_user!r}"
-            )
-
-    async def terminate(self, process: asyncio.subprocess.Process) -> None:
-        if process.returncode is not None:
-            return
-        taskkill = await asyncio.create_subprocess_exec(
-            "taskkill",
-            "/PID",
-            str(process.pid),
-            "/T",
-            "/F",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await taskkill.communicate()
-        if process.returncode is not None:
-            return
-        try:
-            await asyncio.wait_for(process.wait(), timeout=2)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
 
 
 class HostEnvironment(BaseEnvironment):
@@ -572,7 +465,7 @@ class HostEnvironment(BaseEnvironment):
         if host_system == "Linux":
             self._process_adapter: _HostProcessAdapter = _LinuxProcessAdapter()
         elif host_system == "Windows":
-            self._process_adapter = _WindowsProcessAdapter()
+            self._process_adapter = windows.WindowsProcessAdapter()
         else:
             raise RuntimeError(
                 "HostEnvironment supports native Linux and Windows hosts only; "
@@ -980,8 +873,7 @@ class HostEnvironment(BaseEnvironment):
             virtual, suffix = virtual_match
             return mappings[virtual].joinpath(*suffix)
         if raw.startswith("/") or (
-            self.os == TaskOS.WINDOWS
-            and (_WINDOWS_ABSOLUTE.match(raw) or raw.startswith("\\\\"))
+            self.os == TaskOS.WINDOWS and windows.is_absolute_path(raw)
         ):
             raise ValueError(f"unsupported HostEnvironment path: {raw}")
         relative = PurePosixPath(
@@ -997,6 +889,8 @@ class HostEnvironment(BaseEnvironment):
         return self._process_adapter.translate_command(command, self._runtime_dirs())
 
     def _translate_env(self, env: dict[str, str] | None) -> dict[str, str]:
+        if self.os == TaskOS.WINDOWS:
+            return windows.translate_environment(env or {}, self._runtime_dirs())
         translated: dict[str, str] = {}
         for key, value in (env or {}).items():
             mapped = _translate_literal(value, self._runtime_dirs(), self.os)
@@ -1078,13 +972,52 @@ class HostEnvironment(BaseEnvironment):
         timeout_sec: float | None = None,
         user: str | int | None = None,
     ) -> ExecResult:
+        return await self._exec_process(
+            command, cwd=cwd, env=env, timeout_sec=timeout_sec, user=user
+        )
+
+    def native_path(self, value: str | Path) -> Path:
+        """Resolve an environment path to its native host path after start."""
+        return self._translate_path(value)
+
+    async def exec_argv(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+        timeout_sec: float | None = None,
+        user: str | int | None = None,
+    ) -> ExecResult:
+        """Execute literal argv/per-call env; map declared environment paths."""
+        if (
+            isinstance(argv, (str, bytes))
+            or not argv
+            or any(not isinstance(arg, str) or "\x00" in arg for arg in argv)
+            or not argv[0]
+        ):
+            raise ValueError(
+                "HostEnvironment argv must contain an executable and NUL-free string arguments"
+            )
+        return await self._exec_process(
+            argv, cwd=cwd, env=env, timeout_sec=timeout_sec, user=user
+        )
+
+    async def _exec_process(
+        self,
+        command: str | Sequence[str],
+        *,
+        cwd: str | None,
+        env: dict[str, str] | None,
+        timeout_sec: float | None,
+        user: str | int | None,
+    ) -> ExecResult:
         self._validate_user(user)
         effective_cwd = self._task_workdir if cwd is None else cwd
         if cwd is not None:
             self._register_workdir(cwd, require_workspace=False)
         translated_cwd = self._translate_path(effective_cwd)
         translated_cwd.mkdir(parents=True, exist_ok=True)
-        translated_command = self._translate_command(command)
         merged_env = dict(self._merge_env(env) or {})
         requested_config = merged_env.pop(PEVAL_CONFIG_ENV, None)
         merged_env = {
@@ -1105,7 +1038,22 @@ class HostEnvironment(BaseEnvironment):
         }
         if "HOME" in merged_env and "NVM_DIR" not in merged_env:
             process_env.pop("NVM_DIR", None)
-        process_env.update(self._translate_env(merged_env))
+        literal_keys = set(env or {}) if not isinstance(command, str) else set()
+        # Harbor scopes override per-call values, so their paths remain logical.
+        for scoped_env in self._exec_env_overlays.get():
+            literal_keys.difference_update(scoped_env)
+        process_env.update(
+            self._translate_env(
+                {
+                    key: value
+                    for key, value in merged_env.items()
+                    if key not in literal_keys
+                }
+            )
+        )
+        process_env.update(
+            {key: value for key, value in merged_env.items() if key in literal_keys}
+        )
         python_dir = str(Path(sys.executable).parent)
         inherited_path = process_env.get("PATH", "")
         process_env["PATH"] = (
@@ -1114,13 +1062,17 @@ class HostEnvironment(BaseEnvironment):
             else python_dir + os.pathsep + inherited_path
         )
         process_env[PEVAL_CONFIG_ENV] = str(runtime_config_path)
-        process = await asyncio.create_subprocess_exec(
-            *self._process_adapter.shell_argv(translated_command),
+        argv = (
+            self._process_adapter.shell_argv(self._translate_command(command))
+            if isinstance(command, str)
+            else command
+        )
+        process = await self._process_adapter.spawn(
+            argv,
             cwd=translated_cwd,
             env=process_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            **self._process_adapter.process_kwargs(),
         )
         self._active_processes.add(process)
         callback = self._output_callback()
@@ -1141,13 +1093,15 @@ class HostEnvironment(BaseEnvironment):
         stdout_task = asyncio.create_task(read_stream(process.stdout, "stdout"))
         stderr_task = asyncio.create_task(read_stream(process.stderr, "stderr"))
         try:
-            await asyncio.wait_for(process.wait(), timeout=timeout_sec)
-            stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+            async with asyncio.timeout(timeout_sec):
+                await process.wait()
+                stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
         except (asyncio.TimeoutError, asyncio.CancelledError):
             await self._terminate_process(process)
             await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
             raise
         finally:
+            self._process_adapter.release(process)
             self._active_processes.discard(process)
         return ExecResult(
             stdout=stdout,

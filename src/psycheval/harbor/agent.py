@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from pathlib import PurePosixPath
 
 from harbor.agents.base import BaseAgent
@@ -11,7 +10,7 @@ from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.scripts import quote_shell_arg
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
-from . import __version__
+from . import __version__, windows
 from .inference_telemetry import (
     load_trajectory,
     populate_context_from_trajectory,
@@ -24,40 +23,20 @@ from .runtime_config import (
     write_effective_runtime_config,
 )
 
-_WINDOWS_ABSOLUTE = re.compile(r"^(?P<drive>[A-Za-z]):[/\\]")
-
 
 def _normalize_workdir(value: str, task_os: TaskOS) -> str:
-    if "\x00" in value:
-        raise ValueError("ExternalHarnessAgent workdir contains NUL")
-    normalized = value.replace("\\", "/") if task_os == TaskOS.WINDOWS else value
+    label = "ExternalHarnessAgent workdir"
     if task_os == TaskOS.WINDOWS:
-        match = _WINDOWS_ABSOLUTE.match(normalized)
-        if match is not None:
-            drive = match.group("drive").upper()
-            if drive != "C":
-                raise ValueError(
-                    "ExternalHarnessAgent workdir must use the C: environment drive"
-                )
-            path = normalized[2:]
-        elif normalized.startswith("/") and not normalized.startswith("//"):
-            drive = "C"
-            path = normalized
-        else:
-            raise ValueError(
-                "ExternalHarnessAgent workdir must be an absolute environment path"
-            )
-    else:
-        if not normalized.startswith("/") or normalized.startswith("//"):
-            raise ValueError(
-                "ExternalHarnessAgent workdir must be an absolute environment path"
-            )
-        drive = None
-        path = normalized
-    if ".." in path.split("/"):
-        raise ValueError("ExternalHarnessAgent workdir cannot traverse a parent")
-    canonical = PurePosixPath(path).as_posix()
-    return f"{drive}:{canonical}" if drive is not None else canonical
+        return "C:" + windows.normalize_environment_path(
+            value, label=label, allow_root=True
+        )
+    if "\x00" in value:
+        raise ValueError(f"{label} contains NUL")
+    if not value.startswith("/") or value.startswith("//"):
+        raise ValueError(f"{label} must be an absolute environment path")
+    if ".." in value.split("/"):
+        raise ValueError(f"{label} cannot traverse a parent")
+    return PurePosixPath(value).as_posix()
 
 
 class ExternalHarnessAgent(BaseAgent):
