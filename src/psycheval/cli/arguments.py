@@ -36,6 +36,8 @@ class CliArgs:
     host: str = "127.0.0.1"
     port: int | None = None
     dataset_id: str | None = None
+    task_selection: list[str] | None = None
+    task_limit: int | None = None
     config_path: str | None = None
     plan_id: str | None = None
     provisional: bool = False

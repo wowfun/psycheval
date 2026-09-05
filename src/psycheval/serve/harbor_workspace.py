@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from harbor.models.dataset.manifest import DatasetInfo, DatasetManifest, DatasetTaskRef
 from harbor.models.task.config import PackageInfo, TaskConfig
+from pydantic import ValidationError
 
 from psycheval.config import (
     HARBOR_ID_RE,
@@ -158,6 +159,7 @@ class HarborWorkspace:
         dataset_id: str,
         path: str,
         expected_revision: str,
+        allow_partial: bool = False,
     ) -> ToolConfig:
         self._expect_config_revision(expected_revision)
         self._validate_dataset_id(dataset_id)
@@ -165,15 +167,20 @@ class HarborWorkspace:
             raise HarborConflictError(f"Dataset id already exists: {dataset_id}")
         root = self._existing_registration_path(path)
         self._ensure_unique_dataset_path(root)
-        detected_format = detect_harbor_dataset_format(root)
-        registered = HarborDataset(
-            id=dataset_id, path=str(root), format=detected_format
-        )
         try:
-            validate_harbor_dataset(
-                dataset_id=registered.id, path=registered.path, format=registered.format
+            registered = HarborDataset(
+                id=dataset_id,
+                path=str(root),
+                format=detect_harbor_dataset_format(root),
+                allow_partial=allow_partial,
             )
-        except HarborDatasetError as exc:
+            validate_harbor_dataset(
+                dataset_id=registered.id,
+                path=registered.path,
+                format=registered.format,
+                allow_partial=registered.allow_partial,
+            )
+        except (HarborDatasetError, ValidationError) as exc:
             raise HarborWorkspaceError(str(exc)) from exc
         return self._save_config(
             (
@@ -191,6 +198,7 @@ class HarborWorkspace:
         path: str,
         mount_ids: Iterable[str],
         expected_revision: str,
+        allow_partial: bool | None = None,
     ) -> ToolConfig:
         self._expect_config_revision(expected_revision)
         current = self._dataset(dataset_id)
@@ -201,17 +209,22 @@ class HarborWorkspace:
             raise HarborConflictError(f"Dataset id already exists: {new_id}")
         root = self._existing_registration_path(path)
         self._ensure_unique_dataset_path(root, excluding=dataset_id)
-        detected_format = detect_harbor_dataset_format(root)
-        updated_dataset = HarborDataset(
-            id=new_id, path=str(root), format=detected_format
-        )
         try:
+            updated_dataset = HarborDataset(
+                id=new_id,
+                path=str(root),
+                format=detect_harbor_dataset_format(root),
+                allow_partial=current.allow_partial
+                if allow_partial is None
+                else allow_partial,
+            )
             validate_harbor_dataset(
                 dataset_id=updated_dataset.id,
                 path=updated_dataset.path,
                 format=updated_dataset.format,
+                allow_partial=updated_dataset.allow_partial,
             )
-        except HarborDatasetError as exc:
+        except (HarborDatasetError, ValidationError) as exc:
             raise HarborWorkspaceError(str(exc)) from exc
         selected_mount_ids = tuple(str(value).strip() for value in mount_ids)
         if any(not value for value in selected_mount_ids):
@@ -477,6 +490,7 @@ class HarborWorkspace:
         return {
             "dataset_id": dataset_id,
             "format": resolved.format,
+            "allow_partial": dataset.allow_partial,
             "read_only": resolved.read_only,
             "task": summary,
             "tree": tree,
@@ -630,6 +644,7 @@ class HarborWorkspace:
             "id": dataset.id,
             "path": dataset.path,
             "format": resolved.format,
+            "allow_partial": dataset.allow_partial,
             "read_only": resolved.read_only,
             "manifest": dict(resolved.manifest),
             "revision": revision,
@@ -797,7 +812,10 @@ class HarborWorkspace:
         self._validate_dataset_directory(root)
         try:
             return resolve_harbor_dataset(
-                dataset_id=dataset.id, path=dataset.path, format=dataset.format
+                dataset_id=dataset.id,
+                path=dataset.path,
+                format=dataset.format,
+                allow_partial=dataset.allow_partial,
             )
         except HarborDatasetError as exc:
             raise HarborWorkspaceError(str(exc)) from exc

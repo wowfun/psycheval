@@ -12,7 +12,10 @@ def resolve_harbor_datasets_for_mount(
     datasets_by_id = {dataset.id: dataset for dataset in config.harbor_datasets}
     return tuple(
         resolve_harbor_dataset(
-            dataset_id=dataset.id, path=dataset.path, format=dataset.format
+            dataset_id=dataset.id,
+            path=dataset.path,
+            format=dataset.format,
+            allow_partial=dataset.allow_partial,
         )
         for dataset in (datasets_by_id[dataset_id] for dataset_id in mount.dataset_ids)
     )

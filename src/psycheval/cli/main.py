@@ -96,6 +96,8 @@ def run_cli_args(args: CliArgs) -> int:
                 workspace_root=args.root,
                 dataset_id=str(args.dataset_id or ""),
                 base_config=str(args.config_path or ""),
+                task_selection=args.task_selection,
+                limit=args.task_limit,
             )
             return 0
         if args.command == "harbor-summarize":

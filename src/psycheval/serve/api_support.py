@@ -250,7 +250,12 @@ def harbor_config_payload(
     return {
         "revision": config_revision(store.paths.config_path),
         "datasets": [
-            {"id": dataset.id, "path": dataset.path, "format": dataset.format}
+            {
+                "id": dataset.id,
+                "path": dataset.path,
+                "format": dataset.format,
+                "allow_partial": dataset.allow_partial,
+            }
             for dataset in current.harbor_datasets
         ],
         "mounts": [harbor_mount_payload(mount) for mount in current.harbor_mounts],
@@ -306,6 +311,7 @@ def mutate_harbor_dataset(
             ),
             path=path,
             expected_revision=expected_revision,
+            allow_partial=payload.get("allow_partial", False),
         )
     elif action == "update":
         config = library.update_dataset(
@@ -314,6 +320,7 @@ def mutate_harbor_dataset(
             path=required_string(payload, "path"),
             mount_ids=harbor_id_list_payload(payload, "mount_ids", allow_empty=True),
             expected_revision=expected_revision,
+            allow_partial=payload.get("allow_partial"),
         )
     elif action == "unregister":
         config = library.remove_datasets(

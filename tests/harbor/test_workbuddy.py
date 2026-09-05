@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import stat
 import tarfile
 import weakref
@@ -12,6 +13,124 @@ import pytest
 
 from psycheval.harbor import workbuddy
 from tests.fixtures.workbuddy import SPECIAL_TASK, write_office_bundle
+
+
+@pytest.mark.parametrize(
+    "selection,limit,expected_jobs",
+    [
+        (["office-02"], None, 1),
+        ([SPECIAL_TASK], None, 1),
+        ([SPECIAL_TASK, "office-02"], None, 2),
+        (["office-02", "office-00"], 1, 1),
+        (None, 2, 1),
+    ],
+)
+def test_prepare_subsets_share_the_plan_and_summary_flow(
+    plan_inputs, monkeypatch, selection, limit, expected_jobs
+):
+    plan = workbuddy.prepare_workbuddy_plan(
+        **plan_inputs, task_selection=selection, limit=limit
+    )
+    expected = sorted(
+        selection
+        if selection is not None
+        else [f"office-{n:02d}" for n in range(49)] + [SPECIAL_TASK]
+    )[:limit]
+    assert plan["expected_tasks"] == expected
+    assert plan["scope"] == "subset"
+    assert len(plan["jobs"]) == expected_jobs
+    assert sorted(name for job in plan["jobs"] for name in job["tasks"]) == expected
+    assert bool(plan["skill_dir"]) == (SPECIAL_TASK in expected)
+    assert bool(plan["warnings"]) == (SPECIAL_TASK in expected)
+
+    def metrics(root, expected_tasks):
+        assert expected_tasks == expected
+        return {"n_tasks": len(expected), "per_task": {name: {} for name in expected}}
+
+    monkeypatch.setattr(workbuddy, "compute_official_metrics", metrics)
+    snapshot = workbuddy.summarize_workbuddy_plan(
+        output_root=plan_inputs["output_root"],
+        plan_id=plan["plan_id"],
+        provisional=True,
+    )
+    assert snapshot["scope"] == "subset"
+    assert snapshot["provisional"] is True
+    for job in plan["jobs"]:
+        directory = Path(plan["jobs_root"]) / job["name"]
+        directory.mkdir()
+        (directory / "result.json").write_text('{"finished_at":"2026-09-05"}')
+    snapshot = workbuddy.summarize_workbuddy_plan(
+        output_root=plan_inputs["output_root"], plan_id=plan["plan_id"]
+    )
+    assert snapshot["scope"] == "subset"
+    assert snapshot["provisional"] is False
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"task_selection": []},
+        {"task_selection": ["missing"]},
+        {"task_selection": ["office-00", "office-00"]},
+        {"task_selection": "office-00"},
+        {"limit": 0},
+        {"limit": -1},
+        {"limit": True},
+        {"limit": 1.5},
+    ],
+)
+def test_invalid_selection_fails_before_writing_a_plan(plan_inputs, kwargs):
+    with pytest.raises(workbuddy.WorkBuddyPlanError):
+        workbuddy.prepare_workbuddy_plan(**plan_inputs, **kwargs)
+    assert not plan_inputs["output_root"].exists()
+
+
+def test_normal_selection_never_opens_the_special_skill(plan_inputs, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("unselected Skill was opened")
+
+    monkeypatch.setattr(workbuddy, "_extract_special_skill", forbidden)
+    workbuddy.prepare_workbuddy_plan(**plan_inputs, task_selection=["office-00"])
+
+
+def test_cropped_bundle_keeps_its_manifest_and_requires_explicit_opt_in(plan_inputs):
+    bundle = plan_inputs["dataset_path"]
+    before = (bundle / "dataset.toml").read_bytes()
+    for path in (bundle / "tasks").iterdir():
+        if path.name != "office-00":
+            shutil.rmtree(path)
+    with pytest.raises(ValueError, match="declares 50, found 1"):
+        workbuddy.prepare_workbuddy_plan(**plan_inputs)
+    plan = workbuddy.prepare_workbuddy_plan(**plan_inputs, allow_partial=True)
+    assert plan["expected_tasks"] == ["office-00"]
+    assert plan["available_task_count"] == 1
+    assert plan["declared_task_count"] == 50
+    assert (bundle / "dataset.toml").read_bytes() == before
+
+
+def test_partial_bundle_with_wrong_profile_reports_the_profile_error(plan_inputs):
+    manifest = plan_inputs["dataset_path"] / "dataset.toml"
+    manifest.write_text(
+        manifest.read_text().replace("wb-bench-office-v1.0", "different-profile")
+    )
+    with pytest.raises(workbuddy.WorkBuddyPlanError, match="Dataset profile"):
+        workbuddy.prepare_workbuddy_plan(**plan_inputs, allow_partial=True)
+    assert not plan_inputs["output_root"].exists()
+
+
+def test_summary_rejects_unselected_results(plan_inputs, monkeypatch):
+    plan = workbuddy.prepare_workbuddy_plan(**plan_inputs, task_selection=["office-00"])
+    monkeypatch.setattr(
+        workbuddy,
+        "compute_official_metrics",
+        lambda *args: {"per_task": {"office-01": {}}},
+    )
+    with pytest.raises(workbuddy.WorkBuddyPlanError, match="outside the run plan"):
+        workbuddy.summarize_workbuddy_plan(
+            output_root=plan_inputs["output_root"],
+            plan_id=plan["plan_id"],
+            provisional=True,
+        )
 
 
 @pytest.fixture
@@ -34,6 +153,28 @@ def plan_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
         "dataset_path": bundle,
         "base_config": base,
     }
+
+
+@pytest.mark.parametrize(
+    "host,commands", [("Windows", {"git"}), ("Linux", {"bash", "git"})]
+)
+def test_verifier_preflight_does_not_require_agent_tools(monkeypatch, host, commands):
+    monkeypatch.setattr(workbuddy.platform, "system", lambda: host)
+
+    def which(name):
+        return name if name in commands else None
+
+    monkeypatch.setattr(workbuddy.shutil, "which", which)
+    monkeypatch.setattr(workbuddy.importlib.util, "find_spec", lambda name: object())
+    workbuddy.validate_workbuddy_host_dependencies()
+    for missing in sorted(commands):
+        monkeypatch.setattr(
+            workbuddy.shutil,
+            "which",
+            lambda name: None if name == missing else which(name),
+        )
+        with pytest.raises(workbuddy.WorkBuddyPlanError, match=f"commands: {missing}"):
+            workbuddy.validate_workbuddy_host_dependencies()
 
 
 @pytest.mark.parametrize("directory", ["harbor-plans", "harbor-jobs"])
@@ -303,13 +444,24 @@ def test_summary_discovery_bounds_retained_entries_without_changing_selection(
     monkeypatch.setattr(
         workbuddy,
         "_read_plan",
-        lambda path: {"plan_id": path.parent.name, "dataset_id": "office"},
+        lambda path: {
+            "plan_id": path.parent.name,
+            "dataset_id": "office",
+            "scope": "subset",
+            "expected_tasks": ["office-00"],
+            "available_task_count": 50,
+            "declared_task_count": 50,
+        },
     )
     monkeypatch.setattr(
         workbuddy,
         "_read_summary",
         lambda path: {
             "plan_id": path.parent.name,
+            "scope": "subset",
+            "expected_tasks": ["office-00"],
+            "available_task_count": 50,
+            "declared_task_count": 50,
             "metrics": {"reward": 1, "pass_rate": 1, "n_tasks": 1, "n_trials": 1},
         },
     )

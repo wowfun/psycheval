@@ -168,14 +168,22 @@ class PathSelectionRequest(StrictRequest):
 
 
 class DatasetCreateRequest(StrictRequest):
+    allow_partial: bool = Field(default=False, strict=True)
     source: Literal["new", "existing"]
     id: str | None = None
     path: str
     package_name: str | None = None
     description: str = ""
 
+    @model_validator(mode="after")
+    def validate_partial_source(self):
+        if self.allow_partial and self.source != "existing":
+            raise ValueError("allow_partial requires an existing WorkBuddy bundle")
+        return self
+
 
 class DatasetPatchRequest(StrictRequest):
+    allow_partial: bool | None = Field(default=None, strict=True)
     new_id: str
     path: str
     mount_ids: list[str] = Field(default_factory=list)

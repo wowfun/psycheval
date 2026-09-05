@@ -1,0 +1,216 @@
+# Office v1.0 shared/verifier/rule.py execution contract fixture.
+"""Rule command construction."""
+
+from __future__ import annotations
+
+from workbuddy_bench.judge import JudgeSpec
+
+from .manifest import VerifierManifest
+
+
+JUDGE_TYPE = "rule_script"
+
+
+def build_rule_judge(
+    *,
+    item_id: str,
+    manifest: VerifierManifest,
+    timeout_sec: float | None,
+) -> JudgeSpec:
+    config: dict[str, object] = {
+        "command": _rule_command(manifest.command),
+        "cwd": manifest.cwd,
+        "env": manifest.env,
+        "shell": True,
+        "score_json": "/logs/verifier/score.json",
+        "reward_json": "/logs/verifier/reward.json",
+    }
+    if timeout_sec is not None:
+        config["timeout_sec"] = timeout_sec
+    return JudgeSpec(
+        name="rule",
+        type=JUDGE_TYPE,
+        family="rule",
+        item_ids=[item_id],
+        config=config,
+    )
+
+
+def prepare_command() -> str:
+    return r"""
+set -euo pipefail
+mkdir -p /logs/verifier
+cd /workspace
+git add -A 2>/dev/null || true
+git diff --staged > /logs/verifier/agent.patch 2>/dev/null || true
+git reset >/dev/null 2>&1 || true
+""".strip()
+
+
+def _rule_command(pytest_command: str) -> str:
+    template = r"""
+set -euo pipefail
+mkdir -p /logs/verifier
+cd /workspace
+START_TIME=$(date +%s)
+echo "=== Running deterministic grading tests ==="
+set +e
+__PYTEST_COMMAND__
+PYTEST_EXIT=$?
+set -e
+cat /logs/verifier/test_output.txt 2>/dev/null || true
+if [ ! -f /logs/verifier/results.xml ]; then
+  printf '<testsuite name="verifier_startup" tests="1" failures="1" errors="0" skipped="0"><testcase classname="verifier" name="pytest_results_missing"><failure message="pytest did not create results.xml">See /logs/verifier/test_output.txt</failure></testcase></testsuite>\\n' > /logs/verifier/results.xml
+fi
+if [ -f /logs/verifier/artifact_manifest.json ]; then
+  cp /logs/verifier/artifact_manifest.json /logs/verifier/evaluator_artifact_manifest.json
+fi
+if [ -f /tests/judge.yaml ] && [ -f /tests/grading/wb_judge_manifest_postprocess.py ]; then
+  echo "=== Building WB Judge evidence manifest ===" >> /logs/verifier/test_output.txt
+  PYTHONPATH="/workspace:/tests/grading:${PYTHONPATH:-}" python /tests/grading/wb_judge_manifest_postprocess.py \
+    --judge-yaml /tests/judge.yaml \
+    --logs /logs/verifier \
+    >> /logs/verifier/test_output.txt 2>&1
+fi
+END_TIME=$(date +%s)
+WALL_TIME=$((END_TIME - START_TIME))
+if [ -f /tests/grading/scorer.py ]; then
+  SCORER_HELP=$(python /tests/grading/scorer.py --help 2>&1 || true)
+  SCORER_ARGS=(--results-xml /logs/verifier/results.xml)
+  if grep -q -- "--log-dir" <<<"$SCORER_HELP"; then
+    SCORER_ARGS+=(--log-dir /logs/verifier)
+  fi
+  if grep -q -- "--pytest-exit" <<<"$SCORER_HELP"; then
+    SCORER_ARGS+=(--pytest-exit "$PYTEST_EXIT")
+  fi
+  if grep -q -- "--wall-time" <<<"$SCORER_HELP"; then
+    SCORER_ARGS+=(--wall-time "$WALL_TIME")
+  fi
+  if grep -q -- "--workspace" <<<"$SCORER_HELP"; then
+    SCORER_ARGS+=(--workspace /workspace)
+  fi
+  if grep -q -- "--gold-path" <<<"$SCORER_HELP"; then
+    SCORER_ARGS+=(--gold-path /tests/gold/gold_answer.json)
+  fi
+  if grep -q -- "--start-time" <<<"$SCORER_HELP"; then
+    SCORER_ARGS+=(--start-time "$START_TIME")
+  fi
+  PYTEST_EXIT="$PYTEST_EXIT" WALL_TIME="$WALL_TIME" \
+    WB_BENCH_WORKSPACE=/workspace \
+    WB_BENCH_GOLD_PATH=/tests/gold/gold_answer.json \
+    WB_BENCH_VERIFIER_START_TIME="$START_TIME" \
+    PYTHONPATH="/workspace:/tests/grading:${PYTHONPATH:-}" python /tests/grading/scorer.py \
+      "${SCORER_ARGS[@]}" \
+      >> /logs/verifier/test_output.txt 2>&1
+else
+  PYTEST_EXIT="$PYTEST_EXIT" WALL_TIME="$WALL_TIME" python3 - <<'PY_SCORE'
+import json
+import os
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+xml_path = Path("/logs/verifier/results.xml")
+exit_code = int(os.environ.get("PYTEST_EXIT") or 0)
+wall = float(os.environ.get("WALL_TIME") or 0)
+out = Path("/logs/verifier/test_output.txt")
+output_text = out.read_text(errors="replace") if out.exists() else ""
+
+passed = total = 0
+if xml_path.exists():
+    try:
+        root = ET.parse(xml_path).getroot()
+        suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
+        collected = sum(int(s.get("tests", 0)) for s in suites)
+        failed = sum(int(s.get("failures", 0)) for s in suites)
+        errors = sum(int(s.get("errors", 0)) for s in suites)
+        skipped = sum(int(s.get("skipped", 0)) for s in suites)
+        passed = max(0, collected - failed - errors - skipped)
+        total = max(0, collected - skipped)
+    except Exception:
+        passed = total = 0
+
+rate = round(passed / total, 4) if total > 0 else 0.0
+markers = ("ERROR: found no collectors", "ImportError while loading conftest", "fixture '")
+if exit_code not in (0, 1) or total <= 0 or any(m in output_text for m in markers):
+    status = "build_error"
+elif rate >= 1.0:
+    status = "full_pass"
+elif rate > 0:
+    status = "partial_pass"
+else:
+    status = "no_pass"
+
+raw = {
+    "test_pass_rate": rate,
+    "tests_passed": passed,
+    "tests_total": total,
+    "wall_time_sec": round(wall, 2),
+}
+Path("/logs/verifier/score.json").write_text(
+    json.dumps(dict(raw, test_status=status), ensure_ascii=False, indent=2),
+    encoding="utf-8",
+)
+Path("/logs/verifier/reward.json").write_text(
+    json.dumps(dict(raw, reward=rate), ensure_ascii=False, indent=2),
+    encoding="utf-8",
+)
+print(json.dumps(dict(raw, test_status=status), ensure_ascii=False, indent=2))
+PY_SCORE
+fi
+if [ -f /tests/judge.yaml ] && [ -f /tests/grading/judge/evidence_builder.py ]; then
+  PYTHONPATH="/workspace:/tests/grading:${PYTHONPATH:-}" python /tests/grading/judge/evidence_builder.py \
+    --workspace /workspace \
+    --logs /logs/verifier \
+    >> /logs/verifier/test_output.txt 2>&1
+fi
+if [ -f /tests/judge.yaml ] && [ -f /tests/grading/judge/manifest_postprocess.py ]; then
+  MANIFEST_HELP=$(python /tests/grading/judge/manifest_postprocess.py --help 2>&1 || true)
+  MANIFEST_ARGS=(--judge-yaml /tests/judge.yaml --logs /logs/verifier)
+  if grep -q -- "--workspace" <<<"$MANIFEST_HELP"; then
+    MANIFEST_ARGS+=(--workspace /workspace)
+  fi
+  if grep -q -- "--verifier-output" <<<"$MANIFEST_HELP"; then
+    MANIFEST_ARGS+=(--verifier-output /logs/verifier)
+  fi
+  PYTHONPATH="/workspace:/tests/grading:${PYTHONPATH:-}" python /tests/grading/judge/manifest_postprocess.py \
+    "${MANIFEST_ARGS[@]}" \
+    >> /logs/verifier/test_output.txt 2>&1
+fi
+if [ -f /tests/judge.yaml ] && [ -f /tests/grading/judge/extract_declared_artifacts.py ]; then
+  PYTHONPATH="/workspace:/tests/grading:${PYTHONPATH:-}" python /tests/grading/judge/extract_declared_artifacts.py \
+    --judge-yaml /tests/judge.yaml \
+    --workspace /workspace \
+    --logs /logs/verifier \
+    >> /logs/verifier/test_output.txt 2>&1
+fi
+python3 - <<'PY_REWARD'
+import json
+from pathlib import Path
+
+score_path = Path("/logs/verifier/score.json")
+reward_path = Path("/logs/verifier/reward.json")
+if not reward_path.exists() and score_path.exists():
+    score = json.loads(score_path.read_text(encoding="utf-8"))
+    numeric = {
+        key: value
+        for key, value in score.items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    numeric["reward"] = score.get("overall", score.get("test_pass_rate", 0.0))
+    reward_path.write_text(json.dumps(numeric, ensure_ascii=False, indent=2), encoding="utf-8")
+if reward_path.exists():
+    data = json.loads(reward_path.read_text(encoding="utf-8"))
+    value = data.get("overall", data.get("reward", data.get("test_pass_rate", 0)))
+else:
+    value = 0
+Path("/logs/verifier/reward.txt").write_text(str(value), encoding="utf-8")
+PY_REWARD
+test -f /logs/verifier/results.xml
+test -f /logs/verifier/test_output.txt
+test -f /logs/verifier/agent.patch
+test -f /logs/verifier/score.json
+test -f /logs/verifier/reward.json
+test -f /logs/verifier/reward.txt
+cat /logs/verifier/reward.json
+""".strip()
+    return template.replace("__PYTEST_COMMAND__", pytest_command)

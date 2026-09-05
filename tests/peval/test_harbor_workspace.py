@@ -1184,6 +1184,58 @@ class HarborWorkspaceTests(unittest.TestCase):
                 thread.join(timeout=5)
                 store.close()
 
+    def test_http_rejects_partial_flat_dataset_without_mutating_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "tasks"
+            existing = root / "existing"
+            dataset.mkdir()
+            existing.mkdir()
+            config_path = root / "peval.toml"
+            config_path.write_text(
+                '[[harbor.datasets]]\nid = "tasks"\npath = "tasks"\n',
+                encoding="utf-8",
+            )
+            before = config_path.read_bytes()
+            store = open_workspace_state(str(root))
+            config = ToolConfig(
+                workspace_root=str(root),
+                harbor_datasets=(HarborDataset(id="tasks", path=str(dataset)),),
+            )
+            runtime = ServeRuntime(store, config)
+            server = LocalHTTPServer(("127.0.0.1", 0), make_handler(runtime))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                for method, suffix, payload in (
+                    ("POST", "", {"source": "existing", "path": str(existing)}),
+                    (
+                        "PATCH",
+                        "/tasks",
+                        {"new_id": "tasks", "path": str(dataset), "mount_ids": []},
+                    ),
+                ):
+                    with self.subTest(method=method):
+                        status, problem = self._request(
+                            server,
+                            method,
+                            "/api/harbor/datasets" + suffix,
+                            {**payload, "allow_partial": True},
+                            request_headers={
+                                "If-Match": f'"{config_revision(config_path)}"'
+                            },
+                        )
+                        self.assertEqual(status, 400, problem)
+                        self.assertEqual(problem["status"], 400)
+                        self.assertIn("allow_partial", problem["detail"])
+                        self.assertEqual(config_path.read_bytes(), before)
+                        self.assertEqual(runtime.config, config)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                store.close()
+
     def test_http_add_harbor_mount_derives_id_and_starts_without_datasets(
         self,
     ) -> None:

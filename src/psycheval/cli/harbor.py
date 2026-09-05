@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform
 import shlex
 from pathlib import Path
 from typing import Any
@@ -12,12 +13,17 @@ from psycheval.config import (
     load_config,
     write_workspace_harbor_config,
 )
-from psycheval.harbor import workbuddy
+from psycheval.harbor import windows, workbuddy
 from psycheval.harbor.workbuddy import WorkBuddyPlanError
 
 
 def prepare_workbuddy_plan(
-    *, workspace_root: str | Path | None, dataset_id: str, base_config: str | Path
+    *,
+    workspace_root: str | Path | None,
+    dataset_id: str,
+    base_config: str | Path,
+    task_selection: list[str] | None = None,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     root, config = _workspace(workspace_root)
     registered = next(
@@ -31,6 +37,9 @@ def prepare_workbuddy_plan(
         dataset_id=registered.id,
         dataset_path=registered.path,
         base_config=base_config,
+        task_selection=task_selection,
+        limit=limit,
+        allow_partial=registered.allow_partial,
     )
     plan_id = plan["plan_id"]
     jobs_root = plan["jobs_root"]
@@ -44,13 +53,23 @@ def prepare_workbuddy_plan(
     )
     for warning in warnings:
         print(f"warning: {warning}")
+    native_windows = platform.system() == "Windows"
+    if host_mode and native_windows:
+        print(
+            "$env:PEVAL_CONFIG = "
+            + windows.quote_powershell_literal(str(root / "peval.toml"))
+        )
     for item in plan["jobs"]:
         command = ["harbor", "run", "-c", str(item["config"])]
-        if host_mode:
+        if host_mode and not native_windows:
             command = ["env", f"PEVAL_CONFIG={root / 'peval.toml'}", *command]
-        print(shlex.join(command))
+        print(
+            windows.powershell_command(command)
+            if native_windows
+            else shlex.join(command)
+        )
     print(
-        shlex.join(
+        (windows.powershell_command if native_windows else shlex.join)(
             [
                 "peval",
                 "harbor",
@@ -73,7 +92,7 @@ def summarize_workbuddy_plan(
         output_root=root, plan_id=plan_id, provisional=provisional
     )
     metrics = snapshot["metrics"]
-    print("WorkBuddy Benchmark Summary")
+    print(f"WorkBuddy Benchmark Summary ({snapshot['scope']})")
     print(f"reward: {float(metrics.get('reward', 0.0)):.4f}")
     print(f"pass_rate: {float(metrics.get('pass_rate', 0.0)):.4f}")
     print(f"tasks: {metrics.get('n_tasks', 0)}; trials: {metrics.get('n_trials', 0)}")

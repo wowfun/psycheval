@@ -77,6 +77,13 @@ class HarborDataset(_FrozenConfigModel):
     id: str
     path: str
     format: Literal["harbor", "workbuddy.v1"] = "harbor"
+    allow_partial: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="after")
+    def validate_partial_format(self):
+        if self.allow_partial and self.format != "workbuddy.v1":
+            raise ValueError("allow_partial is only supported for WorkBuddy")
+        return self
 
     @field_validator("id")
     @classmethod
@@ -267,6 +274,7 @@ class _HarborDatasetDocument(_RawConfigModel):
     id: str
     path: str
     format: Literal["harbor", "workbuddy.v1"] = "harbor"
+    allow_partial: bool = Field(default=False, strict=True)
 
 
 class _HarborMountDocument(_RawConfigModel):
@@ -404,7 +412,9 @@ def apply_toml_config(
             for index, raw_dataset in enumerate(raw_datasets):
                 if not isinstance(raw_dataset, dict):
                     raise ValueError(f"harbor.datasets[{index}] must be a TOML table")
-                dataset_unknown = sorted(set(raw_dataset) - {"format", "id", "path"})
+                dataset_unknown = sorted(
+                    set(raw_dataset) - {"format", "id", "path", "allow_partial"}
+                )
                 if dataset_unknown:
                     raise ValueError(
                         f"unknown harbor dataset field: {dataset_unknown[0]}"
@@ -426,6 +436,7 @@ def apply_toml_config(
                         id=dataset_id,
                         path=dataset_path,
                         format=raw_dataset.get("format", "harbor"),
+                        allow_partial=raw_dataset.get("allow_partial", False),
                     )
                 )
 
@@ -735,6 +746,8 @@ def write_workspace_harbor_config(
                     f"path = {json.dumps(_stored_harbor_path(dataset.path, path.parent))}\n",
                 ]
             )
+            if dataset.allow_partial:
+                lines.append("allow_partial = true\n")
             if dataset.format != "harbor":
                 lines.append(f"format = {json.dumps(dataset.format)}\n")
         if datasets and mounts:
@@ -816,7 +829,10 @@ def _validate_harbor_dataset_directory(dataset: HarborDataset) -> None:
         from psycheval.harbor.datasets import resolve_harbor_dataset
 
         resolve_harbor_dataset(
-            dataset_id=dataset.id, path=dataset.path, format=dataset.format
+            dataset_id=dataset.id,
+            path=dataset.path,
+            format=dataset.format,
+            allow_partial=dataset.allow_partial,
         )
 
 

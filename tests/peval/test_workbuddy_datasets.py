@@ -70,6 +70,46 @@ judge_config = "tests/judge.yaml"
 
 
 class WorkBuddyDatasetTests(unittest.TestCase):
+    def test_partial_registration_survives_config_mount_and_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = _write_workbuddy_bundle(root / "bundle", declared_count=50)
+            config_path = root / "peval.toml"
+            config_path.write_text("")
+            library = HarborWorkspace(config_path, ToolConfig(workspace_root=str(root)))
+            before = (bundle / "dataset.toml").read_bytes()
+            with self.assertRaisesRegex(HarborWorkspaceError, "declares 50, found 1"):
+                library.register_dataset(
+                    dataset_id="office",
+                    path=str(bundle),
+                    expected_revision=config_revision(config_path),
+                )
+            config = library.register_dataset(
+                dataset_id="office",
+                path=str(bundle),
+                allow_partial=True,
+                expected_revision=config_revision(config_path),
+            )
+            self.assertTrue(config.harbor_datasets[0].allow_partial)
+            loaded = load_config(workspace_root=root)
+            self.assertTrue(loaded.harbor_datasets[0].allow_partial)
+            mount = HarborMount(
+                id="jobs", path=str(root / "jobs"), dataset_ids=("office",)
+            )
+            self.assertEqual(
+                harbor_task_roots_for_mount(loaded, mount), (str(bundle / "tasks"),)
+            )
+            library = HarborWorkspace(config_path, loaded)
+            updated = library.update_dataset(
+                dataset_id="office",
+                new_id="cropped",
+                path=str(bundle),
+                mount_ids=[],
+                expected_revision=config_revision(config_path),
+            )
+            self.assertTrue(updated.harbor_datasets[0].allow_partial)
+            self.assertEqual((bundle / "dataset.toml").read_bytes(), before)
+
     def test_config_loading_is_lightweight_but_registration_validates_content(
         self,
     ) -> None:

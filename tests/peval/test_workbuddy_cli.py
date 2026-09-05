@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import tarfile
 import tempfile
 import unittest
@@ -21,6 +22,48 @@ from psycheval.harbor.workbuddy import (
 )
 from tests.fixtures.workbuddy import SPECIAL_TASK
 from tests.fixtures.workbuddy import write_office_bundle as _write_office_bundle
+
+
+def test_cli_selects_tasks_from_a_registered_cropped_bundle(tmp_path):
+    bundle = tmp_path / "bundle"
+    _write_office_bundle(bundle)
+    base = _write_workspace(tmp_path, bundle)
+    for path in (bundle / "tasks").iterdir():
+        if path.name not in {"office-00", "office-02"}:
+            shutil.rmtree(path)
+    config = tmp_path / "peval.toml"
+    config.write_text(config.read_text() + "allow_partial = true\n")
+    with patch(
+        "psycheval.harbor.workbuddy.validate_workbuddy_runtime",
+        return_value={"version": "fixture"},
+    ):
+        assert (
+            main(
+                [
+                    "harbor",
+                    "prepare",
+                    "-r",
+                    str(tmp_path),
+                    "--dataset",
+                    "office",
+                    "--config",
+                    str(base),
+                    "-t",
+                    "office-02",
+                    "-t",
+                    "office-00",
+                    "-l",
+                    "1",
+                ]
+            )
+            == 0
+        )
+    plans = list((tmp_path / "harbor-plans").glob("*/workbuddy-run-plan.json"))
+    assert len(plans) == 1
+    plan = json.loads(plans[0].read_text())
+    assert plan["expected_tasks"] == ["office-00"]
+    assert plan["scope"] == "subset"
+    assert plan["available_task_count"] == 2
 
 
 def _write_workspace(root: Path, bundle: Path) -> Path:
@@ -87,7 +130,7 @@ class WorkBuddyCliTests(unittest.TestCase):
             plans = list((root / "harbor-plans").glob("*/workbuddy-run-plan.json"))
             self.assertEqual(len(plans), 1)
             plan = json.loads(plans[0].read_text())
-            self.assertEqual(plan["schema"], "psycheval.workbuddy-run-plan.v1")
+            self.assertEqual(plan["schema"], "psycheval.workbuddy-run-plan.v2")
             self.assertEqual(plan["expected_tasks"], list(names))
             self.assertEqual(len(plan["jobs"]), 2)
             self.assertTrue(any("case.yaml" in item for item in plan["warnings"]))
@@ -502,6 +545,7 @@ class WorkBuddyCliTests(unittest.TestCase):
                     "psycheval.harbor.workbuddy.validate_workbuddy_runtime",
                     return_value={"version": "0.1.0"},
                 ),
+                patch("psycheval.harbor.workbuddy_verifier.validate_office_profile"),
                 patch(
                     "psycheval.harbor.workbuddy.validate_workbuddy_host_dependencies"
                 ) as host_preflight,
@@ -597,15 +641,26 @@ class WorkBuddyCliTests(unittest.TestCase):
             jobs_root.mkdir(parents=True)
             (root / "peval.toml").write_text("")
             plan = {
-                "schema": "psycheval.workbuddy-run-plan.v1",
+                "schema": "psycheval.workbuddy-run-plan.v2",
                 "plan_id": plan_id,
                 "dataset_id": "office",
                 "runtime": {"version": "0.1.0"},
                 "jobs_root": str(jobs_root),
+                "scope": "subset",
+                "available_task_count": 50,
+                "declared_task_count": 50,
                 "expected_tasks": ["one", SPECIAL_TASK],
                 "jobs": [
-                    {"name": "normal", "config": str(plan_dir / "normal.yaml")},
-                    {"name": "special", "config": str(plan_dir / "special.yaml")},
+                    {
+                        "name": "normal",
+                        "config": str(plan_dir / "normal.yaml"),
+                        "tasks": ["one"],
+                    },
+                    {
+                        "name": "special",
+                        "config": str(plan_dir / "special.yaml"),
+                        "tasks": [SPECIAL_TASK],
+                    },
                 ],
                 "warnings": ["known source defect"],
             }
@@ -674,6 +729,10 @@ class WorkBuddyCliTests(unittest.TestCase):
                     {
                         "plan_id": plan_id,
                         "dataset_id": "office",
+                        "scope": "subset",
+                        "selected_task_count": 2,
+                        "available_task_count": 50,
+                        "declared_task_count": 50,
                         "generated_at": snapshot["generated_at"],
                         "provisional": False,
                         "pending_jobs": [],
@@ -715,14 +774,25 @@ class WorkBuddyCliTests(unittest.TestCase):
             linked_jobs.symlink_to(outside, target_is_directory=True)
             (root / "peval.toml").write_text("")
             plan = {
-                "schema": "psycheval.workbuddy-run-plan.v1",
+                "schema": "psycheval.workbuddy-run-plan.v2",
                 "plan_id": plan_id,
                 "dataset_id": "office",
                 "jobs_root": str(linked_jobs),
+                "scope": "subset",
+                "available_task_count": 50,
+                "declared_task_count": 50,
                 "expected_tasks": ["one", SPECIAL_TASK],
                 "jobs": [
-                    {"name": "normal", "config": str(plan_dir / "normal.yaml")},
-                    {"name": "special", "config": str(plan_dir / "special.yaml")},
+                    {
+                        "name": "normal",
+                        "config": str(plan_dir / "normal.yaml"),
+                        "tasks": ["one"],
+                    },
+                    {
+                        "name": "special",
+                        "config": str(plan_dir / "special.yaml"),
+                        "tasks": [SPECIAL_TASK],
+                    },
                 ],
             }
             (plan_dir / "workbuddy-run-plan.json").write_text(json.dumps(plan))
@@ -745,14 +815,17 @@ class WorkBuddyCliTests(unittest.TestCase):
             jobs_root.mkdir(parents=True)
             (root / "peval.toml").write_text("")
             plan = {
-                "schema": "psycheval.workbuddy-run-plan.v1",
+                "schema": "psycheval.workbuddy-run-plan.v2",
                 "plan_id": plan_id,
                 "dataset_id": "office",
                 "jobs_root": str(jobs_root),
+                "scope": "subset",
+                "available_task_count": 50,
+                "declared_task_count": 50,
                 "expected_tasks": ["one", SPECIAL_TASK],
                 "jobs": [
-                    {"name": "../../outside", "config": "unused"},
-                    {"name": "special", "config": "unused"},
+                    {"name": "../../outside", "config": "unused", "tasks": ["one"]},
+                    {"name": "special", "config": "unused", "tasks": [SPECIAL_TASK]},
                 ],
             }
             (plan_dir / "workbuddy-run-plan.json").write_text(json.dumps(plan))

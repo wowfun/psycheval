@@ -10,11 +10,13 @@ import importlib.util
 import json
 import math
 import os
+import platform
 import re
 import secrets
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 from collections.abc import Iterator
@@ -30,7 +32,14 @@ from harbor.models.job.config import JobConfig
 from .datasets import ResolvedHarborDataset, validate_harbor_dataset
 from .identifiers import HARBOR_ID_RE
 
-PLAN_SCHEMA = "psycheval.workbuddy-run-plan.v1"
+PLAN_SCHEMA = "psycheval.workbuddy-run-plan.v2"
+SUMMARY_SCHEMA = "psycheval.workbuddy-summary.v2"
+_SELECTION_FIELDS = (
+    "scope",
+    "declared_task_count",
+    "available_task_count",
+    "expected_tasks",
+)
 OFFICE_DATASET_ID = "wb-bench-office-v1.0"
 OFFICE_TASK_COUNT = 50
 SPECIAL_TASK = "recruiting-search-skill-mock-mcp-hardened"
@@ -61,46 +70,58 @@ def prepare_workbuddy_plan(
     dataset_id: str,
     dataset_path: str | Path,
     base_config: str | Path,
+    task_selection: list[str] | None = None,
+    limit: int | None = None,
+    allow_partial: bool = False,
 ) -> dict[str, Any]:
     root = _output_root(output_root)
     resolved = validate_harbor_dataset(
-        dataset_id=dataset_id, path=dataset_path, format="workbuddy.v1"
+        dataset_id=dataset_id,
+        path=dataset_path,
+        format="workbuddy.v1",
+        allow_partial=allow_partial,
     )
-    _validate_office_dataset(resolved)
+    _validate_office_dataset(resolved, allow_partial=allow_partial)
+    task_names = _select_tasks(resolved.task_names, task_selection, limit)
     runtime = validate_workbuddy_runtime()
     base = _load_base_config(Path(base_config).expanduser().resolve())
     _validate_base_ownership(base)
     _validate_llm_environment()
     host_mode = _adapt_explicit_host_environment(base)
 
+    if host_mode and platform.system() == "Windows":
+        from .workbuddy_verifier import validate_office_profile
+
+        validate_office_profile(resolved, task_names)
+
     plan_id, plan_dir, jobs_root = _reserve_plan_directories(root)
-    skill_dir = _extract_special_skill(resolved, plan_dir / "skills")
-    task_names = list(resolved.task_names)
+    skill_dir = (
+        _extract_special_skill(resolved, plan_dir / "skills")
+        if SPECIAL_TASK in task_names
+        else None
+    )
     normal_names = [name for name in task_names if name != SPECIAL_TASK]
-    normal_name = f"{plan_id}-normal"
-    special_name = f"{plan_id}-special"
-    normal = _compose_job(
-        base,
-        job_name=normal_name,
-        jobs_root=jobs_root,
-        task_root=resolved.task_root,
-        task_names=normal_names,
-        host_mode=host_mode,
-    )
-    special = _compose_job(
-        base,
-        job_name=special_name,
-        jobs_root=jobs_root,
-        task_root=resolved.task_root,
-        task_names=[SPECIAL_TASK],
-        skill_dir=skill_dir,
-        host_mode=host_mode,
-    )
-    normal_path = plan_dir / "normal.yaml"
-    special_path = plan_dir / "special.yaml"
-    _write_yaml(normal_path, normal)
-    _write_yaml(special_path, special)
-    warnings = _office_warnings()
+    jobs = []
+    for kind, names, skill in (
+        ("normal", normal_names, None),
+        ("special", [SPECIAL_TASK] if skill_dir is not None else [], skill_dir),
+    ):
+        if not names:
+            continue
+        job_name = f"{plan_id}-{kind}"
+        path = plan_dir / f"{kind}.yaml"
+        config = _compose_job(
+            base,
+            job_name=job_name,
+            jobs_root=jobs_root,
+            task_root=resolved.task_root,
+            task_names=names,
+            skill_dir=skill,
+            host_mode=host_mode,
+        )
+        _write_yaml(path, config)
+        jobs.append({"name": job_name, "config": str(path), "tasks": names})
+    warnings = _office_warnings() if skill_dir is not None else []
     plan = {
         "schema": PLAN_SCHEMA,
         "plan_id": plan_id,
@@ -110,17 +131,13 @@ def prepare_workbuddy_plan(
         "task_root": str(resolved.task_root),
         "jobs_root": str(jobs_root),
         "expected_tasks": task_names,
+        "scope": "full" if len(task_names) == OFFICE_TASK_COUNT else "subset",
+        "declared_task_count": resolved.manifest["dataset"]["task_count"],
+        "available_task_count": len(resolved.task_names),
         "runtime": runtime,
         "host_environment": host_mode,
-        "skill_dir": str(skill_dir),
-        "jobs": [
-            {"name": normal_name, "config": str(normal_path), "tasks": normal_names},
-            {
-                "name": special_name,
-                "config": str(special_path),
-                "tasks": [SPECIAL_TASK],
-            },
-        ],
+        "skill_dir": str(skill_dir) if skill_dir is not None else None,
+        "jobs": jobs,
         "warnings": warnings,
     }
     _atomic_write_json(plan_dir / "workbuddy-run-plan.json", plan)
@@ -141,12 +158,25 @@ def summarize_workbuddy_plan(
     jobs_root = _plan_contained_path(root, plan.get("jobs_root"), "jobs_root")
     expected = plan.get("expected_tasks")
     jobs = plan.get("jobs")
-    if not isinstance(expected, list) or not all(
-        isinstance(item, str) and item for item in expected
+    if not isinstance(jobs, list) or not 1 <= len(jobs) <= 2:
+        raise WorkBuddyPlanError("run plan must contain one or two nonempty Jobs")
+    assigned = []
+    names = []
+    for job in jobs:
+        if (
+            not isinstance(job, dict)
+            or not isinstance(job.get("tasks"), list)
+            or not job["tasks"]
+        ):
+            raise WorkBuddyPlanError("run plan Job tasks are invalid")
+        assigned.extend(job["tasks"])
+        names.append(job.get("name"))
+    if (
+        any(not isinstance(name, str) for name in assigned + names)
+        or sorted(assigned) != expected
+        or len(set(names)) != len(names)
     ):
-        raise WorkBuddyPlanError("run plan expected_tasks is invalid")
-    if not isinstance(jobs, list) or len(jobs) != 2:
-        raise WorkBuddyPlanError("run plan must contain exactly two Jobs")
+        raise WorkBuddyPlanError("run plan Jobs must partition expected_tasks")
     pending = []
     for item in jobs:
         if (
@@ -176,8 +206,12 @@ def summarize_workbuddy_plan(
             "WorkBuddy runtime identity changed after plan preparation"
         )
     metrics = compute_official_metrics(jobs_root, expected)
+    per_task = metrics.get("per_task")
+    if isinstance(per_task, dict) and set(per_task) - set(expected):
+        raise WorkBuddyPlanError("WorkBuddy results contain tasks outside the run plan")
     snapshot = {
-        "schema": "psycheval.workbuddy-summary.v1",
+        **{key: plan[key] for key in _SELECTION_FIELDS},
+        "schema": SUMMARY_SCHEMA,
         "plan_id": plan_id,
         "generated_at": datetime.now(UTC).isoformat(),
         "provisional": bool(pending),
@@ -223,6 +257,7 @@ def discover_workbuddy_summaries(
             or snapshot.get("plan_id") != entry.name
             or not isinstance(dataset_id, str)
             or dataset_id not in registered_dataset_ids
+            or any(snapshot.get(key) != plan.get(key) for key in _SELECTION_FIELDS)
         ):
             continue
         metrics = _project_summary_metrics(snapshot.get("metrics"))
@@ -235,6 +270,10 @@ def discover_workbuddy_summaries(
             {
                 "plan_id": entry.name,
                 "dataset_id": dataset_id,
+                "scope": snapshot["scope"],
+                "selected_task_count": len(snapshot["expected_tasks"]),
+                "available_task_count": snapshot["available_task_count"],
+                "declared_task_count": snapshot["declared_task_count"],
                 "generated_at": (
                     generated_at
                     if isinstance(generated_at, str) and len(generated_at) <= 64
@@ -301,7 +340,7 @@ def validate_workbuddy_runtime() -> dict[str, str]:
 def validate_workbuddy_host_dependencies() -> None:
     missing_commands = [
         name
-        for name in ("bash", "curl", "git", "node", "npm")
+        for name in (("git",) if platform.system() == "Windows" else ("bash", "git"))
         if shutil.which(name) is None
     ]
     modules = {
@@ -340,7 +379,7 @@ def compute_official_metrics(
     try:
         module = importlib.import_module("workbuddy_bench.scorer.metrics")
         compute: Callable[..., Any] = getattr(module, "compute_job_metrics")
-    except (ImportError, AttributeError) as exc:
+    except (ImportError, AttributeError, ValueError) as exc:
         raise WorkBuddyPlanError("WorkBuddy official metrics are unavailable") from exc
     metrics = compute(jobs_root, expected_tasks=expected_tasks)
     if not isinstance(metrics, dict):
@@ -348,17 +387,74 @@ def compute_official_metrics(
     return metrics
 
 
-def _validate_office_dataset(resolved: ResolvedHarborDataset) -> None:
+def _validate_office_dataset(
+    resolved: ResolvedHarborDataset, *, allow_partial: bool
+) -> None:
     manifest_id = resolved.manifest.get("dataset", {}).get("id")
-    if (
-        resolved.format != "workbuddy.v1"
-        or manifest_id != OFFICE_DATASET_ID
-        or len(resolved.task_names) != OFFICE_TASK_COUNT
+    if resolved.format != "workbuddy.v1" or manifest_id != OFFICE_DATASET_ID:
+        raise WorkBuddyPlanError(
+            "harbor prepare requires the workbuddy.v1 wb-bench-office-v1.0 Dataset profile"
+        )
+    if len(resolved.task_names) > OFFICE_TASK_COUNT:
+        raise WorkBuddyPlanError(
+            f"Office supports at most {OFFICE_TASK_COUNT} Tasks; found {len(resolved.task_names)}"
+        )
+    if not allow_partial and (
+        len(resolved.task_names) != OFFICE_TASK_COUNT
         or SPECIAL_TASK not in resolved.task_names
     ):
         raise WorkBuddyPlanError(
-            "harbor prepare currently requires wb-bench-office-v1.0 with all 50 Tasks"
+            "full Office preparation requires all 50 Tasks; "
+            "use allow_partial=True for a cropped bundle"
         )
+
+
+def _select_tasks(
+    available: tuple[str, ...], selection: list[str] | None, limit: int | None
+) -> list[str]:
+    if limit is not None and (type(limit) is not int or limit < 1):
+        raise WorkBuddyPlanError("limit must be a positive integer")
+    if selection is not None:
+        if (
+            not isinstance(selection, list)
+            or not selection
+            or any(not isinstance(name, str) or not name for name in selection)
+        ):
+            raise WorkBuddyPlanError(
+                "task_selection must be a nonempty list of Task names"
+            )
+        if len(set(selection)) != len(selection):
+            raise WorkBuddyPlanError("task_selection contains duplicate Task names")
+        missing = set(selection) - set(available)
+        if missing:
+            raise WorkBuddyPlanError(
+                "selected Tasks are unavailable: " + ", ".join(sorted(missing))
+            )
+    return sorted(available if selection is None else selection)[:limit]
+
+
+def _validate_plan_selection(plan: dict[str, Any]) -> None:
+    expected = plan.get("expected_tasks")
+    declared = plan.get("declared_task_count")
+    available = plan.get("available_task_count")
+    if (
+        not isinstance(expected, list)
+        or not expected
+        or any(not isinstance(name, str) or not name for name in expected)
+    ):
+        raise WorkBuddyPlanError("run plan expected_tasks is invalid")
+    if (
+        expected != sorted(set(expected))
+        or type(declared) is not int
+        or type(available) is not int
+        or not len(expected) <= available <= declared
+        or available > OFFICE_TASK_COUNT
+    ):
+        raise WorkBuddyPlanError("run plan task counts or selection are invalid")
+    if plan.get("scope") != (
+        "full" if len(expected) == OFFICE_TASK_COUNT else "subset"
+    ):
+        raise WorkBuddyPlanError("run plan scope is invalid")
 
 
 def _load_base_config(path: Path) -> dict[str, Any]:
@@ -469,7 +565,11 @@ def _compose_job(
     value["n_attempts"] = value.get("n_attempts", 3)
     value["timeout_multiplier"] = value.get("timeout_multiplier", 2.0)
     verifier = dict(value.get("verifier") or {})
-    verifier["import_path"] = COMPOSITE_VERIFIER
+    verifier["import_path"] = (
+        f"{__package__}.workbuddy_verifier:WindowsOfficeVerifier"
+        if host_mode and platform.system() == "Windows"
+        else COMPOSITE_VERIFIER
+    )
     env = dict(verifier.get("env") or {})
     if all(os.environ.get(name) for name in LLM_REQUIRED_ENV):
         for name in LLM_REQUIRED_ENV:
@@ -493,7 +593,7 @@ def _compose_job(
             {
                 "name": "recruiting_search_lab",
                 "transport": "stdio",
-                "command": "python3",
+                "command": sys.executable if host_mode else "python3",
                 "args": [
                     mcp_script,
                     "--case-root",
@@ -758,6 +858,7 @@ def _read_plan(path: Path) -> dict[str, Any]:
         raise WorkBuddyPlanError(f"cannot read WorkBuddy run plan: {path}") from exc
     if not isinstance(value, dict) or value.get("schema") != PLAN_SCHEMA:
         raise WorkBuddyPlanError("unsupported WorkBuddy run plan")
+    _validate_plan_selection(value)
     return value
 
 
@@ -768,11 +869,9 @@ def _read_summary(path: Path) -> dict[str, Any]:
         )
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise WorkBuddyPlanError(f"cannot read WorkBuddy summary: {path}") from exc
-    if (
-        not isinstance(value, dict)
-        or value.get("schema") != "psycheval.workbuddy-summary.v1"
-    ):
+    if not isinstance(value, dict) or value.get("schema") != SUMMARY_SCHEMA:
         raise WorkBuddyPlanError("unsupported WorkBuddy summary")
+    _validate_plan_selection(value)
     return value
 
 

@@ -65,10 +65,18 @@ def detect_harbor_dataset_format(root: Path) -> DatasetFormat:
 
 
 def resolve_harbor_dataset(
-    *, dataset_id: str, path: str | Path, format: DatasetFormat = "harbor"
+    *,
+    dataset_id: str,
+    path: str | Path,
+    format: DatasetFormat = "harbor",
+    allow_partial: bool = False,
 ) -> ResolvedHarborDataset:
     """Resolve a Dataset's effective layout without walking every Task body."""
 
+    if type(allow_partial) is not bool or (allow_partial and format != "workbuddy.v1"):
+        raise HarborDatasetError(
+            "allow_partial must be a boolean and is only supported for WorkBuddy"
+        )
     try:
         dataset_id = validate_harbor_id(dataset_id, kind="dataset")
     except ValueError as exc:
@@ -88,15 +96,21 @@ def resolve_harbor_dataset(
         )
     if format != "workbuddy.v1":
         raise HarborDatasetError(f"unsupported Harbor Dataset format: {format}")
-    return _resolve_workbuddy(dataset_id, root)
+    return _resolve_workbuddy(dataset_id, root, allow_partial=allow_partial)
 
 
 def validate_harbor_dataset(
-    *, dataset_id: str, path: str | Path, format: DatasetFormat = "harbor"
+    *,
+    dataset_id: str,
+    path: str | Path,
+    format: DatasetFormat = "harbor",
+    allow_partial: bool = False,
 ) -> ResolvedHarborDataset:
     """Fully validate a Dataset at registration and execution-plan gates."""
 
-    resolved = resolve_harbor_dataset(dataset_id=dataset_id, path=path, format=format)
+    resolved = resolve_harbor_dataset(
+        dataset_id=dataset_id, path=path, format=format, allow_partial=allow_partial
+    )
     if resolved.format != "workbuddy.v1":
         return resolved
     for relative in REQUIRED_SHARED_VERIFIER_FILES:
@@ -128,7 +142,9 @@ def validate_harbor_dataset(
     return resolved
 
 
-def _resolve_workbuddy(dataset_id: str, root: Path) -> ResolvedHarborDataset:
+def _resolve_workbuddy(
+    dataset_id: str, root: Path, *, allow_partial: bool
+) -> ResolvedHarborDataset:
     manifest = _read_toml(root / "dataset.toml")
     dataset = _required_table(manifest, "dataset")
     verifier = _required_table(manifest, "verifier")
@@ -148,7 +164,11 @@ def _resolve_workbuddy(dataset_id: str, root: Path) -> ResolvedHarborDataset:
     task_count = dataset.get("task_count")
     if type(task_count) is not int or task_count < 1:
         raise HarborDatasetError("dataset.task_count must be a positive integer")
-    if task_count != len(task_dirs):
+    if (
+        not task_dirs
+        or len(task_dirs) > task_count
+        or (not allow_partial and task_count != len(task_dirs))
+    ):
         raise HarborDatasetError(
             f"dataset.task_count declares {task_count}, found {len(task_dirs)} Tasks"
         )

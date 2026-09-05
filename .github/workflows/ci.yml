@@ -32,6 +32,17 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest
+      - name: Install pinned WorkBuddy integration runtime
+        run: >-
+          uv pip install --no-deps
+          "workbuddy-bench @ git+https://github.com/Tencent/workbuddy-bench.git@625b2233093ae4f23e76be28c1f341d41cc70373"
+      - run: uv pip check
+      - name: Verify native and vendored WorkBuddy integration
+        env:
+          PEVAL_WORKBUDDY_RUNTIME_TESTS: "1"
+        run: >-
+          uv run --no-sync pytest tests/harbor/test_workbuddy_verifier.py
+          tests/harbor/test_vendoring.py -k real_runtime
 
   web-and-source-tool:
     name: Web, docs, and source tool

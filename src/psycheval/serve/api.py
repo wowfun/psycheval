@@ -1440,6 +1440,7 @@ def _register_harbor_routes(app: FastAPI) -> None:
             "action": "create" if body.source == "new" else "register",
             "dataset_id": body.id,
             "path": body.path,
+            "allow_partial": body.allow_partial,
             "package_name": body.package_name,
             "description": body.description,
             "expected_revision": expected,
@@ -1472,6 +1473,7 @@ def _register_harbor_routes(app: FastAPI) -> None:
             "dataset_id": dataset_id,
             "new_id": body.new_id,
             "path": body.path,
+            "allow_partial": body.allow_partial,
             "mount_ids": body.mount_ids,
             "expected_revision": expected,
         }

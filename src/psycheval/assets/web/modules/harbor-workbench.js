@@ -280,8 +280,9 @@ function renderWorkBuddySummaries(surface) {
     const status = summary?.provisional
       ? t("workbuddy_provisional", "Provisional")
       : t("workbuddy_terminal", "Terminal");
+    const scope = summary?.scope === "subset" ? t("workbuddy_subset", "Subset") : t("workbuddy_full", "Full benchmark");
     return `<article class="workbuddy-summary-card">
-      <div><p class="eyebrow">${esc(t("workbuddy_benchmark_summary", "WorkBuddy Benchmark Summary"))}</p><strong>${esc(summary?.plan_id || "-")}</strong><small>${esc(summary?.generated_at || "-")} · ${esc(status)}</small></div>
+      <div><p class="eyebrow">${esc(t("workbuddy_benchmark_summary", "WorkBuddy Benchmark Summary"))}</p><strong>${esc(summary?.plan_id || "-")}</strong><small>${esc(summary?.generated_at || "-")} · ${esc(scope)} · ${esc(status)}</small></div>
       <dl><div><dt>${esc(t("reward", "Reward"))}</dt><dd>${esc(metrics.reward ?? "-")}</dd></div><div><dt>${esc(t("pass_rate", "Pass rate"))}</dt><dd>${esc(metrics.pass_rate ?? "-")}</dd></div><div><dt>${esc(t("tasks", "Tasks"))}</dt><dd>${esc(metrics.n_tasks ?? "-")}</dd></div><div><dt>${esc(t("trials", "Trials"))}</dt><dd>${esc(metrics.n_trials ?? "-")}</dd></div><div><dt>${esc(t("missing", "Missing"))}</dt><dd>${esc(metrics.missing_task_count ?? 0)}</dd></div></dl>
     </article>`;
   }).join("");

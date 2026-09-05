@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import shutil
 import subprocess
 import sys
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.native_office import write_native_office
 from tests.fixtures.workbuddy import write_office_bundle
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -62,3 +64,20 @@ def test_harbor_internal_imports_are_relocatable_even_in_type_annotations() -> N
                 assert all(
                     alias.name.split(".")[0] != "psycheval" for alias in node.names
                 ), path
+
+
+@pytest.mark.skipif(
+    os.environ.get("PEVAL_WORKBUDDY_RUNTIME_TESTS") != "1",
+    reason="opt-in pinned WorkBuddy runtime integration",
+)
+def test_copied_native_verifier_uses_the_real_runtime(copied_harbor):
+    write_native_office(copied_harbor / "bundle", "def test_pass():\n    assert True\n")
+    completed = subprocess.run(
+        [sys.executable, "-I", str(RUNNER), str(copied_harbor), "native_office"],
+        cwd=copied_harbor,
+        text=True,
+        capture_output=True,
+        timeout=180 if sys.platform == "win32" else 60,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr

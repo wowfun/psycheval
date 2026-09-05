@@ -537,6 +537,16 @@ def harbor_prepare(
         str, typer.Option("--config", metavar="PATH", help="Base Harbor Job YAML")
     ],
     root: RootOption = None,
+    task: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--task", "-t", help="Exact Task directory name; repeat to select multiple"
+        ),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", "-l", min=1, help="Limit sorted selected Tasks"),
+    ] = None,
 ) -> None:
     execute(
         CliArgs(
@@ -544,6 +554,8 @@ def harbor_prepare(
             root=root,
             dataset_id=dataset,
             config_path=config,
+            task_selection=task,
+            task_limit=limit,
         )
     )
 

@@ -616,6 +616,7 @@ test("WorkBuddy Datasets remain browsable while every editing surface is disable
     revision: "config-r2",
     workbuddy_summaries: [{
       plan_id: "office-plan",
+      scope: "subset",
       generated_at: "2026-09-03T00:00:00Z",
       provisional: false,
       metrics: { reward: 0.5, pass_rate: 0.25, n_tasks: 50, n_trials: 150, missing_task_count: 0 },
@@ -665,6 +666,8 @@ test("WorkBuddy Datasets remain browsable while every editing surface is disable
     assert.equal(document.querySelector("[data-harbor-file-actions]").hidden, true);
     assert.match(document.querySelector("[data-workbuddy-summaries]").textContent, /office-plan/);
     assert.match(document.querySelector("[data-workbuddy-summaries]").textContent, /150/);
+    assert.match(document.querySelector("[data-workbuddy-summaries]").textContent, /Subset/);
+    assert.match(document.querySelector("[data-workbuddy-summaries]").textContent, /Terminal/);
     assert.match(document.querySelector("[data-harbor-selected-meta]").textContent, /workbuddy\.v1/);
     assert.match(document.querySelector("[data-harbor-selected-meta]").textContent, /Read-only/);
     assert.match(document.querySelector("[data-harbor-selected-meta]").textContent, /valid/);

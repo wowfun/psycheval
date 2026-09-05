@@ -41,6 +41,13 @@ def run_module(name: str, *args: str) -> None:
 
 
 def imports(root: Path) -> None:
+    class BlockOptionalRuntime(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path, target=None):
+            if fullname.split(".")[0] == "workbuddy_bench":
+                raise ModuleNotFoundError("optional WorkBuddy runtime is unavailable")
+            return None
+
+    sys.meta_path.insert(0, BlockOptionalRuntime())
     package = importlib.import_module(PACKAGE)
     found = list(pkgutil.walk_packages(package.__path__, f"{PACKAGE}."))
     for info in found:
@@ -53,6 +60,61 @@ def imports(root: Path) -> None:
     runtime = module("runtime_config")
     assert runtime.HARNESS_PROTOCOL_VERSION == 2
     assert runtime.PEVAL_CONFIG_ENV == "PEVAL_CONFIG"
+
+
+def native_office(root: Path) -> None:
+    from harbor.models.task.config import EnvironmentConfig
+    from harbor.models.task.task import Task
+    from harbor.models.trial.paths import TrialPaths
+
+    async def scenario():
+        task = root / "bundle/tasks/office-00"
+        config = root / "peval.toml"
+        config.write_text('[harbor.host]\nworkdir_root=""\n')
+        os.environ["PEVAL_CONFIG"] = str(config)
+        paths = TrialPaths(root / "native trial 中文")
+        paths.mkdir()
+        environment = module("environment").HostEnvironment(
+            environment_dir=task / "environment",
+            environment_name="copied-office",
+            session_id="copied-office",
+            trial_paths=paths,
+            task_env_config=EnvironmentConfig(workdir="/workspace"),
+            logger=logging.getLogger("copied-office"),
+            allow_host_execution=True,
+            bootstrap_workbuddy_workspace=True,
+            mounts=[
+                {
+                    "type": "bind",
+                    "source": str(paths.agent_dir),
+                    "target": "/logs/agent",
+                },
+                {
+                    "type": "bind",
+                    "source": str(paths.verifier_dir),
+                    "target": "/logs/verifier",
+                },
+            ],
+        )
+        await environment.start(force_build=False)
+        try:
+
+            async def forbidden_shell(*args, **kwargs):
+                raise AssertionError("native verifier invoked a shell")
+
+            environment.exec = forbidden_shell
+            verifier = module("workbuddy_verifier").WindowsOfficeVerifier(
+                task=Task(task),
+                trial_paths=paths,
+                environment=environment,
+            )
+            result = await verifier.verify()
+            assert result.rewards["reward"] == 1.0, result
+            assert (paths.verifier_dir / "office-adaptation.json").is_file()
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
 
 
 def write_runtime(root: Path, *, action: str = "run") -> Path:
@@ -344,6 +406,7 @@ if __name__ == "__main__":
         "workbuddy": workbuddy,
         "host": host,
         "synthetic_harness": synthetic_harness,
+        "native_office": native_office,
     }
     scenarios[sys.argv[2]](root)
     assert not any(name.split(".")[0] == "psycheval" for name in sys.modules)
