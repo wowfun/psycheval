@@ -35,9 +35,15 @@ separate config-file path.
 It rejects preselected Tasks, Datasets, source Jobs, install-only mode, and a
 conflicting verifier; preserves the remaining Agent, model, environment, and
 concurrency settings; defaults Office runs to three attempts and a timeout
-multiplier of two; registers a new isolated Jobs mount; and prints the two exact
+multiplier of two; registers a new isolated Jobs mount; and prints each generated
 `harbor run -c ...` commands followed by its summarize command. Generated names
 avoid Harbor's reserved `__` delimiter.
+
+Repeatable `--task/-t` selects exact Task directory names; `--limit/-l` takes a
+positive number of Tasks after sorting the selection. The command prints one or
+two nonempty Job configurations and uses PowerShell syntax on Windows. Cropped
+bundles require an explicit `allow_partial=true` registration; selection and
+summary scope follow the [WorkBuddy contract](harbor.md#workbuddy-office-bundles).
 
 `harbor summarize --plan <plan-id>` reads that plan and retained Harbor results,
 delegates score calculation to the installed WorkBuddy package, and writes a

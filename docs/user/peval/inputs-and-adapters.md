@@ -38,6 +38,10 @@ path = "/path/to/wb-bench-office-v1.0"
 format = "workbuddy.v1"
 ```
 
+For a cropped bundle, add `allow_partial = true` to that registration. Keep the
+original manifest, shared verifier, and complete remaining Task directories.
+Default registration still checks that every declared Task is present.
+
 Install the supported external `workbuddy-bench` source revision in the same
 environment as Psycheval:
 
@@ -46,8 +50,9 @@ uv pip install --no-deps \
   "workbuddy-bench @ git+https://github.com/Tencent/workbuddy-bench.git@625b2233093ae4f23e76be28c1f341d41cc70373"
 ```
 
-`--no-deps` preserves Psycheval's Harbor 0.21.0 runtime instead of installing
-the benchmark repository's older development pin.
+`--no-deps` preserves the existing Harbor 0.21.0 dependency environment. For
+downstream package and lockfile setup, follow
+[WorkBuddy runtime installation](../downstream-vendoring.md#install-the-workbuddy-runtime).
 
 Then create a base Harbor Job file containing exactly one Agent. This example
 deliberately opts into Psycheval's trusted Linux host environment and uses
@@ -76,11 +81,21 @@ PEVAL_CONFIG=.local/evaluation/peval.toml harbor run -c <printed-special-config>
 peval harbor summarize -r .local/evaluation --plan <printed-plan-id>
 ```
 
+For a single Task or a subset, add repeatable `--task/-t` options or a positive
+`--limit/-l` to prepare. Filtering uses exact Task directory names; the limit
+applies after sorting. Run each returned config, which may be a single Job.
+Summaries label subset scope separately from unfinished (`--provisional`) runs.
+
+Windows Host preparation selects a Bash-free Office verifier. Use a
+Windows-capable Agent or harness; see the
+[native Windows workflow](../downstream-vendoring.md#run-on-native-windows).
+The CLI prints PowerShell run commands on Windows.
+
 Host execution expands each Task's workspace archive and creates its clean Git
 baseline, but it is not a sandbox and does not reproduce container resource or
-network isolation. Use it only for trusted Tasks on Linux. A Docker-capable
+network isolation. Use it only for trusted Tasks on Linux or Windows. A Docker-capable
 Harbor environment remains the portable path. The special recruiting Task is
-kept in the official denominator even though the source bundle has documented
+kept in the denominator when selected even though the source bundle has documented
 missing-input, network-contract, and sanity-check defects; preparation prints
 those warnings. The **Datasets** page allows browsing this registration but
 offers no mutation controls. Trial detail uses `verifier/score.json` as the

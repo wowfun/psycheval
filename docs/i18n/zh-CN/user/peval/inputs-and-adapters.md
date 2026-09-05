@@ -34,6 +34,9 @@ path = "/path/to/wb-bench-office-v1.0"
 format = "workbuddy.v1"
 ```
 
+注册裁剪包时，在该表中增加 `allow_partial = true`，并保留原 manifest、共享
+verifier 和剩余 Task 的完整目录。默认注册仍要求声明的全部 Task 都存在。
+
 在 Psycheval 所在环境中安装受支持的外部 `workbuddy-bench` 源码版本：
 
 ```console
@@ -41,8 +44,8 @@ uv pip install --no-deps \
   "workbuddy-bench @ git+https://github.com/Tencent/workbuddy-bench.git@625b2233093ae4f23e76be28c1f341d41cc70373"
 ```
 
-`--no-deps` 会保留 Psycheval 的 Harbor 0.21.0 runtime，避免安装 benchmark
-仓库中较旧的开发 pin。
+`--no-deps` 会保留现有的 Harbor 0.21.0 依赖环境。下游项目的依赖声明和锁文件
+配置见 [WorkBuddy 运行时安装说明](../../../../user/downstream-vendoring.md#install-the-workbuddy-runtime)。
 
 然后创建仅含一个 Agent 的 Harbor Job 基础配置。下面的例子显式选择
 Psycheval 的可信 Linux host environment，并使用 OpenCode：
@@ -70,11 +73,19 @@ PEVAL_CONFIG=.local/evaluation/peval.toml harbor run -c <输出的-special-confi
 peval harbor summarize -r .local/evaluation --plan <输出的-plan-id>
 ```
 
+运行单题或子集时，在 prepare 后增加可重复的 `--task/-t`，或正整数
+`--limit/-l`。选题使用精确的 Task 目录名，排序后再应用数量限制。运行返回的
+全部配置，可能只有一个 Job。汇总会区分子集范围和未完成的 `--provisional` 状态。
+
+Windows Host 会自动选用无需 Bash 的 Office verifier。Agent 或 harness 需要
+支持 Windows，具体配置见 [原生 Windows 工作流](../../../../user/downstream-vendoring.md#run-on-native-windows)。
+Windows 上的 CLI 会输出 PowerShell 运行命令。
+
 Host execution 会展开每个 Task 的 workspace archive 并建立干净的 Git
-baseline，但它不是 sandbox，也不能复现容器的资源和网络隔离。仅应在 Linux
+baseline，但它不是 sandbox，也不能复现容器的资源和网络隔离。仅应在 Linux 或 Windows
 上对可信 Task 使用；可运行 Docker 的 Harbor environment 仍是可移植路径。
 特殊 recruiting Task 虽有已知的缺少输入、网络契约和 sanity-check 源数据
-缺陷，仍保留在官方分母中；prepare 会输出相应警告。**Datasets** 页面允许
+缺陷，选中时仍保留在分母中；prepare 会输出相应警告。**Datasets** 页面允许
 浏览此注册，但不提供任何修改操作。Trial 详情以 `verifier/score.json` 作为
 WorkBuddy 分数，单独保留 Harbor reward，并且只展示有界的 verifier 证据。
 精确的 runtime、verifier LLM 与聚合契约见

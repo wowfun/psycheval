@@ -42,6 +42,14 @@ orchestration owns workspace discovery, mount registration, and command output.
 The package version has one source in the lightweight Harbor initializer,
 shared by the root package and build metadata.
 
+Within Harbor, `windows` owns native Windows path and process mechanics and
+PowerShell command rendering.
+Environment and Agent adapters consume those mechanics without changing the
+reported host OS or choosing the Agent's tool shell. WorkBuddy owns Office
+profile recognition, execution orchestration, and approved runtime-copy
+rewrites; its native verifier reuses the external runtime's scoring engine.
+External Dataset sources remain read-only, including during plugin loading.
+
 `psycheval.atif` is a separate, standard-library-only source-copy unit. It owns
 strict ATIF validation, content recognition, and timestamp parsing.
 `psycheval.conversion` owns adapter dispatch, normalization, and metadata
@@ -174,7 +182,8 @@ remains owned by `pretty-aui`.
 
 Core CLI implementation may consume pinned Harbor interfaces and the explicit
 `psycheval.harbor.datasets`, `psycheval.harbor.tasks`, and
-`psycheval.harbor.workbuddy` services and shared identifier rules, but not
+`psycheval.harbor.workbuddy` services, shared identifier rules, and the
+`psycheval.harbor.windows` helpers for rendering Windows shell commands, but not
 Agent, Environment, or harness internals. The implementations exchange only
 owned configuration sections and explicit formats. Tasks invoke the installed
 verifier rather than checkout-relative Python paths. Documentation and skills
