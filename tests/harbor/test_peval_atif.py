@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from harbor.models.trajectories import Trajectory
 
-from psycheval.atif import convert_records
 from psycheval.config import ToolConfig
+from psycheval.conversion import convert_records
 from psycheval.sources import read_jsonl
 
 ROOT = Path(__file__).resolve().parents[2]

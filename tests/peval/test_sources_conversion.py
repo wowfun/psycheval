@@ -6,13 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from psycheval.atif import (
+from psycheval.atif import validate_atif_trajectory
+from psycheval.config import ToolConfig
+from psycheval.conversion import (
     convert_db,
     convert_path,
     convert_records,
-    validate_atif_trajectory,
 )
-from psycheval.config import ToolConfig
 from psycheval.report import build_report
 from psycheval.sources import (
     ACCOUNTING_COLUMNS,

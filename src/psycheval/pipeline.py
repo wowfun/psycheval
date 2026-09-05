@@ -4,13 +4,13 @@ from copy import deepcopy
 from typing import Any
 
 from psycheval.adapters.base import ConversionResult
-from psycheval.atif import (
+from psycheval.config import ToolConfig, config_for_adapter
+from psycheval.conversion import (
     _finalize_atif_session_context,
     convert_db,
     convert_path,
     convert_records,
 )
-from psycheval.config import ToolConfig, config_for_adapter
 from psycheval.models import LoadedInputs, LoadedSession
 from psycheval.report import (
     NoteInput,

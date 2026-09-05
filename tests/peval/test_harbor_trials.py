@@ -11,7 +11,6 @@ from unittest.mock import patch
 
 from psycheval._harbor_trials import is_harbor_trial_dir, load_harbor_trial_bundle
 from psycheval.analysis import import_analysis_artifacts
-from psycheval.atif import convert_db
 from psycheval.config import (
     HarborDataset,
     HarborMount,
@@ -19,6 +18,7 @@ from psycheval.config import (
     load_config,
     unique_harbor_id_from_path,
 )
+from psycheval.conversion import convert_db
 from psycheval.serve.exports import build_serve_export
 from psycheval.state import CatalogQuery, WorkspaceCatalog, open_workspace_state
 from psycheval.state.workspace_harbor import _telemetry_aligns

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
 from typing import Any
 
 from psycheval.adapters.base import ConversionResult
@@ -12,12 +11,14 @@ from psycheval.analysis import (
     cached_note_report,
 )
 from psycheval.atif import (
-    _finalize_atif_session_context,
-    atif_timestamp_ms,
-    step_meta_from_atif_step,
+    iso_timestamp_ms,
     validate_atif_trajectory,
 )
 from psycheval.config import ToolConfig
+from psycheval.conversion import (
+    _finalize_atif_session_context,
+    step_meta_from_atif_step,
+)
 from psycheval.models import NoteInput, ReportSession
 from psycheval.redaction import redact_value
 from psycheval.report.data_ref import data_ref_for_input
@@ -195,7 +196,7 @@ def canonical_time_bounds(
     for step in trajectory.get("steps") or []:
         if not isinstance(step, dict):
             continue
-        timestamp = atif_timestamp_ms(step)
+        timestamp = iso_timestamp_ms(step.get("timestamp"))
         if timestamp is not None:
             timestamps.append(timestamp)
             step_extra = (
@@ -404,7 +405,7 @@ def project_canonical_step_facts(
     for step, report in zip(trajectory.get("steps") or [], step_reports, strict=True):
         if not isinstance(step, dict):
             continue
-        timestamp = atif_timestamp_ms(step)
+        timestamp = iso_timestamp_ms(step.get("timestamp"))
         if timestamp is not None:
             report["timestamp_ms"] = timestamp
             report["elapsed_ms"] = timestamp - started_at_ms if started_at_ms else None
@@ -473,18 +474,6 @@ def project_canonical_step_facts(
         ]
         if canonical_errors:
             report["tool_error"] = any(canonical_errors)
-
-
-def iso_timestamp_ms(value: Any) -> int | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return int(parsed.timestamp() * 1000)
 
 
 def trial_key_for(

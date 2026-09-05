@@ -18,13 +18,13 @@ from unittest.mock import patch as patch
 from psycheval.adapters import adapter_for as adapter_for
 from psycheval.adapters import available_adapter_ids as available_adapter_ids
 from psycheval.adapters.base import ConversionResult, StepMeta
-from psycheval.atif import convert_db as convert_db
-from psycheval.atif import convert_path as convert_path
-from psycheval.atif import convert_records as convert_records
 from psycheval.config import ToolConfig
 from psycheval.config import apply_overrides as apply_overrides
 from psycheval.config import config_for_adapter as config_for_adapter
 from psycheval.config import load_config as load_config
+from psycheval.conversion import convert_db as convert_db
+from psycheval.conversion import convert_path as convert_path
+from psycheval.conversion import convert_records as convert_records
 from psycheval.html import load_asset_text as load_asset_text
 from psycheval.html import render_serve_html as render_serve_html
 from psycheval.inputs import LoadedInputs as LoadedInputs
