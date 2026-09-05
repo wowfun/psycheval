@@ -6,7 +6,8 @@ not a second package or module.
 ```text
 psycheval
 ├── cli                 -> installed as `peval`
-├── adapters, ATIF      -> retained-session conversion
+├── atif                -> standalone ATIF format recognition and validation
+├── adapters, conversion -> retained-session conversion
 ├── report, workspace   -> derived views and user overlays
 ├── serve, state        -> local evaluation workspace and ACP client runtime
 ├── assets              -> authored Web modules, templates, and styles
@@ -19,7 +20,7 @@ The package-level implementation reads retained sessions and Harbor Trial
 evidence, converts strict ATIF, and builds reports and workspaces behind the
 `psycheval.cli` interface. One internal Harbor Trial loader owns read-only
 recognition and projection for both direct CLI paths and workspace mounts;
-one internal Harbor Task loader owns validated Task configuration, text
+`psycheval.harbor.tasks` owns validated Task configuration, text
 decoding, and publishable file selection for both workspace state and the
 Dataset workbench. Workspace state owns only discovery, overlays, and derived
 catalog records. One EvaluationReports module resolves normalized Harbor and
@@ -31,7 +32,21 @@ from a live Task or any other Copilot context.
 `psycheval.harbor` is the adapter module for Harbor's Agent, Environment,
 trajectory, verifier, and external-Dataset seams. It owns host execution,
 harness integration, evidence scoring, non-executing Dataset resolution, and
-the public WorkBuddy run-plan service.
+the public WorkBuddy run-plan service. Its subtree is a relocatable source-copy
+unit: it imports no other Psycheval module and uses relative internal imports.
+Dataset services accept explicit identifiers, paths, and formats. WorkBuddy
+services accept an explicit output root and Dataset path, write their owned
+plan and summary artifacts, and return results without printing or reading
+workspace configuration. The application owns Dataset-to-mount selection; CLI
+orchestration owns workspace discovery, mount registration, and command output.
+The package version has one source in the lightweight Harbor initializer,
+shared by the root package and build metadata.
+
+`psycheval.atif` is a separate, standard-library-only source-copy unit. It owns
+strict ATIF validation, content recognition, and timestamp parsing.
+`psycheval.conversion` owns adapter dispatch, normalization, and metadata
+projection, using the existing types owned by `adapters.base`. Imported ATIF
+is validated without repair; only adapter conversion normalizes evidence.
 
 The CLI and Harbor adapter share formats and one `peval.toml`, but not parser
 ownership: the CLI reads workspace, adapter, Dataset, and mount fields; Harbor
@@ -158,7 +173,8 @@ remains owned by `pretty-aui`.
 ## Dependency direction
 
 Core CLI implementation may consume pinned Harbor interfaces and the explicit
-`psycheval.harbor.datasets` and `psycheval.harbor.workbuddy` services, but not
+`psycheval.harbor.datasets`, `psycheval.harbor.tasks`, and
+`psycheval.harbor.workbuddy` services and shared identifier rules, but not
 Agent, Environment, or harness internals. The implementations exchange only
 owned configuration sections and explicit formats. Tasks invoke the installed
 verifier rather than checkout-relative Python paths. Documentation and skills

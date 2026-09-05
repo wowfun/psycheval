@@ -18,16 +18,44 @@ Psycheval supports the public Harbor `0.21.0` contract through
 
 ## WorkBuddy Office bundles
 
+The Python Dataset services take keyword-only `dataset_id`, `path`, and
+`format` (default `"harbor"`), and return `ResolvedHarborDataset`. The
+application owns workspace registration and mount selection. WorkBuddy's
+`prepare_workbuddy_plan` takes `output_root`, `dataset_id`, `dataset_path`, and
+`base_config`; it fully validates the WorkBuddy Dataset itself.
+`summarize_workbuddy_plan` takes `output_root`, `plan_id`, and optional
+`provisional`. Both return their canonical document and write only owned
+artifacts below `output_root/harbor-plans` and `output_root/harbor-jobs`.
+`discover_workbuddy_summaries` reads an explicit output root and Dataset ID set.
+These services neither discover a workspace nor read or write its `peval.toml`,
+and do not print. The `peval` CLI owns those application operations.
+Empty or whitespace-only path strings are rejected; `"."` and `Path(".")`
+explicitly select the current directory. A `Path` object has already normalized
+its input, so `Path("")` has the same meaning as `Path(".")`. Dataset identifiers
+must be strings and are trimmed before validation; retained plan IDs are exact
+identities and are not trimmed. Dataset services report invalid inputs as
+`HarborDatasetError`, and plan documents use the validated Dataset identity.
+
+The caller owns a trusted output directory. Psycheval checks for directory
+symlinks at reservation and read boundaries and rechecks newly created
+directories. These checks do not isolate concurrent directory replacement:
+the caller must prevent replacement of output directories while preparation,
+summarization, or the external WorkBuddy scorer uses them. YAML and JSON outputs
+use exclusively created temporary files and atomic replacement; failed writes
+leave an existing destination intact.
+
 Psycheval recognizes a registered `workbuddy.dataset.v1` bundle as a read-only
 Dataset whose Harbor Tasks live below the manifest's `layout.task_root`.
-Registration validates the bounded UTF-8 manifest, declared CompositeVerifier
-contract, contained task root, task count, bounded UTF-8 Task text, shared
-verifier inputs, and regular workspace archives. Discovery never imports or
-executes external package code. Ordinary mount and workbench reads resolve only
-the bounded manifest, contained task root, declared count, and immediate Task
-names; the shared Task index validates Task content as it is associated with
-Trials. Registration and `peval harbor prepare` remain the explicit full-bundle
-validation gates, so read paths do not re-walk every Task merely to locate the
+Dataset workbench registration and updates validate the bounded UTF-8 manifest,
+declared CompositeVerifier contract, contained task root, task count, bounded
+UTF-8 Task text, shared verifier inputs, and regular workspace archives.
+Discovery never imports or executes external package code. Ordinary mount and
+workbench reads resolve only the bounded manifest, contained task root, declared
+count, and immediate Task names; the shared Task index validates Task content
+as it is associated with Trials. Loading a hand-edited `peval.toml` performs the same lightweight layout
+resolution as other read paths, not full registration validation. Workbench
+registration/updates and `peval harbor prepare` are the full-bundle validation
+gates, so read paths do not re-walk every Task merely to locate the
 allowlisted root. A selected read-only Task derives its revision from current
 tree metadata instead of hashing archive bodies, and an existing instruction is
 the default preview even though it is not editable. Bundle and plan readers use
@@ -61,6 +89,11 @@ preparation. The known
 `recruiting-search-skill-mock-mcp-hardened` source defects and its public-network
 exception remain included and prominently warned; Psycheval neither patches nor
 reweights that Task.
+
+Skill extraction rejects `.git` path components case-insensitively and accepts
+the Skill root archive entry only as a directory. Extracted files retain their
+read and execute permissions but lose group/other write permission; conflicting
+duplicate archive entries are still compared using their original modes.
 
 ## Host configuration
 
@@ -112,3 +145,76 @@ a fresh session.
 Psychevo state is Trial-owned under Agent logs, so evaluation does not open the
 user's persistent database. Hermes likewise resumes and exports an exact native
 session. Both project only the current invocation for step-local scoring.
+
+## Copying into a downstream package
+
+Copy the entire `src/psycheval/harbor` directory into your importable package,
+for example `downstream/_vendor/psycheval_harbor`. Keep its internal layout and
+copy the repository's [LICENSE](../../LICENSE) alongside it. Record the source
+commit in your downstream dependency tracking so later updates can replace the
+same source unit. No source rewriting or Psycheval installation is required.
+
+Use Python 3.12 or newer with `harbor==0.21.0`, PyYAML, and pathspec; their direct
+dependency constraints are maintained in [pyproject.toml](../../pyproject.toml).
+WorkBuddy execution additionally needs the runtime and host dependencies
+described above. Harbor has its own transitive dependencies; source copying
+does not remove those. The copied subtree needs no Psycheval workspace, Web
+assets, report code, or adapter entry-point registry.
+
+Set Harbor Job import paths to the copied modules:
+
+```yaml
+environment:
+  import_path: downstream._vendor.psycheval_harbor.environment:HostEnvironment
+  kwargs:
+    allow_host_execution: true
+agents:
+  - import_path: downstream._vendor.psycheval_harbor.agent:ExternalHarnessAgent
+    kwargs:
+      command: python -m downstream._vendor.psycheval_harbor.psychevo_harness
+```
+
+Use the environment's Python executable in Task verifier scripts:
+
+```console
+python -m downstream._vendor.psycheval_harbor.verifier /tests/grader.json
+```
+
+The host and Agent supply `PEVAL_CONFIG` as described above. Namespace changes
+do not rename that locator, runtime JSON fields, schema identifiers, or Agent
+identities. The caller owns downstream Job and Task commands; copying this
+subtree does not rewrite external Dataset scripts.
+
+For direct Dataset and WorkBuddy use:
+
+```python
+from downstream._vendor.psycheval_harbor.datasets import resolve_harbor_dataset
+from downstream._vendor.psycheval_harbor.workbuddy import (
+    prepare_workbuddy_plan,
+    summarize_workbuddy_plan,
+)
+
+dataset = resolve_harbor_dataset(dataset_id="suite", path="/data/tasks")
+plan = prepare_workbuddy_plan(
+    output_root="/evaluation",
+    dataset_id="office",
+    dataset_path="/data/workbuddy",
+    base_config="/evaluation/base.yaml",
+)
+# Run the two returned Job configs with Harbor before summarizing.
+summary = summarize_workbuddy_plan(output_root="/evaluation", plan_id=plan["plan_id"])
+```
+
+For standalone ATIF validation, copy only `src/psycheval/atif.py` plus LICENSE.
+The file can be renamed, uses only the standard library, and validates without
+modifying its input. It also owns `is_atif_content` and `iso_timestamp_ms`.
+Recognition helpers detect candidate ATIF; call `validate_atif_trajectory` for
+strict validation. Adapter conversion belongs to `psycheval.conversion` and is
+not part of that copy unit. Harbor's `Trajectory` model remains available
+directly from `harbor.models.trajectories`.
+
+```python
+from downstream._vendor.atif import validate_atif_trajectory
+
+validate_atif_trajectory(trajectory)  # Raises ValueError with a field path.
+```

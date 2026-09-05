@@ -32,6 +32,21 @@ Tests isolate HOME/XDG state, config, sockets, timers, and environment secrets.
 Focused success is not a release claim unless the expected test inventory is
 visible.
 
+## Downstream source-copy checks
+
+The Python suite copies the complete Harbor subtree into an unrelated nested
+package and blocks imports of the original `psycheval` package. It exercises
+module discovery, verifier and harness entry points, synthetic host run/resume,
+and WorkBuddy planning and summarization with local fixtures. Copied production
+source is never rewritten. These tests also verify that library calls do not
+discover or mutate workspace configuration or print CLI output.
+
+Standalone ATIF tests copy and rename only `atif.py`, then execute it under
+`python -I -S` without site packages. They cover valid and invalid evidence,
+field-path errors, and non-mutation. Existing conversion tests separately own
+normalization and metadata behavior. All source-copy checks isolate user state
+and use no real providers, credentials, or WorkBuddy runtime.
+
 ## Editable source-tool check
 
 Install the checkout into an isolated tool directory and exercise its public
