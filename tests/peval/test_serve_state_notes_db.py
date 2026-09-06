@@ -295,7 +295,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/database-inspections",
+                    "/api/session-inspections",
                     {"db": ".hermes/state.db"},
                     origin=origin,
                 )
@@ -303,29 +303,32 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 self.assertEqual(body["adapter"], "hermes")
                 self.assertTrue(body["inferred"])
                 self.assertEqual(body["sessions"][0]["session_id"], "hermes-latest")
+                self.assertEqual(body["sessions"][0]["updated_at_ms"], 230000)
                 self.assertEqual(body["sessions"][0]["index"], 1)
 
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/database-inspections",
+                    "/api/session-inspections",
                     {"db": ".psychevo/state.db"},
                     origin=origin,
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(body["adapter"], "psychevo")
                 self.assertEqual(body["sessions"][0]["session_id"], "db-b")
+                self.assertEqual(body["sessions"][0]["updated_at_ms"], 450)
 
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/database-inspections",
+                    "/api/session-inspections",
                     {"db": ".opencode/opencode.db"},
                     origin=origin,
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(body["adapter"], "opencode")
                 self.assertEqual(body["sessions"][0]["session_id"], "ses-latest")
+                self.assertEqual(body["sessions"][0]["updated_at_ms"], 2600)
 
                 status, _, body = request_json(
                     port,
@@ -390,7 +393,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                     status, _, body = request_json(
                         port,
                         "POST",
-                        "/api/database-inspections",
+                        "/api/session-inspections",
                         {"db": r"C:\Users\kevin\.hermes\state.db"},
                         origin=origin,
                     )
@@ -479,7 +482,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/database-inspections",
+                    "/api/session-inspections",
                     {"db": "data/state.db"},
                     origin=origin,
                 )
@@ -490,7 +493,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/database-inspections",
+                    "/api/session-inspections",
                     {"db": "data/state.db", "adapter": "hermes"},
                     origin=origin,
                 )
@@ -501,7 +504,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/database-inspections",
+                    "/api/session-inspections",
                     {"db": "hermes/opencode/state.db"},
                     origin=origin,
                 )
@@ -512,7 +515,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "POST",
-                    "/api/database-inspections",
+                    "/api/session-inspections",
                     {"db": "missing/state.db"},
                     origin=origin,
                 )
@@ -528,7 +531,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                     status, _, body = request_json(
                         port,
                         "POST",
-                        "/api/database-inspections",
+                        "/api/session-inspections",
                         {"db": "custom/state.db", "adapter": "custom"},
                         origin=origin,
                     )
@@ -538,7 +541,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                 status, headers, body = request_json(
                     port,
                     "POST",
-                    "/api/database-inspections",
+                    "/api/session-inspections",
                     {"db": "data/state.db", "adapter": "hermes"},
                     origin="http://example.test",
                 )

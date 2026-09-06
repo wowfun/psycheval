@@ -590,6 +590,7 @@ function detailStepSelection(report, trialKey, selection = {}) {
 
 function applyServeDetailSelection(sourceKey, report, artifactRevision, selection = {}) {
   const trialKey = listValue(report?.trajectory_meta)[0]?.trial_key || null;
+  if (state.selectedSourceKey !== sourceKey || selection.stepId != null || selection.firstUserStep) state.selectedTrajectory = null;
   state.selectedSourceKey = sourceKey;
   state.selectedArtifactRevision = artifactRevision || null;
   state.selectedTrial = trialKey;
@@ -689,7 +690,7 @@ async function pollCatalogOperation(operationId, options = {}) {
 
 function setWorkspaceWriteControlsDisabled(disabled) {
   state.workspaceWriteBusy = Boolean(disabled);
-  document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-add-form] button[type=submit],[data-harbor-add-mount],[data-harbor-remove-mounts],[data-source-state-action],[data-source-delete-action]").forEach(control => {
+  document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-add-form] button[type=submit],[data-harbor-add-mount],[data-harbor-remove-mounts],[data-source-state-action],[data-source-delete-action],[data-source-refresh-action]").forEach(control => {
     if (disabled) {
       if (!Object.prototype.hasOwnProperty.call(control.dataset, "busyPreviousDisabled")) {
         control.dataset.busyPreviousDisabled = control.disabled ? "true" : "false";

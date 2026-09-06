@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 from urllib.parse import unquote
 
-from psycheval.adapters import available_adapter_ids, normalize_adapter_id
+from psycheval.adapters import adapter_for, available_adapter_ids, normalize_adapter_id
 from psycheval.inputs import infer_adapter_from_path, validate_selected_adapter
 from psycheval.serve.constants import (
     WINDOWS_DRIVE_MOUNT_ROOT,
@@ -281,14 +281,14 @@ def adapter_default_db_payload(payload: dict[str, Any]) -> tuple[str, str | None
     return adapter_id, optional_string(payload.get("default_db_path"))
 
 
-def adapter_for_db_inspect(path: str, raw_adapter: str | None) -> tuple[str, bool]:
+def adapter_for_session_inspect(path: str, raw_adapter: str | None) -> tuple[str, bool]:
     available = set(available_adapter_ids())
     if raw_adapter:
         try:
             adapter_id = validate_selected_adapter(
                 normalize_adapter_id(raw_adapter),
                 available,
-                "DB session inspect",
+                "session inspect",
             )
         except ValueError as exc:
             raise HttpError(400, str(exc)) from exc
@@ -310,25 +310,40 @@ def source_args_from_payload(
 ) -> SimpleNamespace:
     paths = source_path_values(store, payload, "path")
     dbs = source_path_values(store, payload, "db")
-    present = [value for value in [paths, dbs] if value]
-    if len(present) != 1:
-        raise HttpError(400, "provide exactly one source: path or db")
     session_id = optional_string(payload.get("session_id"))
     session_ids = session_ids_payload(payload)
     if session_id and session_ids:
         raise HttpError(400, "provide either session_id or session_ids, not both")
-    if (session_id or session_ids) and not dbs:
-        raise HttpError(
-            400, "session_id and session_ids are only valid with db sources"
-        )
-    if (session_id or session_ids) and len(dbs) != 1:
-        raise HttpError(400, "session_id and session_ids require exactly one db source")
+    if paths and dbs:
+        raise HttpError(400, "provide exactly one source: path or db")
+    if (session_id or session_ids) and len(paths or dbs) > 1:
+        raise HttpError(400, "session_id and session_ids require exactly one source")
+    if len(paths) == 1 and not dbs and not Path(paths[0]).exists():
+        raw = split_source_path_lines(payload["path"])[0]
+        adapter_id = adapter_override_payload(payload)
+        if adapter_id:
+            adapter_id = validate_selected_adapter(
+                adapter_id, set(available_adapter_ids()), "session input"
+            )
+            identify = getattr(adapter_for(adapter_id), "is_session_id", None)
+            is_id = callable(identify) and identify(raw)
+        else:
+            is_id = bool(re.fullmatch(r"[A-Za-z0-9_-]+", raw))
+        if is_id:
+            if not adapter_id:
+                raise HttpError(400, "session ID import requires an explicit adapter")
+            selected = [session_id] if session_id else session_ids
+            if selected and selected != [raw]:
+                raise HttpError(
+                    400, "session selection does not match the input Session ID"
+                )
+            session_id, session_ids, paths = raw, None, []
+    if not paths and not dbs and not (session_id or session_ids):
+        raise HttpError(400, "provide a Session ID, path, or db")
     return SimpleNamespace(
         path=paths or None,
         db=dbs or None,
-        session_id=(
-            [session_id] if session_id and dbs else session_ids if dbs else None
-        ),
+        session_id=[session_id] if session_id else session_ids,
         adapter=[],
         note=[],
     )

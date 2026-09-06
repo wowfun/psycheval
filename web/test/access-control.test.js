@@ -195,7 +195,7 @@ test("guest administrator action functions issue no requests when invoked direct
     await catalog.refreshServeSourcesFromServer();
     await shell.changeLocale("zh-CN");
     await configuration.submitServeSourceForm(sourceForm);
-    await configuration.inspectDbSessions(dbForm);
+    await configuration.inspectSourceSessions(dbForm);
     await configuration.addHarborMount();
     await configuration.removeSelectedHarborMounts();
     await harbor.saveFile();

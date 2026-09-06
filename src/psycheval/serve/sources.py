@@ -5,24 +5,26 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from psycheval.adapters import adapter_for, available_adapter_ids
 from psycheval.config import ToolConfig
 from psycheval.inputs import (
     AdapterAssignments,
     LoadedInputs,
     LoadedSession,
+    adapter_for_input_path,
     load_inputs,
     parse_adapter_assignments,
+    remap_session_selectors,
 )
 from psycheval.serve.errors import HttpError
 from psycheval.serve.payloads import (
-    adapter_for_db_inspect,
+    adapter_for_session_inspect,
     adapter_override_payload,
     optional_string,
     source_args_from_payload,
-    source_path_values,
     split_source_path_lines,
 )
-from psycheval.session_select import list_adapter_sessions
+from psycheval.session_select import inspect_adapter_sessions
 from psycheval.state import (
     ServeStateStore,
     discover_complete_trial_cell_dirs,
@@ -51,6 +53,12 @@ def add_source_payload(
 ) -> AddSourceResult:
     path_lines = path_batch_lines(payload)
     if len(path_lines) > 1:
+        if payload.get("session_id") or payload.get("session_ids"):
+            raise HttpError(
+                400, "session_id and session_ids require exactly one source"
+            )
+        if payload.get("db"):
+            raise HttpError(400, "provide exactly one source: path or db")
         return add_path_batch_sources(store, config, payload, path_lines)
     source_args = source_args_from_payload(store, payload)
     assignments = source_adapter_assignments(payload, config)
@@ -113,12 +121,28 @@ def load_payload_sources(
     path_values = list(source_args.path)
     recursive_by_index: dict[int, list[LoadedSession]] = {}
     ordinary_paths: list[tuple[int, str]] = []
+    available = set(available_adapter_ids())
     for index, path in enumerate(path_values, start=1):
         recursive_sessions = recursive_trial_cell_sessions(path, config)
         if recursive_sessions:
+            if source_args.session_id:
+                raise HttpError(
+                    400, "session selection requires an adapter session directory"
+                )
             recursive_by_index[index] = recursive_sessions
-        else:
-            ordinary_paths.append((index, path))
+            continue
+        if Path(path).is_dir():
+            adapter_id = adapter_for_input_path(
+                path, index, assignments, "path", available
+            )
+            if not callable(
+                getattr(adapter_for(adapter_id), "resolve_session_path", None)
+            ):
+                raise HttpError(
+                    400,
+                    f"adapter {adapter_id} does not support session directories: {path}",
+                )
+        ordinary_paths.append((index, path))
     ordinary_loaded = LoadedInputs(sessions=[], notes=[])
     if ordinary_paths:
         ordinary_loaded = load_serve_inputs(
@@ -126,18 +150,27 @@ def load_payload_sources(
                 **{
                     **vars(source_args),
                     "path": [path for _, path in ordinary_paths],
+                    "session_id": remap_session_selectors(
+                        source_args.session_id or [],
+                        [index for index, _ in ordinary_paths],
+                    ),
                 }
             ),
             remap_path_assignments(assignments, [index for index, _ in ordinary_paths]),
             config,
         )
-    ordinary_sessions = iter(ordinary_loaded.sessions)
+    ordinary_groups: dict[int, list[LoadedSession]] = {}
+    for session in ordinary_loaded.sessions:
+        selector = session.input_selector or ""
+        if selector.startswith("p"):
+            original = ordinary_paths[int(selector[1:]) - 1][0]
+            ordinary_groups.setdefault(original, []).append(session)
     ordered_sessions: list[LoadedSession] = []
     for index, _path in enumerate(path_values, start=1):
         if index in recursive_by_index:
             ordered_sessions.extend(recursive_by_index[index])
         else:
-            ordered_sessions.append(next(ordinary_sessions))
+            ordered_sessions.extend(ordinary_groups.get(index, []))
     return LoadedInputs(sessions=ordered_sessions, notes=ordinary_loaded.notes)
 
 
@@ -148,8 +181,6 @@ def recursive_trial_cell_sessions(
     path = Path(raw_path).expanduser()
     cells = discover_complete_trial_cell_dirs(path)
     if not cells:
-        if path.is_dir():
-            raise HttpError(400, f"no complete Trial cells found under: {path}")
         return []
     return [
         replace(
@@ -187,30 +218,49 @@ def apply_payload_alias(loaded: LoadedInputs, alias: str | None) -> LoadedInputs
     )
 
 
-def db_sessions_payload(
+def sessions_payload(
     store: ServeStateStore,
     payload: dict[str, Any],
+    config: ToolConfig,
 ) -> dict[str, Any]:
-    db_paths = source_path_values(store, payload, "db")
-    if len(db_paths) != 1:
-        raise HttpError(400, "DB Inspect requires exactly one DB path")
-    db_path = db_paths[0]
-    path = Path(db_path)
-    if not path.is_file():
-        raise HttpError(400, f"DB path does not exist: {path}")
+    source_args = source_args_from_payload(store, payload)
+    kind = "db" if payload.get("db") else "path"
+    paths = getattr(source_args, kind) or []
+    if not paths and source_args.session_id:
+        loaded = load_serve_inputs(
+            source_args, source_adapter_assignments(payload, config), config
+        )
+        paths = [session.input_path for session in loaded.sessions]
+    if len(paths) != 1:
+        raise HttpError(400, "Session Inspect requires exactly one source path")
+    path = Path(paths[0])
+    if not (path.is_file() if kind == "db" else path.is_dir() or path.is_file()):
+        raise HttpError(
+            400,
+            f"{'DB path' if kind == 'db' else 'Session path'} does not exist or has the wrong type: {path}",
+        )
     raw_adapter = adapter_override_payload(payload)
-    adapter_id, inferred = adapter_for_db_inspect(str(path), raw_adapter)
-    sessions = list_adapter_sessions(adapter_id, str(path))
+    adapter_id, inferred = adapter_for_session_inspect(str(path), raw_adapter)
+    if kind == "path" and not callable(
+        getattr(adapter_for(adapter_id), "resolve_session_path", None)
+    ):
+        raise HttpError(
+            400, f"adapter {adapter_id} does not support session directories"
+        )
+    listing = inspect_adapter_sessions(adapter_id, str(path))
     return {
-        "db": str(path),
+        kind: str(path),
         "adapter": adapter_id,
         "inferred": inferred,
+        "selection_required": kind == "db" or path.is_dir(),
+        "warnings": listing.warnings,
         "sessions": [
             {
                 "index": index,
                 "session_id": session.session_id,
                 "name": session.name,
+                "updated_at_ms": session.updated_at_ms,
             }
-            for index, session in enumerate(sessions, start=1)
+            for index, session in enumerate(listing.sessions, start=1)
         ],
     }

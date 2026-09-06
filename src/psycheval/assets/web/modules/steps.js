@@ -1,6 +1,7 @@
 import { esc, fmtMs, fmtNum, hasMetricValue, listValue, lower, stepMeta, t } from "./runtime.js";
 import { stepPreviewText } from "./trajectory-trace.js";
 import { metricExtra, timeGradientClass, timeGradientStyle, timeTitle, timingRatio } from "./analysis-metrics.js";
+import { bindCopyButton } from "./clipboard.js";
 
 function renderStepsHeader(trajectory, options = {}) {
   const count = (trajectory?.steps || []).length;
@@ -15,17 +16,17 @@ function valuePreview(value) {
 function renderStep(step, meta, timingStats, options = {}) {
   const sm = stepMeta(meta, step.step_id);
   const preview = stepPreviewText(step) || "(No Message)";
-  return `<details class="step" data-step="${esc(step.step_id)}"${options.open ? " open" : ""}><summary><div class="step-row"><span class="step-id">#${esc(step.step_id)}</span><span class="role ${esc(step.source)}">${esc(step.source)}</span><span class="preview">${esc(preview)}</span></div><div class="rail">${renderStepRail(step, sm, timingStats)}</div></summary><div class="step-body">${renderBlocks(step, sm, timingStats)}</div></details>`;
+  return `<details class="step" data-step="${esc(step.step_id)}"${options.open ? " open" : ""}><summary><div class="step-row"><span class="step-id">#${esc(step.step_id)}</span><span class="role ${esc(step.source)}">${esc(step.source)}</span><span class="preview">${esc(preview)}</span></div><div class="rail">${renderStepRail(step, sm, timingStats)}</div></summary><div class="step-body">${renderBlocks(step, sm, timingStats, options.childIds)}</div></details>`;
 }
-function renderBlocks(step, meta, timingStats) {
+function renderBlocks(step, meta, timingStats, childIds = new Set()) {
   let html = "";
   if (step.reasoning_content) html += block("Reasoning", step.reasoning_content, "reasoning-block");
   const message = valuePreview(step.message);
   if (message.trim()) html += block(step.source === "system" ? "System Prompt" : "Message", message, "message-block");
-  html += renderStepActivityBlocks(step, meta, timingStats);
+  html += renderStepActivityBlocks(step, meta, timingStats, childIds);
   return html || `<p class="copy">No visible content.</p>`;
 }
-function renderStepActivityBlocks(step, meta, timingStats) {
+function renderStepActivityBlocks(step, meta, timingStats, childIds = new Set()) {
   const entries = [];
   (step.tool_calls || []).forEach(tool => {
     const toolMeta = toolMetaFor(meta, tool.tool_call_id);
@@ -40,17 +41,20 @@ function renderStepActivityBlocks(step, meta, timingStats) {
     entries.push({
       timestamp: blockTimestamp(observationMeta?.timestamp_ms),
       order: entries.length,
-      html: renderObservationBlock(observation, observationMeta),
+      html: renderObservationBlock(observation, observationMeta, childIds),
     });
   });
   return entries.sort(compareStepActivityBlocks).map(entry => entry.html).join("");
 }
 function renderToolCallBlock(tool, toolMeta, timingStats) {
   const ratio = timingRatio(toolMeta?.execution_duration_ms, timingStats?.maxToolExecutionMs);
-  return `<div class="block tool-block"><h4>Tool Calls</h4><p>${renderToolNameChip(tool, toolMeta, "", ratio)} <span class="muted">ID: ${esc(tool.tool_call_id || "-")}${toolMeta?.status ? ` / ${esc(toolMeta.status)}` : ""}${renderToolTiming(toolMeta)}</span></p><pre>${esc(valuePreview(tool.arguments || {}))}</pre></div>`;
+  const content = valuePreview(tool.arguments || {});
+  return `<div class="block tool-block">${blockHeader("Tool Calls", content)}<p>${renderToolNameChip(tool, toolMeta, "", ratio)} <span class="muted">ID: ${esc(tool.tool_call_id || "-")}${toolMeta?.status ? ` / ${esc(toolMeta.status)}` : ""}${renderToolTiming(toolMeta)}</span></p><pre>${esc(content)}</pre></div>`;
 }
-function renderObservationBlock(observation, observationMeta) {
-  return `<div class="block observation-block"><h4 class="${observationMeta?.tool_error ? "danger" : ""}">Observations</h4><p class="muted">Result for: ${esc(observation.source_call_id || "-")}${observationMeta?.status ? ` / ${esc(observationMeta.status)}` : ""}</p><pre>${esc(valuePreview(observation.content))}</pre></div>`;
+function renderObservationBlock(observation, observationMeta, childIds = new Set()) {
+  const children = (observation.subagent_trajectory_ref || []).filter(ref => childIds.has(ref.trajectory_id)).map(ref => `<button class="action-button" type="button" data-trajectory-id="${esc(ref.trajectory_id)}">${esc(t("view_subagent", "View subagent"))}</button>`).join("");
+  const content = valuePreview(observation.content);
+  return `<div class="block observation-block">${blockHeader("Observations", content, observationMeta?.tool_error ? "danger" : "")}<p class="muted">Result for: ${esc(observation.source_call_id || "-")}${observationMeta?.status ? ` / ${esc(observationMeta.status)}` : ""}</p><pre>${esc(content)}</pre>${children}</div>`;
 }
 function compareStepActivityBlocks(a, b) {
   if (a.timestamp !== null && b.timestamp !== null && a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
@@ -61,7 +65,18 @@ function compareStepActivityBlocks(a, b) {
 function blockTimestamp(value) {
   return hasMetricValue(value) ? Number(value) : null;
 }
-function block(title, content, cls) { return `<div class="block ${cls}"><h4>${esc(title)}</h4><pre>${esc(content)}</pre></div>`; }
+function blockHeader(title, content, headingClass = "") {
+  const canCopy = Boolean(content.trim());
+  const copyLabel = canCopy ? t("copy_block_content", "Copy block content") : t("no_block_content_to_copy", "No block content to copy");
+  return `<div class="block-head"><h4 class="${esc(headingClass)}">${esc(title)}</h4><button class="block-copy" type="button" data-block-copy title="${esc(copyLabel)}" aria-label="${esc(`${copyLabel}: ${title}`)}" aria-live="polite"${canCopy ? "" : " disabled"}>${esc(t("copy", "Copy"))}</button></div>`;
+}
+function block(title, content, cls) { return `<div class="block ${cls}">${blockHeader(title, content)}<pre>${esc(content)}</pre></div>`; }
+function bindBlockCopyControls(target) {
+  target.querySelectorAll("[data-block-copy]").forEach(button => {
+    const card = button.closest(".block");
+    bindCopyButton(button, () => card.querySelector("pre")?.textContent || "", card.querySelector("h4")?.textContent || "");
+  });
+}
 function fmtRailTokens(value) {
   if (!hasMetricValue(value)) return "-";
   const number = Number(value);
@@ -159,6 +174,7 @@ function bindStepToggle(root = document, listSelector = "#step-list") {
   refresh();
 }
 export {
+  bindBlockCopyControls,
   bindStepToggle,
   block,
   blockTimestamp,

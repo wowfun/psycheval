@@ -288,6 +288,17 @@
 .db-default-actions .action-button {
   width:100%;
 }
+.source-import-results {
+  display:grid;
+  gap:8px;
+  max-height:300px;
+  overflow:auto;
+  margin:8px 0 0;
+  padding-inline-start:24px;
+}
+.source-import-results li { padding:8px; border-top:1px solid var(--rule); overflow-wrap:anywhere; }
+.source-import-results code { display:block; white-space:pre-wrap; }
+.source-input-actions { display:flex; flex-wrap:wrap; gap:8px; margin-inline-end:auto; }
 .source-picker-actions {
   display:flex;
   justify-content:flex-end;

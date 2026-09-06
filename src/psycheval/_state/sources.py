@@ -6,6 +6,19 @@ from psycheval._state.artifacts import normalized_optional_path
 from psycheval.models import LoadedSession
 
 
+def refresh_binding(state: dict[str, Any]) -> dict[str, Any] | None:
+    binding = state.get("refresh_binding")
+    if (
+        isinstance(binding, dict)
+        and binding.get("kind") == "path"
+        and binding.get("adapter") == "claude"
+        and isinstance(binding.get("input_path"), str)
+        and binding["input_path"]
+    ):
+        return binding
+    return None
+
+
 def loaded_session_from_source(source: dict[str, Any]) -> LoadedSession:
     return LoadedSession(
         records=None,

@@ -707,33 +707,101 @@ test("Configuration edits reciprocal Harbor associations and batch removes mount
   }
 });
 
-test("DB session picker reuses the shared visible-selection behavior", () => {
+test("Session picker reuses the shared visible-selection behavior", () => {
   const form = document.createElement("form");
   form.dataset.sourceAddForm = "";
-  form.innerHTML = '<div data-db-session-picker></div>';
+  form.innerHTML = '<div data-session-picker></div>';
   document.body.append(form);
   try {
-    configuration.renderDbSessionPicker(form, {
+    configuration.renderSessionPicker(form, {
       adapter: "psychevo",
       db: "/tmp/sessions.db",
       sessions: [
-        { index: 1, session_id: "session-a", name: "Alpha" },
+        { index: 1, session_id: "session-a", name: "Alpha", updated_at_ms: 0 },
         { index: 2, session_id: "session-b", name: "Beta" },
       ],
     });
-    const picker = form.querySelector("[data-db-session-picker]");
+    const picker = form.querySelector("[data-session-picker]");
+    assert.match(picker.textContent, /Updated \(UTC\)/);
+    const updateTimes = picker.querySelectorAll('td[data-value-type="datetime"]');
+    assert.equal(updateTimes[0].textContent, "1970-01-01T00:00:00.000Z");
+    assert.equal(updateTimes[1].textContent, "-");
     const rows = picker.querySelectorAll("[data-table-row-select]");
     const header = picker.querySelector("[data-table-select-visible]");
     rows[0].click();
-    assert.deepEqual(configuration.selectedDbSessionIds(form), ["session-a"]);
+    assert.deepEqual(configuration.selectedSessionIds(form), ["session-a"]);
     assert.equal(header.indeterminate, true);
-    assert.equal(picker.querySelector("[data-db-selected-count]").textContent, "1 selected");
+    assert.equal(picker.querySelector("[data-session-selected-count]").textContent, "1 selected");
     header.click();
-    assert.deepEqual(configuration.selectedDbSessionIds(form).sort(), ["session-a", "session-b"]);
+    assert.deepEqual(configuration.selectedSessionIds(form).sort(), ["session-a", "session-b"]);
     assert.equal(Array.from(rows).every(row => row.checked), true);
     assert.equal(header.indeterminate, false);
   } finally {
     form.remove();
+  }
+});
+
+test("Session inspection diagnostics stay visible for empty and partial listings", () => {
+  const form = document.createElement("form");
+  form.innerHTML = '<div data-session-picker></div>';
+  const warning = 'excluded <script>bad</script>.jsonl';
+  for (const sessions of [[], [{ index: 1, session_id: "good" }]]) {
+    configuration.renderSessionPicker(form, { adapter: "claude", path: "/tmp/project", sessions, warnings: [warning] });
+    assert.equal(form.querySelector("[data-session-diagnostics]").textContent, warning);
+    assert.equal(form.querySelector("script"), null);
+    assert.equal(form.querySelectorAll("[data-table-row-select]").length, sessions.length);
+  }
+});
+
+test("Editing a session source clears selection before a stale submit can send a request", async () => {
+  const previousFetch = globalThis.fetch;
+  const root = document.querySelector("[data-config-page]");
+  const requests = [];
+  root.hidden = false;
+  root.innerHTML = `<p data-config-page-status hidden></p>
+    <form data-source-add-form data-source-kind="path">
+      <textarea name="path">/tmp/one</textarea>
+      <select name="adapter"><option>claude</option><option>opencode</option></select>
+      <div data-session-picker></div>
+    </form>`;
+  delete root.dataset.configBound;
+  globalThis.fetch = async path => {
+    requests.push(String(path));
+    return { ok: true, status: 200, headers: etagHeaders("picker-race"),
+      text: async () => JSON.stringify(String(path) === "/api/prompts" ? [] : { datasets: [], mounts: [] }) };
+  };
+  try {
+    await configuration.initializeConfiguration();
+    const form = root.querySelector("form");
+    for (const [name, value, event] of [["path", "/tmp/two", "input"], ["adapter", "opencode", "change"]]) {
+      configuration.renderSessionPicker(form, { path: "/tmp/one", adapter: "claude", sessions: [{ index: 1, session_id: "one" }] });
+      form.querySelector("[data-table-row-select]").click();
+      assert.deepEqual(configuration.selectedSessionIds(form), ["one"]);
+      const field = form.querySelector(`[name="${name}"]`);
+      field.value = value;
+      field.dispatchEvent(new Event(event, { bubbles: true }));
+      requests.length = 0;
+      await configuration.addSelectedSessions(form);
+      assert.deepEqual(requests, []);
+      assert.deepEqual(configuration.selectedSessionIds(form), []);
+      assert.equal(form.querySelector("[data-session-picker]").hidden, true);
+      assert.match(root.querySelector("[data-config-page-status]").textContent, /Select sessions/);
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+    root.hidden = true;
+  }
+});
+
+test("Source refresh is available for linked Harbor and native Claude but not snapshots", () => {
+  const previousSources = runtime.state.serveSources;
+  try {
+    for (const [adapter, kind, refreshable] of [["harbor", "harbor-trial", true], ["claude", "path", true], ["atif", "path", false]]) {
+      runtime.state.serveSources = [{ source_key: "source", adapter, kind, refreshable }];
+      assert.equal(sourceStateControls.renderSourceRefreshControl("source").includes("data-source-refresh-action"), refreshable);
+    }
+  } finally {
+    runtime.state.serveSources = previousSources;
   }
 });
 
@@ -809,7 +877,7 @@ test("Configuration reports nested and background source import results", async 
 
     const form = document.createElement("form");
     form.dataset.sourceKind = "path";
-    form.innerHTML = '<textarea name="path">one.jsonl\nmissing.jsonl</textarea>';
+    form.innerHTML = '<textarea name="path">one.jsonl\nmissing.jsonl</textarea><div data-source-import-results hidden></div>';
     root.append(form);
     globalThis.fetch = async path => ({
       ok: true,
@@ -831,6 +899,8 @@ test("Configuration reports nested and background source import results", async 
     await tick();
     await tick();
     assert.equal(root.querySelector("[data-config-page-status]").textContent, "Imported 1, failed 1: missing.jsonl was not found");
+    assert.deepEqual([...form.querySelectorAll(".source-import-results code")].map(node => node.textContent), ["one.jsonl", "missing.jsonl"]);
+    assert.equal(form.querySelector("[data-source-import-results]").hidden, false);
   } finally {
     globalThis.fetch = previousFetch;
     configuration.harborConfigState.busy = false;

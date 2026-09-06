@@ -1,4 +1,4 @@
-import { adminMode, esc, t } from "./shared.js";
+import { adminMode, esc, fmtDate, t } from "./shared.js";
 import { applyDataTableControls, bindDataTableControls, bindDataTableSelection, renderDataTable, selectionColumn } from "./data-tables.js";
 import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
 import { applyDefaultDbToForm, formPayload, selectedAdapterValue, setAdapterChoice, showServeNotice, syncAdapterDefaultDbControls, updateAdapterDefaults } from "./form-controls.js";
@@ -19,7 +19,7 @@ const promptConfigState = {
   renderedId: "",
   dirty: false,
 };
-const dbSessionSelections = new WeakMap();
+const sessionSelections = new WeakMap();
 
 function setConfigurationStatus(message = "", error = false) {
   const target = document.querySelector("[data-config-page-status]");
@@ -166,6 +166,7 @@ async function choosePathSourceFiles(button) {
     const paths = Array.isArray(payload?.paths) ? payload.paths.map(path => String(path || "").trim()).filter(Boolean) : [];
     if (!paths.length) return;
     field.value = paths.join("\n");
+    clearSessionPicker(form);
     setConfigurationStatus(t("serve_path_picker_selected", "Path selection updated"));
   } catch (error) {
     const message = error.message || String(error);
@@ -372,8 +373,10 @@ function bindConfigurationSourceControls(root) {
     adapter?.addEventListener("change", () => {
       applyDefaultDbToForm(form, { force: true });
       syncAdapterDefaultDbControls(form);
+      clearSessionPicker(form);
     });
-    db?.addEventListener("input", () => syncAdapterDefaultDbControls(form));
+    db?.addEventListener("input", () => { syncAdapterDefaultDbControls(form); clearSessionPicker(form); });
+    form.querySelector('[name="path"]')?.addEventListener("input", () => clearSessionPicker(form));
     form.querySelector("[data-adapter-default-db-save]")?.addEventListener("click", () => {
       void saveAdapterDefaultDb(form, db?.value || "");
     });
@@ -388,18 +391,18 @@ function bindConfigurationSourceControls(root) {
       void choosePathSourceFiles(button);
     });
   });
-  root.querySelectorAll("[data-db-inspect]").forEach(button => {
+  root.querySelectorAll("[data-session-inspect]").forEach(button => {
     button.addEventListener("click", event => {
       event.preventDefault();
-      void inspectDbSessions(button.closest("[data-source-add-form]"));
+      void inspectSourceSessions(button.closest("[data-source-add-form]"));
     });
   });
-  root.querySelectorAll("[data-db-session-picker]").forEach(picker => {
+  root.querySelectorAll("[data-session-picker]").forEach(picker => {
     picker.addEventListener("click", event => {
-      const button = event.target?.closest?.("[data-db-add-selected]");
+      const button = event.target?.closest?.("[data-session-add-selected]");
       if (!button) return;
       event.preventDefault();
-      void addSelectedDbSessions(button.closest("[data-source-add-form]"));
+      void addSelectedSessions(button.closest("[data-source-add-form]"));
     });
   });
 }
@@ -626,7 +629,7 @@ async function rescanTrajectorySources() {
     setConfigurationStatus(error.message || String(error), true);
   }
 }
-async function pollConfigurationOperation(operationId) {
+async function pollConfigurationOperation(operationId, sourceForm = null) {
   if (!operationId) return;
   activeConfigurationOperations.add(operationId);
   syncConfigurationBusyState();
@@ -634,13 +637,14 @@ async function pollConfigurationOperation(operationId) {
     const operation = await serveApi(`/api/operations/${encodeURIComponent(operationId)}`);
     setConfigurationStatus(`${operation.kind}: ${operation.completed}/${operation.total}`);
     if (["queued", "running"].includes(operation.state)) {
-      setTimeout(() => pollConfigurationOperation(operationId), 250);
+      setTimeout(() => pollConfigurationOperation(operationId, sourceForm), 250);
       return;
     }
     const failures = Array.isArray(operation.failures) ? operation.failures : [];
     activeConfigurationOperations.delete(operationId);
     syncConfigurationBusyState();
     if (operation.kind.includes("harbor-")) await refreshHarborConfig();
+    if (sourceForm) renderSourceImportResults(sourceForm, operation);
     if (!showImportResultsSummary(operation)) {
       setConfigurationStatus(failures[0]?.error || "", failures.length > 0 || operation.state === "failed");
     }
@@ -780,11 +784,14 @@ async function submitServeSourceForm(form) {
   try {
     setConfigurationBusy(true);
     setConfigurationStatus(t("serve_refresh", "Refresh"));
+    renderSourceImportResults(form, {});
     const payload = await serveApi("/api/source-import-operations", { method: "POST", body });
     form.reset();
     if (kind === "db") syncAdapterDefaultDbControls(form);
+    clearSessionPicker(form);
     setConfigurationBusy(false);
-    if (payload?.id) pollConfigurationOperation(payload.id);
+    if (payload?.id) pollConfigurationOperation(payload.id, form);
+    renderSourceImportResults(form, payload);
     showImportResultsSummary(payload);
   } catch (error) {
     setConfigurationBusy(false);
@@ -792,7 +799,7 @@ async function submitServeSourceForm(form) {
     setConfigurationStatus(error.message || String(error), true);
   }
 }
-function showImportResultsSummary(payload) {
+function sourceImportResults(payload) {
   let results = Array.isArray(payload?.import_results)
     ? payload.import_results
     : Array.isArray(payload?.result?.import_results)
@@ -804,6 +811,22 @@ function showImportResultsSummary(payload) {
       ...(Array.isArray(payload?.failures) ? payload.failures : []),
     ].sort((left, right) => Number(left?.index || 0) - Number(right?.index || 0));
   }
+  return results;
+}
+function renderSourceImportResults(form, payload) {
+  const target = form.querySelector("[data-source-import-results]");
+  if (!target) return;
+  const results = sourceImportResults(payload);
+  target.hidden = !results.length;
+  target.innerHTML = results.length ? `<strong>${esc(t("serve_import_results", "Import results"))}</strong><ol class="source-import-results">${results.map(result => {
+    const item = result.item || {};
+    const input = result.input || result.path || item.path || item.db || item.session_id || "";
+    const failed = result.status === "error";
+    return `<li><code>${esc(input)}</code><span class="${failed ? "danger" : "copy"}">${esc(failed ? result.error || t("serve_import_failed", "Import failed") : t("serve_imported", "Imported"))}</span></li>`;
+  }).join("")}</ol>` : "";
+}
+function showImportResultsSummary(payload) {
+  const results = sourceImportResults(payload);
   if (!results.length) return false;
   const imported = results.filter(result => result?.status === "ok").length;
   const failures = results.filter(result => result?.status === "error");
@@ -816,28 +839,33 @@ function showImportResultsSummary(payload) {
   setConfigurationStatus(message, failed > 0);
   return true;
 }
-async function inspectDbSessions(form) {
+async function inspectSourceSessions(form) {
   if (!adminMode()) return;
   if (!form) return;
   applyDefaultDbToForm(form);
   const body = formPayload(form);
-  const db = String(body.db || "").trim();
-  if (!db) return;
-  const picker = form.querySelector("[data-db-session-picker]");
+  const kind = form.dataset.sourceKind === "db" ? "db" : "path";
+  const path = String(body[kind] || "").trim();
+  if (!path) return;
+  clearSessionPicker(form);
+  const requestId = form.dataset.sessionInspection;
+  const picker = form.querySelector("[data-session-picker]");
   try {
-    setConfigurationStatus(t("serve_inspect_db", "Inspect DB"));
-    const payload = await serveApi("/api/database-inspections", {
+    setConfigurationStatus(t("serve_inspect_sessions", "Inspect sessions"));
+    const payload = await serveApi("/api/session-inspections", {
       method: "POST",
       body: {
-        db,
+        [kind]: path,
         adapter: selectedAdapterValue(form)
       }
     });
+    if (form.dataset.sessionInspection !== requestId) return;
     if (payload?.adapter) setAdapterChoice(form, payload.adapter);
     syncAdapterDefaultDbControls(form);
-    renderDbSessionPicker(form, payload);
+    renderSessionPicker(form, payload);
     setConfigurationStatus(t("serve_latest_snapshots", "Latest snapshots"));
   } catch (error) {
+    if (form.dataset.sessionInspection !== requestId) return;
     if (picker) {
       picker.hidden = false;
       picker.innerHTML = `<p class="copy danger">${esc(error.message || String(error))}</p>`;
@@ -845,17 +873,29 @@ async function inspectDbSessions(form) {
     setConfigurationStatus(error.message || String(error), true);
   }
 }
-function renderDbSessionPicker(form, payload) {
-  const picker = form.querySelector("[data-db-session-picker]");
+function clearSessionPicker(form) {
+  form.dataset.sessionInspection = String(Number(form.dataset.sessionInspection || 0) + 1);
+  sessionSelections.delete(form);
+  delete form.dataset.inspectedPath;
+  delete form.dataset.inspectedAdapter;
+  delete form.dataset.sessionSelectionRequired;
+  const picker = form.querySelector("[data-session-picker]");
+  if (picker) { picker.hidden = true; picker.innerHTML = ""; }
+}
+function renderSessionPicker(form, payload) {
+  const picker = form.querySelector("[data-session-picker]");
   if (!picker) return;
   const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
   const selection = new Set();
-  dbSessionSelections.set(form, selection);
-  form.dataset.inspectedDb = payload?.db || "";
+  sessionSelections.set(form, selection);
+  form.dataset.inspectedPath = payload?.db || payload?.path || "";
   form.dataset.inspectedAdapter = payload?.adapter || "";
+  form.dataset.sessionSelectionRequired = String(payload?.selection_required !== false);
   picker.hidden = false;
+  const warnings = Array.isArray(payload?.warnings) ? payload.warnings : [];
+  const diagnostics = warnings.length ? `<ul class="copy danger" data-session-diagnostics>${warnings.map(warning => `<li>${esc(warning)}</li>`).join("")}</ul>` : "";
   if (!sessions.length) {
-    picker.innerHTML = `<div class="db-picker-head"><strong>${esc(t("serve_db_sessions", "DB sessions"))}</strong><span>${esc(t("serve_no_sessions", "No sessions found"))}</span></div>`;
+    picker.innerHTML = `<div class="db-picker-head"><strong>${esc(t("serve_sessions", "Sessions"))}</strong><span>${esc(t("serve_no_sessions", "No sessions found"))}</span></div>${diagnostics}`;
     return;
   }
   const adapterLabel = payload?.inferred ? t("serve_adapter_inferred", "Adapter inferred") : t("serve_adapter_selected", "Adapter selected");
@@ -868,16 +908,18 @@ function renderDbSessionPicker(form, payload) {
     }),
     { key: "index", label: "#", valueType: "number", numeric: true, value: session => session?.index ?? "-" },
     { key: "session_id", label: t("session", "Session"), valueType: "identity", value: session => session?.session_id || "-", html: session => `<code>${esc(session?.session_id || "-")}</code>` },
+    { key: "updated_at_ms", label: t("serve_session_updated", "Updated (UTC)"), valueType: "datetime", value: session => session?.updated_at_ms, format: fmtDate },
     { key: "name", label: t("serve_session_name", "Name"), valueType: "text", value: session => session?.name || "-" },
   ];
   picker.innerHTML = `
     <div class="db-picker-head">
-      <div><strong>${esc(t("serve_db_sessions", "DB sessions"))}</strong><span>${esc(adapterLabel)}: ${esc(payload?.adapter || "-")}</span></div>
+      <div><strong>${esc(t("serve_sessions", "Sessions"))}</strong><span>${esc(adapterLabel)}: ${esc(payload?.adapter || "-")}</span></div>
       <div class="db-picker-actions">
-        <span data-db-selected-count>0 ${esc(t("serve_selected_count", "selected"))}</span>
-        <button class="action-button primary" type="button" data-db-add-selected disabled>${esc(t("serve_add_selected", "Add selected"))}</button>
+        <span data-session-selected-count>0 ${esc(t("serve_selected_count", "selected"))}</span>
+        <button class="action-button primary" type="button" data-session-add-selected disabled>${esc(t("serve_add_selected", "Add selected"))}</button>
       </div>
     </div>
+    ${diagnostics}
     <div class="db-session-table-wrap">${renderDataTable({
       tableId: "db-sessions",
       columns,
@@ -889,24 +931,24 @@ function renderDbSessionPicker(form, payload) {
   bindDataTableSelection(picker, {
     columns,
     rows: sessions,
-    onChange: () => updateDbSelectedCount(picker, form),
+    onChange: () => updateSessionSelectedCount(picker, form),
   });
-  updateDbSelectedCount(picker, form);
+  updateSessionSelectedCount(picker, form);
 }
-function selectedDbSessionIds(form) {
-  return Array.from(dbSessionSelections.get(form) || []);
+function selectedSessionIds(form) {
+  return Array.from(sessionSelections.get(form) || []);
 }
-function updateDbSelectedCount(picker, form = picker?.closest?.("[data-source-add-form]")) {
-  const count = dbSessionSelections.get(form)?.size || 0;
-  const target = picker.querySelector("[data-db-selected-count]");
+function updateSessionSelectedCount(picker, form = picker?.closest?.("[data-source-add-form]")) {
+  const count = sessionSelections.get(form)?.size || 0;
+  const target = picker.querySelector("[data-session-selected-count]");
   if (target) target.textContent = `${count} ${t("serve_selected_count", "selected")}`;
-  const addButton = picker.querySelector("[data-db-add-selected]");
+  const addButton = picker.querySelector("[data-session-add-selected]");
   if (addButton) addButton.disabled = count < 1;
 }
-async function addSelectedDbSessions(form) {
+async function addSelectedSessions(form) {
   if (!adminMode()) return;
   if (!form) return;
-  const sessionIds = selectedDbSessionIds(form);
+  const sessionIds = selectedSessionIds(form);
   if (!sessionIds.length) {
     setConfigurationStatus(t("serve_select_sessions", "Select sessions"), true);
     return;
@@ -915,27 +957,21 @@ async function addSelectedDbSessions(form) {
   try {
     setConfigurationBusy(true);
     setConfigurationStatus(t("serve_refresh", "Refresh"));
+    renderSourceImportResults(form, {});
     const payload = await serveApi("/api/source-import-operations", {
       method: "POST",
       body: {
-        db: form.dataset.inspectedDb || body.db,
+        [form.dataset.sourceKind === "db" ? "db" : "path"]: form.dataset.inspectedPath,
         adapter: form.dataset.inspectedAdapter || selectedAdapterValue(form),
-        session_ids: sessionIds,
+        ...(form.dataset.sessionSelectionRequired === "false" ? {} : { session_ids: sessionIds }),
         alias: body.alias
       }
     });
     form.reset();
     syncAdapterDefaultDbControls(form);
-    const picker = form.querySelector("[data-db-session-picker]");
-    if (picker) {
-      picker.hidden = true;
-      picker.innerHTML = "";
-    }
-    dbSessionSelections.delete(form);
-    delete form.dataset.inspectedDb;
-    delete form.dataset.inspectedAdapter;
+    clearSessionPicker(form);
     setConfigurationBusy(false);
-    if (payload?.id) pollConfigurationOperation(payload.id);
+    if (payload?.id) pollConfigurationOperation(payload.id, form);
   } catch (error) {
     setConfigurationBusy(false);
     showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
@@ -1037,17 +1073,17 @@ async function removeSelectedHarborMounts() {
 }
 export {
   addHarborMount,
-  addSelectedDbSessions,
+  addSelectedSessions,
   choosePathSourceFiles,
   initializeConfiguration,
-  inspectDbSessions,
+  inspectSourceSessions,
   pollConfigurationOperation,
-  renderDbSessionPicker,
+  renderSessionPicker,
   removeSelectedHarborMounts,
-  selectedDbSessionIds,
+  selectedSessionIds,
   showImportResultsSummary,
   submitServeSourceForm,
-  updateDbSelectedCount,
+  updateSessionSelectedCount,
   harborConfigState,
   promptConfigState,
   refreshHarborConfig,

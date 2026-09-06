@@ -9,7 +9,7 @@ from pathlib import Path
 
 import uvicorn
 
-from psycheval.config import AcpAgent, ToolConfig
+from psycheval.config import AcpAgent, load_config
 from psycheval.serve.access import ServeAccess
 from psycheval.serve.acp import MAX_ACP_FRAME_BYTES
 from psycheval.serve.api import create_app
@@ -20,9 +20,35 @@ from psycheval.state import open_workspace_state
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="peval-acp-e2e-") as temporary:
         root = Path(temporary)
+        if os.environ.get("PEVAL_E2E_CLAUDE") == "1":
+            from tests.peval.claude_support import event, family, write_events
+
+            family(root / ".claude")
+            write_events(
+                root / ".claude/newer.jsonl",
+                [event("user", seq=50, content="Newer session", sessionId="newer")],
+            )
+            (root / ".claude/bad.jsonl").write_text("{bad", encoding="utf-8")
+            (root / ".claude/empty.jsonl").touch()
+            for name in ("duplicate", "backup"):
+                write_events(
+                    root / f".claude/{name}.jsonl",
+                    [
+                        event(
+                            "user",
+                            content="Duplicate session",
+                            sessionId="duplicate-session",
+                        )
+                    ],
+                )
         locale = os.environ.get("PEVAL_E2E_LOCALE", "en")
         (root / "peval.toml").write_text(
-            f'locale = {json.dumps(locale)}\nanalysis_eval_slug = "default"\n',
+            f'locale = {json.dumps(locale)}\nanalysis_eval_slug = "default"\n'
+            + (
+                '[adapters.claude]\ndefault_session_root = ".claude"\n'
+                if os.environ.get("PEVAL_E2E_CLAUDE") == "1"
+                else ""
+            ),
             encoding="utf-8",
         )
         write_e2e_trial(
@@ -47,10 +73,7 @@ def main() -> None:
         store = open_workspace_state(str(root))
         runtime = ServeRuntime(
             store,
-            ToolConfig(
-                workspace_root=str(root),
-                locale=locale,
-                analysis_eval_slug="default",
+            load_config(workspace_root=root).validated_update(
                 acp_agents=(
                     AcpAgent(
                         id="synthetic",

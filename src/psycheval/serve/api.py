@@ -88,7 +88,6 @@ from psycheval.serve.api_models import (
     CatalogQueryRequest,
     CatalogSummaryRequest,
     ConfigPatchRequest,
-    DatabaseInspectionRequest,
     DatasetCreateRequest,
     DatasetPatchRequest,
     DatasetUnregisterRequest,
@@ -105,6 +104,7 @@ from psycheval.serve.api_models import (
     PromptPutRequest,
     ReportBindingsRequest,
     ReportImportRequest,
+    SessionInspectionRequest,
     SourceImportRequest,
     SourceKeysRequest,
     SourcePatchRequest,
@@ -164,7 +164,7 @@ from psycheval.serve.payloads import (
 )
 from psycheval.serve.prompt_assets import PromptAssetConflict
 from psycheval.serve.runtime import ServeRuntime
-from psycheval.serve.sources import add_source_payload, db_sessions_payload
+from psycheval.serve.sources import add_source_payload, sessions_payload
 from psycheval.serve.visibility import (
     project_catalog_payload,
     project_detail_payload,
@@ -967,9 +967,12 @@ def _register_source_routes(app: FastAPI) -> None:
         operation = runtime.start_operation(
             "source-import",
             payloads,
-            lambda item: add_source_result_payload(
-                add_source_payload(runtime.store, runtime.config, item)
-            ),
+            lambda item: {
+                **add_source_result_payload(
+                    add_source_payload(runtime.store, runtime.config, item)
+                ),
+                "input": item.get("path") or item.get("db") or item.get("session_id"),
+            },
         )
         return _operation_response(operation)
 
@@ -1049,16 +1052,18 @@ def _register_source_routes(app: FastAPI) -> None:
         return _json(_operation_payload(status), headers=headers)
 
     @app.post(
-        "/api/database-inspections",
+        "/api/session-inspections",
         dependencies=[Depends(require_admin), Depends(mutation_guard)],
     )
     @access(ADMIN_ACCESS)
-    def inspect_database(
-        request: Request, body: DatabaseInspectionRequest
+    def inspect_sessions(
+        request: Request, body: SessionInspectionRequest
     ) -> JSONResponse:
         runtime = writable_runtime(request)
         try:
-            return _json(db_sessions_payload(runtime.store, body.payload()))
+            return _json(
+                sessions_payload(runtime.store, body.payload(), runtime.config)
+            )
         except ValueError as exc:
             raise ProblemException(400, str(exc)) from exc
 

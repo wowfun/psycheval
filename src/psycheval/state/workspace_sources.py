@@ -15,6 +15,7 @@ from psycheval._state.artifacts import (
     trial_artifacts,
     write_json_file,
 )
+from psycheval._state.sources import refresh_binding
 from psycheval.atif import validate_atif_trajectory
 from psycheval.config import HarborMount, ToolConfig, validate_harbor_mount_paths
 from psycheval.harbor.datasets import ResolvedHarborDataset
@@ -785,8 +786,8 @@ class WorkspaceSources:
                 updated_at_ms=timestamp,
                 input_bytes=input_bytes,
                 readable=True,
-                refreshable=False,
-                snapshot=True,
+                refreshable=refresh_binding(state) is not None,
+                snapshot=refresh_binding(state) is None,
                 active=bool(state.get("active", True)),
                 last_status=optional_str(state.get("last_status")) or "ok",
                 last_error=optional_str(state.get("last_error")),

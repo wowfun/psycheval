@@ -1,6 +1,6 @@
-import { $, esc, finalMetricsFor, fmtCost, fmtDate, fmtMs, fmtNum, fmtScore, hasMetricValue, listValue, lower, renderComparisonPanels, selectedKey, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, statusLabel, t } from "./runtime.js";
+import { $, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtScore, hasMetricValue, listValue, lower, renderComparisonPanels, selectedKey, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, statusLabel, t } from "./runtime.js";
 import { agentNameFor, bindDataTableSelection, renderRowSelection, selectionColumn } from "./data-tables.js";
-import { bindServeSourceStateControls, renderServeSourceStateControls } from "./source-state-controls.js";
+import { bindServeSourceStateControls, renderServeSourceStateControls, renderSourceRefreshControl } from "./source-state-controls.js";
 import { catalogStepOutline, leaderboardRows, metaFor, selectServeDetail, trajectoryFor } from "./serve-catalog.js";
 import { finalMetric, infoGrid, maxPositiveMetric, reasoningExposed, systemExposed, timeTitle, timingRatio, tokenTotal, trajectoryDurationHeatClass, trialWallDurationMs } from "./analysis-metrics.js";
 import { renderSelectedNotes } from "./analysis-notes.js";
@@ -9,6 +9,7 @@ import { renderHarborEvidence, renderSelectedEvidence } from "./analysis-selecte
 import { disposeTimelineChart, initTimelineDiagnostics, renderTimelineDiagnostics } from "./timeline-shell.js";
 import { bindTimelineControls } from "./timeline-table.js";
 import { toolCallRatio, valuePreview } from "./steps.js";
+import { selectedTrajectoryDetail, renderTrajectoryNavigation, bindTrajectoryNavigation } from "./trajectory-family.js";
 
 function renderTrajectoryOverview(rows = leaderboardRows()) {
   const target = $("trajectory-overview");
@@ -117,17 +118,18 @@ function stepPreviewText(step) {
 }
 function renderTrace() {
   const target = $("trace");
-  const trial = metaFor(selectedKey());
-  if (!trial?.trial_key) {
+  const rootMeta = metaFor(selectedKey());
+  if (!rootMeta?.trial_key) {
     state.selectedTrial = null;
     state.selectedStep = null;
     disposeTimelineChart();
     if (target) target.innerHTML = "";
     return;
   }
-  state.selectedTrial = trial.trial_key;
-  const trajectory = trajectoryFor(trial.trial_key);
-  const metrics = finalMetricsFor(trial.trial_key);
+  state.selectedTrial = rootMeta.trial_key;
+  const root = trajectoryFor(rootMeta.trial_key);
+  const { trajectory, meta: trial, depth } = selectedTrajectoryDetail(root, rootMeta);
+  const metrics = trajectory?.final_metrics || {};
   const status = lower(trial.status || "passed");
   const agentName = trajectory?.agent?.name || "-";
   const model = trajectory?.agent?.model_name || "-";
@@ -148,6 +150,8 @@ function renderTrace() {
   disposeTimelineChart();
   target.innerHTML = `
     <div class="trace-head"><div><p class="eyebrow">${esc(t("selected_trial_trajectory", "selected trial trajectory"))}</p><h2 id="trace-title" class="trace-title"><span>${esc(t("selected_session_label", "session"))}</span><code>${esc(trial.trial_key || "-")}</code></h2></div><span class="status ${status}">${esc(statusLabel(status))}</span></div>
+    ${renderTrajectoryNavigation(root, rootMeta)}
+    ${renderSourceRefreshControl(rootMeta.trial_key)}
     <h3>${esc(t("run", "Run"))}</h3>
     ${infoGrid(runItems)}
     <h3>${esc(t("result", "Result"))}</h3>
@@ -161,13 +165,15 @@ function renderTrace() {
       [t("cost", "Cost"), fmtCost(metrics.total_cost_usd)]
     ])}
     ${renderHarborEvidence(trial)}
-    ${renderSelectedNotes(trial.trial_key)}
-    ${renderSelectedAnalysis(trial.trial_key)}
+    ${depth ? "" : renderSelectedNotes(trial.trial_key)}
+    ${depth ? "" : renderSelectedAnalysis(trial.trial_key)}
     ${renderSelectedEvidence(trajectory, trial)}
     ${renderTimelineDiagnostics(trajectory, trial)}
   `;
   initTimelineDiagnostics(trajectory, trial);
   bindTimelineControls(trajectory, trial);
+  bindTrajectoryNavigation(target, root, rootMeta);
+  bindServeSourceStateControls(target);
 }
 export {
   bindTrajectoryControls,

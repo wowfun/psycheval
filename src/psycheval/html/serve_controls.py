@@ -312,9 +312,11 @@ def render_source_add_form(
     }[kind]
     name = kind
     help_id = f"source-{kind}-auto-help"
+    help_key = (
+        "serve_session_input_help" if kind == "path" else "serve_auto_adapter_help"
+    )
     help_copy = (
-        f'<span class="copy" id="{escape(help_id)}">'
-        f"{escape(messages['serve_auto_adapter_help'])}</span>"
+        f'<span class="copy" id="{escape(help_id)}">{escape(messages[help_key])}</span>'
     )
     if kind == "path":
         field_tag = f'<textarea name="{escape(name)}" autocomplete="off" required rows="4" data-path-picker-target aria-describedby="{escape(help_id)}"></textarea>'
@@ -330,9 +332,7 @@ def render_source_add_form(
     path_picker = ""
     if kind == "path":
         path_picker = f"""
-            <div class="source-picker-actions">
-              <button class="action-button" type="button" data-path-picker>{escape(messages["serve_choose_path_files"])}</button>
-            </div>"""
+              <button class="action-button" type="button" data-path-picker>{escape(messages["serve_choose_path_files"])}</button>"""
     session_field = ""
     if kind == "db":
         session_field = f"""
@@ -341,27 +341,27 @@ def render_source_add_form(
             </label>"""
     inspect_button = ""
     picker = ""
-    if kind == "db":
+    if kind in {"db", "path"}:
         inspect_button = f"""
-              <button class="action-button" type="button" data-db-inspect>{escape(messages["serve_inspect_db"])}</button>"""
+              <button class="action-button" type="button" data-session-inspect>{escape(messages["serve_inspect_sessions"])}</button>"""
         picker = """
-            <div class="db-session-picker" data-db-session-picker hidden></div>"""
+            <div class="db-session-picker" data-session-picker hidden></div>"""
     return f"""
           <form class="source-form" data-source-add-form data-source-kind="{escape(kind)}">
             <label>{escape(messages[label_key])}
               {field_tag}
-              {help_copy}
             </label>
-            {path_picker}
+            {help_copy}
             {session_field}
             <div class="source-form-actions">
-              {inspect_button}
+              <span class="source-input-actions">{path_picker}{inspect_button}</span>
               <span class="source-add-actions">
                 {render_adapter_select(messages, adapter_defaults)}
                 <button class="action-button primary" type="submit">{escape(messages["serve_add_source"])}</button>
               </span>
             </div>
             {picker}
+            <div data-source-import-results aria-live="polite" hidden></div>
           </form>"""
 
 

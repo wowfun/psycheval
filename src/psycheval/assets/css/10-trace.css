@@ -101,3 +101,75 @@
   flex-wrap:wrap;
   margin-top:10px;
 }
+.trajectory-navigation {
+  display:grid;
+  justify-items:start;
+  align-content:start;
+  gap:8px;
+  min-width:0;
+  width:100%;
+  max-height:min(32dvh,260px);
+  overflow:auto;
+  overscroll-behavior:contain;
+}
+.trajectory-tree,.trajectory-tree ul {
+  list-style:none;
+  margin:0;
+  padding:0;
+}
+.trajectory-tree {
+  width:100%;
+}
+.trajectory-tree ul {
+  margin-left:12px;
+  padding-left:12px;
+  border-left:1px solid var(--rule);
+}
+.trajectory-tree li {
+  min-width:0;
+}
+.trajectory-tree-row {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+}
+.trajectory-tree button {
+  display:block;
+  min-width:0;
+  width:100%;
+  padding:6px 8px;
+  border:0;
+  border-radius:4px;
+  background:transparent;
+  color:var(--ink);
+  font:13px/1.4 var(--mono);
+  text-align:left;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  cursor:pointer;
+}
+.trajectory-tree button:enabled:hover,.trajectory-tree button[aria-current] {
+  background:color-mix(in oklch,var(--focus),var(--surface) 88%);
+}
+.trajectory-tree button[aria-current] {
+  color:var(--focus);
+  font-weight:700;
+}
+.trajectory-tree button:focus-visible {
+  outline:2px solid var(--focus);
+  outline-offset:-2px;
+}
+.trajectory-tree [data-trajectory-copy] {
+  width:auto;
+  justify-self:end;
+  text-align:right;
+  color:var(--muted);
+  font-size:12px;
+}
+.trajectory-tree button:disabled {
+  opacity:.5;
+  cursor:default;
+}

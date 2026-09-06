@@ -39,6 +39,9 @@
   text-overflow:ellipsis;
   white-space:nowrap;
 }
+.detail-sidebar-head .trajectory-navigation {
+  grid-column:1 / -1;
+}
 .detail-sidebar-body {
   min-height:0;
   display:grid;

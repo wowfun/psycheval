@@ -1,9 +1,10 @@
 import { $, RENDER_OPTIONS, esc, listValue, renderComparisonPanels, state, t } from "./runtime.js";
 import { stepTimingStats } from "./analysis-metrics.js";
-import { bindStepToggle, renderStep, renderStepsHeader } from "./steps.js";
+import { bindBlockCopyControls, bindStepToggle, renderStep, renderStepsHeader } from "./steps.js";
 import { createTaskBrowser } from "./harbor-task-browser.js";
 import { serveApi } from "./serve-effects.js";
 import { createSidebarController } from "./sidebar.js";
+import { selectedTrajectoryDetail, renderTrajectoryNavigation, bindTrajectoryNavigation } from "./trajectory-family.js";
 
 let detailSidebarController = null;
 
@@ -71,8 +72,12 @@ function renderDetailSidebar() {
   const sidebar = detailSidebarState();
   const metas = listValue(state.view?.trajectory_meta);
   const index = metas.findIndex(meta => meta?.trial_key === state.selectedTrial);
-  const trial = index >= 0 ? metas[index] : null;
-  const trajectory = index >= 0 ? listValue(state.view?.trajectory)[index] : null;
+  const rootMeta = index >= 0 ? metas[index] : null;
+  const root = index >= 0 ? listValue(state.view?.trajectory)[index] : null;
+  const detail = selectedTrajectoryDetail(root, rootMeta);
+  const trial = rootMeta ? detail.meta : null;
+  const trajectory = detail.trajectory;
+  const childIds = new Set((trajectory?.subagent_trajectories || []).map(child => child.trajectory_id));
   if (!sidebar.open || !trial) {
     if (!trial) {
       sidebar.open = false;
@@ -98,12 +103,13 @@ function renderDetailSidebar() {
       <div class="detail-sidebar-head">
         <div><p class="eyebrow">${esc(t("selected_trial_details", "Selected trial details"))}</p><h2 id="detail-sidebar-title">${esc(trial.trial_key || "-")}</h2></div>
         <button class="action-button compact" type="button" data-sidebar-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
+        ${renderTrajectoryNavigation(root, rootMeta)}
       </div>
       <div class="detail-sidebar-body${task ? " has-task" : ""}">
         ${task}
         <section class="detail-sidebar-steps" data-detail-sidebar-steps aria-labelledby="detail-sidebar-steps-title">
           ${renderStepsHeader(trajectory, { headingId: "detail-sidebar-steps-title" })}
-          <div class="detail-sidebar-step-list" data-detail-sidebar-step-list>${steps.map(step => renderStep(step, trial, timingStats, { open: String(step?.step_id) === selectedStepId })).join("")}</div>
+          <div class="detail-sidebar-step-list" data-detail-sidebar-step-list>${steps.map(step => renderStep(step, trial, timingStats, { open: String(step?.step_id) === selectedStepId, childIds })).join("")}</div>
         </section>
       </div>
     </div>
@@ -117,6 +123,8 @@ function renderDetailSidebar() {
   sidebar.pendingOpener = null;
   sidebar.pendingOpenerSelector = null;
   bindStepToggle(target, "[data-detail-sidebar-step-list]");
+  bindBlockCopyControls(target);
+  bindTrajectoryNavigation(target, root, rootMeta);
   bindDetailSidebarTaskBrowser(target, trial);
   focusSelectedStep(target, selectedStepId);
 }

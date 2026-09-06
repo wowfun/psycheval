@@ -78,10 +78,12 @@ class SourceImportRequest(StrictRequest):
         path_count = len(
             [line for line in (self.path or "").splitlines() if line.strip()]
         )
-        if path_count > 1 and self.session_ids and len(self.session_ids) > 1:
-            raise ValueError(
-                "multiple paths cannot be combined with multiple session_ids"
-            )
+        if self.session_id and self.session_ids:
+            raise ValueError("provide either session_id or session_ids, not both")
+        if self.path and self.db:
+            raise ValueError("provide exactly one source: path or db")
+        if path_count > 1 and (self.session_id or self.session_ids):
+            raise ValueError("session_id and session_ids require exactly one source")
         return self
 
 
@@ -158,9 +160,16 @@ class ReportBindingsRequest(StrictRequest):
     source_keys: list[str]
 
 
-class DatabaseInspectionRequest(StrictRequest):
-    db: str
+class SessionInspectionRequest(StrictRequest):
+    db: str | None = None
+    path: str | None = None
     adapter: str | None = None
+
+    @model_validator(mode="after")
+    def require_one_source(self) -> SessionInspectionRequest:
+        if bool(self.db) == bool(self.path):
+            raise ValueError("provide exactly one source: path or db")
+        return self
 
 
 class PathSelectionRequest(StrictRequest):

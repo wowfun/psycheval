@@ -1,6 +1,12 @@
-import { adminMode, currentServeSourceMode, esc, listValue, normalizeServeSourceMode, readableServeSourcesFrom, t } from "./runtime.js";
+import { adminMode, currentServeSourceMode, esc, listValue, normalizeServeSourceMode, readableServeSourcesFrom, state, t } from "./runtime.js";
 import { serveApi, setServeStatus } from "./serve-effects.js";
-import { applyServeSourceStateMutationPayload, leaderboardRows, switchServeSourceMode, visibleSelectedSourceKeys } from "./serve-catalog.js";
+import { applyServeMutationPayload, applyServeSourceStateMutationPayload, leaderboardRows, setWorkspaceWriteControlsDisabled, sourceForTrialKey, switchServeSourceMode, visibleSelectedSourceKeys } from "./serve-catalog.js";
+
+function renderSourceRefreshControl(trialKey) {
+  const source = sourceForTrialKey(trialKey);
+  if (!adminMode() || !source?.refreshable) return "";
+  return `<button class="action-button" type="button" data-source-refresh-action data-source-key="${esc(source.source_key)}" ${state.workspaceWriteBusy ? "disabled" : ""}>${esc(t("serve_refresh_source", "Refresh source"))}</button>`;
+}
 
 function renderServeSourceStateControls(rows = leaderboardRows()) {
   const mode = currentServeSourceMode();
@@ -47,6 +53,23 @@ function bindServeSourceStateControls(target) {
     button.addEventListener("click", event => {
       event.stopPropagation();
       deleteVisibleServeSources();
+    });
+  });
+  target.querySelectorAll("[data-source-refresh-action]").forEach(button => {
+    button.addEventListener("click", async event => {
+      event.stopPropagation();
+      if (!adminMode() || state.workspaceWriteBusy) return;
+      setWorkspaceWriteControlsDisabled(true);
+      try {
+        const payload = await serveApi("/api/source-refresh-operations", {
+          method: "POST",
+          body: { source_keys: [button.dataset.sourceKey] },
+        });
+        await applyServeMutationPayload(payload);
+      } catch (error) {
+        setWorkspaceWriteControlsDisabled(false);
+        setServeStatus(error.message || String(error), true);
+      }
     });
   });
 }
@@ -109,5 +132,6 @@ export {
   deleteVisibleServeSources,
   mutateVisibleServeSourceState,
   renderServeSourceStateControls,
+  renderSourceRefreshControl,
   serveSourceModeStatusText,
 };

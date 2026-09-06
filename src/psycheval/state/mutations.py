@@ -53,6 +53,9 @@ class StateMutationMixin:
             "agent_name": source.get("agent_name"),
             "agent_version": source.get("agent_version"),
             "model": source.get("model"),
+            "refresh_binding": source.get(
+                "refresh_binding", existing.get("refresh_binding")
+            ),
             "artifact_dir": artifact_dir,
             "artifact_updated_at_ms": timestamp,
             "trial_key": summary["trial_key"],

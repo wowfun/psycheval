@@ -16,6 +16,7 @@ from psycheval._state.artifacts import (
     write_json_file,
     write_json_files_atomically,
 )
+from psycheval._state.sources import refresh_binding
 from psycheval.atif import validate_atif_trajectory
 from psycheval.config import ToolConfig
 from psycheval.report import project_meta_from_atif
@@ -296,9 +297,9 @@ class StateArtifactMixin:
             "artifact_dir": artifact_dir,
             "artifact_updated_at_ms": timestamp,
             **summary,
-            "refreshable": False,
+            "refreshable": refresh_binding(state) is not None,
             "active": bool(state.get("active", True)),
-            "snapshot": True,
+            "snapshot": refresh_binding(state) is None,
             "created_at_ms": int(state.get("created_at_ms") or timestamp),
             "updated_at_ms": int(state.get("updated_at_ms") or timestamp),
             "last_status": status,
@@ -430,6 +431,9 @@ class StateArtifactMixin:
 
     def compact_source_state(self, state: dict[str, Any]) -> dict[str, Any]:
         payload: dict[str, Any] = {}
+        binding = refresh_binding(state)
+        if binding is not None:
+            payload["refresh_binding"] = binding
         source_alias = optional_str(state.get("source_alias"))
         if source_alias:
             payload["source_alias"] = source_alias

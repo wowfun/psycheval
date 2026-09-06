@@ -1349,9 +1349,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(body["state"], "failed")
-                self.assertIn(
-                    "no complete Trial cells found", body["failures"][0]["error"]
-                )
+                self.assertIn("could not infer adapter", body["failures"][0]["error"])
                 self.assertEqual(store.source_payload(), [])
             finally:
                 server.shutdown()

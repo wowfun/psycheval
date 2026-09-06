@@ -23,6 +23,7 @@ from psycheval._state.artifacts import (
 )
 from psycheval._state.sources import (
     loaded_session_from_source,
+    refresh_binding,
     source_row_for_session,
     trial_payload_from_report,
 )
@@ -83,6 +84,25 @@ class StateIngestMixin:
         ordered_keys: list[str] = []
         for session in loaded_inputs.sessions:
             source = source_row_for_session(session)
+            source["refresh_binding"] = (
+                {
+                    key: source.get(key)
+                    for key in (
+                        "kind",
+                        "adapter",
+                        "label",
+                        "input_path",
+                        "session_id",
+                        "agent_name",
+                        "agent_version",
+                        "model",
+                    )
+                }
+                if session.adapter_id == "claude"
+                and session.source_kind == "path"
+                and session.snapshot_trajectory is None
+                else None
+            )
             eval_slug = session.artifact_eval_slug or config.analysis_eval_slug
             refreshable = session.snapshot_trajectory is None
             snapshot = not refreshable
@@ -172,7 +192,12 @@ class StateIngestMixin:
         source_key = source["source_key"]
         timestamp = now_ms()
         try:
-            session = loaded_session_from_source(source)
+            binding = refresh_binding(
+                self.read_source_state(
+                    self.resolve_artifact_dir(source["artifact_dir"])
+                )
+            )
+            session = loaded_session_from_source(binding or source)
             report_session = report_session_for_loaded(session, config)
             report = build_multi_report([report_session], config, [])
             artifact_dir, warning_count = self.store_report_for_source(
