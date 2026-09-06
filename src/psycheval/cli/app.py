@@ -83,7 +83,7 @@ SessionIdOption = Annotated[
         "-s",
         "--session-id",
         metavar="ID",
-        help="DB session id; use dN=ID when multiple DB inputs are present",
+        help="Session ID or index; pN=ID/dN=ID for multiple inputs; -a claude -s ID also works without a path",
     ),
 ]
 MaxContentCharsOption = Annotated[
@@ -281,14 +281,14 @@ def view_trajectory(
     ] = ViewMode.inspect,
     list_sessions: Annotated[
         bool,
-        typer.Option("-l", "--list", help="List DB sessions and exit"),
+        typer.Option("-l", "--list", help="List directory or DB sessions and exit"),
     ] = False,
     list_interactive: Annotated[
         bool,
         typer.Option(
             "-li",
             "--list-interactive",
-            help="List DB sessions, prompt for selection, and render selected sessions",
+            help="List directory or DB sessions, prompt for selection, and render selected sessions",
         ),
     ] = False,
     note: NoteOption = None,

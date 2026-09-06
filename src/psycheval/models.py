@@ -34,6 +34,7 @@ class LoadedSession:
     snapshot_meta: dict[str, Any] | None = None
     snapshot_source_report: dict[str, Any] | None = None
     artifact_eval_slug: str | None = None
+    input_selector: str | None = None
 
 
 @dataclass(frozen=True)

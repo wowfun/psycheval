@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
-from psycheval.adapters import available_adapter_ids
+from psycheval.adapters import adapter_for, available_adapter_ids
 from psycheval.cli.arguments import CliArgs
 from psycheval.inputs import (
     adapter_for_input_path,
@@ -10,7 +11,7 @@ from psycheval.inputs import (
 )
 from psycheval.session_select import (
     format_session_table,
-    list_adapter_sessions,
+    inspect_adapter_sessions,
     parse_session_selection,
 )
 
@@ -20,9 +21,11 @@ def print_session_lists(
     adapter_assignments,
     config,
 ) -> None:
-    for input_db in db_inputs_with_adapters(args, adapter_assignments, config):
-        if len(input_db["all"]) > 1:
-            print(f"d{input_db['index']} {input_db['path']} ({input_db['adapter']})")
+    inputs = session_inputs_with_adapters(args, adapter_assignments, config)
+    for input_db in inputs:
+        if len(inputs) > 1:
+            print(f"{input_db['selector']} {input_db['path']} ({input_db['adapter']})")
+        print_session_warnings(input_db)
         print(format_session_table(input_db["sessions"]), end="")
 
 
@@ -35,30 +38,56 @@ def interactive_session_selection(
         raise ValueError("--list-interactive cannot be combined with --session-id")
     if not sys.stdin.isatty():
         raise ValueError("--list-interactive requires an interactive terminal")
-    inputs = db_inputs_with_adapters(args, adapter_assignments, config)
+    inputs = session_inputs_with_adapters(args, adapter_assignments, config)
     if len(inputs) != 1:
         raise ValueError(
-            "--list-interactive requires exactly one --db; "
-            "use repeated -s dN=ID for multiple DB inputs"
+            "--list-interactive requires exactly one session-selectable input; "
+            "use repeated -s pN=ID or dN=ID for multiple inputs"
         )
     input_db = inputs[0]
+    print_session_warnings(input_db)
     print(format_session_table(input_db["sessions"]), end="")
     raw = input("Select sessions (for example 1,3-5 or all; blank cancels): ")
     indexes = parse_session_selection(raw, len(input_db["sessions"]))
-    return [input_db["sessions"][index - 1].session_id for index in indexes]
+    return [
+        f"{input_db['selector']}={input_db['sessions'][index - 1].session_id}"
+        for index in indexes
+    ]
 
 
-def db_inputs_with_adapters(
+def print_session_warnings(source: dict) -> None:
+    for warning in source["warnings"]:
+        print(f"warning: {warning}", file=sys.stderr)
+
+
+def session_inputs_with_adapters(
     args: CliArgs,
     adapter_assignments,
     config,
 ) -> list[dict]:
 
     dbs = list(getattr(args, "db", None) or [])
-    if not dbs:
-        raise ValueError("--list requires at least one --db")
     available = set(available_adapter_ids())
     inputs = []
+    for index, raw_path in enumerate(getattr(args, "path", None) or [], start=1):
+        path = Path(raw_path).expanduser()
+        if not path.is_dir():
+            continue
+        adapter = adapter_for_input_path(
+            str(path), index, adapter_assignments, "path", available
+        )
+        if not callable(getattr(adapter_for(adapter), "resolve_session_path", None)):
+            raise ValueError(f"adapter {adapter} does not support session directories")
+        listing = inspect_adapter_sessions(adapter, str(path))
+        inputs.append(
+            {
+                "selector": f"p{index}",
+                "path": str(path),
+                "adapter": adapter,
+                "sessions": listing.sessions,
+                "warnings": listing.warnings,
+            }
+        )
     for index, path in enumerate(dbs, start=1):
         resolved_path, token_adapter = resolve_db_input(
             path, index, adapter_assignments, config
@@ -70,14 +99,16 @@ def db_inputs_with_adapters(
             "db",
             available,
         )
+        listing = inspect_adapter_sessions(adapter, resolved_path)
         inputs.append(
             {
-                "index": index,
+                "selector": f"d{index}",
                 "path": resolved_path,
                 "adapter": adapter,
-                "kind": "adapter-db",
-                "sessions": list_adapter_sessions(adapter, resolved_path),
-                "all": dbs,
+                "sessions": listing.sessions,
+                "warnings": listing.warnings,
             }
         )
+    if not inputs:
+        raise ValueError("--list requires a session directory or --db")
     return inputs

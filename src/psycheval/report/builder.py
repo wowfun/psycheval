@@ -23,7 +23,7 @@ from psycheval.models import NoteInput, ReportSession
 from psycheval.redaction import redact_value
 from psycheval.report.data_ref import data_ref_for_input
 from psycheval.report.metrics import automatic_analysis_metrics
-from psycheval.report.timing import step_meta_reports, trial_active_duration_ms
+from psycheval.report.timing import step_meta_reports
 
 VIEW_SCHEMA_VERSION = 19
 
@@ -161,7 +161,7 @@ def prepare_session_report(
         "started_at_ms": started,
         "finished_at_ms": finished,
         "wall_duration_ms": wall_duration,
-        "duration_ms": trial_active_duration_ms(conversion.steps_meta, steps),
+        "duration_ms": active_duration_from_sidecar(trajectory, steps, None),
         "status": status,
         "failure_class": None if status == "passed" else "conversion",
         "score": None,
@@ -176,6 +176,17 @@ def prepare_session_report(
         ),
         "steps": steps,
     }
+    if conversion.subagent_results:
+        meta["subagent_meta"] = {
+            child.trajectory["trajectory_id"]: prepare_session_report(
+                1,
+                ReportSession(child, input_label="subagent", adapter_id=adapter_id),
+                config,
+                False,
+                {},
+            )["meta"]
+            for child in conversion.subagent_results
+        }
     return {
         "index": index,
         "input_label": session.input_label,
@@ -292,6 +303,27 @@ def project_meta_from_atif(
         isinstance(step, dict) and step.get("source") == "user"
         for step in trajectory.get("steps") or []
     )
+    children = trajectory.get("subagent_trajectories") or []
+    previous_children = projected.pop("subagent_meta", {})
+    if not isinstance(previous_children, dict):
+        previous_children = {}
+    if children:
+        projected["subagent_meta"] = {}
+        for child in children:
+            identifier = child.get("trajectory_id") if isinstance(child, dict) else None
+            if not isinstance(identifier, str) or not identifier.strip():
+                raise ValueError(
+                    "subagent_trajectories: each child requires a non-empty trajectory_id"
+                )
+            previous = previous_children.get(identifier)
+            defaults = {
+                "trial_key": identifier,
+                "adapter": projected.get("adapter", "atif"),
+                "total_events": len(child.get("steps") or []),
+            }
+            projected["subagent_meta"][identifier] = project_meta_from_atif(
+                child, {**defaults, **(previous if isinstance(previous, dict) else {})}
+            )
     return projected
 
 

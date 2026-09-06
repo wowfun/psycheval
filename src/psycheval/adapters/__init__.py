@@ -5,6 +5,7 @@ from importlib.metadata import EntryPoint, entry_points
 from typing import Any
 
 from psycheval.adapters.base import Adapter
+from psycheval.adapters.claude import ClaudeAdapter
 from psycheval.adapters.deepagents import DeepagentsAdapter
 from psycheval.adapters.hermes import HermesAdapter
 from psycheval.adapters.opencode import OpencodeAdapter
@@ -15,6 +16,7 @@ ENTRY_POINT_GROUP = "psycheval.adapters"
 AdapterFactory = Callable[[], Adapter]
 
 BUILTIN_ADAPTERS: dict[str, AdapterFactory] = {
+    "claude": ClaudeAdapter,
     "psychevo": PsychevoAdapter,
     "opencode": OpencodeAdapter,
     "hermes": HermesAdapter,

@@ -381,7 +381,8 @@ def list_hermes_sessions(path: Path) -> list[SessionInfo]:
     try:
         rows = conn.execute(
             """
-            SELECT s.id, s.title
+            SELECT s.id, s.title,
+                   COALESCE(latest.last_active, s.ended_at, s.started_at)
             FROM sessions s
             LEFT JOIN (
                 SELECT session_id, MAX(timestamp) AS last_active
@@ -399,7 +400,11 @@ def list_hermes_sessions(path: Path) -> list[SessionInfo]:
     finally:
         conn.close()
     return [
-        SessionInfo(session_id=str(row[0]), name=str(row[1]) if row[1] else None)
+        SessionInfo(
+            session_id=str(row[0]),
+            name=str(row[1]) if row[1] else None,
+            updated_at_ms=optional_seconds_to_ms(row[2]),
+        )
         for row in rows
     ]
 

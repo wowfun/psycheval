@@ -1,67 +1,95 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from psycheval.adapters import adapter_for
-from psycheval.adapters.base import SessionInfo
+from psycheval.adapters.base import SessionInfo, SessionListing
 
 
-def list_adapter_sessions(adapter_id: str, path: str) -> list[SessionInfo]:
+def inspect_adapter_sessions(adapter_id: str, path: str) -> SessionListing:
     adapter = adapter_for(adapter_id)
+    inspect_sessions = getattr(adapter, "inspect_sessions", None)
+    if callable(inspect_sessions):
+        return inspect_sessions(path)
     list_sessions = getattr(adapter, "list_sessions", None)
     if not callable(list_sessions):
         raise ValueError(f"adapter {adapter_id} does not support session listing")
-    return list(list_sessions(path))
+    return SessionListing(list(list_sessions(path)))
 
 
 def resolve_session_selectors(
     adapter_id: str,
     path: str,
     selectors: list[str],
-) -> list[str]:
-    return [
-        resolve_session_selector(adapter_id, path, selector) for selector in selectors
-    ]
-
-
-def resolve_session_selector(adapter_id: str, path: str, selector: str) -> str:
-    text = str(selector)
-    if text.startswith("#"):
-        return session_by_index(adapter_id, path, text[1:]).session_id
-    if text.isdigit():
-        sessions = list_adapter_sessions(adapter_id, path)
-        for session in sessions:
-            if session.session_id == text:
-                return text
-        return session_by_index(adapter_id, path, text, sessions=sessions).session_id
-    return text
-
-
-def session_by_index(
-    adapter_id: str,
-    path: str,
-    raw_index: str,
     *,
     sessions: list[SessionInfo] | None = None,
-) -> SessionInfo:
-    if not raw_index.isdigit():
-        raise ValueError(f"session index must be a positive integer: #{raw_index}")
-    index = int(raw_index)
-    if index < 1:
-        raise ValueError(f"session index out of range: #{index}")
-    available = (
-        sessions if sessions is not None else list_adapter_sessions(adapter_id, path)
-    )
-    if index > len(available):
+) -> list[str]:
+    if sessions is None and any(s.startswith("#") or s.isdigit() for s in selectors):
+        sessions = inspect_adapter_sessions(adapter_id, path).sessions
+    available = sessions or []
+    ids = {session.session_id for session in available}
+    resolved = []
+    for text in selectors:
+        if not text.startswith("#") and (not text.isdigit() or text in ids):
+            resolved.append(text)
+            continue
+        raw_index = text.removeprefix("#")
+        if not raw_index.isdigit():
+            raise ValueError(f"session index must be a positive integer: #{raw_index}")
+        index = int(raw_index)
+        if index < 1 or index > len(available):
+            raise ValueError(
+                f"session index out of range: #{index} (available sessions: {len(available)})"
+            )
+        resolved.append(available[index - 1].session_id)
+    return resolved
+
+
+def resolve_directory_session_paths(
+    adapter_id: str, path: str, selectors: list[str]
+) -> list[tuple[str, str]]:
+    listing = inspect_adapter_sessions(adapter_id, path)
+    if not listing.sessions:
+        detail = "; ".join(listing.warnings)
         raise ValueError(
-            f"session index out of range: #{index} "
-            f"(available sessions: {len(available)})"
+            f"no {adapter_id.capitalize()} sessions found in: {path}"
+            + (f"; {detail}" if detail else "")
         )
-    return available[index - 1]
+    ids = (
+        resolve_session_selectors(
+            adapter_id, path, selectors, sessions=listing.sessions
+        )
+        if selectors
+        else [listing.sessions[0].session_id]
+    )
+    sessions = {session.session_id: session for session in listing.sessions}
+    resolved = []
+    for identifier in ids:
+        session = sessions.get(identifier)
+        if session is None:
+            raise ValueError(
+                f"{adapter_id.capitalize()} session not found: {identifier}"
+            )
+        concrete = session.path or adapter_for(adapter_id).resolve_session_path(
+            path, identifier
+        )
+        resolved.append((identifier, concrete))
+    return resolved
 
 
 def format_session_table(sessions: list[SessionInfo]) -> str:
-    headers = ["#", "session_id", "name"]
+    headers = ["#", "session_id", "updated_at (UTC)", "name"]
     rows = [
-        [str(index), session.session_id, session.name or "-"]
+        [
+            str(index),
+            session.session_id,
+            datetime.fromtimestamp(session.updated_at_ms / 1000, timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+            if session.updated_at_ms is not None
+            else "-",
+            session.name or "-",
+        ]
         for index, session in enumerate(sessions, start=1)
     ]
     widths = [

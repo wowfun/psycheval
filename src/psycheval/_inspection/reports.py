@@ -13,8 +13,9 @@ from psycheval._inspection.validation import validate_inspect_raw_only_args
 from psycheval.cli.arguments import CliArgs
 from psycheval.config import ToolConfig
 from psycheval.evaluation_reports import EvaluationReports
-from psycheval.inputs import AdapterAssignments, load_inputs
+from psycheval.inputs import AdapterAssignments, load_inputs, remap_session_selectors
 from psycheval.pipeline import build_report_from_loaded_inputs
+from psycheval.report import project_meta_from_atif
 
 
 def inspect_report_for_args(
@@ -31,8 +32,14 @@ def inspect_report_for_args(
         adapter_assignments,
         config,
     )
+    if args.session_id and args.path and not remaining_paths and not args.db:
+        raise ValueError("--session-id requires a session directory or --db")
     reports: list[dict[str, Any]] = []
-    if remaining_paths or getattr(args, "db", None):
+    if (
+        remaining_paths
+        or getattr(args, "db", None)
+        or (args.session_id and not args.path)
+    ):
         remapped_assignments = replace(
             adapter_assignments,
             path_adapters={
@@ -47,6 +54,9 @@ def inspect_report_for_args(
         load_args = replace(
             args,
             path=tuple(remaining_paths),
+            session_id=tuple(
+                remap_session_selectors(list(args.session_id or []), remaining_indexes)
+            ),
         )
         loaded_inputs = load_inputs(load_args, remapped_assignments, config=config)
         if loaded_inputs.sessions:
@@ -57,16 +67,16 @@ def inspect_report_for_args(
                     list(args.note),
                 )
             )
-            path_chunks = converted[: len(remaining_paths)]
-            if len(path_chunks) != len(remaining_paths):
-                raise ValueError("path inputs did not produce one source each")
-            for original_index, report in zip(
-                remaining_indexes,
-                path_chunks,
-                strict=True,
-            ):
-                path_reports[original_index - 1] = report
-            reports.extend(converted[len(remaining_paths) :])
+            path_groups: dict[int, list[dict[str, Any]]] = {}
+            for session, report in zip(loaded_inputs.sessions, converted, strict=True):
+                selector = session.input_selector or ""
+                if selector.startswith("p"):
+                    original_index = remaining_indexes[int(selector[1:]) - 1]
+                    path_groups.setdefault(original_index, []).append(report)
+                else:
+                    reports.append(report)
+            for original_index, group in path_groups.items():
+                path_reports[original_index - 1] = merge_reports(group)
     reports = [report for report in path_reports if report is not None] + reports
     if not reports:
         raise ValueError("missing input source; pass --path, --db, or --source-ref")
@@ -85,7 +95,7 @@ def inspect_source_ref_report(
     if getattr(args, "adapter", None):
         raise ValueError("--source-ref is self-describing; do not assign an adapter")
     if getattr(args, "session_id", None):
-        raise ValueError("--session-id is only valid with --db")
+        raise ValueError("--session-id requires a session directory or --db")
     if not isinstance(config, ToolConfig) or not config.workspace_root:
         raise ValueError("--source-ref requires an initialized workspace root")
 
@@ -131,8 +141,9 @@ def direct_inspect_reports(
     remaining: list[str] = []
     remaining_indexes: list[int] = []
     for index, raw_path in enumerate(paths, start=1):
+        path = Path(raw_path).expanduser()
         bundle = (
-            load_direct_harbor_trial_bundle(raw_path, config)
+            load_direct_harbor_trial_bundle(str(path), config)
             if isinstance(config, ToolConfig)
             else None
         )
@@ -168,7 +179,6 @@ def direct_inspect_reports(
                 }
             )
             continue
-        path = Path(raw_path)
         parsed = read_json_object(path)
         if parsed is None:
             reports.append(None)
@@ -230,11 +240,27 @@ def read_json_object(path: Path) -> Any:
 
 def report_from_direct_json(parsed: Any, path: Path) -> dict[str, Any] | None:
     if is_report_json(parsed):
+        trajectories = list(parsed.get("trajectory") or [])
+        metas = list(parsed.get("trajectory_meta") or [])
+        for index, trajectory in enumerate(trajectories):
+            if not isinstance(trajectory, dict) or not trajectory.get(
+                "subagent_trajectories"
+            ):
+                continue
+            while len(metas) <= index:
+                metas.append({})
+            meta = metas[index] if isinstance(metas[index], dict) else {}
+            metas[index] = {
+                **meta,
+                "subagent_meta": project_meta_from_atif(trajectory, meta)[
+                    "subagent_meta"
+                ],
+            }
         return {
             "schema_version": parsed.get("schema_version"),
             "includes": parsed.get("includes", []),
-            "trajectory": list(parsed.get("trajectory") or []),
-            "trajectory_meta": list(parsed.get("trajectory_meta") or []),
+            "trajectory": trajectories,
+            "trajectory_meta": metas,
         }
     if is_atif_trajectory(parsed):
         return {
@@ -292,28 +318,21 @@ def looks_like_meta(value: dict[str, Any]) -> bool:
 
 
 def meta_from_trajectory(trajectory: dict[str, Any], path: Path) -> dict[str, Any]:
-    steps = trajectory.get("steps") if isinstance(trajectory.get("steps"), list) else []
-    return {
-        "trial_key": str(
-            trajectory.get("trajectory_id") or trajectory.get("session_id") or path.stem
-        ),
-        "adapter": "atif",
-        "status": "passed",
-        "warnings": [],
-        "data_ref": {"label": path.name, "path": str(path)},
-        "steps": [
-            {
-                "step_id": step.get("step_id", index)
-                if isinstance(step, dict)
-                else index,
-                "tool_calls": [],
-                "observations": [],
-                "tool_error": False,
-                "truncated": False,
-            }
-            for index, step in enumerate(steps, start=1)
-        ],
-    }
+    return project_meta_from_atif(
+        trajectory,
+        {
+            "trial_key": str(
+                trajectory.get("trajectory_id")
+                or trajectory.get("session_id")
+                or path.stem
+            ),
+            "adapter": "atif",
+            "status": "passed",
+            "warnings": [],
+            "data_ref": {"label": path.name, "path": str(path)},
+            "total_events": len(trajectory.get("steps") or []),
+        },
+    )
 
 
 def empty_trajectory_for_meta(meta: dict[str, Any], path: Path) -> dict[str, Any]:

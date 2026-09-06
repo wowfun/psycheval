@@ -34,15 +34,18 @@ from psycheval._inputs.workspace_snapshots import (
 from psycheval._inputs.workspace_snapshots import (
     same_local_path as same_local_path,
 )
-from psycheval.adapters import available_adapter_ids, normalize_adapter_id
+from psycheval.adapters import adapter_for, available_adapter_ids, normalize_adapter_id
 from psycheval.atif import is_atif_json_path
 from psycheval.config import ToolConfig
 from psycheval.models import AdapterAssignments, LoadedInputs, LoadedSession
-from psycheval.session_select import resolve_session_selectors
+from psycheval.session_select import (
+    resolve_directory_session_paths,
+    resolve_session_selectors,
+)
 from psycheval.sources import MessageRecord as MessageRecord
 
 ADAPTER_SELECTOR_RE = re.compile(r"^([pd])([1-9][0-9]*)=(.+)$")
-SESSION_SELECTOR_RE = re.compile(r"^d([1-9][0-9]*)=(.+)$")
+SESSION_SELECTOR_RE = re.compile(r"^([pd][1-9][0-9]*)=(.+)$")
 PSEUDO_ADAPTERS = {"atif", "report"}
 PATH_TOKEN_RE = re.compile(r"[^a-z0-9]+")
 DEFAULT_DB_TOKEN_RE = re.compile(r"^@([A-Za-z0-9_.-]+)$")
@@ -100,6 +103,34 @@ def load_sessions(
         raise ValueError("--source-ref cannot be combined with --path or --db")
     if source_refs and getattr(args, "adapter", None):
         raise ValueError("--source-ref is self-describing; do not assign an adapter")
+    if not paths and not dbs and not source_refs and getattr(args, "session_id", None):
+        validate_adapter_selector_range(adapter_assignments, path_count=0, db_count=0)
+        if not adapter_assignments.default_explicit:
+            raise ValueError("session ID import requires an explicit adapter")
+        adapter_id = validate_selected_adapter(
+            adapter_assignments.default_adapter,
+            set(available_adapter_ids()),
+            "session ID",
+        )
+        resolve_id = getattr(adapter_for(adapter_id), "resolve_session_id", None)
+        if not callable(resolve_id):
+            raise ValueError(f"adapter {adapter_id} does not support session ID lookup")
+        active_config = config if isinstance(config, ToolConfig) else ToolConfig()
+        resolved = [
+            (identifier, Path(resolve_id(identifier, active_config)))
+            for identifier in args.session_id
+        ]
+        return [
+            LoadedSession(
+                records=None,
+                input_label=path.name,
+                adapter_id=adapter_id,
+                input_path=str(path),
+                session_hint=identifier,
+                source_kind="path",
+            )
+            for identifier, path in resolved
+        ]
     if require_sources and not paths and not dbs and not source_refs:
         raise ValueError("missing input source; pass --path, --db, or --source-ref")
     validate_adapter_selector_range(
@@ -107,9 +138,6 @@ def load_sessions(
         path_count=len(paths),
         db_count=len(dbs),
     )
-    if getattr(args, "session_id", None) and not dbs:
-        raise ValueError("--session-id is only valid with --db")
-
     available = set(available_adapter_ids())
     sessions: list[LoadedSession] = []
     if source_refs:
@@ -152,7 +180,7 @@ def load_sessions(
     for index, path in enumerate(paths, start=1):
         trial_cell_session = loaded_trial_cell_artifact_session(path, config)
         if trial_cell_session is not None:
-            sessions.append(trial_cell_session)
+            sessions.append(replace(trial_cell_session, input_selector=f"p{index}"))
             continue
         harbor_bundle = (
             load_direct_harbor_trial_bundle(path, config)
@@ -190,10 +218,11 @@ def load_sessions(
                         source_kind="harbor-trial",
                         snapshot_trajectory=document.trajectory,
                         snapshot_meta=document.meta,
+                        input_selector=f"p{index}",
                     )
                 )
             continue
-        source_path = Path(path)
+        source_path = Path(path).expanduser()
         is_atif = is_atif_json_path(str(source_path))
         adapter_id = (
             "atif"
@@ -214,15 +243,45 @@ def load_sessions(
                 input_path=str(source_path),
                 session_hint=None if is_atif else source_path.stem or "session",
                 source_kind="path",
+                input_selector=f"p{index}",
             )
         )
 
-    session_ids_by_db = parse_db_session_ids(
+    directories = {
+        session.input_selector: session
+        for session in sessions
+        if session.source_kind == "path"
+        and session.input_path
+        and Path(session.input_path).is_dir()
+        and callable(
+            getattr(adapter_for(session.adapter_id), "resolve_session_path", None)
+        )
+    }
+    selected = parse_input_session_ids(
         getattr(args, "session_id", None) or [],
-        db_count=len(dbs),
+        {*directories, *(f"d{i}" for i in range(1, len(dbs) + 1))},
     )
+    expanded = []
+    for session in sessions:
+        if session.input_selector not in directories:
+            expanded.append(session)
+            continue
+        selectors = selected.get(session.input_selector, [])
+        for session_id, concrete in resolve_directory_session_paths(
+            session.adapter_id, session.input_path, selectors
+        ):
+            resolved = Path(concrete)
+            expanded.append(
+                replace(
+                    session,
+                    input_path=str(resolved),
+                    input_label=resolved.name,
+                    session_hint=session_id or resolved.stem,
+                )
+            )
+    sessions = expanded
     for index, db in enumerate(dbs, start=1):
-        raw_session_ids = session_ids_by_db.get(index) or []
+        raw_session_ids = selected.get(f"d{index}") or []
         resolved_db, token_adapter = resolve_db_input(
             db, index, adapter_assignments, config
         )
@@ -251,6 +310,7 @@ def load_sessions(
                     db_path=str(db_path),
                     session_hint=session_id,
                     source_kind="db",
+                    input_selector=f"d{index}",
                 )
             )
 
@@ -411,33 +471,52 @@ def path_tokens(path: str) -> set[str]:
     return tokens
 
 
-def parse_db_session_ids(
-    raw_session_ids: list[str],
-    db_count: int,
-) -> dict[int, list[str]]:
-    session_ids_by_db: dict[int, list[str]] = {}
+def parse_input_session_ids(
+    raw_session_ids: list[str], selectable: set[str]
+) -> dict[str, list[str]]:
+    selected: dict[str, list[str]] = {}
     for raw in raw_session_ids:
         text = str(raw)
         match = SESSION_SELECTOR_RE.fullmatch(text)
         if match:
-            index = int(match.group(1))
+            selector = match.group(1)
             session_id = match.group(2)
-            if index > db_count:
+            if selector not in selectable:
                 raise ValueError(
-                    f"--session-id selector d{index} has no matching --db input "
-                    f"(DB inputs: {db_count})"
+                    f"--session-id selector {selector} has no session-selectable input"
                 )
-            session_ids_by_db.setdefault(index, []).append(session_id)
+            selected.setdefault(selector, []).append(session_id)
             continue
         if "=" in text:
-            raise ValueError("--session-id selector must use dN=ID")
-        if db_count != 1:
+            raise ValueError("--session-id selector must use pN=ID or dN=ID")
+        if len(selectable) != 1:
             raise ValueError(
-                "bare --session-id is only valid with exactly one --db; "
-                "use --session-id dN=ID"
+                "bare --session-id requires exactly one session-selectable input; "
+                "use --session-id pN=ID or dN=ID"
             )
-        session_ids_by_db.setdefault(1, []).append(text)
-    return session_ids_by_db
+        selected.setdefault(next(iter(selectable)), []).append(text)
+    return selected
+
+
+def remap_session_selectors(
+    selectors: list[str], original_indexes: list[int]
+) -> list[str]:
+    mapping = {
+        f"p{original}": f"p{index}"
+        for index, original in enumerate(original_indexes, 1)
+    }
+    remapped = []
+    for selector in selectors:
+        match = SESSION_SELECTOR_RE.fullmatch(selector)
+        if match and match.group(1).startswith("p"):
+            original, session_id = match.groups()
+            if original not in mapping:
+                raise ValueError(
+                    f"--session-id selector {original} is not a session directory"
+                )
+            selector = f"{mapping[original]}={session_id}"
+        remapped.append(selector)
+    return remapped
 
 
 def validate_required_adapters(sessions: list[LoadedSession]) -> None:

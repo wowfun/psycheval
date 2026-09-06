@@ -33,6 +33,7 @@ PEVAL_CONFIG_FILENAME = "peval.toml"
 PEVAL_ROOT_ENV = "PEVAL_ROOT"
 WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 WINDOWS_DRIVE_MOUNT_ROOT = Path("/mnt")
+DEFAULT_ADAPTER_SESSION_ROOTS = {"claude": "~/.claude/projects/"}
 DEFAULT_ADAPTER_DB_PATHS = {
     "psychevo": "~/.psychevo/state.db",
     "opencode": "~/.local/share/opencode/opencode.db",
@@ -166,6 +167,9 @@ class ToolConfig(_FrozenConfigModel):
         repr=False,
     )
     adapter_default_db_paths: dict[str, str] = Field(default_factory=dict, repr=False)
+    adapter_default_session_roots: dict[str, str] = Field(
+        default_factory=lambda: dict(DEFAULT_ADAPTER_SESSION_ROOTS), repr=False
+    )
     harbor_datasets: tuple[HarborDataset, ...] = ()
     harbor_mounts: tuple[HarborMount, ...] = ()
     acp_agents: tuple[AcpAgent, ...] = ()
@@ -293,6 +297,7 @@ class _AdapterDocument(BaseModel):
     model_config = ConfigDict(strict=True, extra="allow", hide_input_in_errors=True)
 
     default_db_path: str | None = None
+    default_session_root: str | None = None
 
 
 class _WorkspaceDocument(_RawConfigModel):
@@ -331,6 +336,13 @@ def default_workspace_config_text() -> str:
             [
                 f"[{_adapter_table_key(adapter_id)}]\n",
                 f"default_db_path = {json.dumps(default_db_path)}\n",
+            ]
+        )
+    for adapter_id, session_root in DEFAULT_ADAPTER_SESSION_ROOTS.items():
+        lines.extend(
+            [
+                f"\n[{_adapter_table_key(adapter_id)}]\n",
+                f"default_session_root = {json.dumps(session_root)}\n",
             ]
         )
     return "".join(lines)
@@ -545,10 +557,19 @@ def apply_toml_config(
             config = config.validated_update(
                 db=config.db.validated_update(**db_updates)
             )
-    adapter_options_by_id, adapter_default_db_paths = _adapter_config_by_id(
-        data.get("adapters", {}),
-        base_dir=base_dir,
+    adapter_options_by_id, adapter_default_db_paths, session_roots = (
+        _adapter_config_by_id(
+            data.get("adapters", {}),
+            base_dir=base_dir,
+        )
     )
+    if session_roots:
+        config = config.validated_update(
+            adapter_default_session_roots={
+                **config.adapter_default_session_roots,
+                **session_roots,
+            }
+        )
     if adapter_default_db_paths:
         merged_default_db_paths = dict(config.adapter_default_db_paths)
         merged_default_db_paths.update(adapter_default_db_paths)
@@ -1058,13 +1079,14 @@ def _adapter_config_by_id(
     value: object,
     *,
     base_dir: Path | None = None,
-) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+) -> tuple[dict[str, dict[str, Any]], dict[str, str], dict[str, str]]:
     if not value:
-        return {}, {}
+        return {}, {}, {}
     if not isinstance(value, dict):
         raise ValueError("adapters config must be a TOML table")
     options: dict[str, dict[str, Any]] = {}
     default_db_paths: dict[str, str] = {}
+    session_roots: dict[str, str] = {}
     for key, raw_options in value.items():
         if not isinstance(raw_options, dict):
             raise ValueError(f"adapter options for {key} must be a TOML table")
@@ -1075,14 +1097,22 @@ def _adapter_config_by_id(
                 adapter_options.pop("default_db_path"),
                 base_dir=base_dir,
             )
+        if "default_session_root" in adapter_options:
+            session_roots[adapter_id] = _resolve_config_path(
+                adapter_options.pop("default_session_root"),
+                base_dir=base_dir,
+                field="default_session_root",
+            )
         options[adapter_id] = adapter_options
-    return options, default_db_paths
+    return options, default_db_paths, session_roots
 
 
-def _resolve_config_path(value: object, *, base_dir: Path | None = None) -> str:
+def _resolve_config_path(
+    value: object, *, base_dir: Path | None = None, field: str = "default_db_path"
+) -> str:
     text = str(value).strip()
     if not text:
-        raise ValueError("default_db_path must not be empty")
+        raise ValueError(f"{field} must not be empty")
     if is_windows_absolute_like_path(text):
         return resolve_windows_absolute_like_path(text)
     path = Path(text).expanduser()

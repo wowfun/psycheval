@@ -74,12 +74,25 @@ class ConversionResult:
     started_at_ms: int | None
     finished_at_ms: int | None
     timestamp_semantics: str | None = None
+    subagent_results: list[ConversionResult] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class SessionInfo:
     session_id: str
     name: str | None = None
+    updated_at_ms: int | None = None
+    path: str | None = None
+
+
+@dataclass
+class SessionListing:
+    sessions: list[SessionInfo]
+    warnings: list[str] = field(default_factory=list)
+
+
+class SessionInspectionAdapter(Protocol):
+    def inspect_sessions(self, path: str) -> SessionListing: ...
 
 
 class Adapter(Protocol):
@@ -94,6 +107,12 @@ class RecordAdapter(Adapter, Protocol):
 
 class PathAdapter(Adapter, Protocol):
     def convert_path(self, path: str, config: ToolConfig) -> ConversionResult: ...
+
+
+class DirectorySessionAdapter(PathAdapter, Protocol):
+    def list_sessions(self, path: str) -> list[SessionInfo]: ...
+
+    def resolve_session_path(self, path: str, session_id: str | None) -> str: ...
 
 
 class DbAdapter(Adapter, Protocol):

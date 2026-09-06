@@ -144,7 +144,7 @@ def list_opencode_sessions(path: Path) -> list[SessionInfo]:
     try:
         rows = conn.execute(
             """
-            SELECT id, title
+            SELECT id, title, time_updated
             FROM session
             ORDER BY time_updated DESC, id DESC
             """
@@ -154,7 +154,11 @@ def list_opencode_sessions(path: Path) -> list[SessionInfo]:
     finally:
         conn.close()
     return [
-        SessionInfo(session_id=str(row[0]), name=str(row[1]) if row[1] else None)
+        SessionInfo(
+            session_id=str(row[0]),
+            name=str(row[1]) if row[1] else None,
+            updated_at_ms=int(row[2]) if row[2] is not None else None,
+        )
         for row in rows
     ]
 

@@ -86,8 +86,12 @@ def finalize_atif_conversion(result: ConversionResult) -> ConversionResult:
 
     session_id = trajectory.get("session_id")
     agent_name = agent.get("name")
-    trajectory.pop("trajectory_id", None)
-    if isinstance(session_id, str) and session_id and isinstance(agent_name, str):
+    if (
+        trajectory.get("trajectory_id") is None
+        and isinstance(session_id, str)
+        and session_id
+        and isinstance(agent_name, str)
+    ):
         trajectory["trajectory_id"] = f"{agent_name}:{session_id}"
 
     steps = trajectory.get("steps")
@@ -97,6 +101,15 @@ def finalize_atif_conversion(result: ConversionResult) -> ConversionResult:
     steps_meta = deepcopy(result.steps_meta)
     step_meta = {item.step_id: item for item in steps_meta}
     warnings = list(result.warnings)
+    children = [finalize_atif_conversion(child) for child in result.subagent_results]
+    if children:
+        trajectory["subagent_trajectories"] = [child.trajectory for child in children]
+        for index, child in enumerate(children):
+            for warning in child.warnings:
+                identifier = child.trajectory.get("trajectory_id", f"subagent[{index}]")
+                qualified = f"{identifier}: {warning}"
+                if qualified not in warnings:
+                    warnings.append(qualified)
     has_portable_timestamp = False
     timestamp_semantics = result.timestamp_semantics
     for index, step in enumerate(steps):
@@ -131,6 +144,7 @@ def finalize_atif_conversion(result: ConversionResult) -> ConversionResult:
         trajectory=trajectory,
         steps_meta=steps_meta,
         warnings=warnings,
+        subagent_results=children,
     )
 
 
@@ -174,6 +188,10 @@ def convert_atif_trajectory(parsed: dict[str, Any]) -> ConversionResult:
         started_at_ms=min(timestamps) if timestamps else None,
         finished_at_ms=max(timestamps) if timestamps else None,
         timestamp_semantics=timestamp_semantics,
+        subagent_results=[
+            convert_atif_trajectory(child)
+            for child in parsed.get("subagent_trajectories", [])
+        ],
     )
 
 

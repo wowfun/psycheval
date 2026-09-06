@@ -486,6 +486,8 @@ label_prefix = "selected"
             self.assertIn("#  session_id", listing)
             self.assertIn("1  hermes-latest", listing)
             self.assertIn("Latest Hermes", listing)
+            self.assertIn("updated_at (UTC)", listing)
+            self.assertIn("1970-01-01T00:03:50.000Z", listing)
 
             index_report = tmp_path / "index.json"
             result = main(
