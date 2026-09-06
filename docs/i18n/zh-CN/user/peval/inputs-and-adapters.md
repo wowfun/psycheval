@@ -21,6 +21,9 @@ peval view tr -p <harbor-trial-dir>
 运行中 step；完整报告要求选中的每个 source 都具有 ATIF 证据。直接传入
 `agent/trajectory.json` 时只读取该 ATIF 文件，不推断其父 Trial。
 
+管理员可在工作区详情中点击 **刷新来源**，重读已关联 Harbor Trial 的证据。
+复制导入的快照不提供刷新操作。
+
 ## 通过 Harbor 运行 WorkBuddy Office
 
 WorkBuddy Office v1.0 bundle 的 `tasks/` 已包含 50 个原生 Harbor Task 目录，
@@ -114,6 +117,60 @@ peval view tr -m raw \
   -a d1=hermes -a d2=opencode \
   -s d1=<hermes-id> -s d2=<opencode-id> -o
 ```
+
+## Claude Code
+
+指定 adapter 后可按 ID 导入，也可直接读取会话文件；两者都会包含明确关联的子 Agent：
+
+```console
+peval view tr -a claude -s <session-id>
+peval export tr -a claude -s <session-id> -o
+```
+
+ID 默认从 `~/.claude/projects/` 查找。可在 `peval.toml` 中设置其他根目录，
+相对路径以该配置文件所在目录为基准：
+
+```toml
+[adapters.claude]
+default_session_root = "/path/to/claude/projects"
+```
+
+复制到该根目录之外的会话也可通过文件路径读取：
+
+```console
+peval view tr -a claude -p ~/.claude/projects/<project>/<session-id>.jsonl
+```
+
+列出项目的主会话，再按 ID 或列表序号选择：
+
+```console
+peval view tr -a claude -p ~/.claude/projects/<project> --list
+peval view tr -a claude -p ~/.claude/projects/<project> -s '#1'
+peval export tr -a claude -p ~/.claude/projects/<project> -s <session-id> -o
+```
+
+省略 `-s` 时选择最近活跃的会话。多个会话目录使用 `-s p1=<id>`、
+`-s p2=<id>` 绑定选择；数据库继续使用 `dN`。
+`--list-interactive` 提供终端交互选择。
+
+在 **Configuration** 页的 **Session ID 或文件 / 目录路径** 输入框中，
+每行填写一项；ID 与路径可以混合输入，每行分别报告导入结果。填写 ID 或
+无法识别 adapter 的路径时，选择 **claude**。点击 **添加来源** 可直接导入。
+
+需要选择会话时，填写一个 ID 或项目目录，点击 **检查会话**，再点击
+**添加选中**。目录列出主会话，ID 则显示匹配的会话。已有路径优先按路径识别；
+相对路径可加 `./` 前缀，即使不存在也会按路径处理。更改输入或 adapter
+会清除之前的选择。列表会同时显示被排除文件的诊断。
+会话表格显示 UTC 更新时间，便于识别最近活跃的会话。
+一个主会话保持为一条评价来源；有子轨迹时，详情和侧栏显示树形导航，
+支持主子轨迹切换，以及父工具结果与子轨迹之间的跳转。各轨迹展示自己的指标。
+点击树形导航每行右侧的 **复制**，可复制该会话中 Agent 的最后一条 message。
+每个 step 的 block 卡片右侧也提供 **复制**，用于复制该卡片的内容。
+详情中的 **刷新来源** 会重读原生 Claude 来源的已选文件及其关联子会话，
+导出则生成自包含的 ATIF 树。
+
+目录与计量语义见 [CLI reference](../../../../reference/cli.md) 和
+[轨迹契约](../../../../reference/state-and-data.md#trajectories-and-sidecars)。
 
 ## 自定义 Adapter
 

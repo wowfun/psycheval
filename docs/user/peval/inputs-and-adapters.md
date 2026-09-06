@@ -24,6 +24,10 @@ running step without a trajectory; complete report mode requires every selected
 source to have ATIF evidence. Passing `agent/trajectory.json` directly reads
 only that ATIF file and does not infer its parent Trial.
 
+In the workspace detail view, administrators can use **Refresh source** for a
+linked Harbor Trial to reload its evidence. Copied snapshots have no refresh
+action.
+
 ## WorkBuddy Office with Harbor
 
 The WorkBuddy Office v1.0 bundle already contains 50 native Harbor Task
@@ -127,6 +131,66 @@ peval view tr -m raw \
   -a d1=hermes -a d2=opencode \
   -s d1=<hermes-id> -s d2=<opencode-id> -o
 ```
+
+## Claude Code
+
+Import by ID with an explicit adapter, or read a retained file directly. Both
+include its explicitly linked subagents:
+
+```console
+peval view tr -a claude -s <session-id>
+peval export tr -a claude -s <session-id> -o
+```
+
+ID lookup defaults to `~/.claude/projects/`. To use a different root, set it in
+`peval.toml` (relative paths resolve from that config file):
+
+```toml
+[adapters.claude]
+default_session_root = "/path/to/claude/projects"
+```
+
+A file path also works for a session copied outside that root:
+
+```console
+peval view tr -a claude -p ~/.claude/projects/<project>/<session-id>.jsonl
+```
+
+List a project's main sessions, then select by ID or list index:
+
+```console
+peval view tr -a claude -p ~/.claude/projects/<project> --list
+peval view tr -a claude -p ~/.claude/projects/<project> -s '#1'
+peval export tr -a claude -p ~/.claude/projects/<project> -s <session-id> -o
+```
+
+Omitting `-s` selects the most recently active session. For several session
+directories, qualify selections with `-s p1=<id>` and `-s p2=<id>`; DB selections
+continue to use `dN`. `--list-interactive` offers terminal selection.
+
+On **Configuration**, use the single **Session ID or file / directory path**
+field. Enter one item per line; IDs and paths can be mixed, and each line reports
+its own result. Choose **claude** when entering IDs or paths that do not identify
+the adapter. Use **Add source** to import the entered items directly.
+
+For selection, enter one ID or project directory and choose **Inspect sessions**,
+then **Add selected**. A directory lists its main sessions; an ID shows its
+matching session. Existing paths take precedence over IDs; prefix a relative
+path with `./` to treat it as a path even when it does not exist. Editing the
+input or adapter clears the previous selection. Inspection shows excluded-file
+diagnostics alongside the selectable sessions.
+The session table shows update times in UTC to help identify recent activity.
+The selected root remains one evaluation source. When it has child trajectories,
+its detail view and sidebar provide tree navigation and links between parent tool
+results and children. Use **Copy** on the right of a tree row to copy that
+session's last Agent message, or use a step block's **Copy** button to copy that
+block's content. Each trajectory shows its own metrics. **Refresh
+source** in the detail view rereads a native Claude import's selected file and
+its linked children; exporting writes a self-contained ATIF tree.
+
+The directory and accounting semantics are owned by the
+[CLI reference](../../reference/cli.md) and
+[trajectory contract](../../reference/state-and-data.md#trajectories-and-sidecars).
 
 ## Custom adapters
 

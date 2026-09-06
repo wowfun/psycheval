@@ -35,6 +35,12 @@ directories or `workbuddy.v1` for a validated WorkBuddy bundle. `psycheval.harbo
 `[harbor.host]`; each parser accepts the sibling section without copying its
 semantics. Harbor host callers name the file with `PEVAL_CONFIG`.
 
+`[adapters.claude].default_session_root` selects the retained-session lookup root
+and defaults to `~/.claude/projects/`, including in an existing configuration
+that omits the field. Relative overrides resolve against the defining
+`peval.toml`; `~` expands to the user's home. Lookup scope and ambiguity rules
+belong to the [input contract](cli.md#inputs-and-adapters).
+
 Dataset and mount paths may be relative to the config. Mounts name explicit
 Harbor Jobs roots and ordered Dataset IDs; there is no implicit Jobs discovery.
 Harbor evidence and registered Dataset files remain read-only to source/catalog

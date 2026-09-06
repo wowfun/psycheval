@@ -26,6 +26,72 @@ ATIF-v1.x artifact is exposed as v1.7 only when changing the schema label alone
 passes the current strict validator; the compatibility view is not persisted.
 Derived browser views render absolute timestamps as UTC without rewriting the
 underlying ATIF, Harbor, or catalog values.
+
+Converted trajectories retain adapter-owned explicit trajectory IDs; only absent
+IDs are derived from Agent and session identity. Embedded subagent trajectories
+are complete ATIF documents with independent steps and metrics, referenced by
+their immediate parent's observations. A reference to an embedded child remains
+navigable when it also carries an external trajectory path; external-only
+references do not create an embedded-child navigation action. Sidecars project child runtime metadata
+and diagnostics by trajectory ID. A child's metrics are not added to its parent
+or counted as another evaluation source; detail navigation selects the child's
+own evidence within the root source.
+Sources with embedded children show left-aligned tree navigation for the complete
+family; sources without children omit it. The detail sidebar keeps the tree in
+its header, with bounded scrolling separate from the step list, so long histories
+and large families cannot displace either navigation or steps.
+Each tree row has a right-aligned Copy action for that trajectory's last Agent
+step's message, without changing the selected trajectory. It copies the original
+message text (text blocks in order for multimodal messages), excluding reasoning
+and tool results. A missing or blank final Agent message disables the action;
+it does not fall back to an earlier response. Copy success or failure is visible.
+Each step block also has a right-aligned Copy action for its displayed body:
+Message, System Prompt, Reasoning, tool arguments, or observation content.
+Structured bodies copy as the displayed formatted JSON. Headings, tool metadata,
+and navigation controls are excluded; blank bodies disable Copy. Copying a block
+preserves the selected trajectory and step expansion state.
+Direct ATIF inspection projects portable runtime metadata for the complete
+embedded family through the same sidecar projector as workspace reads. Report
+inspection fills child metadata from ATIF while retaining existing sidecar
+diagnostics and source-level evaluation fields. Malformed child identities in
+report JSON produce validation errors before child metadata projection.
+
+Claude preserves file ordering and merges assistant fragments by message ID,
+counting the last valid usage once per response. Prompt usage includes ordinary
+input, cache reads, and cache writes; missing measurements remain unknown.
+Aggregate usage input totals use the same inclusive prompt count; original
+uncached input remains a separate usage component.
+Partial usage updates retain the last valid value of each measured component.
+Canonical prompt totals require measurements for all three input components;
+an omitted cache component is unknown, not an assumed zero. Known components
+remain available in usage evidence even when the inclusive total is unknown.
+The canonical cached-token subset is also omitted when that prompt total is
+unknown, as required by ATIF; the raw cache measurement remains in usage evidence.
+Repeated identical Claude conversion diagnostics are displayed once per trajectory.
+Child session identities include their Agent ID so an explicitly imported child
+cannot replace its root's cell; Claude source metadata retains the native session ID.
+Session cost-state records are retained in `extra.claude.cost_state` as source
+summary evidence; they do not supply trajectory totals or displayed cost metrics.
+Tool-result agent IDs are the authority for child association. Child files must
+belong to the selected session's subagents directory and match its identity;
+missing, invalid, or cyclic links remain visible diagnostics. Association metadata
+must identify a unique tool result: ambiguous batch metadata and orphan
+child links are diagnosed without guessing a parent call. Per-result metadata
+can associate each child independently. Families are trees; a second parent of
+an already embedded child receives an explicit omitted-link diagnostic.
+Child sidecar adapter identity follows the root input adapter, including ATIF
+imports. Retained source files are never modified. Task notifications,
+compaction, and local-command
+context retain their source classification; bookkeeping does not create turns.
+An explicit native Claude import stores its concrete source binding in the local
+source overlay for administrator-requested refresh. The canonical cell remains
+the read authority; reads do not consult the original logs. Imported ATIF and
+copied cells do not activate source paths from their metadata. Refresh replaces
+the derived family only after conversion succeeds and preserves the cell identity.
+The detail view's Refresh source action is available to administrators for
+refreshable sources, including linked Harbor Trials and native Claude imports.
+It operates on the root source even when a child trajectory is selected; Harbor
+refresh reloads its linked Trial evidence. Snapshot imports have no refresh action.
 Live Harbor Task text is read on demand through the bounded Workspace Task file
 interface. Task configuration, required instruction files, and Task ignore
 rules are strict UTF-8, independent of the host locale. Task text is not copied

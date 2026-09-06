@@ -52,8 +52,8 @@ aggregation.
 
 ## Inputs and adapters
 
-Built-in adapters are `psychevo`, `opencode`, `hermes`, and path-only
-`deepagents`. Installed custom adapters register under the
+Built-in adapters are `psychevo`, `opencode`, `hermes`, and file adapters
+`deepagents` and `claude`. Installed custom adapters register under the
 `psycheval.adapters` entry-point group and implement at least one supported
 conversion method.
 
@@ -61,6 +61,50 @@ Original JSONL, JSON, SQLite, ATIF, and Trial inputs are read-only. CLI path
 selection may infer an adapter and fall back to configuration; workspace Path
 and DB sources require unambiguous inference when set to automatic. Export
 accepts one effective session, while raw reports may compare repeated inputs.
+
+Claude Code accepts a retained JSONL file or a single project directory through
+`-p`. Directory listing includes top-level main sessions, ordered by latest valid
+event time descending, then session ID; unknown times always sort last. An omitted session selector chooses the
+first session. Malformed or empty files and all files with an ambiguous duplicate
+session ID are excluded; CLI listing and workspace session inspection show the
+exclusion diagnostics. A sidechain record alone does not hide an otherwise main
+session. Listing streams each file without retaining its conversation content.
+One directory load reuses one listing for all selectors and concrete paths.
+`--list` and `--list-interactive` support session directories and
+databases. CLI and workspace session tables display the adapter's update time in
+UTC, or `-` when unknown. Claude uses its latest valid event timestamp; Psychevo
+and OpenCode use their stored session update time, and Hermes uses its latest
+active message time, falling back to session end or start time.
+Repeatable `-s` accepts IDs and list indexes; `pN=ID` selects a session
+from path input N and `dN=ID` selects one from database input N. A bare selector
+requires exactly one session-selectable input. Interactive selection requires
+one such input and a terminal.
+
+With no `-p` or `-d`, an explicit `-a claude -s <session-id>` resolves exact IDs
+against `adapters.claude.default_session_root`. It checks `<id>.jsonl` in that
+root and its immediate project directories, verifies the recorded identity,
+and rejects missing, conflicting, or ambiguous matches. It skips linked files
+and project directories and never recursively scans HOME or unrelated logs.
+This lookup accepts exact IDs, not listing indexes or `pN`/`dN` selectors.
+An explicitly supplied project directory may itself be a symbolic link. Listing
+reads only that directory's top-level regular JSONL files; it does not traverse
+nested directories or follow linked JSONL files. Linked subagent reads remain
+subject to the [trajectory ownership checks](state-and-data.md#trajectories-and-sidecars).
+
+Claude imports explicitly linked subagents recursively into the selected root's
+ATIF. Directory selection resolves to concrete session files, so refreshing an
+import keeps its selected session even when another session becomes newer. One
+root with children is one exportable session and one workspace evaluation source.
+The workspace session input accepts one Session ID, file, or directory per line,
+including mixed batches, with independent results in input order shown beneath
+the form. Existing paths
+take precedence. With an explicit adapter, a bare identifier that is not an
+existing path is resolved as a Session ID; `./` forces a relative path.
+Inspection accepts one such input and offers the same directory session selection
+or the one matching Claude session. Explicit `session_id`/`session_ids` selections
+require one source and cannot be combined with multiple path lines.
+An unrecognized directory reports that an adapter must be chosen; an explicitly
+selected adapter without directory support reports that capability mismatch.
 
 `view tr -p <trial-dir>` recognizes a Harbor Trial root without an adapter
 selector and preserves its Job, Trial, result, reward, timing, failure, Task,

@@ -53,7 +53,14 @@ External Dataset sources remain read-only, including during plugin loading.
 `psycheval.atif` is a separate, standard-library-only source-copy unit. It owns
 strict ATIF validation, content recognition, and timestamp parsing.
 `psycheval.conversion` owns adapter dispatch, normalization, and metadata
-projection, using the existing types owned by `adapters.base`. Imported ATIF
+projection, using the existing types owned by `adapters.base`. Adapters own
+retained-session directory discovery, inspection diagnostics, and resolution to concrete files.
+Adapters also own exact session-ID lookup within their configured session root;
+the shared input loader handles pathless CLI and workspace imports. Workspace
+input parsing distinguishes existing paths from bare session IDs before loading.
+Conversion
+recursively normalizes embedded subagent results; one selected root remains one
+source, with child navigation owned by the trajectory detail view. Imported ATIF
 is validated without repair; only adapter conversion normalizes evidence.
 
 The CLI and Harbor adapter share formats and one `peval.toml`, but not parser
@@ -81,7 +88,8 @@ entry points with the same server-side access checks.
 `WorkspaceApp` owns the active page and maps the `catalog`, `reports`,
 `dataset-registry`, `tasks`, and `assistant-config` invalidation domains to page
 adapters. Page adapters do not import one another; shared browser primitives do
-not depend on the Home runtime. One shared sidebar primitive owns lifecycle,
+not depend on the Home runtime. Tree and step-block controls share one clipboard
+primitive for writes and copy feedback. One shared sidebar primitive owns lifecycle,
 focus, mutual exclusion, and responsive width interaction for report previews
 across Home and Reports, the Home Saved View rail, and Trial detail; the global
 ACP drawer remains independent and stays mounted and open across in-document
