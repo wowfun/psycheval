@@ -441,7 +441,10 @@ class EvaluationReportsTests(unittest.TestCase):
 
                 outside = root / "outside.md"
                 outside.write_text("outside", encoding="utf-8")
-                (cell / "analysis.md").symlink_to(outside)
+                try:
+                    (cell / "analysis.md").symlink_to(outside)
+                except OSError as exc:
+                    self.skipTest(f"symlink creation unavailable: {exc}")
                 with self.assertRaisesRegex(ValueError, "symlink"):
                     reports.publish(source_ref=source_ref, draft_path=large)
                 (cell / "analysis.md").unlink()
@@ -472,7 +475,10 @@ class EvaluationReportsTests(unittest.TestCase):
                 report_path.unlink()
                 outside = root / "outside.md"
                 outside.write_text("unsafe", encoding="utf-8")
-                report_path.symlink_to(outside)
+                try:
+                    report_path.symlink_to(outside)
+                except OSError as exc:
+                    self.skipTest(f"symlink creation unavailable: {exc}")
                 self.assertIsNone(reports.read(source_ref))
                 report_path.unlink()
                 report_path.write_text("123456789", encoding="utf-8")

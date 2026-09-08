@@ -83,7 +83,10 @@ class SourceImportRequest(StrictRequest):
         if self.path and self.db:
             raise ValueError("provide exactly one source: path or db")
         if path_count > 1 and (self.session_id or self.session_ids):
-            raise ValueError("session_id and session_ids require exactly one source")
+            raise ValueError(
+                "multiple paths require exactly one source; session_id and session_ids "
+                "cannot select across them"
+            )
         return self
 
 

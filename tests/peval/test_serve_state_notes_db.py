@@ -234,7 +234,7 @@ class PevalServeStateNotesDbTests(unittest.TestCase):
                     [
                         r"C:\Users\kevin\AppData\Local\state.db",
                         r"D:\Data Dir\session.jsonl",
-                        "C:/Users/kevin/.hermes/state.db",
+                        str(Path("C:/Users/kevin/.hermes/state.db")),
                         r"\\server\share\state.db",
                         str(root / "relative.jsonl"),
                     ],

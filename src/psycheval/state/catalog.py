@@ -1183,10 +1183,11 @@ class WorkspaceCatalog:
             )
         else:
             connection = sqlite3.connect(self.path, timeout=1.0)
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute("PRAGMA synchronous=NORMAL")
-        connection.row_factory = sqlite3.Row
         try:
+            if not readonly:
+                connection.execute("PRAGMA journal_mode=WAL")
+                connection.execute("PRAGMA synchronous=NORMAL")
+            connection.row_factory = sqlite3.Row
             if readonly:
                 connection.execute("BEGIN")
             yield connection

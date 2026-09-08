@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import os
+import re
 
-from psycheval.config import ToolConfig, write_workspace_adapter_default_db
+from psycheval.config import (
+    ToolConfig,
+    display_config_path,
+    write_workspace_adapter_default_db,
+)
 from tests.peval.peval_test_support import (
     BrokenEntryPoint,
     CustomPathAdapter,
@@ -22,6 +27,70 @@ from tests.peval.peval_test_support import (
 
 
 class PevalConfigAdapterTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Windows drive names are native on Windows")
+    def test_unmapped_windows_paths_ignore_relative_posix_collisions(self):
+        from psycheval.config import (
+            lexical_windows_absolute_like_path,
+            resolve_windows_absolute_like_path,
+        )
+        from psycheval.serve.payloads import (
+            resolve_windows_absolute_like_path as resolve_server_path,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            values = (
+                "C:/Users/kevin/workspace",
+                r"C:\Users\kevin\workspace",
+                r"\\server\share\workspace",
+            )
+            for value in values:
+                (root / value).mkdir(parents=True)
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                for resolve in (
+                    lexical_windows_absolute_like_path,
+                    resolve_windows_absolute_like_path,
+                    resolve_server_path,
+                ):
+                    for value in values:
+                        with self.subTest(resolve=resolve, value=value):
+                            self.assertEqual(
+                                resolve(value, windows_mount_root=root / "empty-mnt"),
+                                value,
+                            )
+            finally:
+                os.chdir(old_cwd)
+
+    @unittest.skipUnless(os.name == "nt", "native Windows path normalization")
+    def test_nonexistent_windows_paths_are_normalized_without_creating_them(self):
+        from psycheval.config import (
+            lexical_windows_absolute_like_path,
+            resolve_windows_absolute_like_path,
+        )
+        from psycheval.serve.payloads import (
+            resolve_windows_absolute_like_path as resolve_server_path,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = str(Path(tmp)) + r"\missing/../future\state.db"
+            expected = os.path.abspath(raw)
+            for resolve in (
+                lexical_windows_absolute_like_path,
+                resolve_windows_absolute_like_path,
+                resolve_server_path,
+            ):
+                with self.subTest(resolve=resolve):
+                    self.assertEqual(resolve(raw), expected)
+                    self.assertFalse(Path(expected).exists())
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_display_preserves_windows_paths_outside_the_native_home(self) -> None:
+        for value in (r"Z:\elsewhere\state.db", r"\\server\share\state.db"):
+            with self.subTest(value=value):
+                self.assertEqual(display_config_path(value), value)
+
     def test_harbor_identifiers_in_toml_must_be_strings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -111,7 +180,9 @@ class PevalConfigAdapterTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 ValueError,
-                rf"{root / 'peval.toml'}: description: Input should be a valid string",
+                re.escape(
+                    f"{root / 'peval.toml'}: description: Input should be a valid string"
+                ),
             ):
                 load_config(workspace_root=root)
 
@@ -228,7 +299,7 @@ default_db_path = '{unc_path}'
                 encoding="utf-8",
             )
 
-            with patch.dict(os.environ, {"HOME": str(home)}):
+            with patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
                 config = load_config(workspace_root=root)
 
             self.assertEqual(
@@ -247,7 +318,7 @@ default_db_path = '{unc_path}'
             config_path.write_text('locale = "en"\n', encoding="utf-8")
             home_db = home / ".psychevo" / "state.db"
 
-            with patch.dict(os.environ, {"HOME": str(home)}):
+            with patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
                 resolved = write_workspace_adapter_default_db(
                     config_path,
                     "psychevo",

@@ -22,6 +22,7 @@ from psycheval.state import (
     CatalogSummaryCapacityError,
     open_workspace_state,
 )
+from psycheval.workspace_views import WorkspaceViewLibrary
 from tests.peval.asgi_server import LocalHTTPServer, make_handler
 from tests.peval.cli_inputs_support import write_trial_cell_artifacts
 
@@ -409,7 +410,13 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     runtime.catalog._writer_lock.release()
                 self.assertEqual(status, 409)
                 self.assertIn("writer operation", json.loads(body)["detail"])
-                self.assertFalse((root / "views/Blocked during snapshot.md").exists())
+                self.assertFalse(
+                    (
+                        WorkspaceViewLibrary(root)._path_for_name(
+                            "Blocked during snapshot"
+                        )
+                    ).exists()
+                )
             finally:
                 with runtime.catalog._state_lock:
                     runtime.catalog._checking = False
@@ -455,7 +462,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertEqual(saved["name"], "Daily focus")
                 self.assertEqual(saved["notes"], payload["notes"])
                 self.assertEqual(saved["filters"], {})
-                stored = (root / "views" / "Daily focus.md").read_text(encoding="utf-8")
+                stored = (
+                    WorkspaceViewLibrary(root)._path_for_name("Daily focus")
+                ).read_text(encoding="utf-8")
                 self.assertIn("group_by: agent", stored)
                 self.assertNotIn("filters:", stored)
                 self.assertTrue(stored.endswith(payload["notes"]))
@@ -478,7 +487,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertEqual(status, 409)
                 self.assertIn("already exists", json.loads(body)["detail"])
                 self.assertEqual(
-                    (root / "views" / "Daily focus.md").read_text(encoding="utf-8"),
+                    (
+                        WorkspaceViewLibrary(root)._path_for_name("Daily focus")
+                    ).read_text(encoding="utf-8"),
                     stored,
                 )
 
@@ -493,7 +504,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(json.loads(body)["notes"], "Replacement notes")
                 self.assertEqual(
-                    (root / "views" / "Daily focus.md")
+                    (WorkspaceViewLibrary(root)._path_for_name("Daily focus"))
                     .read_text(encoding="utf-8")
                     .split("---\n", 2)[-1],
                     "Replacement notes",
@@ -575,7 +586,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(json.loads(body)["name"], "Renamed view")
-                self.assertFalse((root / "views" / "Daily focus.md").exists())
+                self.assertFalse(
+                    (WorkspaceViewLibrary(root)._path_for_name("Daily focus")).exists()
+                )
 
                 status, _headers, _body = self.request(
                     server,
@@ -584,8 +597,14 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     None,
                 )
                 self.assertEqual(status, 404)
-                self.assertTrue((root / "views" / "Renamed view.md").is_file())
-                self.assertTrue((root / "views" / "Other view.md").is_file())
+                self.assertTrue(
+                    (
+                        WorkspaceViewLibrary(root)._path_for_name("Renamed view")
+                    ).is_file()
+                )
+                self.assertTrue(
+                    (WorkspaceViewLibrary(root)._path_for_name("Other view")).is_file()
+                )
 
                 status, _headers, body = self.request(
                     server,
@@ -607,8 +626,14 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     self.assertLess(time.monotonic(), deadline)
                     time.sleep(0.01)
                 self.assertEqual(operation["state"], "failed")
-                self.assertTrue((root / "views" / "Renamed view.md").is_file())
-                self.assertTrue((root / "views" / "Other view.md").is_file())
+                self.assertTrue(
+                    (
+                        WorkspaceViewLibrary(root)._path_for_name("Renamed view")
+                    ).is_file()
+                )
+                self.assertTrue(
+                    (WorkspaceViewLibrary(root)._path_for_name("Other view")).is_file()
+                )
 
                 status, _headers, body = self.request(
                     server,

@@ -1139,7 +1139,9 @@ def display_config_path(value: object, *, base_dir: Path | None = None) -> str:
         return text
     if text.startswith("~"):
         return text
-    if is_windows_absolute_like_path(text):
+    if is_windows_absolute_like_path(text) and not (
+        os.name == "nt" and Path(text).is_relative_to(Path.home())
+    ):
         return text
     path = Path(text).expanduser()
     if not path.is_absolute():
@@ -1165,10 +1167,8 @@ def resolve_windows_absolute_like_path(
     *,
     windows_mount_root: Path | None = None,
 ) -> str:
-    if os.name == "nt":
-        return str(Path(raw_path).expanduser())
     original = Path(raw_path).expanduser()
-    if original.exists():
+    if original.is_absolute() and original.exists():
         return str(original.resolve())
     mapped = windows_drive_mount_path(
         raw_path,
@@ -1176,7 +1176,7 @@ def resolve_windows_absolute_like_path(
     )
     if mapped is not None and mapped.exists():
         return str(mapped.resolve())
-    return raw_path
+    return os.path.abspath(original) if os.name == "nt" else raw_path
 
 
 def lexical_windows_absolute_like_path(
@@ -1186,16 +1186,16 @@ def lexical_windows_absolute_like_path(
 ) -> str:
     """Map an existing Windows drive path without resolving symbolic links."""
 
-    if os.name == "nt":
-        return os.path.abspath(Path(raw_path).expanduser())
+    original = Path(raw_path).expanduser()
+    if os.name == "nt" and original.exists():
+        return os.path.abspath(original)
     mapped = windows_drive_mount_path(
         raw_path,
         windows_mount_root or WINDOWS_DRIVE_MOUNT_ROOT,
     )
     if mapped is not None and mapped.exists():
         return os.path.abspath(mapped)
-    original = Path(raw_path).expanduser()
-    if original.exists():
+    if os.name == "nt" or (original.is_absolute() and original.exists()):
         return os.path.abspath(original)
     return raw_path
 

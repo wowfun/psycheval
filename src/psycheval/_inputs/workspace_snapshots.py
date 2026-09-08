@@ -410,13 +410,17 @@ def resolved_local_path(value: str) -> Path | None:
 
 
 def resolved_windows_absolute_like_path(text: str) -> Path | None:
-    resolved = path_config.resolve_windows_absolute_like_path(text)
-    if os.name == "nt":
-        return Path(resolved).expanduser().resolve()
+    original = Path(text).expanduser()
+    if os.name == "nt" and original.exists():
+        return original.resolve()
     mapped = path_config.windows_drive_mount_path(
         text,
         path_config.WINDOWS_DRIVE_MOUNT_ROOT,
     )
-    if mapped is None or not mapped.exists():
-        return None
-    return mapped.resolve()
+    if mapped is not None and mapped.exists():
+        return mapped.resolve()
+    if os.name != "nt":
+        resolved = path_config.resolve_windows_absolute_like_path(text)
+        if Path(resolved).is_absolute() and Path(resolved).exists():
+            return Path(resolved).expanduser().resolve()
+    return None

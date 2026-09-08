@@ -75,7 +75,9 @@ class ReportLibrary:
             format=str(metadata["format"]),
             source_keys=tuple(str(key) for key in metadata["source_keys"]),
             primary_source_key=str(metadata["primary_source_key"]),
-            content=report.content.encode("utf-8"),
+            content=report.content.replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .encode("utf-8"),
         )
 
     def _read_workspace_report(self, report_ref: str) -> ReportDocument:

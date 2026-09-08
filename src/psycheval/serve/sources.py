@@ -55,7 +55,9 @@ def add_source_payload(
     if len(path_lines) > 1:
         if payload.get("session_id") or payload.get("session_ids"):
             raise HttpError(
-                400, "session_id and session_ids require exactly one source"
+                400,
+                "multiple paths require exactly one source; session_id and "
+                "session_ids cannot select across them",
             )
         if payload.get("db"):
             raise HttpError(400, "provide exactly one source: path or db")

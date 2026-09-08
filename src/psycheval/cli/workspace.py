@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -46,7 +47,7 @@ def validated_workspace_root(args: CliArgs) -> str | None:
         root_text = str(root).strip()
         root_path = resolved_local_path(root_text)
         if root_path is None:
-            if is_windows_absolute_like_path(root_text):
+            if is_windows_absolute_like_path(root_text) and os.name != "nt":
                 raise ValueError(f"workspace root is not accessible: {root_text}")
             root_path = Path(root_text).expanduser()
         return str(ensure_workspace_root(root_path))

@@ -8,6 +8,7 @@
 }
 .timeline-section {
   display:grid;
+  grid-template-columns:minmax(0,1fr);
   gap:10px;
   border:1px solid var(--rule);
   border-radius:var(--radius);
@@ -41,6 +42,7 @@
 }
 .timeline-section-body {
   display:grid;
+  grid-template-columns:minmax(0,1fr);
   gap:10px;
 }
 .timeline-total {

@@ -131,7 +131,14 @@ def _bind_port(host: str, port: int) -> socket.socket:
     for family, socktype, proto, _canonical, address in addresses:
         listener = socket.socket(family, socktype, proto)
         try:
-            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if sys.platform == "win32":
+                listener.setsockopt(
+                    socket.SOL_SOCKET,
+                    getattr(socket, "SO_EXCLUSIVEADDRUSE", 0x0004),
+                    1,
+                )
+            else:
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.set_inheritable(False)
             listener.bind(address)
             listener.listen(128)

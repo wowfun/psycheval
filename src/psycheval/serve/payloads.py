@@ -317,7 +317,11 @@ def source_args_from_payload(
     if paths and dbs:
         raise HttpError(400, "provide exactly one source: path or db")
     if (session_id or session_ids) and len(paths or dbs) > 1:
-        raise HttpError(400, "session_id and session_ids require exactly one source")
+        raise HttpError(
+            400,
+            "multiple paths require exactly one source; session_id and session_ids "
+            "cannot select across them",
+        )
     if len(paths) == 1 and not dbs and not Path(paths[0]).exists():
         raw = split_source_path_lines(payload["path"])[0]
         adapter_id = adapter_override_payload(payload)
@@ -444,18 +448,16 @@ def resolve_windows_absolute_like_path(
     raw_path: str,
     windows_mount_root: Path | None = None,
 ) -> str:
-    if os.name == "nt":
-        return str(Path(raw_path).expanduser())
     original = Path(raw_path).expanduser()
-    if original.exists():
-        return str(original)
+    if original.is_absolute() and original.exists():
+        return os.path.abspath(original) if os.name == "nt" else str(original)
     mapped = windows_drive_mount_path(
         raw_path,
         windows_mount_root or patched_windows_drive_mount_root(),
     )
     if mapped is not None and mapped.exists():
         return str(mapped)
-    return raw_path
+    return os.path.abspath(original) if os.name == "nt" else raw_path
 
 
 def patched_windows_drive_mount_root() -> Path:

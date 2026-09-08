@@ -153,9 +153,12 @@ class PromptAssetTests(unittest.TestCase):
     def test_broken_prompts_symlink_is_rejected_as_a_workspace_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "prompts").symlink_to(
-                root / "missing-prompts", target_is_directory=True
-            )
+            try:
+                (root / "prompts").symlink_to(
+                    root / "missing-prompts", target_is_directory=True
+                )
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
             library = PromptAssetLibrary(root)
             default = library.read("failure-diagnosis")
             with self.assertRaisesRegex(
@@ -211,7 +214,10 @@ class PromptAssetTests(unittest.TestCase):
             target = root / "outside.md"
             target.write_text("# Outside\n", encoding="utf-8")
             override = prompts / default.filename
-            override.symlink_to(target)
+            try:
+                override.symlink_to(target)
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
             with self.assertRaisesRegex(ValueError, "regular file"):
                 library.read(default.id)
             override.unlink()

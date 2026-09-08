@@ -425,12 +425,12 @@ class WorkspaceSources:
             if document.source.get("kind") != HARBOR_SOURCE_KIND:
                 raise ValueError(f"source is not a Harbor Trial: {source_ref}")
             return self.overlay_dir(source_ref)
-        if not source_ref or "\\" in source_ref:
-            raise ValueError("local source_ref must be normalized and relative")
         path = Path(source_ref)
         parts = path.parts
         if (
-            path.is_absolute()
+            not source_ref
+            or "\\" in source_ref
+            or path.is_absolute()
             or path.as_posix() != source_ref
             or len(parts) != 5
             or parts[0] != "runs"

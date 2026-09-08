@@ -204,7 +204,7 @@ default_db_path = "state.db"
             self.assertNotIn("artifact_ref", source_payload)
             expected_ref = {
                 "kind": "trial-cell-artifact",
-                "path": os.path.relpath(cell_dir, outside),
+                "path": Path(os.path.relpath(cell_dir, outside)).as_posix(),
                 "workspace_relative_path": str(source["artifact_dir"]),
                 "source_key": keys[0],
             }
@@ -311,7 +311,7 @@ default_db_path = "state.db"
             )
             expected_ref = {
                 "kind": "trial-cell-artifact",
-                "path": os.path.relpath(cell_dir, outside),
+                "path": Path(os.path.relpath(cell_dir, outside)).as_posix(),
                 "workspace_relative_path": cell_dir.relative_to(workspace).as_posix(),
             }
             self.assertEqual(

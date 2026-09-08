@@ -1016,6 +1016,7 @@ def _read_harbor_analysis_markdown(candidate: SourceCandidate) -> str | None:
         markdown = content.decode("utf-8")
     except (OSError, UnicodeDecodeError, ValueError):
         return None
+    markdown = markdown.replace("\r\n", "\n").replace("\r", "\n")
     return markdown if markdown.strip() else None
 
 

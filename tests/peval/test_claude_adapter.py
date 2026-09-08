@@ -136,7 +136,10 @@ def test_child_failures_preserve_parent_with_diagnostics(tmp_path, failure):
         write_events(child, [event("user", agent="wrong", content="Wrong")])
     elif failure == "symlink":
         child.unlink()
-        child.symlink_to(source)
+        try:
+            child.symlink_to(source)
+        except OSError as exc:
+            pytest.skip(f"symlink creation unavailable: {exc}")
     else:
         write_events(
             child,
@@ -316,7 +319,10 @@ def test_escaped_child_directory_preserves_root_without_reading_children(tmp_pat
     child_root = project / "root-session/subagents"
     outside = tmp_path / "outside"
     child_root.rename(outside)
-    child_root.symlink_to(outside, target_is_directory=True)
+    try:
+        child_root.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
     result = convert_path(str(source), CONFIG)
     assert result.subagent_results == []
     assert len(result.trajectory["steps"]) == 2

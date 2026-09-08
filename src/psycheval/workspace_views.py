@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,7 +12,9 @@ import yaml
 
 from psycheval.state.catalog import CatalogQuery
 
-VIEW_SCHEMA_VERSION = 1
+logger = logging.getLogger(__name__)
+
+VIEW_SCHEMA_VERSION = 2
 VIEW_MAX_NOTE_BYTES = 1024 * 1024
 VIEW_SUFFIX = ".md"
 VIEW_NAME_MAX_CHARS = 120
@@ -67,8 +71,8 @@ class WorkspaceViewLibrary:
                 continue
             try:
                 views.append(self._read(path))
-            except (OSError, UnicodeError, ValueError, yaml.YAMLError):
-                continue
+            except (OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
+                logger.warning("Omitting unreadable saved view %s: %s", path, exc)
         return sorted(views, key=lambda view: view.name.casefold())
 
     def save(
@@ -85,7 +89,7 @@ class WorkspaceViewLibrary:
         )
         self._ensure_views_root()
         target = self._path_for_name(view.name)
-        if target.exists():
+        if target.exists() or target.is_symlink():
             if target.is_symlink() or not target.is_file():
                 raise ValueError(f"saved view path is not a regular file: {view.name}")
             if not overwrite:
@@ -149,7 +153,6 @@ class WorkspaceViewLibrary:
             path = self._path_for_name(name)
             if path.is_symlink() or not path.is_file():
                 raise WorkspaceViewNotFound(f"saved view does not exist: {name}")
-            self._read(path)
             paths.append(path)
         for path in paths:
             path.unlink()
@@ -163,24 +166,31 @@ class WorkspaceViewLibrary:
         target = self._path_for_name(new_name)
         if target.exists() or target.is_symlink():
             raise WorkspaceViewConflict(f"saved view already exists: {new_name}")
-        source.replace(target)
-        return WorkspaceView(
+        renamed = self.save(
             name=new_name,
-            filters=view.filters,
+            filters=view_filters_dict(view.filters),
             group_by=view.group_by,
             notes=view.notes,
         )
+        try:
+            source.unlink()
+        except OSError as error:
+            try:
+                target.unlink()
+            except OSError as rollback_error:
+                error.add_note(f"saved view rename rollback failed: {rollback_error}")
+            raise
+        return renamed
 
     def _read(self, path: Path) -> WorkspaceView:
         if path.resolve().parent != self.views_root.resolve():
             raise ValueError("saved view escapes workspace views directory")
-        name = validate_view_name(path.stem)
         text = path.read_text(encoding="utf-8")
         match = _FRONTMATTER_RE.fullmatch(text)
         if match is None:
             raise ValueError(f"saved view has invalid frontmatter: {path.name}")
         payload = yaml.safe_load(match.group("header"))
-        required_fields = {"schema_version", "group_by"}
+        required_fields = {"schema_version", "name", "group_by"}
         allowed_fields = required_fields | {"filters"}
         if (
             not isinstance(payload, dict)
@@ -190,6 +200,9 @@ class WorkspaceViewLibrary:
             raise ValueError(f"saved view has invalid frontmatter fields: {path.name}")
         if payload.get("schema_version") != VIEW_SCHEMA_VERSION:
             raise ValueError(f"saved view has unsupported schema: {path.name}")
+        name = validate_view_name(payload["name"])
+        if self._path_for_name(name).name != path.name:
+            raise ValueError("saved view name does not match its filename")
         return view_from_values(
             name=name,
             filters=payload.get("filters"),
@@ -198,7 +211,9 @@ class WorkspaceViewLibrary:
         )
 
     def _path_for_name(self, name: str) -> Path:
-        target = self.views_root / f"{validate_view_name(name)}{VIEW_SUFFIX}"
+        target = self.views_root / (
+            f"{_filename_stem_for_view(validate_view_name(name))}{VIEW_SUFFIX}"
+        )
         if target.parent != self.views_root:
             raise ValueError("saved view path escapes workspace views directory")
         return target
@@ -232,6 +247,11 @@ def validate_view_name(value: Any) -> str:
     if any(ord(character) < 32 or ord(character) == 127 for character in name):
         raise ValueError("view name must not contain control characters")
     return name
+
+
+def _filename_stem_for_view(name: str) -> str:
+    """Bound the filename and preserve identity on case-insensitive hosts."""
+    return "view-" + hashlib.sha256(name.encode("utf-8")).hexdigest()
 
 
 def view_from_values(
@@ -375,7 +395,7 @@ def editable_view_configuration(value: Any) -> tuple[dict[str, Any], str]:
 
 
 def render_view_markdown(view: WorkspaceView) -> str:
-    payload = {"schema_version": VIEW_SCHEMA_VERSION}
+    payload = {"schema_version": VIEW_SCHEMA_VERSION, "name": view.name}
     filters = view_filters_dict(view.filters)
     if filters:
         payload["filters"] = filters

@@ -35,6 +35,40 @@ from tests.peval.cli_inputs_support import write_trial_cell_artifacts
 
 
 class WorkspaceCatalogTests(unittest.TestCase):
+    def test_failed_connection_initialization_closes_the_database(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, catalog = self.catalog(Path(tmp))
+            catalog.path.write_bytes(b"SQLite format 3\x00" + b"broken" * 100)
+            connections = []
+
+            class TrackedConnection(sqlite3.Connection):
+                closed = False
+
+                def close(self):
+                    self.closed = True
+                    super().close()
+
+            connect = sqlite3.connect
+
+            def tracked_connect(*args, **kwargs):
+                connection = connect(*args, **kwargs, factory=TrackedConnection)
+                connections.append(connection)
+                return connection
+
+            try:
+                with patch("psycheval.state.catalog.sqlite3.connect", tracked_connect):
+                    with self.assertRaises(sqlite3.DatabaseError):
+                        with catalog._connect():
+                            self.fail("damaged database was accepted")
+                self.assertTrue(connections)
+                self.assertTrue(all(connection.closed for connection in connections))
+                rebuilt = WorkspaceCatalog(store, catalog.config)
+                self.assertFalse(rebuilt.has_generation)
+            finally:
+                for connection in connections:
+                    connection.close()
+                store.close()
+
     def test_invalid_generation_retains_the_complete_zero_presence_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
