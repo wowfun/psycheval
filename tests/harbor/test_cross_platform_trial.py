@@ -26,7 +26,7 @@ def _run_multi_step_job(
     resume: bool = False,
     load_trajectory: Path | None = None,
     workspace: Path | None = None,
-    peval_config: Path | None = None,
+    workdir_root: Path | None = None,
     delete: bool = True,
     n_attempts: int = 1,
     n_concurrent: int = 1,
@@ -50,7 +50,7 @@ def _run_multi_step_job(
         "--env",
         "psycheval.harbor.environment:HostEnvironment",
         "--environment-kwarg",
-        "allow_host_execution=true",
+        'host_access={"filesystem":true,"process":true}',
         "--jobs-dir",
         str(jobs_dir),
         "--job-name",
@@ -85,14 +85,14 @@ def _run_multi_step_job(
                 "workdir=/workspace",
             ]
         )
-    environment = os.environ.copy()
-    if peval_config is not None:
-        environment["PEVAL_CONFIG"] = str(peval_config)
+    environment = dict(os.environ, PYTHONIOENCODING="utf-8")
+    if workdir_root is not None:
+        command.extend(["--environment-kwarg", f"workdir_root={workdir_root}"])
     return subprocess.run(
         command,
         cwd=_REPOSITORY_ROOT,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         env=environment,
         timeout=90,
         check=False,
@@ -160,7 +160,7 @@ def test_synthetic_host_trial_selects_native_verifier_entrypoint(
             "--env",
             "psycheval.harbor.environment:HostEnvironment",
             "--environment-kwarg",
-            "allow_host_execution=true",
+            'host_access={"filesystem":true,"process":true}',
             "--jobs-dir",
             str(jobs_dir),
             "--job-name",
@@ -172,7 +172,8 @@ def test_synthetic_host_trial_selects_native_verifier_entrypoint(
         ],
         cwd=_REPOSITORY_ROOT,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        env=dict(os.environ, PYTHONIOENCODING="utf-8"),
         timeout=60,
         check=False,
     )
@@ -322,7 +323,7 @@ def test_synthetic_host_multi_step_uses_isolated_anonymous_workspaces(
         jobs_dir,
         job_name,
         resume=True,
-        peval_config=config,
+        workdir_root=workspace_root,
         delete=False,
         n_attempts=2,
         n_concurrent=2,
@@ -336,9 +337,9 @@ def test_synthetic_host_multi_step_uses_isolated_anonymous_workspaces(
     assert len(trial_dirs) == 2
     assert len(workspaces) == 2
     assert {path.name for path in workspaces} == {
-        path.name.rsplit("__", 1)[-1] for path in trial_dirs
+        "task_" + path.name.rsplit("__", 1)[-1] for path in trial_dirs
     }
-    assert all(len(path.name) == 7 for path in workspaces)
+    assert all(len(path.name) == 12 for path in workspaces)
     assert all((path / "multi-step-workspace.txt").is_file() for path in workspaces)
     for trial_dir in trial_dirs:
         result = json.loads((trial_dir / "result.json").read_text(encoding="utf-8"))

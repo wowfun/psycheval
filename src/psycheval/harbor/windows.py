@@ -10,15 +10,32 @@ import asyncio
 import ctypes
 import os
 import re
+import stat
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
 from harbor.models.task.config import TaskOS
 from harbor.utils.scripts import quote_windows_shell_arg
 
 _ABSOLUTE = re.compile(r"^[A-Za-z]:[/\\]")
+
+
+def retry_readonly_removal(
+    operation: Callable, path: str, error: BaseException
+) -> None:
+    """Handle Windows read-only files when deleting an owned runtime tree."""
+    if sys.platform != "win32" or not isinstance(error, PermissionError):
+        raise error
+    try:
+        info = os.stat(path, follow_symlinks=False)
+        if not info.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
+            raise error
+        os.chmod(path, stat.S_IWRITE)
+        operation(path)
+    except FileNotFoundError:
+        pass  # Concurrent removal has already achieved the requested cleanup.
 
 
 def quote_powershell_literal(value: str) -> str:
@@ -300,6 +317,10 @@ class _ProcessJob:
             self.handle = None
 
 
+class _CmdShellArgv(tuple):
+    """The final argument is cmd program text, already quoted for its shell."""
+
+
 class WindowsProcessAdapter:
     os = TaskOS.WINDOWS
 
@@ -312,6 +333,11 @@ class WindowsProcessAdapter:
         job = _ProcessJob()
         process = None
         try:
+            target = (
+                "subprocess.list2cmdline(sys.argv[1:-1]) + ' ' + sys.argv[-1]"
+                if isinstance(argv, _CmdShellArgv)
+                else "sys.argv[1:]"
+            )
             # No child can be created until assignment succeeds. -I -S prevents
             # site/PYTHONPATH startup code from executing before this gate.
             process = await asyncio.create_subprocess_exec(
@@ -320,7 +346,7 @@ class WindowsProcessAdapter:
                 "-S",
                 "-c",
                 "import subprocess,sys; token=sys.stdin.buffer.read(1); "
-                "sys.exit(subprocess.call(sys.argv[1:]) if token == b'1' else 125)",
+                f"sys.exit(subprocess.call({target}) if token == b'1' else 125)",
                 *argv,
                 stdin=asyncio.subprocess.PIPE,
                 **kwargs,
@@ -351,12 +377,14 @@ class WindowsProcessAdapter:
 
     def shell_argv(self, command: str) -> tuple[str, ...]:
         shell_command = f'"{command}"' if command.lstrip().startswith('"') else command
-        return (
-            os.environ.get("COMSPEC", "cmd.exe"),
-            "/D",
-            "/S",
-            "/C",
-            shell_command,
+        return _CmdShellArgv(
+            (
+                os.environ.get("COMSPEC", "cmd.exe"),
+                "/D",
+                "/S",
+                "/C",
+                shell_command,
+            )
         )
 
     def process_kwargs(self) -> dict[str, object]:

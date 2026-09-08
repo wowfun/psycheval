@@ -63,6 +63,7 @@ def isolated_test_environment(
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     for name, leaf in (
         ("XDG_CONFIG_HOME", "config"),
         ("XDG_DATA_HOME", "data"),

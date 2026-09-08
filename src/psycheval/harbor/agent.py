@@ -11,6 +11,7 @@ from harbor.utils.scripts import quote_shell_arg
 from harbor.utils.trajectory_validator import TrajectoryValidator
 
 from . import __version__, windows
+from .environment import HostEnvironment
 from .inference_telemetry import (
     load_trajectory,
     populate_context_from_trajectory,
@@ -109,7 +110,15 @@ class ExternalHarnessAgent(BaseAgent):
         workdir = _normalize_workdir(
             configured_workdir or default_workdir.as_posix(), environment.os
         )
-        prepare_result = await environment.ensure_dirs([workdir], chmod=False)
+        prepare_result = await environment.ensure_dirs(
+            [workdir],
+            chmod=False,
+            **(
+                {"virtual_workdir": True}
+                if isinstance(environment, HostEnvironment)
+                else {}
+            ),
+        )
         if prepare_result is not None and prepare_result.return_code != 0:
             diagnostic = (
                 prepare_result.stderr or prepare_result.stdout or "no output"

@@ -28,7 +28,16 @@ def copied_harbor(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize(
-    "scenario", ["imports", "verifier", "psychevo", "workbuddy", "host"]
+    "scenario",
+    [
+        "imports",
+        "verifier",
+        "psychevo",
+        "workbuddy",
+        "host",
+        "host_filesystem",
+        "project",
+    ],
 )
 def test_copied_harbor_runs_without_the_original_package(
     copied_harbor: Path, scenario: str

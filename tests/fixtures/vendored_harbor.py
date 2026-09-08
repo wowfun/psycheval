@@ -69,19 +69,17 @@ def native_office(root: Path) -> None:
 
     async def scenario():
         task = root / "bundle/tasks/office-00"
-        config = root / "peval.toml"
-        config.write_text('[harbor.host]\nworkdir_root=""\n')
-        os.environ["PEVAL_CONFIG"] = str(config)
         paths = TrialPaths(root / "native trial 中文")
         paths.mkdir()
         environment = module("environment").HostEnvironment(
             environment_dir=task / "environment",
             environment_name="copied-office",
+            workdir_root=None,
             session_id="copied-office",
             trial_paths=paths,
             task_env_config=EnvironmentConfig(workdir="/workspace"),
             logger=logging.getLogger("copied-office"),
-            allow_host_execution=True,
+            host_access={"filesystem": True, "process": True},
             bootstrap_workbuddy_workspace=True,
             mounts=[
                 {
@@ -244,7 +242,7 @@ def workbuddy(root: Path) -> None:
                 "agents": [{"name": "opencode", "model_name": "fixture/model"}],
                 "environment": {
                     "import_path": f"{PACKAGE}.environment:HostEnvironment",
-                    "kwargs": {"allow_host_execution": True},
+                    "kwargs": {"host_access": {"filesystem": True, "process": True}},
                 },
             }
         ),
@@ -258,6 +256,7 @@ def workbuddy(root: Path) -> None:
             return_value={"version": "fixture", "commit": "local"},
         ),
         patch.object(work, "validate_workbuddy_host_dependencies"),
+        patch.object(module("workbuddy_verifier"), "validate_office_profile"),
         patch.object(
             work,
             "compute_official_metrics",
@@ -339,9 +338,6 @@ def host(root: Path) -> None:
     from harbor.models.trial.paths import TrialPaths
 
     async def scenario() -> None:
-        config = root / "peval.toml"
-        config.write_text('[harbor.host]\nworkdir_root=""\n', encoding="utf-8")
-        os.environ["PEVAL_CONFIG"] = str(config)
         environment_dir = root / "environment"
         environment_dir.mkdir()
         (environment_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
@@ -352,11 +348,12 @@ def host(root: Path) -> None:
         environment = module("environment").HostEnvironment(
             environment_dir=environment_dir,
             environment_name="vendored",
+            workdir_root=None,
             session_id="vendored",
             trial_paths=paths,
             task_env_config=EnvironmentConfig(workdir="/app"),
             logger=logging.getLogger("vendored"),
-            allow_host_execution=True,
+            host_access={"filesystem": True, "process": True},
             mounts=[
                 {"type": "bind", "source": str(source), "target": target}
                 for source, target in (
@@ -394,6 +391,104 @@ def host(root: Path) -> None:
     asyncio.run(scenario())
 
 
+def host_filesystem(root: Path) -> None:
+    from harbor.models.task.config import EnvironmentConfig
+    from harbor.models.trial.paths import TrialPaths
+
+    async def scenario() -> None:
+        environment_dir = root / "filesystem-environment"
+        environment_dir.mkdir()
+        (environment_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+        paths = TrialPaths(root / "filesystem trial")
+        paths.mkdir()
+        artifacts = paths.artifacts_dir / "logs/artifacts"
+        artifacts.mkdir(parents=True)
+        environment = module("environment").HostEnvironment(
+            environment_dir=environment_dir,
+            environment_name="vendored-filesystem",
+            workdir_root=None,
+            session_id="vendored-filesystem",
+            trial_paths=paths,
+            task_env_config=EnvironmentConfig(workdir="/app"),
+            logger=logging.getLogger("vendored-filesystem"),
+            host_access={"filesystem": True, "process": False},
+            workspace_baseline="none",
+            mounts=[
+                {"type": "bind", "source": str(source), "target": target}
+                for source, target in (
+                    (paths.agent_dir, "/logs/agent"),
+                    (paths.verifier_dir, "/logs/verifier"),
+                    (artifacts, "/logs/artifacts"),
+                )
+            ],
+        )
+        await environment.start(force_build=False)
+        try:
+            await environment.ensure_dirs(["/app/input"], chmod=False)
+            environment.native_path("/app/input/value.txt").write_text(
+                "value", encoding="utf-8"
+            )
+            assert await environment.is_file("/app/input/value.txt")
+            downloaded = root / "downloaded.txt"
+            await environment.download_file("/app/input/value.txt", downloaded)
+            assert downloaded.read_text(encoding="utf-8") == "value"
+            try:
+                await environment.exec("true")
+            except module("environment").HostProcessAccessError:
+                pass
+            else:
+                raise AssertionError("filesystem-only Host executed a process")
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
+
+
+def project(root: Path) -> None:
+    from harbor.models.task.config import EnvironmentConfig
+    from harbor.models.trial.paths import TrialPaths
+
+    source = root / "project"
+    source.mkdir()
+    (source / "input.txt").write_text("original")
+    task_context = root / "environment"
+    task_context.mkdir()
+    (task_context / "task.txt").write_text("task input")
+    paths = TrialPaths(root / "trial__YfQLWrD")
+    paths.mkdir()
+    os.environ["PEVAL_CONFIG"] = str(root / "missing.toml")
+    environment = module("environment").HostEnvironment(
+        environment_dir=task_context,
+        environment_name="copied-project",
+        session_id="project",
+        trial_paths=paths,
+        task_env_config=EnvironmentConfig(workdir="/workspace"),
+        host_access={"filesystem": True, "process": True},
+        workdir_root=root / "copies",
+        workspace_source=source,
+    )
+
+    async def scenario():
+        await environment.start(False)
+        try:
+            assert environment.work_dir == root / "copies" / "task_YfQLWrD"
+            assert environment.work_dir == environment.native_path(".")
+            result = await environment.exec_argv(
+                [
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; assert Path('task.txt').read_text() == 'task input'; Path('input.txt').write_text('changed')",
+                ]
+            )
+            assert result.return_code == 0, result.stderr
+            assert (source / "input.txt").read_text() == "original"
+        finally:
+            await environment.stop(True)
+        assert not list((root / "copies").iterdir())
+
+    asyncio.run(scenario())
+
+
 if __name__ == "__main__":
     sys.dont_write_bytecode = True
     root = Path(sys.argv[1])
@@ -405,8 +500,10 @@ if __name__ == "__main__":
         "psychevo": psychevo,
         "workbuddy": workbuddy,
         "host": host,
+        "host_filesystem": host_filesystem,
         "synthetic_harness": synthetic_harness,
         "native_office": native_office,
+        "project": project,
     }
     scenarios[sys.argv[2]](root)
     assert not any(name.split(".")[0] == "psycheval" for name in sys.modules)

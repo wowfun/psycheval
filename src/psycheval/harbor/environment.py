@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
+import fnmatch
 import getpass
 import hashlib
 import os
 import platform
 import re
-import secrets
 import shlex
 import shutil
 import signal
@@ -15,10 +16,13 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from collections.abc import Iterator, Sequence
+import threading
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path, PurePath, PurePosixPath
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import uuid4
 
 import yaml
@@ -28,13 +32,14 @@ from harbor.models.task.config import TaskOS
 from harbor.utils.scripts import quote_windows_shell_arg
 
 from . import windows
+from .paths import HostPathMapper, split_virtual_path, trial_short_uuid
 from .runtime_config import (
+    DEFAULT_WORKDIR_ROOT,
     PEVAL_CONFIG_ENV,
     EffectiveRuntimeConfig,
-    HostSettings,
     RuntimePaths,
+    _resolve_host_path,
     load_effective_runtime_config,
-    load_host_settings,
     write_effective_runtime_config,
 )
 
@@ -46,22 +51,23 @@ _VIRTUAL_LOGS = "/logs"
 _VIRTUAL_AGENT_LOGS = "/logs/agent"
 _VIRTUAL_VERIFIER_LOGS = "/logs/verifier"
 _VIRTUAL_ARTIFACTS = "/logs/artifacts"
+_VIRTUAL_SKILLS = "/harbor/skills"
 _VIRTUAL_ROOTS = (
     _VIRTUAL_VERIFIER_LOGS,
     _VIRTUAL_ARTIFACTS,
     _VIRTUAL_AGENT_LOGS,
+    _VIRTUAL_SKILLS,
     _VIRTUAL_SOLUTION,
     _VIRTUAL_WORKDIR,
     _VIRTUAL_TESTS,
     _VIRTUAL_LOGS,
 )
 _WORKSPACE_RESERVED_ROOTS = (
+    _VIRTUAL_SKILLS,
     _VIRTUAL_LOGS,
     _VIRTUAL_TESTS,
     _VIRTUAL_SOLUTION,
 )
-_SHORTUUID_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-_SHORTUUID_LENGTH = 7
 _LEGACY_RUNTIME_ENV_PREFIX = "PSYCHEVAL_"
 _WORKBUDDY_COMPOSE_METADATA = {
     "services": {
@@ -74,12 +80,28 @@ _WORKBUDDY_ARCHIVE_TOTAL_LIMIT = 256 * 1024 * 1024
 _WORKBUDDY_ARCHIVE_ENTRY_LIMIT = 100_000
 
 
-def _truthy(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return False
+async def _await_owned_task(task: asyncio.Task, *, on_cancel=None):
+    """Do not release owned resources while an operation is still using them."""
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError as cancelled:
+        if on_cancel is not None:
+            on_cancel()
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled() and (error := task.exception()):
+            cancelled.add_note(f"owned operation failed: {error}")
+        raise
+
+
+def _check_filesystem_cancel(cancel: threading.Event | None) -> None:
+    if cancel is not None and cancel.is_set():
+        raise asyncio.CancelledError("Host filesystem operation cancelled")
 
 
 def _read_regular_nofollow(path: Path, *, max_bytes: int) -> bytes:
@@ -144,12 +166,15 @@ def _open_workbuddy_archive(archive: Path) -> Iterator[tarfile.TarFile]:
             os.close(descriptor)
 
 
-def _extract_workbuddy_workspace(archive: Path, destination: Path) -> None:
+def _extract_workbuddy_workspace(
+    archive: Path, destination: Path, *, cancel: threading.Event | None = None
+) -> None:
     total = 0
     seen: dict[PurePosixPath, tuple[str, int, int, bytes]] = {}
     try:
         with _open_workbuddy_archive(archive) as stream:
             for index, member in enumerate(stream, start=1):
+                _check_filesystem_cancel(cancel)
                 if index > _WORKBUDDY_ARCHIVE_ENTRY_LIMIT:
                     raise ValueError(
                         "WorkBuddy workspace archive exceeds 100000 entries"
@@ -158,9 +183,12 @@ def _extract_workbuddy_workspace(archive: Path, destination: Path) -> None:
                 if (
                     relative.is_absolute()
                     or "\\" in member.name
+                    or ":" in member.name
                     or not relative.parts
-                    or any(part in {"", ".", ".."} for part in relative.parts)
-                    or ".git" in relative.parts
+                    or any(
+                        part.endswith((" ", ".")) or part.lower() == ".git"
+                        for part in relative.parts
+                    )
                 ):
                     raise ValueError("WorkBuddy workspace archive path is unsafe")
                 if (
@@ -206,32 +234,45 @@ def _extract_workbuddy_workspace(archive: Path, destination: Path) -> None:
                         )
                     continue
                 seen[relative] = identity
-                target.write_bytes(content)
+                _check_filesystem_cancel(cancel)
+                try:
+                    with target.open("xb") as output:
+                        output.write(content)
+                except FileExistsError as exc:
+                    raise ValueError(
+                        "WorkBuddy workspace archive has conflicting duplicate paths"
+                    ) from exc
                 target.chmod(member.mode & 0o777)
     except (OSError, tarfile.TarError) as exc:
         raise ValueError("WorkBuddy workspace archive cannot be extracted") from exc
 
 
-def _initialize_workbuddy_git(workspace: Path) -> None:
+def _initialize_git_baseline(
+    workspace: Path, *, project: bool = False, cancel: threading.Event | None = None
+) -> None:
     commands = (
         ("init", "-q", "-b", "main"),
         ("config", "user.email", "dev@project"),
         ("config", "user.name", "Developer"),
-        ("add", "-A"),
-        ("commit", "--no-verify", "-q", "-m", "initial setup"),
+        ("add", "-A", *(("--force",) if project else ())),
+        ("commit", "--allow-empty", "--no-verify", "-q", "-m", "initial setup"),
     )
     environment = {
         key: value
         for key, value in os.environ.items()
         if not key.upper().startswith("GIT_")
     }
+    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
     for arguments in commands:
+        _check_filesystem_cancel(cancel)
         try:
             result = subprocess.run(
                 [
                     "git",
                     "-c",
                     "core.hooksPath=" + os.devnull,
+                    "-c",
+                    "commit.gpgSign=false",
                     "-C",
                     str(workspace),
                     *arguments,
@@ -244,47 +285,183 @@ def _initialize_workbuddy_git(workspace: Path) -> None:
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise ValueError(
-                "WorkBuddy host bootstrap could not create its Git baseline"
+                "Host workspace could not create its Git baseline"
             ) from exc
         if result.returncode != 0:
             diagnostic = (result.stderr or result.stdout).strip()
             raise ValueError(
-                "WorkBuddy host bootstrap could not create its Git baseline"
+                "Host workspace could not create its Git baseline"
                 + (f": {diagnostic}" if diagnostic else "")
             )
 
 
-def _split_virtual_path(
-    value: str,
-    host_os: TaskOS,
-    virtual_roots: Sequence[str] = _VIRTUAL_ROOTS,
-) -> tuple[str, tuple[str, ...]] | None:
-    if host_os == TaskOS.WINDOWS:
-        return windows.split_virtual_path(value, virtual_roots)
-    for virtual in sorted(set(virtual_roots), key=len, reverse=True):
-        if value == virtual:
-            return virtual, ()
-        if value.startswith(virtual + "/"):
-            parts = PurePosixPath(value[len(virtual) + 1 :]).parts
-            if ".." in parts:
-                raise ValueError(f"unsupported HostEnvironment path: {value}")
-            return virtual, tuple(part for part in parts if part != ".")
-    return None
+def _workspace_entry_info(path: Path) -> os.stat_result:
+    info = path.stat(follow_symlinks=False)
+    if _is_link_info(info):
+        raise ValueError(f"workspace source contains a link or junction: {path}")
+    if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+        raise ValueError(f"workspace source contains a special file: {path}")
+    return info
 
 
-def _translate_literal(
-    value: str, mappings: dict[str, Path], host_os: TaskOS
-) -> str | None:
-    match = _split_virtual_path(value, host_os, tuple(mappings))
-    if match is None:
-        return None
-    virtual, suffix = match
-    return str(mappings[virtual].joinpath(*suffix))
+def _is_link_info(info: os.stat_result) -> bool:
+    return bool(
+        stat.S_ISLNK(info.st_mode)
+        or getattr(info, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    )
+
+
+def _is_native_link(path: Path) -> bool:
+    try:
+        return _is_link_info(path.stat(follow_symlinks=False))
+    except FileNotFoundError:
+        return False
+
+
+def _native_regular_file_info(path: Path) -> os.stat_result:
+    try:
+        info = path.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError(f"native filesystem source is not readable: {path}") from exc
+    if _is_link_info(info) or not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"native filesystem source is not a regular file: {path}")
+    return info
+
+
+def _copy_native_file(
+    source: Path, target: Path, *, cancel: threading.Event | None = None
+) -> None:
+    """Copy one regular file from an already checked native path safely."""
+
+    _check_filesystem_cancel(cancel)
+    before = _native_regular_file_info(source)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    descriptor = os.open(source, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            _is_link_info(opened)
+            or not stat.S_ISREG(opened.st_mode)
+            or not os.path.samestat(before, opened)
+        ):
+            raise ValueError(
+                f"native filesystem source changed while copying: {source}"
+            )
+        # Harbor collects mounted artifacts onto their existing host files.
+        # Preserve the file and every hardlink alias in that case.
+        if target.exists() and os.path.samestat(opened, target.stat()):
+            return
+        with os.fdopen(descriptor, "rb") as incoming:
+            descriptor = -1
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary_fd, temporary_name = tempfile.mkstemp(
+                prefix=".peval-copy-", dir=target.parent
+            )
+            temporary = Path(temporary_name)
+            try:
+                with os.fdopen(temporary_fd, "wb") as outgoing:
+                    while True:
+                        _check_filesystem_cancel(cancel)
+                        chunk = incoming.read(1024 * 1024)
+                        _check_filesystem_cancel(cancel)
+                        if not chunk:
+                            break
+                        outgoing.write(chunk)
+                temporary.chmod(stat.S_IMODE(opened.st_mode))
+                os.utime(temporary, ns=(opened.st_atime_ns, opened.st_mtime_ns))
+                _check_filesystem_cancel(cancel)
+                temporary.replace(target)
+            finally:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except PermissionError as exc:
+                    windows.retry_readonly_removal(os.unlink, str(temporary), exc)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _copy_project_tree(
+    source: Path, destination: Path, *, cancel: threading.Event | None = None
+) -> None:
+    _check_filesystem_cancel(cancel)
+    if not stat.S_ISDIR(_workspace_entry_info(source).st_mode):
+        raise ValueError(f"workspace source must be a directory: {source}")
+    pending = [(source.iterdir(), destination)]
+    while pending:
+        _check_filesystem_cancel(cancel)
+        entries, current_destination = pending[-1]
+        entry = next(entries, None)
+        if entry is None:
+            pending.pop()
+            continue
+        if entry.name.lower() == ".git":
+            continue
+        info = _workspace_entry_info(entry)
+        target = current_destination / entry.name
+        if stat.S_ISDIR(info.st_mode):
+            if target.exists() and not target.is_dir():
+                raise ValueError(f"workspace merge conflict: {target}")
+            target.mkdir(exist_ok=True)
+            pending.append((entry.iterdir(), target))
+        else:
+            if target.exists():
+                raise ValueError(f"workspace merge conflict: {target}")
+            flags = (
+                os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            )
+            flags |= getattr(os, "O_NONBLOCK", 0)
+            with os.fdopen(os.open(entry, flags), "rb") as incoming:
+                opened = os.fstat(incoming.fileno())
+                if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(
+                    info, opened
+                ):
+                    raise ValueError(f"workspace source changed while copying: {entry}")
+                try:
+                    with target.open("xb") as outgoing:
+                        while True:
+                            _check_filesystem_cancel(cancel)
+                            chunk = incoming.read(1024 * 1024)
+                            _check_filesystem_cancel(cancel)
+                            if not chunk:
+                                break
+                            outgoing.write(chunk)
+                except FileExistsError as exc:
+                    raise ValueError(f"workspace merge conflict: {target}") from exc
+            target.chmod(stat.S_IMODE(info.st_mode))
+
+
+def _validate_project_directory(source: Path) -> None:
+    source = source.expanduser().absolute()
+    try:
+        for ancestor in (source, *source.parents):
+            if not stat.S_ISDIR(_workspace_entry_info(ancestor).st_mode):
+                raise ValueError(f"workspace source must be a directory: {source}")
+    except OSError as exc:
+        raise ValueError(f"cannot access workspace source directory: {source}") from exc
+
+
+@dataclass(frozen=True)
+class _Workspace:
+    path: Path
+    virtual_path: str
+    owned: bool
 
 
 def _translate_posix_command(command: str, mappings: dict[str, Path]) -> str:
     ordered_mappings = sorted(
         mappings.items(), key=lambda item: len(item[0]), reverse=True
+    )
+    mapper = HostPathMapper(
+        host_os=TaskOS.LINUX,
+        mappings=mappings,
+        task_workdir=_VIRTUAL_WORKDIR,
     )
 
     def translate_unquoted(value: str) -> str:
@@ -327,7 +504,7 @@ def _translate_posix_command(command: str, mappings: dict[str, Path]) -> str:
             pieces.append(command[index:])
             return "".join(pieces)
         content = command[index + 1 : end]
-        translated_literal = _translate_literal(content, mappings, TaskOS.LINUX)
+        translated_literal = mapper.translate_literal(content)
         if translated_literal is not None and not (
             quote == '"' and any(char in content for char in ("$", "`", "\\"))
         ):
@@ -390,6 +567,66 @@ class _HostProcessAdapter(Protocol):
     def release(self, process: asyncio.subprocess.Process) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class HostAccessPolicy:
+    """Explicit permissions for Host filesystem and process operations."""
+
+    filesystem: bool = False
+    process: bool = False
+
+    def __post_init__(self) -> None:
+        invalid = [
+            (name, value)
+            for name, value in (
+                ("filesystem", self.filesystem),
+                ("process", self.process),
+            )
+            if type(value) is not bool
+        ]
+        if invalid:
+            details = ", ".join(
+                f"{name}={value!r} ({type(value).__name__})" for name, value in invalid
+            )
+            raise ValueError(
+                "HostAccessPolicy fields must be booleans; invalid " + details
+            )
+        if self.process and not self.filesystem:
+            raise ValueError(
+                "HostAccessPolicy.process requires HostAccessPolicy.filesystem"
+            )
+
+    @classmethod
+    def from_value(cls, value: object) -> HostAccessPolicy:
+        """Parse a Python or Job-config representation of the policy."""
+
+        if value is None:
+            return cls()
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, Mapping):
+            raise ValueError(
+                "HostEnvironment host_access must be an object; got "
+                f"{type(value).__name__}"
+            )
+        allowed = {"filesystem", "process"}
+        for key in value:
+            if not isinstance(key, str) or key not in allowed:
+                raise ValueError(
+                    f"HostEnvironment host_access has unknown field: {key}"
+                )
+        filesystem = value.get("filesystem", False)
+        process = value.get("process", False)
+        return cls(filesystem=filesystem, process=process)
+
+
+class HostFilesystemAccessError(PermissionError):
+    """Raised when a Host filesystem operation is not enabled."""
+
+
+class HostProcessAccessError(PermissionError):
+    """Raised when local Host process execution is not enabled."""
+
+
 class _LinuxProcessAdapter:
     os = TaskOS.LINUX
 
@@ -438,28 +675,61 @@ class _LinuxProcessAdapter:
 
 
 class HostEnvironment(BaseEnvironment):
-    """Run a trusted Harbor Task as native Linux or Windows host subprocesses."""
+    """Provide trusted native filesystem and optional process access for a Task."""
 
     def __init__(
         self,
         *args,
-        allow_host_execution: object = False,
-        bootstrap_workbuddy_workspace: object = False,
+        host_access: HostAccessPolicy | Mapping[str, object] | None = None,
+        workspace_baseline: Literal["git", "none"] = "git",
+        bootstrap_workbuddy_workspace: bool = False,
+        workdir_root: str | Path | None = DEFAULT_WORKDIR_ROOT,
+        workspace_source: str | Path | None = None,
         **kwargs,
     ):
-        if "workdir_root" in kwargs:
-            raise ValueError(
-                "HostEnvironment workdir_root is configured through PEVAL_CONFIG, "
-                "not an Environment kwarg"
+        if "allow_host_execution" in kwargs:
+            raise TypeError(
+                "HostEnvironment.allow_host_execution was replaced by "
+                "host_access={filesystem, process}"
             )
-        self._allow_host_execution = _truthy(allow_host_execution)
-        self._bootstrap_workbuddy_workspace = _truthy(bootstrap_workbuddy_workspace)
+        self._workdir_root = _resolve_host_path(
+            workdir_root, base=Path.cwd(), label="HostEnvironment workdir_root"
+        )
+        self._workspace_source = _resolve_host_path(
+            workspace_source, base=Path.cwd(), label="HostEnvironment workspace_source"
+        )
+        if workspace_source is not None:
+            _validate_project_directory(Path(workspace_source))
+        self._host_access = HostAccessPolicy.from_value(host_access)
+        if not isinstance(workspace_baseline, str) or workspace_baseline not in {
+            "git",
+            "none",
+        }:
+            raise ValueError(
+                "HostEnvironment workspace_baseline must be 'git' or 'none'"
+            )
+        if type(bootstrap_workbuddy_workspace) is not bool:
+            raise ValueError(
+                "HostEnvironment bootstrap_workbuddy_workspace must be boolean"
+            )
+        self._workspace_baseline = workspace_baseline
+        self._bootstrap_workbuddy_workspace = bootstrap_workbuddy_workspace
         self._runtime_root: Path | None = None
-        self._automatic_workspace: Path | None = None
-        self._host_settings: HostSettings | None = None
-        self._active_processes: set[asyncio.subprocess.Process] = set()
+        self._workspace: _Workspace | None = None
+        self._started = False
+        self._stopping = False
+        self._initialization_cancel = threading.Event()
+        self._lifecycle_lock = asyncio.Lock()
+        self._launch_lock = asyncio.Lock()
+        self._active_processes: dict[
+            asyncio.subprocess.Process, asyncio.Future[None]
+        ] = {}
+        self._active_filesystem: dict[asyncio.Task, threading.Event] = {}
+        self._filesystem_slots = asyncio.Semaphore(4)
+        self._callback_command: ContextVar[asyncio.Future[None] | None] = ContextVar(
+            "host_callback_command", default=None
+        )
         self._task_workdir = _VIRTUAL_WORKDIR
-        self._workspace_mount: tuple[str, Path] | None = None
         self._transient_workdirs: dict[str, Path] = {}
         host_system = platform.system()
         if host_system == "Linux":
@@ -472,6 +742,9 @@ class HostEnvironment(BaseEnvironment):
                 f"received {host_system!r}"
             )
         super().__init__(*args, **kwargs)
+        if self._bootstrap_workbuddy_workspace:
+            # Harbor 0.21 consults the Task OS for Skill chmod after upload.
+            self.task_env_config.os = self.os
 
     @staticmethod
     def type() -> str:
@@ -487,13 +760,80 @@ class HostEnvironment(BaseEnvironment):
     def os(self) -> TaskOS:
         return self._process_adapter.os
 
-    def _validate_definition(self) -> None:
-        if not self._allow_host_execution:
-            raise ValueError(
-                "HostEnvironment executes trusted code without isolation; pass "
-                "--environment-kwarg allow_host_execution=true to opt in"
+    @property
+    def host_access(self) -> HostAccessPolicy:
+        """The immutable permissions configured for this Host instance."""
+
+        return self._host_access
+
+    def _require_filesystem_access(self) -> None:
+        if not self._host_access.filesystem:
+            raise HostFilesystemAccessError(
+                "HostEnvironment filesystem access is disabled; set "
+                "host_access.filesystem=true"
             )
-        self._host_settings = load_host_settings()
+
+    def _require_process_access(self) -> None:
+        if not self._host_access.process:
+            raise HostProcessAccessError(
+                "HostEnvironment process execution is disabled; set "
+                "host_access.process=true"
+            )
+
+    def _require_filesystem_ready(self) -> None:
+        self._require_filesystem_access()
+        if not self._started:
+            raise RuntimeError("HostEnvironment has not started")
+        if self._stopping:
+            raise RuntimeError("HostEnvironment is stopping")
+
+    async def _run_filesystem(
+        self, operation: Callable, *args, cancellable: bool = False, **kwargs
+    ):
+        self._require_filesystem_ready()
+        cancel = threading.Event()
+
+        async def run():
+            async with self._filesystem_slots:
+                _check_filesystem_cancel(cancel)
+                return await asyncio.to_thread(
+                    operation,
+                    *args,
+                    **kwargs,
+                    **({"cancel": cancel} if cancellable else {}),
+                )
+
+        # No await separates the readiness check and registration, so stop sees
+        # every admitted operation, including those waiting for an executor slot.
+        worker = asyncio.create_task(run())
+        self._active_filesystem[worker] = cancel
+        try:
+            return await _await_owned_task(worker, on_cancel=cancel.set)
+        finally:
+            self._active_filesystem.pop(worker, None)
+
+    def _chmod_directory(self, path: Path, *, chmod: bool) -> None:
+        if chmod and self.os != TaskOS.WINDOWS:
+            path.chmod(0o777)
+
+    def _validate_definition(self) -> None:
+        self._require_filesystem_access()
+        if self._workspace_source is not None and self._bootstrap_workbuddy_workspace:
+            raise ValueError("WorkBuddy host bootstrap cannot use workspace_source")
+        if self._bootstrap_workbuddy_workspace and self._workspace_baseline != "git":
+            raise ValueError(
+                "WorkBuddy host bootstrap requires workspace_baseline='git'"
+            )
+        if self._workspace_baseline == "git" and not self._host_access.process:
+            raise ValueError(
+                "workspace_baseline='git' requires host_access.process=true"
+            )
+        self._validate_task_environment()
+        self._validate_mounts()
+
+    def _validate_task_environment(self) -> None:
+        if self._workspace_source is not None:
+            _validate_project_directory(self.environment_dir)
         if (
             self.task_env_config.os == TaskOS.WINDOWS
             and self._process_adapter.os != TaskOS.WINDOWS
@@ -567,6 +907,8 @@ class HostEnvironment(BaseEnvironment):
                 "HostEnvironment cannot enforce Task resources: "
                 + ", ".join(sorted(requested))
             )
+
+    def _validate_mounts(self) -> None:
         expected_mounts = {
             _VIRTUAL_AGENT_LOGS: self.trial_paths.agent_dir,
             _VIRTUAL_VERIFIER_LOGS: self.trial_paths.verifier_dir,
@@ -576,7 +918,7 @@ class HostEnvironment(BaseEnvironment):
         workspace_mounts: list[tuple[str, Path]] = []
         for mount in self._mounts:
             target = str(mount.get("target"))
-            target_match = _split_virtual_path(target, self.os)
+            target_match = split_virtual_path(target, self.os, _VIRTUAL_ROOTS)
             logical_target = (
                 target_match[0]
                 if target_match is not None and not target_match[1]
@@ -629,7 +971,13 @@ class HostEnvironment(BaseEnvironment):
             raise ValueError(
                 "WorkBuddy host bootstrap does not accept an external workspace mount"
             )
-        self._workspace_mount = workspace_mounts[0] if workspace_mounts else None
+        if self._workspace_source is not None and workspace_mounts:
+            raise ValueError(
+                "workspace_source cannot be combined with a workspace mount"
+            )
+        if workspace_mounts:
+            target, source = workspace_mounts[0]
+            self._workspace = _Workspace(source, target, owned=False)
         seen_targets: set[str] = set()
         for mount, logical_target in managed_mounts:
             target = str(mount.get("target"))
@@ -653,63 +1001,119 @@ class HostEnvironment(BaseEnvironment):
                 )
 
     async def start(self, force_build: bool) -> None:
+        self._require_lifecycle_caller()
         if force_build:
             raise ValueError("HostEnvironment does not build Docker images")
-        if self._runtime_root is not None:
-            return
-        self._runtime_root = Path(tempfile.mkdtemp(prefix="psycheval-harbor-"))
-        try:
-            self._prepare_automatic_workspace()
-            if self.os == TaskOS.WINDOWS:
-                quote_windows_shell_arg(sys.executable)
-                for path in set(self._runtime_dirs().values()):
-                    quote_windows_shell_arg(path)
-            for path in set(self._runtime_dirs().values()):
-                path.mkdir(parents=True, exist_ok=True)
-            context_target = (
-                self._runtime_dirs()[_VIRTUAL_TESTS]
-                if self._is_separate_verifier()
-                else self._translate_path(self._task_workdir)
+        self._require_filesystem_access()
+        async with self._lifecycle_lock:
+            if self._started:
+                return
+            if self._runtime_root is not None or (
+                self._workspace is not None and self._workspace.owned
+            ):
+                await self._delete_owned_runtime()
+            self._initialization_cancel.clear()
+            self._runtime_root = Path(tempfile.mkdtemp(prefix="psycheval-harbor-"))
+            worker = asyncio.create_task(asyncio.to_thread(self._initialize_context))
+            try:
+                await _await_owned_task(
+                    worker, on_cancel=self._initialization_cancel.set
+                )
+            except BaseException as error:
+                try:
+                    await self._delete_owned_runtime()
+                except OSError as cleanup_error:
+                    error.add_note(f"workspace cleanup failed: {cleanup_error}")
+                raise
+            self._started = True
+
+    def _initialize_context(self) -> None:
+        cancel = self._initialization_cancel
+        _check_filesystem_cancel(cancel)
+        self._prepare_automatic_workspace()
+        mappings = self._create_runtime_directories()
+        context_target = self._context_target(mappings)
+        self._materialize_context(context_target, cancel=cancel)
+        _check_filesystem_cancel(cancel)
+
+    def _create_runtime_directories(self) -> dict[str, Path]:
+        mappings = self._runtime_dirs()
+        if self.os == TaskOS.WINDOWS:
+            quote_windows_shell_arg(sys.executable)
+            for path in set(mappings.values()):
+                quote_windows_shell_arg(path)
+        for path in set(mappings.values()):
+            path.mkdir(parents=True, exist_ok=True)
+        return mappings
+
+    def _context_target(self, mappings: Mapping[str, Path]) -> Path:
+        separate_verifier = self._is_separate_verifier()
+        context_target = (
+            mappings[_VIRTUAL_TESTS]
+            if separate_verifier
+            else self._translate_path(self._task_workdir)
+        ).resolve()
+        return context_target
+
+    def _materialize_context(
+        self, context_target: Path, *, cancel: threading.Event
+    ) -> None:
+        separate_verifier = self._is_separate_verifier()
+        environment_source = self.environment_dir.resolve()
+        project = self._workspace_source is not None and not separate_verifier
+        if project:
+            _copy_project_tree(self._workspace_source, context_target, cancel=cancel)
+            _copy_project_tree(environment_source, context_target, cancel=cancel)
+        elif self._bootstrap_workbuddy_workspace:
+            _extract_workbuddy_workspace(
+                environment_source / "workspace.tar.gz", context_target, cancel=cancel
             )
-            environment_source = self.environment_dir.resolve()
-            context_target = context_target.resolve()
-            if self._bootstrap_workbuddy_workspace:
-                await asyncio.to_thread(
-                    _extract_workbuddy_workspace,
-                    environment_source / "workspace.tar.gz",
-                    context_target,
+        elif context_target != environment_source:
+            if context_target.is_relative_to(environment_source):
+                raise ValueError(
+                    "HostEnvironment workspace context target cannot be inside "
+                    f"the Task environment directory: {str(context_target)!r}"
                 )
-                await asyncio.to_thread(_initialize_workbuddy_git, context_target)
-            elif context_target != environment_source:
-                if context_target.is_relative_to(environment_source):
-                    raise ValueError(
-                        "HostEnvironment workspace context target cannot be inside "
-                        f"the Task environment directory: {str(context_target)!r}"
-                    )
-                shutil.copytree(
-                    environment_source,
-                    context_target,
-                    dirs_exist_ok=True,
+            if self._workspace is not None and self._workspace.owned:
+                _copy_project_tree(environment_source, context_target, cancel=cancel)
+            else:
+                shutil.copytree(environment_source, context_target, dirs_exist_ok=True)
+        if not separate_verifier and (self._workspace is None or self._workspace.owned):
+            self._initialize_workspace_baseline(
+                context_target, project=project, cancel=cancel
+            )
+
+    def _initialize_workspace_baseline(
+        self,
+        context_target: Path,
+        *,
+        project: bool = False,
+        cancel: threading.Event | None = None,
+    ) -> None:
+        if self._workspace_baseline == "git":
+            if os.path.lexists(context_target / ".git"):
+                raise ValueError(
+                    "Host workspace baseline cannot reuse inherited .git metadata"
                 )
-        except Exception:
-            self._delete_owned_runtime()
-            raise
+            _initialize_git_baseline(context_target, project=project, cancel=cancel)
 
     def _prepare_automatic_workspace(self) -> None:
-        if (
-            self._host_settings is None
-            or self._host_settings.workdir_root is None
-            or self._workspace_mount is not None
-            or self._is_separate_verifier()
-        ):
+        if self._workspace is not None or self._is_separate_verifier():
             return
-        root = self._host_settings.workdir_root
+        root = self._workdir_root or self._runtime_root
+        assert root is not None
+        workspace = root / f"task_{trial_short_uuid(self.trial_paths.trial_dir.name)}"
+        if self._workspace_source is not None:
+            for source in (self._workspace_source, self.environment_dir.resolve()):
+                if workspace.is_relative_to(source) or source.is_relative_to(workspace):
+                    raise ValueError(
+                        f"workspace source and destination overlap: {source}"
+                    )
         root.mkdir(parents=True, exist_ok=True)
         if not root.is_dir():
             raise ValueError(
                 f"HostEnvironment workdir_root is not a directory: {str(root)!r}"
             )
-        workspace = root / self._trial_short_uuid()
         try:
             workspace.mkdir()
         except FileExistsError as exc:
@@ -717,25 +1121,18 @@ class HostEnvironment(BaseEnvironment):
                 "HostEnvironment automatic workspace already exists; refusing to "
                 f"reuse stale state: {str(workspace)!r}"
             ) from exc
-        self._automatic_workspace = workspace
-
-    def _trial_short_uuid(self) -> str:
-        trial_name = self.trial_paths.trial_dir.name
-        candidate = trial_name.rsplit("__", 1)[-1]
-        if len(candidate) == _SHORTUUID_LENGTH and all(
-            char in _SHORTUUID_ALPHABET for char in candidate
-        ):
-            return candidate
-        return "".join(
-            secrets.choice(_SHORTUUID_ALPHABET) for _ in range(_SHORTUUID_LENGTH)
-        )
+        self._workspace = _Workspace(workspace, self._task_workdir, owned=True)
 
     def _is_separate_verifier(self) -> bool:
         logical_targets = {
             match[0]
             for mount in self._mounts
             if mount.get("target")
-            and (match := _split_virtual_path(str(mount["target"]), self.os))
+            and (
+                match := split_virtual_path(
+                    str(mount["target"]), self.os, _VIRTUAL_ROOTS
+                )
+            )
             is not None
             and not match[1]
         }
@@ -745,23 +1142,70 @@ class HostEnvironment(BaseEnvironment):
         )
 
     async def stop(self, delete: bool):
-        for process in list(self._active_processes):
-            await self._terminate_process(process)
-        if delete:
-            self._delete_owned_runtime()
-
-    def _delete_owned_runtime(self) -> None:
-        errors: list[OSError] = []
-        if self._automatic_workspace is not None:
+        self._require_lifecycle_caller()
+        if not self._started:
+            self._initialization_cancel.set()
+        async with self._lifecycle_lock:
+            self._stopping = True
             try:
-                shutil.rmtree(self._automatic_workspace, ignore_errors=False)
+                await _await_owned_task(
+                    asyncio.create_task(self._stop_commands(delete))
+                )
+            finally:
+                self._stopping = False
+
+    def _require_lifecycle_caller(self) -> None:
+        command = self._callback_command.get()
+        if command is not None and not command.done():
+            raise RuntimeError(
+                "HostEnvironment lifecycle operations cannot run from an active "
+                "output callback"
+            )
+
+    async def _stop_commands(self, delete: bool) -> None:
+        for cancel in self._active_filesystem.values():
+            cancel.set()
+        async with self._launch_lock:
+            commands = list(self._active_processes.items())
+        for process, _ in commands:
+            await self._terminate_process(process)
+        if commands:
+            await asyncio.gather(*(done for _, done in commands))
+        if self._active_filesystem:
+            await asyncio.gather(*self._active_filesystem, return_exceptions=True)
+        if delete:
+            await self._delete_owned_runtime()
+
+    async def _delete_owned_runtime(self) -> None:
+        self._started = False
+        await _await_owned_task(
+            asyncio.create_task(asyncio.to_thread(self._remove_owned_runtime))
+        )
+
+    def _remove_owned_runtime(self) -> None:
+        errors: list[OSError] = []
+        if self._workspace is not None and self._workspace.owned:
+            try:
+                shutil.rmtree(
+                    self._workspace.path,
+                    ignore_errors=False,
+                    onexc=windows.retry_readonly_removal,
+                )
+            except FileNotFoundError:
+                self._workspace = None
             except OSError as exc:
                 errors.append(exc)
             else:
-                self._automatic_workspace = None
+                self._workspace = None
         if self._runtime_root is not None:
             try:
-                shutil.rmtree(self._runtime_root, ignore_errors=False)
+                shutil.rmtree(
+                    self._runtime_root,
+                    ignore_errors=False,
+                    onexc=windows.retry_readonly_removal,
+                )
+            except FileNotFoundError:
+                self._runtime_root = None
             except OSError as exc:
                 errors.append(exc)
             else:
@@ -779,7 +1223,9 @@ class HostEnvironment(BaseEnvironment):
         for mount in self._mounts:
             if not mount.get("target") or not mount.get("source"):
                 continue
-            target_match = _split_virtual_path(str(mount["target"]), self.os)
+            target_match = split_virtual_path(
+                str(mount["target"]), self.os, _VIRTUAL_ROOTS
+            )
             if target_match is not None and not target_match[1]:
                 mounted[target_match[0]] = Path(str(mount["source"]))
         separate_verifier = self._is_separate_verifier()
@@ -794,14 +1240,10 @@ class HostEnvironment(BaseEnvironment):
             else self.trial_paths.artifacts_dir / "logs" / "artifacts"
         )
         mappings = {
-            _VIRTUAL_WORKDIR: (
-                self._automatic_workspace
-                if self._task_workdir == _VIRTUAL_WORKDIR
-                and self._automatic_workspace is not None
-                else self._runtime_root / "app"
-            ),
+            _VIRTUAL_WORKDIR: self._runtime_root / "app",
             _VIRTUAL_TESTS: self._runtime_root / "tests",
             _VIRTUAL_SOLUTION: self._runtime_root / "solution",
+            _VIRTUAL_SKILLS: self._runtime_root / "skills",
             _VIRTUAL_LOGS: self._runtime_root / "logs",
             _VIRTUAL_AGENT_LOGS: mounted.get(_VIRTUAL_AGENT_LOGS, default_agent_logs),
             _VIRTUAL_VERIFIER_LOGS: mounted.get(
@@ -813,17 +1255,12 @@ class HostEnvironment(BaseEnvironment):
             ),
         }
         if self._task_workdir != _VIRTUAL_WORKDIR and not (
-            self._workspace_mount is not None
-            and _same_or_descendant(self._task_workdir, self._workspace_mount[0])
+            self._workspace is not None
+            and _same_or_descendant(self._task_workdir, self._workspace.virtual_path)
         ):
-            mappings[self._task_workdir] = (
-                self._automatic_workspace
-                if self._automatic_workspace is not None
-                else self._transient_path(self._task_workdir)
-            )
-        if self._workspace_mount is not None:
-            target, source = self._workspace_mount
-            mappings[target] = source
+            mappings[self._task_workdir] = self._transient_path(self._task_workdir)
+        if self._workspace is not None:
+            mappings[self._workspace.virtual_path] = self._workspace.path
         mappings.update(self._transient_workdirs)
         return mappings
 
@@ -833,24 +1270,21 @@ class HostEnvironment(BaseEnvironment):
         parts = tuple(part for part in PurePosixPath(virtual).parts if part != "/")
         return self._runtime_root.joinpath("workdirs", *parts)
 
-    def _register_workdir(
-        self, value: str | PurePath, *, require_workspace: bool
-    ) -> str:
+    def _register_virtual_workdir(self, value: str | PurePath) -> str:
         canonical = _canonical_virtual_path(
             str(value), self.os, label="HostEnvironment workdir"
         )
-        if require_workspace and self._workspace_mount is not None:
-            workspace_target = self._workspace_mount[0]
+        if self._workspace is not None and not self._workspace.owned:
+            workspace_target = self._workspace.virtual_path
             if not _same_or_descendant(canonical, workspace_target):
                 raise ValueError(
                     "HostEnvironment workdir must equal the workspace mount target "
                     f"or be its descendant: {workspace_target!r}"
                 )
-        mappings = self._runtime_dirs()
-        if _split_virtual_path(canonical, self.os, tuple(mappings)) is None:
+        if split_virtual_path(canonical, self.os, tuple(self._runtime_dirs())) is None:
             self._transient_workdirs[canonical] = (
-                self._automatic_workspace
-                if require_workspace and self._automatic_workspace is not None
+                self._workspace.path
+                if self._workspace is not None and self._workspace.owned
                 else self._transient_path(canonical)
             )
         return canonical
@@ -860,42 +1294,131 @@ class HostEnvironment(BaseEnvironment):
         dirs: Sequence[str | PurePath],
         *,
         chmod: bool = True,
+        virtual_workdir: bool = False,
     ) -> ExecResult | None:
-        for path in dirs:
-            self._register_workdir(path, require_workspace=True)
-        return await super().ensure_dirs(dirs, chmod=chmod)
+        self._require_filesystem_ready()
+        paths = (
+            [self._register_virtual_workdir(path) for path in dirs]
+            if virtual_workdir
+            else dirs
+        )
+        mapper = self._path_mapper()
+        native_paths = [mapper.translate(path) for path in paths]
+        await self._run_filesystem(self._ensure_native_dirs, native_paths, chmod=chmod)
+        return None
+
+    def _ensure_native_dirs(self, paths: Sequence[Path], *, chmod: bool) -> None:
+        for native in paths:
+            native.mkdir(parents=True, exist_ok=True)
+            self._chmod_directory(native, chmod=chmod)
+
+    @staticmethod
+    def _remove_native_path(path: Path) -> None:
+        if not os.path.lexists(path):
+            return
+        info = path.stat(follow_symlinks=False)
+        if _is_link_info(info) and stat.S_ISDIR(info.st_mode):
+            path.rmdir()
+        elif stat.S_ISDIR(info.st_mode):
+            shutil.rmtree(path, onexc=windows.retry_readonly_removal)
+        else:
+            try:
+                path.unlink()
+            except PermissionError as exc:
+                windows.retry_readonly_removal(os.unlink, str(path), exc)
+
+    def _empty_native_directory(self, path: Path) -> None:
+        if path.is_dir() and not _is_native_link(path):
+            for child in path.iterdir():
+                self._remove_native_path(child)
+            return
+        self._remove_native_path(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+    async def empty_dirs(
+        self,
+        dirs: Sequence[str | PurePath],
+        *,
+        chmod: bool = True,
+    ) -> ExecResult | None:
+        self._require_filesystem_ready()
+        mapper = self._path_mapper()
+        native_paths = [mapper.translate(path) for path in dirs]
+        await self._run_filesystem(self._empty_native_dirs, native_paths, chmod=chmod)
+        return None
+
+    def _empty_native_dirs(self, paths: Sequence[Path], *, chmod: bool) -> None:
+        for native in paths:
+            self._empty_native_directory(native)
+            self._chmod_directory(native, chmod=chmod)
+
+    async def reset_dirs(
+        self,
+        *,
+        remove_dirs: Sequence[str | PurePath],
+        create_dirs: Sequence[str | PurePath],
+        chmod_dirs: Sequence[str | PurePath] | None = None,
+    ) -> ExecResult:
+        self._require_filesystem_ready()
+        mapper = self._path_mapper()
+        await self._run_filesystem(
+            self._reset_native_dirs,
+            [mapper.translate(path) for path in remove_dirs],
+            [mapper.translate(path) for path in create_dirs],
+            [mapper.translate(path) for path in (chmod_dirs or ())],
+        )
+        return ExecResult(return_code=0)
+
+    def _reset_native_dirs(
+        self, remove: Sequence[Path], create: Sequence[Path], chmod: Sequence[Path]
+    ) -> None:
+        for path in remove:
+            self._remove_native_path(path)
+        for native in create:
+            native.mkdir(parents=True, exist_ok=True)
+        for path in chmod:
+            self._chmod_directory(path, chmod=True)
+
+    async def is_dir(self, path: str, user: str | int | None = None) -> bool:
+        self._require_filesystem_ready()
+        self._validate_user(user)
+        native = self._translate_path(path)
+        return await self._run_filesystem(
+            lambda: native.is_dir() and not _is_native_link(native)
+        )
+
+    async def is_file(self, path: str, user: str | int | None = None) -> bool:
+        self._require_filesystem_ready()
+        self._validate_user(user)
+        native = self._translate_path(path)
+        return await self._run_filesystem(
+            lambda: native.is_file() and not _is_native_link(native)
+        )
 
     def _translate_path(self, value: str | Path) -> Path:
-        raw = str(value)
-        mappings = self._runtime_dirs()
-        virtual_match = _split_virtual_path(raw, self.os, tuple(mappings))
-        if virtual_match is not None:
-            virtual, suffix = virtual_match
-            return mappings[virtual].joinpath(*suffix)
-        if raw.startswith("/") or (
-            self.os == TaskOS.WINDOWS and windows.is_absolute_path(raw)
-        ):
-            raise ValueError(f"unsupported HostEnvironment path: {raw}")
-        relative = PurePosixPath(
-            raw.replace("\\", "/") if self.os == TaskOS.WINDOWS else raw
+        return self._path_mapper().translate(value)
+
+    def _path_mapper(self) -> HostPathMapper:
+        return HostPathMapper(
+            host_os=self.os,
+            mappings=self._runtime_dirs(),
+            task_workdir=self._task_workdir,
         )
-        if ".." in relative.parts:
-            raise ValueError(f"unsupported HostEnvironment path: {raw}")
-        return self._translate_path(self._task_workdir).joinpath(
-            *(part for part in relative.parts if part != ".")
-        )
+
+    @property
+    def path_mapper(self) -> HostPathMapper:
+        """Return the current native path mapper after successful startup."""
+
+        if not self._started:
+            raise RuntimeError("HostEnvironment has not started")
+        self._require_filesystem_access()
+        return self._path_mapper()
 
     def _translate_command(self, command: str) -> str:
         return self._process_adapter.translate_command(command, self._runtime_dirs())
 
     def _translate_env(self, env: dict[str, str] | None) -> dict[str, str]:
-        if self.os == TaskOS.WINDOWS:
-            return windows.translate_environment(env or {}, self._runtime_dirs())
-        translated: dict[str, str] = {}
-        for key, value in (env or {}).items():
-            mapped = _translate_literal(value, self._runtime_dirs(), self.os)
-            translated[key] = mapped if mapped is not None else value
-        return translated
+        return self._path_mapper().translate_environment(env or {})
 
     def _effective_runtime_config(
         self,
@@ -908,14 +1431,12 @@ class HostEnvironment(BaseEnvironment):
             requested_path = self._translate_path(requested_config)
             harness = load_effective_runtime_config(requested_path).harness
         paths = self._runtime_dirs()
-        workspace = (
-            self._automatic_workspace
-            if self._automatic_workspace is not None
-            else self._workspace_mount[1]
-            if self._workspace_mount is not None
+        workspace = self._workspace.path if self._workspace is not None else None
+        root = (
+            self._workdir_root
+            if self._workspace is not None and self._workspace.owned
             else None
         )
-        root = self._host_settings.workdir_root if self._host_settings else None
         return EffectiveRuntimeConfig(
             paths=RuntimePaths(
                 workdir=str(workdir),
@@ -937,28 +1458,173 @@ class HostEnvironment(BaseEnvironment):
         return write_effective_runtime_config(directory / "peval.json", config)
 
     async def upload_file(self, source_path: Path | str, target_path: str):
+        self._require_filesystem_ready()
         source = Path(source_path)
         target = self._translate_path(target_path)
+        await self._run_filesystem(self._upload_native_file, source, target)
+
+    @staticmethod
+    def _upload_native_file(source: Path, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
 
     async def upload_dir(self, source_dir: Path | str, target_dir: str):
+        self._require_filesystem_ready()
         source = Path(source_dir)
         target = self._translate_path(target_dir)
-        target.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, target, dirs_exist_ok=True)
+        await self._run_filesystem(shutil.copytree, source, target, dirs_exist_ok=True)
 
     async def download_file(self, source_path: str, target_path: Path | str):
+        self._require_filesystem_ready()
         source = self._translate_path(source_path)
         target = Path(target_path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        await self._run_filesystem(_copy_native_file, source, target, cancellable=True)
 
     async def download_dir(self, source_dir: str, target_dir: Path | str):
+        await self.download_dir_with_exclusions(
+            source_dir=source_dir, target_dir=target_dir, exclude=[]
+        )
+
+    def _native_download_entries(
+        self,
+        source: Path,
+        *,
+        exclude: Sequence[str] = (),
+        cancel: threading.Event | None = None,
+    ) -> Iterator[tuple[Path, os.stat_result | None]]:
+        """Visit files incrementally and directories after their children."""
+        pending = [(source, os.scandir(source))]
+        try:
+            while pending:
+                _check_filesystem_cancel(cancel)
+                current, entries = pending[-1]
+                entry = next(entries, None)
+                if entry is None:
+                    entries.close()
+                    pending.pop()
+                    yield current, None
+                    continue
+                info = entry.stat(follow_symlinks=False)
+                path = Path(entry.path)
+                if _is_link_info(info) or self._matches_download_exclusion(
+                    path.relative_to(source).as_posix(), exclude
+                ):
+                    continue
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append((path, os.scandir(path)))
+                else:
+                    yield path, info
+        finally:
+            for _, entries in pending:
+                entries.close()
+
+    async def download_dir_with_exclusions(
+        self,
+        *,
+        source_dir: str,
+        target_dir: Path | str,
+        exclude: list[str],
+    ) -> None:
+        self._require_filesystem_ready()
         source = self._translate_path(source_dir)
-        target = Path(target_dir)
+        await self._run_filesystem(
+            self._download_native_dir,
+            source,
+            Path(target_dir),
+            exclude,
+            cancellable=True,
+        )
+
+    def _download_native_dir(
+        self,
+        source: Path,
+        target: Path,
+        exclude: Sequence[str],
+        *,
+        cancel: threading.Event | None = None,
+    ) -> None:
+        self._validate_native_download_directory(source, target)
         target.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, target, dirs_exist_ok=True)
+        for path, info in self._native_download_entries(
+            source, exclude=exclude, cancel=cancel
+        ):
+            destination = target / path.relative_to(source)
+            if info is None:
+                destination.mkdir(parents=True, exist_ok=True)
+                if not os.path.samefile(path, destination):
+                    shutil.copystat(path, destination)
+            else:
+                _copy_native_file(path, destination, cancel=cancel)
+
+    @staticmethod
+    def _validate_native_download_directory(source: Path, target: Path) -> None:
+        if _is_native_link(source) or not source.is_dir():
+            raise NotADirectoryError(source)
+        resolved_source, resolved_target = source.resolve(), target.resolve()
+        if resolved_target != resolved_source and resolved_target.is_relative_to(
+            resolved_source
+        ):
+            raise ValueError("download target cannot be inside its source directory")
+
+    @staticmethod
+    def _matches_download_exclusion(relative: str, patterns: Sequence[str]) -> bool:
+        return any(
+            fnmatch.fnmatch(relative, pattern)
+            or fnmatch.fnmatch(Path(relative).name, pattern)
+            for pattern in patterns
+        )
+
+    async def download_dir_filtered(
+        self,
+        *,
+        source_dir: str,
+        target_dir: Path | str,
+        include: Sequence[str] | None = None,
+        exclude: Sequence[str] | None = None,
+        protect: Sequence[str] | None = None,
+    ) -> None:
+        self._require_filesystem_ready()
+        source = self._translate_path(source_dir)
+        await self._run_filesystem(
+            self._download_native_dir_filtered,
+            source,
+            Path(target_dir),
+            include=include,
+            exclude=exclude,
+            protect=protect,
+            cancellable=True,
+        )
+
+    def _download_native_dir_filtered(
+        self,
+        source: Path,
+        target: Path,
+        *,
+        include: Sequence[str] | None,
+        exclude: Sequence[str] | None,
+        protect: Sequence[str] | None,
+        cancel: threading.Event | None = None,
+    ) -> None:
+        self._validate_native_download_directory(source, target)
+        target.mkdir(parents=True, exist_ok=True)
+        protected = set(protect or ())  # Harbor protect entries are exact paths.
+        copied = False
+        for path, info in self._native_download_entries(source, cancel=cancel):
+            if info is None or not stat.S_ISREG(info.st_mode):
+                continue
+            relative = path.relative_to(source).as_posix()
+            if relative not in protected:
+                if include and not any(fnmatch.fnmatch(relative, p) for p in include):
+                    continue
+                if exclude and any(fnmatch.fnmatch(relative, p) for p in exclude):
+                    continue
+            _copy_native_file(path, target / path.relative_to(source), cancel=cancel)
+            copied = True
+        if not copied:
+            self.logger.warning(
+                f"No files in {str(source)!r} matched include={include} "
+                f"exclude={exclude}; downloading nothing"
+            )
 
     def _validate_user(self, user: str | int | None) -> None:
         resolved = self._resolve_user(user)
@@ -978,7 +1644,15 @@ class HostEnvironment(BaseEnvironment):
 
     def native_path(self, value: str | Path) -> Path:
         """Resolve an environment path to its native host path after start."""
+        if not self._started:
+            raise RuntimeError("HostEnvironment has not started")
+        self._require_filesystem_access()
         return self._translate_path(value)
+
+    @property
+    def work_dir(self) -> Path:
+        """The native Task working directory after successful startup."""
+        return self.native_path(".")
 
     async def exec_argv(
         self,
@@ -1003,19 +1677,16 @@ class HostEnvironment(BaseEnvironment):
             argv, cwd=cwd, env=env, timeout_sec=timeout_sec, user=user
         )
 
-    async def _exec_process(
+    async def _spawn_process(
         self,
         command: str | Sequence[str],
         *,
         cwd: str | None,
         env: dict[str, str] | None,
-        timeout_sec: float | None,
         user: str | int | None,
-    ) -> ExecResult:
+    ) -> asyncio.subprocess.Process:
         self._validate_user(user)
         effective_cwd = self._task_workdir if cwd is None else cwd
-        if cwd is not None:
-            self._register_workdir(cwd, require_workspace=False)
         translated_cwd = self._translate_path(effective_cwd)
         translated_cwd.mkdir(parents=True, exist_ok=True)
         merged_env = dict(self._merge_env(env) or {})
@@ -1029,7 +1700,11 @@ class HostEnvironment(BaseEnvironment):
             workdir=translated_cwd,
             requested_config=requested_config,
         )
-        runtime_config_path = self._write_runtime_config(runtime_config)
+        runtime_config_path = await _await_owned_task(
+            asyncio.create_task(
+                asyncio.to_thread(self._write_runtime_config, runtime_config)
+            )
+        )
         process_env = {
             key: value
             for key, value in os.environ.items()
@@ -1067,14 +1742,31 @@ class HostEnvironment(BaseEnvironment):
             if isinstance(command, str)
             else command
         )
-        process = await self._process_adapter.spawn(
+        return await self._process_adapter.spawn(
             argv,
             cwd=translated_cwd,
             env=process_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        self._active_processes.add(process)
+
+    async def _exec_process(
+        self,
+        command: str | Sequence[str],
+        *,
+        cwd: str | None,
+        env: dict[str, str] | None,
+        timeout_sec: float | None,
+        user: str | int | None,
+    ) -> ExecResult:
+        self._require_process_access()
+        # Fail promptly during startup/stop, then recheck after waiting for the lock.
+        self._require_command_ready()
+        async with self._launch_lock:
+            self._require_command_ready()
+            process = await self._spawn_process(command, cwd=cwd, env=env, user=user)
+            done = asyncio.get_running_loop().create_future()
+            self._active_processes[process] = done
         callback = self._output_callback()
 
         async def read_stream(
@@ -1083,31 +1775,81 @@ class HostEnvironment(BaseEnvironment):
             if stream is None:
                 return ""
             chunks: list[str] = []
-            while chunk := await stream.read(4096):
-                text = chunk.decode("utf-8", errors="replace")
-                chunks.append(text)
-                if callback is not None:
-                    await callback(text, stream_name)
-            return "".join(chunks)
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            token = self._callback_command.set(done)
+            try:
+                while chunk := await stream.read(4096):
+                    text = decoder.decode(chunk)
+                    chunks.append(text)
+                    if callback is not None:
+                        await callback(text, stream_name)
+                tail = decoder.decode(b"", final=True)
+                chunks.append(tail)
+                if tail and callback is not None:
+                    await callback(tail, stream_name)
+                return "".join(chunks)
+            finally:
+                self._callback_command.reset(token)
 
         stdout_task = asyncio.create_task(read_stream(process.stdout, "stdout"))
         stderr_task = asyncio.create_task(read_stream(process.stderr, "stderr"))
+        command_error: BaseException | None = None
         try:
             async with asyncio.timeout(timeout_sec):
-                await process.wait()
-                stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            await self._terminate_process(process)
-            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+                _, stdout, stderr = await asyncio.gather(
+                    process.wait(), stdout_task, stderr_task
+                )
+        except BaseException as error:
+            command_error = error
+
+            async def cleanup(primary_error: BaseException):
+                stdout_task.cancel()
+                stderr_task.cancel()
+                await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+                outcomes = await asyncio.gather(
+                    self._terminate_process(process),
+                    process.communicate(),
+                    return_exceptions=True,
+                )
+                for outcome in outcomes:
+                    if isinstance(outcome, BaseException):
+                        primary_error.add_note(
+                            f"command cleanup failed: {type(outcome).__name__}: {outcome}"
+                        )
+
+            try:
+                await _await_owned_task(asyncio.create_task(cleanup(error)))
+            except BaseException as cleanup_error:
+                error.add_note(
+                    "command cleanup interrupted: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
             raise
         finally:
-            self._process_adapter.release(process)
-            self._active_processes.discard(process)
+            try:
+                self._process_adapter.release(process)
+            except BaseException as release_error:
+                if command_error is None:
+                    raise
+                command_error.add_note(
+                    "process release failed: "
+                    f"{type(release_error).__name__}: {release_error}"
+                )
+            finally:
+                self._active_processes.pop(process, None)
+                if not done.done():
+                    done.set_result(None)
         return ExecResult(
             stdout=stdout,
             stderr=stderr,
             return_code=process.returncode if process.returncode is not None else 1,
         )
+
+    def _require_command_ready(self) -> None:
+        if not self._started:
+            raise RuntimeError("HostEnvironment has not started")
+        if self._stopping:
+            raise RuntimeError("HostEnvironment is stopping")
 
     async def _terminate_process(self, process: asyncio.subprocess.Process) -> None:
         await self._process_adapter.terminate(process)

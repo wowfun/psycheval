@@ -36,6 +36,32 @@ _LINUX_ONLY = pytest.mark.skipif(
 )
 
 
+def test_external_agent_virtual_override_uses_prepared_host_workspace(tmp_path):
+    from tests.harbor.test_environment import make_environment
+
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        command = " ".join(
+            quote_shell_arg(str(arg), host.os)
+            for arg in (sys.executable, _SYNTHETIC_HARNESS, "--mode", "single-step")
+        )
+        agent = ExternalHarnessAgent(
+            logs_dir=host.trial_paths.agent_dir,
+            command=command,
+            workdir="/agent-selected/path",
+        )
+        await host.start(False)
+        try:
+            context = AgentContext()
+            await agent.run("Use the prepared workspace", host, context)
+            assert host.native_path("/agent-selected/path") == host.work_dir
+            assert context.metadata["harness_return_code"] == 0
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
 @_LINUX_ONLY
 def test_external_agent_runs_harness_and_validates_atif(tmp_path: Path) -> None:
     async def scenario() -> None:
@@ -70,7 +96,7 @@ def test_external_agent_runs_harness_and_validates_atif(tmp_path: Path) -> None:
                     "target": "/logs/artifacts",
                 },
             ],
-            allow_host_execution=True,
+            host_access={"filesystem": True, "process": True},
         )
         agent = ExternalHarnessAgent(
             logs_dir=paths.agent_dir,

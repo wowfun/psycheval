@@ -8,11 +8,32 @@ import os
 import sys
 import textwrap
 from pathlib import Path, PureWindowsPath
+from types import SimpleNamespace
 
 import pytest
 
 from psycheval.harbor import windows
 from tests.harbor.test_environment import make_environment
+
+
+@pytest.mark.parametrize("stage", ["stat", "chmod", "remove"])
+def test_readonly_cleanup_tolerates_concurrent_file_removal(monkeypatch, stage):
+    def gone(*args, **kwargs):
+        raise FileNotFoundError("already removed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(windows.sys, "platform", "win32")
+        patch.setattr(
+            windows.os,
+            "stat",
+            gone
+            if stage == "stat"
+            else lambda *a, **kw: SimpleNamespace(st_file_attributes=1),
+        )
+        patch.setattr(
+            windows.os, "chmod", gone if stage == "chmod" else lambda *a, **kw: None
+        )
+        windows.retry_readonly_removal(gone, "owned-file", PermissionError("read-only"))
 
 
 @pytest.mark.parametrize(

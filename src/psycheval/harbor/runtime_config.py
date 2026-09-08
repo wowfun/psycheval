@@ -73,26 +73,14 @@ class EffectiveRuntimeConfig:
         }
 
 
-def load_host_settings(
-    *,
-    environ: dict[str, str] | os._Environ[str] | None = None,
-    cwd: Path | None = None,
-) -> HostSettings:
-    values = os.environ if environ is None else environ
-    configured = values.get(PEVAL_CONFIG_ENV)
-    if configured is None:
-        return HostSettings(
-            workdir_root=_resolve_root(DEFAULT_WORKDIR_ROOT, Path.cwd())
-        )
-
-    base = Path.cwd() if cwd is None else cwd
-    config_path = Path(configured).expanduser()
-    if not config_path.is_absolute():
-        config_path = base / config_path
-    config_path = config_path.resolve()
+def load_host_settings(path: str | Path) -> HostSettings:
+    """Read only the host settings in an explicitly selected TOML file."""
+    if isinstance(path, str) and not path.strip():
+        raise RuntimeConfigError("host settings require a readable TOML file")
+    config_path = Path(path).expanduser().resolve()
     if not config_path.is_file():
         raise RuntimeConfigError(
-            f"{PEVAL_CONFIG_ENV} must name a readable TOML file: {config_path}"
+            f"host settings require a readable TOML file: {config_path}"
         )
     try:
         data = tomllib.loads(config_path.read_text(encoding="utf-8"))
@@ -115,7 +103,11 @@ def load_host_settings(
         raise RuntimeConfigError(
             "PEVAL config [harbor.host].workdir_root must be a string"
         )
-    root = None if not raw_root.strip() else _resolve_root(raw_root, config_path.parent)
+    root = _resolve_host_path(
+        raw_root if raw_root.strip() else None,
+        base=config_path.parent,
+        label="PEVAL config workdir_root",
+    )
     return HostSettings(workdir_root=root, source_path=config_path)
 
 
@@ -230,9 +222,13 @@ def optional_effective_runtime_config(
     return load_effective_runtime_config(environ=values)
 
 
-def _resolve_root(raw: str, base: Path) -> Path:
-    if "\x00" in raw:
-        raise RuntimeConfigError("PEVAL config workdir_root contains NUL")
+def _resolve_host_path(
+    raw: str | Path | None, *, base: Path, label: str
+) -> Path | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, (str, Path)) or not str(raw).strip() or "\x00" in str(raw):
+        raise RuntimeConfigError(f"{label} must be a non-empty, NUL-free path or None")
     root = Path(raw).expanduser()
     if not root.is_absolute():
         root = base / root
