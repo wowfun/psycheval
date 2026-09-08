@@ -184,8 +184,6 @@ remains owned by `pretty-aui`.
 - `src/psycheval/assets/web/` is the browser module graph distributed with the
   package and served directly by the local workspace. `web/` owns its Node test
   harness.
-- `web/vendor/` holds lockfile-referenced Node package archives required to
-  reproduce browser distributions that have not been published upstream.
 - `datasets/` contains maintained Harbor Datasets; `examples/` contains
   authoring examples, not maintained evaluation members.
 - `skills/peval/` is the repository source of the project Agent Skill and is

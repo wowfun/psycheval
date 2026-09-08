@@ -7,21 +7,20 @@ uv sync --frozen
 npm ci
 ```
 
-The Node toolchain follows the sanitizer dependency used by `pretty-aui` and
-supports Node.js `^22.22.2`, `^24.15.0`, or `>=26.0.0`.
+The browser test toolchain supports Node.js `^22.22.2`, `^24.15.0`, or `>=26.0.0`.
 
 Python runtime code lives under `src/psycheval`; all Python behavior tests live
 under `tests` and use normal package imports. Browser modules live under
 `src/psycheval/assets/web`, ship as authored ESM, and are exercised by the Node
 tests under `web` without an application bundle. The exception is the immutable
-`pretty-aui` standalone distribution under `assets/web/vendor`, which is copied
-by `npm run vendor:pretty-aui` from the lockfile-pinned package archive in
-`web/vendor`; do not edit either generated artifact directly. Refresh that
-archive by packing the owning pretty-aui checkout, then update the lockfile,
-install it, and run the vendoring command. The lockfile integrity and
-byte-for-byte vendor check make a clean `npm ci` reproduce the checked-in
-browser distribution. Its `LICENSE` and `THIRD_PARTY_LICENSES.txt` files are
-part of that immutable vendored asset and must remain present.
+`pretty-aui` standalone distribution under `assets/web/vendor`; do not edit
+generated assets directly. To update it, build the owning pretty-aui checkout
+and run `npm run vendor:pretty-aui -- /path/to/pretty-aui/dist/standalone`.
+Append `--check` to compare that build with the checked-in distribution without
+copying. Review the generated diff and run `npm run check` against the vendored
+assets. Normal installation and validation use those checked-in assets and do
+not require the upstream checkout or a second package archive. Its `LICENSE`
+and `THIRD_PARTY_LICENSES.txt` files must remain present.
 
 Keep Harbor-specific adapters at the pinned public `0.21.0` seams under
 `psycheval.harbor`; package-wide CLI, trajectory, report, and workspace code

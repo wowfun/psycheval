@@ -1,9 +1,13 @@
-import { cp, mkdir, readdir, readFile, rm } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
+import { cp, mkdir, readdir, readFile, realpath, rm } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const source = join(root, "node_modules", "pretty-aui", "dist", "standalone");
+const sourceArgument = process.argv[2];
+if (!sourceArgument || sourceArgument.startsWith("--")) {
+  throw new Error("usage: npm run vendor:pretty-aui -- <standalone-directory> [--check]");
+}
+const source = await realpath(resolve(sourceArgument));
 const target = join(
   root,
   "src",
@@ -14,6 +18,16 @@ const target = join(
   "pretty-aui",
 );
 const checking = process.argv.includes("--check");
+
+// Validate the supplied build before replacing the repository-owned output.
+await Promise.all(["pretty-aui.js", "LICENSE", "THIRD_PARTY_LICENSES.txt"].map(
+  name => readFile(join(source, name)),
+));
+const sourceFromTarget = relative(await realpath(target), source);
+if (sourceFromTarget === "" || (!isAbsolute(sourceFromTarget)
+    && sourceFromTarget !== ".." && !sourceFromTarget.startsWith(`..${sep}`))) {
+  throw new Error("source build must be outside the vendored output directory");
+}
 
 async function fileSet(directory) {
   const found = [];
@@ -35,7 +49,7 @@ if (checking) {
     fileSet(target),
   ]);
   if (JSON.stringify(sourceFiles) !== JSON.stringify(targetFiles)) {
-    throw new Error("vendored pretty-aui file set differs from the installed package");
+    throw new Error("vendored pretty-aui file set differs from the supplied build");
   }
   for (const name of sourceFiles) {
     const [expected, actual] = await Promise.all([
@@ -46,7 +60,7 @@ if (checking) {
       throw new Error(`vendored pretty-aui asset differs: ${name}`);
     }
   }
-  console.log("vendored pretty-aui assets match the installed package");
+  console.log("vendored pretty-aui assets match the supplied build");
 } else {
   await rm(target, { recursive: true, force: true });
   await mkdir(dirname(target), { recursive: true });
