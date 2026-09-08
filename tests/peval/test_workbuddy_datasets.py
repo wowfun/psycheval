@@ -97,7 +97,8 @@ class WorkBuddyDatasetTests(unittest.TestCase):
                 id="jobs", path=str(root / "jobs"), dataset_ids=("office",)
             )
             self.assertEqual(
-                harbor_task_roots_for_mount(loaded, mount), (str(bundle / "tasks"),)
+                harbor_task_roots_for_mount(loaded, mount),
+                (str(bundle.resolve() / "tasks"),),
             )
             library = HarborWorkspace(config_path, loaded)
             updated = library.update_dataset(
@@ -172,8 +173,8 @@ class WorkBuddyDatasetTests(unittest.TestCase):
                 dataset_id="office", path=str(bundle), format="workbuddy.v1"
             )
 
-            self.assertEqual(resolved.source_root, bundle)
-            self.assertEqual(resolved.task_root, bundle / "tasks")
+            self.assertEqual(resolved.source_root, bundle.resolve())
+            self.assertEqual(resolved.task_root, bundle.resolve() / "tasks")
             self.assertEqual(resolved.format, "workbuddy.v1")
             self.assertTrue(resolved.read_only)
             self.assertEqual(resolved.task_names, ("office-one",))
@@ -348,7 +349,7 @@ class WorkBuddyDatasetTests(unittest.TestCase):
 
             self.assertEqual(
                 harbor_task_roots_for_mount(config, config.harbor_mounts[0]),
-                (str(bundle / "tasks"),),
+                (str(bundle.resolve() / "tasks"),),
             )
 
     def test_mount_task_root_lookup_does_not_revalidate_task_contents(self) -> None:
@@ -364,7 +365,7 @@ class WorkBuddyDatasetTests(unittest.TestCase):
             with patch("psycheval.harbor.datasets._walk_regular_tree") as walk:
                 self.assertEqual(
                     harbor_task_roots_for_mount(config, mount),
-                    (str(bundle / "tasks"),),
+                    (str(bundle.resolve() / "tasks"),),
                 )
 
             walk.assert_not_called()
@@ -449,7 +450,7 @@ class WorkBuddyDatasetTests(unittest.TestCase):
 
             paths = harbor_task_roots_for_mount(config, mount)
 
-            self.assertEqual(paths, (str(root / "second"),))
+            self.assertEqual(paths, (str((root / "second").resolve()),))
             self.assertFalse((root / "first").exists())
 
     def test_task_tree_walk_is_not_limited_by_python_recursion_depth(self) -> None:

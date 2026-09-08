@@ -269,7 +269,7 @@ def artifact_ref_for_cell_path(
 
 def display_local_path(path: Path) -> str:
     try:
-        return Path(os.path.relpath(path, Path.cwd())).as_posix()
+        return Path(os.path.relpath(path.resolve(), Path.cwd().resolve())).as_posix()
     except ValueError:
         return str(path)
 

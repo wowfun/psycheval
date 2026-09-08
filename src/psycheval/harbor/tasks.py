@@ -35,9 +35,13 @@ def load_harbor_task(
     *,
     read_bytes: TaskFileReader,
 ) -> LoadedHarborTask:
-    """Load one Task through strict text and pinned Harbor validation."""
+    """Load one Task through strict text and pinned Harbor validation.
 
-    paths = TaskPaths(task_dir)
+    Reader paths preserve the caller's lexical absolute root, including Windows
+    short names. Callers own link and containment checks at the read boundary.
+    """
+
+    paths = _lexical_task_paths(task_dir)
     loaded_task = load_harbor_task_config(task_dir, read_bytes=read_bytes)
     config = loaded_task.config
 
@@ -69,7 +73,7 @@ def load_harbor_task_config(
 ) -> LoadedHarborTask:
     """Parse one Task configuration through the shared strict UTF-8 seam."""
 
-    paths = TaskPaths(task_dir)
+    paths = _lexical_task_paths(task_dir)
     config_bytes = read_bytes(paths.config_path)
     config = TaskConfig.model_validate_toml(
         _decode_task_text(paths, paths.config_path, config_bytes)
@@ -89,7 +93,7 @@ def select_publishable_task_files(
     paths outside task_dir raise ValueError before any file is read.
     """
 
-    paths = TaskPaths(task_dir)
+    paths = _lexical_task_paths(task_dir)
     by_relative: dict[str, Path] = {}
     for path in files:
         absolute_path = Path(os.path.abspath(path))
@@ -114,6 +118,13 @@ def select_publishable_task_files(
     ]
     selected.sort(key=lambda path: path.relative_to(paths.task_dir).as_posix())
     return selected
+
+
+def _lexical_task_paths(task_dir: Path) -> TaskPaths:
+    paths = TaskPaths(task_dir)
+    # Harbor resolves aliases here; reader callbacks must retain their root.
+    paths.task_dir = Path(os.path.abspath(task_dir))
+    return paths
 
 
 def _decode_task_text(paths: TaskPaths, path: Path, content: bytes) -> str:

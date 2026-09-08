@@ -892,8 +892,9 @@ def _output_root(value: str | Path) -> Path:
 
 
 def _require_unlinked_path(path: Path, label: str) -> None:
-    if path.is_symlink() or path.resolve() != path:
-        raise WorkBuddyPlanError(f"WorkBuddy {label} traverses a symbolic link")
+    for current in (path, *path.parents):
+        if current.is_symlink() or current.is_junction():
+            raise WorkBuddyPlanError(f"WorkBuddy {label} traverses a symbolic link")
 
 
 def _reserve_plan_directories(root: Path) -> tuple[str, Path, Path]:
@@ -1053,11 +1054,11 @@ def _plan_contained_path(root: Path, value: object, label: str) -> Path:
         raise WorkBuddyPlanError(f"run plan {label} is invalid")
     path = Path(value)
     absolute = Path(os.path.abspath(path))
+    _require_unlinked_path(absolute, label)
+    absolute = absolute.resolve()
     allowed = root / "harbor-jobs"
     if allowed not in absolute.parents:
         raise WorkBuddyPlanError(f"run plan {label} escapes the output root")
-    if absolute.resolve(strict=False) != absolute:
-        raise WorkBuddyPlanError(f"run plan {label} traverses a symbolic link")
     return absolute
 
 

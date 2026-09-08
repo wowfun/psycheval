@@ -224,10 +224,10 @@ class HarborTrialTests(unittest.TestCase):
             )
             config = load_config(workspace_root=str(workspace))
             self.assertEqual(config.harbor_mounts[0].id, "jobs-2026-08-08")
-            self.assertEqual(config.harbor_mounts[0].path, str(jobs.absolute()))
+            self.assertEqual(config.harbor_mounts[0].path, str(jobs.resolve()))
             self.assertEqual(
                 config.harbor_datasets[0].path,
-                str(dataset.absolute()),
+                str(dataset.resolve()),
             )
             self.assertEqual(config.harbor_mounts[0].dataset_ids, ("pbench",))
 

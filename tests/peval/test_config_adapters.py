@@ -181,7 +181,7 @@ class PevalConfigAdapterTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 ValueError,
                 re.escape(
-                    f"{root / 'peval.toml'}: description: Input should be a valid string"
+                    f"{root.resolve() / 'peval.toml'}: description: Input should be a valid string"
                 ),
             ):
                 load_config(workspace_root=root)

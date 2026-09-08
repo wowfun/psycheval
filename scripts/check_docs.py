@@ -117,19 +117,19 @@ def link_failures(paths: list[Path]) -> list[str]:
                 resolved.relative_to(ROOT)
             except ValueError:
                 failures.append(
-                    f"{path.relative_to(ROOT)}: link escapes repository: {target}"
+                    f"{path.relative_to(ROOT).as_posix()}: link escapes repository: {target}"
                 )
                 continue
             if not resolved.is_file():
                 failures.append(
-                    f"{path.relative_to(ROOT)}: missing link target: {target}"
+                    f"{path.relative_to(ROOT).as_posix()}: missing link target: {target}"
                 )
                 continue
             if fragment and resolved.suffix.lower() == ".md":
                 available = anchor_cache.setdefault(resolved, anchors(resolved))
                 if unquote(fragment).lower() not in available:
                     failures.append(
-                        f"{path.relative_to(ROOT)}: missing anchor in {target}"
+                        f"{path.relative_to(ROOT).as_posix()}: missing anchor in {target}"
                     )
     return failures
 
@@ -219,7 +219,7 @@ def main() -> int:
         text = path.read_text(encoding="utf-8")
         if "specs/" in text:
             failures.append(
-                f"{path.relative_to(ROOT)}: active documentation references specs/"
+                f"{path.relative_to(ROOT).as_posix()}: active documentation references specs/"
             )
     failures.extend(link_failures(paths))
     failures.extend(pair_failures())

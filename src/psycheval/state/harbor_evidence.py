@@ -586,9 +586,16 @@ def _task_path_matches(candidate: Path, raw_path: Any) -> bool:
         return False
     requested = Path(text)
     if requested.is_absolute():
-        return os.path.normcase(os.path.normpath(candidate)) == os.path.normcase(
+        if os.path.normcase(os.path.normpath(candidate)) == os.path.normcase(
             os.path.normpath(requested)
-        )
+        ):
+            return True
+        if os.name == "nt":
+            try:
+                return candidate.samefile(requested)
+            except OSError:
+                pass
+        return False
     normalized = posixpath.normpath(text)
     requested_parts = tuple(
         os.path.normcase(part)

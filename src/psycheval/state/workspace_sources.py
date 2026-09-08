@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from psycheval._harbor_datasets import resolve_harbor_datasets_for_mount
@@ -22,6 +22,7 @@ from psycheval.harbor.datasets import ResolvedHarborDataset
 from psycheval.state.constants import SOURCE_STATE_DIR, SOURCE_STATE_FILENAME
 from psycheval.state.harbor_evidence import (
     HarborTaskIndex,
+    _task_path_matches,
     read_harbor_evidence,
     read_harbor_task_index,
 )
@@ -1180,7 +1181,7 @@ def _trial_records_workbuddy_task(
             dataset.format
             for dataset in datasets
             for task_name in dataset.task_names
-            if _recorded_task_path_matches(
+            if _task_path_matches(
                 dataset.task_root / task_name,
                 recorded,
             )
@@ -1188,23 +1189,3 @@ def _trial_records_workbuddy_task(
         if matches == {"workbuddy.v1"}:
             return True
     return False
-
-
-def _recorded_task_path_matches(candidate: Path, recorded: str) -> bool:
-    text = recorded.strip().replace("\\", "/")
-    if not text:
-        return False
-    requested = Path(text)
-    if requested.is_absolute():
-        return os.path.normcase(os.path.normpath(candidate)) == os.path.normcase(
-            os.path.normpath(requested)
-        )
-    requested_parts = tuple(
-        os.path.normcase(part)
-        for part in PurePath(text).parts
-        if part not in {"", ".", ".."} and not part.endswith(":")
-    )
-    candidate_parts = tuple(os.path.normcase(part) for part in candidate.parts)
-    return bool(requested_parts) and candidate_parts[-len(requested_parts) :] == (
-        requested_parts
-    )

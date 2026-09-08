@@ -142,7 +142,7 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 cache_path = echarts_cache_path(store)
                 self.assertEqual(
                     cache_path,
-                    root / ".cache" / "echarts" / "6.0.0" / "echarts.min.js",
+                    root.resolve() / ".cache" / "echarts" / "6.0.0" / "echarts.min.js",
                 )
                 cache_path.parent.mkdir(parents=True)
                 cache_path.write_bytes(b"console.log('cached');")

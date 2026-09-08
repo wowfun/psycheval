@@ -1513,7 +1513,7 @@ def _live_task_ref(meta: dict[str, Any], config: ToolConfig) -> dict[str, str] |
         dataset = datasets.get(dataset_id)
         if dataset is None:
             continue
-        root = Path(os.path.abspath(Path(dataset.path).expanduser()))
+        root = Path(dataset.path).expanduser().resolve()
         if task_path.parent == root:
             matches.append(dataset_id)
     if len(matches) != 1:

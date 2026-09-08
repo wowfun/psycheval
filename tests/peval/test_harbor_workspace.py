@@ -1136,7 +1136,9 @@ class HarborWorkspaceTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(inventory["datasets"][0]["id"], "pbench-v1.0")
-                self.assertEqual(inventory["datasets"][0]["path"], str(dataset))
+                self.assertEqual(
+                    inventory["datasets"][0]["path"], str(dataset.resolve())
+                )
             finally:
                 server.shutdown()
                 server.server_close()

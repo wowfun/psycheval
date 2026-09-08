@@ -780,7 +780,7 @@ class WorkBuddyCliTests(unittest.TestCase):
                     main(["harbor", "summarize", "-r", str(root), "--plan", plan_id]),
                     0,
                 )
-            compute.assert_called_once_with(jobs_root, ["one", SPECIAL_TASK])
+            compute.assert_called_once_with(jobs_root.resolve(), ["one", SPECIAL_TASK])
             validate_runtime.assert_called_once_with()
             snapshot = json.loads((plan_dir / "workbuddy-summary.json").read_text())
             self.assertEqual(snapshot["metrics"], official)

@@ -82,8 +82,9 @@ identities and are not trimmed. Dataset services report invalid inputs as
 `HarborDatasetError`, and plan documents use the validated Dataset identity.
 
 The caller owns a trusted output directory. Psycheval checks for directory
-symlinks at reservation and read boundaries and rechecks newly created
-directories. These checks do not isolate concurrent directory replacement:
+symlinks and junctions at reservation and read boundaries and rechecks newly
+created directories. Windows short directory names are accepted as aliases of
+the same directory. These checks do not isolate concurrent directory replacement:
 the caller must prevent replacement of output directories while preparation,
 summarization, or the external WorkBuddy scorer uses them. YAML and JSON outputs
 use exclusively created temporary files and atomic replacement; failed writes

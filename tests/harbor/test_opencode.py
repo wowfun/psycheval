@@ -296,7 +296,9 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
                     (logs / "trajectory.json").read_text(encoding="utf-8")
                 )
                 assert trajectory["steps"][-1]["message"] == "完成 🎉"
-            observed = json.loads((host.work_dir / "observed.json").read_text())
+            observed = json.loads(
+                (host.work_dir / "observed.json").read_text(encoding="utf-8")
+            )
             assert observed["prompt"] == instruction
             assert Path(observed["cwd"]) == host.work_dir
             assert Path(observed["home"]).is_relative_to(logs)
@@ -308,7 +310,7 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
             assert observed["config"]["mcp"]["fixture"]["command"] == ["python"]
             assert observed["argv"][-2:] == ["--variant", "high"]
             assert observed["key"] == "fixture-key"
-            assert "step_start" in (logs / "opencode.txt").read_text()
+            assert "step_start" in (logs / "opencode.txt").read_text(encoding="utf-8")
         finally:
             await host.stop(delete=True)
 

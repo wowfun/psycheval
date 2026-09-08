@@ -722,7 +722,7 @@ class HarborWorkspace:
         return summaries
 
     def _trash_summary(self, dataset: HarborDataset, entry: Path) -> dict[str, Any]:
-        _assert_safe_directory(Path(dataset.path), entry)
+        _assert_safe_directory(self._mutable_dataset_root(dataset), entry)
         metadata = self._trash_metadata(entry)
         return {
             "entry_id": entry.name,
