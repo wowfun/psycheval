@@ -31,6 +31,8 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({
   await drawer.getByRole("button", { name: "连接" }).click();
   const chat = drawer.locator("[data-acp-chat]");
   await expect(chat.locator("textarea")).toHaveAttribute("placeholder", "询问这次评测…");
+  await expect(chat.getByText("本地 Agent 已连接", { exact: true })).toBeVisible();
+  await chat.getByRole("button", { name: "新建会话" }).click();
   await expect(chat.getByText("开始对话", { exact: true })).toBeVisible();
   await expect(chat.getByText("消息、工具活动和计划会显示在这里。", { exact: true })).toBeVisible();
   await expect(chat.getByRole("button", { name: "新建会话" })).toBeVisible();

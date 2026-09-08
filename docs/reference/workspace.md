@@ -101,6 +101,9 @@ locales use the English counterparts. A valid saved selection remains selected
 regardless of locale. Prompt writes are revision-checked, bounded UTF-8 text
 mutations and do not modify evaluation evidence.
 
+Configuration controls accept interaction after their event handlers are bound.
+Copilot's Connect button stays disabled until the Agent catalog is available.
+
 ## Storage and identity
 
 Saved View Markdown frontmatter owns the exact display name. Files use a fixed

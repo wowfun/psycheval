@@ -17,6 +17,7 @@ test("unified session input inspects IDs and reports mixed imports independently
     await expect(form.locator('[name="session_id"]')).toHaveCount(0);
     const input = form.locator('[name="path"]');
     await expect(input).toHaveAccessibleName("Session ID 或文件 / 目录路径（每行一个）");
+    await input.click();
     await input.fill("root-session");
     await form.locator('[name="adapter"]').selectOption("claude");
     const inspectResponse = page.waitForResponse(response => response.url().endsWith("/api/session-inspections"));
@@ -72,7 +73,9 @@ test("Claude project selection imports one family and navigates children without
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto(new URL("/config", fixture.origin).href);
   const form = page.locator('[data-source-add-form][data-source-kind="path"]');
-  await form.locator('[name="path"]').fill(".claude");
+  const input = form.locator('[name="path"]');
+  await input.click();
+  await input.fill(".claude");
   const inspected = page.waitForResponse(response => response.url().endsWith("/api/session-inspections"));
   await form.locator("[data-session-inspect]").click();
   const project = (await (await inspected).json()).path;

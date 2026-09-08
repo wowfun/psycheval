@@ -361,6 +361,7 @@ function bindConfigurationActions() {
   root.querySelector("[data-prompt-reset]")?.addEventListener("click", resetPromptAsset);
   root.querySelector("[data-harbor-config-reload]")?.addEventListener("click", reloadConfiguration);
   root.querySelector("[data-source-config-rescan]")?.addEventListener("click", rescanTrajectorySources);
+  root.removeAttribute("inert");
 }
 function bindConfigurationSourceControls(root) {
   root.querySelectorAll("[data-source-add-form]").forEach(form => {

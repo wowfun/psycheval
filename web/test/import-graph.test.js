@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -19,7 +19,7 @@ function staticGraph(entry) {
     }
   };
   visit(resolve(WEB_ROOT, entry));
-  return new Set([...seen].map(path => relative(WEB_ROOT, path)));
+  return new Set([...seen].map(path => relative(WEB_ROOT, path).split(sep).join("/")));
 }
 
 test("the static entry graph contains only the Workspace kernel", () => {

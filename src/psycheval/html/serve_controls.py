@@ -235,7 +235,7 @@ def render_acp_drawer(messages: dict[str, str]) -> str:
       <label><span>{escape(messages["acp_agent"])}</span>
         <select data-acp-agent></select>
       </label>
-      <button class="action-button" type="button" data-acp-connect>{escape(messages["acp_connect"])}</button>
+      <button class="action-button" type="button" data-acp-connect disabled>{escape(messages["acp_connect"])}</button>
       <a class="action-button acp-configure" href="/config#acp-agents-title"
         data-workspace-route="config"
         data-acp-configure hidden>{escape(messages["acp_configure_agents"])}</a>

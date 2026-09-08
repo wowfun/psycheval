@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
 
 import { installBrowserDom } from "./support/browser.js";
 
@@ -60,7 +59,7 @@ test("the distributed ESM entrypoint starts a Live Workspace page", async () => 
     },
   });
   try {
-    await import(`${pathToFileURL(MAIN_ENTRY.pathname).href}?smoke=${Date.now()}`);
+    await import(`${MAIN_ENTRY.href}?smoke=${Date.now()}`);
     await new Promise(resolve => setImmediate(resolve));
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(requests, ["/api/harbor/datasets"]);
