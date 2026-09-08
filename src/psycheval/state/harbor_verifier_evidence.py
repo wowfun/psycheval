@@ -147,6 +147,22 @@ def read_harbor_verifier_evidence(
             score_status = "malformed"
             score, score_source = 0.0, "malformed"
             warnings.append("verifier score has no usable canonical score field")
+        diagnostics = (score_payload or {}).get("diagnostics")
+        adaptation = (
+            diagnostics.get("native_adaptation")
+            if isinstance(diagnostics, dict)
+            else None
+        )
+        skipped = (
+            _nonnegative_int(adaptation.get("skipped"))
+            if isinstance(adaptation, dict)
+            else None
+        )
+        if skipped:
+            warnings.append(
+                f"Native WorkBuddy adaptation skipped {skipped} source expressions; "
+                "this score is best effort."
+            )
 
     normalized_harbor_reward = _finite_number(harbor_reward)
     if normalized_harbor_reward is None:
@@ -234,6 +250,8 @@ def read_harbor_verifier_artifact(
     media_type = (
         _preview_media_type(path) if purpose == "preview" else _media_type(path)
     )
+    if purpose == "preview" and media_type.startswith("text/"):
+        content = _normalize_text_bytes(content)
     if purpose == "preview" and not media_type.startswith("image/"):
         try:
             content.decode("utf-8")
@@ -244,6 +262,12 @@ def read_harbor_verifier_artifact(
         media_type=media_type,
         content=content,
     )
+
+
+def _normalize_text_bytes(content: bytes) -> bytes:
+    """Expose text previews with stable LF line endings on every host."""
+
+    return content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
 def open_harbor_verifier_artifact_download(

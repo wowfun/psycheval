@@ -228,6 +228,33 @@ def test_score_precedence_and_consistency(
     assert evidence.reward_consistency == consistency
 
 
+@pytest.mark.parametrize("skipped", [3, 0, -1, True, "3", None])
+def test_native_adaptation_warning_is_visible_without_changing_score(tmp_path, skipped):
+    trial = tmp_path / "task__1"
+    _write_json(
+        trial / "verifier/score.json",
+        {
+            "reward": 0.7,
+            "diagnostics": {
+                "native_adaptation": {"skipped": skipped, "source": "/secret/path"}
+            },
+        },
+    )
+    evidence = read_harbor_verifier_evidence(
+        trial,
+        containment_root=tmp_path,
+        dataset_format="workbuddy.v1",
+        harbor_reward=0.7,
+    )
+    assert evidence.score == 0.7
+    assert evidence.reward_consistency == "matched"
+    assert bool(evidence.warnings) == (skipped == 3 or skipped == "3")
+    if evidence.warnings:
+        assert "best effort" in evidence.warnings[0]
+        assert "3" in evidence.warnings[0]
+    assert "/secret/path" not in json.dumps(evidence.to_dict(include_artifacts=True))
+
+
 def test_missing_or_malformed_workbuddy_score_is_zero(tmp_path: Path) -> None:
     trial = tmp_path / "task__1"
     trial.mkdir()
@@ -296,7 +323,10 @@ def test_manifest_cannot_escape_or_traverse_a_symlink(tmp_path: Path) -> None:
     outside = tmp_path / "outside.txt"
     outside.write_text("private", encoding="utf-8")
     (verifier / "artifact_text").mkdir(parents=True)
-    os.symlink(outside, verifier / "artifact_text" / "linked.txt")
+    try:
+        os.symlink(outside, verifier / "artifact_text" / "linked.txt")
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
     _write_json(verifier / "score.json", {"reward": 1})
     _write_json(
         verifier / "artifact_manifest.json",
@@ -363,6 +393,8 @@ def test_manifest_artifact_reads_share_an_aggregate_byte_budget(
 def test_artifact_download_name_does_not_copy_unsafe_path_suffix(
     tmp_path: Path,
 ) -> None:
+    if os.name == "nt":
+        pytest.skip("Windows filenames cannot contain the unsafe control suffix")
     trial = tmp_path / "task__1"
     verifier = trial / "verifier"
     artifacts = verifier / "raw_artifacts"

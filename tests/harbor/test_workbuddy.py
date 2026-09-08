@@ -5,14 +5,190 @@ import json
 import os
 import shutil
 import stat
+import sys
 import tarfile
 import weakref
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from psycheval.harbor import workbuddy
+from psycheval.harbor.runtime_config import HostSettings
 from tests.fixtures.workbuddy import SPECIAL_TASK, write_office_bundle
+
+
+@pytest.fixture
+def runtime_distribution(monkeypatch):
+    distribution = SimpleNamespace(
+        version=workbuddy.WORKBUDDY_VERSION, read_text=lambda name: None
+    )
+    monkeypatch.setattr(
+        workbuddy.importlib.metadata, "distribution", lambda name: distribution
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "workbuddy_bench.judge",
+        SimpleNamespace(CompositeVerifier=object),
+    )
+    return distribution
+
+
+@pytest.mark.parametrize(
+    "metadata,commit",
+    [
+        (None, None),
+        ('{"vcs_info": {"commit_id": "local-revision"}}', "local-revision"),
+        ('{"vcs_info": {"commit_id": "another-revision"}}', "another-revision"),
+        ('{"vcs_info": {"commit_id": 123}}', None),
+        ('{"vcs_info": {"commit_id": ""}}', None),
+        ("not json", None),
+        ("[]", None),
+    ],
+)
+def test_runtime_commit_metadata_is_optional_provenance(
+    runtime_distribution, metadata, commit
+):
+    runtime_distribution.read_text = lambda name: metadata
+    expected = {"version": workbuddy.WORKBUDDY_VERSION}
+    if commit is not None:
+        expected["commit"] = commit
+    assert workbuddy.validate_workbuddy_runtime() == expected
+
+
+@pytest.mark.parametrize("error", [OSError("unreadable"), UnicodeError("invalid text")])
+def test_runtime_accepts_unreadable_source_metadata(runtime_distribution, error):
+    def unreadable(name):
+        raise error
+
+    runtime_distribution.read_text = unreadable
+    assert workbuddy.validate_workbuddy_runtime() == {
+        "version": workbuddy.WORKBUDDY_VERSION
+    }
+
+
+def test_runtime_does_not_probe_editable_source_with_git(
+    runtime_distribution, tmp_path, monkeypatch
+):
+    (tmp_path / ".git").mkdir()
+    runtime_distribution.read_text = lambda name: json.dumps(
+        {"url": tmp_path.as_uri(), "dir_info": {"editable": True}}
+    )
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("runtime provenance must not execute Git")
+
+    monkeypatch.setattr("subprocess.run", forbidden)
+    assert workbuddy.validate_workbuddy_runtime() == {
+        "version": workbuddy.WORKBUDDY_VERSION
+    }
+
+
+def test_runtime_still_requires_the_supported_package_version(runtime_distribution):
+    runtime_distribution.version = "0.2.0"
+    with pytest.raises(workbuddy.WorkBuddyPlanError, match="version must be"):
+        workbuddy.validate_workbuddy_runtime()
+
+
+@pytest.mark.parametrize(
+    "module", [None, SimpleNamespace(), SimpleNamespace(CompositeVerifier=None)]
+)
+def test_runtime_still_requires_a_callable_verifier(
+    runtime_distribution, monkeypatch, module
+):
+    monkeypatch.setitem(sys.modules, "workbuddy_bench.judge", module)
+    with pytest.raises(workbuddy.WorkBuddyPlanError, match="CompositeVerifier"):
+        workbuddy.validate_workbuddy_runtime()
+
+
+def test_metric_projection_uses_full_task_identity_and_preserves_sources(tmp_path):
+    jobs = tmp_path / "jobs"
+    view = tmp_path / "view"
+    view.mkdir()
+    name = "task-with-a-name-longer-than-thirty-two-characters"
+    original = name[:32] + "__same-id"
+    payload = {"overall": 0.5, "reason": "中文评分 🎯"}
+    for job in ("one", "two"):
+        trial = jobs / job / original
+        (trial / "verifier").mkdir(parents=True)
+        (trial / "config.json").write_text(
+            json.dumps({"task": {"path": "D:\\dataset\\tasks\\" + name}}),
+            encoding="utf-8",
+        )
+        (trial / "verifier/score.json").write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+    before = {p: p.read_bytes() for p in jobs.rglob("*") if p.is_file()}
+    originals = workbuddy._project_metric_trials(jobs, view, {name})
+    assert len(originals) == 2
+    assert set(originals.values()) == {original}
+    for trial in view.iterdir():
+        assert trial.name.rsplit("__", 1)[0] == name
+        assert (
+            json.loads((trial / "verifier/score.json").read_text(encoding="ascii"))
+            == payload
+        )
+    assert {p: p.read_bytes() for p in jobs.rglob("*") if p.is_file()} == before
+    with pytest.raises(workbuddy.WorkBuddyPlanError, match="outside the run plan"):
+        workbuddy._project_metric_trials(jobs, view, {"other-task"})
+
+
+@pytest.mark.parametrize("job_config", [None, {}, {"tasks": []}, {"unrelated": True}])
+def test_metric_projection_skips_job_summaries_with_trial_like_names(
+    tmp_path, job_config
+):
+    job = tmp_path / "jobs/batch__run"
+    job.mkdir(parents=True)
+    (job / "result.json").write_text('{"stats": {}, "finished_at": "fixture"}')
+    if job_config is not None:
+        (job / "config.json").write_text(json.dumps(job_config))
+    # Failed Trials still count without a score, using config or retained result evidence.
+    for name, config in (("one", {"task": {"path": "/tasks/one"}}), ("two", None)):
+        trial = job / f"{name}__attempt"
+        trial.mkdir()
+        (trial / "result.json").write_text(
+            json.dumps({"trial_name": trial.name, "task_name": name})
+        )
+        if config is not None:
+            (trial / "config.json").write_text(json.dumps(config))
+    for root in (job.parent, job):
+        view = tmp_path / f"view-{root.name}"
+        view.mkdir()
+        originals = workbuddy._project_metric_trials(root, view, {"one", "two"})
+        assert set(originals.values()) == {"one__attempt", "two__attempt"}
+
+
+def test_metric_projection_preserves_bounded_read_error(tmp_path):
+    trial = tmp_path / "jobs/one__attempt"
+    (trial / "verifier").mkdir(parents=True)
+    (trial / "verifier/score.json").write_text("{}")
+    (trial / "config.json").write_bytes(b" " * (2 * 1024 * 1024 + 1))
+    view = tmp_path / "view"
+    view.mkdir()
+    with pytest.raises(
+        workbuddy.WorkBuddyPlanError, match="Trial configuration.*bounded regular file"
+    ):
+        workbuddy._project_metric_trials(trial.parent, view, {"one"})
+
+
+@pytest.mark.parametrize(
+    "config",
+    [None, [], {}, {"task": {}}, {"task": {"path": ""}}, {"task": {"path": 1}}],
+)
+def test_metric_projection_rejects_invalid_present_identity_despite_score(
+    tmp_path, config
+):
+    trial = tmp_path / "jobs/one__attempt"
+    (trial / "verifier").mkdir(parents=True)
+    (trial / "verifier/score.json").write_text('{"overall": 1}')
+    (trial / "config.json").write_text(json.dumps(config))
+    view = tmp_path / "view"
+    view.mkdir()
+    with pytest.raises(
+        workbuddy.WorkBuddyPlanError, match="invalid Trial Task identity"
+    ):
+        workbuddy._project_metric_trials(trial.parent, view, {"one"})
 
 
 @pytest.mark.parametrize(
@@ -118,6 +294,63 @@ def test_partial_bundle_with_wrong_profile_reports_the_profile_error(plan_inputs
     assert not plan_inputs["output_root"].exists()
 
 
+@pytest.mark.parametrize(
+    "prepared_commit,current_commit",
+    [("first", "second"), ("first", None), (None, "second"), (None, None)],
+)
+def test_summary_accepts_changed_commit_provenance(
+    plan_inputs, monkeypatch, prepared_commit, current_commit
+):
+    prepared = {"version": "fixture"}
+    current = {"version": "fixture"}
+    if prepared_commit is not None:
+        prepared["commit"] = prepared_commit
+    if current_commit is not None:
+        current["commit"] = current_commit
+    monkeypatch.setattr(workbuddy, "validate_workbuddy_runtime", lambda: prepared)
+    plan = workbuddy.prepare_workbuddy_plan(**plan_inputs, task_selection=["office-00"])
+    plan_file = (
+        plan_inputs["output_root"]
+        / "harbor-plans"
+        / plan["plan_id"]
+        / "workbuddy-run-plan.json"
+    )
+    before = plan_file.read_bytes()
+    assert json.loads(before)["runtime"] == prepared
+    monkeypatch.setattr(workbuddy, "validate_workbuddy_runtime", lambda: current)
+    metrics = {"per_task": {"office-00": {"reward": 0.5}}}
+    monkeypatch.setattr(workbuddy, "compute_official_metrics", lambda *args: metrics)
+    snapshot = workbuddy.summarize_workbuddy_plan(
+        output_root=plan_inputs["output_root"],
+        plan_id=plan["plan_id"],
+        provisional=True,
+    )
+    assert snapshot["metrics"] == metrics
+    assert snapshot["runtime"] == current
+    assert bool(snapshot["warnings"]) == (prepared_commit != current_commit)
+    if prepared_commit != current_commit:
+        assert "provenance" in snapshot["warnings"][0]
+    assert plan_file.read_bytes() == before
+
+
+def test_summary_still_rejects_changed_runtime_versions(plan_inputs, monkeypatch):
+    plan = workbuddy.prepare_workbuddy_plan(**plan_inputs, task_selection=["office-00"])
+    monkeypatch.setattr(
+        workbuddy, "validate_workbuddy_runtime", lambda: {"version": "different"}
+    )
+
+    def forbidden(*args):
+        pytest.fail("incompatible runtime reached metric aggregation")
+
+    monkeypatch.setattr(workbuddy, "compute_official_metrics", forbidden)
+    with pytest.raises(workbuddy.WorkBuddyPlanError, match="runtime version changed"):
+        workbuddy.summarize_workbuddy_plan(
+            output_root=plan_inputs["output_root"],
+            plan_id=plan["plan_id"],
+            provisional=True,
+        )
+
+
 def test_summary_rejects_unselected_results(plan_inputs, monkeypatch):
     plan = workbuddy.prepare_workbuddy_plan(**plan_inputs, task_selection=["office-00"])
     monkeypatch.setattr(
@@ -153,6 +386,90 @@ def plan_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
         "dataset_path": bundle,
         "base_config": base,
     }
+
+
+@pytest.mark.parametrize(
+    "job_root,settings_root,expected",
+    [
+        ({}, "absent", "default"),
+        ({}, "caller", "caller"),
+        ({"workdir_root": "job-relative"}, "caller", "job-relative"),
+        ({"workdir_root": None}, "caller", None),
+        ({}, None, None),
+    ],
+)
+def test_host_plan_records_explicit_roots_with_configuration_precedence(
+    plan_inputs, monkeypatch, tmp_path, job_root, settings_root, expected
+):
+    base = plan_inputs["base_config"]
+    base.write_text(
+        yaml.safe_dump(
+            {
+                "agents": [{"name": "opencode"}],
+                "environment": {
+                    "import_path": "psycheval.harbor.environment:HostEnvironment",
+                    "kwargs": {
+                        "host_access": {"filesystem": True, "process": True},
+                        **job_root,
+                    },
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(workbuddy, "validate_workbuddy_host_dependencies", lambda: None)
+    monkeypatch.setattr(
+        "psycheval.harbor.workbuddy_verifier.validate_office_profile", lambda *_: None
+    )
+    monkeypatch.setenv("PEVAL_CONFIG", str(tmp_path / "missing.toml"))
+    elsewhere = tmp_path / "launch-from-here"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    settings = (
+        None
+        if settings_root == "absent"
+        else HostSettings(workdir_root=tmp_path / "caller" if settings_root else None)
+    )
+    plan = workbuddy.prepare_workbuddy_plan(
+        **plan_inputs, host_settings=settings, task_selection=["office-00"]
+    )
+    generated = yaml.safe_load(Path(plan["jobs"][0]["config"]).read_text())
+    root = generated["environment"]["kwargs"]["workdir_root"]
+    wanted = (
+        (Path.home() / "workspaces" if expected == "default" else tmp_path / expected)
+        if expected is not None
+        else None
+    )
+    assert root == (str(wanted) if wanted is not None else None)
+    assert generated["environment"]["kwargs"]["bootstrap_workbuddy_workspace"] is True
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"workdir_root": ""}, {"workdir_root": True}, {"workspace_source": "project"}],
+)
+def test_host_plan_rejects_invalid_workspace_options_before_reservation(
+    plan_inputs, kwargs
+):
+    base = plan_inputs["base_config"]
+    base.write_text(
+        yaml.safe_dump(
+            {
+                "agents": [{"name": "opencode"}],
+                "environment": {
+                    "import_path": "psycheval.harbor.environment:HostEnvironment",
+                    "kwargs": {
+                        "host_access": {"filesystem": True, "process": True},
+                        **kwargs,
+                    },
+                },
+            }
+        )
+    )
+    with pytest.raises(
+        workbuddy.WorkBuddyPlanError, match="workdir_root|workspace_source"
+    ):
+        workbuddy.prepare_workbuddy_plan(**plan_inputs)
+    assert not plan_inputs["output_root"].exists()
 
 
 @pytest.mark.parametrize(
@@ -312,14 +629,37 @@ def test_extracted_skill_files_are_not_group_or_world_writable(
     assert stat.S_IMODE(skill.stat().st_mode) == expected
 
 
-@pytest.mark.parametrize("name", [".GIT/config", ".GiT/hooks/run", "."])
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".GIT/config",
+        ".GiT/hooks/run",
+        ".",
+        ".git./config",
+        "nested/.Git /config",
+        "file:stream",
+        "nested/D:outside/file",
+        ".. /escape.txt",
+        "ordinary.txt.",
+        "ordinary.txt ",
+        "ordinary. /file.txt",
+    ],
+)
 def test_skill_extraction_rejects_git_paths_and_a_regular_root_entry(
-    plan_inputs: dict, name: str
+    plan_inputs: dict, name: str, monkeypatch
 ) -> None:
     _replace_skill_archive(
         plan_inputs,
         [("SKILL.md", b"# Local skill\n", 0o644), (name, b"unexpected", 0o644)],
     )
+    original_join = Path.joinpath
+
+    def guarded_join(path, *parts):
+        if any(":" in str(part) for part in parts):
+            pytest.fail("Skill archive drive or stream reached native path mapping")
+        return original_join(path, *parts)
+
+    monkeypatch.setattr(Path, "joinpath", guarded_join)
     with pytest.raises(workbuddy.WorkBuddyPlanError, match="path is unsafe"):
         workbuddy.prepare_workbuddy_plan(**plan_inputs)
 
@@ -333,11 +673,30 @@ def test_skill_extraction_accepts_a_root_directory_entry(plan_inputs: dict) -> N
     assert (Path(plan["skill_dir"]) / "SKILL.md").read_bytes() == content
 
 
-def test_skill_extraction_compares_original_duplicate_modes(plan_inputs: dict) -> None:
+@pytest.mark.skipif(os.name != "nt", reason="native Windows filename aliases")
+def test_skill_extraction_does_not_overwrite_a_native_filename_alias(plan_inputs):
     _replace_skill_archive(
         plan_inputs,
-        [("SKILL.md", b"same", 0o666), ("SKILL.md", b"same", 0o644)],
+        [("SKILL.md", b"original", 0o644), ("skill.md", b"overwrite", 0o644)],
     )
+    with pytest.raises(
+        workbuddy.WorkBuddyPlanError, match="conflicting duplicate paths"
+    ):
+        workbuddy.prepare_workbuddy_plan(**plan_inputs)
+
+
+@pytest.mark.parametrize("second_mode", [0o666, 0o644])
+def test_skill_extraction_compares_original_duplicate_modes(
+    plan_inputs: dict, second_mode: int
+) -> None:
+    _replace_skill_archive(
+        plan_inputs,
+        [("SKILL.md", b"same", 0o666), ("SKILL.md", b"same", second_mode)],
+    )
+    if second_mode == 0o666:
+        plan = workbuddy.prepare_workbuddy_plan(**plan_inputs)
+        assert (Path(plan["skill_dir"]) / "SKILL.md").read_bytes() == b"same"
+        return
     with pytest.raises(workbuddy.WorkBuddyPlanError, match="conflicting duplicate"):
         workbuddy.prepare_workbuddy_plan(**plan_inputs)
 

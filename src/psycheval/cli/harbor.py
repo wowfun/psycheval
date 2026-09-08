@@ -14,6 +14,7 @@ from psycheval.config import (
     write_workspace_harbor_config,
 )
 from psycheval.harbor import windows, workbuddy
+from psycheval.harbor.runtime_config import load_host_settings
 from psycheval.harbor.workbuddy import WorkBuddyPlanError
 
 
@@ -40,11 +41,11 @@ def prepare_workbuddy_plan(
         task_selection=task_selection,
         limit=limit,
         allow_partial=registered.allow_partial,
+        host_settings=load_host_settings(root / "peval.toml"),
     )
     plan_id = plan["plan_id"]
     jobs_root = plan["jobs_root"]
     warnings = plan["warnings"]
-    host_mode = plan["host_environment"]
     mount = HarborMount(id=plan_id, path=str(jobs_root), dataset_ids=(registered.id,))
     write_workspace_harbor_config(
         root / "peval.toml",
@@ -54,15 +55,12 @@ def prepare_workbuddy_plan(
     for warning in warnings:
         print(f"warning: {warning}")
     native_windows = platform.system() == "Windows"
-    if host_mode and native_windows:
-        print(
-            "$env:PEVAL_CONFIG = "
-            + windows.quote_powershell_literal(str(root / "peval.toml"))
-        )
+    if native_windows:
+        # Harbor 0.21 reads Task text with Python's process-default encoding.
+        print("$env:PYTHONUTF8 = '1'")
+        print("$env:PYTHONIOENCODING = 'utf-8'")
     for item in plan["jobs"]:
         command = ["harbor", "run", "-c", str(item["config"])]
-        if host_mode and not native_windows:
-            command = ["env", f"PEVAL_CONFIG={root / 'peval.toml'}", *command]
         print(
             windows.powershell_command(command)
             if native_windows

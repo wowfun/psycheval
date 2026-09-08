@@ -239,7 +239,10 @@ class WorkBuddyDatasetTests(unittest.TestCase):
             bundle = _write_workbuddy_bundle(root / "bundle")
             outside = root / "outside.txt"
             outside.write_text("private", encoding="utf-8")
-            (bundle / "tasks" / "office-one" / "linked.txt").symlink_to(outside)
+            try:
+                (bundle / "tasks" / "office-one" / "linked.txt").symlink_to(outside)
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
             with self.assertRaisesRegex(HarborDatasetError, "symbolic link"):
                 validate_harbor_dataset(
                     dataset_id="office", path=str(bundle), format="workbuddy.v1"
@@ -256,7 +259,10 @@ class WorkBuddyDatasetTests(unittest.TestCase):
             config_path.write_text("")
             bundle = _write_workbuddy_bundle(root / "physical")
             linked = root / "linked"
-            linked.symlink_to(bundle, target_is_directory=True)
+            try:
+                linked.symlink_to(bundle, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
 
             configured = HarborWorkspace(
                 config_path, ToolConfig(workspace_root=str(workspace))

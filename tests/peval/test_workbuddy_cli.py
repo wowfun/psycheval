@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import platform
 import shutil
 import tarfile
 import tempfile
@@ -154,8 +155,12 @@ class WorkBuddyCliTests(unittest.TestCase):
             self.assertEqual(
                 special["agents"][0]["mcp_servers"][0]["transport"], "stdio"
             )
-            self.assertIn("harbor run -c", stdout.getvalue())
-            self.assertIn("peval harbor summarize", stdout.getvalue())
+            if platform.system() == "Windows":
+                self.assertIn("& 'harbor' 'run' '-c'", stdout.getvalue())
+                self.assertIn("& 'peval' 'harbor' 'summarize'", stdout.getvalue())
+            else:
+                self.assertIn("harbor run -c", stdout.getvalue())
+                self.assertIn("peval harbor summarize", stdout.getvalue())
             configured = (root / "peval.toml").read_text()
             self.assertIn("[[harbor.mounts]]", configured)
             self.assertIn('dataset_ids = ["office"]', configured)
@@ -538,7 +543,7 @@ class WorkBuddyCliTests(unittest.TestCase):
                 "environment:\n"
                 "  import_path: psycheval.harbor.environment:HostEnvironment\n"
                 "  kwargs:\n"
-                "    allow_host_execution: true\n"
+                "    host_access: {filesystem: true, process: true}\n"
             )
             with (
                 patch(
@@ -579,6 +584,11 @@ class WorkBuddyCliTests(unittest.TestCase):
             self.assertEqual(environment["override_memory_mb"], 0)
             self.assertEqual(environment["override_storage_mb"], 0)
             self.assertTrue(environment["kwargs"]["bootstrap_workbuddy_workspace"])
+            self.assertEqual(
+                environment["kwargs"]["host_access"],
+                {"filesystem": True, "process": True},
+            )
+            self.assertEqual(environment["kwargs"]["workspace_baseline"], "git")
             self.assertTrue(plan["host_environment"])
             mcp = special["agents"][0]["mcp_servers"][0]
             self.assertEqual(
@@ -590,7 +600,7 @@ class WorkBuddyCliTests(unittest.TestCase):
                 "input/workspace/exports",
             )
 
-    def test_prepare_rejects_integer_host_execution_opt_in(self) -> None:
+    def test_prepare_rejects_non_boolean_host_access(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bundle = root / "bundle"
@@ -603,7 +613,7 @@ class WorkBuddyCliTests(unittest.TestCase):
                 "environment:\n"
                 "  import_path: psycheval.harbor.environment:HostEnvironment\n"
                 "  kwargs:\n"
-                "    allow_host_execution: 1\n"
+                "    host_access: {filesystem: true, process: 1}\n"
             )
             stderr = io.StringIO()
             with (
@@ -627,7 +637,61 @@ class WorkBuddyCliTests(unittest.TestCase):
                 )
 
             self.assertEqual(exit_code, 1)
-            self.assertIn("allow_host_execution=true", stderr.getvalue())
+            self.assertIn("HostAccessPolicy fields must be booleans", stderr.getvalue())
+
+    def test_prepare_rejects_incomplete_host_capabilities(self) -> None:
+        cases = (
+            (
+                "host_access: {filesystem: true, process: false}\n",
+                "host_access.process=true",
+            ),
+            (
+                "host_access: {filesystem: true, process: true}\n"
+                "workspace_baseline: none\n",
+                "workspace_baseline='git'",
+            ),
+        )
+        for host_kwargs, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                bundle = root / "bundle"
+                _write_office_bundle(bundle)
+                base = _write_workspace(root, bundle)
+                kwargs_yaml = "".join(
+                    f"    {line}\n" for line in host_kwargs.splitlines()
+                )
+                base.write_text(
+                    "job_name: host\n"
+                    "agents:\n"
+                    "  - name: opencode\n"
+                    "environment:\n"
+                    "  import_path: psycheval.harbor.environment:HostEnvironment\n"
+                    "  kwargs:\n" + kwargs_yaml,
+                    encoding="utf-8",
+                )
+                stderr = io.StringIO()
+                with (
+                    patch(
+                        "psycheval.harbor.workbuddy.validate_workbuddy_runtime",
+                        return_value={"version": "0.1.0"},
+                    ),
+                    redirect_stderr(stderr),
+                ):
+                    exit_code = main(
+                        [
+                            "harbor",
+                            "prepare",
+                            "-r",
+                            str(root),
+                            "--dataset",
+                            "office",
+                            "--config",
+                            str(base),
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn(expected, stderr.getvalue())
 
     def test_summarize_requires_terminal_jobs_then_delegates_official_metrics(
         self,
@@ -771,7 +835,12 @@ class WorkBuddyCliTests(unittest.TestCase):
             outside.mkdir()
             (root / "harbor-jobs").mkdir()
             linked_jobs = root / "harbor-jobs" / plan_id
-            linked_jobs.symlink_to(outside, target_is_directory=True)
+            try:
+                linked_jobs.symlink_to(outside, target_is_directory=True)
+            except OSError as exc:
+                if getattr(exc, "winerror", None) == 1314:
+                    self.skipTest("Windows symlink privilege is unavailable")
+                raise
             (root / "peval.toml").write_text("")
             plan = {
                 "schema": "psycheval.workbuddy-run-plan.v2",

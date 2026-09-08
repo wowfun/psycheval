@@ -15,7 +15,6 @@ import re
 import secrets
 import shutil
 import stat
-import subprocess
 import sys
 import tarfile
 import tempfile
@@ -30,7 +29,9 @@ import yaml
 from harbor.models.job.config import JobConfig
 
 from .datasets import ResolvedHarborDataset, validate_harbor_dataset
+from .environment import HostAccessPolicy
 from .identifiers import HARBOR_ID_RE
+from .runtime_config import DEFAULT_WORKDIR_ROOT, HostSettings, _resolve_host_path
 
 PLAN_SCHEMA = "psycheval.workbuddy-run-plan.v2"
 SUMMARY_SCHEMA = "psycheval.workbuddy-summary.v2"
@@ -45,7 +46,6 @@ OFFICE_TASK_COUNT = 50
 SPECIAL_TASK = "recruiting-search-skill-mock-mcp-hardened"
 COMPOSITE_VERIFIER = "workbuddy_bench.judge:CompositeVerifier"
 WORKBUDDY_VERSION = "0.1.0"
-WORKBUDDY_SOURCE_COMMIT = "625b2233093ae4f23e76be28c1f341d41cc70373"
 LLM_REQUIRED_ENV = (
     "WORKBUDDY_VERIFIER_LLM_BASE_URL",
     "WORKBUDDY_VERIFIER_LLM_API_KEY",
@@ -73,6 +73,7 @@ def prepare_workbuddy_plan(
     task_selection: list[str] | None = None,
     limit: int | None = None,
     allow_partial: bool = False,
+    host_settings: HostSettings | None = None,
 ) -> dict[str, Any]:
     root = _output_root(output_root)
     resolved = validate_harbor_dataset(
@@ -84,10 +85,13 @@ def prepare_workbuddy_plan(
     _validate_office_dataset(resolved, allow_partial=allow_partial)
     task_names = _select_tasks(resolved.task_names, task_selection, limit)
     runtime = validate_workbuddy_runtime()
-    base = _load_base_config(Path(base_config).expanduser().resolve())
+    base_path = Path(base_config).expanduser().resolve()
+    base = _load_base_config(base_path)
     _validate_base_ownership(base)
     _validate_llm_environment()
-    host_mode = _adapt_explicit_host_environment(base)
+    host_mode = _adapt_explicit_host_environment(
+        base, base_dir=base_path.parent, host_settings=host_settings
+    )
 
     if host_mode and platform.system() == "Windows":
         from .workbuddy_verifier import validate_office_profile
@@ -201,14 +205,21 @@ def summarize_workbuddy_plan(
     ):
         raise WorkBuddyPlanError("run plan runtime identity is invalid")
     current_runtime = validate_workbuddy_runtime()
-    if current_runtime != expected_runtime:
+    if current_runtime["version"] != expected_runtime.get("version"):
         raise WorkBuddyPlanError(
-            "WorkBuddy runtime identity changed after plan preparation"
+            "WorkBuddy runtime version changed after plan preparation"
         )
     metrics = compute_official_metrics(jobs_root, expected)
     per_task = metrics.get("per_task")
     if isinstance(per_task, dict) and set(per_task) - set(expected):
         raise WorkBuddyPlanError("WorkBuddy results contain tasks outside the run plan")
+    warnings = list(plan.get("warnings") or [])
+    if current_runtime.get("commit") != expected_runtime.get("commit"):
+        warnings.append(
+            "WorkBuddy runtime source provenance differs from preparation; "
+            "aggregate scores may not be directly comparable. "
+            "See the plan and summary runtime metadata."
+        )
     snapshot = {
         **{key: plan[key] for key in _SELECTION_FIELDS},
         "schema": SUMMARY_SCHEMA,
@@ -217,7 +228,8 @@ def summarize_workbuddy_plan(
         "provisional": bool(pending),
         "pending_jobs": pending,
         "metrics": metrics,
-        "warnings": list(plan.get("warnings") or []),
+        "runtime": current_runtime,
+        "warnings": warnings,
     }
     _atomic_write_json(plan_dir / "workbuddy-summary.json", snapshot)
     return snapshot
@@ -320,11 +332,6 @@ def validate_workbuddy_runtime() -> dict[str, str]:
     commit = _distribution_commit(distribution)
     if commit is not None:
         identity["commit"] = commit
-        if commit != WORKBUDDY_SOURCE_COMMIT:
-            raise WorkBuddyPlanError(
-                "workbuddy-bench source commit must be "
-                f"{WORKBUDDY_SOURCE_COMMIT}, found {commit}"
-            )
     try:
         module = importlib.import_module("workbuddy_bench.judge")
         verifier = getattr(module, "CompositeVerifier")
@@ -381,10 +388,93 @@ def compute_official_metrics(
         compute: Callable[..., Any] = getattr(module, "compute_job_metrics")
     except (ImportError, AttributeError, ValueError) as exc:
         raise WorkBuddyPlanError("WorkBuddy official metrics are unavailable") from exc
-    metrics = compute(jobs_root, expected_tasks=expected_tasks)
+    with tempfile.TemporaryDirectory(prefix="workbuddy-metrics-") as directory:
+        view = Path(directory)
+        originals = _project_metric_trials(jobs_root, view, set(expected_tasks))
+        metrics = compute(view, expected_tasks=expected_tasks)
     if not isinstance(metrics, dict):
         raise WorkBuddyPlanError("WorkBuddy official metrics returned a non-object")
+    metrics["run_dir"] = str(jobs_root)
+    for task in metrics.get("per_task", {}).values():
+        for attempt in task.get("attempts", []):
+            name = attempt.get("trial")
+            if name in originals:
+                attempt["trial"] = originals[name]
     return metrics
+
+
+def _project_metric_trials(
+    jobs_root: Path, view: Path, expected: set[str]
+) -> dict[str, str]:
+    """Bridge Harbor's truncated Trial names to the WorkBuddy scorer's directory API."""
+    originals = {}
+    if not jobs_root.exists():
+        return originals
+    _require_unlinked_path(jobs_root, "Jobs root")
+    parents = [jobs_root, *(p for p in jobs_root.iterdir() if p.is_dir())]
+    for parent in parents:
+        _require_unlinked_path(parent, "Job directory")
+        for trial in parent.iterdir():
+            if not trial.is_dir() or "__" not in trial.name:
+                continue
+            _require_unlinked_path(trial, "Trial directory")
+            score = trial / "verifier/score.json"
+            result = trial / "result.json"
+            if not score.exists() and not result.exists():
+                continue
+            task_name, suffix = trial.name.rsplit("__", 1)
+            config_path = trial / "config.json"
+            config = None
+            if config_path.exists():
+                raw = _read_bounded_regular_bytes(config_path, "Trial configuration")
+                try:
+                    config = json.loads(raw.decode("utf-8"))
+                except ValueError as exc:
+                    raise WorkBuddyPlanError("invalid Trial Task identity") from exc
+            has_task = isinstance(config, dict) and "task" in config
+            if not score.exists() and not has_task:
+                raw = _read_bounded_regular_bytes(result, "Harbor result")
+                try:
+                    result_data = json.loads(raw.decode("utf-8"))
+                except ValueError as exc:
+                    raise WorkBuddyPlanError("invalid Harbor result") from exc
+                if not (
+                    isinstance(result_data, dict)
+                    and isinstance(result_data.get("task_name"), str)
+                    and isinstance(result_data.get("trial_name"), str)
+                ):
+                    continue  # A Job summary is not Trial evidence.
+            if config_path.exists():
+                try:
+                    task_path = config["task"]["path"]
+                    if not isinstance(task_path, str) or not task_path:
+                        raise ValueError("missing Task path")
+                    task_name = PurePosixPath(task_path.replace("\\", "/")).name
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise WorkBuddyPlanError("invalid Trial Task identity") from exc
+            if task_name not in expected:
+                raise WorkBuddyPlanError(
+                    "WorkBuddy results contain tasks outside the run plan"
+                )
+            identity = hashlib.sha256(
+                str(trial.relative_to(jobs_root)).encode()
+            ).hexdigest()[:12]
+            projected = view / f"{task_name}__{suffix}-{identity}"
+            projected.mkdir()
+            originals[projected.name] = trial.name
+            (projected / "result.json").write_text("{}", encoding="ascii")
+            if score.exists():
+                _require_unlinked_path(score.parent, "verifier directory")
+                raw = _read_bounded_regular_bytes(score, "WorkBuddy score")
+                try:
+                    payload = json.loads(raw.decode("utf-8"))
+                except (UnicodeError, json.JSONDecodeError):
+                    payload = {}  # The official scorer treats unreadable scores as missing.
+                (projected / "verifier").mkdir()
+                (projected / "verifier/score.json").write_text(
+                    json.dumps(payload, ensure_ascii=True), encoding="ascii"
+                )
+    return originals
 
 
 def _validate_office_dataset(
@@ -513,7 +603,9 @@ def _validate_llm_environment() -> None:
         )
 
 
-def _adapt_explicit_host_environment(base: dict[str, Any]) -> bool:
+def _adapt_explicit_host_environment(
+    base: dict[str, Any], *, base_dir: Path, host_settings: HostSettings | None
+) -> bool:
     environment = base.get("environment") or {}
     if not isinstance(environment, dict):
         return False
@@ -522,19 +614,39 @@ def _adapt_explicit_host_environment(base: dict[str, Any]) -> bool:
     kwargs = environment.get("kwargs") or {}
     if not isinstance(kwargs, dict):
         raise WorkBuddyPlanError("HostEnvironment kwargs must be an object")
-    allow_host_execution = kwargs.get("allow_host_execution")
-    if not (
-        allow_host_execution is True
-        or (
-            isinstance(allow_host_execution, str)
-            and allow_host_execution.strip().lower() in {"1", "true", "yes", "on"}
-        )
-    ):
+    try:
+        host_access = HostAccessPolicy.from_value(kwargs.get("host_access"))
+    except ValueError as exc:
+        raise WorkBuddyPlanError(str(exc)) from exc
+    if not host_access.filesystem or not host_access.process:
         raise WorkBuddyPlanError(
             "WorkBuddy host preparation requires explicit "
-            "environment.kwargs.allow_host_execution=true"
+            "environment.kwargs.host_access.filesystem=true and "
+            "environment.kwargs.host_access.process=true"
         )
+    if kwargs.get("workspace_baseline", "git") != "git":
+        raise WorkBuddyPlanError(
+            "WorkBuddy host preparation requires "
+            "environment.kwargs.workspace_baseline='git'"
+        )
+    if kwargs.get("workspace_source") is not None:
+        raise WorkBuddyPlanError("WorkBuddy host bootstrap cannot use workspace_source")
+    root = kwargs.get(
+        "workdir_root",
+        host_settings.workdir_root
+        if host_settings is not None
+        else DEFAULT_WORKDIR_ROOT,
+    )
+    try:
+        resolved_root = _resolve_host_path(
+            root, base=base_dir, label="HostEnvironment workdir_root"
+        )
+    except ValueError as exc:
+        raise WorkBuddyPlanError(str(exc)) from exc
+    kwargs["workdir_root"] = str(resolved_root) if resolved_root is not None else None
     validate_workbuddy_host_dependencies()
+    kwargs["host_access"] = {"filesystem": True, "process": True}
+    kwargs["workspace_baseline"] = "git"
     kwargs["bootstrap_workbuddy_workspace"] = True
     environment["kwargs"] = kwargs
     environment["force_build"] = False
@@ -650,6 +762,7 @@ def _extract_special_skill(
                 if (
                     path.is_absolute()
                     or "\\" in member.name
+                    or ":" in member.name
                     or any(part == ".." for part in path.parts)
                 ):
                     raise WorkBuddyPlanError("special Skill archive path is unsafe")
@@ -657,7 +770,8 @@ def _extract_special_skill(
                     continue
                 relative = path.relative_to(prefix)
                 if (path == prefix and not member.isdir()) or any(
-                    part.lower() in {"", ".", "..", ".git"} for part in relative.parts
+                    part.endswith((" ", ".")) or part.lower() == ".git"
+                    for part in relative.parts
                 ):
                     raise WorkBuddyPlanError("special Skill archive path is unsafe")
                 if (
@@ -703,7 +817,13 @@ def _extract_special_skill(
                     continue
                 seen[relative] = identity
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(content)
+                try:
+                    with target.open("xb") as output:
+                        output.write(content)
+                except FileExistsError as exc:
+                    raise WorkBuddyPlanError(
+                        "special Skill archive has conflicting duplicate paths"
+                    ) from exc
                 target.chmod(member.mode & 0o755)
                 found = True
     except (OSError, tarfile.TarError) as exc:
@@ -992,26 +1112,12 @@ def _read_bounded_regular_bytes(path: Path, label: str) -> bytes:
 def _distribution_commit(
     distribution: importlib.metadata.Distribution,
 ) -> str | None:
+    """Read optional installation provenance without inspecting source checkouts."""
     try:
         text = distribution.read_text("direct_url.json")
         direct = json.loads(text) if text else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     vcs = direct.get("vcs_info") if isinstance(direct, dict) else None
-    if isinstance(vcs, dict) and isinstance(vcs.get("commit_id"), str):
-        return vcs["commit_id"]
-    if not isinstance(direct, dict) or not isinstance(direct.get("url"), str):
-        return None
-    url = direct["url"]
-    if not url.startswith("file://"):
-        return None
-    source = Path(url.removeprefix("file://"))
-    if not (source / ".git").exists():
-        return None
-    result = subprocess.run(
-        ["git", "-C", str(source), "rev-parse", "HEAD"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip() if result.returncode == 0 else None
+    commit = vcs.get("commit_id") if isinstance(vcs, dict) else None
+    return commit if isinstance(commit, str) and commit else None

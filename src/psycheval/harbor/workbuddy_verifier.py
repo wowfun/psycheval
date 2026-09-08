@@ -1,4 +1,4 @@
-"""Bash-free execution of the pinned WorkBuddy Office verifier profile.
+"""Bash-free execution of the WorkBuddy Office verifier profile.
 
 Office policy lives here; Windows mechanics live in windows. No optional
 WorkBuddy imports occur until verification, so this module is relocatable.
@@ -10,6 +10,7 @@ import ast
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import shlex
@@ -35,9 +36,8 @@ from .datasets import (
     _walk_regular_tree,
 )
 
-# AST identity of Office v1.0 shared/verifier/rule.py, whose execution wrapper
-# is implemented below. This is a supported-profile contract, not a cache key.
-_RULE_AST_SHA256 = "50b36de72a37b460946bb725966eee468f75122ec416c5bbe45ebf2efb190257"
+logger = logging.getLogger(__name__)
+
 _PATH_LITERAL = re.compile(r"^/(workspace|tests|logs)(?:/|$)")
 _PYTHONPATHS = {
     "PYTHONPATH=/workspace:${PYTHONPATH:-}": ("/workspace",),
@@ -65,6 +65,7 @@ class OfficeRule:
     template: str
     score_python: str
     reward_python: str
+    source_sha256: str
 
 
 @dataclass(frozen=True)
@@ -96,28 +97,44 @@ def _parse_python(source: str) -> ast.Module:
 
 
 def _load_rule(root: Path) -> OfficeRule:
-    source = _read_source(root, root / "shared/verifier/rule.py")
-    tree = _parse_python(source)
-    digest = hashlib.sha256(
-        ast.dump(tree, include_attributes=False).encode()
-    ).hexdigest()
-    if digest != _RULE_AST_SHA256:
-        raise OfficeProfileError("unsupported Office rule execution template")
-    template = next(
-        node.value.strip()
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and "__PYTEST_COMMAND__" in node.value
-        and "PY_SCORE" in node.value
+    source = _read_regular_bytes(
+        root, root / "shared/verifier/rule.py", max_bytes=TASK_TEXT_LIMIT
     )
+    tree = _parse_python(source.decode("utf-8-sig"))
+    template = next(
+        (
+            node.value.strip()
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and "__PYTEST_COMMAND__" in node.value
+            and "PY_SCORE" in node.value
+        ),
+        None,
+    )
+    if template is None:
+        raise OfficeProfileError("Office rule execution template is unavailable")
 
     # Reuse the source profile's Python score/reward code verbatim except for
     # file-access paths. Scoring conditions have no second implementation.
     def embedded(marker: str) -> str:
-        return template.split(f"<<'{marker}'\n", 1)[1].split(f"\n{marker}\n", 1)[0]
+        match = re.search(
+            rf"<<'{marker}'\r?\n(.*?)\r?\n{marker}(?:\r?\n|$)",
+            template,
+            re.DOTALL,
+        )
+        if match is None:
+            raise OfficeProfileError(
+                f"Office rule execution template is missing {marker}"
+            )
+        return match.group(1)
 
-    return OfficeRule(template, embedded("PY_SCORE"), embedded("PY_REWARD"))
+    return OfficeRule(
+        template,
+        embedded("PY_SCORE"),
+        embedded("PY_REWARD"),
+        hashlib.sha256(source).hexdigest(),
+    )
 
 
 def _load_command(task_dir: Path) -> OfficeCommand:
@@ -175,6 +192,18 @@ def _adapt_python(
     }
     edits = []
     audit = []
+
+    def skipped(node: ast.AST, reason: str) -> None:
+        audit.append(
+            {
+                "line": node.lineno,
+                "column": node.col_offset,
+                "kind": "skipped",
+                "reason": reason,
+                "before": ast.get_source_segment(source, node) or ast.unparse(node),
+            }
+        )
+
     for node in ast.walk(tree):
         if (
             not isinstance(node, ast.Constant)
@@ -184,9 +213,8 @@ def _adapt_python(
             continue
         parent = parents.get(node)
         if isinstance(parent, ast.JoinedStr):
-            raise OfficeProfileError(
-                f"unsupported Office interpolated path at line {node.lineno}: {node.value}"
-            )
+            skipped(parent, "unrecognized interpolated path")
+            continue
         ancestors = []
         cursor = parent
         while cursor is not None:
@@ -204,6 +232,14 @@ def _adapt_python(
             ast.unparse(call.func) in {"Path", "sys.path.insert", "os.environ.get"}
             for call in calls
         )
+        direct_call = parents.get(parent) if isinstance(parent, ast.keyword) else parent
+        if isinstance(direct_call, ast.Call):
+            opener = ast.unparse(direct_call.func)
+            if opener in {"open", "builtins.open", "io.open", "os.open"}:
+                path_keyword = "path" if opener == "os.open" else "file"
+                allowed |= bool(direct_call.args and direct_call.args[0] is node) or (
+                    isinstance(parent, ast.keyword) and parent.arg == path_keyword
+                )
         allowed |= (
             isinstance(parent, ast.keyword)
             and parent.arg == "default"
@@ -222,9 +258,8 @@ def _adapt_python(
             for item in ancestors
         ) and isinstance(parent, (ast.Return, ast.BoolOp))
         if not allowed:
-            raise OfficeProfileError(
-                f"unsupported Office path expression at line {node.lineno}: {node.value}"
-            )
+            skipped(node, "unrecognized path expression")
+            continue
         try:
             mapped = windows.translate_literal(node.value, mappings)
         except ValueError as exc:
@@ -232,7 +267,8 @@ def _adapt_python(
                 f"invalid Office path at line {node.lineno}: {node.value}"
             ) from exc
         if mapped is None:
-            raise OfficeProfileError(f"unmapped Office path: {node.value}")
+            skipped(node, "no native path mapping")
+            continue
         edits.append((node, repr(mapped)))
         audit.append(
             {
@@ -241,6 +277,45 @@ def _adapt_python(
                 "kind": "file_path",
                 "before": node.value,
                 "after": mapped,
+            }
+        )
+    # WindowsPath sorts without case sensitivity. Preserve the source POSIX
+    # traversal order used by snapshot hashes, without changing any hash inputs.
+    snapshot_roots = {
+        "_compute_snapshot": "root",
+        "_compute_workspace_snapshot": "workspace_root",
+        "_protected_root_rollup": "base",
+    }
+    for function in tree.body:
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        root = snapshot_roots.get(function.name)
+        if root is None:
+            continue
+        calls = [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "sorted"
+        ]
+        expected = f"sorted((p for p in {root}.rglob('*') if p.is_file()))"
+        if len(calls) != 1 or ast.unparse(calls[0]) != expected:
+            skipped(function, "unrecognized snapshot traversal")
+            continue
+        node = calls[0]
+        expression = (
+            f"sorted((p for p in {root}.rglob('*') if p.is_file()), "
+            "key=lambda p: p.parts)"
+        )
+        edits.append((node, expression))
+        audit.append(
+            {
+                "line": node.lineno,
+                "column": node.col_offset,
+                "kind": "path_order",
+                "before": expected,
+                "after": expression,
             }
         )
     # The MCP probe validates the source config's literal "python3" contract.
@@ -253,15 +328,18 @@ def _adapt_python(
             continue
         returns = [n for n in ast.walk(function) if isinstance(n, ast.Return)]
         if len(returns) != 1:
-            raise OfficeProfileError("unsupported Office MCP probe launch")
+            skipped(function, "unrecognized MCP probe launch")
+            continue
         value = returns[0].value
         if (
             not isinstance(value, ast.Tuple)
+            or not value.elts
             or not isinstance(value.elts[0], ast.List)
             or not value.elts[0].elts
             or ast.unparse(value.elts[0].elts[0]) != "command"
         ):
-            raise OfficeProfileError("unsupported Office MCP probe launch")
+            skipped(returns[0], "unrecognized MCP probe launch")
+            continue
         node = value.elts[0].elts[0]
         expression = f"({sys.executable!r} if command == 'python3' else command)"
         edits.append((node, expression))
@@ -283,7 +361,7 @@ def _adapt_python(
 def validate_office_profile(
     resolved: ResolvedHarborDataset, task_names: Sequence[str]
 ) -> None:
-    """Non-executing validation before a native plan is reserved."""
+    """Check required native inputs without enforcing source identity or shape."""
     _walk_regular_tree(resolved.source_root / "shared")
     _load_rule(resolved.source_root)
     # Native values are immaterial here; exercise exactly the rewrite recognizer.
@@ -397,7 +475,7 @@ class NativeOfficeExecutor:
         if (
             (shell is not None and shell is not True)
             or command != expected
-            or str(cwd) not in {"/workspace", str(self.mappings["/workspace"])}
+            or Path(str(cwd)) not in {Path("/workspace"), self.mappings["/workspace"]}
         ):
             raise OfficeProfileError(
                 "native Office executor received an unsupported command"
@@ -455,6 +533,8 @@ class NativeOfficeExecutor:
                 "-m",
                 "pytest",
                 self.path(self.command.pytest_target),
+                f"--rootdir={self.task_dir / 'tests'}",
+                f"--confcutdir={self.task_dir / 'tests'}",
                 "-p",
                 "no:cacheprovider",
                 "-v",
@@ -645,16 +725,17 @@ class WindowsOfficeVerifier(BaseVerifier):
                 )
                 source = original_bytes.decode("utf-8-sig")
                 adapted, edits = _adapt_python(source, executor.mappings)
-                if edits:
+                adapted_bytes = original_bytes
+                if adapted != source:
+                    adapted_bytes = adapted.encode("utf-8")
                     path.chmod(path.stat().st_mode | stat.S_IWUSR)
-                    path.write_bytes(adapted.encode("utf-8"))
+                    path.write_bytes(adapted_bytes)
+                if edits:
                     audit.append(
                         {
                             "path": path.relative_to(task).as_posix(),
                             "source_sha256": hashlib.sha256(original_bytes).hexdigest(),
-                            "adapted_sha256": hashlib.sha256(
-                                adapted.encode()
-                            ).hexdigest(),
+                            "adapted_sha256": hashlib.sha256(adapted_bytes).hexdigest(),
                             "edits": edits,
                         }
                     )
@@ -662,7 +743,7 @@ class WindowsOfficeVerifier(BaseVerifier):
                 json.dumps(
                     {
                         "schema": "psycheval.workbuddy-office-adaptation.v1",
-                        "rule_ast_sha256": _RULE_AST_SHA256,
+                        "rule_source_sha256": executor.rule.source_sha256,
                         "files": audit,
                     },
                     ensure_ascii=False,
@@ -670,6 +751,15 @@ class WindowsOfficeVerifier(BaseVerifier):
                 ),
                 encoding="utf-8",
             )
+            skipped_count = sum(
+                edit["kind"] == "skipped" for entry in audit for edit in entry["edits"]
+            )
+            if skipped_count:
+                logger.warning(
+                    "Native Office adaptation skipped %d source expressions; "
+                    "grading is best effort. See office-adaptation.json.",
+                    skipped_count,
+                )
             contract = load_verifier_contract(task)
             runtime = HarborAttemptRuntime(
                 verifier=self,
@@ -711,5 +801,13 @@ class WindowsOfficeVerifier(BaseVerifier):
             score = await registry.engine().run(context, plan)
             if registry.finalize_score is not None:
                 score = await maybe_await(registry.finalize_score(score, context, plan))
+            if skipped_count:
+                score = replace(
+                    score,
+                    diagnostics={
+                        **score.diagnostics,
+                        "native_adaptation": {"skipped": skipped_count},
+                    },
+                )
             runtime.write_score(score)
             return VerifierResult(rewards=score.reward_payload())

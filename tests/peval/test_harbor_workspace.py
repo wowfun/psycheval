@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import os
@@ -12,7 +13,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from harbor.models.dataset.manifest import DatasetManifest
-from harbor.publisher.packager import Packager
 
 from psycheval.config import (
     HarborDataset,
@@ -20,6 +20,7 @@ from psycheval.config import (
     ToolConfig,
     apply_toml_config,
 )
+from psycheval.harbor.tasks import select_publishable_task_files
 from psycheval.serve import (
     ServeAccess,
     ServeRuntime,
@@ -584,7 +585,17 @@ class HarborWorkspaceTests(unittest.TestCase):
             manifest = DatasetManifest.from_toml_file(root / "dataset" / "dataset.toml")
             self.assertEqual([task.name for task in manifest.tasks], ["local/chinese"])
             digest = manifest.tasks[0].digest
-            expected_hash, _ = Packager.compute_content_hash(task_dir)
+            publishable = select_publishable_task_files(
+                task_dir,
+                files=(path for path in task_dir.rglob("*") if path.is_file()),
+                read_bytes=lambda path: path.read_bytes(),
+            )
+            outer = hashlib.sha256()
+            for path in publishable:
+                relative = path.relative_to(task_dir).as_posix()
+                file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+                outer.update(f"{relative}\0{file_hash}\n".encode())
+            expected_hash = outer.hexdigest()
             self.assertEqual(digest, f"sha256:{expected_hash}")
 
             (task_dir / "environment" / "忽略.txt").write_text(
