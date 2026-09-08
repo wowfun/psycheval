@@ -69,7 +69,7 @@ uv run harbor run \
   --path datasets/pbench-v1.0/trend-digest-01 \
   --resume-trajectory \
   --env psycheval.harbor.environment:HostEnvironment \
-  --environment-kwarg allow_host_execution=true \
+  --environment-kwarg 'host_access={"filesystem":true,"process":true}' \
   [AGENT OPTIONS]
 ```
 

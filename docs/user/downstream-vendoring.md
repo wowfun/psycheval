@@ -43,7 +43,9 @@ For an external harness Job, use your package namespace:
 environment:
   import_path: downstream._vendor.psycheval_harbor.environment:HostEnvironment
   kwargs:
-    allow_host_execution: true
+    host_access:
+      filesystem: true
+      process: true
 agents:
   - import_path: downstream._vendor.psycheval_harbor.agent:ExternalHarnessAgent
     kwargs:
@@ -72,6 +74,81 @@ Keep the `PEVAL_CONFIG` locator and runtime document fields unchanged; see
 [Host configuration](../reference/harbor.md#host-configuration) for their meaning
 and the trusted-host execution boundary.
 
+## Configure a host workspace
+
+Configure the copied Host directly in an ordinary Harbor Job:
+
+```yaml
+environment:
+  import_path: downstream._vendor.psycheval_harbor.environment:HostEnvironment
+  kwargs:
+    host_access:
+      filesystem: true
+      process: true
+    workdir_root: /evaluation/workspaces
+    workspace_source: /projects/my-project
+```
+
+Use native absolute paths for direct Harbor runs. Omit `workspace_source` to
+initialize from the Task alone, or set `workdir_root: null` for temporary
+workspaces. The default `workspace_baseline: git` requires Git and process
+access; a filesystem-only Agent must set `workspace_baseline: none`. The
+[host contract](../reference/harbor.md#host-configuration) defines merge conflicts,
+copy exclusions, ownership, and WorkBuddy restrictions.
+
+After Harbor has started the environment, a downstream Agent can use the
+generic Host filesystem and process capabilities according to its own execution
+model:
+
+```python
+async def run(self, instruction, environment, context):
+    work_dir = environment.work_dir
+    await environment.ensure_dirs(["/workspace/output"], chmod=False)
+    # The Agent chooses how to execute its instruction using this work_dir.
+```
+
+No Host subclass or private initializer is needed. `path_mapper`, transfers,
+and native filesystem operations use the same initialized workspace. An Agent
+that needs local process execution must request both policy capabilities; an
+Agent that owns another execution backend can use filesystem-only access with
+`workspace_baseline: none`.
+
+For a generic filesystem-only downstream Agent:
+
+```yaml
+environment:
+  import_path: downstream._vendor.psycheval_harbor.environment:HostEnvironment
+  kwargs:
+    host_access:
+      filesystem: true
+      process: false
+    workspace_baseline: none
+```
+
+Its `exec` and `exec_argv` calls fail explicitly; uploads, downloads, directory
+operations, and `path_mapper` remain available after startup.
+
+For WorkBuddy planning, put `workdir_root` in the base Job or supply parsed
+settings explicitly:
+
+```python
+from downstream._vendor.psycheval_harbor.runtime_config import load_host_settings
+from downstream._vendor.psycheval_harbor.workbuddy import prepare_workbuddy_plan
+
+settings = load_host_settings("peval.toml")
+plan = prepare_workbuddy_plan(
+    output_root="/evaluation",
+    dataset_id="office",
+    dataset_path="/data/wb-bench-office-v1.0",
+    base_config="workbuddy-base.yaml",
+    host_settings=settings,
+)
+```
+
+The planner records the resolved root in each generated Job. Run those Jobs
+without assigning a parent `PEVAL_CONFIG`; child processes still receive their
+generated runtime JSON through that variable.
+
 ## Install the WorkBuddy runtime
 
 WorkBuddy Office planning and summarization require the external
@@ -80,7 +157,8 @@ integration. Keep its import namespace `workbuddy_bench`: the verifiers reuse
 its scoring engine, and summaries use its official metrics module. Copying only its Python directory would omit the distribution metadata
 used by runtime validation.
 
-Use the supported Git revision as a normal downstream dependency:
+Pin the reference Git revision as a normal downstream dependency for reproducible
+installation:
 
 ```console
 uv add "workbuddy-bench @ git+https://github.com/Tencent/workbuddy-bench.git@625b2233093ae4f23e76be28c1f341d41cc70373"
@@ -127,8 +205,8 @@ print(validate_workbuddy_runtime())
 ```
 
 For the Git installation above, the result contains version `0.1.0` and commit
-`625b2233093ae4f23e76be28c1f341d41cc70373`. A missing distribution, mismatched
-version or source commit, or unavailable `CompositeVerifier` fails validation.
+`625b2233093ae4f23e76be28c1f341d41cc70373`. Runtime validation follows the
+[WorkBuddy compatibility contract](../reference/harbor.md#workbuddy-office-bundles).
 If dependency resolution cannot find Harbor 0.21.0, check the configured package
 index or mirror before changing the required version.
 
@@ -157,6 +235,11 @@ dependencies or establish container or network isolation; the
 [host contract](../reference/harbor.md#host-configuration) describes the execution
 boundary.
 
+If a host Agent invokes `pip`, install it in the same virtual environment
+(`uv pip install --python .venv/Scripts/python.exe pip` on Windows). Otherwise
+an environment created by uv may resolve bare `pip` to an unrelated global
+Python even though `python` resolves to the evaluation environment.
+
 For Linux, save this as `workbuddy-base.yaml`, replacing `provider/model` with
 your model. The Windows harness example follows below:
 
@@ -168,7 +251,9 @@ agents:
 environment:
   import_path: downstream._vendor.psycheval_harbor.environment:HostEnvironment
   kwargs:
-    allow_host_execution: true
+    host_access:
+      filesystem: true
+      process: true
 ```
 
 Prepare a plan from your downstream application:
@@ -252,6 +337,33 @@ Agent or external harness. The Office verifier needs no Bash. The Agent may use
 PowerShell or Git Bash independently; its installer and tools have their own
 requirements.
 
+For a preinstalled OpenCode CLI, use the native host adapter:
+
+```yaml
+n_attempts: 1
+agents:
+  - import_path: downstream._vendor.psycheval_harbor.opencode:HostOpenCodeAgent
+    model_name: provider-name/model-name
+    env:
+      OPENCODE_PROVIDER_KEY: ${OPENCODE_PROVIDER_KEY}
+    kwargs:
+      opencode_config:
+        provider:
+          provider-name:
+            options:
+              apiKey: "{env:OPENCODE_PROVIDER_KEY}"
+environment:
+  import_path: downstream._vendor.psycheval_harbor.environment:HostEnvironment
+  kwargs:
+    host_access:
+      filesystem: true
+      process: true
+```
+
+Set `OPENCODE_PROVIDER_KEY` in the launching process. The adapter uses separate
+Trial state; see its [contract](../reference/harbor.md#native-opencode) for supported
+configuration and retained evidence.
+
 For a downstream harness implementing the
 [external-harness contract](../reference/harbor.md#harness-behavior), a base Job is:
 
@@ -259,24 +371,33 @@ For a downstream harness implementing the
 agents:
   - import_path: downstream._vendor.psycheval_harbor.agent:ExternalHarnessAgent
     kwargs:
-      command: '"C:/agent-eval/.venv/Scripts/python.exe" -m downstream.harness'
+      command: '"C:/path/to/downstream/.venv/Scripts/python.exe" -m downstream.harness'
 environment:
   import_path: downstream._vendor.psycheval_harbor.environment:HostEnvironment
   kwargs:
-    allow_host_execution: true
+    host_access:
+      filesystem: true
+      process: true
 ```
 
 Replace the interpreter path and harness module. Call `prepare_workbuddy_plan`
 from Windows using native paths such as `C:/evaluation` and `D:/datasets/office`.
 It automatically selects the copied native Office verifier. Run the returned
-configs in PowerShell with `uv run harbor run -c <config-path>`. The `peval`
-CLI prints PowerShell commands on Windows, including its workspace config
-assignment when needed.
+configs in PowerShell after enabling UTF-8 for Harbor's Task reader and console:
+
+```powershell
+$env:PYTHONUTF8 = '1'
+$env:PYTHONIOENCODING = 'utf-8'
+uv run --no-sync harbor run -c <config-path>
+```
+
+The `peval` CLI includes these assignments in its Windows command output.
 
 The native verifier adapts only Trial-owned copies and retains an
 `office-adaptation.json` audit under verifier logs. Source bundles and scoring
-conditions remain unchanged. Unsupported Office execution templates fail
-explicitly. See [Host configuration](../reference/harbor.md#host-configuration)
+conditions remain unchanged. Source adaptation is best effort, with unrecognized
+grader expressions retained and recorded in the audit. See
+[Host configuration](../reference/harbor.md#host-configuration)
 for process, path, and native-platform acceptance semantics.
 
 ## Copy ATIF validation separately

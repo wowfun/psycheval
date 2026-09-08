@@ -32,12 +32,24 @@ Tests isolate HOME/XDG state, config, sockets, timers, and environment secrets.
 Focused success is not a release claim unless the expected test inventory is
 visible.
 
+The native Harbor OpenCode adapter has a separate opt-in CLI test. With a
+preinstalled `opencode` on PATH, run
+`PEVAL_OPENCODE_CLI_TESTS=1 uv run --no-sync pytest tests/harbor/test_opencode.py -k real_cli`.
+On PowerShell, set `$env:PEVAL_OPENCODE_CLI_TESTS = '1'` first. The real executable
+uses an isolated Trial home and a local HTTP model fixture with a dummy key. It
+checks provider/model registration, Unicode stdin, JSON events, and ATIF without
+contacting a live model provider.
+
 ## Downstream source-copy checks
 
 The Python suite copies the complete Harbor subtree into an unrelated nested
 package and blocks imports of the original `psycheval` package. It exercises
 module discovery, verifier and harness entry points, synthetic host run/resume,
-and WorkBuddy planning and summarization with local fixtures. Copied production
+filesystem-only Host operations, WorkBuddy planning and summarization, and
+project-copy host execution with local fixtures. Project-copy tests exercise
+independent Trial copies, a fresh Git baseline, and cleanup through public Host
+interfaces on each native platform.
+Copied production
 source is never rewritten. These tests also verify that library calls do not
 discover or mutate workspace configuration or print CLI output. Module discovery
 also blocks the optional WorkBuddy runtime to verify import-time independence.
@@ -47,24 +59,18 @@ execution wrapper. Linux differential tests compare its Bash path against the
 native argv path for passing, failing, empty, skipped, and collection-error
 results. Other fixtures cover optional scorers, postprocessing failures, missing
 JUnit, runtime-copy audits, and source immutability.
+The cross-drive collection test requires the checkout and pytest temporary
+directory to occupy different Windows drives; it skips on other layouts. A
+Windows suite pass alone does not establish that this case ran. Check its skip
+status when validating that boundary.
 
 The rule fixture comes from
 `wb-bench-office-v1.0/shared/verifier/rule.py`, with an explanatory comment added.
-The native profile identifies that source by the SHA-256 of its Python AST,
-excluding source positions. To check a local bundle's rule:
-
-```console
-uv run python -c "import ast, hashlib, pathlib, sys; source = pathlib.Path(sys.argv[1]).read_bytes().decode('utf-8-sig'); print(hashlib.sha256(ast.dump(ast.parse(source), include_attributes=False).encode('utf-8')).hexdigest())" /path/to/wb-bench-office-v1.0/shared/verifier/rule.py
-```
-
-Compare the result with `_RULE_AST_SHA256` in
-`src/psycheval/harbor/workbuddy_verifier.py`. Comments and formatting outside
-string values do not change this identity. Changes inside the embedded shell
-template do. Updating the supported profile requires reviewing execution and
-scoring semantics; do not refresh the digest just to make a check pass.
-The local Office test below exercises each Task's actual command and graders,
-including this rule check; the owned fixture alone does not establish bundle
-compatibility.
+Native adaptation tests cover source variations, unchanged unknown expressions,
+audit evidence, and errors for inputs the pipeline cannot execute. Source
+digests are provenance rather than acceptance gates. The local Office test below
+exercises each Task's actual command and graders; the owned fixture alone does
+not establish bundle compatibility.
 
 The real WorkBuddy runtime integration is explicit and uses no provider or live
 Dataset service. Install the pinned runtime using the
@@ -75,7 +81,8 @@ then run:
 PEVAL_WORKBUDDY_RUNTIME_TESTS=1 uv run --no-sync pytest tests/harbor/test_workbuddy_verifier.py tests/harbor/test_vendoring.py -k real_runtime
 ```
 
-On PowerShell, set `$env:PEVAL_WORKBUDDY_RUNTIME_TESTS = '1'` before the `uv run`
+On PowerShell, set `$env:PYTHONUTF8 = '1'`, `$env:PYTHONIOENCODING = 'utf-8'`, and
+`$env:PEVAL_WORKBUDDY_RUNTIME_TESTS = '1'` before the `uv run`
 command. CI adds the pinned runtime with `--no-deps` to the synced environment
 on both Linux and Windows, then checks dependency consistency before integration
 tests; the existing dependencies remain at their locked versions.

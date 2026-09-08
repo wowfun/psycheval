@@ -62,7 +62,9 @@ agents:
 environment:
   import_path: psycheval.harbor.environment:HostEnvironment
   kwargs:
-    allow_host_execution: true
+    host_access:
+      filesystem: true
+      process: true
 ```
 
 生成相互隔离的两个 Job 配置，运行命令输出中的两个 Harbor 命令，并在两者
@@ -71,8 +73,8 @@ environment:
 ```console
 peval harbor prepare -r .local/evaluation \
   --dataset workbuddy-office --config workbuddy-base.yaml
-PEVAL_CONFIG=.local/evaluation/peval.toml harbor run -c <输出的-normal-config>
-PEVAL_CONFIG=.local/evaluation/peval.toml harbor run -c <输出的-special-config>
+harbor run -c <输出的-normal-config>
+harbor run -c <输出的-special-config>
 peval harbor summarize -r .local/evaluation --plan <输出的-plan-id>
 ```
 

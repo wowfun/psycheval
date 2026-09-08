@@ -71,7 +71,9 @@ agents:
 environment:
   import_path: psycheval.harbor.environment:HostEnvironment
   kwargs:
-    allow_host_execution: true
+    host_access:
+      filesystem: true
+      process: true
 ```
 
 Prepare the isolated two-Job plan, run the commands it prints, and compute the
@@ -80,8 +82,8 @@ official aggregate after both Jobs finish:
 ```console
 peval harbor prepare -r .local/evaluation \
   --dataset workbuddy-office --config workbuddy-base.yaml
-PEVAL_CONFIG=.local/evaluation/peval.toml harbor run -c <printed-normal-config>
-PEVAL_CONFIG=.local/evaluation/peval.toml harbor run -c <printed-special-config>
+harbor run -c <printed-normal-config>
+harbor run -c <printed-special-config>
 peval harbor summarize -r .local/evaluation --plan <printed-plan-id>
 ```
 

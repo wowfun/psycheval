@@ -9,12 +9,54 @@ Psycheval supports the public Harbor `0.21.0` contract through
   process and loads its current-invocation ATIF output.
 - `psycheval.harbor.environment:HostEnvironment` executes directly on a trusted
   native host.
+- `psycheval.harbor.environment:HostAccessPolicy` describes independent
+  filesystem and process permissions for a Host.
+- `psycheval.harbor.paths:HostPathMapper` and
+  `psycheval.harbor.paths:trial_short_uuid` are the small public seams for
+  explicit path translation and workspace naming.
 - `psycheval.harbor.hermes:HermesAgent` is the pinned Harbor compatibility
   adapter for current Hermes provider and exact-session behavior.
+- `psycheval.harbor.opencode:HostOpenCodeAgent` runs an already installed
+  OpenCode CLI through `HostEnvironment` on native Windows or Linux.
 - `psycheval-psychevo-harness` is the external-harness command for Psychevo.
 - `psycheval.harbor.verifier` implements shared evidence and artifact scoring.
 - `psycheval.harbor.datasets` resolves registered flat Harbor Datasets and
   `workbuddy.dataset.v1` bundles without importing Dataset-owned Python code.
+
+## Native OpenCode
+
+For native OpenCode runs, select `HostOpenCodeAgent` by import path, provide
+`model_name` as `provider/model`, and install OpenCode on the host first.
+Its `executable` kwarg defaults to `opencode`; an optional `version` requires an
+exact match. It accepts Harbor's `opencode_config`, `variant`, prompt template,
+Skills, MCP servers, and Agent environment. Provider secrets belong in Agent
+environment references and OpenCode `{env:NAME}` substitutions, not inline Job
+configuration. No user OpenCode configuration or authentication file is copied.
+The requested model is registered in the generated provider configuration;
+Harbor's configured base URL applies to its OpenAI and Anthropic providers.
+Caller `opencode_config` values override these defaults. Configuration sections
+that the adapter extends must be objects, and `skills.paths` must be a list of
+strings; invalid shapes fail during Agent construction.
+Task MCP definitions supply defaults for each named server; caller MCP entries
+merge over them, preserving options such as authentication, timeout, and an
+explicit `enabled=false`. Caller-only servers remain available.
+Each Trial owns separate OpenCode home, config, data, state, and cache directories
+under its Agent logs. During both setup and execution, generated runtime paths
+and OpenCode configuration take precedence over Agent environment overrides,
+including Harbor's surrounding execution scope. Other Agent environment values
+remain available, and the surrounding scope is restored afterward.
+Configuration disables automatic updates, sharing, and
+OpenCode's additional Git snapshots (the Environment owns the Task baseline), and
+allows task tools by default; callers can override permissions in
+`opencode_config`. OpenCode chooses its native tool shell, configurable through
+that same object. Instructions arrive on stdin, independent of shell quoting and
+Windows command-line length. Native JSON events and stderr stream to Agent logs,
+including on cancellation, and Harbor's pinned OpenCode converter produces ATIF
+and usage metrics. This adapter supports fresh runs only; resume and trajectory
+loading are not supported.
+The version probe uses the same isolated Trial configuration as execution and
+retains `opencode-setup.log`. A probe exceeding its 30-second command timeout
+reports that probe failure instead of Harbor's overall Agent setup timeout.
 
 ## WorkBuddy Office bundles
 
@@ -82,9 +124,13 @@ selected normal Office tasks and, when selected, the Skill/MCP task. Only that
 selection extracts a Skill and injects MCP configuration. This split is required because Harbor `0.21.0`
 has no per-Task Agent override. The external `workbuddy_bench` runtime supplies
 `workbuddy_bench.judge:CompositeVerifier`; Psycheval does not vendor that runtime
-or replace its scoring policy. The supported runtime source is commit
-`625b2233093ae4f23e76be28c1f341d41cc70373`; source installations are checked
-against that commit in addition to package version `0.1.0`.
+or replace its scoring policy. Runtime validation requires package version
+`0.1.0` and a callable `CompositeVerifier`. Available source commit metadata from
+the installed distribution is recorded as provenance on a best-effort basis;
+it is not a compatibility requirement and local source repositories are not
+probed with Git. Use the
+[runtime installation workflow](../user/downstream-vendoring.md#install-the-workbuddy-runtime)
+to pin a reproducible dependency.
 
 With no verifier LLM variables, the run uses WorkBuddy's deterministic rule
 score. The optional variables `WORKBUDDY_VERIFIER_LLM_BASE_URL`,
@@ -93,7 +139,17 @@ all-or-none; `WORKBUDDY_VERIFIER_LLM_MAX_OUTPUT_TOKENS` is optional. Secret valu
 remain environment references and are never copied into a plan manifest.
 
 `peval harbor summarize` calls WorkBuddy's installed `compute_job_metrics`
-against the isolated Jobs root and the selected expected Tasks. Missing selected
+using a temporary view of the isolated Jobs root and the selected expected Tasks.
+Trial configuration supplies the full Task directory name; a complete expected
+name in the Trial directory is the fallback when configuration is absent. The
+view recognizes Trials by a Task configuration, a Trial-shaped result, or a
+verifier score, rather than by a directory name alone. Job summaries without
+Trial evidence are ignored even when the Job name contains `__`. The
+view preserves score payloads and distinguishes equal Trial names in separate
+Jobs. Published metrics retain original Trial names and the Jobs root. Retained
+results are never renamed or modified. When a Trial configuration is present,
+it must contain a valid `task.path`; malformed configuration fails summarization.
+Directory-name identity is a fallback only when configuration is absent. Missing selected
 Tasks contribute zero under the upstream metric policy; unexpected Task results
 are errors. By default every Job must be terminal; `--provisional` permits an
 unfinished snapshot. Version 2 plan and summary documents record full/subset
@@ -101,24 +157,153 @@ scope, declared and available counts, and selection independently of completion.
 Only version 2 plans and summaries are supported. Version 1 artifacts cannot be
 read or discovered; run `prepare` to create a new plan.
 Summarization
-revalidates the installed runtime and requires the identity recorded by
-preparation. The known
+revalidates the installed runtime and requires the package version recorded by
+preparation; differences in source commit metadata do not prevent aggregation.
+A source commit changing, appearing, or disappearing adds a summary warning; the
+summary records the runtime metadata used for aggregation separately from the
+plan's preparation metadata. The known
 `recruiting-search-skill-mock-mcp-hardened` source defects and its public-network
 exception are prominently warned when that Task is selected. Its scoring rules
 and weights remain unchanged.
 
-Skill extraction rejects `.git` path components case-insensitively and accepts
-the Skill root archive entry only as a directory. Extracted files retain their
+WorkBuddy workspace and Skill archives use portable relative paths: extraction
+rejects drive prefixes, alternate data streams, and `.git` components at any
+depth, including case variations. Path components ending in a dot or space are
+rejected to prevent Windows filename aliases. A distinct archive path must not
+overwrite an already extracted file, including through a native filename alias.
+Skill extraction accepts the Skill root archive entry only as a directory. Extracted files retain their
 read and execute permissions but lose group/other write permission; conflicting
 duplicate archive entries are still compared using their original modes.
 
 ## Host configuration
 
-Host execution is opt-in with `allow_host_execution=true` and is not a sandbox.
-The parent `PEVAL_CONFIG` may name a user `peval.toml`; Harbor reads only
-`[harbor.host].workdir_root`. Omission defaults to `~/workspaces`, while an
-empty string keeps Trial-temporary workdirs. Unknown host fields fail closed and
-the user file is never modified.
+`HostEnvironment` requires an explicit `host_access` policy. In Python this is
+`HostAccessPolicy(filesystem=True, process=True)`; Job YAML uses the equivalent
+`host_access: {filesystem: true, process: true}` object. Filesystem and process
+fields require actual booleans; strings and integers are rejected. These
+permissions are independent, although process permission requires filesystem
+permission. Filesystem-only Hosts can prepare workspaces, map paths, and move
+files, while `exec` and `exec_argv` fail with an explicit process-access error.
+The Host is trusted native execution, not a sandbox. It accepts explicit
+`workdir_root` and `workspace_source` paths; it does not read the parent
+`PEVAL_CONFIG`. The root defaults to `~/workspaces`; `None` selects a
+Trial-temporary root. Empty path strings are errors. Direct arguments expand
+`~` and resolve relative to the construction working directory. Each automatic
+workspace is exclusively created as `task_<short UUID>`, using the Trial suffix
+when valid. Existing directories are never reused.
+
+`workspace_baseline` is a construction option with values `"git"` (the default)
+and `"none"`. Git baseline initialization is performed for owned workspace
+contexts and requires `host_access.process=true`; a filesystem-only caller must
+choose `workspace_baseline="none"` explicitly. WorkBuddy bootstrap always
+selects the Git baseline. The Harbor-compatible `start(force_build)` signature
+does not carry this setting.
+Owned Task copies exclude inherited `.git` metadata before creating a fresh
+baseline; source repositories are never initialized or committed by the Host.
+
+`HostPathMapper(host_os, mappings, task_workdir)` is lifecycle-free and accepts
+explicit virtual-to-native mappings. Its `split`, `translate`, and
+`translate_environment` methods handle POSIX paths, Windows case-insensitive
+and `C:` aliases, traversal checks, and native absolute paths. A native absolute
+path that is not a virtual path passes through unchanged. `path_mapper`,
+`native_path`, and `work_dir` are available only after successful startup; code
+that needs a pre-start mapper constructs `HostPathMapper` directly.
+
+The read-only `work_dir` property equals `native_path(".")`: the native Task
+working directory after successful startup. It remains available after
+`stop(delete=False)`, but not before startup, after failed startup, or after
+deletion. Path mapping, command cwd, runtime configuration, and cleanup share
+one workspace record. Startup failure or cancellation waits for outstanding
+file operations before removing owned directories. Project copying checks for
+cancellation between files and bounded data chunks; WorkBuddy extraction and
+Git initialization check between entries or commands. An in-progress filesystem
+or Git call must finish before cleanup. Calling `stop` during startup requests
+the same cancellation. Copying, extraction, Git commands, and directory deletion
+run off the event loop.
+Filesystem operations require successful startup. Host-local directory creation,
+resetting, type checks, uploads, downloads, and filtered downloads use the native
+filesystem directly and do not require `exec`. A non-virtual native absolute path
+passed to these operations is used as-is; `host_access.filesystem=true` therefore
+grants trusted host filesystem access and is not a confinement boundary. Symlinks
+and Windows reparse-point entries are not reported by type checks or copied by
+directory downloads. Emptying a linked directory replaces the link without
+traversing its target. Relative filesystem paths resolve against the Task workdir.
+`ensure_dirs(..., virtual_workdir=True)` explicitly registers Agent-selected
+virtual workdirs against the owned workspace; with a borrowed workspace, those
+workdirs must lie within its mount target. ExternalHarnessAgent uses this option
+for its environment workdir. Ordinary filesystem calls do not register mappings.
+Downloads preserve file modes and timestamps; copying a file onto itself or a
+hard-link alias leaves it intact. Filters on a mounted directory never erase
+excluded source files. Recursive transfers and directory operations run off the
+event loop with a bounded number of active filesystem workers per Host. Directory
+downloads traverse incrementally. Cancellation and stop signal downloads between
+entries and bounded data chunks, discard an incomplete file's temporary copy,
+and drain active workers before releasing or deleting the runtime. Completed
+files remain at the destination. An operating-system call already in progress
+must return before cancellation can finish. Native transfers have no total-size
+quota; callers own destination capacity and timeout policy. Process commands
+require both successful startup and process permission.
+`exec` and `exec_argv` resolve `cwd` through the same
+mapper: omitted or relative values use the Task workdir, registered virtual
+paths map into their configured directories, and other native absolute paths
+are used directly. A missing cwd is created before launch. Passing a native cwd
+does not register a transient mapping or transfer ownership; runtime deletion
+does not remove that directory. While `stop` is in progress, the Host prevents new
+filesystem operations and commands from starting, terminates registered processes,
+and waits for their output
+callbacks and cleanup before deleting runtime paths. Stop waits for in-flight
+launch registration, then drains callbacks without holding the command-launch
+lock. Commands waiting to launch recheck the stopping state, including commands
+requested by output callbacks. Already running commands may execute concurrently.
+Output callbacks must finish
+or raise before their command can complete. A callback cannot call `start` or
+`stop` on the same Host while its command is active; these calls raise to prevent
+waiting on the callback itself. Raise from the callback to abort its command,
+then manage the Host lifecycle from the command's caller.
+If command cleanup also fails, the original command exception remains primary
+and carries the cleanup failures as exception notes. Pending cleanup operations
+are drained before the command releases its runtime.
+Each command receives its own runtime JSON, retained until runtime deletion so
+its configuration remains available after command completion. Runtime JSON writes
+run off the event loop; cancellation waits for the write to finish before releasing
+the command's runtime. After `stop(delete=False)` completes, commands may run again
+in the retained workspace.
+Calling `start` on a successfully started Host is idempotent, including after
+`stop(delete=False)`.
+`stop(delete=True)`
+removes automatic workspaces; external workspace bind mounts are borrowed and
+retain their existing Task-context merge behavior.
+
+`workspace_source` must be an existing, accessible directory, validated during
+construction before any workspace allocation. It copies the project into each
+independent Trial.
+It includes ordinary files, including untracked and Git-ignored files, but
+excludes every `.git` entry from both the project and Task environment. Task
+`environment/` content is then merged into the copy: directories may merge,
+but every file or type collision is an error, even for identical files.
+Links, Windows junctions, special files, and source/destination overlap are
+rejected. The caller must keep source trees and output directories stable
+during initialization. No process isolation is implied by copying a project.
+With `workspace_baseline="git"`, Git commits the complete merged copy as a
+clean initial baseline, including ignored files and empty projects, without
+inherited `GIT_*` state or repository hooks. Sources are never modified.
+Each baseline Git command has a 30-second timeout; exceeding it fails startup
+and cleans up the owned workspace. `workspace_source` cannot be combined with a
+workspace bind mount or WorkBuddy archive bootstrap. External workspace bind
+mounts are borrowed and are not baseline-initialized. Separate verifier
+environments retain their isolated Task test context without copying the project or
+initializing a Git baseline.
+
+The explicit `runtime_config.load_host_settings(path)` parser owns
+`[harbor.host].workdir_root` in a caller-selected TOML file. Omission uses the
+built-in root; an empty TOML value selects temporary workdirs. Relative roots
+resolve against that TOML file. Unknown host fields fail closed and the file
+is never modified. The peval CLI passes these settings to
+`prepare_workbuddy_plan(..., host_settings=...)`. For host plans, an explicit
+Job `workdir_root` takes precedence over caller settings, then the built-in
+default. Relative Job roots resolve against the base YAML file. Generated Jobs
+contain the resolved absolute root (or `null` for temporary workdirs), so their
+launch commands need no parent `PEVAL_CONFIG` assignment.
 
 Each child process receives `PEVAL_CONFIG` pointing to a permission-restricted
 effective `peval.json`. That runtime document contains native paths, the Python
@@ -144,9 +329,13 @@ modes. Precedence remains Task < persistent < per-call < scoped environment;
 an active scope overrides even a literal per-call value. Arbitrary argument text is never
 interpreted as a shell program. `exec` retains the native
 host shell contract. Agents may independently use PowerShell or Git Bash.
+Command output uses incremental UTF-8 decoding, preserving characters split
+across process-output chunks in both returned text and streaming callbacks.
+
 For Windows shell execution, `PATH` and `PYTHONPATH` overrides use native
 semicolon-separated entries; each virtual path is mapped independently while
-native entries are preserved.
+native entries are preserved. The launch gate preserves the rendered cmd
+command text without applying executable-argument quoting to it a second time.
 
 Timeouts cover both process completion and draining captured output. Timeout
 and cancellation cleanup target the Linux process group or Windows Job even
@@ -171,12 +360,24 @@ alias; suffix components retain their letter case. Windows virtual paths reject
 embedded drive prefixes and alternate-data-stream
 syntax, so joining a suffix cannot discard the mapped native root.
 
-Windows Host WorkBuddy plans select Psycheval's Office native verifier. It runs
-the supported Office profile's preparation, pytest, scorer, and artifact steps
+Windows Host WorkBuddy plans select Psycheval's Office native verifier. It accepts
+the recognized workspace cwd whether the runtime supplies a string or a native
+`Path` object, including Windows' backslash form of `/workspace`. It runs
+pytest with its copied tests as the collection root, including when the workspace
+and temporary tests occupy different Windows drives. Conftest discovery includes
+the copied tests directory and its descendants, but excludes its ancestors and
+the separate Agent workspace. The supported Office
+profile's preparation, pytest, scorer, and artifact steps run
 without Bash, using Git and the current interpreter's Office Python packages.
 Agent-specific command dependencies remain the Agent's responsibility. Linux
 and container plans use the upstream verifier. Host MCP commands use the host
 interpreter; container MCP commands use the container interpreter.
+Host WorkBuddy bootstrap records the native OS in the supplied in-memory Task
+environment configuration after constructor validation, so Harbor's Skill upload
+uses native platform behavior. This configuration belongs to one Trial; direct
+callers using a reusable configuration must pass a separate copy for each Trial.
+Source Task files remain unchanged. The standard `/harbor/skills` directory maps to owned
+runtime storage, outside the task workspace, and is removed with that runtime.
 Host preflight checks Git on Windows, Bash and Git on Linux, and Office Python
 imports. It does not check the selected Agent's installer tools, such as curl,
 Node, or npm; callers provision those separately.
@@ -186,20 +387,36 @@ workspace's `.git` and working tree; a missing repository cannot fall back to an
 ancestor repository. A failed preparation step aborts verification
 with its command, exit code, and diagnostic; a successful empty diff is valid.
 
-The planner validates source profiles before reserving a plan. Each verification
-checks source file safety, then validates and adapts its Trial-owned grader copy
-in one pass before loading plugins. Plan-time validation is not reused as proof
-that a later runtime copy is valid. Only
-recognized file-access paths and interpreter launch sites are adapted; logical
+The planner checks the inputs required by the native pipeline before reserving
+a plan. Each verification checks source file safety and adapts its Trial-owned
+grader copy before loading plugins. Source adaptation is best effort: the rule
+module is not required to match a fixed source fingerprint, and unknown grader
+expressions remain unchanged with skipped adaptations recorded in the audit.
+Skipped adaptations also produce a verifier log warning and a diagnostic in the
+final score. Trial detail exposes that diagnostic as a best-effort score warning;
+it does not invalidate the score or block execution.
+Only recognized file-access paths, interpreter launch sites, and snapshot
+traversal ordering are adapted; logical
 path comparisons, gold data, instructions, and scoring conditions remain intact.
 The verifier retains an adaptation audit with source and transformed digests.
-Unsupported execution shapes fail explicitly. The fixed external WorkBuddy
-runtime still owns scoring, LLM judging, and final score aggregation.
-The recognized Python path sites are `Path`, `sys.path.insert`,
+The native pipeline requires a readable execution template with score/reward
+snippets and a supported pytest command; incompatible execution interfaces fail
+explicitly. Other changes to the source shell wrapper are not interpreted by
+the native pipeline. The installed external WorkBuddy runtime still owns
+scoring, LLM judging, and final score aggregation.
+The recognized Python path sites are `Path`, the path argument of `open`,
+`builtins.open`, `io.open`, and `os.open`, `sys.path.insert`,
 `os.environ.get`, argument-parser defaults, `DEFAULT_OUTPUT_PATH`, and
 `_default_output_path`. These sites accept standalone string literals;
-interpolated virtual paths are rejected. Invalid paths, malformed Python, and
+interpolated virtual paths are left unchanged. Invalid mapped paths, malformed Python, and
 rewrite failures are reported as `OfficeProfileError` before plan creation.
+The recognized snapshot functions `_compute_snapshot`,
+`_compute_workspace_snapshot`, and `_protected_root_rollup` retain POSIX's
+case-sensitive path-component ordering when hashing file trees on Windows.
+Only their known file traversal expression is adapted; file bytes, hash inputs,
+gold hashes, and score conditions are unchanged. Unexpected traversal shapes
+remain unchanged. The adaptation audit records successful rewrites as `path_order`
+and unrecognized expressions as `skipped`.
 The manifest's known POSIX `PYTHONPATH` prefixes are parsed into
 entries and rebuilt with the host separator. Explicit environment path lists
 use the host separator as well; native drive-letter colons are preserved.

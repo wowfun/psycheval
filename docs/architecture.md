@@ -49,6 +49,9 @@ reported host OS or choosing the Agent's tool shell. WorkBuddy owns Office
 profile recognition, execution orchestration, and approved runtime-copy
 rewrites; its native verifier reuses the external runtime's scoring engine.
 External Dataset sources remain read-only, including during plugin loading.
+For native WorkBuddy execution, the Host adapter records the host OS in Harbor's
+in-memory Task environment configuration; Harbor uses it when injecting Skills.
+The source Task and its scoring contract remain unchanged.
 
 `psycheval.atif` is a separate, standard-library-only source-copy unit. It owns
 strict ATIF validation, content recognition, and timestamp parsing.
@@ -65,8 +68,11 @@ is validated without repair; only adapter conversion normalizes evidence.
 
 The CLI and Harbor adapter share formats and one `peval.toml`, but not parser
 ownership: the CLI reads workspace, adapter, Dataset, and mount fields; Harbor
-reads only `[harbor.host]`. Child harnesses receive a generated `peval.json`, not
-the user TOML.
+owns the explicit parser for `[harbor.host]`. CLI orchestration passes its
+parsed settings to WorkBuddy planning, which records resolved host paths in
+Job configurations. Host environments accept explicit workspace parameters
+and never discover user configuration. Child harnesses receive a generated
+`peval.json`, not the user TOML.
 
 The serve subtree owns one internal FastAPI application for the bundled browser
 UI. `run_serve_command` owns listener selection, the single-process runtime, and
@@ -190,7 +196,8 @@ remains owned by `pretty-aui`.
 
 Core CLI implementation may consume pinned Harbor interfaces and the explicit
 `psycheval.harbor.datasets`, `psycheval.harbor.tasks`, and
-`psycheval.harbor.workbuddy` services, shared identifier rules, and the
+`psycheval.harbor.workbuddy` services, the explicit host-settings parser in
+`psycheval.harbor.runtime_config`, shared identifier rules, and the
 `psycheval.harbor.windows` helpers for rendering Windows shell commands, but not
 Agent, Environment, or harness internals. The implementations exchange only
 owned configuration sections and explicit formats. Tasks invoke the installed

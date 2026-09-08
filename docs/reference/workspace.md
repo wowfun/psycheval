@@ -33,13 +33,25 @@ The Psycheval CLI owns top-level workspace presentation, `[adapters.*]`,
 registration has a resolved format: `harbor` for immediate-child Task
 directories or `workbuddy.v1` for a validated WorkBuddy bundle. `psycheval.harbor` owns
 `[harbor.host]`; each parser accepts the sibling section without copying its
-semantics. Harbor host callers name the file with `PEVAL_CONFIG`.
+semantics. CLI orchestration passes the selected file to Harbor's explicit
+host-settings parser; the [host contract](harbor.md#host-configuration) owns
+workspace allocation and Job configuration precedence.
+`peval harbor prepare` validates `[harbor.host]` before writing a plan, including
+for container Jobs. An absent section uses the Host defaults; a malformed section
+fails preparation. Host settings are applied only to Host Jobs.
 
 `[adapters.claude].default_session_root` selects the retained-session lookup root
 and defaults to `~/.claude/projects/`, including in an existing configuration
 that omits the field. Relative overrides resolve against the defining
 `peval.toml`; `~` expands to the user's home. Lookup scope and ambiguity rules
 belong to the [input contract](cli.md#inputs-and-adapters).
+Adapter path preferences shorten paths beneath the native home to `~` when
+writing configuration. Other Windows drive and UNC paths retain their spelling.
+When resolving paths on native Windows, configuration and server paths are
+normalized to native absolute form even if the target does not exist yet.
+Lexical resolution preserves symbolic links; physical resolution follows an
+existing target. Non-Windows hosts preserve unmapped Windows path spelling and
+never bind it to a coincidentally named relative entry under the current directory.
 
 Dataset and mount paths may be relative to the config. Mounts name explicit
 Harbor Jobs roots and ordered Dataset IDs; there is no implicit Jobs discovery.
@@ -91,6 +103,19 @@ mutations and do not modify evaluation evidence.
 
 ## Storage and identity
 
+Saved View Markdown frontmatter owns the exact display name. Files use a fixed
+length lowercase digest of that name, so distinct names remain distinct on
+case-insensitive filesystems and accepted Unicode names fit filesystem component
+limits. Reads verify that the name matches the file identity. Rename writes the
+new identity before removing the old file; filters and notes remain editable.
+If removing the old file fails, rename rolls back the new file and reports the
+error. This two-file operation is not crash-atomic. Invalid or unsupported view
+files remain untouched and produce a warning when omitted from listing.
+Explicit overwrite or deletion by display name can recover a corrupt file at
+that name's current storage identity without parsing its old contents. Linked
+or non-regular targets remain rejected. Unsupported legacy storage layouts are
+not migrated automatically.
+
 Linked Trial references use
 `harbor/<mount-id>/<job-name>/<trial-name>`. Workspace-authored Harbor overlays
 contain only state, notes, and analysis. Catalog SQLite data, imported report
@@ -101,6 +126,10 @@ Source keys remain stable across alias edits, queries, pages, state changes,
 and report attachment. Mutations are generation-aware. Original databases,
 trajectory inputs, and Harbor roots are never rewritten by report or catalog
 rebuilds.
+Catalog connections are closed even when connection initialization fails, before
+any damaged cache files are removed for rebuilding.
+Wide timeline detail tables scroll within their own container; they do not
+expand the workspace beyond the viewport on narrow screens.
 
 ## Access model
 

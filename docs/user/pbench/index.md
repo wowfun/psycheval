@@ -10,11 +10,11 @@ environment so Task verifiers can use the installed project interpreter:
 uv run harbor run \
   -p datasets/pbench-v1.0 \
   --env psycheval.harbor.environment:HostEnvironment \
-  --environment-kwarg allow_host_execution=true \
+  --environment-kwarg 'host_access={"filesystem":true,"process":true}' \
   [AGENT OPTIONS]
 ```
 
-This opts into host execution; read its safety rules in the
+This enables trusted host filesystem and process access; read its safety rules in the
 [Harbor reference](../../reference/harbor.md) first. Use
 [Authoring](authoring.md) for Task workflow and [Scoring](scoring.md) when
 interpreting verifier output.
