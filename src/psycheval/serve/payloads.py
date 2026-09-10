@@ -16,6 +16,11 @@ from psycheval.serve.constants import (
     WINDOWS_DRIVE_PATH_RE,
 )
 from psycheval.serve.errors import HttpError
+from psycheval.serve.path_inputs import (
+    source_path_lines,
+    unquote_path_token,
+    validate_path_token,
+)
 from psycheval.state import CatalogQuery, ServeStateStore
 from psycheval.workspace_views import WorkspaceView, browser_views_from_payload
 
@@ -358,40 +363,40 @@ def source_path_values(
     payload: dict[str, Any],
     key: str,
 ) -> list[str]:
-    raw = optional_string(payload.get(key))
-    if raw is None:
+    value = payload.get(key)
+    if value is None:
         return []
-    parts = (
-        split_source_path_lines(raw)
-        if key == "path"
-        else split_source_path_list(raw, key)
-    )
-    if not parts:
-        raise HttpError(400, f"{key} path list is empty")
-    return [workspace_relative_path(store, part) for part in parts]
+    raw = _string_value(value, key)
+    if not raw.strip(" "):
+        return []
+    try:
+        parts = (
+            split_source_path_lines(raw)
+            if key == "path"
+            else split_source_path_list(raw, key)
+        )
+        if not parts:
+            raise HttpError(400, f"{key} path list is empty")
+        return [
+            workspace_relative_path(store, validate_path_token(part)) for part in parts
+        ]
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
 
 
 def split_source_path_lines(raw: str) -> list[str]:
-    return [
-        unquote_path_token(line)
-        for line in str(raw).splitlines()
-        if unquote_path_token(line)
-    ]
+    """Decode the one-path-per-line input without interpreting spaces or escapes."""
+    return [unquote_path_token(line) for line in source_path_lines(raw)]
 
 
 def split_source_path_list(raw: str, key: str) -> list[str]:
+    """Decode legacy db lists using non-POSIX shell tokenization."""
     try:
+        validate_path_token(raw)
         raw_parts = shlex.split(raw, posix=False)
     except ValueError as exc:
         raise HttpError(400, f"{key} path list is invalid: {exc}") from exc
-    return [unquote_path_token(part) for part in raw_parts if unquote_path_token(part)]
-
-
-def unquote_path_token(raw: object) -> str:
-    text = str(raw).strip()
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
-        return text[1:-1]
-    return text
+    return [text for part in raw_parts if (text := unquote_path_token(part)).strip()]
 
 
 def adapter_override_payload(payload: dict[str, Any]) -> str | None:
@@ -423,9 +428,10 @@ def workspace_relative_path(
     *,
     windows_mount_root: Path | None = None,
 ) -> str | None:
+    """Resolve one already-normalized path token relative to the workspace."""
     if raw_path is None:
         return None
-    text = unquote_path_token(raw_path)
+    text = raw_path
     if not text:
         return None
     if is_windows_absolute_like_path(text):

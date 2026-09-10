@@ -155,6 +155,7 @@ from psycheval.serve.harbor_workspace import (
     HarborWorkspaceError,
     config_revision,
 )
+from psycheval.serve.path_inputs import source_path_lines
 from psycheval.serve.path_picker import PathPickerUnavailable, pick_file_paths
 from psycheval.serve.payloads import (
     catalog_post_query_payload,
@@ -308,7 +309,12 @@ def _patch_workspace_config(
     )
     temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "wb") as handle:
+        try:
+            handle = os.fdopen(descriptor, "wb")
+        except BaseException:
+            os.close(descriptor)
+            raise
+        with handle:
             handle.write(source)
             handle.flush()
             os.fsync(handle.fileno())
@@ -952,7 +958,7 @@ def _register_source_routes(app: FastAPI) -> None:
         payloads = [body.payload()]
         raw_path = body.path
         if raw_path is not None:
-            lines = [line.strip() for line in raw_path.splitlines() if line.strip()]
+            lines = source_path_lines(raw_path)
             if len(lines) > 1:
                 payloads = [{**body.payload(), "path": line} for line in lines]
         if body.session_ids and len(body.session_ids) > 1:

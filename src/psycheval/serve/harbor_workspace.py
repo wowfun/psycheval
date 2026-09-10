@@ -82,14 +82,6 @@ class HarborWorkspace:
                 self._dataset_summary(item) for item in self.config.harbor_datasets
             ],
         }
-        from psycheval.harbor.workbuddy import discover_workbuddy_summaries
-
-        summaries = discover_workbuddy_summaries(
-            self.config_path.parent.resolve(),
-            {item.id for item in self.config.harbor_datasets},
-        )
-        if summaries:
-            payload["workbuddy_summaries"] = summaries
         return payload
 
     def task_inventory(self, dataset_id: str | None = None) -> dict[str, Any]:
@@ -380,8 +372,9 @@ class HarborWorkspace:
         source = self._task_path(root, task)
         self._expect_revision(source, expected_revision)
         package_name = self._task_package_name(source)
-        deleted_at = datetime.now(UTC).isoformat()
-        entry_id = f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:12]}"
+        now = datetime.now(UTC)
+        deleted_at = now.isoformat()
+        entry_id = f"{now.strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:12]}"
         entry = root / TRASH_DIRNAME / entry_id
         entry.mkdir(parents=True)
         metadata = {
@@ -1325,7 +1318,12 @@ def _atomic_write(path: Path, content: bytes) -> None:
     )
     temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "wb") as handle:
+        try:
+            handle = os.fdopen(descriptor, "wb")
+        except BaseException:
+            os.close(descriptor)
+            raise
+        with handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())

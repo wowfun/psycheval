@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+
+from psycheval.serve.path_inputs import required_path_token, source_path_lines
+
+BrowserPath = Annotated[str, AfterValidator(required_path_token)]
 
 
 class StrictRequest(BaseModel):
@@ -75,9 +79,7 @@ class SourceImportRequest(StrictRequest):
 
     @model_validator(mode="after")
     def reject_ambiguous_batch_axes(self) -> SourceImportRequest:
-        path_count = len(
-            [line for line in (self.path or "").splitlines() if line.strip()]
-        )
+        path_count = len(source_path_lines(self.path or ""))
         if self.session_id and self.session_ids:
             raise ValueError("provide either session_id or session_ids, not both")
         if self.path and self.db:
@@ -120,7 +122,7 @@ class AcpAgentInput(StrictRequest):
 
 class ConfigPatchRequest(StrictRequest):
     locale: str | None = None
-    adapter_defaults: dict[str, str | None] | None = None
+    adapter_defaults: dict[str, BrowserPath | None] | None = None
     acp_agents: list[AcpAgentInput] | None = None
 
     @model_validator(mode="after")
@@ -155,7 +157,7 @@ class ViewDeletionRequest(StrictRequest):
 
 
 class ReportImportRequest(StrictRequest):
-    path: str
+    path: BrowserPath
     source_keys: list[str] = Field(default_factory=list)
 
 
@@ -183,7 +185,7 @@ class DatasetCreateRequest(StrictRequest):
     allow_partial: bool = Field(default=False, strict=True)
     source: Literal["new", "existing"]
     id: str | None = None
-    path: str
+    path: BrowserPath
     package_name: str | None = None
     description: str = ""
 
@@ -197,7 +199,7 @@ class DatasetCreateRequest(StrictRequest):
 class DatasetPatchRequest(StrictRequest):
     allow_partial: bool | None = Field(default=None, strict=True)
     new_id: str
-    path: str
+    path: BrowserPath
     mount_ids: list[str] = Field(default_factory=list)
 
 
@@ -257,12 +259,12 @@ class FileCreateRequest(StrictRequest):
 
 
 class MountCreateRequest(StrictRequest):
-    path: str
+    path: BrowserPath
 
 
 class MountPatchRequest(StrictRequest):
     new_id: str
-    path: str
+    path: BrowserPath
     dataset_ids: list[str] = Field(default_factory=list)
 
 

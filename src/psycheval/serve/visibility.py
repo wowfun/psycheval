@@ -50,15 +50,6 @@ VERIFIER_EVIDENCE_PUBLIC_FIELDS = {
     "status",
     "tests",
 }
-WORKBUDDY_SUMMARY_PUBLIC_FIELDS = {
-    "dataset_id",
-    "generated_at",
-    "metrics",
-    "pending_jobs",
-    "plan_id",
-    "provisional",
-    "warnings",
-}
 REGRADE_PUBLIC_FIELDS = {"action", "task_digest", "trial_id", "type"}
 DATA_REF_PUBLIC_FIELDS = {
     "job_name",
@@ -139,17 +130,6 @@ def project_harbor_inventory(payload: dict[str, Any], role: str) -> dict[str, An
         if isinstance(datasets, list)
         else []
     }
-    summaries = payload.get("workbuddy_summaries")
-    if isinstance(summaries, list):
-        projected["workbuddy_summaries"] = [
-            {
-                key: value
-                for key, value in item.items()
-                if key in WORKBUDDY_SUMMARY_PUBLIC_FIELDS
-            }
-            for item in summaries
-            if isinstance(item, dict)
-        ]
     return projected
 
 

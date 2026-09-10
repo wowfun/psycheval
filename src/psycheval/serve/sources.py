@@ -17,12 +17,12 @@ from psycheval.inputs import (
     remap_session_selectors,
 )
 from psycheval.serve.errors import HttpError
+from psycheval.serve.path_inputs import source_path_lines
 from psycheval.serve.payloads import (
     adapter_for_session_inspect,
     adapter_override_payload,
     optional_string,
     source_args_from_payload,
-    split_source_path_lines,
 )
 from psycheval.session_select import inspect_adapter_sessions
 from psycheval.state import (
@@ -71,10 +71,15 @@ def add_source_payload(
 
 
 def path_batch_lines(payload: dict[str, Any]) -> list[str]:
-    raw = optional_string(payload.get("path"))
+    raw = payload.get("path")
     if raw is None:
         return []
-    return split_source_path_lines(raw)
+    if not isinstance(raw, str):
+        raise HttpError(400, "path must be a string")
+    try:
+        return source_path_lines(raw)
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from exc
 
 
 def add_path_batch_sources(

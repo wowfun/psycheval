@@ -4,6 +4,7 @@ import http.client
 import json
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -380,7 +381,9 @@ class ServeApiContractTests(unittest.TestCase):
         status, headers, body = self.request(
             "POST",
             "/api/source-import-operations",
-            json.dumps({"path": "missing.jsonl", "adapter": "opencode"}).encode(),
+            json.dumps(
+                {"path": '\'\'\n"missing.jsonl"\n" "', "adapter": "opencode"}
+            ).encode(),
             headers={"Content-Type": "application/json"},
         )
         operation = json.loads(body)
@@ -388,6 +391,14 @@ class ServeApiContractTests(unittest.TestCase):
         self.assertEqual(headers["location"], f"/api/operations/{operation['id']}")
         self.assertEqual(headers["retry-after"], "1")
         self.assertIn(operation["state"], {"queued", "running", "failed"})
+        self.assertEqual(operation["total"], 1)
+        deadline = time.monotonic() + 5
+        while operation["state"] in {"queued", "running"}:
+            self.assertLess(time.monotonic(), deadline, operation)
+            time.sleep(0.01)
+            status, _, body = self.request("GET", headers["location"])
+            self.assertEqual(status, 200)
+            operation = json.loads(body)
 
         status, headers, body = self.request(
             "POST",

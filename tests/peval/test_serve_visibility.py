@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from copy import deepcopy
 
 from psycheval.serve.visibility import (
     project_catalog_payload,
@@ -11,28 +12,62 @@ from psycheval.serve.visibility import (
 
 
 class ServeGuestVisibilityTests(unittest.TestCase):
-    def test_harbor_summary_projection_has_an_explicit_guest_allowlist(self) -> None:
+    def test_harbor_inventory_projection_retains_only_public_task_metadata(self):
         payload = {
-            "datasets": [],
-            "workbuddy_summaries": [
+            "revision": "private-config-revision",
+            "config_path": "/srv/private/peval.toml",
+            "datasets": [
                 {
-                    "plan_id": "plan-a",
-                    "dataset_id": "office",
-                    "generated_at": "2026-09-03T00:00:00+00:00",
-                    "provisional": True,
-                    "pending_jobs": ["job-a"],
-                    "metrics": {"reward": 0.5},
-                    "warnings": ["public warning"],
-                    "run_dir": "/private/jobs",
+                    "id": "suite",
+                    "format": "workbuddy",
+                    "read_only": True,
+                    "path": "/srv/private/tasks",
+                    "revision": "private-dataset-revision",
+                    "trash": [{"path": "/srv/private/trash"}],
+                    "tasks": [
+                        {
+                            "directory": "task-a",
+                            "status": "draft",
+                            "package_name": "suite/task-a",
+                            "path": "C:\\private\\task-a",
+                            "revision": "private-task-revision",
+                            "diagnostics": [
+                                "Missing instruction.md",
+                                "failed at /srv/private/task.toml",
+                                r"failed at C:\private\task.toml",
+                            ],
+                        }
+                    ],
                 }
             ],
         }
-
-        guest = project_harbor_inventory(payload, "guest")
-
-        self.assertNotIn("run_dir", guest["workbuddy_summaries"][0])
-        self.assertEqual(guest["workbuddy_summaries"][0]["plan_id"], "plan-a")
+        before = deepcopy(payload)
         self.assertIs(project_harbor_inventory(payload, "admin"), payload)
+        self.assertEqual(
+            project_harbor_inventory(payload, "guest"),
+            {
+                "datasets": [
+                    {
+                        "id": "suite",
+                        "format": "workbuddy",
+                        "read_only": True,
+                        "tasks": [
+                            {
+                                "directory": "task-a",
+                                "status": "draft",
+                                "package_name": "suite/task-a",
+                                "diagnostics": [
+                                    "Missing instruction.md",
+                                    "request could not be completed",
+                                    "request could not be completed",
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(payload, before)
 
     def test_internal_error_projection_is_generic_for_guests(self) -> None:
         detail = "failed to read /srv/private/workspace/state.db"

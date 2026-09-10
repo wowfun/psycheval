@@ -307,14 +307,19 @@ class WorkspaceCatalogTests(unittest.TestCase):
                     "_reconcile_locked",
                     side_effect=RuntimeError("reconcile failed"),
                 ):
+                    committed_file = root / "committed.txt"
                     _result, failed_status = catalog.mutate_with_background_reconcile(
                         "harbor-task-reconcile",
-                        lambda: None,
+                        lambda: committed_file.write_text("saved", encoding="utf-8"),
+                    )
+                    self.assertEqual(
+                        committed_file.read_text(encoding="utf-8"), "saved"
                     )
                     failed = self._wait_catalog_operation(
                         catalog, failed_status.operation_id
                     )
                 self.assertEqual(failed.state, "failed")
+                self.assertEqual(committed_file.read_text(encoding="utf-8"), "saved")
                 self.assertIn("reconcile failed", failed.failures[0]["error"])
             finally:
                 store.close()
