@@ -41,7 +41,9 @@ Task MCP definitions supply defaults for each named server; caller MCP entries
 merge over them, preserving options such as authentication, timeout, and an
 explicit `enabled=false`. Caller-only servers remain available.
 Each Trial owns separate OpenCode home, config, data, state, and cache directories
-under its Agent logs. During both setup and execution, generated runtime paths
+in neutral runtime storage outside its Agent logs. Stdin forwarding also uses a
+neutral runtime path, so the launcher command does not expose a Trial log path.
+During setup and execution, generated runtime paths
 and OpenCode configuration take precedence over Agent environment overrides,
 including Harbor's surrounding execution scope. Other Agent environment values
 remain available, and the surrounding scope is restored afterward.
@@ -52,129 +54,109 @@ allows task tools by default; callers can override permissions in
 that same object. Instructions arrive on stdin, independent of shell quoting and
 Windows command-line length. Native JSON events and stderr stream to Agent logs,
 including on cancellation, and Harbor's pinned OpenCode converter produces ATIF
-and usage metrics. This adapter supports fresh runs only; resume and trajectory
-loading are not supported.
+and usage metrics. The adapter writes `trajectory.json` as UTF-8 without a BOM,
+preserving non-ASCII characters directly. This adapter supports fresh runs only;
+resume and trajectory loading are not supported.
 The version probe uses the same isolated Trial configuration as execution and
 retains `opencode-setup.log`. A probe exceeding its 30-second command timeout
 reports that probe failure instead of Harbor's overall Agent setup timeout.
 
-## WorkBuddy Office bundles
+## WorkBuddy Tasks
 
-The Python Dataset services take keyword-only `dataset_id`, `path`, and
-`format` (default `"harbor"`), and `allow_partial` (default `false`), and return `ResolvedHarborDataset`. The
-application owns workspace registration and mount selection. WorkBuddy's
-`prepare_workbuddy_plan` takes `output_root`, `dataset_id`, `dataset_path`, and
-`base_config`, optional `task_selection` and `limit`, and `allow_partial`;
-it fully validates the present WorkBuddy Dataset content itself. `task_selection`
-is a list of exact Task directory names, sorted before applying a positive limit. An explicit
-empty selection, repeated names, or unavailable names is an error.
-`summarize_workbuddy_plan` takes `output_root`, `plan_id`, and optional
-`provisional`. Both return their canonical document and write only owned
-artifacts below `output_root/harbor-plans` and `output_root/harbor-jobs`.
-`discover_workbuddy_summaries` reads an explicit output root and Dataset ID set.
-These services neither discover a workspace nor read or write its `peval.toml`,
-and do not print. The `peval` CLI owns those application operations.
-Empty or whitespace-only path strings are rejected; `"."` and `Path(".")`
-explicitly select the current directory. A `Path` object has already normalized
-its input, so `Path("")` has the same meaning as `Path(".")`. Dataset identifiers
-must be strings and are trimmed before validation; retained plan IDs are exact
-identities and are not trimmed. Dataset services report invalid inputs as
-`HarborDatasetError`, and plan documents use the validated Dataset identity.
+`prepare_workbuddy_job(config: JobConfig, *, host_settings=None) -> JobConfig`
+accepts only a Harbor model, deep-copies it, exports every field, and validates
+again. It returns independent configuration without creating files, selecting
+Tasks, discovering a workspace, or running Harbor. Harbor owns defaults
+(including one attempt, timeout multiplier 1.0, and `jobs/<job_name>`), Task and
+Dataset selection, multiple Agents, Job identities, and retained artifacts.
+Callers export YAML or pass the result to Harbor directly. Benchmark-specific
+attempt and timeout settings belong in caller configuration.
 
-The caller owns a trusted output directory. Psycheval checks for directory
-symlinks and junctions at reservation and read boundaries and rechecks newly
-created directories. Windows short directory names are accepted as aliases of
-the same directory. These checks do not isolate concurrent directory replacement:
-the caller must prevent replacement of output directories while preparation,
-summarization, or the external WorkBuddy scorer uses them. YAML and JSON outputs
-use exclusively created temporary files and atomic replacement; failed writes
-leave an existing destination intact.
+Preparation installs `workbuddy_verifier:WorkBuddyVerifier` unless a conflicting
+verifier is explicitly configured. An explicit `HostEnvironment` is adapted to
+`workbuddy_environment:WorkBuddyHostEnvironment`; native execution requires
+explicit filesystem and process access. Other environments retain their own
+execution semantics. Skills, MCP servers, environment references, and artifacts
+use Harbor's Task/Agent configuration. No Task name triggers hidden additions.
 
-Psycheval recognizes a registered `workbuddy.dataset.v1` bundle as a read-only
-Dataset whose Harbor Tasks live below the manifest's `layout.task_root`.
-Dataset workbench registration and updates validate the bounded UTF-8 manifest,
-declared CompositeVerifier contract, contained task root, task count, bounded
-UTF-8 Task text, shared verifier inputs, and regular workspace archives.
-Discovery never imports or executes external package code. Ordinary mount and
-workbench reads resolve only the bounded manifest, contained task root, declared
-count, and immediate Task names; the shared Task index validates Task content
-as it is associated with Trials. Loading a hand-edited `peval.toml` performs the same lightweight layout
-resolution as other read paths, not full registration validation. Workbench
-registration/updates and `peval harbor prepare` are the full-bundle validation
-gates, so read paths do not re-walk every Task merely to locate the
-allowlisted root. A selected read-only Task derives its revision from current
-tree metadata instead of hashing archive bodies, and an existing instruction is
-the default preview even though it is not editable. Bundle and plan readers use
-non-blocking, no-follow file opens before accepting regular files.
+WorkBuddy Tasks declare the upstream `workbuddy.verifier.v1` CompositeVerifier
+contract in an ancestor `dataset.toml` and `metadata.source_case` in `task.toml`.
+Dataset IDs and versions are descriptive, not an Office allowlist. Plugins use
+`verifier.plugin = "module:function"` or the conventional
+`shared/verifier/plugin.py`. The installed WorkBuddy runtime owns registry
+construction, preparation/custom verification hooks, scoring, and finalization.
+Psycheval owns runtime copies and native path/execution adaptation; source
+Datasets remain unchanged, including during plugin loading. Importing the
+adapter or registering a Dataset does not import the optional runtime or execute
+Dataset Python code. The supported runtime is WorkBuddy 0.1.0 with Harbor 0.21.0;
+see the [installation workflow](../user/downstream-vendoring.md#install-the-workbuddy-runtime).
 
-An explicitly registered `allow_partial=true` WorkBuddy bundle may omit whole
-Task directories while retaining the original manifest count. Empty bundles,
-more Tasks than declared, and invalid present content remain errors. The flag
-is accepted only for WorkBuddy, propagates through configuration and workbench
-registration, and does not modify the source manifest. Without it, preparation
-requires all 50 Office Tasks.
+Explicit plugin modules bundled in the Dataset load from the runtime copy in a
+private package namespace; relative imports resolve within that copy. Installed
+plugin modules use the caller's Python environment.
 
-`workbuddy.v1` currently denotes the pinned WorkBuddy Office v1.0 profile, not
-an open-ended family of WorkBuddy manifests. A different WorkBuddy Dataset
-profile requires an explicit Psycheval contract update.
+Verifier environment references resolve at execution through Harbor's environment
+helpers. The runtime artifact writer applies Harbor's sensitive-environment
+serialization rules to canonical score diagnostics before persistence, without
+mutating the plugin's score or rereading score files during cleanup. Plugins own
+the contents of files they write directly outside this writer.
+In-memory adaptation preserves environment values without applying persistence
+redaction. Use environment references in exported Jobs; route completeness is
+validated by the selected upstream plugin rather than an Office-only planner.
 
-`peval harbor prepare` converts a validated WorkBuddy registration plus one
-ordinary Harbor `0.21.0` Job config into a reproducible run plan. It does not run
-Harbor. The plan owns an isolated Jobs root and one or two nonempty configs:
-selected normal Office tasks and, when selected, the Skill/MCP task. Only that
-selection extracts a Skill and injects MCP configuration. This split is required because Harbor `0.21.0`
-has no per-Task Agent override. The external `workbuddy_bench` runtime supplies
-`workbuddy_bench.judge:CompositeVerifier`; Psycheval does not vendor that runtime
-or replace its scoring policy. Runtime validation requires package version
-`0.1.0` and a callable `CompositeVerifier`. Available source commit metadata from
-the installed distribution is recorded as provenance on a best-effort basis;
-it is not a compatibility requirement and local source repositories are not
-probed with Git. Use the
-[runtime installation workflow](../user/downstream-vendoring.md#install-the-workbuddy-runtime)
-to pin a reproducible dependency.
+The Dataset services accept explicit `dataset_id`, `path`, `format`, and
+`allow_partial`, returning `ResolvedHarborDataset`. WorkBuddy registration is
+read-only. A declared `layout.task_root` selects the contained Task collection;
+without it, the supplied path is the Task collection. An ancestor manifest is
+accepted. Declared counts are validated when present; `allow_partial=true`
+permits missing whole Tasks, but never invalid present Tasks or extra Tasks.
+Task text, manifest reads, and declared or conventional archives retain bounded regular-file
+checks. Fixed Office helper filenames and workspace archives are not required
+by the generic plugin contract.
 
-With no verifier LLM variables, the run uses WorkBuddy's deterministic rule
-score. The optional variables `WORKBUDDY_VERIFIER_LLM_BASE_URL`,
-`WORKBUDDY_VERIFIER_LLM_API_KEY`, and `WORKBUDDY_VERIFIER_LLM_MODEL` are
-all-or-none; `WORKBUDDY_VERIFIER_LLM_MAX_OUTPUT_TOKENS` is optional. Secret values
-remain environment references and are never copied into a plan manifest.
+`compute_official_metrics(job_dir, *, expected_tasks=None)` returns the upstream
+metric object for one Harbor Job directory, without writing a summary or
+requiring completion. An explicit expected Task list takes precedence; otherwise
+Harbor's `lock.json` supplies Task identities. Missing or ambiguous identity is
+an error. Missing expected Tasks score zero under the upstream policy. A
+short-lived view restores full Task names from retained Trial configuration or
+locks for Harbor's truncated Trial directory names. It preserves original score
+payloads and leaves retained evidence unchanged. Linked paths and unbounded or
+nonregular inputs are rejected at read boundaries. Callers own the trusted Job
+directory and prevent concurrent replacement during scoring. A parent containing
+nested Jobs is rejected rather than treated as an empty Job. The returned
+`run_dir` identifies the caller's Job; it is not a browser-safe projection.
+Malformed scorer Task entries and unknown Task aliases raise `WorkBuddyError`.
+Identity conflicts compare retained paths with paths and digests with digests;
+a missing Trial lock does not turn a known path into a conflicting digest.
 
-`peval harbor summarize` calls WorkBuddy's installed `compute_job_metrics`
-using a temporary view of the isolated Jobs root and the selected expected Tasks.
-Trial configuration supplies the full Task directory name; a complete expected
-name in the Trial directory is the fallback when configuration is absent. The
-view recognizes Trials by a Task configuration, a Trial-shaped result, or a
-verifier score, rather than by a directory name alone. Job summaries without
-Trial evidence are ignored even when the Job name contains `__`. The
-view preserves score payloads and distinguishes equal Trial names in separate
-Jobs. Published metrics retain original Trial names and the Jobs root. Retained
-results are never renamed or modified. When a Trial configuration is present,
-it must contain a valid `task.path`; malformed configuration fails summarization.
-Directory-name identity is a fallback only when configuration is absent. Missing selected
-Tasks contribute zero under the upstream metric policy; unexpected Task results
-are errors. By default every Job must be terminal; `--provisional` permits an
-unfinished snapshot. Version 2 plan and summary documents record full/subset
-scope, declared and available counts, and selection independently of completion.
-Only version 2 plans and summaries are supported. Version 1 artifacts cannot be
-read or discovered; run `prepare` to create a new plan.
-Summarization
-revalidates the installed runtime and requires the package version recorded by
-preparation; differences in source commit metadata do not prevent aggregation.
-A source commit changing, appearing, or disappearing adds a summary warning; the
-summary records the runtime metadata used for aggregation separately from the
-plan's preparation metadata. The known
-`recruiting-search-skill-mock-mcp-hardened` source defects and its public-network
-exception are prominently warned when that Task is selected. Its scoring rules
-and weights remain unchanged.
+## WorkBuddy native execution
 
-WorkBuddy workspace and Skill archives use portable relative paths: extraction
-rejects drive prefixes, alternate data streams, and `.git` components at any
-depth, including case variations. Path components ending in a dot or space are
-rejected to prevent Windows filename aliases. A distinct archive path must not
-overwrite an already extracted file, including through a native filename alias.
-Skill extraction accepts the Skill root archive entry only as a directory. Extracted files retain their
-read and execute permissions but lose group/other write permission; conflicting
-duplicate archive entries are still compared using their original modes.
+`WorkBuddyHostEnvironment` recognizes declared workspace archives and the
+conventional `environment/workspace.tar.gz`. Otherwise it uses the regular Host
+context. A missing archive is valid when none is declared. Real Docker builds,
+Compose services, and incompatible native commands require an appropriate
+execution environment; the adapter never treats them as successfully executed.
+The recognized inert WorkBuddy Compose metadata may accompany an archive.
+Native preparation does not install Task dependencies.
+
+The Windows Python/pytest execution-format adapter recognizes
+`workbuddy.office.verifier.v1`, independently of Dataset ID. It executes the
+source profile's score/reward snippets and supported pipeline using native argv,
+with copied tests as the collection root. Other plugins use their own commands
+and platform requirements. Registry prepare, custom verification, and score
+finalization remain available. Unknown rewrite expressions remain unchanged and
+produce adaptation diagnostics. Only recognized file-access paths, interpreter
+launches, and snapshot ordering are changed; instructions, gold data, and scoring
+conditions remain intact. Necessary source/transformed digests remain in the
+Trial verifier audit.
+
+Workspace extraction rejects unsafe paths, links, `.git` metadata, conflicting
+duplicate members, and oversized input. Identical repeated entries remain valid.
+Tar root directory entries (`.` or `./`) leave the destination's metadata intact.
+These filesystem integrity checks are independent of sandboxing. Evaluator-owned
+tests and gold files are staged outside the Agent workspace; legitimate project
+tests are ordinary workspace content.
 
 ## Host configuration
 
@@ -187,17 +169,20 @@ permission. Filesystem-only Hosts can prepare workspaces, map paths, and move
 files, while `exec` and `exec_argv` fail with an explicit process-access error.
 The Host is trusted native execution, not a sandbox. It accepts explicit
 `workdir_root` and `workspace_source` paths; it does not read the parent
-`PEVAL_CONFIG`. The root defaults to `~/workspaces`; `None` selects a
-Trial-temporary root. Empty path strings are errors. Direct arguments expand
-`~` and resolve relative to the construction working directory. Each automatic
+`PEVAL_CONFIG`. The root defaults to `~/workspaces`, resolved internally. Explicit roots must
+be native absolute paths; `None`, empty strings, relative paths, and Windows
+drive-relative or root-relative paths are errors. Explicit home shorthand must
+first be expanded by the caller, for example `Path("~/workspaces").expanduser()`;
+the TOML loader performs its own path resolution. `workspace_source` retains
+its explicit path resolution rules. Each automatic
 workspace is exclusively created as `task_<short UUID>`, using the Trial suffix
 when valid. Existing directories are never reused.
 
 `workspace_baseline` is a construction option with values `"git"` (the default)
 and `"none"`. Git baseline initialization is performed for owned workspace
 contexts and requires `host_access.process=true`; a filesystem-only caller must
-choose `workspace_baseline="none"` explicitly. WorkBuddy bootstrap always
-selects the Git baseline. The Harbor-compatible `start(force_build)` signature
+choose `workspace_baseline="none"` explicitly. Execution formats requiring
+Git diff capture require the Git baseline. The Harbor-compatible `start(force_build)` signature
 does not carry this setting.
 Owned Task copies exclude inherited `.git` metadata before creating a fresh
 baseline; source repositories are never initialized or committed by the Host.
@@ -227,13 +212,15 @@ filesystem directly and do not require `exec`. A non-virtual native absolute pat
 passed to these operations is used as-is; `host_access.filesystem=true` therefore
 grants trusted host filesystem access and is not a confinement boundary. Symlinks
 and Windows reparse-point entries are not reported by type checks or copied by
-directory downloads. Emptying a linked directory replaces the link without
+directory uploads or downloads; each traversal reports one warning with the
+number of omitted links. Neutral runtime storage rejects linked state
+directories. Emptying a linked directory replaces the link without
 traversing its target. Relative filesystem paths resolve against the Task workdir.
 `ensure_dirs(..., virtual_workdir=True)` explicitly registers Agent-selected
 virtual workdirs against the owned workspace; with a borrowed workspace, those
 workdirs must lie within its mount target. ExternalHarnessAgent uses this option
 for its environment workdir. Ordinary filesystem calls do not register mappings.
-Downloads preserve file modes and timestamps; copying a file onto itself or a
+Transfers preserve file modes and timestamps; copying a file onto itself or a
 hard-link alias leaves it intact. Filters on a mounted directory never erase
 excluded source files. Recursive transfers and directory operations run off the
 event loop with a bounded number of active filesystem workers per Host. Directory
@@ -264,8 +251,8 @@ then manage the Host lifecycle from the command's caller.
 If command cleanup also fails, the original command exception remains primary
 and carries the cleanup failures as exception notes. Pending cleanup operations
 are drained before the command releases its runtime.
-Each command receives its own runtime JSON, retained until runtime deletion so
-its configuration remains available after command completion. Runtime JSON writes
+Explicit control commands receive their own runtime JSON, retained until runtime
+deletion so their configuration remains available after completion. Runtime JSON writes
 run off the event loop; cancellation waits for the write to finish before releasing
 the command's runtime. After `stop(delete=False)` completes, commands may run again
 in the retained workspace.
@@ -297,20 +284,27 @@ initializing a Git baseline.
 
 The explicit `runtime_config.load_host_settings(path)` parser owns
 `[harbor.host].workdir_root` in a caller-selected TOML file. Omission uses the
-built-in root; an empty TOML value selects temporary workdirs. Relative roots
-resolve against that TOML file. Unknown host fields fail closed and the file
-is never modified. The peval CLI passes these settings to
-`prepare_workbuddy_plan(..., host_settings=...)`. For host plans, an explicit
-Job `workdir_root` takes precedence over caller settings, then the built-in
-default. Relative Job roots resolve against the base YAML file. Generated Jobs
-contain the resolved absolute root (or `null` for temporary workdirs), so their
-launch commands need no parent `PEVAL_CONFIG` assignment.
+built-in root; empty values are errors. Relative roots resolve against that
+TOML file. Job roots take precedence over these settings, then the built-in
+default. Prepared Host configurations contain an absolute root.
 
-Each child process receives `PEVAL_CONFIG` pointing to a permission-restricted
-effective `peval.json`. That runtime document contains native paths, the Python
-executable, and, for external harnesses, protocol version 2 with `run` or
-`resume`. The user TOML and effective JSON are different interfaces despite
-sharing the environment-variable locator at different process boundaries.
+Native Task test scripts that use Psycheval path mapping select
+`psycheval.harbor.verifier.host:HostVerifier` through Harbor's
+`verifier.import_path`. It reuses Harbor's script execution and reward loading,
+supplying the Host runtime protocol only within verification. The environment
+scope is restored on success, failure, and cancellation. It requires a Host;
+container scripts retain Harbor's native paths and verifier.
+
+Ordinary child commands receive no automatic `PEVAL_CONFIG`. Control components
+explicitly request effective runtime configuration through the Host protocol;
+external harnesses supply their invocation document, and verifier launchers use
+`HostEnvironment.runtime_config_env()`. The generated document contains native
+paths, Python, and optional harness protocol version 2 with `run` or `resume`.
+Harnesses remove evaluation control variables before launching actual Agents.
+Generated runtime directories use neutral names. Agent homes and active state
+live outside retained Job/Trial paths; necessary state is collected for diagnostics
+and resume. This reduces incidental evaluation clues without concealing
+user-supplied paths or providing access isolation.
 Command environment overrides are applied to the host process. When a command
 overrides `HOME` without explicitly setting `NVM_DIR`, HostEnvironment removes
 the inherited host `NVM_DIR` so Node installers cannot accidentally target a
@@ -360,86 +354,6 @@ Windows virtual roots match without case sensitivity, with or without the `C:`
 alias; suffix components retain their letter case. Windows virtual paths reject
 embedded drive prefixes and alternate-data-stream
 syntax, so joining a suffix cannot discard the mapped native root.
-
-Windows Host WorkBuddy plans select Psycheval's Office native verifier. It accepts
-the recognized workspace cwd whether the runtime supplies a string or a native
-`Path` object, including Windows' backslash form of `/workspace`. It runs
-pytest with its copied tests as the collection root, including when the workspace
-and temporary tests occupy different Windows drives. Conftest discovery includes
-the copied tests directory and its descendants, but excludes its ancestors and
-the separate Agent workspace. The supported Office
-profile's preparation, pytest, scorer, and artifact steps run
-without Bash, using Git and the current interpreter's Office Python packages.
-Agent-specific command dependencies remain the Agent's responsibility. Linux
-and container plans use the upstream verifier. Host MCP commands use the host
-interpreter; container MCP commands use the container interpreter.
-Host WorkBuddy bootstrap records the native OS in the supplied in-memory Task
-environment configuration after constructor validation, so Harbor's Skill upload
-uses native platform behavior. This configuration belongs to one Trial; direct
-callers using a reusable configuration must pass a separate copy for each Trial.
-Source Task files remain unchanged. The standard `/harbor/skills` directory maps to owned
-runtime storage, outside the task workspace, and is removed with that runtime.
-Host preflight checks Git on Windows, Bash and Git on Linux, and Office Python
-imports. It does not check the selected Agent's installer tools, such as curl,
-Node, or npm; callers provision those separately.
-Native verification requires successful Git add, staged-diff capture, and reset
-before publishing `agent.patch`. These commands explicitly target the Trial
-workspace's `.git` and working tree; a missing repository cannot fall back to an
-ancestor repository. A failed preparation step aborts verification
-with its command, exit code, and diagnostic; a successful empty diff is valid.
-
-The planner checks the inputs required by the native pipeline before reserving
-a plan. Each verification checks source file safety and adapts its Trial-owned
-grader copy before loading plugins. Source adaptation is best effort: the rule
-module is not required to match a fixed source fingerprint, and unknown grader
-expressions remain unchanged with skipped adaptations recorded in the audit.
-Skipped adaptations also produce a verifier log warning and a diagnostic in the
-final score. Trial detail exposes that diagnostic as a best-effort score warning;
-it does not invalidate the score or block execution.
-Only recognized file-access paths, interpreter launch sites, and snapshot
-traversal ordering are adapted; logical
-path comparisons, gold data, instructions, and scoring conditions remain intact.
-The verifier retains an adaptation audit with source and transformed digests.
-The native pipeline requires a readable execution template with score/reward
-snippets and a supported pytest command; incompatible execution interfaces fail
-explicitly. Other changes to the source shell wrapper are not interpreted by
-the native pipeline. The installed external WorkBuddy runtime still owns
-scoring, LLM judging, and final score aggregation.
-The recognized Python path sites are `Path`, the path argument of `open`,
-`builtins.open`, `io.open`, and `os.open`, `sys.path.insert`,
-`os.environ.get`, argument-parser defaults, `DEFAULT_OUTPUT_PATH`, and
-`_default_output_path`. These sites accept standalone string literals;
-interpolated virtual paths are left unchanged. Invalid mapped paths, malformed Python, and
-rewrite failures are reported as `OfficeProfileError` before plan creation.
-The recognized snapshot functions `_compute_snapshot`,
-`_compute_workspace_snapshot`, and `_protected_root_rollup` retain POSIX's
-case-sensitive path-component ordering when hashing file trees on Windows.
-Only their known file traversal expression is adapted; file bytes, hash inputs,
-gold hashes, and score conditions are unchanged. Unexpected traversal shapes
-remain unchanged. The adaptation audit records successful rewrites as `path_order`
-and unrecognized expressions as `skipped`.
-The manifest's known POSIX `PYTHONPATH` prefixes are parsed into
-entries and rebuilt with the host separator. Explicit environment path lists
-use the host separator as well; native drive-letter colons are preserved.
-Native Python steps include the profile's declared import paths, including the
-fallback score and reward snippets. The source Bash heredocs add no such prefix.
-
-`bootstrap_workbuddy_workspace=true` is an additional explicit trusted-host
-opt-in for WorkBuddy Office Tasks. It accepts only a bounded YAML document with
-that bundle's inert Compose metadata shape, safely expands the regular
-`workspace.tar.gz` into the mapped
-workspace, exposes that directory to Task commands as `/workspace`, and creates
-the clean Git baseline required by diff capture. Repeated archive members are
-accepted only when their type, mode, size, and content are identical. A
-bootstrap opens the archive non-blockingly without following a replacement
-symlink, ignores inherited `GIT_*` process state, and disables repository hooks
-while creating the baseline. Extracted WorkBuddy Skill paths apply the same cross-platform
-absolute, traversal, and separator checks. A
-prepared host Job also clears unenforceable Task resource requests, disables
-image builds, and uses host-relative MCP paths. It does not execute Dockerfile
-instructions or install their declared system/Python dependencies; those remain
-an exact preflight responsibility of the host. This mode provides no container,
-network, user, or resource isolation.
 
 ## Harness behavior
 

@@ -32,22 +32,24 @@ from a live Task or any other Copilot context.
 `psycheval.harbor` is the adapter module for Harbor's Agent, Environment,
 trajectory, verifier, and external-Dataset seams. It owns host execution,
 harness integration, evidence scoring, non-executing Dataset resolution, and
-the public WorkBuddy run-plan service. Its subtree is a relocatable source-copy
+the public WorkBuddy configuration and metrics functions. Its subtree is a relocatable source-copy
 unit: it imports no other Psycheval module and uses relative internal imports.
 Dataset services accept explicit identifiers, paths, and formats. WorkBuddy
-services accept an explicit output root and Dataset path, write their owned
-plan and summary artifacts, and return results without printing or reading
-workspace configuration. The application owns Dataset-to-mount selection; CLI
-orchestration owns workspace discovery, mount registration, and command output.
+services accept an in-memory Harbor JobConfig or an explicit retained Job path.
+Preparation returns a private validated model without allocating files; metrics
+return the upstream result without persisting another summary. Harbor owns Task
+selection, execution, Job identities, and retained artifacts. The application
+owns configuration export and Dataset-to-mount selection.
 The package version has one source in the lightweight Harbor initializer,
 shared by the root package and build metadata.
 
 Within Harbor, `windows` owns native Windows path and process mechanics and
 PowerShell command rendering.
 Environment and Agent adapters consume those mechanics without changing the
-reported host OS or choosing the Agent's tool shell. WorkBuddy owns Office
-profile recognition, execution orchestration, and approved runtime-copy
-rewrites; its native verifier reuses the external runtime's scoring engine.
+reported host OS or choosing the Agent's tool shell. WorkBuddy owns dataset
+contract recognition, WorkBuddyHostEnvironment workspace preparation, and
+execution-format adapters; its verifier reuses the external runtime's registry,
+hooks, and scoring engine. Host owns reusable filesystem and process mechanics.
 External Dataset sources remain read-only, including during plugin loading.
 For native WorkBuddy execution, the Host adapter records the host OS in Harbor's
 in-memory Task environment configuration; Harbor uses it when injecting Skills.
@@ -68,11 +70,13 @@ is validated without repair; only adapter conversion normalizes evidence.
 
 The CLI and Harbor adapter share formats and one `peval.toml`, but not parser
 ownership: the CLI reads workspace, adapter, Dataset, and mount fields; Harbor
-owns the explicit parser for `[harbor.host]`. CLI orchestration passes its
-parsed settings to WorkBuddy planning, which records resolved host paths in
-Job configurations. Host environments accept explicit workspace parameters
-and never discover user configuration. Child harnesses receive a generated
-`peval.json`, not the user TOML.
+owns the explicit parser for `[harbor.host]`. Applications pass explicitly
+parsed settings to WorkBuddy configuration adaptation, which requires absolute
+host roots. Host environments accept explicit workspace parameters
+and never discover user configuration. Trusted child harnesses explicitly request
+the generated `peval.json` protocol; ordinary Agent commands receive no evaluation
+control configuration. The opt-in Host script verifier supplies that protocol
+only while Harbor executes verification. See the [Host contract](reference/harbor.md).
 
 The serve subtree owns one internal FastAPI application for the bundled browser
 UI. `run_serve_command` owns listener selection, the single-process runtime, and
@@ -94,7 +98,14 @@ entry points with the same server-side access checks.
 `WorkspaceApp` owns the active page and maps the `catalog`, `reports`,
 `dataset-registry`, `tasks`, and `assistant-config` invalidation domains to page
 adapters. Page adapters do not import one another; shared browser primitives do
-not depend on the Home runtime. Tree and step-block controls share one clipboard
+not depend on the Home runtime. Shared action feedback owns scoped messages and
+the shell's transient notification host, using the Workspace runtime only to
+return to an action's page. Shared action forms reuse the modal lifecycle.
+Pages supply resource identities; the operation watcher reads the explicitly
+supplied operation resource and invokes the page's refresh callback. Feedback
+does not infer results from unrelated HTTP traffic. Serve owns human path-token
+parsing at its input boundary; domain filesystem validation remains with its
+existing owners. Tree and step-block controls share one clipboard
 primitive for writes and copy feedback. One shared sidebar primitive owns lifecycle,
 focus, mutual exclusion, and responsive width interaction for report previews
 across Home and Reports, the Home Saved View rail, and Trial detail; the global

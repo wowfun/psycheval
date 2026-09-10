@@ -9,9 +9,8 @@ is not a Python module and does not run Agents or score Tasks.
 `psycheval.cli.main(argv) -> int` is the programmatic interface and
 `psycheval.cli.app` is its Typer application. The editable tool installation
 exposes the `peval` command with `init`, `view trajectory`, `publish
-evaluation-report`, `export trajectory`, `import analysis`, `harbor prepare`,
-`harbor summarize`, and `serve`; `tr`
-is the trajectory alias.
+evaluation-report`, `export trajectory`, `import analysis`,
+and `serve`; `tr` is the trajectory alias.
 
 Help and errors are plain terminal text. `-h` and `--help` are equivalent.
 Root completion options emit or explicitly install shell completion; ordinary
@@ -30,25 +29,10 @@ Configuration comes only from the workspace selected with `-r`/`--root`, the
 current directory and its parents, or `PEVAL_ROOT`. Commands do not accept a
 separate config-file path.
 
-`harbor prepare --dataset <id> --config <job.yaml>` requires one registered
-`workbuddy.v1` Dataset and a base Harbor Job config containing exactly one Agent.
-It rejects preselected Tasks, Datasets, source Jobs, install-only mode, and a
-conflicting verifier; preserves the remaining Agent, model, environment, and
-concurrency settings; defaults Office runs to three attempts and a timeout
-multiplier of two; registers a new isolated Jobs mount; and prints each generated
-`harbor run -c ...` commands followed by its summarize command. Generated names
-avoid Harbor's reserved `__` delimiter.
-
-Repeatable `--task/-t` selects exact Task directory names; `--limit/-l` takes a
-positive number of Tasks after sorting the selection. The command prints one or
-two nonempty Job configurations and uses PowerShell syntax on Windows. Cropped
-bundles require an explicit `allow_partial=true` registration; selection and
-summary scope follow the [WorkBuddy contract](harbor.md#workbuddy-office-bundles).
-
-`harbor summarize --plan <plan-id>` reads that plan and retained Harbor results,
-delegates score calculation to the installed WorkBuddy package, and writes a
-derived WorkBuddy summary snapshot. It never substitutes the normal Saved View
-aggregation.
+WorkBuddy configuration and official metrics use the Python
+[WorkBuddy interface](harbor.md#workbuddy-tasks). Applications run Harbor and
+associate its Jobs directory through the existing workspace mount controls.
+See the [Python workflow](../user/peval/inputs-and-adapters.md#workbuddy-with-harbor).
 
 ## Inputs and adapters
 

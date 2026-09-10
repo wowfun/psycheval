@@ -28,86 +28,72 @@ In the workspace detail view, administrators can use **Refresh source** for a
 linked Harbor Trial to reload its evidence. Copied snapshots have no refresh
 action.
 
-## WorkBuddy Office with Harbor
+## WorkBuddy with Harbor
 
-The WorkBuddy Office v1.0 bundle already contains 50 native Harbor Task
-directories under `tasks/`; do not convert or copy them. Register the bundle
-root on the **Configuration** page, or add a read-only registration to
-`peval.toml`:
+Any Harbor Task declaring the WorkBuddy verifier contract can run in a compatible
+environment. Install the pinned runtime using the
+[installation workflow](../downstream-vendoring.md#install-the-workbuddy-runtime)
+and provision the Task and Agent dependencies. Registration in Psycheval is
+optional for execution.
 
-```toml
-[[harbor.datasets]]
-id = "workbuddy-office"
-path = "/path/to/wb-bench-office-v1.0"
-format = "workbuddy.v1"
+This Python workflow uses a preinstalled OpenCode CLI on a trusted native Host.
+Replace the Task collection path and model identifier with your own:
+
+```python
+import subprocess
+from pathlib import Path
+
+import yaml
+from harbor.models.job.config import DatasetConfig, JobConfig
+from harbor.models.trial.config import AgentConfig, EnvironmentConfig
+from psycheval.harbor.workbuddy import compute_official_metrics, prepare_workbuddy_job
+
+base = JobConfig(
+    datasets=[DatasetConfig(path=Path("path/to/tasks").resolve())],
+    agents=[AgentConfig(
+        import_path="psycheval.harbor.opencode:HostOpenCodeAgent",
+        model_name="provider/model",
+    )],
+    environment=EnvironmentConfig(
+        import_path="psycheval.harbor.environment:HostEnvironment",
+        kwargs={"host_access": {"filesystem": True, "process": True}},
+    ),
+)
+config = prepare_workbuddy_job(base)
+yaml_path = Path("job.yaml")
+yaml_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+subprocess.run(["harbor", "run", "-c", str(yaml_path)], check=True)
+job_dir = config.jobs_dir / config.job_name
+print(compute_official_metrics(job_dir))
 ```
 
-For a cropped bundle, add `allow_partial = true` to that registration. Keep the
-original manifest, shared verifier, and complete remaining Task directories.
-Default registration still checks that every declared Task is present.
+Harbor defaults to one attempt, a timeout multiplier of 1.0, and
+`./jobs/<job_name>`. Set `base.n_attempts = 3` and
+`base.timeout_multiplier = 2.0` before preparation when reproducing that
+WorkBuddy benchmark configuration. Host workspaces default to `~/workspaces`.
+Preparation returns a private model and writes no files. YAML export and
+execution in this example belong to the application.
 
-Install the supported external `workbuddy-bench` source revision in the same
-environment as Psycheval:
+For a single Task, use `JobConfig.tasks`; for a subset, use Harbor's
+`DatasetConfig.task_names`, `exclude_task_names`, and `n_tasks`. Declare Skills
+and MCP servers through the native Task/Agent fields. Task names never trigger
+special configuration. Metrics use the retained Job lock for the selected Task
+denominator, including missing results, and return an on-demand snapshot.
 
-```console
-uv pip install --no-deps \
-  "workbuddy-bench @ git+https://github.com/Tencent/workbuddy-bench.git@625b2233093ae4f23e76be28c1f341d41cc70373"
-```
+To browse results, register the Dataset on **Configuration** and add
+`config.jobs_dir` as a Jobs mount associated with that Dataset. A WorkBuddy
+registration uses `format = "workbuddy.v1"`; use `allow_partial = true` if a
+manifest declares more Tasks than the cropped bundle contains. See
+[workspace controls](workspace.md). Trial detail reads canonical verifier scores
+and Harbor rewards directly; no separate WorkBuddy summary is stored.
 
-`--no-deps` preserves the existing Harbor 0.21.0 dependency environment. For
-downstream package and lockfile setup, follow
-[WorkBuddy runtime installation](../downstream-vendoring.md#install-the-workbuddy-runtime).
-
-Then create a base Harbor Job file containing exactly one Agent. This example
-deliberately opts into Psycheval's trusted Linux host environment and uses
-OpenCode:
-
-```yaml
-job_name: workbuddy-base
-n_concurrent_trials: 1
-agents:
-  - name: opencode
-    model_name: xiaomi-token-plan-cn/mimo-v2.5-pro
-environment:
-  import_path: psycheval.harbor.environment:HostEnvironment
-  kwargs:
-    host_access:
-      filesystem: true
-      process: true
-```
-
-Prepare the isolated two-Job plan, run the commands it prints, and compute the
-official aggregate after both Jobs finish:
-
-```console
-peval harbor prepare -r .local/evaluation \
-  --dataset workbuddy-office --config workbuddy-base.yaml
-harbor run -c <printed-normal-config>
-harbor run -c <printed-special-config>
-peval harbor summarize -r .local/evaluation --plan <printed-plan-id>
-```
-
-For a single Task or a subset, add repeatable `--task/-t` options or a positive
-`--limit/-l` to prepare. Filtering uses exact Task directory names; the limit
-applies after sorting. Run each returned config, which may be a single Job.
-Summaries label subset scope separately from unfinished (`--provisional`) runs.
-
-Windows Host preparation selects a Bash-free Office verifier. Use a
-Windows-capable Agent or harness; see the
+The Host is trusted native execution. It stages scoring materials outside the
+Agent workspace and uses neutral generated paths to reduce incidental evaluation
+clues. It does not reproduce container builds or isolate access. Tasks still
+require their own platform and dependencies. The recognized Windows Python/pytest
+format has a Bash-free adapter; see the
 [native Windows workflow](../downstream-vendoring.md#run-on-native-windows).
-The CLI prints PowerShell run commands on Windows.
-
-Host execution expands each Task's workspace archive and creates its clean Git
-baseline, but it is not a sandbox and does not reproduce container resource or
-network isolation. Use it only for trusted Tasks on Linux or Windows. A Docker-capable
-Harbor environment remains the portable path. The special recruiting Task is
-kept in the denominator when selected even though the source bundle has documented
-missing-input, network-contract, and sanity-check defects; preparation prints
-those warnings. The **Datasets** page allows browsing this registration but
-offers no mutation controls. Trial detail uses `verifier/score.json` as the
-WorkBuddy score, retains Harbor reward separately, and exposes only bounded
-verifier evidence. See the [Harbor reference](../../reference/harbor.md) for the
-exact runtime, verifier LLM, and aggregation contracts.
+The [Harbor contract](../../reference/harbor.md#workbuddy-tasks) owns exact semantics.
 
 ```console
 peval export tr -a opencode -p session.jsonl -o

@@ -33,12 +33,13 @@ The Psycheval CLI owns top-level workspace presentation, `[adapters.*]`,
 registration has a resolved format: `harbor` for immediate-child Task
 directories or `workbuddy.v1` for a validated WorkBuddy bundle. `psycheval.harbor` owns
 `[harbor.host]`; each parser accepts the sibling section without copying its
-semantics. CLI orchestration passes the selected file to Harbor's explicit
+semantics. Applications can pass a selected file to Harbor's explicit
 host-settings parser; the [host contract](harbor.md#host-configuration) owns
 workspace allocation and Job configuration precedence.
-`peval harbor prepare` validates `[harbor.host]` before writing a plan, including
-for container Jobs. An absent section uses the Host defaults; a malformed section
-fails preparation. Host settings are applied only to Host Jobs.
+WorkBuddy preparation uses the Python interface and does not discover workspace
+settings or register a Jobs mount. Applications pass parsed Host settings
+explicitly and use the existing workspace mount controls to associate the
+Harbor `JobConfig.jobs_dir`. Host settings are applied only to Host Jobs.
 
 `[adapters.claude].default_session_root` selects the retained-session lookup root
 and defaults to `~/.claude/projects/`, including in an existing configuration
@@ -103,6 +104,63 @@ mutations and do not modify evaluation evidence.
 
 Configuration controls accept interaction after their event handlers are bound.
 Copilot's Connect button stays disabled until the Agent catalog is available.
+
+## Browser input and feedback
+
+Human-entered filesystem paths remove surrounding whitespace, one matching pair
+of ASCII single or double quotes, and whitespace immediately inside that pair
+before path resolution or identifier derivation. Remaining characters, including
+spaces within a path, are literal; this is not shell parsing. Empty
+quoted paths are invalid. Report imports use the same token normalization.
+Source `path` inputs use LF or CRLF separators; other control characters and
+Unicode line separators are rejected before token normalization. Empty and quoted-empty lines are
+ignored consistently for batch selection and execution. Source `db` inputs use
+non-POSIX shell token splitting before removing one quote pair per token.
+Dataset and Jobs paths remain relative to the
+configuration directory; source imports retain their workspace-relative rules.
+This input convenience does not reinterpret hand-authored TOML, Task-relative
+file paths, or ACP commands and argument arrays.
+
+Action feedback belongs to its form, editor, or resource region. Field errors
+use structured Problem Details pointers when available; other failures remain
+at the form or action level. Failed submissions retain input. An unrelated
+refresh, navigation, or an older request cannot clear a newer action's error.
+Page loading, scan progress, source-mode text, and shell failures have their own
+feedback scopes. Neutral page status stays inline without completion notifications. Notifications
+outside the visible action region provide a summary and a return action without
+automatically scrolling or taking focus. Errors and actionable notifications
+remain until resolved or dismissed; transient success feedback expires, releasing
+its state, and pauses while read. Independent actions retain independent results.
+These rules do not replace Copilot's transcript-owned notices.
+
+Input dialogs keep a failed draft open and prevent duplicate submissions.
+Enter submits the primary action; destructive secondary actions require explicit
+activation. Opening another dialog suspends an input dialog and preserves its
+draft; closing the newer dialog returns to the suspended one.
+Accepted writes followed by background reconciliation report those two phases
+separately: reconciliation failure offers a refresh, not a repeated write.
+Reading the displayed data again cannot turn a failed background operation into
+a success. Read and refresh retries hold the same busy gate as the initial
+observation; repeated activation cannot start overlapping retries.
+An operation has one active observer per document. Replacing that observer,
+disposing its feedback, or unloading the document stops its reads and timers.
+Post-save refresh errors have one reporting owner. A failed retry retains its
+Refresh action, and a successful retry clears that action's error.
+Batch results retain failed items and their input; import forms reset only after
+all items succeed. A failed operation-status read offers another read of the
+same operation, never an automatic replay. Revision conflicts retain the draft
+and expose the current saved configuration in the action's details;
+prompt and file conflicts expose the current saved text in the error details
+as a bounded preview for review before another explicit submission. Truncated
+previews are labelled; the complete file remains available in the file editor.
+A failed conflict refresh keeps
+the original conflict visible. Task mutations do not discard edits made while
+their request is pending.
+
+Clearing feedback ends that action and releases its entry; another attempt
+starts fresh feedback. Empty status containers are hidden. Filesystem path
+tokens reject control characters after normalization, including source imports;
+line breaks separating imported paths are not part of a path token.
 
 ## Storage and identity
 

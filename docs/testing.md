@@ -44,7 +44,7 @@ contacting a live model provider.
 The Python suite copies the complete Harbor subtree into an unrelated nested
 package and blocks imports of the original `psycheval` package. It exercises
 module discovery, verifier and harness entry points, synthetic host run/resume,
-filesystem-only Host operations, WorkBuddy planning and summarization, and
+filesystem-only Host operations, WorkBuddy model adaptation and on-demand metrics, and
 project-copy host execution with local fixtures. Project-copy tests exercise
 independent Trial copies, a fresh Git baseline, and cleanup through public Host
 interfaces on each native platform.

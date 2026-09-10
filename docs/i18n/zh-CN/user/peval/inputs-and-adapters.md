@@ -24,77 +24,64 @@ peval view tr -p <harbor-trial-dir>
 管理员可在工作区详情中点击 **刷新来源**，重读已关联 Harbor Trial 的证据。
 复制导入的快照不提供刷新操作。
 
-## 通过 Harbor 运行 WorkBuddy Office
+## 通过 Harbor 运行 WorkBuddy
 
-WorkBuddy Office v1.0 bundle 的 `tasks/` 已包含 50 个原生 Harbor Task 目录，
-无需转换或复制。可在 **Configuration** 页面注册 bundle 根目录，也可在
-`peval.toml` 中加入只读注册：
+符合 WorkBuddy verifier 契约的 Harbor Task 均可在兼容环境中运行。按
+[运行时安装说明](../../../../user/downstream-vendoring.md#install-the-workbuddy-runtime)
+安装固定版本，并准备 Task 和 Agent 的依赖。执行不要求先注册 Psycheval Dataset。
 
-```toml
-[[harbor.datasets]]
-id = "workbuddy-office"
-path = "/path/to/wb-bench-office-v1.0"
-format = "workbuddy.v1"
+下面的 Python 工作流使用已安装的 OpenCode CLI 和可信本机 Host。
+将任务集合路径和模型名称替换为实际值：
+
+```python
+import subprocess
+from pathlib import Path
+
+import yaml
+from harbor.models.job.config import DatasetConfig, JobConfig
+from harbor.models.trial.config import AgentConfig, EnvironmentConfig
+from psycheval.harbor.workbuddy import compute_official_metrics, prepare_workbuddy_job
+
+base = JobConfig(
+    datasets=[DatasetConfig(path=Path("path/to/tasks").resolve())],
+    agents=[AgentConfig(
+        import_path="psycheval.harbor.opencode:HostOpenCodeAgent",
+        model_name="provider/model",
+    )],
+    environment=EnvironmentConfig(
+        import_path="psycheval.harbor.environment:HostEnvironment",
+        kwargs={"host_access": {"filesystem": True, "process": True}},
+    ),
+)
+config = prepare_workbuddy_job(base)
+yaml_path = Path("job.yaml")
+yaml_path.write_text(yaml.safe_dump(config.model_dump(mode="json")), encoding="utf-8")
+subprocess.run(["harbor", "run", "-c", str(yaml_path)], check=True)
+job_dir = config.jobs_dir / config.job_name
+print(compute_official_metrics(job_dir))
 ```
 
-注册裁剪包时，在该表中增加 `allow_partial = true`，并保留原 manifest、共享
-verifier 和剩余 Task 的完整目录。默认注册仍要求声明的全部 Task 都存在。
+Harbor 默认运行一次，超时倍率为 1.0，结果保存到 `./jobs/<job_name>`。
+需要复现对应的 WorkBuddy 基准配置时，在准备前设置 `base.n_attempts = 3`
+和 `base.timeout_multiplier = 2.0`。Host 工作区默认为 `~/workspaces`。
+准备函数返回独立模型，不写文件；示例中的 YAML 导出与运行由应用负责。
 
-在 Psycheval 所在环境中安装受支持的外部 `workbuddy-bench` 源码版本：
+单题使用 `JobConfig.tasks`；子集使用 Harbor 的 `DatasetConfig.task_names`、
+`exclude_task_names` 和 `n_tasks`。Skills 与 MCP 通过原生 Task/Agent 字段声明，
+任务名称不会触发特殊配置。指标函数从留存的 Job lock 获取选中任务分母，包含
+缺失结果，并按需返回当前快照。
 
-```console
-uv pip install --no-deps \
-  "workbuddy-bench @ git+https://github.com/Tencent/workbuddy-bench.git@625b2233093ae4f23e76be28c1f341d41cc70373"
-```
+浏览结果时，在 **Configuration** 注册 Dataset，并将 `config.jobs_dir` 添加为
+关联该 Dataset 的 Jobs 挂载。WorkBuddy 注册使用 `format = "workbuddy.v1"`；
+裁剪后的 bundle 少于 manifest 声明的题数时，设置 `allow_partial = true`。
+参见[工作区操作](workspace.md)。Trial 详情直接读取权威 verifier 分数和 Harbor
+reward，不另存 WorkBuddy summary。
 
-`--no-deps` 会保留现有的 Harbor 0.21.0 依赖环境。下游项目的依赖声明和锁文件
-配置见 [WorkBuddy 运行时安装说明](../../../../user/downstream-vendoring.md#install-the-workbuddy-runtime)。
-
-然后创建仅含一个 Agent 的 Harbor Job 基础配置。下面的例子显式选择
-Psycheval 的可信 Linux host environment，并使用 OpenCode：
-
-```yaml
-job_name: workbuddy-base
-n_concurrent_trials: 1
-agents:
-  - name: opencode
-    model_name: xiaomi-token-plan-cn/mimo-v2.5-pro
-environment:
-  import_path: psycheval.harbor.environment:HostEnvironment
-  kwargs:
-    host_access:
-      filesystem: true
-      process: true
-```
-
-生成相互隔离的两个 Job 配置，运行命令输出中的两个 Harbor 命令，并在两者
-结束后计算官方聚合指标：
-
-```console
-peval harbor prepare -r .local/evaluation \
-  --dataset workbuddy-office --config workbuddy-base.yaml
-harbor run -c <输出的-normal-config>
-harbor run -c <输出的-special-config>
-peval harbor summarize -r .local/evaluation --plan <输出的-plan-id>
-```
-
-运行单题或子集时，在 prepare 后增加可重复的 `--task/-t`，或正整数
-`--limit/-l`。选题使用精确的 Task 目录名，排序后再应用数量限制。运行返回的
-全部配置，可能只有一个 Job。汇总会区分子集范围和未完成的 `--provisional` 状态。
-
-Windows Host 会自动选用无需 Bash 的 Office verifier。Agent 或 harness 需要
-支持 Windows，具体配置见 [原生 Windows 工作流](../../../../user/downstream-vendoring.md#run-on-native-windows)。
-Windows 上的 CLI 会输出 PowerShell 运行命令。
-
-Host execution 会展开每个 Task 的 workspace archive 并建立干净的 Git
-baseline，但它不是 sandbox，也不能复现容器的资源和网络隔离。仅应在 Linux 或 Windows
-上对可信 Task 使用；可运行 Docker 的 Harbor environment 仍是可移植路径。
-特殊 recruiting Task 虽有已知的缺少输入、网络契约和 sanity-check 源数据
-缺陷，选中时仍保留在分母中；prepare 会输出相应警告。**Datasets** 页面允许
-浏览此注册，但不提供任何修改操作。Trial 详情以 `verifier/score.json` 作为
-WorkBuddy 分数，单独保留 Harbor reward，并且只展示有界的 verifier 证据。
-精确的 runtime、verifier LLM 与聚合契约见
-[Harbor reference](../../../../reference/harbor.md)。
+Host 采用可信本机执行。评分材料暂存在 Agent 工作区外，自动生成的路径采用
+中性名称，尽力减少评测线索。它不复现容器构建，也不隔离访问权限。Task 仍须
+满足自身的平台和依赖要求；已识别的 Windows Python/pytest 格式提供无 Bash
+适配，参见[Windows 工作流](../../../../user/downstream-vendoring.md#run-on-native-windows)。
+精确语义由 [Harbor 契约](../../../../reference/harbor.md#workbuddy-tasks) 负责。
 
 ```console
 peval export tr -a opencode -p session.jsonl -o
