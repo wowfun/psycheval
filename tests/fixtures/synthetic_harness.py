@@ -6,12 +6,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from harbor.utils.trajectory_validator import TrajectoryValidator
-
 from psycheval.harbor.runtime_config import (
     RuntimeConfigError,
     load_effective_runtime_config,
 )
+from psycheval.harbor.trajectory_validation import load_validated_trajectory
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -55,11 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(trajectory, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    validator = TrajectoryValidator()
-    if not validator.validate(trajectory_path):
-        raise SystemExit(
-            "fixture generated invalid ATIF: " + "; ".join(validator.errors)
-        )
+    load_validated_trajectory(trajectory_path)
     if session_state is not None:
         (logs_dir / "fixture-session.json").write_text(
             json.dumps(session_state, separators=(",", ":")) + "\n",

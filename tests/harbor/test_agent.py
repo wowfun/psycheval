@@ -13,7 +13,6 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import EnvironmentConfig, TaskOS
 from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
 from harbor.utils.scripts import quote_shell_arg
-from harbor.utils.trajectory_validator import TrajectoryValidator
 
 from psycheval.harbor.agent import ExternalHarnessAgent
 from psycheval.harbor.environment import HostEnvironment
@@ -22,6 +21,7 @@ from psycheval.harbor.runtime_config import (
     PEVAL_CONFIG_ENV,
     load_effective_runtime_config,
 )
+from psycheval.harbor.trajectory_validation import load_validated_trajectory
 from tests.fixtures import load_pbench_trajectory
 
 _SYNTHETIC_HARNESS = (
@@ -188,7 +188,7 @@ def test_external_agent_runs_harness_and_validates_atif(tmp_path: Path) -> None:
         try:
             context = AgentContext()
             await agent.run("Find the example domains", environment, context)
-            assert TrajectoryValidator().validate(paths.agent_dir / "trajectory.json")
+            load_validated_trajectory(paths.agent_dir / "trajectory.json")
             assert context.metadata is not None
             assert context.metadata["harness_return_code"] == 0
             invalid_agent = ExternalHarnessAgent(
@@ -205,14 +205,21 @@ def test_external_agent_runs_harness_and_validates_atif(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_external_agent_declares_and_uses_windows_paths(tmp_path: Path) -> None:
+@pytest.mark.parametrize("instruction", ["Find the example domains", "中文任务 🎉"])
+def test_external_agent_declares_and_uses_windows_paths(
+    tmp_path: Path, instruction: str
+) -> None:
     async def scenario() -> None:
         logs_dir = tmp_path / "agent logs"
         artifacts_dir = tmp_path / "artifacts"
         environment = _RecordingWindowsEnvironment(logs_dir, artifacts_dir)
         agent = ExternalHarnessAgent(logs_dir=logs_dir, command="fixture-harness")
 
-        await agent.run("Find the example domains", environment, AgentContext())
+        await agent.run(instruction, environment, AgentContext())
+        trajectory = json.loads(
+            (logs_dir / "trajectory.json").read_text(encoding="utf-8")
+        )
+        assert trajectory["steps"][0]["message"] == instruction
 
         paths = EnvironmentPaths.for_os(TaskOS.WINDOWS)
         assert ExternalHarnessAgent.SUPPORTS_WINDOWS is True
@@ -413,9 +420,10 @@ class _RecordingWindowsEnvironment:
                 json.dumps(
                     load_pbench_trajectory(
                         _WEB_SEARCH_FIXTURE,
-                        "Find the example domains",
+                        (self.logs_dir / "instruction.txt").read_text(encoding="utf-8"),
                         self.artifacts_dir,
-                    )
+                    ),
+                    ensure_ascii=False,
                 ),
                 encoding="utf-8",
             )

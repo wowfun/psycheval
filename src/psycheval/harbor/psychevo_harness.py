@@ -8,8 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from harbor.utils.trajectory_validator import TrajectoryValidator
-
 from .psychevo import (
     parse_ndjson,
     psychevo_events_to_atif,
@@ -20,6 +18,7 @@ from .runtime_config import (
     RuntimeConfigError,
     load_effective_runtime_config,
 )
+from .trajectory_validation import load_validated_trajectory
 
 _SESSION_STATE_FILENAME = "psychevo-session.json"
 
@@ -35,7 +34,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    instruction = sys.stdin.read()
+    input_bytes = getattr(sys.stdin, "buffer", None)
+    instruction = (
+        input_bytes.read().decode("utf-8")
+        if input_bytes is not None
+        else sys.stdin.read()
+    )
     if not instruction.strip():
         raise SystemExit("Psychevo harness received an empty instruction")
     try:
@@ -91,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         cwd=workdir,
         env=process_env,
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=False,
     )
@@ -124,10 +129,11 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(trajectory, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    validator = TrajectoryValidator()
-    if not validator.validate(trajectory_path):
+    try:
+        load_validated_trajectory(trajectory_path)
+    except ValueError as exc:
         trajectory_path.unlink(missing_ok=True)
-        raise SystemExit("generated invalid ATIF: " + "; ".join(validator.errors))
+        raise SystemExit(f"generated invalid ATIF: {exc}") from exc
     _write_session_state(logs_dir, session_id)
     return 0
 

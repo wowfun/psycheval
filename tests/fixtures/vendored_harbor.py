@@ -144,6 +144,32 @@ def trajectory(message: str) -> dict:
     }
 
 
+def trajectory_file(root: Path) -> None:
+    assert sys.flags.utf8_mode == 0
+    load = module("trajectory_validation").load_validated_trajectory
+    directory = root / "trajectory"
+    directory.mkdir()
+    image = directory / "截图.png"
+    image.write_bytes(b"fixture")
+    payload = trajectory("完成 🎉")
+    payload["steps"][0]["message"] = [
+        {"type": "text", "text": "完成 🎉"},
+        {"type": "image", "source": {"media_type": "image/png", "path": image.name}},
+    ]
+    path = directory / "trajectory.json"
+    original = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    path.write_bytes(original)
+    assert load(path) == payload
+    image.unlink()
+    try:
+        load(path)
+    except ValueError as exc:
+        assert "referenced image file does not exist" in str(exc)
+    else:
+        raise AssertionError("copied validator accepted a missing relative image")
+    assert path.read_bytes() == original
+
+
 def verifier(root: Path) -> None:
     write_runtime(root)
     (root / "agent").mkdir()
@@ -447,6 +473,7 @@ if __name__ == "__main__":
     sys.meta_path.insert(0, BlockPsycheval())
     scenarios = {
         "imports": imports,
+        "trajectory_file": trajectory_file,
         "verifier": verifier,
         "psychevo": psychevo,
         "workbuddy": workbuddy,

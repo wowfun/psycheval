@@ -40,8 +40,9 @@ def set_runtime_config(
     monkeypatch.setenv("PEVAL_CONFIG", str(path))
 
 
+@pytest.mark.parametrize("instruction", ["Fetch the page", "中文任务 🎉"])
 def test_harness_uses_trial_owned_psychevo_database(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, instruction: str
 ) -> None:
     logs_dir = tmp_path / "agent"
     pevo = tmp_path / "pevo"
@@ -50,7 +51,7 @@ def test_harness_uses_trial_owned_psychevo_database(
     set_runtime_config(tmp_path, monkeypatch, logs_dir)
     monkeypatch.delenv("PSYCHEVO_DB", raising=False)
     monkeypatch.setenv("PSYCHEVAL_LEGACY", "must-not-leak")
-    monkeypatch.setattr(sys, "stdin", io.StringIO("Fetch the page"))
+    monkeypatch.setattr(sys, "stdin", io.StringIO(instruction))
 
     def fake_run(command, **kwargs):
         if "run" in command:
@@ -96,7 +97,60 @@ def test_harness_uses_trial_owned_psychevo_database(
     monkeypatch.setattr(psychevo_harness.subprocess, "run", fake_run)
 
     assert psychevo_harness.main(["--pevo", str(pevo), "--dir", str(tmp_path)]) == 0
-    assert (logs_dir / "trajectory.json").is_file()
+    trajectory = json.loads((logs_dir / "trajectory.json").read_text(encoding="utf-8"))
+    assert trajectory["steps"][0]["message"] == instruction
+
+
+def test_harness_reads_utf8_stdin_and_child_output_with_legacy_text_encoding(
+    tmp_path,
+    monkeypatch,
+):
+    logs_dir = tmp_path / "agent"
+    pevo = tmp_path / "pevo"
+    pevo.write_bytes(b"fixture")
+    set_runtime_config(tmp_path, monkeypatch, logs_dir)
+    instruction, answer = "中文任务 🎉", "完成 🎉"
+    stdin = io.TextIOWrapper(io.BytesIO(instruction.encode("utf-8")), encoding="cp936")
+    monkeypatch.setattr(sys, "stdin", stdin)
+    events = [
+        {
+            "type": "turn.completed",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "outcome": "completed",
+            "toolFailures": 0,
+            "finalAnswer": answer,
+        }
+    ]
+    output = (json.dumps(events[0], ensure_ascii=False) + "\n").encode("utf-8")
+    diagnostic = "日志 🎉".encode("utf-8")
+    run = subprocess.run
+
+    def fixture_process(command, **kwargs):
+        if "run" not in command:
+            return subprocess.CompletedProcess(
+                command, 0, stdout="pevo 0.1.0\n", stderr=""
+            )
+        assert command[-1] == instruction
+        return run(
+            [
+                sys.executable,
+                "-c",
+                f"import sys; sys.stdout.buffer.write(bytes.fromhex({output.hex()!r})); "
+                f"sys.stderr.buffer.write(bytes.fromhex({diagnostic.hex()!r}))",
+            ],
+            **kwargs,
+        )
+
+    monkeypatch.setattr(psychevo_harness.subprocess, "run", fixture_process)
+    try:
+        assert psychevo_harness.main(["--pevo", str(pevo)]) == 0
+    finally:
+        stdin.close()
+    payload = json.loads((logs_dir / "trajectory.json").read_text(encoding="utf-8"))
+    assert payload["steps"][0]["message"] == instruction
+    assert payload["steps"][-1]["message"] == answer
+    assert (logs_dir / "psychevo.stderr.log").read_bytes() == diagnostic
 
 
 def test_harness_resumes_the_exact_trial_owned_session(
@@ -281,8 +335,12 @@ def test_harness_invalid_atif_invalidates_prior_session_state(
         )
 
     monkeypatch.setattr(psychevo_harness.subprocess, "run", fake_run)
+
+    def reject_trajectory(_path):
+        raise ValueError("fixture invalid ATIF")
+
     monkeypatch.setattr(
-        psychevo_harness.TrajectoryValidator, "validate", lambda _self, _path: False
+        psychevo_harness, "load_validated_trajectory", reject_trajectory
     )
 
     with pytest.raises(SystemExit, match="generated invalid ATIF"):

@@ -9,14 +9,10 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import TaskOS
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.scripts import quote_shell_arg
-from harbor.utils.trajectory_validator import TrajectoryValidator
 
 from . import __version__, windows
 from .environment import HostEnvironment
-from .inference_telemetry import (
-    load_trajectory,
-    populate_context_from_trajectory,
-)
+from .inference_telemetry import populate_context_from_trajectory
 from .runtime_config import (
     PEVAL_CONFIG_ENV,
     EffectiveRuntimeConfig,
@@ -24,6 +20,7 @@ from .runtime_config import (
     RuntimePaths,
     write_effective_runtime_config,
 )
+from .trajectory_validation import load_validated_trajectory
 
 
 def _normalize_workdir(value: str, task_os: TaskOS) -> str:
@@ -201,12 +198,11 @@ class ExternalHarnessAgent(BaseAgent):
                 "external harness did not write "
                 f"{environment_paths.agent_dir.as_posix()}/trajectory.json"
             )
-        validator = TrajectoryValidator()
-        if not validator.validate(trajectory_path):
-            raise RuntimeError(
-                "external harness wrote invalid ATIF: " + "; ".join(validator.errors)
-            )
-        populate_context_from_trajectory(context, load_trajectory(trajectory_path))
+        try:
+            trajectory = load_validated_trajectory(trajectory_path)
+        except ValueError as exc:
+            raise RuntimeError(f"external harness wrote invalid ATIF: {exc}") from exc
+        populate_context_from_trajectory(context, trajectory)
         context.metadata = {
             "harness_action": action,
             "harness_return_code": result.return_code,

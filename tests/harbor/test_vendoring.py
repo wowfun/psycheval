@@ -31,6 +31,7 @@ def copied_harbor(tmp_path: Path) -> Path:
     "scenario",
     [
         "imports",
+        "trajectory_file",
         "verifier",
         "psychevo",
         "workbuddy",
@@ -46,8 +47,11 @@ def test_copied_harbor_runs_without_the_original_package(
         pytest.skip("synthetic host command uses Linux shell quoting")
     if scenario == "workbuddy":
         write_office_bundle(copied_harbor / "bundle")
+    python_flags = ["-I"]
+    if scenario == "trajectory_file":
+        python_flags += ["-X", "utf8=0"]
     completed = subprocess.run(
-        [sys.executable, "-I", str(RUNNER), str(copied_harbor), scenario],
+        [sys.executable, *python_flags, str(RUNNER), str(copied_harbor), scenario],
         cwd=copied_harbor,
         text=True,
         capture_output=True,

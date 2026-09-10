@@ -14,9 +14,9 @@ import pytest
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import MCPServerConfig
-from harbor.utils.trajectory_validator import TrajectoryValidator
 
 from psycheval.harbor.opencode import HostOpenCodeAgent
+from psycheval.harbor.trajectory_validation import load_validated_trajectory
 from tests.harbor.test_environment import make_environment
 
 
@@ -90,7 +90,7 @@ def test_real_cli_reads_unicode_stdin_and_uses_registered_model(tmp_path):
             async with asyncio.timeout(60):
                 await agent.run(instruction, host, AgentContext())
             agent.populate_context_post_run(AgentContext())
-            assert TrajectoryValidator().validate(agent.logs_dir / "trajectory.json")
+            load_validated_trajectory(agent.logs_dir / "trajectory.json")
             contents = []
             for _, _, payload in requests:
                 for message in payload["messages"]:
@@ -310,11 +310,10 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
                 agent.populate_context_post_run(context)
                 assert context.n_output_tokens == 7
                 assert context.cost_usd == 0.25
-                assert TrajectoryValidator().validate(logs / "trajectory.json")
+                trajectory = load_validated_trajectory(logs / "trajectory.json")
                 raw_trajectory = (logs / "trajectory.json").read_bytes()
                 assert not raw_trajectory.startswith(b"\xef\xbb\xbf")
                 assert "完成 🎉".encode("utf-8") in raw_trajectory
-                trajectory = json.loads(raw_trajectory.decode("utf-8"))
                 assert trajectory["steps"][-1]["message"] == "完成 🎉"
             observed = json.loads(
                 (host.work_dir / "observed.json").read_text(encoding="utf-8")
