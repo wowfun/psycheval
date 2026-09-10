@@ -63,4 +63,16 @@ function installBrowserDom(body, options = {}) {
   };
 }
 
-export { installBrowserDom };
+function submitActionForm(values) {
+  const form = document.querySelector('.action-form-overlay:not([hidden]) form');
+  if (!form) throw new Error("No action form is open");
+  for (const [name, value] of Object.entries(values)) {
+    const input = form.elements.namedItem(name);
+    input.value = value;
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  }
+  form.requestSubmit();
+  return form;
+}
+
+export { installBrowserDom, submitActionForm };

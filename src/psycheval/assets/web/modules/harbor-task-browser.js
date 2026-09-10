@@ -329,6 +329,19 @@ function createTaskBrowser(options = {}) {
   }
 
   const api = {
+    rebindTask(taskRef) {
+      browser.requestId += 1;
+      browser.taskRef = normalizeTaskRef(taskRef);
+      browser.contextKey = taskContextKey(browser.taskRef);
+    },
+    acceptRevision(path, revision) {
+      if (browser.filePath === path) browser.fileRevision = revision;
+    },
+    acceptSave(path, content) {
+      if (browser.filePath !== path) return;
+      browser.savedText = content;
+      setDirty(node("[data-harbor-editor]")?.value !== content);
+    },
     attach,
     clear,
     currentFile,

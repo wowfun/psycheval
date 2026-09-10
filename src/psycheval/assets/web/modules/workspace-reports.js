@@ -1,5 +1,6 @@
+import { beginFeedback } from "./action-feedback.js";
 import { $, adminMode, esc, listValue, renderComparisonPanels, state, t } from "./runtime.js";
-import { serveApi, setServeStatus } from "./serve-effects.js";
+import { serveApi } from "./serve-effects.js";
 import { leaderboardRows, visibleSelectedSourceKeys } from "./serve-catalog.js";
 import { applyReportCatalog, normalizedReports, reportForId, reportStore } from "./report-store.js";
 import { createReportSidebarAdapter } from "./report-sidebar.js";
@@ -71,7 +72,7 @@ async function refreshWorkspaceReports(options = {}) {
     if (options.renderLeaderboard !== false) renderComparisonPanels({ trace: false });
     return workspaceReports();
   } catch (error) {
-    setServeStatus(error.message || String(error), true);
+    beginFeedback("#comparison .leaderboard-action-row", { key: "home:reports:load", page: "home" }).error(error);
     return null;
   }
 }
@@ -143,6 +144,7 @@ async function attachWorkspaceReport(button) {
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
   button.disabled = true;
+  const feedback = beginFeedback("#comparison .leaderboard-action-row", { page: "home", key: "home:report-attach" });
   try {
     const pickerPayload = await serveApi("/api/path-selections", {
       method: "POST",
@@ -160,9 +162,9 @@ async function attachWorkspaceReport(button) {
     openWorkspaceReportReader(payload?.report_id, {
       opener: document.querySelector("[data-report-manager-open]")
     });
-    setServeStatus(t("report_attached", "Report attached"));
+    feedback.set(t("report_attached", "Report attached"));
   } catch (error) {
-    setServeStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   } finally {
     button.disabled = false;
   }

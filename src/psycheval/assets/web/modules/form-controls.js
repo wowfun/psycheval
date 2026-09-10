@@ -74,21 +74,11 @@ function updateAdapterDefaults(values) {
   Object.assign(adapterDefaults, values || {});
 }
 
-function showServeNotice(text, error = false) {
-  const notice = document.querySelector("[data-config-page-status]");
-  if (!notice) return;
-  notice.textContent = text;
-  notice.classList.toggle("danger", Boolean(error));
-  notice.classList.toggle("loading", false);
-  notice.removeAttribute("hidden");
-}
-
 export {
   applyDefaultDbToForm,
   formPayload,
   selectedAdapterValue,
   setAdapterChoice,
-  showServeNotice,
   syncAdapterDefaultDbControls,
   updateAdapterDefaults,
 };

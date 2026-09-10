@@ -774,6 +774,7 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
   let finished = false;
   let pending = false;
   const focusCell = (rowKey = renderedRowKey) => focusTableCell(tableId, rowKey, column.key, cell);
+  let afterCancel = null;
   const cancel = () => {
     if (finished || pending) return;
     finished = true;
@@ -783,6 +784,7 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
     if (originalAriaLabel === null) cell.removeAttribute("aria-label");
     else cell.setAttribute("aria-label", originalAriaLabel);
     cell.focus();
+    if (afterCancel) { afterCancel(); focusCell(); }
   };
   const save = async () => {
     if (finished || pending) return;
@@ -818,6 +820,16 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
       input.disabled = false;
       editor.querySelectorAll("button").forEach(button => { button.disabled = false; });
       status.textContent = error?.message || String(error);
+      afterCancel = error?.onEditorCancel || afterCancel;
+      if (error?.savedContent) {
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = t("feedback_saved_content", "Current saved content");
+        const content = document.createElement("pre");
+        content.textContent = error.savedContent;
+        details.append(summary, content);
+        status.append(details);
+      }
       status.classList.add("danger");
       input.focus();
     }

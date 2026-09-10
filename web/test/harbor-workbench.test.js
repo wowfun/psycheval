@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { installBrowserDom } from "./support/browser.js";
+import { installBrowserDom, submitActionForm } from "./support/browser.js";
 
 const browser = installBrowserDom(`
   <script type="application/json" id="peval-i18n">{}</script>
@@ -15,8 +15,7 @@ const browser = installBrowserDom(`
       <button data-harbor-delete-selected>Delete selected</button>
       <button data-harbor-show-trash>Show archived</button>
       <p data-harbor-workbench-status hidden></p>
-      <section data-workbuddy-summaries hidden></section>
-      <span data-harbor-operation-status></span>
+      <div class="harbor-overview-head"></div><div class="harbor-editor-head"></div>
       <input data-harbor-search type="search">
       <span data-harbor-overview-count></span>
       <div data-harbor-overview></div>
@@ -44,6 +43,11 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 harbor.bindHarborWorkbench();
 
 test.after(() => browser.cleanup());
+test.afterEach(() => {
+  document.querySelectorAll(".action-feedback button").forEach(button => {
+    if (button.textContent === "Close") button.click();
+  });
+});
 
 test("workbench page fills its content when its status notice is hidden", () => {
   const style = document.createElement("style");
@@ -117,8 +121,9 @@ const inventory = {
   }],
 };
 
-test("Dataset overview renders status rails and saves text explicitly", async () => {
+for (const reconcileFails of [false, true]) test(`Dataset file save stays committed when reconcile ${reconcileFails ? "fails" : "succeeds"}`, async () => {
   const calls = [];
+  let committedContent = "Original";
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (path, options = {}) => {
     const method = options.method || "GET";
@@ -128,18 +133,19 @@ test("Dataset overview renders status rails and saves text explicitly", async ()
     if (String(path) === "/api/harbor/datasets") payload = inventory;
     else if (String(path) === "/api/harbor/datasets/pbench/tasks/valid-task") payload = detail;
     else if (String(path).endsWith("/tasks/valid-task/files/instruction.md") && method === "GET") {
-      payload = { path: "instruction.md", content: "Original", revision: "file-r1", task_revision: "task-r1" };
+      payload = { path: "instruction.md", content: committedContent, revision: "file-r1", task_revision: "task-r1" };
     } else if (String(path).endsWith("/tasks/valid-task/files/instruction.md") && method === "PUT") {
+      committedContent = body.content;
       payload = { id: "file-op", kind: "harbor-task-file", state: "queued", completed: 0, total: 1, successes: [], failures: [] };
     } else if (String(path) === "/api/operations/file-op") {
       payload = {
         id: "file-op",
         kind: "harbor-task-file",
-        state: "succeeded",
+        state: reconcileFails ? "failed" : "succeeded",
         completed: 1,
         total: 1,
         successes: [{ index: 0, status: "ok" }],
-        failures: [],
+        failures: reconcileFails ? [{ error: "Index offline" }] : [],
       };
     }
     return {
@@ -173,9 +179,112 @@ test("Dataset overview renders status rails and saves text explicitly", async ()
       content: "Changed",
     });
     assert.equal(harbor.isHarborDirty(), false);
+    assert.equal(editor.value, "Changed");
+    if (reconcileFails) {
+      const status = document.querySelector(".harbor-editor-head");
+      assert.match(status.textContent, /Saved, but background reconciliation failed/);
+      [...status.querySelectorAll("button")].find(button => button.textContent === "Refresh").click();
+      await tick(); await tick();
+      assert.equal(calls.filter(call => call.method === "PUT").length, 1);
+    }
     assert.ok(calls.filter(call => call.path === "/api/harbor/datasets/pbench/tasks/valid-task").length >= 2);
   } finally {
     globalThis.fetch = previousFetch;
+  }
+});
+
+for (const large of [false, true]) test(`a file conflict retains the draft with a bounded saved preview (large=${large})`, async () => {
+  const previousFetch = globalThis.fetch;
+  const writes = [];
+  let conflicted = false;
+  globalThis.fetch = async (path, options = {}) => {
+    if (options.method === "PUT") {
+      writes.push({ body: JSON.parse(options.body), revision: options.headers["If-Match"] });
+      conflicted = true;
+      return new Response(JSON.stringify({ detail: "File changed elsewhere" }), { status: 412 });
+    }
+    const payload = path === "/api/harbor/datasets" ? inventory
+      : path.endsWith("/files/instruction.md")
+        ? { path: "instruction.md", content: conflicted ? (large ? "Remote change\n" + "x".repeat(2 * 1024 * 1024 - 30) + "END OF FILE" : "Remote change") : "Original", revision: conflicted ? "file-r2" : "file-r1" }
+        : detail;
+    return new Response(JSON.stringify(payload), { headers: { ETag: conflicted ? '"file-r2"' : '"file-r1"' } });
+  };
+  try {
+    await harbor.openHarborWorkbench();
+    const editor = document.querySelector("[data-harbor-editor]");
+    editor.value = "My draft";
+    editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await harbor.saveFile();
+    assert.equal(editor.value, "My draft");
+    assert.equal(harbor.isHarborDirty(), true);
+    assert.match(document.querySelector(".harbor-editor-head").textContent, /File changed elsewhere/);
+    assert.match(document.querySelector(".harbor-editor-head details").textContent, /Remote change/);
+    if (large) {
+      const preview = document.querySelector(".harbor-editor-head details").textContent;
+      assert.ok(preview.length < 20000);
+      assert.match(preview, /Preview truncated/);
+      assert.doesNotMatch(preview, /END OF FILE/);
+    }
+    assert.equal(writes.length, 1);
+    await harbor.saveFile();
+    assert.deepEqual(writes, [
+      { body: { content: "My draft" }, revision: '"file-r1"' },
+      { body: { content: "My draft" }, revision: '"file-r2"' },
+    ]);
+  } finally {
+    document.querySelector("[data-harbor-editor]").value = "Original";
+    document.querySelector("[data-harbor-editor]").dispatchEvent(new window.Event("input", { bubbles: true }));
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("Task rename preserves edits made during the request and rebinds file reads", async () => {
+  const previousFetch = globalThis.fetch, previousConfirm = window.confirm;
+  let accept, renamed = false;
+  const requests = [];
+  globalThis.fetch = async (path, options = {}) => {
+    requests.push({ path, method: options.method });
+    if (options.method === "PATCH") return new Promise(resolve => {
+      accept = () => {
+        renamed = true;
+        resolve(new Response(JSON.stringify({ id: "rename-draft-op" }), { status: 202 }));
+      };
+    });
+    const currentInventory = structuredClone(inventory);
+    if (renamed) currentInventory.datasets[0].tasks[0].directory = "renamed-live";
+    const payload = path === "/api/harbor/datasets" ? currentInventory
+      : path === "/api/operations/rename-draft-op" ? { state: "failed", failures: [{ error: "Index offline" }] }
+        : path.includes("/files/") ? { path: "instruction.md", content: "Original", revision: "file-r1" }
+          : detail;
+    return new Response(JSON.stringify(payload));
+  };
+  try {
+    window.confirm = () => true;
+    await harbor.openHarborWorkbench();
+    const cell = document.querySelector('[data-table-column-key="task"][data-table-editable]')
+      || document.querySelector('[data-table-column-key="task"]');
+    cell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    const input = cell.querySelector(".table-cell-editor-control");
+    input.value = "renamed-live";
+    input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+    assert.equal(typeof accept, "function");
+    const editor = document.querySelector("[data-harbor-editor]");
+    assert.equal(editor.disabled, false);
+    editor.value = "Typed while rename was pending";
+    editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+    accept();
+    await tick(); await tick();
+    assert.equal(editor.value, "Typed while rename was pending");
+    assert.equal(harbor.isHarborDirty(), true);
+    assert.equal(harbor.workbenchState.taskName, "renamed-live");
+    const beforeRead = requests.length;
+    document.querySelector("[data-harbor-file-tree] .kind-file").click();
+    await tick();
+    assert.ok(requests.slice(beforeRead).some(request => request.path.includes("/tasks/renamed-live/files/")));
+  } finally {
+    globalThis.fetch = previousFetch; window.confirm = previousConfirm;
+    harbor.workbenchState.taskName = "valid-task";
   }
 });
 
@@ -356,6 +465,8 @@ test("a pending file save rejects an overlapping save", async () => {
     assert.equal(saveRequests, 1);
     pendingSaves[0]();
     await Promise.all([first, second]);
+    for (let attempt = 0; harbor.workbenchState.busy && attempt < 50; attempt++) await tick();
+    assert.equal(harbor.workbenchState.busy, false);
   } finally {
     globalThis.fetch = previousFetch;
     harbor.workbenchState.busy = false;
@@ -467,7 +578,7 @@ test("Task batches span Datasets, restore edited archive names, and retain only 
       ],
     });
     assert.deepEqual(Array.from(harbor.workbenchState.taskSelection), ["dataset:two|task:second"]);
-    assert.match(document.querySelector("[data-harbor-workbench-status]").textContent, /second failed/);
+    assert.match(document.querySelector(".harbor-overview-head").textContent, /second failed/);
     assert.equal(harbor.workbenchState.busy, false);
 
     const archivedEntry = {
@@ -557,6 +668,7 @@ test("a newly created Task is selected after its queued reconcile completes", as
     harbor.renderHarborWorkbench();
 
     await harbor.createTask();
+    submitActionForm({ directory: "new-task", package_name: "local/new-task", steps: "0" });
     for (let index = 0; index < 5; index += 1) await tick();
 
     assert.equal(harbor.workbenchState.taskName, "new-task");
@@ -570,7 +682,6 @@ test("a newly created Task is selected after its queued reconcile completes", as
 
 test("invalid step counts and oversized uploads stop before request or file read", async () => {
   const previousFetch = globalThis.fetch;
-  const previousPrompt = window.prompt;
   const calls = [];
   globalThis.fetch = async (...args) => {
     calls.push(args);
@@ -581,12 +692,12 @@ test("invalid step counts and oversized uploads stop before request or file read
   harbor.workbenchState.taskName = "valid-task";
   harbor.workbenchState.taskDetail = detail;
   try {
-    const answers = ["bad-steps", "local/bad-steps", "not-a-number"];
-    window.prompt = () => answers.shift();
     await harbor.createTask();
+    const form = submitActionForm({ directory: "bad-steps", package_name: "local/bad-steps", steps: "51" });
+    assert.equal(form.checkValidity(), false);
+    form.querySelector('[type="button"]').click();
 
     let reads = 0;
-    window.prompt = (_message, fallback) => fallback;
     await harbor.uploadFile({
       name: "large.bin",
       size: 16 * 1024 * 1024 + 1,
@@ -599,11 +710,10 @@ test("invalid step counts and oversized uploads stop before request or file read
     assert.equal(calls.length, 0);
     assert.equal(reads, 0);
     assert.match(
-      document.querySelector("[data-harbor-workbench-status]").textContent,
+      document.querySelector(".harbor-editor-head").textContent,
       /16 MiB/,
     );
   } finally {
-    window.prompt = previousPrompt;
     globalThis.fetch = previousFetch;
   }
 });
@@ -614,13 +724,6 @@ test("WorkBuddy Datasets remain browsable while every editing surface is disable
   const calls = [];
   const readonlyInventory = {
     revision: "config-r2",
-    workbuddy_summaries: [{
-      plan_id: "office-plan",
-      scope: "subset",
-      generated_at: "2026-09-03T00:00:00Z",
-      provisional: false,
-      metrics: { reward: 0.5, pass_rate: 0.25, n_tasks: 50, n_trials: 150, missing_task_count: 0 },
-    }],
     datasets: [{
       id: "wb-office",
       format: "workbuddy.v1",
@@ -664,10 +767,7 @@ test("WorkBuddy Datasets remain browsable while every editing surface is disable
     assert.equal(document.querySelector("[data-harbor-create-task]").disabled, true);
     assert.equal(document.querySelector("[data-harbor-sync-manifest]").disabled, true);
     assert.equal(document.querySelector("[data-harbor-file-actions]").hidden, true);
-    assert.match(document.querySelector("[data-workbuddy-summaries]").textContent, /office-plan/);
-    assert.match(document.querySelector("[data-workbuddy-summaries]").textContent, /150/);
-    assert.match(document.querySelector("[data-workbuddy-summaries]").textContent, /Subset/);
-    assert.match(document.querySelector("[data-workbuddy-summaries]").textContent, /Terminal/);
+    assert.equal(document.querySelector("[data-workbuddy-summaries]"), null);
     assert.match(document.querySelector("[data-harbor-selected-meta]").textContent, /workbuddy\.v1/);
     assert.match(document.querySelector("[data-harbor-selected-meta]").textContent, /Read-only/);
     assert.match(document.querySelector("[data-harbor-selected-meta]").textContent, /valid/);
@@ -688,4 +788,25 @@ test("WorkBuddy Datasets remain browsable while every editing surface is disable
     window.prompt = previousPrompt;
     globalThis.fetch = previousFetch;
   }
+});
+
+
+test("repeated failures loading one Task replace that action's feedback", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("Task read failed"); };
+  try {
+    harbor.workbenchState.inventory = inventory;
+    harbor.workbenchState.datasetId = "pbench";
+    harbor.workbenchState.taskName = null;
+    harbor.workbenchState.taskDetail = null;
+    harbor.workbenchState.showTrash = false;
+    harbor.workbenchState.search = "";
+    harbor.workbenchState.busy = false;
+    harbor.renderHarborWorkbench();
+    const row = harbor.overviewRows().find(row => row.task?.directory === "valid-task");
+    for (let index = 0; index < 5; index++) await harbor.selectOverviewRow(row);
+    const errors = [...document.querySelectorAll(".harbor-editor-head .action-feedback")]
+      .filter(node => node.textContent.includes("Task read failed"));
+    assert.equal(errors.length, 1);
+  } finally { globalThis.fetch = previousFetch; }
 });

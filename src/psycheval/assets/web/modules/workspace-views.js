@@ -1,7 +1,9 @@
+import { beginFeedback } from "./action-feedback.js";
+import { offerRefresh } from "./operation-feedback.js";
 import { $, RENDER_OPTIONS, adminMode, closeOpenSubmenus, esc, fmtNum, listValue, normalizeServeSourceMode, state, statusLabel, t } from "./runtime.js";
 import { applyDataTableControls, bindDataTableControls, renderDataTable, selectionColumn, tableCellContent, tableControls, tableValueAttributes } from "./data-tables.js";
 import { leaderboardSummaryGroupHeading, leaderboardSummaryGroupUnit, leaderboardSummaryStatistics, leaderboardSummaryValue, renderLeaderboardSummary, summaryNumber, visibleLeaderboardSummaryDefinitions } from "./leaderboard-summary.js";
-import { serveApi, setServeStatus } from "./serve-effects.js";
+import { serveApi } from "./serve-effects.js";
 import { loadCatalogPage, serveDownload } from "./serve-catalog.js";
 import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
 import { renderMarkdown } from "./markdown.js";
@@ -275,7 +277,7 @@ function bindWorkspaceViewDialog() {
 
 function openWorkspaceViewSaveDialog(opener) {
   if (state.workspaceAppliedViewNames.size) {
-    setServeStatus(t("clear_conditions_before_saving_view", "Clear applied views before saving a new view."), true);
+    beginFeedback("#comparison .leaderboard-action-row", { key: "home:view-save-guard", page: "home" }).error(t("clear_conditions_before_saving_view", "Clear applied views before saving a new view."));
     return;
   }
   const dialog = document.querySelector?.("[data-view-save-dialog]");
@@ -296,6 +298,7 @@ function openWorkspaceViewSaveDialog(opener) {
   const browserLocation = dialog.querySelector?.('[name="view_location"][value="browser"]');
   if (adminMode() && workspaceLocation) workspaceLocation.checked = true;
   else if (browserLocation) browserLocation.checked = true;
+  beginFeedback(dialog.querySelector("form") || dialog, { key: "home:view-save", page: "home" }).clear();
   renderWorkspaceViewCurrentConfiguration(dialog);
 }
 
@@ -369,6 +372,7 @@ function workspaceViewFilterConfig(filters = currentWorkspaceViewFilters()) {
 }
 
 async function saveWorkspaceView(dialog) {
+  if (dialog.dataset.saving === "true") return;
   const name = String(dialog.querySelector?.("[data-view-name-input]")?.value || "").trim();
   const notes = String(dialog.querySelector?.("[data-view-notes-input]")?.value || "");
   const requestedLocation = String(dialog.querySelector?.('[name="view_location"]:checked')?.value || "browser");
@@ -379,36 +383,63 @@ async function saveWorkspaceView(dialog) {
     group_by: state.leaderboardSummaryGroupBy,
     notes,
   };
+  const feedback = beginFeedback(dialog.querySelector("form") || dialog, { page: "home", key: "home:view-save" });
+  let saved = false;
+  dialog.dataset.saving = "true";
+  dialog.setAttribute("aria-busy", "true");
+  const buttonStates = [...dialog.querySelectorAll("button")].map(button => [button, button.disabled]);
+  buttonStates.forEach(([button]) => { button.disabled = true; });
   try {
     const repository = workspaceViewRepository();
-    if (!repository) return;
+    if (!repository) { feedback.clear(); return; }
     try {
       await repository.save(payload, { location, overwrite: false });
     } catch (error) {
       if (!String(error?.message || error).includes("already exists")) throw error;
       const prompt = workspaceViewMessage("view_overwrite_confirm", "Replace the saved view {name}?", { name });
-      if (typeof window.confirm === "function" && !window.confirm(prompt)) return;
+      if (typeof window.confirm === "function" && !window.confirm(prompt)) { feedback.clear(); return; }
       await repository.save(payload, { location, overwrite: true });
     }
+    saved = true;
     state.workspaceViews = repository.list();
     state.workspaceViewSummaries = [];
     state.workspaceViewsLoaded = true;
     state.workspaceViewsRefreshVersion += 1;
     renderWorkspaceViewRail();
     closeWorkspaceViewSaveDialog();
-    await refreshWorkspaceViews();
-    setServeStatus(t("view_saved", "View saved"));
+    await refreshSavedWorkspaceViews();
+    feedback.clear();
+    beginFeedback("#workspace-views", { key: "home:view-saved", page: "home" }).success(t("view_saved", "View saved"));
   } catch (error) {
-    setServeStatus(error.message || String(error), true);
+    if (!saved) feedback.error(error);
+    else {
+      feedback.clear();
+      const refreshFeedback = beginFeedback("#workspace-views", { key: "home:view-refresh", page: "home" });
+      offerRefresh(refreshFeedback, error, refreshSavedWorkspaceViews);
+    }
+  } finally {
+    delete dialog.dataset.saving;
+    dialog.removeAttribute("aria-busy");
+    buttonStates.forEach(([button, disabled]) => { button.disabled = disabled; });
   }
 }
 
 async function refreshWorkspaceViews() {
+  const feedback = beginFeedback("#workspace-views", { key: "home:views:load", page: "home" });
+  const error = await refreshWorkspaceViewData();
+  if (error) feedback.error(error);
+  else feedback.clear();
+  return error;
+}
+
+async function refreshWorkspaceViewData() {
   state.workspaceViewsRefreshQueued = true;
   if (state.workspaceViewsRefreshPromise) return state.workspaceViewsRefreshPromise;
   state.workspaceViewsLoading = true;
   state.workspaceViewsRefreshPromise = (async () => {
+    let refreshError = null;
     while (state.workspaceViewsRefreshQueued) {
+      refreshError = null;
       state.workspaceViewsRefreshQueued = false;
       const revision = state.workspaceViewsRefreshVersion;
       const appliedBefore = new Set(state.workspaceAppliedViewNames);
@@ -450,6 +481,7 @@ async function refreshWorkspaceViews() {
           else await clearWorkspaceViewConditions();
         }
       } catch (error) {
+        refreshError = error;
         if (revision === state.workspaceViewsRefreshVersion) {
           const repository = workspaceViewRepository();
           state.workspaceViews = repository?.list() || [];
@@ -460,16 +492,21 @@ async function refreshWorkspaceViews() {
             if (state.workspaceAppliedViewNames.size) await reloadAppliedWorkspaceViews();
             else await clearWorkspaceViewConditions();
           }
-          setServeStatus(error.message || String(error), true);
         }
       }
     }
+    return refreshError;
   })().finally(() => {
     state.workspaceViewsLoading = false;
     state.workspaceViewsRefreshPromise = null;
-    if (state.workspaceViewsRefreshQueued) return refreshWorkspaceViews();
+    if (state.workspaceViewsRefreshQueued) return refreshWorkspaceViewData();
   });
   return state.workspaceViewsRefreshPromise;
+}
+
+async function refreshSavedWorkspaceViews() {
+  const error = await refreshWorkspaceViewData();
+  if (error) throw error;
 }
 
 function pruneWorkspaceViewState() {
@@ -811,6 +848,12 @@ async function commitWorkspaceViewCellEdit(view, field, value) {
   const id = String(view?.id || "");
   if (!id || (view.origin !== "browser" && !adminMode()) || !["name", "categories", "tags", "models", "tasks", "jobs", "providers", "group_by", "other_conditions", "notes"].includes(field)) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
   const appliedBefore = state.workspaceAppliedViewNames.has(id);
+  let savedRowKey = null;
+  const feedback = beginFeedback("#workspace-views", { key: `home:view-edit:${id}`, page: "home" });
+  const refresh = async () => {
+    await refreshSavedWorkspaceViews();
+    if (appliedBefore) await reloadAppliedWorkspaceViews();
+  };
   try {
     const repository = workspaceViewRepository();
     if (!repository) throw new Error(t("view_edit_unavailable", "View editing is unavailable"));
@@ -833,19 +876,25 @@ async function commitWorkspaceViewCellEdit(view, field, value) {
       if (typeof window.confirm === "function" && !window.confirm(prompt)) throw error;
       updated = await repository.update(id, { field: wireField, value: wireValue, overwrite: true });
     }
+    savedRowKey = updated.id;
     if (updated.id !== id) replaceWorkspaceViewStateName(id, updated.id);
     state.workspaceViews = repository.list();
     state.workspaceViewSummaries = [];
     state.workspaceViewsLoaded = true;
     state.workspaceViewsRefreshVersion += 1;
     renderWorkspaceViewRail();
-    await refreshWorkspaceViews();
-    if (appliedBefore) await reloadAppliedWorkspaceViews();
-    setServeStatus(t("view_updated", "View updated"));
+    await refresh();
+
+    feedback.dispose();
     return { rowKey: updated.id };
   } catch (error) {
+    if (savedRowKey) {
+      offerRefresh(feedback, error, refresh);
+      return { rowKey: savedRowKey };
+    }
     if (error?.status === 409) await refreshWorkspaceViews();
-    setServeStatus(error.message || String(error), true);
+
+    feedback.dispose();
     throw error;
   }
 }
@@ -871,6 +920,7 @@ async function deleteSelectedWorkspaceViews() {
   );
   if (typeof window.confirm === "function" && !window.confirm(prompt)) return;
   const appliedChanged = ids.some(id => state.workspaceAppliedViewNames.has(id));
+  const feedback = beginFeedback("#workspace-views", { page: "home", key: "home:views:delete" });
   try {
     const repository = workspaceViewRepository();
     if (!repository) return;
@@ -890,9 +940,9 @@ async function deleteSelectedWorkspaceViews() {
       if (state.workspaceAppliedViewNames.size) await reloadAppliedWorkspaceViews();
       else await clearWorkspaceViewConditions();
     }
-    setServeStatus(t("views_deleted", "Views deleted"));
+    feedback.set(t("views_deleted", "Views deleted"));
   } catch (error) {
-    setServeStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   }
 }
 

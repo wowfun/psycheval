@@ -1,5 +1,6 @@
+import { beginFeedback } from "./action-feedback.js";
 import { adminMode, currentServeSourceMode, esc, listValue, normalizeServeSourceMode, readableServeSourcesFrom, state, t } from "./runtime.js";
-import { serveApi, setServeStatus } from "./serve-effects.js";
+import { serveApi } from "./serve-effects.js";
 import { applyServeMutationPayload, applyServeSourceStateMutationPayload, leaderboardRows, setWorkspaceWriteControlsDisabled, sourceForTrialKey, switchServeSourceMode, visibleSelectedSourceKeys } from "./serve-catalog.js";
 
 function renderSourceRefreshControl(trialKey) {
@@ -68,7 +69,7 @@ function bindServeSourceStateControls(target) {
         await applyServeMutationPayload(payload);
       } catch (error) {
         setWorkspaceWriteControlsDisabled(false);
-        setServeStatus(error.message || String(error), true);
+        beginFeedback("#comparison .leaderboard-action-row", { key: "home:source-refresh", page: "home" }).error(error);
       }
     });
   });
@@ -78,12 +79,14 @@ async function mutateVisibleServeSourceState() {
   if (!adminMode()) return;
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
+  const guardFeedback = beginFeedback("#comparison .leaderboard-action-row", { key: "home:source-guard", page: "home" });
   const mode = currentServeSourceMode();
   if (mode === "all") {
-    setServeStatus(t("mixed_state_action_disabled", "Mixed view"), true);
+    guardFeedback.error(t("mixed_state_action_disabled", "Mixed view"));
     return;
   }
   const targetMode = mode === "archived" ? "active" : "archived";
+  const feedback = beginFeedback("#comparison .leaderboard-action-row", { page: "home", key: "home:source-operation" });
   try {
     const payload = await serveApi("/api/source-state-operations", {
       method: "POST",
@@ -92,9 +95,9 @@ async function mutateVisibleServeSourceState() {
         active: targetMode === "active"
       }
     });
-    await applyServeSourceStateMutationPayload(payload, { sourceKeys, targetMode });
+    await applyServeSourceStateMutationPayload(payload, { sourceKeys, targetMode, feedback });
   } catch (error) {
-    setServeStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   }
 }
 async function deleteVisibleServeSources() {
@@ -102,14 +105,15 @@ async function deleteVisibleServeSources() {
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
   if (!window.confirm(t("serve_delete_selected_confirm", "Permanently delete the selected sources? This cannot be undone."))) return;
+  const feedback = beginFeedback("#comparison .leaderboard-action-row", { page: "home", key: "home:source-operation" });
   try {
     const payload = await serveApi("/api/source-deletion-operations", {
       method: "POST",
       body: { source_keys: sourceKeys },
     });
-    await applyServeSourceStateMutationPayload(payload, { sourceKeys, targetMode: currentServeSourceMode() });
+    await applyServeSourceStateMutationPayload(payload, { sourceKeys, targetMode: currentServeSourceMode(), feedback });
   } catch (error) {
-    setServeStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   }
 }
 

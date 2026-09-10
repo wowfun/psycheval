@@ -164,8 +164,10 @@ test("workspace router intercepts ordinary links and follows popstate", async ()
     home.dispatchEvent(modifiedClick);
     assert.equal(modifiedClick.defaultPrevented, false);
 
+    const popped = new Promise(resolve => window.addEventListener("popstate", resolve, { once: true }));
     window.history.back();
-    await new Promise(resolve => setTimeout(resolve, 20));
+    await popped;
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(document.querySelector('[data-workspace-page="home"]').hidden, false);
     app.destroy();
   } finally {

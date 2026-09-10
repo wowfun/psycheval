@@ -285,9 +285,15 @@ test("guest saves a view only to workspace-scoped browser storage", async () => 
     runtime.state.workspaceViewsRefreshQueued = false;
     await views.refreshWorkspaceViews();
     const dialog = document.querySelector("[data-view-save-dialog]");
+    const unavailable = document.createElement("button");
+    unavailable.disabled = true;
+    unavailable.textContent = "Unavailable action";
+    dialog.append(unavailable);
     dialog.querySelector("[data-view-name-input]").value = "Guest local";
     dialog.querySelector("[data-view-notes-input]").value = "Only here";
     await views.saveWorkspaceView(dialog);
+    assert.equal(unavailable.disabled, true);
+    unavailable.remove();
 
     assert.deepEqual(views.workspaceViews().map(view => [view.id, view.notes]), [
       ["browser:Guest local", "Only here"],

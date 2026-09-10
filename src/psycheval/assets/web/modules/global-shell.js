@@ -1,3 +1,4 @@
+import { beginFeedback } from "./action-feedback.js";
 // @ts-check
 
 import { closeAcpDrawer, initializeAcp } from "./acp-client.js";
@@ -67,6 +68,7 @@ function bindAuthenticationControls() {
 function openAdminLogin(opener = null) {
   const dialog = document.querySelector("[data-admin-login-dialog]");
   if (!dialog) return false;
+  beginFeedback("[data-admin-login-status]", { key: "shell:login" }).clear();
   const status = dialog.querySelector("[data-admin-login-status]");
   if (status) {
     status.setAttribute("hidden", "");
@@ -88,18 +90,14 @@ async function submitAdminLogin(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const password = String(new FormData(form).get("password") || "");
-  const status = form.querySelector("[data-admin-login-status]");
+  const feedback = beginFeedback("[data-admin-login-status]", { key: "shell:login" });
   const submit = form.querySelector('[type="submit"]');
   if (submit) submit.disabled = true;
   try {
     await serveApi("/api/session", { method: "POST", body: { password } });
     window.location.reload();
   } catch (error) {
-    if (status) {
-      status.textContent = error.message || t("serve_login_failed", "Login failed");
-      status.classList.add("danger");
-      status.hidden = false;
-    }
+    feedback.error(error.message || t("serve_login_failed", "Login failed"));
     if (submit) submit.disabled = false;
     form.querySelector('[name="password"]')?.focus?.();
   }
@@ -132,10 +130,9 @@ async function changeLocale(locale, select = document.querySelector("[data-local
 }
 
 function setGlobalShellStatus(message) {
-  const status = document.querySelector("[data-global-shell-status]");
-  if (!status) return;
-  status.textContent = message || "";
-  status.toggleAttribute("hidden", !message);
+  const feedback = beginFeedback("[data-global-shell-status]", { key: "shell:status" });
+  if (message) feedback.error(message);
+  else feedback.clear();
 }
 
 export {

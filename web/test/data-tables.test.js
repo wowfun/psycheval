@@ -710,6 +710,25 @@ test("Leaderboard and saved-view adapters keep persistence behind the shared edi
   assert.match(update.body.value, /tags:\n    - "daily"\n    - "nightly"/);
   assert.match(update.body.value, /results:\n    - "passed"/);
 
+  const successfulFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    if (url === "/api/view-summaries") throw new Error("Summary unavailable");
+    return successfulFetch(url, options);
+  };
+  const saved = await views.commitWorkspaceViewCellEdit(view, "tags", ["daily", "nightly"]);
+  assert.equal(saved.rowKey, view.id);
+  assert.match(document.querySelector("#workspace-views").textContent, /Saved, but workspace refresh failed/);
+  assert.equal(document.querySelectorAll("#workspace-views .action-feedback.danger").length, 1);
+  const writesBeforeRetry = calls.filter(call => call.method === "PATCH").length;
+  globalThis.fetch = successfulFetch;
+  const refresh = [...document.querySelectorAll("#workspace-views .action-feedback button")].find(button => button.textContent === "Refresh");
+  assert.ok(refresh);
+  refresh.click();
+  await tick();
+  await tick();
+  assert.equal(calls.filter(call => call.method === "PATCH").length, writesBeforeRetry);
+  assert.doesNotMatch(document.querySelector("#workspace-views").textContent, /Summary unavailable/);
+
   const columns = views.workspaceViewColumns();
   assert.deepEqual(columns.filter(column => column.edit).map(column => [column.key, column.valueType]), [
     ["name", "text"],
@@ -797,4 +816,19 @@ test("Saved View Category editing preserves a scalar value containing a comma", 
     runtime.state.workspaceViewsRefreshPromise = null;
     runtime.state.workspaceViewsRefreshQueued = false;
   }
+});
+
+
+test("conflicted cell shows the saved revision and refreshes on cancel without losing its draft", async () => {
+  let refreshed = 0;
+  const mounted = mountEditor("text", { commit: async () => {
+    throw Object.assign(new Error("Changed elsewhere"), { savedContent: "current saved value", onEditorCancel: () => { refreshed++; } });
+  } });
+  mounted.input.value = "my retained draft";
+  mounted.input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(mounted.input.value, "my retained draft");
+  assert.match(mounted.cell.querySelector("details").textContent, /current saved value/);
+  mounted.input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.equal(refreshed, 1);
 });

@@ -1,6 +1,7 @@
+import { beginFeedback } from "./action-feedback.js";
 import { adminMode, cellNoteFor, editableNotesSource, esc, notesFor, selectedKey, state, t } from "./runtime.js";
 import { renderTrace } from "./trajectory-trace.js";
-import { serveApi, setServeStatus } from "./serve-effects.js";
+import { serveApi } from "./serve-effects.js";
 import { applyServeMutationPayload } from "./serve-catalog.js";
 import { renderManualNote } from "./markdown.js";
 
@@ -26,11 +27,10 @@ function renderNotesAction(trialKey) {
 function renderNotesEditor(trialKey) {
   if (!adminMode() || !trialKey || !state.notesEditor || state.notesEditor.trialKey !== trialKey) return "";
   const markdown = state.notesEditor.markdown ?? "";
-  const error = state.notesEditor.error ? `<p class="copy danger">${esc(state.notesEditor.error)}</p>` : "";
+
   const disabled = state.notesEditor.saving ? " disabled" : "";
   return `<article class="notes-editor-panel" data-notes-editor-panel>
     <textarea data-notes-editor data-trial-key="${esc(trialKey)}" rows="8">${esc(markdown)}</textarea>
-    ${error}
     <div class="notes-editor-actions">
       <button class="action-button primary" type="button" data-notes-save data-trial-key="${esc(trialKey)}"${disabled}>${esc(t("save_notes", "Save notes"))}</button>
       <button class="action-button" type="button" data-notes-cancel${disabled}>${esc(t("cancel", "Cancel"))}</button>
@@ -57,17 +57,23 @@ async function saveSelectedNotes(button) {
   const markdown = textarea.value || "";
   state.notesEditor = { trialKey, markdown, error: "", saving: true };
   renderTrace();
+  const pendingEditor = state.notesEditor;
+  const feedback = beginFeedback(() => state.notesEditor?.trialKey === trialKey ? document.querySelector('[data-notes-editor-panel]') : null, {
+    page: "home", key: `home:notes:${trialKey}`, label: trialKey,
+  });
+  feedback.pending();
   try {
     await serveApi(`/api/sources/${encodeURIComponent(source.source_key)}`, {
       method: "PATCH",
       body: { notes: markdown }
     });
-    state.notesEditor = null;
+    if (state.notesEditor === pendingEditor) state.notesEditor = null;
+    feedback.dispose();
     applyServeMutationPayload({}, { preserveTrial: trialKey });
   } catch (error) {
     const message = `${t("notes_save_failed", "Save notes failed")}: ${error.message || String(error)}`;
-    state.notesEditor = { trialKey, markdown, error: message, saving: false };
-    setServeStatus(message, true);
+    if (state.notesEditor === pendingEditor) state.notesEditor = { trialKey, markdown, error: message, saving: false };
+    feedback.set(message, true);
     renderTrace();
   }
 }

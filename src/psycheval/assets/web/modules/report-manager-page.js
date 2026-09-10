@@ -1,3 +1,4 @@
+import { beginFeedback } from "./action-feedback.js";
 // @ts-check
 
 import { bindDataTableEditors } from "./data-tables.js";
@@ -38,7 +39,6 @@ async function initializeReportManagerPage() {
 }
 
 async function loadReportManagerPage() {
-  setStatus("");
   await Promise.all([loadEvaluationReports(), loadImportedReports()]);
 }
 
@@ -53,6 +53,7 @@ async function loadEvaluationReports(changes = {}) {
     page_size: "100",
     search: manager.search || "",
   });
+  const feedback = beginFeedback('.evaluation-report-panel', { page: "reports", key: "reports:evaluation:load" });
   try {
     const page = await serveApi(`/api/evaluation-reports?${params.toString()}`);
     if (generation !== evaluationLoadGeneration) return;
@@ -63,7 +64,7 @@ async function loadEvaluationReports(changes = {}) {
   } catch (error) {
     if (generation !== evaluationLoadGeneration) return;
     manager.loading = false;
-    setStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
     renderReportManagerPage();
     throw error;
   }
@@ -75,6 +76,7 @@ async function loadImportedReports(changes = {}) {
   manager.loading = true;
   manager.page = Math.max(1, Number(changes.page || manager.page || 1));
   renderReportManagerPage();
+  const feedback = beginFeedback('.imported-report-panel', { page: "reports", key: "reports:imported:load" });
   try {
     if (!adminMode()) {
       const reports = await serveApi("/api/reports");
@@ -107,7 +109,7 @@ async function loadImportedReports(changes = {}) {
   } catch (error) {
     if (generation !== importedLoadGeneration) return;
     manager.loading = false;
-    setStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
     renderReportManagerPage();
     throw error;
   }
@@ -432,17 +434,23 @@ async function saveBindings() {
   if (!reportId || !reportBindingsChanged() || manager.busy) return;
   manager.busy = true;
   renderReportManagerPage();
+  const feedback = beginFeedback(() => manager.selectedId === reportId ? document.querySelector('.report-bindings-panel') : null, {
+    page: "reports", key: `reports:bindings:${reportId}`, label: reportForId(reportId)?.filename || reportId,
+    onView: () => selectActiveReport(reportForId(reportId)?.report_ref),
+  });
   try {
     const updated = await serveApi(`/api/reports/${encodeURIComponent(reportId)}/bindings`, {
       method: "PUT",
       body: { source_keys: [...manager.draftBindings] },
     });
     applyReportCatalog([...reportStore.reports.filter(report => report.report_id !== reportId), updated]);
-    manager.dirty = false;
-    syncActiveReport();
-    setStatus(t("report_bindings_saved", "Report bindings saved"));
+    if (manager.selectedId === reportId) {
+      manager.dirty = false;
+      syncActiveReport();
+    }
+    feedback.set(t("report_bindings_saved", "Report bindings saved"));
   } catch (error) {
-    setStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   } finally {
     manager.busy = false;
     renderReportManagerPage();
@@ -454,14 +462,16 @@ async function deleteReport(reportId) {
   if (!report || reportStore.manager.busy) return;
   if (!window.confirm(`${t("report_delete", "Delete report")}: ${report.filename}?`)) return;
   reportStore.manager.busy = true;
+  const feedback = beginFeedback('.imported-report-panel', { page: "reports", key: `reports:delete:${reportId}` });
   try {
     await serveApi(`/api/reports/${encodeURIComponent(report.report_id)}`, { method: "DELETE" });
     reportStore.manager.selectedId = null;
     reportStore.manager.dirty = false;
     applyReportCatalog(reportStore.reports.filter(item => item.report_id !== report.report_id));
     syncActiveReport();
+    feedback.success();
   } catch (error) {
-    setStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   } finally {
     reportStore.manager.busy = false;
     renderReportManagerPage();
@@ -541,14 +551,6 @@ function pageLabel(pageData) {
   const size = Number(pageData?.page_size || 100);
   const total = Number(pageData?.total || 0);
   return total ? `${(page - 1) * size + 1}-${pageEnd(pageData)} / ${total}` : "0 / 0";
-}
-
-function setStatus(message, error = false) {
-  const target = document.querySelector("[data-report-manager-status]");
-  if (!target) return;
-  target.textContent = message || "";
-  target.classList.toggle("danger", Boolean(error));
-  target.toggleAttribute("hidden", !message);
 }
 
 export {

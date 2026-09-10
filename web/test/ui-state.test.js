@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { installBrowserDom } from "./support/browser.js";
+import { installBrowserDom, submitActionForm } from "./support/browser.js";
 
 const browser = installBrowserDom(`
   <script type="application/json" id="peval-i18n">{}</script>
@@ -34,6 +34,58 @@ const etagHeaders = revision => ({
 });
 
 test.after(() => browser.cleanup());
+test("Notes save finishes and removes its local pending feedback", async () => {
+  const notes = await import("../../src/psycheval/assets/web/modules/analysis-notes.js");
+  const previousFetch = globalThis.fetch;
+  const previousSources = runtime.state.serveSources;
+  const panel = document.createElement("article");
+  panel.dataset.notesEditorPanel = "true";
+  panel.innerHTML = '<textarea data-notes-editor>My note</textarea><button data-notes-save data-trial-key="note-source">Save</button>';
+  document.body.append(panel);
+  let release;
+  globalThis.fetch = async (_path, options) => {
+    if (options.method === "PATCH") await new Promise(resolve => { release = resolve; });
+    return new Response(JSON.stringify({ items: [], generation: 0, checking: false }));
+  };
+  try {
+    runtime.state.serveSources = [{ source_key: "note-source" }];
+    const saving = notes.saveSelectedNotes(panel.querySelector("button"));
+    await tick();
+    assert.match(panel.querySelector(".action-feedback").textContent, /Saving/);
+    release(); await saving; await tick();
+    assert.equal(panel.querySelector(".action-feedback"), null);
+    assert.equal(runtime.state.notesEditor, null);
+  } finally {
+    globalThis.fetch = previousFetch; runtime.state.serveSources = previousSources;
+    panel.remove();
+  }
+});
+test("Home scan and source-mode status stays inline without clearing action errors", async () => {
+  const { beginFeedback } = await import("../../src/psycheval/assets/web/modules/action-feedback.js");
+  const { setServeStatus } = await import("../../src/psycheval/assets/web/modules/serve-effects.js");
+  const row = document.createElement("div");
+  row.className = "leaderboard-action-row";
+  document.querySelector("#comparison").append(row);
+  const action = beginFeedback("#comparison .leaderboard-action-row", { key: "test-home-action" });
+  try {
+    action.error("Export failed");
+    for (const text of ["Checking runs", "Archived snapshots"]) {
+      setServeStatus(text);
+      assert.ok(row.textContent.includes(text));
+      assert.match(row.textContent, /Export failed/);
+      assert.match(document.querySelector('.action-toast[data-action-feedback="test-home-action"]').textContent, /Export failed/);
+      assert.ok([...document.querySelectorAll(".action-toast")].every(toast => !toast.textContent.includes(text)));
+    }
+    setServeStatus("");
+    assert.match(row.textContent, /Export failed/);
+    assert.doesNotMatch(row.textContent, /Archived snapshots/);
+  } finally { action.dispose(); row.remove(); }
+});
+function addFeedbackRegions(root) {
+  for (const title of ["trajectory-ingestion-title", "acp-agents-title", "prompt-assets-title", "dataset-registry-title", "harbor-mounts-title"]) {
+    if (!root.querySelector(`[aria-labelledby="${title}"]`)) root.insertAdjacentHTML("beforeend", `<section aria-labelledby="${title}"></section>`);
+  }
+}
 
 test("workspace description renders escaped Markdown and hides blank content", () => {
   const node = document.createElement("div");
@@ -200,6 +252,7 @@ test("Configuration loads workspace configuration and prompt assets without a so
     };
   };
   try {
+    addFeedbackRegions(root);
     await configuration.initializeConfiguration();
     assert.deepEqual(requests, ["/api/config", "/api/prompts"]);
     assert.match(root.querySelector("[data-harbor-dataset-registry]").textContent, /tasks/);
@@ -259,6 +312,7 @@ test("Configuration adds ACP agents and saves same-name prompt overrides", async
   };
 
   try {
+    addFeedbackRegions(root);
     await configuration.initializeConfiguration();
     const panel = root.querySelector("[data-acp-agent-form-panel]");
     const open = root.querySelector("[data-acp-agent-form-open]");
@@ -318,7 +372,7 @@ test("Configuration adds ACP agents and saves same-name prompt overrides", async
   }
 });
 
-test("Configuration reloads the current prompt after a revision conflict", async () => {
+for (const refreshFails of [false, true]) test(`Configuration retains the conflict draft when version refresh ${refreshFails ? "fails" : "succeeds"}`, async () => {
   const requests = [];
   const previousFetch = globalThis.fetch;
   const root = document.querySelector("[data-config-page]");
@@ -340,6 +394,7 @@ test("Configuration reloads the current prompt after a revision conflict", async
       return { ok: false, status: 412, statusText: "Precondition Failed", headers: etagHeaders("p2"), text: async () => JSON.stringify({ detail: "Workspace prompt changed; refresh before saving" }) };
     }
     if (request.path === "/api/prompts") {
+      if (conflicted && refreshFails) throw new Error("Version lookup offline");
       const prompt = conflicted
         ? { id: "failure-diagnosis", filename: "failure-diagnosis.md", title: "Teammate edit", content: "# Teammate edit\n", customized: true, revision: "p2" }
         : { id: "failure-diagnosis", filename: "failure-diagnosis.md", title: "Failure diagnosis", content: "# Default\n", customized: false, revision: "p1" };
@@ -350,6 +405,7 @@ test("Configuration reloads the current prompt after a revision conflict", async
   };
 
   try {
+    addFeedbackRegions(root);
     await configuration.initializeConfiguration();
     const editor = root.querySelector("[data-prompt-content]");
     editor.value = "# My stale edit\n";
@@ -359,11 +415,14 @@ test("Configuration reloads the current prompt after a revision conflict", async
     await tick();
     await tick();
 
-    assert.equal(requests.filter(request => request.path === "/api/config").length, 2);
+    assert.equal(requests.filter(request => request.path === "/api/config").length, 1);
     assert.equal(requests.filter(request => request.path === "/api/prompts" && request.method === "GET").length, 2);
-    assert.equal(configuration.promptConfigState.prompts[0].revision, "p2");
-    assert.equal(editor.value, "# Teammate edit\n");
-    assert.match(root.querySelector("[data-config-page-status]").textContent, /refresh before saving/);
+    assert.equal(configuration.promptConfigState.prompts[0].revision, refreshFails ? "p1" : "p2");
+    assert.equal(editor.value, "# My stale edit\n");
+    assert.equal(configuration.promptConfigState.dirty, true);
+    if (refreshFails) assert.match(root.querySelector('[aria-labelledby="prompt-assets-title"]').textContent, /Version lookup offline/);
+    else assert.match(root.querySelector('[aria-labelledby="prompt-assets-title"] details').textContent, /# Teammate edit/);
+    assert.match(root.querySelector('[aria-labelledby="prompt-assets-title"]').textContent, /refresh before saving/);
   } finally {
     globalThis.fetch = previousFetch;
     configuration.harborConfigState.busy = false;
@@ -406,9 +465,12 @@ test("Configuration preserves a failed Harbor operation status after refreshing"
   };
 
   try {
+    addFeedbackRegions(root);
     await configuration.pollConfigurationOperation("failed-op");
-    const status = root.querySelector("[data-config-page-status]");
-    assert.equal(status.textContent, "reconcile exploded");
+    const status = root.querySelector('[aria-labelledby="trajectory-ingestion-title"] .action-feedback');
+    assert.match(status.textContent, /reconcile exploded/);
+    await configuration.refreshHarborConfig();
+    assert.match(status.textContent, /reconcile exploded/);
     assert.equal(status.hidden, false);
     assert.equal(status.classList.contains("danger"), true);
   } finally {
@@ -458,13 +520,15 @@ test("Configuration registers Dataset and Jobs roots from path-only actions", as
   };
 
   try {
+    addFeedbackRegions(root);
     await configuration.initializeConfiguration();
     assert.equal(root.querySelector("[data-harbor-mount-form]"), null);
 
     root.querySelector("[data-harbor-register-dataset]").click();
+    submitActionForm({ path: "/workspace/tasks" });
     for (let index = 0; index < 5; index += 1) await tick();
 
-    assert.equal(prompts.length, 1);
+    assert.equal(prompts.length, 0);
     assert.deepEqual(
       requests.find(request => request.path === "/api/harbor/datasets").body,
       {
@@ -479,6 +543,7 @@ test("Configuration registers Dataset and Jobs roots from path-only actions", as
     );
 
     root.querySelector("[data-harbor-add-mount]").click();
+    submitActionForm({ jobs_path: "/workspace/jobs" });
     for (let index = 0; index < 5; index += 1) await tick();
     const mountRequests = requests.filter(
       request => request.path === "/api/harbor/mounts",
@@ -487,10 +552,9 @@ test("Configuration registers Dataset and Jobs roots from path-only actions", as
       mountRequests.at(-1).body,
       {
         path: "/workspace/jobs",
-        dataset_ids: [],
       },
     );
-    assert.equal(prompts.length, 2);
+    assert.equal(prompts.length, 0);
     assert.equal(root.querySelector("[data-harbor-mount-count]").textContent, "1");
     assert.match(root.querySelector("[data-harbor-mount-config]").textContent, /jobs/);
     assert.equal(root.querySelector("[data-harbor-mount-form]"), null);
@@ -540,6 +604,7 @@ test("Configuration edits Dataset cells and atomically unregisters the selected 
   window.confirm = () => true;
 
   try {
+    addFeedbackRegions(root);
     await configuration.initializeConfiguration();
     const idCell = root.querySelector('[data-table-column-key="id"]');
     idCell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
@@ -642,6 +707,7 @@ test("Configuration edits reciprocal Harbor associations and batch removes mount
   window.confirm = () => true;
 
   try {
+    addFeedbackRegions(root);
     await configuration.initializeConfiguration();
     assert.equal(root.querySelector("[data-harbor-mount-count]").textContent, "2");
 
@@ -771,6 +837,7 @@ test("Editing a session source clears selection before a stale submit can send a
       text: async () => JSON.stringify(String(path) === "/api/prompts" ? [] : { datasets: [], mounts: [] }) };
   };
   try {
+    addFeedbackRegions(root);
     await configuration.initializeConfiguration();
     const form = root.querySelector("form");
     for (const [name, value, event] of [["path", "/tmp/two", "input"], ["adapter", "opencode", "change"]]) {
@@ -785,7 +852,7 @@ test("Editing a session source clears selection before a stale submit can send a
       assert.deepEqual(requests, []);
       assert.deepEqual(configuration.selectedSessionIds(form), []);
       assert.equal(form.querySelector("[data-session-picker]").hidden, true);
-      assert.match(root.querySelector("[data-config-page-status]").textContent, /Select sessions/);
+      assert.match(form.querySelector(".action-feedback").textContent, /Select sessions/);
     }
   } finally {
     globalThis.fetch = previousFetch;
@@ -858,23 +925,14 @@ test("workspace busy state disables and restores controls", () => {
   assert.equal(mountAction.hasAttribute("aria-busy"), false);
 });
 
-test("Configuration reports nested and background source import results", async () => {
+test("Configuration reports background source import results", async () => {
   const previousFetch = globalThis.fetch;
   const root = document.querySelector("[data-config-page]");
   root.hidden = false;
   root.innerHTML = '<p data-config-page-status hidden></p>';
 
   try {
-    configuration.showImportResultsSummary({
-      result: {
-        import_results: [
-          { status: "ok", source_keys: ["source-a"] },
-          { status: "error", error: "nested failure" },
-        ],
-      },
-    });
-    assert.equal(root.querySelector("[data-config-page-status]").textContent, "Imported 1, failed 1: nested failure");
-
+    addFeedbackRegions(root);
     const form = document.createElement("form");
     form.dataset.sourceKind = "path";
     form.innerHTML = '<textarea name="path">one.jsonl\nmissing.jsonl</textarea><div data-source-import-results hidden></div>';
@@ -898,7 +956,8 @@ test("Configuration reports nested and background source import results", async 
     await configuration.submitServeSourceForm(form);
     await tick();
     await tick();
-    assert.equal(root.querySelector("[data-config-page-status]").textContent, "Imported 1, failed 1: missing.jsonl was not found");
+    assert.match(form.querySelector(".action-feedback").textContent, /1 succeeded, 1 failed/);
+    assert.equal(form.querySelector('[name="path"]').value, "missing.jsonl");
     assert.deepEqual([...form.querySelectorAll(".source-import-results code")].map(node => node.textContent), ["one.jsonl", "missing.jsonl"]);
     assert.equal(form.querySelector("[data-source-import-results]").hidden, false);
   } finally {
@@ -963,6 +1022,8 @@ test("one completed Configuration operation does not clear another operation's b
     });
     await tick();
     assert.equal(configuration.harborConfigState.busy, false);
+    assert.match(firstForm.textContent, /Completed/);
+    assert.match(secondForm.textContent, /Completed/);
   } finally {
     globalThis.fetch = previousFetch;
     configuration.harborConfigState.busy = false;
@@ -1334,4 +1395,40 @@ test("HTML report previews fit an 1180px design viewport into the reader pane", 
   assert.equal(frame.style.height, "1400px");
   assert.equal(frame.style.transform, "scale(0.5)");
   reports.closeWorkspaceReportReader({ restoreFocus: false });
+});
+
+
+test("a mount conflict retains its draft and retries with current unrelated fields", async () => {
+  const previousFetch = globalThis.fetch;
+  const root = document.querySelector("[data-config-page]");
+  root.hidden = false;
+  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-config-reload></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><div data-harbor-mount-count></div><div data-harbor-mount-config></div>';
+  delete root.dataset.configBound;
+  const writes = [];
+  globalThis.fetch = async (path, options = {}) => {
+    if (String(path) === "/api/prompts") return new Response("[]");
+    if (options.method === "PATCH") {
+      writes.push(JSON.parse(options.body));
+      if (writes.length === 1) return new Response(JSON.stringify({ detail: "Changed elsewhere" }), { status: 412, headers: { "Content-Type": "application/problem+json", ETag: '"r2"' } });
+      return new Response(JSON.stringify({ id: "conflict-retry" }), { status: 202 });
+    }
+    if (String(path).startsWith("/api/operations/")) return new Response(JSON.stringify({ state: "succeeded", successes: [], failures: [] }));
+    return new Response(JSON.stringify({ revision: writes.length ? "r2" : "r1", datasets: [{ id: "source", path: "/tasks", tasks: [] }], mounts: [
+      { id: "jobs", path: writes.length ? "/concurrent" : "/original", dataset_ids: writes.length ? ["source"] : [] },
+    ], acp_agents: [] }), { headers: { ETag: writes.length ? '"r2"' : '"r1"' } });
+  };
+  try {
+    addFeedbackRegions(root);
+    await configuration.initializeConfiguration();
+    const cell = root.querySelector('[data-table-id="harbor-mount-registry"] [data-table-column-key="path"]');
+    cell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    const input = cell.querySelector("input"); input.value = "/my-draft";
+    input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick(); await tick();
+    assert.equal(input.value, "/my-draft");
+    assert.match(cell.querySelector("details").textContent, /concurrent/);
+    input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    for (let attempt = 0; attempt < 5; attempt++) await tick();
+    assert.deepEqual(writes[1], { new_id: "jobs", path: "/my-draft", dataset_ids: ["source"] });
+  } finally { globalThis.fetch = previousFetch; configuration.harborConfigState.busy = false; root.hidden = true; }
 });

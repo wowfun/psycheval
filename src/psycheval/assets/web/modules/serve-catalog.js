@@ -1,9 +1,11 @@
+import { beginFeedback } from "./action-feedback.js";
+import { watchOperation } from "./operation-feedback.js";
 import { adminMode, esc, hasMetricValue, isAnalysisArtifactPath, listValue, lower, normalizeServeSourceMode, render, renderComparison, renderComparisonPanels, selectedIndex, selectedKey, state, synthesizedReportRow, t } from "./runtime.js";
 import { filterValues, renderLeaderboardColumnControls, renderLeaderboardExportControls, tableControls } from "./data-tables.js";
 import { downloadBlob, firstUserStepSelection } from "./export.js";
 import { openDetailSidebar } from "./detail-sidebar.js";
 import { renderServeSourceStateControls, serveSourceModeStatusText } from "./source-state-controls.js";
-import { emptyServeReport, hideServeNotice, reloadExpiredAdminSession, serveApi, setServeStatus } from "./serve-effects.js";
+import { emptyServeReport, reloadExpiredAdminSession, serveApi, setServeStatus } from "./serve-effects.js";
 import { refreshWorkspaceReports, renderAttachWorkspaceReportAction } from "./workspace-reports.js";
 import { clearWorkspaceViewConditions, refreshWorkspaceViews, workspaceViewQueryPayload, workspaceViews } from "./workspace-views.js";
 
@@ -522,6 +524,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
     state.leaderboardSummaryLoading = false;
     state.leaderboardSummaryError = error?.message || String(error);
     renderCatalogComparison();
+    if (options.throwOnError) throw error;
     setServeStatus(error.message || String(error), true);
     return null;
   } finally {
@@ -652,11 +655,10 @@ async function switchServeSourceMode(mode) {
 }
 
 function applyServeMutationPayload(payload, options = {}) {
-  hideServeNotice();
   if (payload?.id) {
     return pollCatalogOperation(payload.id, options);
   }
-  return loadCatalogPage({}, { force: true });
+  return loadCatalogPage({}, { force: true, throwOnError: options.throwOnError });
 }
 
 async function applyServeSourceStateMutationPayload(payload, options = {}) {
@@ -664,30 +666,17 @@ async function applyServeSourceStateMutationPayload(payload, options = {}) {
 }
 
 async function pollCatalogOperation(operationId, options = {}) {
-  try {
-    const operation = await serveApi(`/api/operations/${encodeURIComponent(operationId)}`);
-    setServeStatus(`${operation.kind}: ${operation.completed}/${operation.total}`);
-    setWorkspaceWriteControlsDisabled(operation.state === "queued" || operation.state === "running");
-    if (operation.state === "queued" || operation.state === "running") {
-      setTimeout(() => pollCatalogOperation(operationId, options), 200);
-      return;
-    }
-    setWorkspaceWriteControlsDisabled(false);
-    const selectedKeys = listValue(options.sourceKeys);
-    const successfulIndexes = new Set(listValue(operation.successes).map(item => Number(item.index)));
-    selectedKeys.forEach((key, index) => {
-      if (successfulIndexes.has(index)) state.rowSelection.delete(key);
-    });
-    await loadCatalogPage({}, { force: true });
-    await refreshSourceCategoryOptions();
-    const failures = listValue(operation.failures);
-    if (failures.length) setServeStatus(`${failures.length} operation item(s) failed: ${failures[0]?.error || "error"}`, true);
-  } catch (error) {
-    setWorkspaceWriteControlsDisabled(false);
-    setServeStatus(error.message || String(error), true);
-  }
+  const feedback = options.feedback || beginFeedback("#comparison .leaderboard-action-row", { key: `home:operation:${operationId}`, page: "home" });
+  await watchOperation(operationId, {
+    feedback, onBusy: setWorkspaceWriteControlsDisabled,
+    async onComplete(operation) {
+      const successfulIndexes = new Set(listValue(operation.successes).map(item => Number(item.index)));
+      listValue(options.sourceKeys).forEach((key, index) => { if (successfulIndexes.has(index)) state.rowSelection.delete(key); });
+      if (!await loadCatalogPage({}, { force: true })) throw new Error(t("feedback_unknown", "The operation result is temporarily unavailable"));
+      await refreshSourceCategoryOptions();
+    },
+  });
 }
-
 function setWorkspaceWriteControlsDisabled(disabled) {
   state.workspaceWriteBusy = Boolean(disabled);
   document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-add-form] button[type=submit],[data-harbor-add-mount],[data-harbor-remove-mounts],[data-source-state-action],[data-source-delete-action],[data-source-refresh-action]").forEach(control => {
@@ -709,15 +698,16 @@ function setWorkspaceWriteControlsDisabled(disabled) {
 
 async function refreshServeSourcesFromServer() {
   if (!adminMode()) return;
+  const feedback = beginFeedback("#comparison .leaderboard-action-row", { page: "home", key: "home:rescan" });
   try {
     const payload = await serveApi("/api/source-discovery-operations", {
       method: "POST",
       body: {},
     });
-    await applyServeMutationPayload(payload);
+    await applyServeMutationPayload(payload, { feedback });
     if (!payload?.id) await refreshSourceCategoryOptions();
   } catch (error) {
-    setServeStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   }
 }
 
@@ -738,7 +728,7 @@ function exportCurrentScope(kind) {
     ? Array.from(state.rowSelection)
     : state.catalogRows.map(row => row.source_key).filter(Boolean);
   if (keys.length > 100) {
-    setServeStatus(t("serve_export_cell_limit", "JSON export is limited to 100 cells"), true);
+    beginFeedback("#comparison .leaderboard-action-row", { key: "home:export", page: "home" }).error(t("serve_export_cell_limit", "JSON export is limited to 100 cells"));
     return;
   }
   serveDownload(kind, { kind, source_keys: keys });
@@ -759,6 +749,7 @@ function exportLeaderboardSummary() {
 }
 
 async function serveDownload(kind, body, requestedFilename = "") {
+  const feedback = beginFeedback("#comparison .leaderboard-action-row", { page: "home", key: "home:export" });
   try {
     const response = await fetch("/api/exports", {
       method: "POST",
@@ -774,8 +765,9 @@ async function serveDownload(kind, body, requestedFilename = "") {
     const blob = await response.blob();
     const filename = requestedFilename || (kind === "xlsx" ? "peval-leaderboard.xlsx" : "peval-report-v19.json");
     downloadBlob(filename, blob.type || "application/octet-stream", blob);
+    feedback.success();
   } catch (error) {
-    setServeStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   }
 }
 export {

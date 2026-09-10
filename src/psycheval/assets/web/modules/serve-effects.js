@@ -1,3 +1,5 @@
+import { beginFeedback, pageFeedback } from "./action-feedback.js";
+import { offerRefresh } from "./operation-feedback.js";
 import { currentServeSourceMode, normalizeServeSourceMode, readableServeSources, selectedKey, sourceTagsFromValue, state } from "./runtime.js";
 import { applyLeaderboardSearchMode, applyServeMutationPayload, refreshSourceCategoryOptions } from "./serve-catalog.js";
 import { reloadExpiredAdminSession, serveApi, serveEtag } from "./http.js";
@@ -76,20 +78,29 @@ async function commitSourceCellEdit(row, field, value) {
     : {
         [action]: action === "tags" ? listValue(value) : String(value || "").trim()
       };
+  let committed = false;
+  let updated;
+  const refresh = async () => {
+    const payload = await serveApi("/api/sources");
+    updated = listValue(payload?.sources).find(source => source?.source_key === sourceKey);
+    if (updated) Object.assign(row, updated);
+    else if (action === "category") row.source_category = body.category || null;
+    await applyServeMutationPayload(payload, { preserveTrial: row?.trial_key || selectedKey(), selectedSourceKey: sourceKey, throwOnError: true });
+    if (action === "category") await refreshSourceCategoryOptions();
+  };
   try {
     await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}`, {
       method: "PATCH",
       body
     });
-    const payload = await serveApi("/api/sources");
-    const updated = listValue(payload?.sources).find(source => source?.source_key === sourceKey);
-    if (updated) Object.assign(row, updated);
-    else if (action === "category") row.source_category = body.category || null;
-    await applyServeMutationPayload(payload, { preserveTrial: row?.trial_key || selectedKey(), selectedSourceKey: sourceKey });
-    if (action === "category") await refreshSourceCategoryOptions();
+    committed = true;
+    await refresh();
     return { rowKey: sourceKey, source: updated || row };
   } catch (error) {
-    setServeStatus(error.message || String(error), true);
+    if (committed) {
+      offerRefresh(beginFeedback("#comparison .leaderboard-action-row", { key: `home:source:${sourceKey}:refresh`, page: "home" }), error, refresh);
+      return { rowKey: sourceKey, source: row };
+    }
     throw error;
   }
 }
@@ -139,23 +150,10 @@ function reportHasTrialKey(report, trialKey) {
   return Boolean(trialKey) && listValue(report?.trajectory_meta).some(meta => meta?.trial_key === trialKey);
 }
 function setServeStatus(text, error = false) {
-  const node = document.querySelector("[data-source-status]");
-  if (!node) return;
-  node.textContent = text;
-  node.classList.toggle("loading", false);
-  node.classList.toggle("danger", Boolean(error));
-}
-function showServeNotice(text, error = false) {
-  const notice = document.querySelector("[data-config-page-status]");
-  if (!notice) return;
-  notice.textContent = text;
-  notice.classList.toggle("danger", Boolean(error));
-  notice.classList.toggle("loading", false);
-  notice.hidden = false;
-}
-function hideServeNotice() {
-  const notice = document.querySelector("[data-config-page-status]");
-  if (notice) notice.hidden = true;
+  const feedback = pageFeedback("#comparison .leaderboard-action-row");
+  if (error) feedback.error(text);
+  else if (text) feedback.info(text);
+  else feedback.clear();
 }
 export {
   bindLeaderboardSearchControls,
@@ -166,7 +164,6 @@ export {
   existingSourceTagOptions,
   focusLeaderboardSearchInput,
   formPayload,
-  hideServeNotice,
   normalizeAdapterValue,
   readableSourceKey,
   reloadExpiredAdminSession,
@@ -176,5 +173,4 @@ export {
   serveEtag,
   setAdapterChoice,
   setServeStatus,
-  showServeNotice,
 };

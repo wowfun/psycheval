@@ -375,8 +375,7 @@ def render_harbor_dataset_page(messages: dict[str, str], *, role: str = "admin")
         <button class="action-button primary" type="button" data-harbor-create-task disabled>{escape(messages["harbor_create_task"])}</button>
         <button class="action-button" type="button" data-harbor-sync-manifest disabled>{escape(messages["harbor_sync_manifest"])}</button>
         <button class="action-button" type="button" data-harbor-state-selected disabled>{escape(messages["archive_selected"])}</button>
-        <button class="action-button danger" type="button" data-harbor-delete-selected disabled>{escape(messages["delete_selected"])}</button>
-        <span class="harbor-operation-status" data-harbor-operation-status aria-live="polite"></span>"""
+        <button class="action-button danger" type="button" data-harbor-delete-selected disabled>{escape(messages["delete_selected"])}</button>"""
         admin_file_actions = f"""
           <div class="harbor-file-actions" data-harbor-file-actions hidden>
             <button class="action-button compact" type="button" data-harbor-new-file>{escape(messages["harbor_new_file"])}</button>
@@ -392,7 +391,6 @@ def render_harbor_dataset_page(messages: dict[str, str], *, role: str = "admin")
         load_asset_text("serve_harbor_datasets.html"),
         {
             "DATASETS": escape(messages["harbor_datasets"]),
-            "WORKBUDDY_SUMMARY": escape(messages["workbuddy_benchmark_summary"]),
             "DATASET_EMPTY": escape(messages["harbor_dataset_empty"]),
             "FILE_EMPTY": escape(messages["harbor_file_empty"]),
             "EDITOR_EMPTY": escape(messages["harbor_editor_empty"]),

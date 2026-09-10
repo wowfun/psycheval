@@ -1,7 +1,10 @@
+import { beginFeedback, pageFeedback, savedContentPreview } from "./action-feedback.js";
+import { openActionForm } from "./action-form.js";
+import { watchOperation } from "./operation-feedback.js";
 import { adminMode, esc, fmtDate, t } from "./shared.js";
 import { applyDataTableControls, bindDataTableControls, bindDataTableSelection, renderDataTable, selectionColumn } from "./data-tables.js";
 import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
-import { applyDefaultDbToForm, formPayload, selectedAdapterValue, setAdapterChoice, showServeNotice, syncAdapterDefaultDbControls, updateAdapterDefaults } from "./form-controls.js";
+import { applyDefaultDbToForm, formPayload, selectedAdapterValue, setAdapterChoice, syncAdapterDefaultDbControls, updateAdapterDefaults } from "./form-controls.js";
 import { serveApi } from "./http.js";
 
 const harborConfigState = {
@@ -21,19 +24,10 @@ const promptConfigState = {
 };
 const sessionSelections = new WeakMap();
 
-function setConfigurationStatus(message = "", error = false) {
-  const target = document.querySelector("[data-config-page-status]");
-  if (!target) return;
-  target.textContent = message;
-  target.classList.toggle("danger", Boolean(error));
-  target.hidden = !message;
-}
 function setAcpAgentFormStatus(message = "", error = false) {
-  const target = document.querySelector("[data-acp-agent-form-status]");
-  if (!target) return;
-  target.textContent = message;
-  target.classList.toggle("danger", Boolean(error));
-  target.hidden = !message;
+  const feedback = beginFeedback("[data-acp-agent-form-status]", { key: "config:agent-form" });
+  if (message) feedback.set(message, error);
+  else feedback.clear();
 }
 async function initializeConfiguration() {
   if (!adminMode()) return false;
@@ -50,7 +44,8 @@ async function refreshHarborConfig() {
       }
     : null;
   setConfigurationBusy(true);
-  setConfigurationStatus(t("loading", "Loading"));
+  const feedback = pageFeedback("[data-config-page-status]");
+  feedback.pending(t("loading", "Loading"));
   try {
     const [configPayload, promptPayload] = await Promise.all([
       serveApi("/api/config"),
@@ -86,21 +81,38 @@ async function refreshHarborConfig() {
       ))?.focus?.();
     }
     setConfigurationBusy(false);
-    setConfigurationStatus();
+    feedback.clear();
     return true;
   } catch (error) {
     setConfigurationBusy(false);
-    setConfigurationStatus(error.message || String(error), true);
+    feedback.error(error);
     return false;
   }
 }
-async function refreshConfigurationAfterConflict(error, { discardPrompt = false } = {}) {
+async function refreshConfigurationAfterConflict(error, resource = "config") {
   if (error?.status !== 412) return;
-  if (discardPrompt) {
-    promptConfigState.dirty = false;
-    promptConfigState.renderedId = "";
+  // Refresh revisions without replacing a mounted editor or its draft.
+  try {
+    const payload = await serveApi(`/api/${resource}`);
+    if (resource === "prompts") promptConfigState.prompts = Array.isArray(payload) ? payload : [];
+    else {
+      harborConfigState.snapshot = payload;
+      updateAdapterDefaults(payload?.adapter_defaults);
+      error.savedContent = savedContentPreview("config", JSON.stringify(payload, null, 2));
+      error.onEditorCancel = renderHarborConfiguration;
+    }
+    return true;
+  } catch (refreshError) {
+    error.message += ` (${t("feedback_conflict_refresh_failed", "Could not load the current saved version")}: ${refreshError.message})`;
+    return false;
   }
-  await refreshHarborConfig();
+}
+async function showPromptConflict(error, prompt, feedback) {
+  const refreshed = await refreshConfigurationAfterConflict(error, "prompts");
+  const current = refreshed && promptConfigState.prompts.find(item => item.id === prompt.id);
+  feedback.error(error, {
+    details: current ? [savedContentPreview(current.filename, current.content)] : [],
+  });
 }
 function datasetMounts(dataset) {
   return (harborConfigState.snapshot?.mounts || [])
@@ -158,6 +170,7 @@ async function choosePathSourceFiles(button) {
   const form = button?.closest?.("[data-source-add-form]");
   const field = form?.querySelector?.("[name=\"path\"]");
   if (!field) return;
+  const feedback = beginFeedback(form, { page: "config", key: "config:path-picker" });
   try {
     const payload = await serveApi("/api/path-selections", {
       method: "POST",
@@ -167,11 +180,10 @@ async function choosePathSourceFiles(button) {
     if (!paths.length) return;
     field.value = paths.join("\n");
     clearSessionPicker(form);
-    setConfigurationStatus(t("serve_path_picker_selected", "Path selection updated"));
+    feedback.set(t("serve_path_picker_selected", "Path selection updated"));
   } catch (error) {
     const message = error.message || String(error);
-    showServeNotice(message, true);
-    setConfigurationStatus(message, true);
+    feedback.set(message, true);
   }
 }
 function renderHarborConfiguration() {
@@ -410,6 +422,7 @@ function bindConfigurationSourceControls(root) {
 async function saveAdapterDefaultDb(form, path) {
   const adapter = selectedAdapterValue(form);
   if (!adapter) return false;
+  const feedback = beginFeedback(form, { page: "config", key: `config:default:${adapter}` });
   try {
     await serveApi("/api/config");
     const payload = await serveApi("/api/config", {
@@ -429,12 +442,12 @@ async function saveAdapterDefaultDb(form, path) {
       if (selectedAdapterValue(candidate) === adapter) applyDefaultDbToForm(candidate, { force: true });
       syncAdapterDefaultDbControls(candidate);
     });
-    showServeNotice(path
+    feedback.set(path
       ? t("serve_adapter_default_db_saved", "Adapter default DB saved")
       : t("serve_adapter_default_db_cleared", "Adapter default DB cleared"));
     return true;
   } catch (error) {
-    showServeNotice(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
     syncAdapterDefaultDbControls(form);
     return false;
   }
@@ -511,22 +524,23 @@ async function mutateAcpAgents(body) {
 async function addAcpAgent(event) {
   event.preventDefault();
   if (!adminMode()) return;
+  const feedback = beginFeedback("[data-acp-agent-form-status]", { key: "config:agent-form" });
   const fields = formPayload(event.currentTarget);
   const agentId = String(fields.agent_id || "").trim();
   const title = String(fields.title || "").trim();
   const command = String(fields.command || "").trim();
   if (!agentId || !title || !command) {
-    setAcpAgentFormStatus(t("required", "Required"), true);
+    feedback.set(t("required", "Required"), true);
     return;
   }
   try {
-    setAcpAgentFormStatus(t("saving", "Saving..."));
+    feedback.pending();
     await mutateAcpAgents({ action: "upsert", agent_id: agentId, title, command, args: parseAcpArgs(fields.args) });
     renderAcpAgentConfiguration();
-    setAcpAgentFormStatus();
+    feedback.clear();
     closeAcpAgentForm();
   } catch (error) {
-    setAcpAgentFormStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   }
 }
 async function updateAcpAgent(agent, changes) {
@@ -543,21 +557,21 @@ async function updateAcpAgent(agent, changes) {
     renderAcpAgentConfiguration();
     return { rowKey: next.agent_id };
   } catch (error) {
-    setConfigurationStatus(error.message || String(error), true);
     throw error;
   }
 }
 async function removeSelectedAcpAgents() {
   const agentIds = Array.from(harborConfigState.acpSelection);
   if (!agentIds.length || !window.confirm(t("serve_acp_remove_confirm", "Remove selected ACP agents? Connected processes will be stopped."))) return;
+  const feedback = beginFeedback('[aria-labelledby="acp-agents-title"]', { page: "config" });
   try {
-    setConfigurationStatus(t("saving", "Saving..."));
+    feedback.pending();
     await mutateAcpAgents({ action: "delete", agent_ids: agentIds });
     harborConfigState.acpSelection.clear();
     renderAcpAgentConfiguration();
-    setConfigurationStatus();
+    feedback.set();
   } catch (error) {
-    setConfigurationStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   }
 }
 function selectPromptAsset(event) {
@@ -579,9 +593,10 @@ async function savePromptAsset() {
   const prompt = selectedPromptAsset();
   const content = document.querySelector("[data-prompt-content]")?.value || "";
   if (!prompt || !String(content).trim()) return;
+  const feedback = beginFeedback('[aria-labelledby="prompt-assets-title"]', { page: "config", key: `config:prompt:${prompt.id}` });
   try {
     setConfigurationBusy(true);
-    setConfigurationStatus(t("saving", "Saving..."));
+    feedback.pending();
     const payload = await serveApi(`/api/prompts/${encodeURIComponent(prompt.id)}`, {
       method: "PUT",
       body: { content },
@@ -591,16 +606,16 @@ async function savePromptAsset() {
     promptConfigState.dirty = false;
     setConfigurationBusy(false);
     renderPromptConfiguration();
-    setConfigurationStatus();
+    feedback.set();
   } catch (error) {
     setConfigurationBusy(false);
-    await refreshConfigurationAfterConflict(error, { discardPrompt: true });
-    setConfigurationStatus(error.message || String(error), true);
+    await showPromptConflict(error, prompt, feedback);
   }
 }
 async function resetPromptAsset() {
   const prompt = selectedPromptAsset();
   if (!prompt?.customized || !window.confirm(t("serve_prompt_reset_confirm", "Remove this workspace override and restore the repository default?"))) return;
+  const feedback = beginFeedback('[aria-labelledby="prompt-assets-title"]', { page: "config", key: `config:prompt:${prompt.id}` });
   try {
     setConfigurationBusy(true);
     const payload = await serveApi(`/api/prompts/${encodeURIComponent(prompt.id)}/override`, {
@@ -611,51 +626,65 @@ async function resetPromptAsset() {
     promptConfigState.dirty = false;
     setConfigurationBusy(false);
     renderPromptConfiguration();
-    setConfigurationStatus();
+    feedback.set();
   } catch (error) {
     setConfigurationBusy(false);
-    await refreshConfigurationAfterConflict(error, { discardPrompt: true });
-    setConfigurationStatus(error.message || String(error), true);
+    await showPromptConflict(error, prompt, feedback);
   }
 }
 async function rescanTrajectorySources() {
+  const feedback = beginFeedback('[aria-labelledby="trajectory-ingestion-title"]', { page: "config" });
   try {
     setConfigurationBusy(true);
-    setConfigurationStatus(t("serve_scanning_runs", "Checking runs"));
+    feedback.pending(t("serve_scanning_runs", "Checking runs"));
     const operation = await serveApi("/api/source-discovery-operations", { method: "POST", body: {} });
     setConfigurationBusy(false);
-    await pollConfigurationOperation(operation.id);
+    await pollConfigurationOperation(operation.id, null, feedback);
   } catch (error) {
     setConfigurationBusy(false);
-    setConfigurationStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   }
 }
-async function pollConfigurationOperation(operationId, sourceForm = null) {
+async function pollConfigurationOperation(operationId, sourceForm = null, feedback = null, committed = false) {
   if (!operationId) return;
-  activeConfigurationOperations.add(operationId);
-  syncConfigurationBusyState();
-  try {
-    const operation = await serveApi(`/api/operations/${encodeURIComponent(operationId)}`);
-    setConfigurationStatus(`${operation.kind}: ${operation.completed}/${operation.total}`);
-    if (["queued", "running"].includes(operation.state)) {
-      setTimeout(() => pollConfigurationOperation(operationId, sourceForm), 250);
-      return;
-    }
-    const failures = Array.isArray(operation.failures) ? operation.failures : [];
-    activeConfigurationOperations.delete(operationId);
-    syncConfigurationBusyState();
-    if (operation.kind.includes("harbor-")) await refreshHarborConfig();
-    if (sourceForm) renderSourceImportResults(sourceForm, operation);
-    if (!showImportResultsSummary(operation)) {
-      setConfigurationStatus(failures[0]?.error || "", failures.length > 0 || operation.state === "failed");
-    }
-  } catch (error) {
-    activeConfigurationOperations.delete(operationId);
-    syncConfigurationBusyState();
-    setConfigurationStatus(error.message || String(error), true);
-  }
+  feedback ||= beginFeedback(sourceForm || '[aria-labelledby="trajectory-ingestion-title"]', {
+    key: `config:operation:${operationId}`, page: "config",
+  });
+  const currentDraft = () => sourceForm ? JSON.stringify([...sourceForm.querySelectorAll("[name]")].map(field => [field.name, field.value])) : null;
+  const submittedValues = currentDraft();
+  await watchOperation(operationId, {
+    feedback, committed,
+    onBusy(busy) {
+      if (busy) activeConfigurationOperations.add(operationId);
+      else activeConfigurationOperations.delete(operationId);
+      syncConfigurationBusyState();
+    },
+    async onComplete(operation) {
+      if (committed && !await refreshHarborConfig()) throw new Error(t("feedback_refresh_failed", "Saved, but workspace refresh failed"));
+      if (sourceForm) {
+        renderSourceImportResults(sourceForm, operation);
+        const results = sourceImportResults(operation);
+        const failures = results.filter(result => result.status === "error");
+        const draftUnchanged = currentDraft() === submittedValues;
+        if (draftUnchanged && operation.state !== "failed" && !failures.length && !(operation.failures || []).length) {
+          sourceForm.reset();
+          clearSessionPicker(sourceForm);
+        } else if (draftUnchanged && sourceForm.dataset.sourceKind === "path" && failures.length) {
+          sourceForm.querySelector('[name="path"]').value = failures.map(result => result.input || result.path || result.item?.path || "").filter(Boolean).join("\n");
+        }
+        const failedIds = new Set(failures.map(result => result.item?.session_id || result.session_id).filter(Boolean));
+        if (failedIds.size) {
+          sessionSelections.set(sourceForm, failedIds);
+          const picker = sourceForm.querySelector("[data-session-picker]");
+          picker?.querySelectorAll('[data-table-row-select]').forEach(input => { input.checked = failedIds.has(input.dataset.tableRowSelect); });
+          if (picker) updateSessionSelectedCount(picker, sourceForm);
+        }
+        if (sourceForm.dataset.sourceKind === "db") syncAdapterDefaultDbControls(sourceForm);
+      }
+    },
+  });
 }
-async function mutateHarborDataset(body) {
+async function mutateHarborDataset(body, feedback = null) {
   setConfigurationBusy(true);
   try {
     let path = "/api/harbor/datasets";
@@ -710,7 +739,10 @@ async function mutateHarborDataset(body) {
       };
     }
     setConfigurationBusy(false);
-    setTimeout(() => pollConfigurationOperation(operation.id), 0);
+    feedback ||= beginFeedback('[aria-labelledby="dataset-registry-title"]', {
+      key: `config:operation:${operation.id}`, page: "config", label: t("harbor_dataset", "Dataset"),
+    });
+    setTimeout(() => pollConfigurationOperation(operation.id, null, feedback, true), 0);
     return operation;
   } catch (error) {
     setConfigurationBusy(false);
@@ -719,6 +751,7 @@ async function mutateHarborDataset(body) {
   }
 }
 async function updateHarborDataset(dataset, changes) {
+  dataset = harborConfigState.snapshot?.datasets?.find(item => item.id === dataset.id) || dataset;
   const newId = String(changes.new_id ?? dataset.id).trim();
   const path = String(changes.path ?? dataset.path).trim();
   const mountIds = Array.isArray(changes.mount_ids) ? changes.mount_ids : datasetMounts(dataset);
@@ -729,49 +762,38 @@ async function updateHarborDataset(dataset, changes) {
     renderHarborConfiguration();
     return { rowKey: newId };
   } catch (error) {
-    setConfigurationStatus(error.message || String(error), true);
     throw error;
   }
 }
 async function createHarborDataset(register = false) {
   if (!adminMode()) return;
-  const datasetId = register
-    ? ""
-    : window.prompt(t("harbor_dataset_id_prompt", "Dataset ID"));
-  if (!register && !datasetId) return;
-  const path = window.prompt(register
-    ? t("harbor_existing_dataset_path_prompt", "Existing Dataset directory")
-    : t("harbor_dataset_path_prompt", "Dataset path"));
-  if (!path) return;
-  const body = register
-    ? { action: "register", path }
-    : { action: "create", dataset_id: datasetId, path };
-  if (!register) {
-    const packageName = window.prompt(t("harbor_dataset_package_prompt", "Dataset package name (org/name)"), datasetId);
-    if (!packageName) return;
-    body.package_name = packageName;
-    body.description = window.prompt(t("harbor_dataset_description_prompt", "Dataset description"), "") || "";
-  }
-  try {
-    setConfigurationStatus(t("saving", "Saving..."));
-    await mutateHarborDataset(body);
-    renderHarborConfiguration();
-    setConfigurationStatus();
-  } catch (error) {
-    setConfigurationStatus(error.message || String(error), true);
-  }
+  const title = register ? t("harbor_register_dataset", "Register existing") : t("harbor_add_dataset", "New Dataset");
+  return openActionForm({
+    title, submitLabel: title,
+    fields: [
+      ...(!register ? [{ name: "dataset_id", label: t("harbor_dataset_id_prompt", "Dataset ID") }] : []),
+      { name: "path", label: t("harbor_dataset_path", "Dataset path") },
+      ...(!register ? [
+        { name: "package_name", label: t("harbor_dataset_package_prompt", "Dataset package name (org/name)"), defaultFrom: "dataset_id" },
+        { name: "description", label: t("harbor_dataset_description_prompt", "Dataset description"), required: false },
+      ] : []),
+    ],
+    async submit(values) {
+      await mutateHarborDataset({ action: register ? "register" : "create", ...values });
+    },
+  });
 }
 async function unregisterSelectedHarborDatasets() {
   const datasetIds = Array.from(harborConfigState.datasetSelection);
   if (!datasetIds.length || !window.confirm(t("harbor_unregister_selected_confirm", "Unregister selected Datasets? Files will not be deleted."))) return;
+  const feedback = beginFeedback('[aria-labelledby="dataset-registry-title"]', { page: "config" });
   try {
-    setConfigurationStatus(t("saving", "Saving..."));
-    await mutateHarborDataset({ action: "unregister", dataset_ids: datasetIds });
+    feedback.pending();
+    await mutateHarborDataset({ action: "unregister", dataset_ids: datasetIds }, feedback);
     harborConfigState.datasetSelection.clear();
     renderHarborConfiguration();
-    setConfigurationStatus();
   } catch (error) {
-    setConfigurationStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   }
 }
 async function submitServeSourceForm(form) {
@@ -782,22 +804,19 @@ async function submitServeSourceForm(form) {
   if (!kind) return;
   const sourceValue = String(body[kind] || "").trim();
   if (!sourceValue) return;
+  const feedback = beginFeedback(form, { page: "config" });
   try {
     setConfigurationBusy(true);
-    setConfigurationStatus(t("serve_refresh", "Refresh"));
+    feedback.pending();
     renderSourceImportResults(form, {});
     const payload = await serveApi("/api/source-import-operations", { method: "POST", body });
-    form.reset();
-    if (kind === "db") syncAdapterDefaultDbControls(form);
-    clearSessionPicker(form);
     setConfigurationBusy(false);
-    if (payload?.id) pollConfigurationOperation(payload.id, form);
+    if (payload?.id) pollConfigurationOperation(payload.id, form, feedback);
     renderSourceImportResults(form, payload);
-    showImportResultsSummary(payload);
+
   } catch (error) {
     setConfigurationBusy(false);
-    showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
-    setConfigurationStatus(error.message || String(error), true);
+    feedback.error(error);
   }
 }
 function sourceImportResults(payload) {
@@ -826,20 +845,6 @@ function renderSourceImportResults(form, payload) {
     return `<li><code>${esc(input)}</code><span class="${failed ? "danger" : "copy"}">${esc(failed ? result.error || t("serve_import_failed", "Import failed") : t("serve_imported", "Imported"))}</span></li>`;
   }).join("")}</ol>` : "";
 }
-function showImportResultsSummary(payload) {
-  const results = sourceImportResults(payload);
-  if (!results.length) return false;
-  const imported = results.filter(result => result?.status === "ok").length;
-  const failures = results.filter(result => result?.status === "error");
-  const failed = failures.length;
-  const template = t("serve_import_summary", "Imported {imported}, failed {failed}");
-  let message = template.replace("{imported}", String(imported)).replace("{failed}", String(failed));
-  const firstError = String(failures[0]?.error || "").trim();
-  if (firstError) message = `${message}: ${firstError}`;
-  showServeNotice(message, failed > 0);
-  setConfigurationStatus(message, failed > 0);
-  return true;
-}
 async function inspectSourceSessions(form) {
   if (!adminMode()) return;
   if (!form) return;
@@ -851,8 +856,9 @@ async function inspectSourceSessions(form) {
   clearSessionPicker(form);
   const requestId = form.dataset.sessionInspection;
   const picker = form.querySelector("[data-session-picker]");
+  const feedback = beginFeedback(form, { page: "config", key: `config:inspect:${form.dataset.sourceKind}` });
   try {
-    setConfigurationStatus(t("serve_inspect_sessions", "Inspect sessions"));
+    feedback.pending(t("serve_inspect_sessions", "Inspect sessions"));
     const payload = await serveApi("/api/session-inspections", {
       method: "POST",
       body: {
@@ -864,14 +870,10 @@ async function inspectSourceSessions(form) {
     if (payload?.adapter) setAdapterChoice(form, payload.adapter);
     syncAdapterDefaultDbControls(form);
     renderSessionPicker(form, payload);
-    setConfigurationStatus(t("serve_latest_snapshots", "Latest snapshots"));
+    feedback.set(t("serve_latest_snapshots", "Latest snapshots"));
   } catch (error) {
     if (form.dataset.sessionInspection !== requestId) return;
-    if (picker) {
-      picker.hidden = false;
-      picker.innerHTML = `<p class="copy danger">${esc(error.message || String(error))}</p>`;
-    }
-    setConfigurationStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   }
 }
 function clearSessionPicker(form) {
@@ -949,15 +951,16 @@ function updateSessionSelectedCount(picker, form = picker?.closest?.("[data-sour
 async function addSelectedSessions(form) {
   if (!adminMode()) return;
   if (!form) return;
+  const feedback = beginFeedback(form, { page: "config" });
   const sessionIds = selectedSessionIds(form);
   if (!sessionIds.length) {
-    setConfigurationStatus(t("serve_select_sessions", "Select sessions"), true);
+    feedback.set(t("serve_select_sessions", "Select sessions"), true);
     return;
   }
   const body = formPayload(form);
   try {
     setConfigurationBusy(true);
-    setConfigurationStatus(t("serve_refresh", "Refresh"));
+    feedback.pending();
     renderSourceImportResults(form, {});
     const payload = await serveApi("/api/source-import-operations", {
       method: "POST",
@@ -968,18 +971,14 @@ async function addSelectedSessions(form) {
         alias: body.alias
       }
     });
-    form.reset();
-    syncAdapterDefaultDbControls(form);
-    clearSessionPicker(form);
     setConfigurationBusy(false);
-    if (payload?.id) pollConfigurationOperation(payload.id, form);
+    if (payload?.id) pollConfigurationOperation(payload.id, form, feedback);
   } catch (error) {
     setConfigurationBusy(false);
-    showServeNotice(`${t("serve_import_failed", "Import failed")}: ${error.message || String(error)}`, true);
-    setConfigurationStatus(error.message || String(error), true);
+    feedback.error(error);
   }
 }
-async function mutateHarborMount(body) {
+async function mutateHarborMount(body, feedback = null) {
   if (!adminMode()) return;
   setConfigurationBusy(true);
   try {
@@ -994,7 +993,7 @@ async function mutateHarborMount(body) {
       method = "PATCH";
       requestBody = { new_id: body.mount_id, path: body.jobs_path, dataset_ids: body.dataset_ids || [] };
     } else {
-      requestBody = { id: body.mount_id || undefined, path: body.jobs_path, dataset_ids: body.dataset_ids || [] };
+      requestBody = { path: body.jobs_path };
     }
     const operation = await serveApi(path, {
       method,
@@ -1017,7 +1016,10 @@ async function mutateHarborMount(body) {
       };
     }
     setConfigurationBusy(false);
-    setTimeout(() => pollConfigurationOperation(operation.id), 0);
+    feedback ||= beginFeedback('[aria-labelledby="harbor-mounts-title"]', {
+      key: `config:operation:${operation.id}`, page: "config", label: t("serve_harbor_mounts", "Harbor mounts"),
+    });
+    setTimeout(() => pollConfigurationOperation(operation.id, null, feedback, true), 0);
     return operation;
   } catch (error) {
     setConfigurationBusy(false);
@@ -1027,18 +1029,14 @@ async function mutateHarborMount(body) {
 }
 async function addHarborMount() {
   if (!adminMode()) return;
-  const jobsPath = window.prompt(t("serve_harbor_jobs_path_prompt", "Jobs path"));
-  if (!jobsPath) return;
-  try {
-    setConfigurationStatus(t("saving", "Saving..."));
-    await mutateHarborMount({ action: "upsert", jobs_path: jobsPath });
-    renderHarborConfiguration();
-    setConfigurationStatus();
-  } catch (error) {
-    setConfigurationStatus(error.message || String(error), true);
-  }
+  return openActionForm({
+    title: t("serve_harbor_mounts", "Harbor mounts"),
+    fields: [{ name: "jobs_path", label: t("serve_harbor_jobs_path_prompt", "Jobs path") }],
+    submit: values => mutateHarborMount({ action: "upsert", ...values }),
+  });
 }
 async function updateHarborMount(mount, changes) {
+  mount = harborConfigState.snapshot?.mounts?.find(item => item.id === mount.id) || mount;
   const mountId = String(changes.mount_id ?? mount.id).trim();
   const jobsPath = String(changes.jobs_path ?? mount.path).trim();
   const datasetIds = Array.isArray(changes.dataset_ids) ? changes.dataset_ids : (mount.dataset_ids || []);
@@ -1055,21 +1053,20 @@ async function updateHarborMount(mount, changes) {
     renderHarborConfiguration();
     return { rowKey: mountId };
   } catch (error) {
-    setConfigurationStatus(error.message || String(error), true);
     throw error;
   }
 }
 async function removeSelectedHarborMounts() {
   const mountIds = Array.from(harborConfigState.mountSelection);
   if (!mountIds.length || !window.confirm(t("harbor_remove_selected_mounts_confirm", "Remove selected Harbor mounts? Jobs files will not be deleted."))) return;
+  const feedback = beginFeedback('[aria-labelledby="harbor-mounts-title"]', { page: "config" });
   try {
-    setConfigurationStatus(t("saving", "Saving..."));
-    await mutateHarborMount({ action: "delete", mount_ids: mountIds });
+    feedback.pending();
+    await mutateHarborMount({ action: "delete", mount_ids: mountIds }, feedback);
     harborConfigState.mountSelection.clear();
     renderHarborConfiguration();
-    setConfigurationStatus();
   } catch (error) {
-    setConfigurationStatus(error.message || String(error), true);
+    feedback.set(error.message || String(error), true);
   }
 }
 export {
@@ -1082,7 +1079,6 @@ export {
   renderSessionPicker,
   removeSelectedHarborMounts,
   selectedSessionIds,
-  showImportResultsSummary,
   submitServeSourceForm,
   updateSessionSelectedCount,
   harborConfigState,

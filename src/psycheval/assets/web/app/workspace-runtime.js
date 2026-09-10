@@ -10,6 +10,10 @@ function setWorkspaceApp(app) {
   workspaceApp = app;
 }
 
+async function navigateWorkspace(page) {
+  await workspaceApp?.navigate(page, { focus: false });
+}
+
 /** @param {import("./workspace-app.js").InvalidationDomain | Iterable<import("./workspace-app.js").InvalidationDomain>} changes */
 function invalidateWorkspace(changes) {
   workspaceApp?.invalidate(changes);
@@ -37,6 +41,7 @@ function subscribeWorkspaceInvalidation(listener) {
 }
 
 export {
+  navigateWorkspace,
   invalidateWorkspace,
   refreshWorkspace,
   setWorkspaceApp,
