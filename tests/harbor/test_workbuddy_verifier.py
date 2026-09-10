@@ -16,24 +16,170 @@ from harbor.environments.base import ExecResult
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
 
-from psycheval.harbor.datasets import resolve_harbor_dataset
-from psycheval.harbor.environment import HostEnvironment
+from psycheval.harbor.workbuddy_environment import WorkBuddyHostEnvironment
 from psycheval.harbor.workbuddy_verifier import (
     NativeOfficeExecutor,
     OfficeProfileError,
     _adapt_python,
     _load_command,
     _load_rule,
-    validate_office_profile,
 )
 from tests.fixtures.native_office import write_native_office
 from tests.harbor.test_environment import make_environment
 
 
+@pytest.mark.skipif(
+    os.environ.get("PEVAL_WORKBUDDY_RUNTIME_TESTS") != "1",
+    reason="opt-in pinned WorkBuddy runtime integration",
+)
+@pytest.mark.parametrize(
+    "mode", ["hooks", "custom", "module", "bundled", "failure", "missing_env"]
+)
+def test_real_runtime_generic_plugins_preserve_hooks_and_sources(
+    tmp_path, monkeypatch, mode
+):
+    from harbor.models.task.task import Task
+
+    from psycheval.harbor.datasets import validate_harbor_dataset
+    from psycheval.harbor.workbuddy_verifier import WorkBuddyVerifier
+
+    secret = "fixture-private-verifier-key"
+    monkeypatch.setenv("WORKBUDDY_TEST_SECRET", secret)
+    if mode == "missing_env":
+        monkeypatch.delenv("WORKBUDDY_TEST_SECRET")
+    root = tmp_path / "dataset"
+    task = root / "collection" / "example"
+    (task / "environment").mkdir(parents=True)
+    (task / "environment/input.txt").write_text("task input")
+    (task / "tests").mkdir()
+    (task / "tests/test.sh").write_text("exit 0")
+    (task / "tests/gold.txt").write_text("grading input")
+    (task / "instruction.md").write_text("Produce an answer.")
+    (task / "task.toml").write_text(
+        '[metadata]\nsource_case = "example"\n[environment]\nworkdir = "/workspace"\n'
+    )
+    (root / "dataset.toml").write_text(
+        '[dataset]\nid = "arbitrary-benchmark"\nversion = "7"\n'
+        '[verifier]\nschema = "workbuddy.verifier.v1"\nengine = "composite"\n'
+        + (
+            'plugin = "generic_fixture_plugin:build_registry"\n'
+            if mode in {"module", "bundled"}
+            else ""
+        )
+    )
+    plugin = """from pathlib import Path
+from harbor.models.verifier.result import VerifierResult
+from workbuddy_bench.judge import EvaluationPlan, PassRateScoringPolicy, VerifierRegistry
+from workbuddy_bench.judge.core import ScoreResult
+
+def build_registry(build):
+    assert build.contract.dataset_id == "arbitrary-benchmark"
+    assert build.runtime.env()["WORKBUDDY_TEST_API_KEY"] == "fixture-private-verifier-key"
+    assert (build.contract.task_dir / "tests/gold.txt").read_text() == "grading input"
+    assert not (build.contract.task_dir.parent / "unselected").exists()
+    assert not Path(build.runtime.workspace, "tests/gold.txt").exists()
+    output = build.verifier.trial_paths.verifier_dir / "hooks.txt"
+    def prepare(context):
+        output.write_text("prepare")
+    def plan(context):
+        assert output.read_text() == "prepare"
+        output.write_text("plan")
+        return EvaluationPlan(dataset_id=context.dataset_id, task_id=context.task_id, items=[], judges=[])
+    def finalize(score, context, plan):
+        assert output.read_text() == "plan"
+        output.write_text("finalize")
+        return score
+    def custom(verifier):
+        assert verifier.task.paths.task_dir == build.contract.task_dir
+        output.write_text("custom")
+        build.runtime.write_score(ScoreResult(reward=0.7, diagnostics={"details": "x" * (3 * 1024 * 1024), "context":{"env":build.runtime.env()}}))
+        return VerifierResult(rewards={"reward": 0.7})
+    return VerifierRegistry(plan_builder=plan, scoring_policy=PassRateScoringPolicy(),
+        prepare=prepare, finalize_score=finalize, custom_verify=CUSTOM)
+""".replace("CUSTOM", "custom" if mode in {"custom", "module", "bundled"} else "None")
+    if mode == "failure":
+        plugin = plugin.replace(
+            'output.write_text("prepare")',
+            'raise RuntimeError("fixture prepare failure")',
+        )
+    if mode == "module":
+        (tmp_path / "generic_fixture_plugin.py").write_text(plugin)
+        monkeypatch.syspath_prepend(str(tmp_path))
+        monkeypatch.delitem(sys.modules, "generic_fixture_plugin", raising=False)
+    elif mode == "bundled":
+        plugin = "from .helper import location\n" + plugin.replace(
+            'assert build.contract.dataset_id == "arbitrary-benchmark"',
+            "assert location == build.contract.dataset_root",
+        )
+        (root / "generic_fixture_plugin.py").write_text(plugin)
+        (root / "helper.py").write_text(
+            "from pathlib import Path\nlocation = Path(__file__).parent\n"
+        )
+        monkeypatch.syspath_prepend(str(root))
+    else:
+        (root / "shared/verifier").mkdir(parents=True)
+        (root / "shared/verifier/plugin.py").write_text(plugin)
+    resolved = validate_harbor_dataset(
+        dataset_id="example", path=task.parent, format="workbuddy.v1"
+    )
+    assert resolved.task_names == ("example",)
+    sibling = task.parent / "unselected"
+    sibling.mkdir()
+    (sibling / "task.toml").write_text('[metadata]\nsource_case = "unselected"\n')
+    (sibling / "private.txt").write_text("other Task material")
+    if mode == "hooks":
+        with (root / "dataset.toml").open("a", encoding="utf-8") as manifest:
+            manifest.write('\n[layout]\ntask_root = "collection"\n')
+    before = _digests(root)
+
+    async def scenario():
+        host = make_office_environment(task, tmp_path / "host")
+        await host.start(False)
+        source = Task(task)
+        try:
+            verifier = WorkBuddyVerifier(
+                task=source,
+                environment=host,
+                trial_paths=host.trial_paths,
+                verifier_env={"WORKBUDDY_TEST_API_KEY": "${WORKBUDDY_TEST_SECRET}"},
+            )
+            original_override = verifier.override_env
+            if mode in {"failure", "missing_env"}:
+                error = RuntimeError if mode == "failure" else ValueError
+                message = (
+                    "fixture prepare failure"
+                    if mode == "failure"
+                    else "WORKBUDDY_TEST_SECRET"
+                )
+                with pytest.raises(error, match=message):
+                    await verifier.verify()
+            else:
+                await verifier.verify()
+                assert (host.trial_paths.verifier_dir / "hooks.txt").read_text() == (
+                    "custom" if mode in {"custom", "module", "bundled"} else "finalize"
+                )
+                assert (
+                    secret
+                    not in (host.trial_paths.verifier_dir / "score.json").read_text()
+                )
+            assert verifier.task is source
+            assert verifier.override_env is original_override
+            assert verifier.verifier_env == {
+                "WORKBUDDY_TEST_API_KEY": "${WORKBUDDY_TEST_SECRET}"
+            }
+            assert (host.work_dir / "input.txt").read_text() == "task input"
+            assert not (host.work_dir / "tests").exists()
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
+    assert _digests(root) == before
+
+
 def make_office_environment(task, root, *, workdir_root=None):
     paths = TrialPaths(root / "trial")
     paths.mkdir()
-    return HostEnvironment(
+    return WorkBuddyHostEnvironment(
         environment_dir=task / "environment",
         environment_name="native-office",
         session_id="native-office",
@@ -41,7 +187,6 @@ def make_office_environment(task, root, *, workdir_root=None):
         task_env_config=EnvironmentConfig(workdir="/workspace"),
         logger=logging.getLogger("native-office"),
         host_access={"filesystem": True, "process": True},
-        bootstrap_workbuddy_workspace=True,
         **({"workdir_root": workdir_root} if workdir_root is not None else {}),
         mounts=[
             {
@@ -70,20 +215,114 @@ def native_task(tmp_path):
     )
 
 
-def test_profile_validation_is_non_executing_and_rejects_unrecognized_commands(
+def test_prepare_command_docstring_is_not_executable_profile(native_task):
+    root = native_task.parents[1]
+    rule = root / "shared/verifier/rule.py"
+    original = _load_rule(root).prepare_command
+    source = rule.read_text(encoding="utf-8")
+    source = source.replace(
+        "def prepare_command() -> str:\n",
+        'def prepare_command() -> str:\n    """Describe preparation without changing its command."""\n',
+    )
+    assert source != rule.read_text(encoding="utf-8")
+    rule.write_text(source, encoding="utf-8")
+    assert _load_rule(root).prepare_command == original
+
+
+def test_score_diagnostics_redact_secrets_beside_nonstring_values():
+    from copy import deepcopy
+
+    from psycheval.harbor.workbuddy_verifier import _retained_score_diagnostics
+
+    diagnostics = {
+        "context": {
+            "env": {"API_KEY": "fixture-private-value", "COUNT": 7, "EMPTY": None}
+        }
+    }
+    original = deepcopy(diagnostics)
+    retained = _retained_score_diagnostics(diagnostics)
+    assert "fixture-private-value" not in json.dumps(retained)
+    assert retained["context"]["env"]["COUNT"] == 7
+    assert retained["context"]["env"]["EMPTY"] is None
+    assert diagnostics == original
+    assert _retained_score_diagnostics(retained) == retained
+
+
+@pytest.mark.skipif(
+    os.environ.get("PEVAL_WORKBUDDY_RUNTIME_TESTS") != "1",
+    reason="opt-in pinned WorkBuddy runtime integration",
+)
+@pytest.mark.parametrize("direct_writer", [True, False])
+@pytest.mark.parametrize("typed_context", [True, False])
+def test_runtime_writer_redacts_large_scores_before_first_persistence(
+    tmp_path, monkeypatch, direct_writer, typed_context
+):
+    from copy import deepcopy
+    from dataclasses import dataclass
+    from types import SimpleNamespace
+
+    from workbuddy_bench.judge.core import ScoreResult, artifacts
+
+    from psycheval.harbor.workbuddy_verifier import _workbuddy_runtime_type
+
+    @dataclass
+    class Context:
+        env: dict
+
+    secret = "fixture-private-value"
+    context = {"env": {"API_KEY": secret, 7: "counter"}}
+    if typed_context:
+        context = Context(**context)
+    score = ScoreResult(
+        reward=0.75,
+        diagnostics={
+            "context": context,
+            "details": "x" * (3 * 1024 * 1024),
+        },
+    )
+    original = deepcopy(score)
+    persisted = []
+    write = artifacts._replace_json
+
+    def checked_write(path, payload, **kwargs):
+        assert secret not in json.dumps(payload)
+        persisted.append(path.name)
+        write(path, payload, **kwargs)
+
+    monkeypatch.setattr(artifacts, "_replace_json", checked_write)
+    runtime = _workbuddy_runtime_type()(
+        verifier=SimpleNamespace(
+            trial_paths=SimpleNamespace(reward_json_path=tmp_path / "reward.json")
+        ),
+        environment=None,
+        tests_dir="",
+        workspace="",
+        container_verifier_dir="",
+        host_verifier_dir=tmp_path,
+    )
+    for _ in range(2):
+        if direct_writer:
+            runtime.artifact_writer().write(score)
+        else:
+            runtime.write_score(score)
+    payload = json.loads((tmp_path / "score.json").read_text(encoding="utf-8"))
+    assert payload["reward"] == 0.75
+    assert payload["diagnostics"]["details"] == score.diagnostics["details"]
+    assert persisted == ["reward.json", "score.json"] * 2
+    assert score == original
+
+
+def test_command_recognition_is_non_executing_and_rejects_unrecognized_commands(
     native_task,
 ):
     root = native_task.parents[1]
     before = _digests(root)
-    resolved = resolve_harbor_dataset(
-        dataset_id="office", path=root, format="workbuddy.v1", allow_partial=True
-    )
-    validate_office_profile(resolved, [native_task.name])
+    _load_command(native_task)
     assert _digests(root) == before
     path = native_task / "tests/verifier.toml"
     path.write_text(path.read_text().replace("python -m pytest", "bash -c evil"))
     with pytest.raises(OfficeProfileError, match="unsupported Office pytest"):
-        validate_office_profile(resolved, [native_task.name])
+        _load_command(native_task)
 
 
 def test_workbuddy_trial_uploads_skills_using_native_host_paths(native_task, tmp_path):
@@ -114,10 +353,9 @@ def test_workbuddy_trial_uploads_skills_using_native_host_paths(native_task, tmp
                         "skills": [str(skill)],
                     },
                     "environment": {
-                        "import_path": "psycheval.harbor.environment:HostEnvironment",
+                        "import_path": "psycheval.harbor.workbuddy_environment:WorkBuddyHostEnvironment",
                         "kwargs": {
                             "host_access": {"filesystem": True, "process": True},
-                            "bootstrap_workbuddy_workspace": True,
                         },
                     },
                 }
@@ -146,36 +384,28 @@ def test_workbuddy_trial_uploads_skills_using_native_host_paths(native_task, tmp
     assert _digests(native_task) == before
 
 
-def test_windows_prepare_selects_the_native_verifier(
-    native_task, tmp_path, monkeypatch
-):
-    import yaml
+def test_prepare_selects_workbuddy_adapters(native_task):
+    from harbor.models.job.config import JobConfig
 
-    from psycheval.harbor import workbuddy
+    from psycheval.harbor.workbuddy import prepare_workbuddy_job
 
-    monkeypatch.setattr(workbuddy.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(
-        workbuddy, "validate_workbuddy_runtime", lambda: {"version": "fixture"}
+    source = JobConfig(
+        tasks=[{"path": native_task}],
+        environment={
+            "import_path": "psycheval.harbor.workbuddy_environment:WorkBuddyHostEnvironment",
+            "kwargs": {"host_access": {"filesystem": True, "process": True}},
+        },
     )
-    monkeypatch.setattr(workbuddy, "validate_workbuddy_host_dependencies", lambda: None)
-    base = tmp_path / "base.yaml"
-    base.write_text(
-        "agents:\n  - name: opencode\n    model_name: fixture/model\nenvironment:\n  import_path: psycheval.harbor.environment:HostEnvironment\n  kwargs:\n    host_access: {filesystem: true, process: true}\n"
-    )
-    plan = workbuddy.prepare_workbuddy_plan(
-        output_root=tmp_path / "output",
-        dataset_id="office",
-        dataset_path=native_task.parents[1],
-        base_config=base,
-        allow_partial=True,
-    )
-    config = yaml.safe_load(Path(plan["jobs"][0]["config"]).read_text())
+    config = prepare_workbuddy_job(source)
     assert (
-        config["verifier"]["import_path"]
-        == "psycheval.harbor.workbuddy_verifier:WindowsOfficeVerifier"
+        config.verifier.import_path
+        == "psycheval.harbor.workbuddy_verifier:WorkBuddyVerifier"
     )
-    assert config["environment"]["kwargs"]["bootstrap_workbuddy_workspace"] is True
-    assert plan["scope"] == "subset"
+    assert (
+        config.environment.import_path
+        == "psycheval.harbor.workbuddy_environment:WorkBuddyHostEnvironment"
+    )
+    assert config.tasks == source.tasks
 
 
 @pytest.mark.parametrize(
@@ -207,10 +437,6 @@ def test_rule_source_changes_do_not_block_native_adaptation(native_task):
     assert rule.score_python == original.score_python
     assert rule.reward_python == original.reward_python
     assert rule.source_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
-    resolved = resolve_harbor_dataset(
-        dataset_id="office", path=root, format="workbuddy.v1", allow_partial=True
-    )
-    validate_office_profile(resolved, [native_task.name])
 
 
 @pytest.mark.parametrize("kind", ["rule", "grader"])
@@ -223,11 +449,11 @@ def test_invalid_python_is_a_profile_error(native_task, kind, source):
         else native_task / "tests/grading/test_verify.py"
     )
     path.write_text(source, encoding="utf-8")
-    resolved = resolve_harbor_dataset(
-        dataset_id="office", path=root, format="workbuddy.v1", allow_partial=True
-    )
     with pytest.raises(OfficeProfileError, match="invalid Python"):
-        validate_office_profile(resolved, [native_task.name])
+        if kind == "rule":
+            _load_rule(root)
+        else:
+            _adapt_python(path.read_text(encoding="utf-8"), {})
 
 
 def test_adaptation_preserves_logical_comparisons_and_score_conditions(tmp_path):
@@ -296,19 +522,11 @@ def test_open_non_path_arguments_keep_logical_values(tmp_path):
         "def load_mcp_process_config():\n    if flag:\n        return []\n    return []\n",
     ],
 )
-def test_unknown_source_expressions_are_retained_and_audited(native_task, source):
+def test_unknown_source_expressions_are_retained_and_audited(source):
     adapted, audit = _adapt_python(source, {"/workspace": Path("native")})
     assert adapted == source
     assert audit and all(item["kind"] == "skipped" for item in audit)
     assert all(item["reason"] for item in audit)
-    (native_task / "tests/grading/test_verify.py").write_text(source, encoding="utf-8")
-    resolved = resolve_harbor_dataset(
-        dataset_id="office",
-        path=native_task.parents[1],
-        format="workbuddy.v1",
-        allow_partial=True,
-    )
-    validate_office_profile(resolved, [native_task.name])
 
 
 @pytest.mark.parametrize(
@@ -319,38 +537,23 @@ def test_unknown_source_expressions_are_retained_and_audited(native_task, source
         'Path("/workspace/file:stream")',
     ],
 )
-def test_invalid_mapped_paths_are_profile_errors(native_task, source):
-    (native_task / "tests/grading/test_verify.py").write_text(source, encoding="utf-8")
-    resolved = resolve_harbor_dataset(
-        dataset_id="office",
-        path=native_task.parents[1],
-        format="workbuddy.v1",
-        allow_partial=True,
-    )
+def test_invalid_mapped_paths_are_profile_errors(source):
     with pytest.raises(OfficeProfileError, match="Office.*line 1"):
-        validate_office_profile(resolved, [native_task.name])
+        _adapt_python(source, {"/workspace": Path("native")})
 
 
 @pytest.mark.parametrize(
     "error", [ValueError("overlapping edits"), SyntaxError("invalid replacement")]
 )
-def test_rewrite_failures_are_reported_as_profile_errors(
-    native_task, monkeypatch, error
-):
+def test_rewrite_failures_are_reported_as_profile_errors(monkeypatch, error):
     from psycheval.harbor import windows
 
     def failed_rewrite(*args, **kwargs):
         raise error
 
     monkeypatch.setattr(windows, "rewrite_python", failed_rewrite)
-    resolved = resolve_harbor_dataset(
-        dataset_id="office",
-        path=native_task.parents[1],
-        format="workbuddy.v1",
-        allow_partial=True,
-    )
     with pytest.raises(OfficeProfileError, match="Office Python adaptation") as raised:
-        validate_office_profile(resolved, [native_task.name])
+        _adapt_python('Path("/workspace/file")', {"/workspace": Path("native")})
     assert raised.value.__cause__ is error
 
 
@@ -788,10 +991,44 @@ def test_real_runtime_metrics_count_missing_selected_tasks(tmp_path):
             }
         )
     )
-    metrics = compute_official_metrics(tmp_path, ["one", "two"])
+    metrics = compute_official_metrics(tmp_path / "job", expected_tasks=["one", "two"])
     assert metrics["n_tasks"] == 2
     assert metrics["reward"] == 0.5
     assert metrics["missing_tasks"] == ["two"]
+
+
+@pytest.mark.skipif(
+    os.environ.get("PEVAL_WORKBUDDY_RUNTIME_TESTS") != "1",
+    reason="opt-in pinned WorkBuddy runtime integration",
+)
+def test_native_prepare_hook_rejects_unadapted_commands(native_task, tmp_path):
+    from harbor.models.task.task import Task
+
+    from psycheval.harbor.workbuddy_verifier import NativePythonVerifier
+
+    root = native_task.parents[1]
+    plugin = root / "shared/verifier/plugin.py"
+    plugin.write_text(
+        plugin.read_text().replace("prepare_command(),", "'unsupported-command',")
+    )
+    before = _digests(root)
+
+    async def scenario():
+        host = make_office_environment(native_task, tmp_path / "host")
+        await host.start(False)
+        try:
+            with pytest.raises(OfficeProfileError, match="preparation command"):
+                await NativePythonVerifier(
+                    task=Task(native_task),
+                    environment=host,
+                    trial_paths=host.trial_paths,
+                ).verify()
+            assert not (host.trial_paths.verifier_dir / "score.json").exists()
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
+    assert _digests(root) == before
 
 
 @pytest.mark.skipif(
@@ -817,8 +1054,10 @@ def test_real_runtime_metric_projection_preserves_missing_and_invalid_scores(
         (trial / "verifier/score.json").write_bytes(score)
     before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
 
-    expected = compute_job_metrics(tmp_path, expected_tasks=["one", "missing"])
-    actual = compute_official_metrics(tmp_path, ["one", "missing"])
+    expected = compute_job_metrics(tmp_path / "job", expected_tasks=["one", "missing"])
+    actual = compute_official_metrics(
+        tmp_path / "job", expected_tasks=["one", "missing"]
+    )
 
     assert actual == expected
     assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
@@ -832,9 +1071,8 @@ def test_real_runtime_metrics_preserve_long_names_and_duplicate_trial_names(tmp_
     from psycheval.harbor.workbuddy import compute_official_metrics
 
     name = "task-with-a-name-longer-than-thirty-two-characters"
-    trial_name = name[:32] + "__same-id"
     for job, reward in (("one", 0.5), ("two", 1.0)):
-        trial = tmp_path / job / trial_name
+        trial = tmp_path / "job" / (name[:32] + "__" + job)
         (trial / "verifier").mkdir(parents=True)
         (trial / "config.json").write_text(
             json.dumps({"task": {"path": f"/dataset/tasks/{name}"}}), encoding="utf-8"
@@ -843,15 +1081,55 @@ def test_real_runtime_metrics_preserve_long_names_and_duplicate_trial_names(tmp_
             json.dumps({"overall": reward, "reason": "中文 🎯"}, ensure_ascii=False),
             encoding="utf-8",
         )
-    metrics = compute_official_metrics(tmp_path, [name, "missing"])
+    metrics = compute_official_metrics(
+        tmp_path / "job", expected_tasks=[name, "missing"]
+    )
     assert metrics["n_tasks"] == 2
     assert metrics["n_trials"] == 3
     assert metrics["reward"] == 0.375
     assert metrics["missing_tasks"] == ["missing"]
     attempts = metrics["per_task"][name]["attempts"]
     assert len(attempts) == 2
-    assert {attempt["trial"] for attempt in attempts} == {trial_name}
-    assert metrics["run_dir"] == str(tmp_path)
+    assert {attempt["trial"] for attempt in attempts} == {
+        name[:32] + "__one",
+        name[:32] + "__two",
+    }
+    assert metrics["run_dir"] == str(tmp_path / "job")
+
+
+@pytest.mark.skipif(
+    os.environ.get("PEVAL_WORKBUDDY_RUNTIME_TESTS") != "1",
+    reason="opt-in pinned WorkBuddy runtime integration",
+)
+def test_real_runtime_metrics_restore_package_names_from_harbor_lock(tmp_path):
+    from harbor.models.job.lock import JobLock, TrialLock
+
+    from psycheval.harbor.workbuddy import compute_official_metrics
+
+    trials = [
+        TrialLock(
+            task={"name": name, "type": "package", "digest": "sha256:" + digit * 64},
+            agent={"name": "oracle"},
+            environment={},
+            verifier={},
+        )
+        for name, digit in (("org/one", "a"), ("elsewhere/one", "b"))
+    ]
+    (tmp_path / "lock.json").write_text(
+        JobLock(n_concurrent_trials=1, retry={}, trials=trials).model_dump_json()
+    )
+    trial = tmp_path / "one__attempt"
+    (trial / "verifier").mkdir(parents=True)
+    (trial / "lock.json").write_text(trials[0].model_dump_json())
+    (trial / "config.json").write_text(json.dumps({"task": {"name": "org/one"}}))
+    (trial / "verifier/score.json").write_text('{"overall": 1}')
+    metrics = compute_official_metrics(tmp_path)
+    assert metrics["reward"] == 0.5
+    assert metrics["missing_tasks"] == ["elsewhere/one"]
+    assert metrics["per_task"]["org/one"]["attempts"][0]["trial"] == trial.name
+    assert metrics["per_task"]["elsewhere/one"]["attempts"][0]["trial"] == (
+        "elsewhere/one__never_ran"
+    )
 
 
 @pytest.mark.skipif(
@@ -874,7 +1152,7 @@ def test_native_verifier_reuses_real_runtime_and_never_mutates_dataset(
     )
 
     from psycheval.harbor import workbuddy_verifier
-    from psycheval.harbor.workbuddy_verifier import WindowsOfficeVerifier
+    from psycheval.harbor.workbuddy_verifier import NativePythonVerifier
 
     gold = native_task / "tests/gold/gold_answer.json"
     gold.parent.mkdir()
@@ -966,14 +1244,15 @@ def test_native_verifier_reuses_real_runtime_and_never_mutates_dataset(
                 pytest.fail("native verifier invoked a shell")
 
             environment.exec = forbidden_shell
-            verifier = WindowsOfficeVerifier(
+            verifier = NativePythonVerifier(
                 task=Task(native_task),
                 trial_paths=environment.trial_paths,
                 environment=environment,
             )
             result = await verifier.verify()
             assert len(adaptation_roots) == 1
-            assert adaptation_roots[0].is_relative_to(environment.native_path("/tests"))
+            assert not adaptation_roots[0].is_relative_to(environment.work_dir)
+            assert not adaptation_roots[0].is_relative_to(native_task)
             assert result.rewards["reward"] == (0.75 if with_llm else 0.5)
             assert result.rewards["fixture_finalized"] == 1
             audit = environment.trial_paths.verifier_dir / "office-adaptation.json"
@@ -1015,13 +1294,9 @@ def test_real_runtime_copy_is_revalidated_before_plugin_loading(
     from harbor.models.task.task import Task
     from workbuddy_bench.judge import registry
 
-    from psycheval.harbor.workbuddy_verifier import WindowsOfficeVerifier
+    from psycheval.harbor.workbuddy_verifier import NativePythonVerifier
 
     root = native_task.parents[1]
-    resolved = resolve_harbor_dataset(
-        dataset_id="office", path=root, format="workbuddy.v1", allow_partial=True
-    )
-    validate_office_profile(resolved, [native_task.name])
     before = _digests(root)
     original_copytree = shutil.copytree
 
@@ -1055,7 +1330,7 @@ def test_real_runtime_copy_is_revalidated_before_plugin_loading(
         environment = make_office_environment(native_task, tmp_path / "host")
         await environment.start(force_build=False)
         try:
-            verifier = WindowsOfficeVerifier(
+            verifier = NativePythonVerifier(
                 task=Task(native_task),
                 environment=environment,
                 trial_paths=environment.trial_paths,
@@ -1095,9 +1370,12 @@ def test_local_office_dataset_executes_without_shell_and_stays_read_only(
     from harbor.models.task.task import Task
     from harbor.models.trial.paths import TrialPaths
 
-    from psycheval.harbor.environment import HostEnvironment
-    from psycheval.harbor.workbuddy import LLM_REQUIRED_ENV
-    from psycheval.harbor.workbuddy_verifier import WindowsOfficeVerifier
+    LLM_REQUIRED_ENV = (
+        "WORKBUDDY_VERIFIER_LLM_BASE_URL",
+        "WORKBUDDY_VERIFIER_LLM_API_KEY",
+        "WORKBUDDY_VERIFIER_LLM_MODEL",
+    )
+    from psycheval.harbor.workbuddy_verifier import NativePythonVerifier
 
     root = Path(os.environ["PEVAL_WORKBUDDY_OFFICE_DATASET"])
     source = root / "tasks" / task_name
@@ -1110,16 +1388,15 @@ def test_local_office_dataset_executes_without_shell_and_stays_read_only(
     async def scenario():
         paths = TrialPaths(tmp_path / "trial space 中文")
         paths.mkdir()
-        environment = HostEnvironment(
+        environment = WorkBuddyHostEnvironment(
             environment_dir=source / "environment",
             environment_name="local-office",
-            workdir_root=None,
+            workdir_root=tmp_path / "workspaces",
             session_id="local-office",
             trial_paths=paths,
             task_env_config=EnvironmentConfig(workdir="/workspace"),
             logger=logging.getLogger("local-office"),
             host_access={"filesystem": True, "process": True},
-            bootstrap_workbuddy_workspace=True,
             mounts=[
                 {
                     "type": "bind",
@@ -1140,7 +1417,7 @@ def test_local_office_dataset_executes_without_shell_and_stays_read_only(
                 pytest.fail("native verifier invoked a shell")
 
             environment.exec = forbidden_shell
-            result = await WindowsOfficeVerifier(
+            result = await NativePythonVerifier(
                 task=Task(source), trial_paths=paths, environment=environment
             ).verify()
             score = json.loads((paths.verifier_dir / "score.json").read_text())

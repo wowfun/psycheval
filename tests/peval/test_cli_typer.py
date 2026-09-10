@@ -18,7 +18,7 @@ class PevalTyperCliTests(unittest.TestCase):
         root = get_command(app)
         self.assertEqual(
             set(root.commands),
-            {"init", "view", "export", "import", "publish", "harbor", "serve"},
+            {"init", "view", "export", "import", "publish", "serve"},
         )
         root_options = {
             option
@@ -35,10 +35,6 @@ class PevalTyperCliTests(unittest.TestCase):
         self.assertEqual(
             set(root.commands["publish"].commands),
             {"evaluation-report"},
-        )
-        self.assertEqual(
-            set(root.commands["harbor"].commands),
-            {"prepare", "summarize"},
         )
         view_options = {
             option
@@ -69,18 +65,15 @@ class PevalTyperCliTests(unittest.TestCase):
         self.assertIn("runs/<evaluation>/<agent>/<session>/<cell>", import_help.output)
         self.assertNotIn("harbor/<mount-id>", import_help.output)
 
-    def test_harbor_commands_require_their_contract_inputs(self) -> None:
+    def test_harbor_command_group_is_removed(self) -> None:
         runner = CliRunner()
-        cases = (
-            (["harbor", "prepare"], "--dataset"),
-            (["harbor", "prepare", "--dataset", "office"], "--config"),
-            (["harbor", "summarize"], "--plan"),
-        )
-        for arguments, option in cases:
-            with self.subTest(arguments=arguments):
-                result = runner.invoke(app, arguments)
-                self.assertEqual(result.exit_code, 2)
-                self.assertIn(f"Missing option '{option}'", result.output)
+        help_result = runner.invoke(app, ["--help"])
+        self.assertEqual(help_result.exit_code, 0)
+        self.assertNotRegex(help_result.output, r"(?m)^\s+harbor\s")
+        for command in ("prepare", "summarize"):
+            result = runner.invoke(app, ["harbor", command])
+            self.assertEqual(result.exit_code, 2)
+            self.assertIn("No such command", result.output)
 
     def test_show_completion_does_not_install_shell_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

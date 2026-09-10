@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -20,8 +21,13 @@ class RuntimeConfigError(ValueError):
 
 @dataclass(frozen=True)
 class HostSettings:
-    workdir_root: Path | None
+    workdir_root: Path
     source_path: Path | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "workdir_root", resolve_workdir_root(self.workdir_root)
+        )
 
 
 @dataclass(frozen=True)
@@ -103,8 +109,12 @@ def load_host_settings(path: str | Path) -> HostSettings:
         raise RuntimeConfigError(
             "PEVAL config [harbor.host].workdir_root must be a string"
         )
+    if not raw_root.strip():
+        raise RuntimeConfigError(
+            "PEVAL config [harbor.host].workdir_root must be nonempty"
+        )
     root = _resolve_host_path(
-        raw_root if raw_root.strip() else None,
+        raw_root,
         base=config_path.parent,
         label="PEVAL config workdir_root",
     )
@@ -130,7 +140,7 @@ def write_effective_runtime_config(path: Path, config: EffectiveRuntimeConfig) -
 def load_effective_runtime_config(
     path: Path | str | None = None,
     *,
-    environ: dict[str, str] | os._Environ[str] | None = None,
+    environ: Mapping[str, str] | None = None,
     require_harness: bool = False,
 ) -> EffectiveRuntimeConfig:
     values = os.environ if environ is None else environ
@@ -214,12 +224,24 @@ def load_effective_runtime_config(
 
 
 def optional_effective_runtime_config(
-    *, environ: dict[str, str] | os._Environ[str] | None = None
+    *, environ: Mapping[str, str] | None = None
 ) -> EffectiveRuntimeConfig | None:
     values = os.environ if environ is None else environ
     if not values.get(PEVAL_CONFIG_ENV):
         return None
     return load_effective_runtime_config(environ=values)
+
+
+def resolve_workdir_root(raw: object) -> Path:
+    """Validate an effective native root without consulting the working directory."""
+    if (
+        not isinstance(raw, (str, Path))
+        or not str(raw).strip()
+        or "\x00" in str(raw)
+        or not Path(raw).is_absolute()
+    ):
+        raise RuntimeConfigError("workdir_root must be an absolute native path")
+    return Path(raw).resolve()
 
 
 def _resolve_host_path(

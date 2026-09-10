@@ -21,11 +21,6 @@ WORKBUDDY_VERIFIER_ENGINE = "composite"
 DATASET_MANIFEST_LIMIT = 256 * 1024
 TASK_TEXT_LIMIT = 2 * 1024 * 1024
 TASK_ENTRY_LIMIT = 100_000
-REQUIRED_SHARED_VERIFIER_FILES = (
-    "shared/verifier/plugin.py",
-    "shared/verifier/manifest.py",
-    "shared/verifier/scoring.py",
-)
 
 
 class HarborDatasetError(ValueError):
@@ -46,7 +41,14 @@ class ResolvedHarborDataset:
 def detect_harbor_dataset_format(root: Path) -> DatasetFormat:
     """Detect WorkBuddy only from its explicit schema; keep other roots generic."""
 
-    manifest_path = root / "dataset.toml"
+    manifest_path = next(
+        (
+            p / "dataset.toml"
+            for p in (root, *root.parents)
+            if (p / "dataset.toml").exists()
+        ),
+        root / "dataset.toml",
+    )
     if not manifest_path.exists():
         return "harbor"
     try:
@@ -57,7 +59,11 @@ def detect_harbor_dataset_format(root: Path) -> DatasetFormat:
         return "harbor"
     dataset = data.get("dataset")
     schema = dataset.get("schema") if isinstance(dataset, dict) else None
-    if schema == WORKBUDDY_DATASET_SCHEMA:
+    verifier = data.get("verifier", {})
+    if schema == WORKBUDDY_DATASET_SCHEMA or (
+        isinstance(verifier, dict)
+        and verifier.get("schema") == WORKBUDDY_VERIFIER_SCHEMA
+    ):
         return "workbuddy.v1"
     if isinstance(schema, str) and schema.startswith("workbuddy."):
         raise HarborDatasetError(f"unsupported WorkBuddy dataset schema: {schema}")
@@ -106,17 +112,21 @@ def validate_harbor_dataset(
     format: DatasetFormat = "harbor",
     allow_partial: bool = False,
 ) -> ResolvedHarborDataset:
-    """Fully validate a Dataset at registration and execution-plan gates."""
+    """Validate a Dataset for registration without executing its plugins."""
 
     resolved = resolve_harbor_dataset(
         dataset_id=dataset_id, path=path, format=format, allow_partial=allow_partial
     )
     if resolved.format != "workbuddy.v1":
         return resolved
-    for relative in REQUIRED_SHARED_VERIFIER_FILES:
-        _regular_file(resolved.source_root, PurePosixPath(relative))
-    layout = _required_table(resolved.manifest, "layout")
-    archive_relative = _required_relative(layout, "workspace_archive")
+    if not resolved.manifest["verifier"].get("plugin"):
+        _regular_file(resolved.source_root, PurePosixPath("shared/verifier/plugin.py"))
+    layout = resolved.manifest.get("layout", {})
+    archive_relative = (
+        _required_relative(layout, "workspace_archive")
+        if "workspace_archive" in layout
+        else None
+    )
     for task_name in resolved.task_names:
         task_dir = resolved.task_root / task_name
         _walk_regular_tree(task_dir)
@@ -133,7 +143,17 @@ def validate_harbor_dataset(
             raise HarborDatasetError(
                 f"invalid Harbor Task {task_dir.name}: {exc}"
             ) from exc
-        archive = _regular_file(task_dir, archive_relative)
+        task_config = _read_toml(task_dir / "task.toml")
+        if not str(task_config.get("metadata", {}).get("source_case") or "").strip():
+            raise HarborDatasetError("WorkBuddy Task requires metadata.source_case")
+        task_archive = archive_relative
+        if task_archive is None and os.path.lexists(
+            task_dir / "environment/workspace.tar.gz"
+        ):
+            task_archive = PurePosixPath("environment/workspace.tar.gz")
+        if task_archive is None:
+            continue
+        archive = _regular_file(task_dir, task_archive)
         header = _read_regular_prefix(task_dir, archive, size=200)
         if header.startswith(b"version https://git-lfs.github.com/spec/v1"):
             raise HarborDatasetError(
@@ -145,29 +165,27 @@ def validate_harbor_dataset(
 def _resolve_workbuddy(
     dataset_id: str, root: Path, *, allow_partial: bool
 ) -> ResolvedHarborDataset:
-    manifest = _read_toml(root / "dataset.toml")
-    dataset = _required_table(manifest, "dataset")
-    verifier = _required_table(manifest, "verifier")
-    layout = _required_table(manifest, "layout")
-    if dataset.get("schema") != WORKBUDDY_DATASET_SCHEMA:
-        raise HarborDatasetError(f"dataset.schema must be {WORKBUDDY_DATASET_SCHEMA!r}")
-    if verifier.get("schema") != WORKBUDDY_VERIFIER_SCHEMA:
-        raise HarborDatasetError(
-            f"verifier.schema must be {WORKBUDDY_VERIFIER_SCHEMA!r}"
-        )
-    if verifier.get("engine") != WORKBUDDY_VERIFIER_ENGINE:
-        raise HarborDatasetError(
-            f"verifier.engine must be {WORKBUDDY_VERIFIER_ENGINE!r}"
-        )
-    task_root = _contained_directory(root, _required_relative(layout, "task_root"))
+    supplied = root
+    root, manifest = read_workbuddy_manifest(root)
+    dataset = manifest["dataset"]
+    layout = manifest.get("layout", {})
+    task_root = (
+        _contained_directory(root, _required_relative(layout, "task_root"))
+        if "task_root" in layout
+        else supplied
+    )
     task_dirs = _direct_task_dirs(task_root)
+    if "task_root" not in layout:
+        task_dirs = [p for p in task_dirs if (p / "task.toml").is_file()]
     task_count = dataset.get("task_count")
-    if type(task_count) is not int or task_count < 1:
+    if task_count is not None and (type(task_count) is not int or task_count < 1):
         raise HarborDatasetError("dataset.task_count must be a positive integer")
-    if (
-        not task_dirs
-        or len(task_dirs) > task_count
-        or (not allow_partial and task_count != len(task_dirs))
+    if not task_dirs or (
+        task_count is not None
+        and (
+            len(task_dirs) > task_count
+            or (not allow_partial and task_count != len(task_dirs))
+        )
     ):
         raise HarborDatasetError(
             f"dataset.task_count declares {task_count}, found {len(task_dirs)} Tasks"
@@ -181,6 +199,39 @@ def _resolve_workbuddy(
         task_names=tuple(path.name for path in task_dirs),
         manifest=MappingProxyType(manifest),
     )
+
+
+def read_workbuddy_manifest(path: Path) -> tuple[Path, dict[str, Any]]:
+    """Read the upstream contract without importing a dataset plugin."""
+    root = next(
+        (p for p in (path, *path.parents) if (p / "dataset.toml").exists()), None
+    )
+    if root is None:
+        raise HarborDatasetError(f"WorkBuddy dataset.toml not found above {path}")
+    manifest = _read_toml(root / "dataset.toml")
+    dataset = _required_table(manifest, "dataset")
+    verifier = _required_table(manifest, "verifier")
+    for key in ("id", "version"):
+        if not isinstance(dataset.get(key), str) or not dataset[key].strip():
+            raise HarborDatasetError(f"dataset.{key} must be a nonempty string")
+    if verifier.get("schema") != WORKBUDDY_VERIFIER_SCHEMA:
+        raise HarborDatasetError(
+            f"verifier.schema must be {WORKBUDDY_VERIFIER_SCHEMA!r}"
+        )
+    if verifier.get("engine") != WORKBUDDY_VERIFIER_ENGINE:
+        raise HarborDatasetError(
+            f"verifier.engine must be {WORKBUDDY_VERIFIER_ENGINE!r}"
+        )
+    if not isinstance(manifest.get("layout", {}), dict):
+        raise HarborDatasetError("Dataset manifest [layout] must be a table")
+    plugin = verifier.get("plugin")
+    if plugin is not None and (
+        not isinstance(plugin, str)
+        or len(plugin.split(":")) != 2
+        or not all(plugin.split(":"))
+    ):
+        raise HarborDatasetError("verifier.plugin must use module:function")
+    return root, manifest
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -254,7 +305,7 @@ def _assert_contained(root: Path, path: Path) -> None:
         raise HarborDatasetError(f"Dataset path escapes its root: {path}")
     current = absolute_path
     while current != absolute_root:
-        if current.is_symlink():
+        if current.is_symlink() or current.is_junction():
             raise HarborDatasetError(
                 f"Dataset path traverses a symbolic link: {current}"
             )
@@ -295,7 +346,7 @@ def _walk_regular_tree(root: Path) -> None:
                     f"Dataset Task exceeds {TASK_ENTRY_LIMIT} filesystem entries"
                 )
             path = Path(entry.path)
-            if entry.is_symlink():
+            if entry.is_symlink() or path.is_junction():
                 raise HarborDatasetError(
                     f"Dataset Task content is a symbolic link: {path}"
                 )

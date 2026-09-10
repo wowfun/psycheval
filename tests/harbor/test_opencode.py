@@ -139,7 +139,16 @@ def test_opencode_registers_model_and_explicit_connection(tmp_path, provider, ov
         extra_env={f"{provider.upper()}_BASE_URL": "http://connection.invalid/v1"},
         opencode_config=config,
     )
-    env = agent._runtime_env(make_environment(tmp_path / "host"))
+
+    async def runtime_env():
+        host = make_environment(tmp_path / "host")
+        await host.start(False)
+        try:
+            return agent._runtime_env(host)
+        finally:
+            await host.stop(True)
+
+    env = asyncio.run(runtime_env())
     generated = json.loads(env["OPENCODE_CONFIG_CONTENT"])["provider"][provider]
     assert generated["models"] == {"unlisted-model": {}}
     if override or provider in {"openai", "anthropic"}:
@@ -209,7 +218,15 @@ def test_task_mcp_defaults_preserve_caller_configuration(
         opencode_config=config,
     )
 
-    env = agent._runtime_env(make_environment(tmp_path / "host"))
+    async def runtime_env():
+        host = make_environment(tmp_path / "host")
+        await host.start(False)
+        try:
+            return agent._runtime_env(host)
+        finally:
+            await host.stop(True)
+
+    env = asyncio.run(runtime_env())
     generated = json.loads(env["OPENCODE_CONFIG_CONTENT"])["mcp"]
     assert generated == {"fixture": {**defaults, **caller}, "caller-only": caller_only}
     assert config == before
@@ -264,6 +281,8 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
             execute = host.exec_argv
 
             async def fake_cli(argv, **kwargs):
+                assert not Path(argv[3]).is_relative_to(agent.logs_dir)
+                assert not Path(argv[3]).is_relative_to(host.work_dir)
                 return await execute([*argv[:5], str(script), *argv[5:]], **kwargs)
 
             monkeypatch.setattr(host, "exec_argv", fake_cli)
@@ -292,17 +311,21 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
                 assert context.n_output_tokens == 7
                 assert context.cost_usd == 0.25
                 assert TrajectoryValidator().validate(logs / "trajectory.json")
-                trajectory = json.loads(
-                    (logs / "trajectory.json").read_text(encoding="utf-8")
-                )
+                raw_trajectory = (logs / "trajectory.json").read_bytes()
+                assert not raw_trajectory.startswith(b"\xef\xbb\xbf")
+                assert "完成 🎉".encode("utf-8") in raw_trajectory
+                trajectory = json.loads(raw_trajectory.decode("utf-8"))
                 assert trajectory["steps"][-1]["message"] == "完成 🎉"
             observed = json.loads(
                 (host.work_dir / "observed.json").read_text(encoding="utf-8")
             )
             assert observed["prompt"] == instruction
             assert Path(observed["cwd"]) == host.work_dir
-            assert Path(observed["home"]).is_relative_to(logs)
-            assert Path(observed["data"]).is_relative_to(logs)
+            assert not Path(observed["home"]).is_relative_to(logs)
+            assert Path(observed["home"]).is_relative_to(
+                host.runtime_directory(f"opencode-{agent._runtime_id}")
+            )
+            assert not Path(observed["data"]).is_relative_to(logs)
             assert observed["config"]["permission"] == {"webfetch": "deny"}
             assert observed["config"]["skills"]["paths"] == [
                 str(host.native_path("/harbor/skills"))
@@ -405,7 +428,7 @@ def test_generated_opencode_environment_wins_inside_harbor_scope(
                     (host.work_dir / "observed-env.json").read_text(encoding="utf-8")
                 )
                 for key in path_keys:
-                    assert Path(observed[key]).is_relative_to(logs), key
+                    assert not Path(observed[key]).is_relative_to(logs), key
                 config = json.loads(observed["OPENCODE_CONFIG_CONTENT"])
                 assert config["provider"]["fixture"]["models"] == {"model": {}}
                 assert config["permission"] == {"webfetch": "deny"}
@@ -466,7 +489,7 @@ def test_agents_with_shared_env_keep_trial_runtime_paths_isolated(tmp_path):
                 assert agent.extra_env == shared_env
             runtime = [agent._runtime_env(host) for agent in agents]
             for agent, env in zip(agents, runtime, strict=True):
-                assert Path(env["HOME"]).is_relative_to(agent.logs_dir)
+                assert not Path(env["HOME"]).is_relative_to(agent.logs_dir)
                 assert env["TEST_API_KEY"] == "fixture-key"
                 assert agent.extra_env == shared_env
             assert runtime[0]["HOME"] != runtime[1]["HOME"]
@@ -492,7 +515,7 @@ def test_opencode_probe_timeout_retains_diagnostic_and_isolated_env(
             async def timeout(argv, *, env, timeout_sec):
                 assert argv[-1] == "--version"
                 assert timeout_sec == 30
-                assert Path(env["HOME"]).is_relative_to(logs)
+                assert not Path(env["HOME"]).is_relative_to(logs)
                 callback = host._output_callback()
                 await callback("startup diagnostic\n", "stderr")
                 raise TimeoutError

@@ -82,26 +82,13 @@ def test_missing_owned_runtime_does_not_prevent_cleanup_or_restart(tmp_path, res
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("root_kind", ["default", "explicit", "temporary", "current"])
+@pytest.mark.parametrize("root_kind", ["default", "explicit"])
 def test_workspace_paths_and_lifecycle_ignore_parent_config(
     tmp_path, monkeypatch, root_kind
 ):
     monkeypatch.setenv("PEVAL_CONFIG", str(tmp_path / "missing.toml"))
     root = tmp_path / "custom workspace"
-    if root_kind == "current":
-        root.mkdir()
-        monkeypatch.chdir(root)
-    kwargs = (
-        {}
-        if root_kind == "default"
-        else {
-            "workdir_root": {
-                "explicit": root,
-                "temporary": None,
-                "current": Path(""),
-            }[root_kind]
-        }
-    )
+    kwargs = {} if root_kind == "default" else {"workdir_root": root}
     environment = make_environment(
         tmp_path / "case",
         trial_name="named__YfQLWrD",
@@ -120,18 +107,16 @@ def test_workspace_paths_and_lifecycle_ignore_parent_config(
             == environment.native_path("/custom/project")
         )
         assert workspace.name == "task_YfQLWrD"
-        if root_kind != "temporary":
-            assert workspace.parent == (
-                Path.home() / "workspaces" if root_kind == "default" else root
-            )
-        else:
-            assert workspace.parent == environment.native_path("/tests").parent
+        assert workspace.parent == (
+            Path.home() / "workspaces" if root_kind == "default" else root
+        )
         result = await environment.exec_argv(
             [
                 sys.executable,
                 "-c",
                 "import json,os; from pathlib import Path; print(json.dumps([os.getcwd(),json.loads(Path(os.environ['PEVAL_CONFIG']).read_text())]))",
-            ]
+            ],
+            env=environment.runtime_config_env(),
         )
         assert result.return_code == 0, result.stderr
         cwd, config = json.loads(result.stdout)
@@ -283,7 +268,10 @@ def test_empty_project_gets_an_initial_commit(tmp_path):
     project.mkdir()
     environment = make_environment(
         tmp_path / "case",
-        environment_kwargs={"workspace_source": project, "workdir_root": None},
+        environment_kwargs={
+            "workspace_source": project,
+            "workdir_root": tmp_path / "copies",
+        },
     )
     (environment.environment_dir / "Dockerfile").unlink()
 
@@ -374,7 +362,7 @@ def test_existing_trial_directory_is_never_reused_or_deleted(tmp_path):
 
 
 @pytest.mark.parametrize("current_directory", [False, True])
-def test_relative_workspace_parameters_are_resolved_at_construction(
+def test_relative_workspace_source_is_resolved_at_construction(
     tmp_path, monkeypatch, current_directory
 ):
     project = tmp_path / "project"
@@ -384,7 +372,7 @@ def test_relative_workspace_parameters_are_resolved_at_construction(
     environment = make_environment(
         tmp_path / "case",
         environment_kwargs={
-            "workdir_root": "../copies" if current_directory else "copies",
+            "workdir_root": tmp_path / "copies",
             "workspace_source": Path("") if current_directory else "project",
         },
     )
@@ -435,16 +423,13 @@ def test_invalid_project_directory_fails_before_allocation(
     assert not root.exists()
 
 
-@pytest.mark.parametrize("mode", ["workbuddy", "mount"])
+@pytest.mark.parametrize("mode", ["mount"])
 def test_project_source_rejects_incompatible_initializers(tmp_path, mode):
     project = tmp_path / "project"
     project.mkdir()
     kwargs = {"workspace_source": project}
     mounts = []
-    if mode == "workbuddy":
-        kwargs["bootstrap_workbuddy_workspace"] = True
-    else:
-        mounts.append({"type": "bind", "source": str(project), "target": "/workspace"})
+    mounts.append({"type": "bind", "source": str(project), "target": "/workspace"})
     with pytest.raises(ValueError, match="workspace_source"):
         make_environment(
             tmp_path / "case", extra_mounts=mounts, environment_kwargs=kwargs

@@ -43,7 +43,7 @@ judge_config = "tests/judge.yaml"
         (task / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
         (task / "instruction.md").write_text(f"Complete {name}.\n")
         (task / "task.toml").write_text(
-            f'schema_version = "1.3"\n[task]\nname = "workbuddy/{name}"\n',
+            f'schema_version = "1.3"\n[task]\nname = "workbuddy/{name}"\n[metadata]\nsource_case = "{name}"\n',
             encoding="utf-8",
         )
         archive = task / "environment" / "workspace.tar.gz"

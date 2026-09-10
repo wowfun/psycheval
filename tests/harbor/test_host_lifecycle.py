@@ -211,6 +211,7 @@ def test_concurrent_commands_keep_independent_runtime_configs(tmp_path):
                                 "import json,os; print(json.dumps([os.getcwd(),os.environ['PEVAL_CONFIG']]),flush=True)",
                             ],
                             cwd=f"/app/{name}",
+                            env=host.runtime_config_env(),
                         )
                         for name in ("one", "two")
                     )
@@ -413,10 +414,11 @@ def test_runtime_config_write_does_not_block_loop_and_drains_before_stop(
             spawned.append(True)
             return await spawn(*args, **kwargs)
 
+        runtime_env = host.runtime_config_env()
         monkeypatch.setattr(module, "write_effective_runtime_config", delayed_write)
         monkeypatch.setattr(host._process_adapter, "spawn", record_spawn)
         command = asyncio.create_task(
-            host.exec_argv([sys.executable, "-c", "print('ready')"])
+            host.exec_argv([sys.executable, "-c", "print('ready')"], env=runtime_env)
         )
         stopped = None
         try:

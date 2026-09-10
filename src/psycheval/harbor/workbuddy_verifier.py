@@ -1,7 +1,7 @@
-"""Bash-free execution of the WorkBuddy Office verifier profile.
+"""WorkBuddy plugin execution and native Python/pytest format adaptation.
 
-Office policy lives here; Windows mechanics live in windows. No optional
-WorkBuddy imports occur until verification, so this module is relocatable.
+Windows mechanics live in windows. Optional WorkBuddy imports occur only during
+verification, preserving the relocatable module's import-time independence.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import hashlib
+import importlib.machinery
 import json
 import logging
 import os
@@ -20,20 +21,30 @@ import sys
 import tempfile
 import time
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
+from harbor.models.task.config import TaskOS
+from harbor.models.task.paths import TaskPaths
 from harbor.models.verifier.result import VerifierResult
+from harbor.utils.env import (
+    is_sensitive_env_key,
+    resolve_env_vars,
+    templatize_sensitive_env,
+)
 from harbor.verifier.base import BaseVerifier
 
 from . import windows
 from .datasets import (
     TASK_TEXT_LIMIT,
-    ResolvedHarborDataset,
     _read_regular_bytes,
     _walk_regular_tree,
+    read_workbuddy_manifest,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,6 +77,7 @@ class OfficeRule:
     score_python: str
     reward_python: str
     source_sha256: str
+    prepare_command: str
 
 
 @dataclass(frozen=True)
@@ -114,6 +126,27 @@ def _load_rule(root: Path) -> OfficeRule:
     )
     if template is None:
         raise OfficeProfileError("Office rule execution template is unavailable")
+    preparation = next(
+        (
+            value.value.strip()
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "prepare_command"
+            for statement in node.body
+            if isinstance(statement, ast.Return)
+            for value in ast.walk(statement)
+            if isinstance(value, ast.Constant) and isinstance(value.value, str)
+        ),
+        "",
+    )
+    if preparation.replace("--cached", "--staged").splitlines() != [
+        "set -euo pipefail",
+        "mkdir -p /logs/verifier",
+        "cd /workspace",
+        "git add -A 2>/dev/null || true",
+        "git diff --staged > /logs/verifier/agent.patch 2>/dev/null || true",
+        "git reset >/dev/null 2>&1 || true",
+    ]:
+        raise OfficeProfileError("unsupported native Python preparation command")
 
     # Reuse the source profile's Python score/reward code verbatim except for
     # file-access paths. Scoring conditions have no second implementation.
@@ -134,6 +167,7 @@ def _load_rule(root: Path) -> OfficeRule:
         embedded("PY_SCORE"),
         embedded("PY_REWARD"),
         hashlib.sha256(source).hexdigest(),
+        preparation,
     )
 
 
@@ -358,24 +392,6 @@ def _adapt_python(
         raise OfficeProfileError(f"invalid Office Python adaptation: {exc}") from exc
 
 
-def validate_office_profile(
-    resolved: ResolvedHarborDataset, task_names: Sequence[str]
-) -> None:
-    """Check required native inputs without enforcing source identity or shape."""
-    _walk_regular_tree(resolved.source_root / "shared")
-    _load_rule(resolved.source_root)
-    # Native values are immaterial here; exercise exactly the rewrite recognizer.
-    mappings = {
-        root: Path("native") / root.lstrip("/")
-        for root in ("/workspace", "/tests", "/logs")
-    }
-    for name in task_names:
-        task = resolved.task_root / name
-        _load_command(task)
-        for path in sorted((task / "tests/grading").rglob("*.py")):
-            _adapt_python(_read_source(task, path), mappings)
-
-
 class NativeOfficeExecutor:
     """Execute the known Office pipeline through HostEnvironment.exec_argv."""
 
@@ -394,6 +410,27 @@ class NativeOfficeExecutor:
         }
         self.logs = self.mappings["/logs/verifier"]
         self.logs.mkdir(parents=True, exist_ok=True)
+        self.prepared = False
+        self.preparation_error: Exception | None = None
+
+    @property
+    def capabilities(self):
+        return self.environment.capabilities
+
+    async def exec(self, command: str, *, env=None, cwd=None, **kwargs):
+        """Adapt the profile's prepare hook through its runtime Environment handle."""
+        try:
+            if command.strip() != self.rule.prepare_command or cwd != "/workspace":
+                raise OfficeProfileError(
+                    "unsupported native Python preparation command"
+                )
+            await self.prepare(env or {})
+            return NativeExecutionResult(command=command, return_code=0)
+        except Exception as exc:
+            # Upstream HarborCommandExecutor returns exceptions as CommandResult;
+            # a prepare hook can ignore that result, so retain the failure here.
+            self.preparation_error = exc
+            raise
 
     def path(self, value: str) -> str:
         return windows.translate_literal(value, self.mappings) or value
@@ -459,6 +496,7 @@ class NativeOfficeExecutor:
             if args[0] == "diff":
                 patch = result.stdout or ""
         patch_path.write_text(patch, encoding="utf-8")
+        self.prepared = True
 
     async def run(
         self,
@@ -662,59 +700,26 @@ class NativeOfficeExecutor:
         )
 
 
-class WindowsOfficeVerifier(BaseVerifier):
+class NativePythonVerifier(BaseVerifier):
     """Native host execution with the external WorkBuddy scoring engine."""
 
     async def verify(self) -> VerifierResult:
         from workbuddy_bench.judge.registry import (
             RegistryBuildContext,
             build_default_context,
-            load_verifier_contract,
             load_verifier_registry,
             maybe_await,
         )
         from workbuddy_bench.judge.runners.rule import HarborScriptRuleJudgeRunner
-        from workbuddy_bench.judge.runtime import HarborAttemptRuntime
 
-        from .datasets import resolve_harbor_dataset
         from .environment import HostEnvironment
-        from .workbuddy import OFFICE_DATASET_ID, validate_workbuddy_runtime
+        from .workbuddy import validate_workbuddy_runtime
 
         if not isinstance(self.environment, HostEnvironment):
-            raise OfficeProfileError("WindowsOfficeVerifier requires HostEnvironment")
+            raise OfficeProfileError("NativePythonVerifier requires HostEnvironment")
         validate_workbuddy_runtime()
-        # Contract resolution only reads TOML; plugin loading happens after copy.
-        original = load_verifier_contract(self.task.paths.task_dir)
-        if original.dataset_id != OFFICE_DATASET_ID:
-            raise OfficeProfileError("WindowsOfficeVerifier requires Office v1.0")
-        resolved = resolve_harbor_dataset(
-            dataset_id=original.dataset_id,
-            path=original.dataset_root,
-            format="workbuddy.v1",
-            allow_partial=True,
-        )
-        _walk_regular_tree(resolved.source_root / "shared")
-        tests_root = self.environment.native_path("/tests")
-        tests_root.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix="office-runtime-", dir=tests_root
-        ) as directory:
-            root = Path(directory)
-            _walk_regular_tree(original.task_dir / "tests")
-            shutil.copy2(original.dataset_toml_path, root / "dataset.toml")
-            shutil.copytree(
-                original.dataset_root / "shared",
-                root / "shared",
-                ignore=shutil.ignore_patterns("__pycache__"),
-            )
-            task = root / original.task_dir.relative_to(original.dataset_root)
-            task.mkdir(parents=True)
-            shutil.copy2(original.task_toml_path, task / "task.toml")
-            shutil.copytree(
-                original.task_dir / "tests",
-                task / "tests",
-                ignore=shutil.ignore_patterns("__pycache__"),
-            )
+        with _staged_verifier_task(self) as root:
+            task = self.task.paths.task_dir
             executor = NativeOfficeExecutor(
                 self.environment, task, _load_rule(root), _load_command(task)
             )
@@ -760,10 +765,10 @@ class WindowsOfficeVerifier(BaseVerifier):
                     "grading is best effort. See office-adaptation.json.",
                     skipped_count,
                 )
-            contract = load_verifier_contract(task)
-            runtime = HarborAttemptRuntime(
+            contract = _staged_contract(task)
+            runtime = _workbuddy_runtime_type()(
                 verifier=self,
-                environment=self.environment,
+                environment=executor,
                 tests_dir=str(task / "tests"),
                 workspace=executor.path("/workspace"),
                 container_verifier_dir=str(executor.logs),
@@ -772,13 +777,17 @@ class WindowsOfficeVerifier(BaseVerifier):
             registry = load_verifier_registry(
                 RegistryBuildContext(contract=contract, runtime=runtime, verifier=self)
             )
-            if (
-                registry.custom_verify is not None
-                or "rule_script" not in registry.judge_runners
-            ):
-                raise OfficeProfileError("unsupported Office registry execution")
+            if registry.custom_verify is not None:
+                return await maybe_await(registry.custom_verify(self))
+            if "rule_script" not in registry.judge_runners:
+                raise OfficeProfileError("unsupported native Python registry execution")
             context = build_default_context(contract, runtime)
-            await executor.prepare({**context.env, **executor.command.env})
+            if registry.prepare is not None:
+                await maybe_await(registry.prepare(context))
+            if executor.preparation_error is not None:
+                raise executor.preparation_error
+            if not executor.prepared:
+                await executor.prepare({**context.env, **executor.command.env})
             plan = await maybe_await(registry.plan_builder(context))
             judges = []
             for judge in plan.judges:
@@ -809,5 +818,190 @@ class WindowsOfficeVerifier(BaseVerifier):
                         "native_adaptation": {"skipped": skipped_count},
                     },
                 )
+            runtime.write_score(score)
+            return VerifierResult(rewards=score.reward_payload())
+
+
+@contextmanager
+def _staged_verifier_task(verifier):
+    """Keep plugin imports, caches, and rewrites in an invocation-owned copy."""
+    from workbuddy_bench.judge.runtime import merged_verifier_env
+
+    original = verifier.task
+    original_override = verifier.override_env
+    task_dir = original.paths.task_dir
+    dataset_root, _ = read_workbuddy_manifest(task_dir)
+    with tempfile.TemporaryDirectory(prefix="session-") as directory:
+        root = Path(directory)
+        # Dataset-level plugin assets may have arbitrary names. Other Tasks need
+        # not be copied merely to execute this Task's verifier.
+        for child in dataset_root.iterdir():
+            if child.name in {".git", "__pycache__"}:
+                continue
+            if child == task_dir or child in task_dir.parents:
+                continue
+            if child.is_dir() and (child / "task.toml").is_file():
+                continue
+            if child.is_dir():
+                _walk_regular_tree(child)
+                shutil.copytree(
+                    child,
+                    root / child.name,
+                    ignore=shutil.ignore_patterns("__pycache__", ".git"),
+                )
+            else:
+                content = _read_regular_bytes(
+                    dataset_root, child, max_bytes=TASK_TEXT_LIMIT
+                )
+                (root / child.name).write_bytes(content)
+        target = root / task_dir.relative_to(dataset_root)
+        _walk_regular_tree(task_dir)
+        shutil.copytree(
+            task_dir,
+            target,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", ".git"),
+        )
+        verifier.task = deepcopy(original)
+        verifier.task.paths = TaskPaths(target)
+        verifier.task._task_dir = target
+        try:
+            verifier.override_env = resolve_env_vars(merged_verifier_env(verifier))
+            yield root
+        finally:
+            verifier.task = original
+            verifier.override_env = original_override
+            namespace = _plugin_namespace(root)
+            for name in tuple(sys.modules):
+                if name == namespace or name.startswith(namespace + "."):
+                    del sys.modules[name]
+
+
+def _retained_score_diagnostics(diagnostics: dict[str, Any]) -> dict[str, Any]:
+    """Redact context credentials without changing the plugin's score object."""
+    if not isinstance(diagnostics, dict):
+        return diagnostics
+    context = diagnostics.get("context")
+    if not isinstance(context, dict) or not isinstance(context.get("env"), dict):
+        return diagnostics
+    env = context["env"]
+    retained = {
+        **env,
+        **templatize_sensitive_env(
+            {
+                key: str(value)
+                for key, value in env.items()
+                if isinstance(value, str) or is_sensitive_env_key(key)
+            }
+        ),
+    }
+    return {**diagnostics, "context": {**context, "env": retained}}
+
+
+def _workbuddy_runtime_type():
+    # Optional imports stay at execution time. Extend the writer seam so custom
+    # hooks using either artifact_writer() or write_score() get the same policy.
+    from workbuddy_bench.judge.core import ArtifactWriter
+    from workbuddy_bench.judge.runtime import HarborAttemptRuntime
+
+    class RetainedArtifactWriter(ArtifactWriter):
+        def write(self, score):
+            super().write(
+                replace(
+                    score,
+                    diagnostics=_retained_score_diagnostics(
+                        score.score_payload()["diagnostics"]
+                    ),
+                )
+            )
+
+    class WorkBuddyRuntime(HarborAttemptRuntime):
+        def artifact_writer(self):
+            return RetainedArtifactWriter(
+                reward_json_path=self.verifier.trial_paths.reward_json_path,
+                score_json_path=self.host_verifier_dir / "score.json",
+            )
+
+    return WorkBuddyRuntime
+
+
+def _plugin_namespace(root: Path) -> str:
+    return "_workbuddy_" + hashlib.sha256(str(root).encode()).hexdigest()[:16]
+
+
+def _staged_contract(task: Path):
+    from workbuddy_bench.judge.registry import load_verifier_contract
+
+    contract = load_verifier_contract(task)
+    if not contract.plugin:
+        return contract
+    module, _, function = contract.plugin.partition(":")
+    path = contract.dataset_root.joinpath(*module.split("."))
+    if not (path.with_suffix(".py").is_file() or (path / "__init__.py").is_file()):
+        return contract
+    namespace = _plugin_namespace(contract.dataset_root)
+    package = ModuleType(namespace)
+    package.__path__ = [str(contract.dataset_root)]
+    package.__spec__ = importlib.machinery.ModuleSpec(
+        namespace, loader=None, is_package=True
+    )
+    sys.modules[namespace] = package
+    return replace(contract, plugin=f"{namespace}.{module}:{function}")
+
+
+class WorkBuddyVerifier(NativePythonVerifier):
+    """Run the upstream plugin lifecycle, with native execution-format adaptation."""
+
+    async def verify(self) -> VerifierResult:
+        from workbuddy_bench.judge.registry import (
+            RegistryBuildContext,
+            build_default_context,
+            load_verifier_registry,
+            maybe_await,
+        )
+
+        from .environment import HostEnvironment
+        from .workbuddy import validate_workbuddy_runtime
+
+        validate_workbuddy_runtime()
+        manifest = self.task.paths.task_dir / "tests/verifier.toml"
+        if (
+            isinstance(self.environment, HostEnvironment)
+            and self.environment.os == TaskOS.WINDOWS
+            and manifest.is_file()
+        ):
+            declaration = tomllib.loads(_read_source(manifest.parent, manifest))
+            if declaration.get("schema_version") == "workbuddy.office.verifier.v1":
+                return await super().verify()
+        with _staged_verifier_task(self):
+            contract = _staged_contract(self.task.paths.task_dir)
+            runtime = _workbuddy_runtime_type().from_verifier(self)
+            if isinstance(self.environment, HostEnvironment):
+                runtime.workspace = str(
+                    self.environment.native_path(
+                        self.environment.task_env_config.workdir or "/app"
+                    )
+                )
+                runtime.tests_dir = str(self.environment.native_path("/tests"))
+                runtime.container_verifier_dir = str(
+                    self.environment.native_path("/logs/verifier")
+                )
+            registry = load_verifier_registry(
+                RegistryBuildContext(
+                    contract=contract,
+                    runtime=runtime,
+                    verifier=self,
+                )
+            )
+            if registry.custom_verify is not None:
+                return await maybe_await(registry.custom_verify(self))
+            await runtime.upload_tests()
+            context = build_default_context(contract, runtime)
+            if registry.prepare is not None:
+                await maybe_await(registry.prepare(context))
+            plan = await maybe_await(registry.plan_builder(context))
+            score = await registry.engine().run(context, plan)
+            if registry.finalize_score is not None:
+                score = await maybe_await(registry.finalize_score(score, context, plan))
             runtime.write_score(score)
             return VerifierResult(rewards=score.reward_payload())

@@ -42,18 +42,22 @@ class VerifierManifest:
     (shared / "plugin.py").write_text("""import tomllib
 from workbuddy_bench.judge import EvaluationItem, EvaluationPlan, PassRateScoringPolicy, VerifierRegistry
 from workbuddy_bench.judge.runners.rule import HarborScriptRuleJudgeRunner
+from workbuddy_bench.judge.runtime import HarborCommandExecutor
 from .manifest import VerifierManifest
-from .rule import build_rule_judge
+from .rule import build_rule_judge, prepare_command
 
 def build_registry(build_context):
     task = build_context.contract.task_dir
     data = tomllib.loads((task / "tests/verifier.toml").read_text())
     manifest = VerifierManifest(**data["run"], env=data.get("env", {}))
+    async def prepare(context):
+        await HarborCommandExecutor(build_context.runtime.environment).run(
+            prepare_command(), cwd="/workspace", env=context.env)
     def build_plan(context):
         return EvaluationPlan(dataset_id=context.dataset_id, task_id=context.task_id,
             items=[EvaluationItem(id="rule", type="rule")],
             judges=[build_rule_judge(item_id="rule", manifest=manifest, timeout_sec=30)])
-    return VerifierRegistry(plan_builder=build_plan, scoring_policy=PassRateScoringPolicy(),
+    return VerifierRegistry(plan_builder=build_plan, prepare=prepare, scoring_policy=PassRateScoringPolicy(),
         judge_runners={"rule_script": HarborScriptRuleJudgeRunner(build_context.runtime)})
 """)
     (task / "tests/grading").mkdir()

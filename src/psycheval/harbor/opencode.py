@@ -7,12 +7,12 @@ import json
 import shutil
 import sys
 from typing import override
+from uuid import uuid4
 
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.agents.installed.opencode import OpenCode
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
-from harbor.utils.trajectory_utils import format_trajectory_json
 
 from .environment import HostEnvironment
 from .inference_telemetry import populate_context_from_trajectory
@@ -60,6 +60,7 @@ class HostOpenCodeAgent(OpenCode):
         if not executable or "\x00" in executable:
             raise ValueError("OpenCode executable must be nonempty and NUL-free")
         self.executable = executable
+        self._runtime_id = uuid4().hex
 
     @staticmethod
     def _host(environment: BaseEnvironment) -> HostEnvironment:
@@ -74,6 +75,7 @@ class HostOpenCodeAgent(OpenCode):
         if executable is None:
             raise FileNotFoundError(f"Install OpenCode first: {self.executable}")
         self.executable = executable
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
         env = self._runtime_env(host)
         with (self.logs_dir / "opencode-setup.log").open("w", encoding="utf-8") as log:
 
@@ -104,7 +106,7 @@ class HostOpenCodeAgent(OpenCode):
         self._version = installed
 
     def _runtime_env(self, host: HostEnvironment) -> dict[str, str]:
-        root = self.logs_dir.resolve() / "opencode"
+        root = host.runtime_directory(f"opencode-{self._runtime_id}")
         connection = self.model_connection
         env = {**connection.env, **self.extra_env}
         for key, child in (
@@ -173,7 +175,7 @@ class HostOpenCodeAgent(OpenCode):
             return
         data = trajectory.to_json_dict()
         (self.logs_dir / "trajectory.json").write_text(
-            format_trajectory_json(data), encoding="utf-8"
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         populate_context_from_trajectory(context, data)
         if trajectory.final_metrics is not None:
@@ -190,7 +192,9 @@ class HostOpenCodeAgent(OpenCode):
         host = self._host(environment)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self._instruction = self.render_instruction(instruction)
-        instruction_path = self.logs_dir.resolve() / "instruction.txt"
+        instruction_path = (
+            host.runtime_directory(f"opencode-{self._runtime_id}") / "instruction.txt"
+        )
         instruction_path.write_bytes(self._instruction.encode("utf-8"))
         (self.logs_dir / "trajectory.json").unlink(missing_ok=True)
         argv = [

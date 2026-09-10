@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import PurePosixPath
+from uuid import uuid4
 
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
@@ -127,6 +128,11 @@ class ExternalHarnessAgent(BaseAgent):
                 "external harness could not prepare workdir "
                 f"{workdir!r}: {diagnostic[-2000:]}"
             )
+        execution_logs = (
+            environment.runtime_directory(f"harness-{uuid4().hex}")
+            if isinstance(environment, HostEnvironment)
+            else None
+        )
         runtime_config_path = self.logs_dir / "peval.json"
         write_effective_runtime_config(
             runtime_config_path,
@@ -134,7 +140,11 @@ class ExternalHarnessAgent(BaseAgent):
                 paths=RuntimePaths(
                     workdir=workdir,
                     tests=environment_paths.tests_dir.as_posix(),
-                    agent_logs=environment_paths.agent_dir.as_posix(),
+                    agent_logs=(
+                        str(execution_logs)
+                        if execution_logs is not None
+                        else environment_paths.agent_dir.as_posix()
+                    ),
                     verifier_logs=environment_paths.verifier_dir.as_posix(),
                     artifacts=environment_paths.artifacts_dir.as_posix(),
                 ),
@@ -143,17 +153,44 @@ class ExternalHarnessAgent(BaseAgent):
         )
         virtual_instruction = environment_paths.agent_dir / "instruction.txt"
         virtual_runtime_config = environment_paths.agent_dir / "peval.json"
-        result = await environment.exec(
-            f"{self.command} < {quote_shell_arg(virtual_instruction, environment.os)}",
-            cwd=workdir,
-            env={PEVAL_CONFIG_ENV: virtual_runtime_config.as_posix()},
-        )
-        (self.logs_dir / "external-harness.stdout.log").write_text(
-            result.stdout or "", encoding="utf-8"
-        )
-        (self.logs_dir / "external-harness.stderr.log").write_text(
-            result.stderr or "", encoding="utf-8"
-        )
+        if execution_logs is not None:
+            await environment.upload_dir(self.logs_dir, str(execution_logs))
+            (execution_logs / "peval.json").unlink(missing_ok=True)
+            virtual_instruction = execution_logs / "instruction.txt"
+        invocation_error: BaseException | None = None
+        result = None
+        try:
+            result = await environment.exec(
+                f"{self.command} < {quote_shell_arg(virtual_instruction, environment.os)}",
+                cwd=workdir,
+                env={PEVAL_CONFIG_ENV: virtual_runtime_config.as_posix()},
+            )
+        except BaseException as exc:
+            invocation_error = exc
+            raise
+        finally:
+            try:
+                if execution_logs is not None:
+                    # Host command cancellation first stops the process tree, then
+                    # collects state (including SQLite WAL files) for exact resume.
+                    try:
+                        await environment.download_dir(
+                            str(execution_logs), self.logs_dir
+                        )
+                    except BaseException as exc:
+                        if invocation_error is None:
+                            raise
+                        invocation_error.add_note(
+                            f"harness state collection failed: {exc}"
+                        )
+            finally:
+                if result is not None:
+                    (self.logs_dir / "external-harness.stdout.log").write_text(
+                        result.stdout or "", encoding="utf-8"
+                    )
+                    (self.logs_dir / "external-harness.stderr.log").write_text(
+                        result.stderr or "", encoding="utf-8"
+                    )
         if result.return_code != 0:
             diagnostic = (result.stderr or result.stdout or "no output").strip()
             raise RuntimeError(

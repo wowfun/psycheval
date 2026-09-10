@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from psycheval._harbor_datasets import harbor_task_roots_for_mount
 from psycheval.config import (
     HarborDataset,
@@ -17,6 +19,7 @@ from psycheval.config import (
 from psycheval.harbor.datasets import (
     HarborDatasetError,
     _walk_regular_tree,
+    detect_harbor_dataset_format,
     resolve_harbor_dataset,
     validate_harbor_dataset,
 )
@@ -25,6 +28,39 @@ from psycheval.serve.harbor_workspace import (
     HarborWorkspaceError,
     config_revision,
 )
+
+
+@pytest.mark.parametrize("source_case", ['"example"', "false"])
+def test_generic_plugin_registration_is_static_without_office_layout(
+    tmp_path, source_case
+):
+    task = tmp_path / "collection/example"
+    (task / "environment").mkdir(parents=True)
+    (task / "tests").mkdir()
+    (task / "tests/test.sh").write_text("exit 0")
+    (task / "instruction.md").write_text("Complete the project.")
+    (task / "task.toml").write_text(f"[metadata]\nsource_case = {source_case}\n")
+    (tmp_path / "dataset.toml").write_text(
+        '[dataset]\nid = "arbitrary"\nversion = "7"\n'
+        '[verifier]\nschema = "workbuddy.verifier.v1"\nengine = "composite"\n'
+        'plugin = "example_plugin:build_registry"\n'
+    )
+    (tmp_path / "example_plugin.py").write_text(
+        "raise AssertionError('must not import')"
+    )
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert detect_harbor_dataset_format(task.parent) == "workbuddy.v1"
+    if source_case == "false":
+        with pytest.raises(HarborDatasetError, match="source_case"):
+            validate_harbor_dataset(
+                dataset_id="arbitrary", path=task.parent, format="workbuddy.v1"
+            )
+    else:
+        resolved = validate_harbor_dataset(
+            dataset_id="arbitrary", path=task.parent, format="workbuddy.v1"
+        )
+        assert resolved.task_names == ("example",)
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
 
 
 def _write_workbuddy_bundle(root: Path, *, declared_count: int = 1) -> Path:
@@ -59,7 +95,7 @@ judge_config = "tests/judge.yaml"
     for name in ("plugin.py", "manifest.py", "scoring.py"):
         (root / "shared" / "verifier" / name).write_text("# fixture\n")
     (task / "task.toml").write_text(
-        'schema_version = "1.3"\n[task]\nname = "workbuddy/office-one"\n',
+        'schema_version = "1.3"\n[task]\nname = "workbuddy/office-one"\n[metadata]\nsource_case = "office-one"\n',
         encoding="utf-8",
     )
     (task / "instruction.md").write_text("Create the requested artifact.\n")
@@ -150,6 +186,7 @@ class WorkBuddyDatasetTests(unittest.TestCase):
             (bundle / "dataset.toml").write_text(
                 "[dataset]\n"
                 'schema = "workbuddy.dataset.v1"\n'
+                'id = "empty"\nversion = "1"\n'
                 "task_count = 0\n\n"
                 "[verifier]\n"
                 'schema = "workbuddy.verifier.v1"\n'
@@ -466,6 +503,25 @@ class WorkBuddyDatasetTests(unittest.TestCase):
                 _walk_regular_tree(root)
             finally:
                 sys.setrecursionlimit(previous_limit)
+
+
+def test_conventional_archive_lfs_pointer_is_rejected_without_layout_declaration(
+    tmp_path,
+):
+    bundle = _write_workbuddy_bundle(tmp_path / "bundle")
+    manifest = bundle / "dataset.toml"
+    manifest.write_text(
+        "\n".join(
+            line
+            for line in manifest.read_text().splitlines()
+            if not line.startswith("workspace_archive")
+        )
+    )
+    (bundle / "tasks/office-one/environment/workspace.tar.gz").write_text(
+        "version https://git-lfs.github.com/spec/v1\noid sha256:fixture\nsize 1\n"
+    )
+    with pytest.raises(HarborDatasetError, match="Git LFS pointer"):
+        validate_harbor_dataset(dataset_id="any", path=bundle, format="workbuddy.v1")
 
 
 if __name__ == "__main__":

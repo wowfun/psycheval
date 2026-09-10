@@ -25,7 +25,6 @@ from pathlib import Path, PurePath, PurePosixPath
 from typing import Literal, Protocol
 from uuid import uuid4
 
-import yaml
 from harbor.environments.base import BaseEnvironment, ExecResult, OutputStream
 from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.models.task.config import TaskOS
@@ -40,11 +39,11 @@ from .runtime_config import (
     RuntimePaths,
     _resolve_host_path,
     load_effective_runtime_config,
+    resolve_workdir_root,
     write_effective_runtime_config,
 )
 
 _VIRTUAL_WORKDIR = "/app"
-_WORKBUDDY_VIRTUAL_WORKDIR = "/workspace"
 _VIRTUAL_TESTS = "/tests"
 _VIRTUAL_SOLUTION = "/solution"
 _VIRTUAL_LOGS = "/logs"
@@ -69,12 +68,7 @@ _WORKSPACE_RESERVED_ROOTS = (
     _VIRTUAL_SOLUTION,
 )
 _LEGACY_RUNTIME_ENV_PREFIX = "PSYCHEVAL_"
-_WORKBUDDY_COMPOSE_METADATA = {
-    "services": {
-        "main": {"extra_hosts": ["host.docker.internal:host-gateway"]},
-    },
-}
-_WORKBUDDY_COMPOSE_LIMIT = 64 * 1024
+_DEFAULT_ROOT = object()
 _WORKBUDDY_ARCHIVE_FILE_LIMIT = 64 * 1024 * 1024
 _WORKBUDDY_ARCHIVE_TOTAL_LIMIT = 256 * 1024 * 1024
 _WORKBUDDY_ARCHIVE_ENTRY_LIMIT = 100_000
@@ -128,7 +122,7 @@ def _read_regular_nofollow(path: Path, *, max_bytes: int) -> bytes:
 
 
 @contextmanager
-def _open_workbuddy_archive(archive: Path) -> Iterator[tarfile.TarFile]:
+def _open_workspace_archive(archive: Path) -> Iterator[tarfile.TarFile]:
     descriptor = -1
     try:
         before = archive.stat(follow_symlinks=False)
@@ -166,13 +160,13 @@ def _open_workbuddy_archive(archive: Path) -> Iterator[tarfile.TarFile]:
             os.close(descriptor)
 
 
-def _extract_workbuddy_workspace(
+def _extract_workspace_archive(
     archive: Path, destination: Path, *, cancel: threading.Event | None = None
 ) -> None:
     total = 0
     seen: dict[PurePosixPath, tuple[str, int, int, bytes]] = {}
     try:
-        with _open_workbuddy_archive(archive) as stream:
+        with _open_workspace_archive(archive) as stream:
             for index, member in enumerate(stream, start=1):
                 _check_filesystem_cancel(cancel)
                 if index > _WORKBUDDY_ARCHIVE_ENTRY_LIMIT:
@@ -180,6 +174,8 @@ def _extract_workbuddy_workspace(
                         "WorkBuddy workspace archive exceeds 100000 entries"
                     )
                 relative = PurePosixPath(member.name)
+                if member.isdir() and member.name in {".", "./"}:
+                    continue
                 if (
                     relative.is_absolute()
                     or "\\" in member.name
@@ -682,8 +678,7 @@ class HostEnvironment(BaseEnvironment):
         *args,
         host_access: HostAccessPolicy | Mapping[str, object] | None = None,
         workspace_baseline: Literal["git", "none"] = "git",
-        bootstrap_workbuddy_workspace: bool = False,
-        workdir_root: str | Path | None = DEFAULT_WORKDIR_ROOT,
+        workdir_root: str | Path | object = _DEFAULT_ROOT,
         workspace_source: str | Path | None = None,
         **kwargs,
     ):
@@ -692,8 +687,14 @@ class HostEnvironment(BaseEnvironment):
                 "HostEnvironment.allow_host_execution was replaced by "
                 "host_access={filesystem, process}"
             )
-        self._workdir_root = _resolve_host_path(
-            workdir_root, base=Path.cwd(), label="HostEnvironment workdir_root"
+        if "bootstrap_workbuddy_workspace" in kwargs:
+            raise TypeError(
+                "use WorkBuddyHostEnvironment for WorkBuddy workspace preparation"
+            )
+        self._workdir_root = resolve_workdir_root(
+            Path(DEFAULT_WORKDIR_ROOT).expanduser()
+            if workdir_root is _DEFAULT_ROOT
+            else workdir_root
         )
         self._workspace_source = _resolve_host_path(
             workspace_source, base=Path.cwd(), label="HostEnvironment workspace_source"
@@ -708,12 +709,7 @@ class HostEnvironment(BaseEnvironment):
             raise ValueError(
                 "HostEnvironment workspace_baseline must be 'git' or 'none'"
             )
-        if type(bootstrap_workbuddy_workspace) is not bool:
-            raise ValueError(
-                "HostEnvironment bootstrap_workbuddy_workspace must be boolean"
-            )
         self._workspace_baseline = workspace_baseline
-        self._bootstrap_workbuddy_workspace = bootstrap_workbuddy_workspace
         self._runtime_root: Path | None = None
         self._workspace: _Workspace | None = None
         self._started = False
@@ -742,9 +738,6 @@ class HostEnvironment(BaseEnvironment):
                 f"received {host_system!r}"
             )
         super().__init__(*args, **kwargs)
-        if self._bootstrap_workbuddy_workspace:
-            # Harbor 0.21 consults the Task OS for Skill chmod after upload.
-            self.task_env_config.os = self.os
 
     @staticmethod
     def type() -> str:
@@ -818,12 +811,6 @@ class HostEnvironment(BaseEnvironment):
 
     def _validate_definition(self) -> None:
         self._require_filesystem_access()
-        if self._workspace_source is not None and self._bootstrap_workbuddy_workspace:
-            raise ValueError("WorkBuddy host bootstrap cannot use workspace_source")
-        if self._bootstrap_workbuddy_workspace and self._workspace_baseline != "git":
-            raise ValueError(
-                "WorkBuddy host bootstrap requires workspace_baseline='git'"
-            )
         if self._workspace_baseline == "git" and not self._host_access.process:
             raise ValueError(
                 "workspace_baseline='git' requires host_access.process=true"
@@ -845,46 +832,9 @@ class HostEnvironment(BaseEnvironment):
             raise FileNotFoundError(
                 f"Task environment directory not found: {self.environment_dir}"
             )
-        compose_paths = tuple(
-            path
-            for path in (
-                self.environment_dir / "docker-compose.yaml",
-                self.environment_dir / "docker-compose.yml",
-            )
-            if os.path.lexists(path)
-        )
-        if compose_paths:
-            if not self._bootstrap_workbuddy_workspace:
-                raise ValueError(
-                    "HostEnvironment does not support Docker Compose Tasks"
-                )
-            if len(compose_paths) != 1:
-                raise ValueError("WorkBuddy Compose metadata is ambiguous")
-            try:
-                compose_bytes = _read_regular_nofollow(
-                    compose_paths[0], max_bytes=_WORKBUDDY_COMPOSE_LIMIT
-                )
-                compose = yaml.safe_load(compose_bytes.decode("utf-8"))
-            except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
-                raise ValueError("WorkBuddy Compose metadata is not readable") from exc
-            if compose != _WORKBUDDY_COMPOSE_METADATA:
-                raise ValueError(
-                    "HostEnvironment accepts only the inert WorkBuddy Compose metadata"
-                )
-        if self._bootstrap_workbuddy_workspace:
-            archive = self.environment_dir / "workspace.tar.gz"
-            try:
-                archive_info = archive.stat(follow_symlinks=False)
-            except OSError as exc:
-                raise ValueError("WorkBuddy workspace archive is missing") from exc
-            if not stat.S_ISREG(archive_info.st_mode):
-                raise ValueError("WorkBuddy workspace archive must be a regular file")
+        self._validate_build_context()
         self._task_workdir = _canonical_virtual_path(
-            (
-                _WORKBUDDY_VIRTUAL_WORKDIR
-                if self._bootstrap_workbuddy_workspace
-                else self.task_env_config.workdir or _VIRTUAL_WORKDIR
-            ),
+            self.task_env_config.workdir or _VIRTUAL_WORKDIR,
             self.os,
             label="HostEnvironment [environment].workdir",
         )
@@ -907,6 +857,13 @@ class HostEnvironment(BaseEnvironment):
                 "HostEnvironment cannot enforce Task resources: "
                 + ", ".join(sorted(requested))
             )
+
+    def _validate_build_context(self) -> None:
+        if any(
+            os.path.lexists(self.environment_dir / name)
+            for name in ("docker-compose.yaml", "docker-compose.yml")
+        ):
+            raise ValueError("HostEnvironment does not support Docker Compose Tasks")
 
     def _validate_mounts(self) -> None:
         expected_mounts = {
@@ -967,10 +924,6 @@ class HostEnvironment(BaseEnvironment):
             workspace_mounts.append((workspace_target, workspace_source))
         if len(workspace_mounts) > 1:
             raise ValueError("HostEnvironment supports only one workspace mount")
-        if self._bootstrap_workbuddy_workspace and workspace_mounts:
-            raise ValueError(
-                "WorkBuddy host bootstrap does not accept an external workspace mount"
-            )
         if self._workspace_source is not None and workspace_mounts:
             raise ValueError(
                 "workspace_source cannot be combined with a workspace mount"
@@ -1013,7 +966,7 @@ class HostEnvironment(BaseEnvironment):
             ):
                 await self._delete_owned_runtime()
             self._initialization_cancel.clear()
-            self._runtime_root = Path(tempfile.mkdtemp(prefix="psycheval-harbor-"))
+            self._runtime_root = Path(tempfile.mkdtemp(prefix="session-"))
             worker = asyncio.create_task(asyncio.to_thread(self._initialize_context))
             try:
                 await _await_owned_task(
@@ -1064,10 +1017,6 @@ class HostEnvironment(BaseEnvironment):
         if project:
             _copy_project_tree(self._workspace_source, context_target, cancel=cancel)
             _copy_project_tree(environment_source, context_target, cancel=cancel)
-        elif self._bootstrap_workbuddy_workspace:
-            _extract_workbuddy_workspace(
-                environment_source / "workspace.tar.gz", context_target, cancel=cancel
-            )
         elif context_target != environment_source:
             if context_target.is_relative_to(environment_source):
                 raise ValueError(
@@ -1100,7 +1049,7 @@ class HostEnvironment(BaseEnvironment):
     def _prepare_automatic_workspace(self) -> None:
         if self._workspace is not None or self._is_separate_verifier():
             return
-        root = self._workdir_root or self._runtime_root
+        root = self._workdir_root
         assert root is not None
         workspace = root / f"task_{trial_short_uuid(self.trial_paths.trial_dir.name)}"
         if self._workspace_source is not None:
@@ -1427,9 +1376,12 @@ class HostEnvironment(BaseEnvironment):
         requested_config: str | None,
     ) -> EffectiveRuntimeConfig:
         harness = None
+        agent_logs = None
         if requested_config:
             requested_path = self._translate_path(requested_config)
-            harness = load_effective_runtime_config(requested_path).harness
+            requested = load_effective_runtime_config(requested_path)
+            harness = requested.harness
+            agent_logs = self._translate_path(requested.paths.agent_logs)
         paths = self._runtime_dirs()
         workspace = self._workspace.path if self._workspace is not None else None
         root = (
@@ -1441,7 +1393,7 @@ class HostEnvironment(BaseEnvironment):
             paths=RuntimePaths(
                 workdir=str(workdir),
                 tests=str(paths[_VIRTUAL_TESTS]),
-                agent_logs=str(paths[_VIRTUAL_AGENT_LOGS]),
+                agent_logs=str(agent_logs or paths[_VIRTUAL_AGENT_LOGS]),
                 verifier_logs=str(paths[_VIRTUAL_VERIFIER_LOGS]),
                 artifacts=str(paths[_VIRTUAL_ARTIFACTS]),
             ),
@@ -1457,22 +1409,41 @@ class HostEnvironment(BaseEnvironment):
         directory = self._runtime_root / "configs" / uuid4().hex
         return write_effective_runtime_config(directory / "peval.json", config)
 
+    def runtime_directory(self, name: str) -> Path:
+        """Return owned neutral storage outside the Task workspace and Job paths."""
+        self._require_filesystem_ready()
+        if not name or re.fullmatch(r"[A-Za-z0-9_-]+", name) is None:
+            raise ValueError("runtime directory name must be one plain component")
+        assert self._runtime_root is not None
+        path = self._runtime_root / "state" / name
+        if any(
+            _is_native_link(part) for part in (self._runtime_root, path.parent, path)
+        ):
+            raise ValueError("runtime directory traverses a link or junction")
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def runtime_config_env(self) -> dict[str, str]:
+        """Explicitly supply path configuration to a trusted control process."""
+        self._require_filesystem_ready()
+        config = self._effective_runtime_config(
+            workdir=self._translate_path(self._task_workdir), requested_config=None
+        )
+        return {PEVAL_CONFIG_ENV: str(self._write_runtime_config(config))}
+
     async def upload_file(self, source_path: Path | str, target_path: str):
         self._require_filesystem_ready()
         source = Path(source_path)
         target = self._translate_path(target_path)
-        await self._run_filesystem(self._upload_native_file, source, target)
-
-    @staticmethod
-    def _upload_native_file(source: Path, target: Path) -> None:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        await self._run_filesystem(_copy_native_file, source, target, cancellable=True)
 
     async def upload_dir(self, source_dir: Path | str, target_dir: str):
         self._require_filesystem_ready()
         source = Path(source_dir)
         target = self._translate_path(target_dir)
-        await self._run_filesystem(shutil.copytree, source, target, dirs_exist_ok=True)
+        await self._run_filesystem(
+            self._download_native_dir, source, target, [], cancellable=True
+        )
 
     async def download_file(self, source_path: str, target_path: Path | str):
         self._require_filesystem_ready()
@@ -1494,6 +1465,7 @@ class HostEnvironment(BaseEnvironment):
     ) -> Iterator[tuple[Path, os.stat_result | None]]:
         """Visit files incrementally and directories after their children."""
         pending = [(source, os.scandir(source))]
+        skipped_links = 0
         try:
             while pending:
                 _check_filesystem_cancel(cancel)
@@ -1506,9 +1478,12 @@ class HostEnvironment(BaseEnvironment):
                     continue
                 info = entry.stat(follow_symlinks=False)
                 path = Path(entry.path)
-                if _is_link_info(info) or self._matches_download_exclusion(
+                if self._matches_download_exclusion(
                     path.relative_to(source).as_posix(), exclude
                 ):
+                    continue
+                if _is_link_info(info):
+                    skipped_links += 1
                     continue
                 if stat.S_ISDIR(info.st_mode):
                     pending.append((path, os.scandir(path)))
@@ -1517,6 +1492,12 @@ class HostEnvironment(BaseEnvironment):
         finally:
             for _, entries in pending:
                 entries.close()
+            if skipped_links:
+                self.logger.warning(
+                    "Directory transfer omitted %d linked entries in %s",
+                    skipped_links,
+                    source,
+                )
 
     async def download_dir_with_exclusions(
         self,
@@ -1696,15 +1677,16 @@ class HostEnvironment(BaseEnvironment):
             for key, value in merged_env.items()
             if not key.startswith(_LEGACY_RUNTIME_ENV_PREFIX)
         }
-        runtime_config = self._effective_runtime_config(
-            workdir=translated_cwd,
-            requested_config=requested_config,
-        )
-        runtime_config_path = await _await_owned_task(
-            asyncio.create_task(
-                asyncio.to_thread(self._write_runtime_config, runtime_config)
+        runtime_config_path = None
+        if requested_config:
+            runtime_config = self._effective_runtime_config(
+                workdir=translated_cwd, requested_config=requested_config
             )
-        )
+            runtime_config_path = await _await_owned_task(
+                asyncio.create_task(
+                    asyncio.to_thread(self._write_runtime_config, runtime_config)
+                )
+            )
         process_env = {
             key: value
             for key, value in os.environ.items()
@@ -1736,7 +1718,8 @@ class HostEnvironment(BaseEnvironment):
             if not inherited_path
             else python_dir + os.pathsep + inherited_path
         )
-        process_env[PEVAL_CONFIG_ENV] = str(runtime_config_path)
+        if runtime_config_path is not None:
+            process_env[PEVAL_CONFIG_ENV] = str(runtime_config_path)
         argv = (
             self._process_adapter.shell_argv(self._translate_command(command))
             if isinstance(command, str)

@@ -16,6 +16,7 @@ import subprocess
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 PACKAGE = "downstream._vendor.harbor_copy"
@@ -71,16 +72,15 @@ def native_office(root: Path) -> None:
         task = root / "bundle/tasks/office-00"
         paths = TrialPaths(root / "native trial 中文")
         paths.mkdir()
-        environment = module("environment").HostEnvironment(
+        environment = module("workbuddy_environment").WorkBuddyHostEnvironment(
             environment_dir=task / "environment",
             environment_name="copied-office",
-            workdir_root=None,
+            workdir_root=root / "workspaces",
             session_id="copied-office",
             trial_paths=paths,
             task_env_config=EnvironmentConfig(workdir="/workspace"),
             logger=logging.getLogger("copied-office"),
             host_access={"filesystem": True, "process": True},
-            bootstrap_workbuddy_workspace=True,
             mounts=[
                 {
                     "type": "bind",
@@ -101,7 +101,7 @@ def native_office(root: Path) -> None:
                 raise AssertionError("native verifier invoked a shell")
 
             environment.exec = forbidden_shell
-            verifier = module("workbuddy_verifier").WindowsOfficeVerifier(
+            verifier = module("workbuddy_verifier").NativePythonVerifier(
                 task=Task(task),
                 trial_paths=paths,
                 environment=environment,
@@ -218,103 +218,54 @@ def psychevo(root: Path) -> None:
 
 
 def workbuddy(root: Path) -> None:
-    import yaml
+    from harbor.models.job.config import JobConfig
 
     work = module("workbuddy")
-    datasets = module("datasets")
     bundle = root / "bundle"
-    resolved = datasets.validate_harbor_dataset(
-        dataset_id="office", path=bundle, format="workbuddy.v1"
+    resolved = module("datasets").validate_harbor_dataset(
+        dataset_id="fixture", path=bundle, format="workbuddy.v1"
     )
-    assert len(resolved.task_names) == 50 and resolved.read_only
-    for name in tuple(os.environ):
-        if name.startswith("WORKBUDDY_VERIFIER_LLM_"):
-            del os.environ[name]
     output = root / "output"
     output.mkdir()
     config = output / "peval.toml"
     config.write_bytes(b"unreadable workspace config\xff")
     os.environ["PEVAL_CONFIG"] = str(config)
-    base = root / "base.yaml"
-    base.write_text(
-        yaml.safe_dump(
-            {
-                "agents": [{"name": "opencode", "model_name": "fixture/model"}],
-                "environment": {
-                    "import_path": f"{PACKAGE}.environment:HostEnvironment",
-                    "kwargs": {"host_access": {"filesystem": True, "process": True}},
-                },
-            }
-        ),
-        encoding="utf-8",
+    base = JobConfig(
+        datasets=[{"path": resolved.task_root}],
+        agents=[{"name": "oracle"}],
+        environment={
+            "import_path": f"{PACKAGE}.environment:HostEnvironment",
+            "kwargs": {"host_access": {"filesystem": True, "process": True}},
+        },
     )
+    before = base.model_dump()
     captured = io.StringIO()
-    with (
-        patch.object(
-            work,
-            "validate_workbuddy_runtime",
-            return_value={"version": "fixture", "commit": "local"},
-        ),
-        patch.object(work, "validate_workbuddy_host_dependencies"),
-        patch.object(module("workbuddy_verifier"), "validate_office_profile"),
-        patch.object(
-            work,
-            "compute_official_metrics",
-            return_value={"reward": 1, "pass_rate": 1, "n_tasks": 50, "n_trials": 50},
-        ) as compute,
-        redirect_stdout(captured),
-    ):
-        plan = work.prepare_workbuddy_plan(
-            output_root=output,
-            dataset_id="office",
-            dataset_path=bundle,
-            base_config=base,
-        )
-        assert plan["host_environment"] is True
-        assert len(plan["jobs"]) == 2
-        for job in plan["jobs"]:
-            generated = yaml.safe_load(Path(job["config"]).read_text())
-            assert (
-                generated["environment"]["import_path"]
-                == f"{PACKAGE}.environment:HostEnvironment"
-            )
-            assert (
-                generated["environment"]["kwargs"]["bootstrap_workbuddy_workspace"]
-                is True
-            )
-        try:
-            work.summarize_workbuddy_plan(output_root=output, plan_id=plan["plan_id"])
-        except work.WorkBuddyPlanError as exc:
-            assert "not terminal" in str(exc)
-        else:
-            raise AssertionError("nonterminal jobs accepted")
-        partial = work.summarize_workbuddy_plan(
-            output_root=output, plan_id=plan["plan_id"], provisional=True
-        )
-        assert partial["provisional"] and len(partial["pending_jobs"]) == 2
-        for job in plan["jobs"]:
-            job_dir = Path(plan["jobs_root"]) / job["name"]
-            job_dir.mkdir()
-            (job_dir / "result.json").write_text(
-                json.dumps({"finished_at": "2026-09-05T00:00:00Z"}), encoding="utf-8"
-            )
-        summary = work.summarize_workbuddy_plan(
-            output_root=output, plan_id=plan["plan_id"]
-        )
-        assert not summary["provisional"] and summary["metrics"]["reward"] == 1
-        compute.assert_called_with(Path(plan["jobs_root"]), list(resolved.task_names))
+    with redirect_stdout(captured):
+        prepared = work.prepare_workbuddy_job(base)
         assert (
-            work.discover_workbuddy_summaries(output, {"office"})[0]["plan_id"]
-            == plan["plan_id"]
+            prepared.environment.import_path
+            == f"{PACKAGE}.workbuddy_environment:WorkBuddyHostEnvironment"
         )
-        assert work.discover_workbuddy_summaries(output, {"unrelated"}) == []
+        assert (
+            prepared.verifier.import_path
+            == f"{PACKAGE}.workbuddy_verifier:WorkBuddyVerifier"
+        )
+        assert prepared.n_attempts == 1 and prepared.timeout_multiplier == 1.0
+        assert prepared.datasets == base.datasets and base.model_dump() == before
+        compute = SimpleNamespace(
+            compute_job_metrics=lambda path, expected_tasks: {
+                "reward": 0,
+                "n_tasks": len(expected_tasks),
+            }
+        )
+        with patch.dict(sys.modules, {"workbuddy_bench.scorer.metrics": compute}):
+            metrics = work.compute_official_metrics(
+                output, expected_tasks=list(resolved.task_names)
+            )
+        assert metrics["n_tasks"] == len(resolved.task_names)
     assert captured.getvalue() == ""
     assert config.read_bytes() == b"unreadable workspace config\xff"
-    assert {path.name for path in output.iterdir()} == {
-        "peval.toml",
-        "harbor-plans",
-        "harbor-jobs",
-    }
+    assert {p.name for p in output.iterdir()} == {"peval.toml"}
 
 
 def synthetic_harness(root: Path) -> None:
@@ -348,7 +299,7 @@ def host(root: Path) -> None:
         environment = module("environment").HostEnvironment(
             environment_dir=environment_dir,
             environment_name="vendored",
-            workdir_root=None,
+            workdir_root=root / "workspaces",
             session_id="vendored",
             trial_paths=paths,
             task_env_config=EnvironmentConfig(workdir="/app"),
@@ -406,7 +357,7 @@ def host_filesystem(root: Path) -> None:
         environment = module("environment").HostEnvironment(
             environment_dir=environment_dir,
             environment_name="vendored-filesystem",
-            workdir_root=None,
+            workdir_root=root / "workspaces",
             session_id="vendored-filesystem",
             trial_paths=paths,
             task_env_config=EnvironmentConfig(workdir="/app"),

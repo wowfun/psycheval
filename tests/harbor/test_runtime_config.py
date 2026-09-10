@@ -102,13 +102,11 @@ def test_host_settings_expand_configured_home(
     assert settings.workdir_root == tmp_path / "profile" / "custom-workspaces"
 
 
-def test_host_settings_empty_root_disables_automatic_workspace(tmp_path: Path) -> None:
-    config = tmp_path / "peval.toml"
-    config.write_text('[harbor.host]\nworkdir_root = ""\n', encoding="utf-8")
-
-    settings = load_host_settings(config)
-
-    assert settings.workdir_root is None
+def test_host_settings_empty_root_is_invalid(tmp_path: Path) -> None:
+    path = tmp_path / "peval.toml"
+    path.write_text('[harbor.host]\nworkdir_root = ""\n')
+    with pytest.raises(RuntimeConfigError, match="must be nonempty"):
+        load_host_settings(path)
 
 
 @pytest.mark.parametrize(

@@ -89,26 +89,6 @@ def run_cli_args(args: CliArgs) -> int:
 
             run_serve_command(args)
             return 0
-        if args.command == "harbor-prepare":
-            from psycheval.cli.harbor import prepare_workbuddy_plan
-
-            prepare_workbuddy_plan(
-                workspace_root=args.root,
-                dataset_id=str(args.dataset_id or ""),
-                base_config=str(args.config_path or ""),
-                task_selection=args.task_selection,
-                limit=args.task_limit,
-            )
-            return 0
-        if args.command == "harbor-summarize":
-            from psycheval.cli.harbor import summarize_workbuddy_plan
-
-            summarize_workbuddy_plan(
-                workspace_root=args.root,
-                plan_id=str(args.plan_id or ""),
-                provisional=args.provisional,
-            )
-            return 0
         workspace_root, _inferred_workspace_root = workspace_root_for_args(args)
         config = apply_overrides(
             load_config(workspace_root=workspace_root),

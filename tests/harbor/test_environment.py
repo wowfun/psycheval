@@ -27,6 +27,7 @@ from psycheval.harbor.environment import (
     HostFilesystemAccessError,
     HostProcessAccessError,
 )
+from psycheval.harbor.workbuddy_environment import WorkBuddyHostEnvironment
 
 _LINUX_ONLY = pytest.mark.skipif(
     platform.system() != "Linux", reason="test exercises the Linux process adapter"
@@ -222,7 +223,7 @@ def test_host_access_errors_identify_invalid_field_type() -> None:
 
 
 def test_bootstrap_workbuddy_flag_requires_bool(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="bootstrap_workbuddy_workspace.*boolean"):
+    with pytest.raises(TypeError, match="WorkBuddyHostEnvironment"):
         make_environment(
             tmp_path,
             environment_kwargs={"bootstrap_workbuddy_workspace": "true"},
@@ -373,26 +374,6 @@ def test_workspace_baseline_none_can_be_selected_without_process_access(
     asyncio.run(scenario())
 
 
-def test_workbuddy_bootstrap_requires_git_baseline(tmp_path: Path) -> None:
-    environment_dir = tmp_path / "environment"
-    environment_dir.mkdir()
-    trial_paths = TrialPaths(tmp_path / "trial")
-    trial_paths.mkdir()
-    with pytest.raises(ValueError, match="requires workspace_baseline='git'"):
-        HostEnvironment(
-            environment_dir=environment_dir,
-            environment_name="test",
-            session_id="test",
-            trial_paths=trial_paths,
-            task_env_config=EnvironmentConfig(),
-            logger=logging.getLogger("test"),
-            mounts=[],
-            host_access={"filesystem": True, "process": True},
-            workspace_baseline="none",
-            bootstrap_workbuddy_workspace=True,
-        )
-
-
 def test_process_output_preserves_split_utf8_characters(tmp_path: Path) -> None:
     async def scenario() -> None:
         environment = make_environment(tmp_path)
@@ -505,7 +486,14 @@ def test_rejects_force_build(tmp_path: Path) -> None:
 @pytest.mark.parametrize("field", ["workdir_root", "workspace_source"])
 @pytest.mark.parametrize("value", ["", "  ", "a\x00b", False, 42])
 def test_rejects_invalid_workspace_parameters(tmp_path: Path, field, value) -> None:
-    with pytest.raises(ValueError, match="non-empty, NUL-free path"):
+    with pytest.raises(
+        ValueError,
+        match=(
+            "absolute native path"
+            if field == "workdir_root"
+            else "non-empty, NUL-free path"
+        ),
+    ):
         make_environment(
             tmp_path,
             environment_kwargs={field: value},
@@ -519,7 +507,10 @@ def test_automatic_workspace_reuses_trial_short_uuid_and_obeys_delete(
     async def scenario() -> None:
         environment = make_environment(tmp_path, trial_name="task__YfQLWrD")
         await environment.start(force_build=False)
-        result = await environment.exec('printf "%s|%s" "$PWD" "$PEVAL_CONFIG"')
+        result = await environment.exec(
+            'printf "%s|%s" "$PWD" "$PEVAL_CONFIG"',
+            env=environment.runtime_config_env(),
+        )
         cwd, config_path_value = (result.stdout or "").split("|", 1)
         workspace = Path(cwd)
         config_path = Path(config_path_value)
@@ -662,7 +653,7 @@ def test_workbuddy_bootstrap_safely_expands_workspace_and_creates_git_baseline(
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(hook_dir))
     trial_paths = TrialPaths(tmp_path / "office__YfQLWrD")
     trial_paths.mkdir()
-    environment = HostEnvironment(
+    environment = WorkBuddyHostEnvironment(
         environment_dir=environment_dir,
         environment_name="test",
         session_id="test-env",
@@ -671,7 +662,6 @@ def test_workbuddy_bootstrap_safely_expands_workspace_and_creates_git_baseline(
         logger=logging.getLogger("test"),
         mounts=[],
         host_access={"filesystem": True, "process": True},
-        bootstrap_workbuddy_workspace=True,
     )
 
     async def scenario() -> None:
@@ -704,8 +694,8 @@ def test_workbuddy_bootstrap_rejects_non_metadata_compose(tmp_path: Path) -> Non
     )
     trial_paths = TrialPaths(tmp_path / "trial")
     trial_paths.mkdir()
-    with pytest.raises(ValueError, match="WorkBuddy Compose metadata"):
-        HostEnvironment(
+    with pytest.raises(ValueError, match="Docker Compose services"):
+        WorkBuddyHostEnvironment(
             environment_dir=environment_dir,
             environment_name="test",
             session_id="test-env",
@@ -714,7 +704,6 @@ def test_workbuddy_bootstrap_rejects_non_metadata_compose(tmp_path: Path) -> Non
             logger=logging.getLogger("test"),
             mounts=[],
             host_access={"filesystem": True, "process": True},
-            bootstrap_workbuddy_workspace=True,
         )
 
 
@@ -735,7 +724,7 @@ def test_workbuddy_bootstrap_accepts_semantically_identical_compose(
     trial_paths = TrialPaths(tmp_path / "trial")
     trial_paths.mkdir()
 
-    HostEnvironment(
+    WorkBuddyHostEnvironment(
         environment_dir=environment_dir,
         environment_name="test",
         session_id="test-env",
@@ -744,7 +733,6 @@ def test_workbuddy_bootstrap_accepts_semantically_identical_compose(
         logger=logging.getLogger("test"),
         mounts=[],
         host_access={"filesystem": True, "process": True},
-        bootstrap_workbuddy_workspace=True,
     )
 
 
@@ -759,8 +747,8 @@ def test_workbuddy_bootstrap_rejects_oversized_compose_metadata(
     trial_paths = TrialPaths(tmp_path / "trial")
     trial_paths.mkdir()
 
-    with pytest.raises(ValueError, match="Compose metadata is not readable"):
-        HostEnvironment(
+    with pytest.raises(ValueError, match="exceeds 65536"):
+        WorkBuddyHostEnvironment(
             environment_dir=environment_dir,
             environment_name="test",
             session_id="test-env",
@@ -769,7 +757,6 @@ def test_workbuddy_bootstrap_rejects_oversized_compose_metadata(
             logger=logging.getLogger("test"),
             mounts=[],
             host_access={"filesystem": True, "process": True},
-            bootstrap_workbuddy_workspace=True,
         )
 
 
@@ -790,7 +777,7 @@ def test_workbuddy_bootstrap_does_not_follow_replaced_archive(
         stream.addfile(info, io.BytesIO())
     trial_paths = TrialPaths(tmp_path / "replaced__YfQLWrD")
     trial_paths.mkdir()
-    environment = HostEnvironment(
+    environment = WorkBuddyHostEnvironment(
         environment_dir=environment_dir,
         environment_name="test",
         session_id="test-env",
@@ -799,7 +786,6 @@ def test_workbuddy_bootstrap_does_not_follow_replaced_archive(
         logger=logging.getLogger("test"),
         mounts=[],
         host_access={"filesystem": True, "process": True},
-        bootstrap_workbuddy_workspace=True,
     )
     replacement = tmp_path / "replacement.tar.gz"
     with tarfile.open(replacement, "w:gz") as stream:
@@ -856,7 +842,7 @@ def test_workbuddy_bootstrap_rejects_unsafe_workspace_archive_paths(
     workspaces = tmp_path / "workspaces"
     trial_paths = TrialPaths(tmp_path / "unsafe__YfQLWrD")
     trial_paths.mkdir()
-    environment = HostEnvironment(
+    environment = WorkBuddyHostEnvironment(
         environment_dir=environment_dir,
         environment_name="test",
         session_id="test-env",
@@ -865,7 +851,6 @@ def test_workbuddy_bootstrap_rejects_unsafe_workspace_archive_paths(
         logger=logging.getLogger("test"),
         mounts=[],
         host_access={"filesystem": True, "process": True},
-        bootstrap_workbuddy_workspace=True,
         workdir_root=workspaces,
     )
 
@@ -893,7 +878,7 @@ def test_workbuddy_bootstrap_rejects_unsafe_workspace_archive_paths(
 def test_workspace_archive_rejects_drive_paths_before_native_path_join(
     tmp_path, monkeypatch, member_name
 ):
-    from psycheval.harbor.environment import _extract_workbuddy_workspace
+    from psycheval.harbor.environment import _extract_workspace_archive
 
     archive = tmp_path / "workspace.tar.gz"
     entry = tarfile.TarInfo(member_name)
@@ -911,13 +896,37 @@ def test_workspace_archive_rejects_drive_paths_before_native_path_join(
 
     monkeypatch.setattr(Path, "joinpath", guarded_join)
     with pytest.raises(ValueError, match="archive path is unsafe"):
-        _extract_workbuddy_workspace(archive, destination)
+        _extract_workspace_archive(archive, destination)
     assert list(destination.iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", [tarfile.DIRTYPE, tarfile.REGTYPE, tarfile.SYMTYPE])
+def test_workspace_archive_accepts_only_directory_root_entries(tmp_path, kind):
+    from psycheval.harbor.environment import _extract_workspace_archive
+
+    archive = tmp_path / "workspace.tar.gz"
+    with tarfile.open(archive, "w:gz") as stream:
+        root = tarfile.TarInfo("./")
+        root.type, root.mode = kind, 0
+        stream.addfile(root)
+        entry = tarfile.TarInfo("./input.txt")
+        entry.size = 5
+        stream.addfile(entry, io.BytesIO(b"input"))
+    destination = tmp_path / "owned"
+    destination.mkdir()
+    mode = destination.stat().st_mode
+    if kind == tarfile.DIRTYPE:
+        _extract_workspace_archive(archive, destination)
+        assert (destination / "input.txt").read_bytes() == b"input"
+        assert destination.stat().st_mode == mode
+    else:
+        with pytest.raises(ValueError, match="unsafe"):
+            _extract_workspace_archive(archive, destination)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows filename aliases")
 def test_workspace_archive_does_not_overwrite_a_native_filename_alias(tmp_path):
-    from psycheval.harbor.environment import _extract_workbuddy_workspace
+    from psycheval.harbor.environment import _extract_workspace_archive
 
     archive = tmp_path / "workspace.tar.gz"
     with tarfile.open(archive, "w:gz") as stream:
@@ -928,7 +937,7 @@ def test_workspace_archive_does_not_overwrite_a_native_filename_alias(tmp_path):
     destination = tmp_path / "owned"
     destination.mkdir()
     with pytest.raises(ValueError, match="conflicting duplicate paths"):
-        _extract_workbuddy_workspace(archive, destination)
+        _extract_workspace_archive(archive, destination)
     assert (destination / "file.txt").read_bytes() == b"original"
 
 
@@ -958,7 +967,7 @@ def test_workbuddy_bootstrap_handles_duplicate_workspace_archive_paths(
             stream.addfile(info, io.BytesIO(payload))
     trial_paths = TrialPaths(tmp_path / "duplicate__YfQLWrD")
     trial_paths.mkdir()
-    environment = HostEnvironment(
+    environment = WorkBuddyHostEnvironment(
         environment_dir=environment_dir,
         environment_name="test",
         session_id="test-env",
@@ -967,7 +976,6 @@ def test_workbuddy_bootstrap_handles_duplicate_workspace_archive_paths(
         logger=logging.getLogger("test"),
         mounts=[],
         host_access={"filesystem": True, "process": True},
-        bootstrap_workbuddy_workspace=True,
     )
 
     async def scenario() -> None:
@@ -986,28 +994,10 @@ def test_workbuddy_bootstrap_handles_duplicate_workspace_archive_paths(
     asyncio.run(scenario())
 
 
-@_LINUX_ONLY
-def test_explicit_none_root_uses_trial_temporary_workdir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = tmp_path / "peval.toml"
-    config.write_text('[harbor.host]\nworkdir_root = ""\n', encoding="utf-8")
-    original = config.read_bytes()
-    monkeypatch.setenv("PEVAL_CONFIG", str(config))
-
-    async def scenario() -> None:
-        environment = make_environment(
-            tmp_path / "case", environment_kwargs={"workdir_root": None}
-        )
-        await environment.start(force_build=False)
-        try:
-            result = await environment.exec("pwd")
-            assert (result.stdout or "").strip().startswith("/tmp/psycheval-harbor-")
-        finally:
-            await environment.stop(delete=True)
-
-    asyncio.run(scenario())
-    assert config.read_bytes() == original
+@pytest.mark.parametrize("root", [None, "", "relative", "C:relative", "\\root"])
+def test_host_rejects_invalid_roots_without_start(tmp_path, root):
+    with pytest.raises(ValueError, match="absolute native path"):
+        make_environment(tmp_path, environment_kwargs={"workdir_root": root})
 
 
 @_LINUX_ONLY
@@ -1065,7 +1055,11 @@ def test_exec_translates_paths_and_sets_effective_runtime_config(
             assert heredoc.stdout == "fixture\n"
             result = await environment.exec(
                 "printf '%s|' \"$PEVAL_CONFIG\"; cat /tests/source.txt",
-                env={"CALL_ENV": "present", "PSYCHEVAL_LEGACY": "hidden"},
+                env={
+                    **environment.runtime_config_env(),
+                    "CALL_ENV": "present",
+                    "PSYCHEVAL_LEGACY": "hidden",
+                },
             )
             assert result.return_code == 0
             config_path, payload = (result.stdout or "").split("|", 1)
@@ -1079,8 +1073,12 @@ def test_exec_translates_paths_and_sets_effective_runtime_config(
             assert "harness" not in runtime["harbor"]
             first_config = Path(config_path)
             second, third = await asyncio.gather(
-                environment.exec('printf "%s" "$PEVAL_CONFIG"'),
-                environment.exec('printf "%s" "$PEVAL_CONFIG"'),
+                environment.exec(
+                    'printf "%s" "$PEVAL_CONFIG"', env=environment.runtime_config_env()
+                ),
+                environment.exec(
+                    'printf "%s" "$PEVAL_CONFIG"', env=environment.runtime_config_env()
+                ),
             )
             generated = {
                 first_config,
@@ -1091,7 +1089,7 @@ def test_exec_translates_paths_and_sets_effective_runtime_config(
             assert all(path.is_file() for path in generated)
             env_result = await environment.exec("env")
             assert "PSYCHEVAL_" not in (env_result.stdout or "")
-            assert "PEVAL_CONFIG=" in (env_result.stdout or "")
+            assert "PEVAL_CONFIG=" not in (env_result.stdout or "")
             url_result = await environment.exec("printf '%s' 'https://example.com/app'")
             assert url_result.stdout == "https://example.com/app"
         finally:
@@ -1887,3 +1885,76 @@ class _HangingProcess(_CompletedProcess):
         while self.returncode is None:
             await asyncio.sleep(3600)
         return self.returncode
+
+
+@pytest.mark.parametrize("placement", ["state", "leaf", "upload"])
+def test_runtime_storage_and_uploads_do_not_follow_directory_links(
+    tmp_path, placement, caplog
+):
+    import subprocess
+
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        await host.start(False)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "private.txt").write_text("private")
+        if placement == "upload":
+            source = tmp_path / "upload"
+            source.mkdir()
+            (source / "regular.txt").write_text("regular")
+            link = source / "alias"
+        else:
+            state = host.runtime_directory("first").parent
+            if placement == "state":
+                (state / "first").rmdir()
+                state.rmdir()
+                link = state
+            else:
+                link = state / "second"
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(link), str(outside)],
+                    check=True,
+                    capture_output=True,
+                )
+            else:
+                link.symlink_to(outside, target_is_directory=True)
+            if placement == "upload":
+                await host.upload_dir(source, "/app/upload")
+                assert (host.work_dir / "upload/regular.txt").read_text() == "regular"
+                assert not (host.work_dir / "upload/alias").exists()
+                assert (
+                    sum(
+                        "Directory transfer omitted 1 linked entries" in record.message
+                        for record in caplog.records
+                    )
+                    == 1
+                )
+            else:
+                with pytest.raises(ValueError, match="link|junction"):
+                    host.runtime_directory("second")
+            assert sorted(p.name for p in outside.iterdir()) == ["private.txt"]
+        finally:
+            if os.path.lexists(link):
+                link.rmdir() if os.name == "nt" else link.unlink()
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_workspace_archive_strips_special_permission_bits(tmp_path):
+    from psycheval.harbor.environment import _extract_workspace_archive
+
+    archive = tmp_path / "workspace.tar.gz"
+    entry = tarfile.TarInfo("executable")
+    entry.mode = 0o7777
+    entry.size = 1
+    with tarfile.open(archive, "w:gz") as stream:
+        stream.addfile(entry, io.BytesIO(b"x"))
+    destination = tmp_path / "project"
+    destination.mkdir()
+    _extract_workspace_archive(archive, destination)
+    assert (destination / "executable").stat().st_mode & 0o7777 == 0o777

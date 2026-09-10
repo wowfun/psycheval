@@ -62,6 +62,84 @@ def test_external_agent_virtual_override_uses_prepared_host_workspace(tmp_path):
     asyncio.run(scenario())
 
 
+def test_native_harness_restores_state_in_neutral_invocation_directories(tmp_path):
+    from tests.harbor.test_environment import make_environment
+
+    async def scenario():
+        host = make_environment(tmp_path / "evaluation-host")
+        command = " ".join(
+            quote_shell_arg(str(arg), host.os)
+            for arg in (sys.executable, _SYNTHETIC_HARNESS, "--mode", "multi-step")
+        )
+        agent = ExternalHarnessAgent(
+            logs_dir=host.trial_paths.agent_dir, command=command
+        )
+        await host.start(False)
+        active = []
+        try:
+            for action, instruction in (("run", "seed"), ("resume", "continue")):
+                await getattr(agent, action)(instruction, host, AgentContext())
+                runtime = load_effective_runtime_config(agent.logs_dir / "peval.json")
+                directory = Path(runtime.paths.agent_logs)
+                assert not directory.is_relative_to(host.trial_paths.trial_dir)
+                assert not directory.is_relative_to(host.work_dir)
+                assert not (directory / "peval.json").exists()
+                active.append(directory)
+            assert active[0] != active[1]
+            state = json.loads((agent.logs_dir / "fixture-session.json").read_text())
+            assert state["sequence"] == 2
+        finally:
+            await host.stop(True)
+        assert all(not path.exists() for path in active)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_native_harness_collects_state_after_failure_or_cancellation(tmp_path, cancel):
+    import sqlite3
+
+    from tests.harbor.test_environment import make_environment
+
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        script = tmp_path / "harness.py"
+        ready = tmp_path / "ready"
+        script.write_text(
+            "import sqlite3,time\nfrom pathlib import Path\n"
+            "from psycheval.harbor.runtime_config import load_effective_runtime_config\n"
+            "root=Path(load_effective_runtime_config().paths.agent_logs)\n"
+            "db=sqlite3.connect(root/'state.db')\ndb.execute('pragma journal_mode=wal')\n"
+            "db.execute('create table state (value integer)')\n"
+            "db.execute('insert into state values (7)')\ndb.commit()\n"
+            f"Path({str(ready)!r}).write_text('ready')\n"
+            + ("time.sleep(90)\n" if cancel else "raise SystemExit(2)\n"),
+            encoding="utf-8",
+        )
+        command = " ".join(
+            quote_shell_arg(str(arg), host.os) for arg in (sys.executable, script)
+        )
+        agent = ExternalHarnessAgent(
+            logs_dir=host.trial_paths.agent_dir, command=command
+        )
+        await host.start(False)
+        try:
+            running = asyncio.create_task(agent.run("start", host, AgentContext()))
+            if cancel:
+                async with asyncio.timeout(15):
+                    while not ready.exists() and not running.done():
+                        await asyncio.sleep(0.02)
+                running.cancel()
+            with pytest.raises(asyncio.CancelledError if cancel else RuntimeError):
+                await running
+            with sqlite3.connect(agent.logs_dir / "state.db") as db:
+                assert db.execute("select value from state").fetchone() == (7,)
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
 @_LINUX_ONLY
 def test_external_agent_runs_harness_and_validates_atif(tmp_path: Path) -> None:
     async def scenario() -> None:
@@ -342,3 +420,83 @@ class _RecordingWindowsEnvironment:
                 encoding="utf-8",
             )
         return ExecResult(stdout="", stderr="", return_code=0)
+
+
+@pytest.mark.parametrize("failure_type", [asyncio.CancelledError, RuntimeError])
+def test_state_collection_failure_preserves_invocation_error(
+    tmp_path, monkeypatch, failure_type
+):
+    from tests.harbor.test_environment import make_environment
+
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        agent = ExternalHarnessAgent(
+            logs_dir=host.trial_paths.agent_dir, command="fixture"
+        )
+        await host.start(False)
+        failure = failure_type("original invocation failure")
+
+        async def execute(*args, **kwargs):
+            raise failure
+
+        async def download(*args, **kwargs):
+            raise OSError("state collection failed")
+
+        monkeypatch.setattr(host, "exec", execute)
+        monkeypatch.setattr(host, "download_dir", download)
+        try:
+            with pytest.raises(failure_type) as caught:
+                await agent.run("instruction", host, AgentContext())
+            assert caught.value is failure
+            assert "harness state collection failed" in failure.__notes__[0]
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("collection_fails", [True, False])
+def test_harness_output_is_retained_after_state_collection(
+    tmp_path, monkeypatch, collection_fails
+):
+    from tests.harbor.test_environment import make_environment
+
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        agent = ExternalHarnessAgent(
+            logs_dir=host.trial_paths.agent_dir, command="fixture"
+        )
+        await host.start(False)
+
+        async def execute(*args, **kwargs):
+            return ExecResult(
+                stdout="current stdout", stderr="current stderr", return_code=3
+            )
+
+        async def download(*args, **kwargs):
+            (agent.logs_dir / "external-harness.stdout.log").write_text(
+                "previous invocation"
+            )
+            if collection_fails:
+                raise OSError("state collection failed")
+
+        monkeypatch.setattr(host, "exec", execute)
+        monkeypatch.setattr(host, "download_dir", download)
+        try:
+            with pytest.raises(
+                OSError if collection_fails else RuntimeError,
+                match="state collection failed"
+                if collection_fails
+                else "exited with 3",
+            ):
+                await agent.run("instruction", host, AgentContext())
+            assert (
+                agent.logs_dir / "external-harness.stdout.log"
+            ).read_text() == "current stdout"
+            assert (
+                agent.logs_dir / "external-harness.stderr.log"
+            ).read_text() == "current stderr"
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
