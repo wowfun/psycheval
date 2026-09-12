@@ -99,6 +99,7 @@ class ServeGuestVisibilityTests(unittest.TestCase):
         rows = [
             {
                 "source_key": "posix",
+                "dataset_id": "tasks",
                 "label": "/srv/evals/run-a/trial.json",
                 "input_path": "/srv/evals/run-a/trial.json",
                 "artifact_dir": "runs/private/run-a",
@@ -162,6 +163,7 @@ class ServeGuestVisibilityTests(unittest.TestCase):
                 self.assertNotIn(field, row)
             self.assertEqual(row["label"], "trial.json")
         task = guest["items"][0]["task_metadata"]
+        self.assertEqual(guest["items"][0]["dataset_id"], "tasks")
         self.assertEqual(task, {"description": "Published task description"})
         self.assertEqual(
             guest["items"][0]["harbor_provenance"]["regrade"],

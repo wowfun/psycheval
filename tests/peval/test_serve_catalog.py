@@ -35,6 +35,35 @@ from tests.peval.cli_inputs_support import write_trial_cell_artifacts
 
 
 class WorkspaceCatalogTests(unittest.TestCase):
+    def test_reconcile_reloads_corrupt_cached_rows_and_preserves_local_fast_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_cell(root, 1)
+            store, catalog = self.catalog(root)
+            self.addCleanup(store.close)
+            catalog.reconcile()
+            original = catalog.query(CatalogQuery()).items[0].to_dict()
+            with patch.object(
+                catalog.sources, "load", wraps=catalog.sources.load
+            ) as load:
+                catalog.reconcile()
+                load.assert_not_called()
+            self.assertEqual(catalog.query(CatalogQuery()).items[0].to_dict(), original)
+            self.assertIsNone(original["dataset_id"])
+            for corrupt in ("{broken", "null", "[]", '"text"', "{}"):
+                with self.subTest(corrupt=corrupt):
+                    with catalog._connect() as connection:
+                        connection.execute("UPDATE cells SET row_json = ?", (corrupt,))
+                        connection.commit()
+                    with patch.object(
+                        catalog.sources, "load", wraps=catalog.sources.load
+                    ) as load:
+                        catalog.reconcile()
+                        self.assertEqual(load.call_count, 1)
+                    self.assertEqual(
+                        catalog.query(CatalogQuery()).items[0].to_dict(), original
+                    )
+
     def test_failed_connection_initialization_closes_the_database(self):
         with tempfile.TemporaryDirectory() as tmp:
             store, catalog = self.catalog(Path(tmp))

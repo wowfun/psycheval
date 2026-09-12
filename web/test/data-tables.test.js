@@ -26,6 +26,38 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());
 
+test("Dataset leads existing layouts and uses query-wide presence and server facets", () => {
+  const previousLayout = runtime.state.leaderboardColumnLayout;
+  const previousPage = runtime.state.catalogPage;
+  try {
+    const columns = tables.leaderboardColumns();
+    const dataset = columns[0];
+    assert.equal(dataset.key, "dataset_id");
+    assert.equal(dataset.edit, undefined);
+    assert.equal(dataset.sortable, true);
+    assert.equal(tables.tableText({}, dataset), "-");
+    runtime.state.leaderboardColumnLayout = {
+      order: columns.slice(1).map(column => column.key).reverse(),
+      visibility: { source_tags: "hide" },
+    };
+    runtime.state.catalogPage = {
+      column_presence: { dataset_id: 105 },
+      facets: { datasets: [{ value: "alpha", count: 105 }, { value: "beta", count: 2 }] },
+    };
+    assert.deepEqual(tables.displayLeaderboardColumns([{}]).slice(0, 2).map(column => column.key), ["__select", "dataset_id"]);
+    assert.deepEqual(tables.currentLeaderboardColumnLayout().order.slice(1), columns.slice(1).map(column => column.key).reverse());
+    assert.deepEqual(catalog.filterOptions(dataset, [{}]), ["alpha", "beta"]);
+    assert.equal(catalog.catalogSortKey(dataset.key), "dataset");
+    runtime.state.catalogPage.column_presence.dataset_id = 0;
+    assert.equal(tables.displayLeaderboardColumns([{}]).some(column => column.key === "dataset_id"), false);
+    runtime.state.leaderboardColumnLayout.visibility.dataset_id = "show";
+    assert.equal(tables.displayLeaderboardColumns([{}])[1].key, "dataset_id");
+  } finally {
+    runtime.state.leaderboardColumnLayout = previousLayout;
+    runtime.state.catalogPage = previousPage;
+  }
+});
+
 test("absolute timestamps render as UTC across Leaderboard, Harbor evidence, and timeline", () => {
   const previousTimezone = process.env.TZ;
   process.env.TZ = "Asia/Shanghai";
@@ -677,7 +709,7 @@ test("Leaderboard and saved-view adapters keep persistence behind the shared edi
   const leaderboardColumns = tables.leaderboardColumns();
   const leaderboardTags = leaderboardColumns.find(column => column.key === "source_tags");
   const leaderboardCategory = leaderboardColumns.find(column => column.key === "source_category");
-  assert.deepEqual(leaderboardColumns.slice(0, 2).map(column => column.key), ["source_category", "source_tags"]);
+  assert.deepEqual(leaderboardColumns.slice(0, 3).map(column => column.key), ["dataset_id", "source_category", "source_tags"]);
   assert.equal(leaderboardCategory.valueType, "text");
   assert.equal(leaderboardTags.valueType, "list");
   assert.equal(typeof leaderboardCategory.edit.commit, "function");

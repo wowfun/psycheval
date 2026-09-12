@@ -62,6 +62,7 @@ class SummaryXlsxTests(unittest.TestCase):
             "tasks": [],
             "jobs": [],
             "providers": [],
+            "datasets": [],
             "results": [],
             "views": ["B", "A", "B"],
             "browser_views": [],

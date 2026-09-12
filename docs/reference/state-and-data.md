@@ -107,6 +107,22 @@ The Workspace is the only browser presentation surface. It fetches derived data
 through local HTTP interfaces and does not serialize that state into offline HTML
 reports or Workspace snapshots.
 
+The Home Leaderboard identifies a Trial's Dataset by its registered ID, using
+the same unique mounted Task-root association as live detail. An unresolved or
+ambiguous association has no Dataset value. The catalog stores only the derived
+ID and rechecks associations during reconciliation, including registration and
+mount changes that leave Trial files unchanged. Dataset is the first data column
+by default and follows the existing column layout and query-wide empty-column
+visibility rules. Dataset filters match any selected ID and intersect with other
+conditions and applied Saved Views. Filtering, sorting, summaries, and exports
+use the complete query across pages; the detailed spreadsheet includes Dataset
+as its first column and preserves the table's requested sort order. Dataset
+filtering does not add a Saved View field or a
+summary grouping dimension.
+Dataset sorting places missing values last in both directions. Direct edits to
+workspace configuration become visible after configuration reload and source
+reconciliation; the catalog does not watch configuration files itself.
+
 ## Telemetry
 
 Inference aggregates retain sufficient statistics for weighted recomputation.

@@ -711,6 +711,7 @@ def test_native_harbor_job_lifecycle_and_mapping(jobs, variant_count):
     try:
         rows = runtime.catalog.query(CatalogQuery()).to_dict()["items"]
         assert len(rows) == variant_count
+        assert {row["dataset_id"] for row in rows} == {"native"}
         assert {row["variant_id"] for row in rows} == set("ab"[:variant_count])
         from psycheval.state.jobs import result_identity
 

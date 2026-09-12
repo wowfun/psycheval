@@ -29,7 +29,7 @@ from psycheval.state.workspace_sources import (
     WorkspaceSources,
 )
 
-CATALOG_SCHEMA_VERSION = 16
+CATALOG_SCHEMA_VERSION = 17
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 SUMMARY_CACHE_ENTRY_LIMIT = 128
@@ -63,6 +63,7 @@ class CatalogQuery:
     tasks: tuple[str, ...] = ()
     jobs: tuple[str, ...] = ()
     providers: tuple[str, ...] = ()
+    datasets: tuple[str, ...] = ()
     include_unreadable: bool = False
 
     def normalized(self) -> CatalogQuery:
@@ -89,6 +90,7 @@ class CatalogQuery:
             tasks=_normalized_values(self.tasks),
             jobs=_normalized_values(self.jobs),
             providers=_normalized_values(self.providers),
+            datasets=_normalized_values(self.datasets),
             include_unreadable=bool(self.include_unreadable),
         )
 
@@ -769,15 +771,18 @@ class WorkspaceCatalog:
 
     def _reconcile_locked(self) -> int:
         candidates = self.sources.discover()
+        config = self.sources.config
+        task_roots: dict[str, tuple[tuple[str, Path], ...]] = {}
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = {
                 str(row["source_ref"]): (
                     str(row["fingerprint"]),
                     str(row["source_key"]),
+                    str(row["row_json"]),
                 )
                 for row in connection.execute(
-                    "SELECT source_ref, fingerprint, source_key FROM cells"
+                    "SELECT source_ref, fingerprint, source_key, row_json FROM cells"
                 )
             }
             seen: set[str] = set()
@@ -785,10 +790,38 @@ class WorkspaceCatalog:
                 source_ref = candidate.source_ref
                 seen.add(source_ref)
                 prior = existing.get(source_ref)
+                row = None
                 if prior is not None and prior[0] == candidate.fingerprint:
+                    try:
+                        cached = json.loads(prior[2])
+                    except (ValueError, RecursionError):
+                        cached = None
+                    if (
+                        isinstance(cached, dict)
+                        and cached.get("source_key") == prior[1]
+                    ):
+                        row = cached
+                if row is not None:
+                    task_ref = _live_task_ref(row, config, task_roots=task_roots)
+                    dataset_id = task_ref["dataset_id"] if task_ref else None
+                    if row.get("dataset_id") != dataset_id:
+                        row["dataset_id"] = dataset_id
+                        # Dataset identity is display/query state, not source search evidence.
+                        connection.execute(
+                            "UPDATE cells SET dataset = ?, row_json = ? WHERE source_ref = ?",
+                            (
+                                dataset_id,
+                                json.dumps(
+                                    row, ensure_ascii=False, separators=(",", ":")
+                                ),
+                                source_ref,
+                            ),
+                        )
                     continue
                 document = self.sources.load(candidate)
                 row, readable, search_doc = self._row_for_document(document)
+                task_ref = _live_task_ref(row, config, task_roots=task_roots)
+                row["dataset_id"] = task_ref["dataset_id"] if task_ref else None
                 source_key = str(row["source_key"])
                 connection.execute(
                     "DELETE FROM cells WHERE source_ref = ? OR source_key = ?",
@@ -806,11 +839,11 @@ class WorkspaceCatalog:
                     INSERT INTO cells (
                         source_key, source_ref, fingerprint, artifact_revision,
                         readable, active, last_status, search_doc, category, tags_json,
-                        agent, model, result, task, job, provider, reward,
+                        agent, model, result, task, job, provider, dataset, reward,
                         session_id, last_turn_end, duration_ms, turns, tool_calls,
                         tool_errors, tokens, cost_usd, ttft_ms, tps, cache_hit_rate,
                         created_at_ms, updated_at_ms, row_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         source_key,
@@ -832,6 +865,7 @@ class WorkspaceCatalog:
                         str(row.get("task_name") or ""),
                         str(row.get("job_name") or ""),
                         str(row.get("model_provider") or ""),
+                        row["dataset_id"],
                         row.get("score"),
                         str(row.get("session_id") or row.get("trial_session_id") or ""),
                         optional_int(row.get("last_turn_finished_at_ms")),
@@ -855,7 +889,7 @@ class WorkspaceCatalog:
                 )
             removed = [
                 (source_ref, source_key)
-                for source_ref, (_, source_key) in existing.items()
+                for source_ref, (_, source_key, _) in existing.items()
                 if source_ref not in seen
             ]
             for source_ref, source_key in removed:
@@ -971,6 +1005,7 @@ class WorkspaceCatalog:
             ("task", query.tasks),
             ("job", query.jobs),
             ("provider", query.providers),
+            ("dataset", query.datasets),
         ):
             if not values:
                 continue
@@ -1050,6 +1085,7 @@ class WorkspaceCatalog:
             ("tasks", "task"),
             ("jobs", "job"),
             ("providers", "provider"),
+            ("datasets", "dataset"),
         ):
             facets[name] = [
                 {"value": str(row[0]), "count": int(row[1])}
@@ -1119,6 +1155,7 @@ class WorkspaceCatalog:
                 task TEXT NOT NULL,
                 job TEXT NOT NULL,
                 provider TEXT NOT NULL,
+                dataset TEXT,
                 reward REAL,
                 session_id TEXT NOT NULL,
                 last_turn_end INTEGER,
@@ -1144,6 +1181,7 @@ class WorkspaceCatalog:
             CREATE INDEX IF NOT EXISTS cells_task ON cells(task);
             CREATE INDEX IF NOT EXISTS cells_job ON cells(job);
             CREATE INDEX IF NOT EXISTS cells_provider ON cells(provider);
+            CREATE INDEX IF NOT EXISTS cells_dataset ON cells(dataset);
             CREATE TABLE IF NOT EXISTS evaluation_reports (
                 report_ref TEXT PRIMARY KEY,
                 source_ref TEXT NOT NULL UNIQUE,
@@ -1303,6 +1341,7 @@ def _summary_query_scope(query: CatalogQuery) -> tuple[Any, ...]:
         tuple(sorted(query.tasks)),
         tuple(sorted(query.jobs)),
         tuple(sorted(query.providers)),
+        tuple(sorted(query.datasets)),
         query.include_unreadable,
     )
 
@@ -1473,10 +1512,11 @@ def _report_with_live_task_ref(
         return report
     projected = list(metas)
     changed = False
+    task_roots: dict[str, tuple[tuple[str, Path], ...]] = {}
     for index, original in enumerate(metas):
         if not isinstance(original, dict) or original.get("adapter") != "harbor":
             continue
-        task_ref = _live_task_ref(original, config)
+        task_ref = _live_task_ref(original, config, task_roots=task_roots)
         if task_ref is None:
             continue
         metadata = original.get("task_metadata")
@@ -1491,7 +1531,14 @@ def _report_with_live_task_ref(
     return {**report, "trajectory_meta": projected}
 
 
-def _live_task_ref(meta: dict[str, Any], config: ToolConfig) -> dict[str, str] | None:
+def _live_task_ref(
+    meta: dict[str, Any],
+    config: ToolConfig,
+    *,
+    task_roots: dict[str, tuple[tuple[str, Path], ...]] | None = None,
+) -> dict[str, str] | None:
+    if meta.get("adapter") != "harbor":
+        return None
     metadata = meta.get("task_metadata")
     provenance = meta.get("harbor_provenance")
     if not isinstance(metadata, dict) or not isinstance(provenance, dict):
@@ -1509,14 +1556,21 @@ def _live_task_ref(meta: dict[str, Any], config: ToolConfig) -> dict[str, str] |
     task_name = task_path.name
     if not TASK_DIRECTORY_RE.fullmatch(task_name):
         return None
-    try:
-        matches = [
-            dataset.id
-            for dataset in resolve_harbor_datasets_for_mount(config, mount)
-            if task_path.parent == dataset.task_root
-        ]
-    except (ValueError, OSError):
-        return None
+    if task_roots is None:
+        task_roots = {}
+    if mount_id not in task_roots:
+        try:
+            task_roots[mount_id] = tuple(
+                (dataset.id, dataset.task_root)
+                for dataset in resolve_harbor_datasets_for_mount(config, mount)
+            )
+        except (ValueError, OSError):
+            task_roots[mount_id] = ()
+    matches = [
+        dataset_id
+        for dataset_id, root in task_roots[mount_id]
+        if task_path.parent == root
+    ]
     if len(matches) != 1:
         return None
     return {"dataset_id": matches[0], "task": task_name}
@@ -1751,6 +1805,7 @@ def _sort_expression(sort: str) -> str:
         "task": "task COLLATE NOCASE",
         "job": "job COLLATE NOCASE",
         "provider": "provider COLLATE NOCASE",
+        "dataset": "dataset COLLATE NOCASE",
         "reward": "reward",
         "duration_ms": "duration_ms",
         "turns": "turns",
@@ -1784,6 +1839,7 @@ def _json_value_present(path: str) -> str:
 
 
 _CATALOG_COLUMN_PRESENCE_SQL = {
+    "dataset_id": "dataset IS NOT NULL AND trim(dataset) <> ''",
     "source_category": "trim(category) <> ''",
     "source_tags": "json_array_length(tags_json) > 0",
     "session_id": "trim(session_id) <> ''",
@@ -1865,6 +1921,7 @@ def _empty_facets() -> dict[str, list[dict[str, Any]]]:
         "tasks": [],
         "jobs": [],
         "providers": [],
+        "datasets": [],
     }
 
 

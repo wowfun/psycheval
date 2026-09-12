@@ -1094,6 +1094,7 @@ async function applySelectedWorkspaceViews() {
     task_name: [],
     job_name: [],
     model_provider: [],
+    dataset_id: [],
     status: [],
   };
   renderWorkspaceViewRail();
@@ -1111,6 +1112,7 @@ async function applySelectedWorkspaceViews() {
     tasks: [],
     jobs: [],
     providers: [],
+    datasets: [],
     results: [],
     views: payload.views,
   }, { force: true });
@@ -1146,6 +1148,7 @@ async function clearWorkspaceViewConditions() {
     task_name: [],
     job_name: [],
     model_provider: [],
+    dataset_id: [],
     status: [],
   };
   renderWorkspaceViewRail();
@@ -1163,6 +1166,7 @@ async function clearWorkspaceViewConditions() {
     tasks: [],
     jobs: [],
     providers: [],
+    datasets: [],
     results: [],
     views: [],
   }, { force: true });

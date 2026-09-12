@@ -60,6 +60,7 @@ _CATALOG_SUMMARY_QUERY_FIELDS = frozenset(
         "tasks",
         "jobs",
         "providers",
+        "datasets",
         "results",
         "views",
         "browser_views",
@@ -87,7 +88,7 @@ def catalog_post_query_payload(
         "views",
         "browser_views",
     }
-    optional_fields = {"tasks", "jobs", "providers"}
+    optional_fields = {"tasks", "jobs", "providers", "datasets"}
     if not required_fields.issubset(value) or not set(value).issubset(
         required_fields | optional_fields
     ):
@@ -114,6 +115,7 @@ def catalog_post_query_payload(
             models=tuple(_string_array(value.get("models"), "query models")),
             results=tuple(_string_array(value.get("results"), "query results")),
             tasks=tuple(_string_array(value.get("tasks", []), "query tasks")),
+            datasets=tuple(_string_array(value.get("datasets", []), "query datasets")),
             jobs=tuple(_string_array(value.get("jobs", []), "query jobs")),
             providers=tuple(
                 _string_array(value.get("providers", []), "query providers")
@@ -149,6 +151,9 @@ def _strict_catalog_summary_query_payload(
             models=tuple(_string_array(query_value.get("models"), "query models")),
             results=tuple(_string_array(query_value.get("results"), "query results")),
             tasks=tuple(_string_array(query_value.get("tasks"), "query tasks")),
+            datasets=tuple(
+                _string_array(query_value.get("datasets"), "query datasets")
+            ),
             jobs=tuple(_string_array(query_value.get("jobs"), "query jobs")),
             providers=tuple(
                 _string_array(query_value.get("providers"), "query providers")

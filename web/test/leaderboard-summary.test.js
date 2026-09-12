@@ -59,6 +59,7 @@ function resetSummaryState() {
     tasks: [],
     jobs: [],
     providers: [],
+    datasets: [],
     results: [],
     views: [],
   };
@@ -75,6 +76,38 @@ function resetSummaryState() {
   runtime.state.leaderboardSummaryRequestPromise = null;
   runtime.state.leaderboardSummaryCache.clear();
 }
+
+test("detailed XLSX exports normalize table sort keys and preserve the complete filter scope", async () => {
+  resetSummaryState();
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (path, options) => {
+    requests.push({ path, body: JSON.parse(options.body) });
+    return { ok: false, status: 400, json: async () => ({ detail: "test export response" }) };
+  };
+  try {
+    runtime.state.catalogQuery.datasets = ["office", "other"];
+    runtime.state.catalogQuery.page = 2;
+    for (const [column, sort] of Object.entries({ dataset_id: "dataset", task_name: "task", job_name: "job", model_provider: "provider", finished_at_ms: "last_turn_end", session_id: "session", status: "result", model: "model" })) {
+      for (const direction of ["asc", "desc"]) {
+        runtime.state.catalogQuery.sort = column;
+        runtime.state.catalogQuery.direction = direction;
+        catalog.exportCurrentScope("xlsx");
+        const request = requests.at(-1);
+        assert.equal(request.path, "/api/exports");
+        assert.equal(request.body.query.sort, sort);
+        assert.equal(request.body.query.direction, direction);
+        assert.deepEqual(request.body.query.datasets, ["office", "other"]);
+        assert.deepEqual(request.body.query.categories, ["b", "a"]);
+        assert.equal("page" in request.body.query, false);
+        assert.equal("page_size" in request.body.query, false);
+        assert.equal(runtime.state.catalogQuery.sort, column);
+      }
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
 
 test("summary cache ignores pagination, sorting, and chart statistic", async () => {
   resetSummaryState();
@@ -97,7 +130,7 @@ test("summary cache ignores pagination, sorting, and chart statistic", async () 
     assert.equal(requests.length, 1);
     assert.equal(requests[0].path, "/api/catalog-summaries");
     assert.deepEqual(Object.keys(requests[0].body).sort(), [
-      "agents", "browser_views", "categories", "group_by", "jobs", "models",
+      "agents", "browser_views", "categories", "datasets", "group_by", "jobs", "models",
       "providers", "results", "search", "state", "tags", "tasks", "views",
     ]);
     assert.equal(requests[0].body.page, undefined);
@@ -110,7 +143,10 @@ test("summary cache ignores pagination, sorting, and chart statistic", async () 
     await catalog.loadLeaderboardSummary();
     runtime.state.catalogPage.generation = 8;
     await catalog.loadLeaderboardSummary();
-    assert.equal(requests.length, 4);
+    runtime.state.catalogQuery.datasets = ["alpha"];
+    await catalog.loadLeaderboardSummary();
+    assert.equal(requests.length, 5);
+    assert.deepEqual(requests.at(-1).body.datasets, ["alpha"]);
   } finally {
     globalThis.fetch = previousFetch;
   }

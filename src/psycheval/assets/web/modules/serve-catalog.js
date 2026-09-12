@@ -129,7 +129,7 @@ function visibleSelectedSourceKeys(rows = leaderboardRows()) {
 }
 
 function filterOptions(column, rows) {
-  const facetKey = ({ source_category: "categories", source_tags: "tags", agent: "agents", model: "models", task_name: "tasks", job_name: "jobs", model_provider: "providers", status: "results" })[column.key];
+  const facetKey = ({ dataset_id: "datasets", source_category: "categories", source_tags: "tags", agent: "agents", model: "models", task_name: "tasks", job_name: "jobs", model_provider: "providers", status: "results" })[column.key];
   if (!facetKey) {
     const values = rows.flatMap(row => filterValues(row, column));
     return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
@@ -199,6 +199,7 @@ function leaderboardConditionsAreDefault() {
     && !listValue(query.tasks).length
     && !listValue(query.jobs).length
     && !listValue(query.providers).length
+    && !listValue(query.datasets).length
     && !listValue(query.results).length
     && catalogSortKey(query.sort) === "last_turn_end"
     && String(query.direction || "desc") === "desc"
@@ -235,6 +236,7 @@ function requestCatalogFacets() {
     tasks: listValue(filters.task_name),
     jobs: listValue(filters.job_name),
     providers: listValue(filters.model_provider),
+    datasets: listValue(filters.dataset_id),
     results: listValue(filters.status)
   }, { force: true });
 }
@@ -272,6 +274,7 @@ function catalogQueryString(surface = "leaderboard") {
   listValue(query.tasks).forEach(value => params.append("task", value));
   listValue(query.jobs).forEach(value => params.append("job", value));
   listValue(query.providers).forEach(value => params.append("provider", value));
+  listValue(query.datasets).forEach(value => params.append("dataset", value));
   listValue(query.results).forEach(value => params.append("result", value));
   listValue(query.views).forEach(value => params.append("view", value));
   return params.toString();
@@ -285,6 +288,7 @@ function catalogSortKey(key) {
     task_name: "task",
     job_name: "job",
     model_provider: "provider",
+    dataset_id: "dataset",
   })[key] || key || "last_turn_end";
 }
 
@@ -301,6 +305,7 @@ function leaderboardSummaryQueryPayload(groupBy = state.leaderboardSummaryGroupB
     tasks: listValue(query.tasks),
     jobs: listValue(query.jobs),
     providers: listValue(query.providers),
+    datasets: listValue(query.datasets),
     results: listValue(query.results),
     views: listValue(applied.views),
     browser_views: listValue(applied.browser_views),
@@ -479,6 +484,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
           tasks: listValue(state.catalogQuery.tasks),
           jobs: listValue(state.catalogQuery.jobs),
           providers: listValue(state.catalogQuery.providers),
+          datasets: listValue(state.catalogQuery.datasets),
           results: listValue(state.catalogQuery.results),
           ...applied,
         },
@@ -735,7 +741,7 @@ function exportCurrentScope(kind) {
     const applied = workspaceViewQueryPayload();
     serveDownload("xlsx", {
       kind: "xlsx",
-      query: { ...state.catalogQuery, ...applied, page: undefined, page_size: undefined }
+      query: { ...state.catalogQuery, ...applied, sort: catalogSortKey(state.catalogQuery.sort), page: undefined, page_size: undefined }
     });
     return;
   }

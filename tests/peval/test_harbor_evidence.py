@@ -9,6 +9,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+from psycheval._harbor_datasets import resolve_harbor_datasets_for_mount
 from psycheval._inspection.frames import InspectFrames
 from psycheval.config import HarborDataset, HarborMount, ToolConfig
 from psycheval.serve.exports import build_serve_export
@@ -124,6 +125,80 @@ def write_evidence_trial(
 
 
 class HarborEvidenceTests(unittest.TestCase):
+    def test_catalog_dataset_tracks_registration_changes_without_reloading_trials(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            task = root / "dataset" / "task"
+            write_task(task, "org/task")
+            for name in ("first", "second"):
+                write_evidence_trial(
+                    root / "jobs" / "job" / name,
+                    config_task={"name": "task", "source": "org"},
+                )
+            store = open_workspace_state(str(root / "workspace"))
+            self.addCleanup(store.close)
+
+            def config(dataset_id):
+                return ToolConfig(
+                    harbor_datasets=(
+                        HarborDataset(id=dataset_id, path=str(task.parent)),
+                    ),
+                    harbor_mounts=(
+                        HarborMount(
+                            id="jobs",
+                            path=str(root / "jobs"),
+                            dataset_ids=(dataset_id,),
+                        ),
+                    ),
+                )
+
+            catalog = WorkspaceCatalog(store, config("original"))
+            for dataset_id in ("original", "renamed"):
+                catalog.sources.config = config(dataset_id)
+                with (
+                    patch(
+                        "psycheval.state.catalog.resolve_harbor_datasets_for_mount",
+                        wraps=resolve_harbor_datasets_for_mount,
+                    ) as resolve,
+                    patch.object(
+                        catalog.sources, "load", wraps=catalog.sources.load
+                    ) as load,
+                ):
+                    catalog.reconcile()
+                    self.assertEqual(resolve.call_count, 1)
+                    if dataset_id == "renamed":
+                        load.assert_not_called()
+                page = catalog.query(CatalogQuery(datasets=(dataset_id,)))
+                self.assertEqual(page.total, 2)
+                self.assertEqual(page.column_presence["dataset_id"], 2)
+                self.assertEqual(
+                    page.facets["datasets"], [{"value": dataset_id, "count": 2}]
+                )
+                self.assertEqual(
+                    {item.payload["dataset_id"] for item in page.items}, {dataset_id}
+                )
+                detail = catalog.load_detail(page.items[0].source_key).report
+                self.assertEqual(
+                    detail["trajectory_meta"][0]["task_metadata"]["task_ref"][
+                        "dataset_id"
+                    ],
+                    dataset_id,
+                )
+            self.assertEqual(
+                catalog.query(CatalogQuery(datasets=("original",))).total, 0
+            )
+            catalog.sources.config = config("renamed").validated_update(
+                harbor_mounts=(HarborMount(id="jobs", path=str(root / "jobs")),),
+            )
+            catalog.reconcile()
+            page = catalog.query(CatalogQuery())
+            self.assertEqual(page.column_presence["dataset_id"], 0)
+            self.assertTrue(
+                all(item.payload["dataset_id"] is None for item in page.items)
+            )
+
     def test_live_task_reference_requires_a_unique_mounted_effective_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -452,6 +527,7 @@ class HarborEvidenceTests(unittest.TestCase):
             self.assertEqual(len(index.candidates), 1)
             self.assertEqual(evidence.task_metadata["status"], "resolved")
             self.assertEqual(evidence.task_metadata["name"], "org/chinese")
+            self.assertEqual(row["dataset_id"], "tasks")
             self.assertEqual(
                 detail["trajectory_meta"][0]["task_metadata"]["task_ref"],
                 {"dataset_id": "tasks", "task": "chinese"},
@@ -818,6 +894,7 @@ class HarborEvidenceTests(unittest.TestCase):
                 catalog.reconcile()
                 row = catalog.query(CatalogQuery()).items[0].to_dict()
                 self.assertEqual(row["score"], 0.4)
+                self.assertEqual(row["dataset_id"], "tasks")
                 self.assertEqual(row["rewards"], {"reward": 0.9})
                 self.assertEqual(
                     row["verifier_evidence"]["reward_consistency"], "drifted"

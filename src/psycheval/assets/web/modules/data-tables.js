@@ -122,6 +122,7 @@ function leaderboardColumns() {
     ? { ...column, filterable: false }
     : column);
   return [
+    { key: "dataset_id", label: t("dataset", "Dataset"), valueType: "identity", filterable: true, sortable: true, value: row => row?.dataset_id || "-" },
     { key: "source_category", label: t("category", "Category"), valueType: "text", filterable: true, filterValues: row => [sourceCategoryFor(row)].filter(Boolean), value: row => sourceCategoryValue(row), html: row => renderReadOnlySourceCategory(row), edit: adminMode() ? { value: row => sourceCategoryEditValue(row), suggestions: existingSourceCategoryOptions, commit: (row, value) => commitSourceCellEdit(row, "category", value) } : undefined },
     { key: "source_tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: row => sourceTagsFor(row), value: row => sourceTagsValue(row), html: row => renderReadOnlySourceTags(row), edit: adminMode() ? { value: row => sourceTagsEditValue(row), suggestions: existingSourceTagOptions, commit: (row, value) => commitSourceCellEdit(row, "tags", value) } : undefined },
     ...serveColumns.slice(0, 2),

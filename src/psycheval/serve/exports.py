@@ -120,6 +120,7 @@ def query_all_catalog_rows(
 
 def xlsx_summary(rows: list[dict[str, Any]]) -> bytes:
     columns = [
+        ("Dataset", lambda row: row.get("dataset_id")),
         ("Category", lambda row: row.get("source_category")),
         ("Tags", lambda row: ", ".join(row.get("display_tags") or [])),
         ("Custom Tags", lambda row: ", ".join(row.get("source_tags") or [])),

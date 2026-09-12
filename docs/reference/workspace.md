@@ -196,6 +196,8 @@ trajectory inputs, and Harbor roots are never rewritten by report or catalog
 rebuilds.
 Catalog connections are closed even when connection initialization fails, before
 any damaged cache files are removed for rebuilding.
+Reconciliation reloads a source when its cached row is malformed, even when the
+source fingerprint has not changed.
 Wide timeline detail tables scroll within their own container; they do not
 expand the workspace beyond the viewport on narrow screens.
 
