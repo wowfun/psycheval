@@ -60,7 +60,7 @@ function createHomePage(_context) {
 
 async function selectSourceFromHash(hash) {
   const sourceKey = sourceKeyFromHash(hash);
-  if (sourceKey) await selectServeDetail(sourceKey);
+  if (sourceKey) await selectServeDetail(sourceKey, { openSidebar: true });
 }
 
 function sourceKeyFromHash(hash) {

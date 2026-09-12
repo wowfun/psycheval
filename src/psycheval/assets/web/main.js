@@ -6,6 +6,7 @@ import { setWorkspaceApp, setWorkspaceSnapshotProvider } from "./app/workspace-r
 "peval-entrypoint";
 
 const pageLoaders = {
+  jobs: context => import("./pages/jobs-page.js").then(module => module.createJobsPage(context)),
   home: context => import("./pages/home-page.js").then(module => module.createHomePage(context)),
   datasets: context => import("./pages/datasets-page.js").then(module => module.createDatasetsPage(context)),
   reports: context => import("./pages/reports-page.js").then(module => module.createReportsPage(context)),

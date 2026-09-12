@@ -3,6 +3,7 @@
 const PAGE_PATHS = Object.freeze({
   home: "/",
   datasets: "/datasets",
+  jobs: "/jobs",
   reports: "/reports",
   config: "/config",
 });
@@ -10,8 +11,9 @@ const PAGE_PATHS = Object.freeze({
 const INVALIDATION_PAGES = Object.freeze({
   catalog: ["home", "reports"],
   reports: ["home", "reports"],
-  "dataset-registry": ["home", "datasets", "config"],
-  tasks: ["home", "datasets"],
+  "dataset-registry": ["home", "datasets", "jobs", "config"],
+  tasks: ["home", "datasets", "jobs"],
+  jobs: ["jobs", "home"],
   "assistant-config": ["config"],
   "prompt-assets": ["config"],
 });

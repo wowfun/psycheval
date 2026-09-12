@@ -36,5 +36,6 @@ test("shared handles stay fully exposed while sidebar panels own clipping", () =
   assert.match(detailCss, /\.detail-sidebar-panel\s*\{[^}]*overflow:hidden/s);
   assert.match(viewsCss, /\.workspace-views\s*\{[^}]*overflow:visible/s);
   assert.match(viewsCss, /\.workspace-views-panel\s*\{[^}]*overflow:auto/s);
-  assert.match(detailCss, /\.detail-sidebar-body\.has-task\s*\{[^}]*grid-template-rows:minmax\(260px,min\(360px,48dvh\)\) minmax\(0,1fr\)/s);
+  assert.match(detailCss, /\.detail-sidebar-body\s*\{[^}]*grid-template-rows:minmax\(0,1fr\)/s);
+  assert.match(detailCss, /\[data-trial-panel\]\[hidden\]\s*\{\s*display:none/);
 });

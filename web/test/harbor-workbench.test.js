@@ -98,7 +98,7 @@ const detail = {
   default_file_path: "instruction.md",
   tree: [
     { path: "environment", kind: "directory", size: null },
-    { path: "instruction.md", kind: "file", size: 8, editable: true },
+    { path: "instruction.md", kind: "file", size: 8, previewable: true, editable: true },
   ],
 };
 
@@ -353,7 +353,7 @@ test("the latest overlapping Task selection owns the file tree", async () => {
     pending.get("draft-task")({
       dataset_id: "pbench",
       task: task("draft-task", "draft"),
-      tree: [{ path: "draft.md", kind: "file", size: 1, editable: true }],
+      tree: [{ path: "draft.md", kind: "file", size: 1, previewable: true, editable: true }],
     });
     await tick();
     pending.get("valid-task")(detail);
@@ -739,7 +739,7 @@ test("WorkBuddy Datasets remain browsable while every editing surface is disable
     read_only: true,
     task: task("office-task", "valid", "task-r2"),
     default_file_path: "instruction.md",
-    tree: [{ path: "instruction.md", kind: "file", size: 11, editable: true }],
+    tree: [{ path: "instruction.md", kind: "file", size: 11, previewable: true, editable: false }],
   };
   globalThis.fetch = async (path, options = {}) => {
     calls.push({ path: String(path), method: options.method || "GET" });

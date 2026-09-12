@@ -1,6 +1,9 @@
 import { listValue, t } from "./shared.js";
+import { bindFilePreviewToggle, createFileMarkdown, createFileRead, formatBytes, renderFileTree, selectFile, showFileText } from "./file-browser.js";
 
 function createTaskBrowser(options = {}) {
+  const fileRead = createFileRead();
+  const collapsed = new Set();
   const browser = {
     root: options.root || null,
     editable: Boolean(options.editable),
@@ -15,9 +18,10 @@ function createTaskBrowser(options = {}) {
     filePath: null,
     fileRevision: null,
     savedText: "",
+    draftText: "",
+    raw: false,
     dirty: false,
     busy: false,
-    requestId: 0,
     taskRequestId: 0,
     taskRequestPromise: null,
     previewStatus: "empty",
@@ -36,10 +40,22 @@ function createTaskBrowser(options = {}) {
     if (!editor || editor.dataset.taskBrowserBound === "true") return;
     editor.dataset.taskBrowserBound = "true";
     editor.addEventListener("input", () => {
-      if (!browser.editable || browser.previewStatus !== "ready") return;
+      if (!canEditFile()) return;
+      browser.draftText = editor.value;
       setDirty(editor.value !== browser.savedText);
       syncControls();
     });
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "action-button compact";
+    toggle.dataset.filePreviewToggle = "";
+    toggle.hidden = true;
+    (node(".harbor-editor-actions") || node(".harbor-editor-head") || editor.parentElement).append(toggle);
+    const preview = document.createElement("div");
+    preview.className = "harbor-markdown";
+    preview.dataset.harborMarkdown = "";
+    preview.hidden = true;
+    editor.before(preview);
   }
 
   async function loadTask(taskRef, selection = {}) {
@@ -90,29 +106,27 @@ function createTaskBrowser(options = {}) {
 
   async function setTaskDetail(detail, selection = {}) {
     const previousPath = browser.filePath;
-    browser.requestId += 1;
+    fileRead.invalidate();
     browser.detail = detail && typeof detail === "object" ? detail : null;
     browser.taskRef = normalizeTaskRef(selection.taskRef) || detailTaskRef(browser.detail);
     browser.contextKey = selection.contextKey || taskContextKey(browser.taskRef, selection);
     browser.filePath = null;
     browser.fileRevision = null;
     browser.savedText = "";
+    browser.draftText = "";
+    browser.raw = false;
     setDirty(false);
     browser.previewStatus = "empty";
     browser.previewMessage = "";
     render();
 
     const tree = listValue(browser.detail?.tree);
-    const preferredItem = selection.preferredPath
-      ? tree.find(value => value?.kind === "file" && value?.path === selection.preferredPath) || null
-      : null;
-    const preservedItem = selection.preserveCurrent
-      ? tree.find(value => value?.kind === "file" && value?.path === previousPath) || null
-      : null;
-    const defaultItem = tree.find(value => value?.kind === "file" && value?.path === browser.detail?.default_file_path) || null;
-    const item = selection.strictPreferred
-      ? preferredItem
-      : preferredItem || preservedItem || defaultItem;
+    const item = selectFile(tree, {
+      preferredPath: selection.preferredPath,
+      preservedPath: selection.preserveCurrent ? previousPath : null,
+      defaultPath: browser.detail?.default_file_path,
+      strictPreferred: selection.strictPreferred,
+    });
     if (!item) {
       const unavailablePath = selection.preferredPath || browser.detail?.default_file_path || null;
       const message = selection.strictPreferred
@@ -137,14 +151,15 @@ function createTaskBrowser(options = {}) {
   async function openItem(item, options = {}) {
     if (!item || item.kind !== "file") return null;
     if (!options.skipDiscard && browser.dirty && !window.confirm(t("harbor_discard_changes", "Discard unsaved file changes?"))) return null;
-    const requestId = browser.requestId + 1;
-    browser.requestId = requestId;
+    const isCurrent = fileRead.begin();
     browser.filePath = item.path;
     browser.fileRevision = null;
     browser.savedText = "";
+    browser.draftText = "";
+    browser.raw = false;
     setDirty(false);
-    if (!item.editable || typeof browser.readFile !== "function" || !browser.taskRef) {
-      showUnavailable(item.path, item.editable
+    if (!item.previewable || typeof browser.readFile !== "function" || !browser.taskRef) {
+      showUnavailable(item.path, item.previewable
         ? t("task_file_unavailable", "Task file unavailable")
         : t("harbor_metadata_only", "metadata only"), item);
       return null;
@@ -154,21 +169,22 @@ function createTaskBrowser(options = {}) {
     render();
     try {
       const payload = await browser.readFile(browser.taskRef, item.path);
-      if (requestId !== browser.requestId || browser.filePath !== item.path) return null;
+      if (!isCurrent() || browser.filePath !== item.path) return null;
       browser.fileRevision = payload?.revision || null;
       browser.savedText = String(payload?.content ?? "");
+      browser.draftText = browser.savedText;
       setDirty(false);
       browser.previewStatus = "ready";
       browser.previewMessage = "";
       render();
       const editor = node("[data-harbor-editor]");
       if (editor) {
-        editor.value = browser.savedText;
-        if (options.focus) editor.focus();
+        showFileText(editor, browser.savedText);
+        if (options.focus && !editor.hidden) editor.focus();
       }
       return payload;
     } catch (error) {
-      if (requestId !== browser.requestId || browser.filePath !== item.path) return null;
+      if (!isCurrent() || browser.filePath !== item.path) return null;
       showUnavailable(item.path, error?.message || String(error), item);
       browser.onError?.(error);
       return null;
@@ -176,10 +192,11 @@ function createTaskBrowser(options = {}) {
   }
 
   function showUnavailable(path, message, item = null) {
-    browser.requestId += 1;
+    fileRead.invalidate();
     browser.filePath = path || null;
     browser.fileRevision = null;
     browser.savedText = "";
+    browser.draftText = "";
     setDirty(false);
     browser.previewStatus = "unavailable";
     browser.previewMessage = String(message || t("task_file_unavailable", "Task file unavailable"));
@@ -207,15 +224,18 @@ function createTaskBrowser(options = {}) {
   }
 
   function resetState({ keepRoot = false } = {}) {
-    browser.requestId += 1;
+    fileRead.invalidate();
     browser.taskRequestId += 1;
     browser.taskRequestPromise = null;
     browser.detail = null;
+    collapsed.clear();
     browser.taskRef = null;
     browser.contextKey = null;
     browser.filePath = null;
     browser.fileRevision = null;
     browser.savedText = "";
+    browser.draftText = "";
+    browser.raw = false;
     browser.dirty = false;
     browser.previewStatus = "empty";
     browser.previewMessage = "";
@@ -229,33 +249,11 @@ function createTaskBrowser(options = {}) {
   }
 
   function renderTree() {
-    const container = node("[data-harbor-file-tree]");
-    if (!container) return;
-    container.replaceChildren();
-    const tree = listValue(browser.detail?.tree);
-    if (!tree.length) {
-      container.append(emptyNode(t("harbor_file_empty", "Select a Task to browse its files")));
-      return;
-    }
-    tree.forEach(item => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = `harbor-file-row kind-${item.kind}`;
-      button.classList.toggle("selected", item.path === browser.filePath);
-      button.style.setProperty("--depth", String(item.path.split("/").length - 1));
-      button.append(
-        textNode("span", item.kind === "directory" ? "▸" : "·"),
-        textNode("span", item.path.split("/").at(-1)),
-        textNode("small", item.kind === "file" ? formatBytes(item.size) : ""),
-      );
-      if (item.kind === "file") button.addEventListener("click", () => openItem(item, { focus: true }));
-      if (browser.onContextMenu) {
-        button.addEventListener("contextmenu", event => {
-          event.preventDefault();
-          browser.onContextMenu(item);
-        });
-      }
-      container.append(button);
+    renderFileTree(node("[data-harbor-file-tree]"), listValue(browser.detail?.tree), {
+      selectedPath: browser.filePath,
+      onOpen: item => openItem(item, { focus: true }),
+      onContextMenu: browser.onContextMenu,
+      collapsed,
     });
   }
 
@@ -268,20 +266,37 @@ function createTaskBrowser(options = {}) {
       ? `${browser.filePath}${browser.dirty ? " •" : ""}`
       : t("harbor_editor_empty", "Select a text file");
     if (meta) meta.textContent = item
-      ? `${formatBytes(item.size)} · ${item.editable ? t("harbor_text", "text") : t("harbor_metadata_only", "metadata only")}`
+      ? `${formatBytes(item.size)} · ${item.previewable ? t("harbor_text", "text") : t("harbor_metadata_only", "metadata only")}`
       : "";
     if (!editor) return;
-    editor.readOnly = !browser.editable || browser.previewStatus !== "ready";
+    editor.readOnly = !canEditFile();
     editor.disabled = browser.previewStatus === "empty";
-    if (browser.previewStatus === "ready" && !browser.dirty) editor.value = browser.savedText;
-    else if (browser.previewStatus === "loading") editor.value = browser.previewMessage;
-    else if (browser.previewStatus === "unavailable") editor.value = browser.previewMessage;
+    if (browser.previewStatus === "ready") showFileText(editor, browser.draftText);
+    else if (browser.previewStatus === "loading") showFileText(editor, browser.previewMessage);
+    else if (browser.previewStatus === "unavailable") showFileText(editor, browser.previewMessage);
     else editor.value = "";
+    const preview = node("[data-harbor-markdown]");
+    const toggle = node("[data-file-preview-toggle]");
+    const markdown = browser.previewStatus === "ready" ? createFileMarkdown(browser.filePath, browser.draftText) : null;
+    editor.hidden = Boolean(markdown) && !browser.raw;
+    if (preview) {
+      preview.hidden = !editor.hidden;
+      preview.replaceChildren(...(markdown ? [markdown] : []));
+    }
+    if (toggle) {
+      toggle.hidden = !markdown;
+      bindFilePreviewToggle(toggle, browser.raw, raw => { browser.raw = raw; renderPreview(); });
+    }
+  }
+
+  function canEditFile() {
+    return browser.editable && browser.previewStatus === "ready"
+      && listValue(browser.detail?.tree).some(item => item.path === browser.filePath && item.editable);
   }
 
   function syncControls() {
     const save = node("[data-harbor-save]");
-    if (save) save.disabled = !browser.editable || browser.busy || !browser.dirty || !browser.filePath;
+    if (save) save.disabled = !canEditFile() || browser.busy || !browser.dirty;
     const path = node("[data-harbor-editor-path]");
     if (path && browser.filePath) path.textContent = `${browser.filePath}${browser.dirty ? " •" : ""}`;
   }
@@ -330,7 +345,7 @@ function createTaskBrowser(options = {}) {
 
   const api = {
     rebindTask(taskRef) {
-      browser.requestId += 1;
+      fileRead.invalidate();
       browser.taskRef = normalizeTaskRef(taskRef);
       browser.contextKey = taskContextKey(browser.taskRef);
     },
@@ -374,25 +389,6 @@ function detailTaskRef(detail) {
 
 function taskContextKey(taskRef, selection = {}) {
   return [taskRef?.dataset_id || "", taskRef?.task || "", selection.preferredPath || "", selection.strictPreferred ? "strict" : "default"].join("\u0000");
-}
-
-function textNode(tag, value) {
-  const result = document.createElement(tag);
-  result.textContent = String(value ?? "");
-  return result;
-}
-
-function emptyNode(value) {
-  const result = textNode("p", value);
-  result.className = "copy harbor-empty";
-  return result;
-}
-
-function formatBytes(value) {
-  const bytes = Number(value || 0);
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 export { createTaskBrowser, formatBytes };

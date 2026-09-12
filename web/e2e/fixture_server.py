@@ -20,6 +20,12 @@ from psycheval.state import open_workspace_state
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="peval-acp-e2e-") as temporary:
         root = Path(temporary)
+        if os.environ.get("PEVAL_E2E_JOBS") == "1":
+            from tests.peval.test_jobs import install_fixture_plugin
+
+            install_fixture_plugin(root)
+            sys.path.insert(0, str(root))
+            os.environ["PYTHONPATH"] = os.pathsep.join([str(root), str(Path.cwd())])
         if os.environ.get("PEVAL_E2E_CLAUDE") == "1":
             from tests.peval.claude_support import event, family, write_events
 
@@ -51,6 +57,8 @@ def main() -> None:
             ),
             encoding="utf-8",
         )
+        if os.environ.get("PEVAL_E2E_VERIFICATION") == "1":
+            write_verification_trial(root)
         write_e2e_trial(
             root / "runs/default/psychevo/e2e-session/e2e-trial",
             "e2e-trial",
@@ -85,13 +93,22 @@ def main() -> None:
             ),
         )
         try:
+            if os.environ.get("PEVAL_E2E_MISSING_TASK") == "1":
+                runtime.catalog.reconcile()
+                task = root / "dataset/tasks/office-one"
+                removed = root / "removed-task"
+                assert task.resolve().is_relative_to(root.resolve())
+                assert removed.resolve().is_relative_to(root.resolve())
+                task.rename(removed)
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
                 listener.bind(("127.0.0.1", 0))
                 listener.listen(2048)
                 origin = f"http://127.0.0.1:{listener.getsockname()[1]}"
                 print(f"PEVAL_E2E_ORIGIN={origin}", flush=True)
                 config = uvicorn.Config(
-                    create_app(runtime, ServeAccess(None)),
+                    create_app(
+                        runtime, ServeAccess(os.environ.get("PEVAL_E2E_PASSWORD"))
+                    ),
                     host="127.0.0.1",
                     port=0,
                     loop="asyncio",
@@ -110,6 +127,109 @@ def main() -> None:
         finally:
             runtime.close()
             store.close()
+
+
+def write_verification_trial(root: Path) -> None:
+    from tests.peval.test_harbor_evidence import write_evidence_trial
+    from tests.peval.test_workbuddy_datasets import _write_workbuddy_bundle
+
+    bundle = _write_workbuddy_bundle(root / "dataset")
+    task = bundle / "tasks/office-one"
+    (task / "instruction.md").write_text(
+        "# Task instructions\n\nCreate the requested artifact.\n\n"
+        "| Input | Output |\n| --- | --- |\n| **Evidence** | `Workbook` |\n",
+        encoding="utf-8",
+    )
+    trial = root / "jobs/office/office-one__trial"
+    write_evidence_trial(
+        trial,
+        config_task={"path": str(task)},
+        result={
+            "task_name": "workbuddy/office-one",
+            "verifier_result": {"rewards": {"reward": 0.676}},
+        },
+    )
+    verifier = trial / "verifier"
+    (verifier / "artifact_text").mkdir(parents=True)
+    (verifier / "raw_artifacts").mkdir()
+    (verifier / "artifact_text/report.md").write_text(
+        "# Retained workbook\n\nPosition mismatch.\n\n"
+        "| Position | Actual |\n| --- | --- |\n| **Total** | `12` |\n",
+        encoding="utf-8",
+    )
+    (verifier / "raw_artifacts/report.xlsx").write_bytes(b"fixture workbook")
+    (verifier / "reward.json").write_text('{"reward":0.676}', encoding="utf-8")
+    verdict = {
+        "item_id": "position-match",
+        "status": "fail",
+        "score": 0,
+        "reason": "Position totals do not match. <script>unsafe()</script>",
+        "evidence_ids": ["workbook"],
+    }
+    (verifier / "score.json").write_text(
+        json.dumps(
+            {
+                "reward": 0.676,
+                "tests_passed": 359,
+                "tests_total": 579,
+                "test_status": "partial_pass",
+                "verdicts": [verdict],
+                "metadata": {
+                    "score_merge": {
+                        "method": "weighted_sum",
+                        "rule_weight": 0.8,
+                        "rule_score": 0.62,
+                        "llm_weight": 0.2,
+                        "llm_score": 0.9,
+                        "overall": 0.676,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (verifier / "llm_judge.json").write_text(
+        json.dumps(
+            {"llm_judge": 0.9, "judge_status": "completed", "verdicts": [verdict]}
+        ),
+        encoding="utf-8",
+    )
+    (verifier / "artifact_manifest.json").write_text(
+        json.dumps(
+            {
+                "artifacts": [
+                    {
+                        "id": "workbook",
+                        "text_path": "artifact_text/report.md",
+                        "verifier_raw_path": "raw_artifacts/report.xlsx",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cases = "".join(
+        f'<testcase classname="rules" name="case-{index}" time="0.1">'
+        + (
+            '<failure message="Position mismatch">Expected retained evidence</failure>'
+            if 359 <= index < 577
+            else '<error message="Setup error"/>'
+            if index == 577
+            else '<skipped message="Optional"/>'
+            if index == 578
+            else ""
+        )
+        + "</testcase>"
+        for index in range(579)
+    )
+    (verifier / "results.xml").write_text(
+        f"<testsuites><testsuite>{cases}</testsuite></testsuites>", encoding="utf-8"
+    )
+    with (root / "peval.toml").open("a", encoding="utf-8") as handle:
+        handle.write(
+            '\n[[harbor.datasets]]\nid = "office"\nformat = "workbuddy.v1"\npath = "dataset"\n'
+            '\n[[harbor.mounts]]\nid = "jobs"\npath = "jobs"\ndataset_ids = ["office"]\n'
+        )
 
 
 def write_e2e_trial(cell: Path, trial_id: str) -> None:

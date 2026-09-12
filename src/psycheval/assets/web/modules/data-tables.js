@@ -269,6 +269,7 @@ function renderLeaderboard(rows = leaderboardRows()) {
     <div class="panel-head leaderboard-panel-head">
       <div class="leaderboard-title-stack">
         <h2 id="leaderboard-title">${esc(t("leaderboard", "Leaderboard"))}</h2>
+        ${RENDER_OPTIONS.workspace_id ? `<a class="action-button" href="/jobs" data-workspace-route="jobs">${esc(t("jobs_configure_run", "Configure run"))}</a>` : ""}
         ${renderLeaderboardSearchControls()}
       </div>
       ${renderLeaderboardPanelControls(rows)}

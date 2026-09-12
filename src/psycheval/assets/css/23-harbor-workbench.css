@@ -258,6 +258,24 @@
 .harbor-editor:disabled {
   background:var(--surface-2);
 }
+.harbor-markdown {
+  grid-row:2;
+  min-width:0;
+  min-height:0;
+  overflow:auto;
+}
+.harbor-markdown[hidden], .harbor-editor[hidden] {
+  display:none;
+}
+.file-markdown {
+  padding:14px;
+  min-width:0;
+}
+.file-markdown pre {
+  max-height:none;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+}
 .harbor-diagnostics {
   max-height:180px;
   overflow:auto;

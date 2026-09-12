@@ -615,7 +615,7 @@ test("structured Execute, Read, and Diff rows expose semantic cards and copies",
   await expect(terminal).toContainText("alpha");
   await terminal.getByRole("button", { name: "Copy" }).click();
   await expect
-    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .poll(() => page.evaluate(async () => (await navigator.clipboard.readText()).replace(/\r\n/g, "\n")))
     .toBe("alpha\nbeta\n");
   await expect(terminal.locator(".paui-tool-terminal__output")).toHaveCSS(
     "overflow-x",
@@ -631,7 +631,7 @@ test("structured Execute, Read, and Diff rows expose semantic cards and copies",
   ).toHaveAttribute("aria-expanded", "true");
   await read.getByRole("button", { name: "Copy" }).click();
   await expect
-    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .poll(() => page.evaluate(async () => (await navigator.clipboard.readText()).replace(/\r\n/g, "\n")))
     .toBe(
       Array.from({ length: 10 }, (_, index) => `fixture line ${index + 1}`).join(
         "\n",

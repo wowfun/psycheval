@@ -49,7 +49,7 @@ test("WorkBuddy evidence renders score consistency and safe artifact controls", 
     /href="\/api\/harbor\/verifier-artifacts\/source-key\/artifact-id"/,
   );
   assert.doesNotMatch(html, /<pre>/);
-  assert.match(
+  assert.doesNotMatch(
     html,
     /\/api\/harbor\/verifier-artifacts\/source-key\/artifact-id\?download=true/,
   );

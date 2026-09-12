@@ -27,9 +27,9 @@ function detail(defaultFilePath = "instruction.md") {
     task: { directory: "task" },
     default_file_path: defaultFilePath,
     tree: [
-      { path: "instruction.md", kind: "file", size: 4, editable: true },
+      { path: "instruction.md", kind: "file", size: 4, previewable: true, editable: true },
       { path: "steps/first", kind: "directory", size: null },
-      { path: "steps/first/instruction.md", kind: "file", size: 5, editable: true },
+      { path: "steps/first/instruction.md", kind: "file", size: 5, previewable: true, editable: true },
     ],
   };
 }
@@ -144,6 +144,45 @@ test("a strict step instruction never falls back and read-only mode exposes no e
   assert.equal(document.querySelector("[data-harbor-editor]").readOnly, true);
 });
 
+test("previewable read-only files load while metadata-only files never request content", async () => {
+  const root = document.createElement("div");
+  root.innerHTML = `
+    <span data-harbor-editor-meta></span>
+    <button data-harbor-save disabled>Save</button>
+    <textarea data-harbor-editor></textarea>
+  `;
+  const reads = [];
+  const taskBrowser = createTaskBrowser({
+    root,
+    editable: true,
+    readFile: async (_taskRef, path) => {
+      reads.push(path);
+      return { path, content: "Read only", revision: "r1" };
+    },
+  });
+  const taskDetail = detail();
+  taskDetail.tree = [
+    { path: "instruction.md", kind: "file", size: 9, previewable: true, editable: false },
+    { path: "archive.tar.gz", kind: "file", size: 20, previewable: false, editable: false },
+    { path: "large.txt", kind: "file", size: 3 * 1024 * 1024, previewable: false, editable: false },
+  ];
+  await taskBrowser.setTaskDetail(taskDetail);
+  const editor = root.querySelector("[data-harbor-editor]");
+  assert.equal(editor.value, "Read only");
+  assert.equal(editor.readOnly, true);
+  assert.match(root.querySelector("[data-harbor-editor-meta]").textContent, /text/);
+  editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+  assert.equal(taskBrowser.isDirty(), false);
+  assert.equal(root.querySelector("[data-harbor-save]").disabled, true);
+
+  for (const path of ["archive.tar.gz", "large.txt"]) {
+    await taskBrowser.openPath(path);
+    assert.equal(editor.value, "metadata only");
+    assert.equal(editor.readOnly, true);
+  }
+  assert.deepEqual(reads, ["instruction.md"]);
+});
+
 test("capability re-renders preserve an unsaved editor value", async () => {
   const root = document.createElement("div");
   root.innerHTML = `
@@ -175,4 +214,34 @@ test("capability re-renders preserve an unsaved editor value", async () => {
 
   assert.equal(taskBrowser.isDirty(), true);
   assert.equal(editor.value, "Unsaved");
+});
+
+test("Task Markdown defaults to rendering and preserves an editable draft across preview and reattachment", async () => {
+  const makeRoot = () => {
+    const root = document.createElement("div");
+    root.innerHTML = '<header class="harbor-editor-head"></header><button data-harbor-save></button><textarea data-harbor-editor></textarea>';
+    return root;
+  };
+  let root = makeRoot();
+  const taskBrowser = createTaskBrowser({ root, editable: true, readFile: async () => ({ content: "# Instruction\n\n**Evidence**\n\n<script>unsafe()</script>", revision: "r1" }) });
+  await taskBrowser.setTaskDetail(detail());
+  assert.equal(root.querySelector("[data-harbor-editor]").hidden, true);
+  assert.equal(root.querySelector(".file-markdown h4").textContent, "Instruction");
+  assert.equal(root.querySelector(".file-markdown strong").textContent, "Evidence");
+  assert.equal(root.querySelector("script"), null);
+  root.querySelector("[data-file-preview-toggle]").click();
+  const editor = root.querySelector("[data-harbor-editor]");
+  assert.equal(editor.hidden, false);
+  editor.value = "# Draft\n\nChanged content";
+  editor.dispatchEvent(new window.Event("input"));
+  root.querySelector("[data-file-preview-toggle]").click();
+  assert.equal(root.querySelector(".file-markdown h4").textContent, "Draft");
+  assert.equal(taskBrowser.isDirty(), true);
+  assert.equal(root.querySelector("[data-harbor-save]").disabled, false);
+  root = makeRoot(); taskBrowser.attach(root);
+  assert.equal(root.querySelector(".file-markdown h4").textContent, "Draft");
+  root.querySelector("[data-file-preview-toggle]").click();
+  assert.equal(taskBrowser.currentFile().content, "# Draft\n\nChanged content");
+  taskBrowser.acceptSave("instruction.md", taskBrowser.currentFile().content);
+  assert.equal(taskBrowser.isDirty(), false);
 });

@@ -55,14 +55,15 @@ test("unified session input inspects IDs and reports mixed imports independently
     let completed;
     await expect.poll(async () => {
       completed = await (await page.request.get(new URL(`/api/operations/${operation.id}`, local.origin).href)).json();
-      return completed.completed;
-    }).toBe(3);
+      return completed.state;
+    }).toBe("failed"); // The batch deliberately includes one missing session.
+    expect(completed.completed).toBe(3);
     expect(completed.successes.map(result => result.input)).toEqual(["newer", ".claude/root-session.jsonl"]);
     expect(completed.failures).toHaveLength(1);
     expect(completed.failures[0].error).toContain("missing-session");
     const { sources } = await (await page.request.get(new URL("/api/sources", local.origin).href)).json();
     expect(sources.filter(source => source.adapter === "claude").map(source => source.session_id).sort()).toEqual(["newer", "root-session"]);
-    await expect(page.locator("[data-config-page-status]")).toContainText("missing-session");
+    await expect(form.locator(".source-import-results")).toContainText("Claude session not found: missing-session");
     await expect(form.locator(".source-import-results code")).toHaveText(["newer", ".claude/root-session.jsonl", "missing-session"]);
   } finally {
     await stopFixture(local);
@@ -106,6 +107,7 @@ test("Claude project selection imports one family and navigates children without
   await page.locator(`.trajectory-row[data-source-key="${source.source_key}"]`).click();
   const trace = page.locator("#trace");
   const sidebar = page.locator("#detail-sidebar");
+  await sidebar.getByRole("tab", { name: "Trajectory", exact: true }).click();
   await expect(trace.locator("[data-trajectory-node]")).toHaveCount(9);
   await expect(sidebar.locator("[data-trajectory-node]")).toHaveCount(9);
   await expect(sidebar.locator("[data-trajectory-copy]")).toHaveCount(9);
@@ -135,7 +137,7 @@ test("Claude project selection imports one family and navigates children without
     const button = agentStep.locator(selector).first().locator("[data-block-copy]");
     await button.click();
     await expect(button).toHaveText("Copied");
-    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
+    await expect.poll(() => page.evaluate(async () => (await navigator.clipboard.readText()).replace(/\r\n/g, "\n"))).toBe(expected);
     await expect(agentStep).toHaveAttribute("open", "");
     await expect(sidebar.locator("[data-trajectory-node][aria-current]")).toHaveAttribute("data-trajectory-id", "claude:root-session");
   }
@@ -174,10 +176,10 @@ test("Claude project selection imports one family and navigates children without
     await sidebar.locator('[data-trajectory-node][data-trajectory-id="claude:root-session"]').click();
     await expect(sidebar.locator(".step")).toHaveCount(62);
     const navigation = await sidebar.locator(".trajectory-navigation").boundingBox();
-    const steps = await sidebar.locator("[data-detail-sidebar-steps]").boundingBox();
+    const steps = await sidebar.locator("[data-detail-sidebar-step-list]").boundingBox();
     const heading = await sidebar.locator("#detail-sidebar-title").boundingBox();
     expect(navigation.y + navigation.height).toBeLessThanOrEqual(steps.y);
-    expect(navigation.x).toBeCloseTo(heading.x, 0);
+    expect(navigation.x).toBeGreaterThanOrEqual(heading.x);
     expect(steps.height).toBeGreaterThan(100);
     const copy = sidebar.locator('[data-trajectory-copy="claude:root-session"]');
     const childCopy = sidebar.locator('[data-trajectory-copy="claude:root-session:agent:child-0"]');

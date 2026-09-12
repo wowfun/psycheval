@@ -580,6 +580,7 @@ function loadedServeDetailIsCurrent(sourceKey) {
   const row = catalogRowForSourceKey(sourceKey);
   return sourceKey === state.selectedSourceKey
     && listValue(state.view?.trajectory_meta).length > 0
+    && !state.view.trajectory_meta[0]?.detail_unavailable
     && (!row?.artifact_revision || row.artifact_revision === state.selectedArtifactRevision);
 }
 
@@ -611,9 +612,12 @@ function applyServeDetailSelection(sourceKey, report, artifactRevision, selectio
   render(report || emptyServeReport());
 }
 
+let detailRequestId = 0;
+
 function selectServeDetail(sourceKey, selection = {}) {
-  if (!sourceKey) return Promise.resolve();
+  if (!sourceKey) { detailRequestId++; return Promise.resolve(); }
   if (loadedServeDetailIsCurrent(sourceKey)) {
+    detailRequestId += 1;
     applyServeDetailSelection(sourceKey, state.view, state.selectedArtifactRevision, selection);
     return Promise.resolve();
   }
@@ -626,11 +630,22 @@ function selectServeSource(sourceKey) {
 
 async function loadServeSourceReport(sourceKey, selection = {}) {
   if (!sourceKey) return;
+  const requestId = ++detailRequestId;
   try {
     const envelope = await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}`);
+    if (requestId !== detailRequestId) return;
     applyServeDetailSelection(sourceKey, envelope.report || emptyServeReport(), envelope.artifact_revision, selection);
     setServeStatus(serveSourceModeStatusText());
   } catch (error) {
+    if (requestId !== detailRequestId) return;
+    const row = catalogRowForSourceKey(sourceKey);
+    if (row && selection.openSidebar && [404, 410].includes(error.status)) {
+      applyServeDetailSelection(sourceKey, {
+        trajectory: [{ synthetic: true, steps: [], final_metrics: {} }],
+        trajectory_meta: [{ ...row, trial_key: row.artifact_trial_key || row.trial_key, detail_unavailable: true }],
+        annotations: {},
+      }, row.artifact_revision, selection);
+    }
     setServeStatus(error.message || String(error), true);
   }
 }

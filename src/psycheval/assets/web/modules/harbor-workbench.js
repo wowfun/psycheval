@@ -331,6 +331,19 @@ function renderSelectedTaskHeading(surface) {
   const dataset = selectedDataset();
   const task = workbenchState.taskDetail?.task || selectedTask();
   const trash = selectedTrashEntry();
+  let runLink = surface.querySelector('[data-harbor-run-task]');
+  if (!runLink && meta) {
+    runLink = document.createElement('a');
+    runLink.className = 'action-button';
+    runLink.dataset.harborRunTask = '';
+    runLink.dataset.workspaceRoute = 'jobs';
+    meta.after(runLink);
+  }
+  if (runLink) {
+    runLink.hidden = !task || Boolean(trash);
+    runLink.textContent = t('jobs_configure_run', 'Configure run');
+    runLink.href = `/jobs#task=${encodeURIComponent(`${workbenchState.datasetId}/${task?.directory || ''}`)}`;
+  }
   if (title) title.textContent = task?.directory || trash?.directory || t("harbor_task_detail_empty", "Select a Task");
   if (meta) {
     meta.textContent = task

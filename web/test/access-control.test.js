@@ -137,7 +137,7 @@ test("guest Dataset page loads Task text as read-only without download controls"
     const payload = value === "/api/harbor/datasets"
       ? { datasets: [{ id: "public", tasks: [{ directory: "task-1", package_name: "org/task", status: "valid", diagnostics: [] }] }] }
       : value === "/api/harbor/datasets/public/tasks/task-1"
-        ? { dataset_id: "public", task: { directory: "task-1", package_name: "org/task", status: "valid", diagnostics: [] }, tree: [{ path: "solution/solve.sh", kind: "file", size: 9, editable: true }] }
+        ? { dataset_id: "public", task: { directory: "task-1", package_name: "org/task", status: "valid", diagnostics: [] }, tree: [{ path: "solution/solve.sh", kind: "file", size: 9, previewable: true, editable: true }] }
         : { path: "solution/solve.sh", content: "echo done" };
     return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(payload) };
   };
