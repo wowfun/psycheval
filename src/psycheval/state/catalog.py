@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
+from psycheval._harbor_datasets import resolve_harbor_datasets_for_mount
 from psycheval._state.annotations import optional_int, optional_str
 from psycheval.config import ToolConfig
 from psycheval.report.inference import inference_row_metrics
@@ -509,8 +510,9 @@ class WorkspaceCatalog:
         if not bool(record["readable"]):
             raise ValueError(f"source is not readable: {source_key}")
         row = json.loads(str(record["row_json"]))
+        config = self.sources.config
         report = _report_with_live_task_ref(
-            self.store.report_for_rows([row], self.config), self.config
+            self.store.report_for_rows([row], config), config
         )
         return DetailEnvelope(
             generation=generation,
@@ -1507,15 +1509,14 @@ def _live_task_ref(meta: dict[str, Any], config: ToolConfig) -> dict[str, str] |
     task_name = task_path.name
     if not TASK_DIRECTORY_RE.fullmatch(task_name):
         return None
-    datasets = {item.id: item for item in config.harbor_datasets}
-    matches = []
-    for dataset_id in mount.dataset_ids:
-        dataset = datasets.get(dataset_id)
-        if dataset is None:
-            continue
-        root = Path(dataset.path).expanduser().resolve()
-        if task_path.parent == root:
-            matches.append(dataset_id)
+    try:
+        matches = [
+            dataset.id
+            for dataset in resolve_harbor_datasets_for_mount(config, mount)
+            if task_path.parent == dataset.task_root
+        ]
+    except (ValueError, OSError):
+        return None
     if len(matches) != 1:
         return None
     return {"dataset_id": matches[0], "task": task_name}

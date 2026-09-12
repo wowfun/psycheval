@@ -64,6 +64,7 @@ from psycheval.serve.api_http import (
     Problem,
     ProblemException,
 )
+from psycheval.serve.api_http import content_disposition as _content_disposition
 from psycheval.serve.api_http import (
     etag as _etag,
 )
@@ -485,11 +486,21 @@ def create_app(runtime: ServeRuntime, access_control: ServeAccess) -> FastAPI:
     _register_view_report_routes(app)
     _register_harbor_routes(app)
     _register_acp_routes(app)
+    from psycheval.serve.jobs import register_jobs_routes
+    from psycheval.serve.verification import register_verification_routes
+
+    register_jobs_routes(app)
+    register_verification_routes(app)
     _verify_route_access(app)
     return app
 
 
 def _register_static_routes(app: FastAPI) -> None:
+    @app.get("/jobs", response_class=HTMLResponse)
+    @access(GUEST_ACCESS)
+    def jobs_page(request: Request) -> HTMLResponse:
+        return _serve_page(request, "jobs")
+
     @app.get("/", response_class=HTMLResponse)
     @access(GUEST_ACCESS)
     def home(request: Request) -> HTMLResponse:
@@ -604,12 +615,6 @@ _CSP_HOST = re.compile(
     r"(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::[0-9]{1,5})?"
 )
 _HARBOR_ARTIFACT_ID_RE = re.compile(r"[0-9a-f]{24}")
-_UNSAFE_HEADER_FILENAME_RE = re.compile(r"[^A-Za-z0-9_.:-]")
-
-
-def _content_disposition(disposition: str, filename: str) -> str:
-    safe_filename = _UNSAFE_HEADER_FILENAME_RE.sub("_", filename)[:145] or "artifact"
-    return f'{disposition}; filename="{safe_filename}"'
 
 
 def _workspace_csp(request: Request, nonce: str) -> str:

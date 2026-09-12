@@ -17,6 +17,7 @@ def render_serve_header(
     pages = [
         ("home", "/", messages["workspace_home"]),
         ("datasets", "/datasets", messages["harbor_datasets"]),
+        ("jobs", "/jobs", "Jobs"),
         ("reports", "/reports", messages["workspace_reports"]),
     ]
     if role == "admin":

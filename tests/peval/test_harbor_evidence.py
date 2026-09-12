@@ -18,6 +18,7 @@ from psycheval.state import (
     harbor_evidence,
     open_workspace_state,
 )
+from psycheval.state.catalog import _report_with_live_task_ref
 from psycheval.state.harbor_evidence import (
     read_harbor_evidence,
     read_harbor_task_index,
@@ -123,6 +124,62 @@ def write_evidence_trial(
 
 
 class HarborEvidenceTests(unittest.TestCase):
+    def test_live_task_reference_requires_a_unique_mounted_effective_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = root / "bundle"
+            tasks = bundle / "nested" / "collection"
+            task = tasks / "office"
+            write_task(task, "workbuddy/office")
+            (root / "unrelated").mkdir()
+            (bundle / "dataset.toml").write_text(
+                '[dataset]\nid = "office"\nversion = "1"\ntask_count = 1\n'
+                '[verifier]\nschema = "workbuddy.verifier.v1"\n'
+                'engine = "composite"\n'
+                '[layout]\ntask_root = "nested/collection"\n',
+                encoding="utf-8",
+            )
+            datasets = (
+                HarborDataset(id="bundle", path=str(bundle), format="workbuddy.v1"),
+                HarborDataset(id="collection", path=str(tasks), format="workbuddy.v1"),
+                HarborDataset(id="unrelated", path=str(root / "unrelated")),
+            )
+            report = {
+                "trajectory_meta": [
+                    {
+                        "adapter": "harbor",
+                        "harbor_provenance": {"mount_id": "jobs"},
+                        "task_metadata": {"status": "resolved", "path": str(task)},
+                    }
+                ],
+            }
+            for selected, expected in (
+                (("bundle",), "bundle"),
+                (("collection",), "collection"),
+                (("bundle", "unrelated"), "bundle"),
+                (("bundle", "collection"), None),
+                (("unrelated",), None),
+                ((), None),
+            ):
+                with self.subTest(selected=selected):
+                    config = ToolConfig(
+                        harbor_datasets=datasets,
+                        harbor_mounts=(
+                            HarborMount(
+                                id="jobs", path=str(root / "jobs"), dataset_ids=selected
+                            ),
+                        ),
+                    )
+                    projected = _report_with_live_task_ref(report, config)
+                    metadata = projected["trajectory_meta"][0]["task_metadata"]
+                    self.assertEqual(
+                        metadata.get("task_ref"),
+                        {"dataset_id": expected, "task": "office"}
+                        if expected
+                        else None,
+                    )
+            self.assertNotIn("task_ref", report["trajectory_meta"][0]["task_metadata"])
+
     def test_verifier_artifact_lookup_rejects_a_malformed_source_reference(
         self,
     ) -> None:
@@ -769,6 +826,10 @@ class HarborEvidenceTests(unittest.TestCase):
                     0
                 ]
                 self.assertEqual(meta["evaluation"]["score"], 0.4)
+                self.assertEqual(
+                    meta["task_metadata"]["task_ref"],
+                    {"dataset_id": "tasks", "task": "office-task"},
+                )
                 self.assertEqual(meta["evaluation"]["harbor_score"], 0.9)
                 self.assertEqual(meta["verifier_evidence"]["tests"]["total"], 5)
                 artifact_id = meta["verifier_evidence"]["artifacts"][0]["id"]
@@ -787,12 +848,12 @@ class HarborEvidenceTests(unittest.TestCase):
                         "task": {"path": str(flat_task)},
                     },
                 )
-                with self.assertRaisesRegex(
-                    ValueError, "no WorkBuddy verifier artifacts"
-                ):
+                self.assertEqual(
                     catalog.sources.read_harbor_verifier_artifact(
                         row["source_ref"], artifact_id, purpose="preview"
-                    )
+                    ).content,
+                    b"# Evidence\n",
+                )
             finally:
                 store.close()
 

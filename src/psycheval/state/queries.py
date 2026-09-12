@@ -89,7 +89,7 @@ class StateQueryMixin:
         reports = [
             source_report_with_current_annotations(
                 dict(row),
-                trajectory,
+                trajectory or {},
                 meta,
                 annotation_config,
                 harbor_analysis=item.get("harbor_analysis"),

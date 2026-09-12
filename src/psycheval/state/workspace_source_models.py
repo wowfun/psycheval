@@ -83,6 +83,7 @@ class SourceCandidate:
     step_result: dict[str, Any] | None = None
     trial_result: dict[str, Any] | None = None
     entry_warnings: tuple[str, ...] = ()
+    projection: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Literal
 
+from psycheval.file_access import open_read_descriptor
 from psycheval.harbor.datasets import DatasetFormat
 
 JSON_MAX_BYTES = 1024 * 1024
@@ -94,7 +95,12 @@ class HarborVerifierArtifactStream:
     def chunks(self) -> Iterator[bytes]:
         def iterate() -> Iterator[bytes]:
             try:
-                while content := self._handle.read(64 * 1024):
+                remaining = self.size
+                while remaining > 0:
+                    content = self._handle.read(min(64 * 1024, remaining))
+                    if not content:
+                        break
+                    remaining -= len(content)
                     yield content
             finally:
                 self.close()
@@ -558,24 +564,22 @@ def _open_regular(
     root: Path,
     path: Path,
     *,
-    max_bytes: int,
+    max_bytes: int | None,
 ) -> tuple[BinaryIO, os.stat_result]:
     _assert_contained(root, path)
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_BINARY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
-    descriptor = os.open(path, flags)
+    descriptor = open_read_descriptor(path)
     try:
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode):
             raise ValueError(f"verifier evidence is not a regular file: {path.name}")
-        if opened.st_size > max_bytes:
+        if max_bytes is not None and opened.st_size > max_bytes:
             raise ValueError(
                 f"verifier evidence exceeds {max_bytes} bytes: {path.name}"
             )
+        _assert_contained(root, path)
+        current = path.stat(follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ValueError("verifier evidence changed while opening")
         handle = os.fdopen(descriptor, "rb")
         descriptor = -1
         return handle, opened
@@ -604,12 +608,23 @@ def _assert_contained(root: Path, path: Path) -> None:
     except ValueError as exc:
         raise ValueError("verifier evidence escapes its Trial root") from exc
     current = absolute_root
-    if current.is_symlink():
+    if _is_link(current):
         raise ValueError("verifier evidence root is a symbolic link")
     for part in relative.parts:
         current /= part
-        if current.is_symlink():
+        if _is_link(current):
             raise ValueError("verifier evidence traverses a symbolic link")
+
+
+def _is_link(path: Path) -> bool:
+    try:
+        value = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(value.st_mode) or bool(
+        getattr(value, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    )
 
 
 def _media_type(path: Path) -> str:

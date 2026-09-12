@@ -24,6 +24,7 @@ from psycheval.harbor.datasets import (
     validate_harbor_dataset,
 )
 from psycheval.serve.harbor_workspace import (
+    TEXT_EDIT_LIMIT,
     HarborWorkspace,
     HarborWorkspaceError,
     config_revision,
@@ -343,6 +344,13 @@ class WorkBuddyDatasetTests(unittest.TestCase):
             config_path = root / "peval.toml"
             config_path.write_text("")
             bundle = _write_workbuddy_bundle(root / "bundle")
+            task_dir = bundle / "tasks" / "office-one"
+            (task_dir / "binary.bin").write_bytes(b"\xff\x00")
+            (task_dir / "large.txt").write_bytes(b"x" * (TEXT_EDIT_LIMIT + 1))
+            (task_dir / "environment" / "Dockerfile").write_text(
+                "FROM example\n", encoding="utf-8"
+            )
+            before = {p: p.read_bytes() for p in bundle.rglob("*") if p.is_file()}
             config = ToolConfig(
                 workspace_root=str(root),
                 harbor_datasets=(
@@ -355,6 +363,12 @@ class WorkBuddyDatasetTests(unittest.TestCase):
             content = library.read_file("office", "office-one", "instruction.md")
             self.assertTrue(detail["read_only"])
             self.assertTrue(detail["tree"])
+            paths = {item["path"]: item for item in detail["tree"]}
+            self.assertTrue(paths["instruction.md"]["previewable"])
+            self.assertTrue(paths["task.toml"]["previewable"])
+            self.assertTrue(paths["environment/Dockerfile"]["previewable"])
+            self.assertFalse(paths["binary.bin"]["previewable"])
+            self.assertFalse(paths["large.txt"]["previewable"])
             self.assertTrue(
                 all(not item.get("editable", False) for item in detail["tree"])
             )
@@ -370,6 +384,9 @@ class WorkBuddyDatasetTests(unittest.TestCase):
                         "expected_revision": detail["task"]["revision"],
                     },
                 )
+            self.assertEqual(
+                {p: p.read_bytes() for p in bundle.rglob("*") if p.is_file()}, before
+            )
 
     def test_mount_task_paths_use_effective_workbuddy_task_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

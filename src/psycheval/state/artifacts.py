@@ -108,14 +108,10 @@ class StateArtifactMixin:
     def read_source_document(
         self, row: dict[str, Any], config: ToolConfig
     ) -> dict[str, Any]:
-        if not is_harbor_source(row):
+        if not is_harbor_source(row) and row.get("kind") != "harness-trial":
             return self.read_trial_artifacts(row)
         document = WorkspaceSources(self, config).load_ref(str(row["source_ref"]))
-        if (
-            not document.readable
-            or document.trajectory is None
-            or document.meta is None
-        ):
+        if not document.readable or document.meta is None:
             raise ValueError(
                 document.last_error
                 or f"Harbor Trial is not readable: {document.source_ref}"

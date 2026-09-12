@@ -284,7 +284,9 @@ def _project_harbor_task_summary(value: dict[str, Any]) -> dict[str, Any]:
 
 def _project_harbor_file(value: dict[str, Any]) -> dict[str, Any]:
     return {
-        key: value[key] for key in ("path", "kind", "size", "editable") if key in value
+        key: value[key]
+        for key in ("path", "kind", "size", "previewable", "editable")
+        if key in value
     }
 
 

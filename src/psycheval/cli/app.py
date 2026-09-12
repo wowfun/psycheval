@@ -517,6 +517,8 @@ app.add_typer(
     name="publish",
     short_help="Publish evaluation artifacts",
 )
+
+
 @app.command(
     "serve",
     help=(

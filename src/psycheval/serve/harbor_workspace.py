@@ -759,9 +759,10 @@ class HarborWorkspace:
                 "size": value.st_size if stat.S_ISREG(value.st_mode) else None,
             }
             if stat.S_ISREG(value.st_mode):
-                item["editable"] = (
-                    editable and value.st_size <= TEXT_EDIT_LIMIT and _is_utf8(path)
+                item["previewable"] = value.st_size <= TEXT_EDIT_LIMIT and _is_utf8(
+                    path
                 )
+                item["editable"] = editable and item["previewable"]
             result.append(item)
         return result
 

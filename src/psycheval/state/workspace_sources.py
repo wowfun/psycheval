@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -18,17 +17,16 @@ from psycheval._state.artifacts import (
 from psycheval._state.sources import refresh_binding
 from psycheval.atif import validate_atif_trajectory
 from psycheval.config import HarborMount, ToolConfig, validate_harbor_mount_paths
-from psycheval.harbor.datasets import ResolvedHarborDataset
 from psycheval.state.constants import SOURCE_STATE_DIR, SOURCE_STATE_FILENAME
 from psycheval.state.harbor_evidence import (
     HarborTaskIndex,
-    _task_path_matches,
     read_harbor_evidence,
     read_harbor_task_index,
 )
 from psycheval.state.harbor_verifier_evidence import (
     HarborVerifierArtifact,
     HarborVerifierArtifactStream,
+    _assert_contained,
     open_harbor_verifier_artifact_download,
     read_harbor_verifier_artifact,
     read_harbor_verifier_evidence,
@@ -87,7 +85,6 @@ if TYPE_CHECKING:
 _LOCAL_SOURCE_FILES_WITHOUT_REPORT = tuple(
     name for name in LOCAL_FINGERPRINT_FILES if name != HARBOR_ANALYSIS_MD_FILE
 )
-_HARBOR_IDENTITY_JSON_MAX_BYTES = 4 * 1024 * 1024
 
 
 class WorkspaceSources:
@@ -98,13 +95,50 @@ class WorkspaceSources:
         self.config = config
         self.workspace_root = store.paths.root.expanduser().resolve()
 
+    @property
+    def config(self):
+        from psycheval.jobs.storage import safe_path
+
+        from .jobs import managed_config
+
+        try:
+            available = (
+                safe_path(self.workspace_root, "jobs").is_dir(),
+                safe_path(self.workspace_root, ".peval", "jobs").is_dir(),
+            )
+        except (ValueError, OSError):
+            return self._config
+        if self._effective_config is None or self._managed_available != available:
+            self._effective_config = managed_config(self._config, self.workspace_root)
+            self._managed_available = available
+        return self._effective_config
+
+    @config.setter
+    def config(self, value):
+        self._config = value
+        self._effective_config = None
+        self._managed_available = None
+
     def discover(self) -> list[SourceCandidate]:
         self._reject_legacy_harbor_projections()
         overlay_root = self.workspace_root / HARBOR_OVERLAY_ROOT
         if overlay_root.is_symlink():
             raise ValueError("workspace Harbor overlay root must not be a symlink")
         candidates = self._local_candidates()
+        from dataclasses import replace
+
+        from .jobs import plugin_candidates, variant_index
+
+        candidates.extend(plugin_candidates(self.workspace_root))
         harbor_candidates, present_refs = self._harbor_candidates()
+        variants = variant_index(self.workspace_root)
+        harbor_candidates = [
+            replace(
+                candidate,
+                projection=variants.get((candidate.job_name, candidate.trial_name), {}),
+            )
+            for candidate in harbor_candidates
+        ]
         candidates.extend(harbor_candidates)
         candidates.extend(self._retained_missing_candidates(present_refs))
         return sorted(candidates, key=lambda item: item.source_ref)
@@ -125,7 +159,7 @@ class WorkspaceSources:
     ) -> HarborVerifierArtifact:
         if purpose not in {"preview", "download"}:
             raise ValueError("unsupported verifier artifact purpose")
-        data_dir, containment_root = self._workbuddy_artifact_location(source_ref)
+        data_dir, containment_root = self.verification_file_location(source_ref)
         return read_harbor_verifier_artifact(
             data_dir,
             containment_root=containment_root,
@@ -138,14 +172,14 @@ class WorkspaceSources:
         source_ref: str,
         artifact_id: str,
     ) -> HarborVerifierArtifactStream:
-        data_dir, containment_root = self._workbuddy_artifact_location(source_ref)
+        data_dir, containment_root = self.verification_file_location(source_ref)
         return open_harbor_verifier_artifact_download(
             data_dir,
             containment_root=containment_root,
             artifact_id=artifact_id,
         )
 
-    def _workbuddy_artifact_location(self, source_ref: str) -> tuple[Path, Path]:
+    def verification_file_location(self, source_ref: str) -> tuple[Path, Path]:
         self._reject_legacy_harbor_projections()
         self.overlay_dir(source_ref)
         parts = Path(source_ref).parts
@@ -156,16 +190,8 @@ class WorkspaceSources:
         )
         if mount is None:
             raise ValueError("unknown Harbor Trial source")
-        datasets_by_id = {
-            dataset.id: dataset for dataset in self.config.harbor_datasets
-        }
-        mount_datasets = tuple(
-            datasets_by_id[dataset_id]
-            for dataset_id in mount.dataset_ids
-            if dataset_id in datasets_by_id
-        )
-        validate_harbor_mount_paths((mount,), mount_datasets)
         lexical_root = Path(os.path.abspath(Path(mount.path).expanduser()))
+        _assert_contained(Path(lexical_root.anchor), lexical_root)
         diagnostic = self._mount_diagnostic(lexical_root)
         if diagnostic is not None:
             raise ValueError(diagnostic)
@@ -174,12 +200,6 @@ class WorkspaceSources:
         trial_dir = self._direct_harbor_directory(job_dir, trial_name, "Trial")
         if not _looks_like_trial(trial_dir):
             raise ValueError("unknown Harbor Trial source")
-        resolved = resolve_harbor_datasets_for_mount(self.config, mount)
-        formats = {dataset.format for dataset in resolved}
-        if "workbuddy.v1" not in formats:
-            raise ValueError("Harbor Trial has no WorkBuddy verifier artifacts")
-        if len(formats) > 1 and not _trial_records_workbuddy_task(trial_dir, resolved):
-            raise ValueError("Harbor Trial has no WorkBuddy verifier artifacts")
         data_dir = trial_dir
         if len(parts) == 6:
             steps_dir = self._direct_harbor_directory(trial_dir, "steps", "Steps")
@@ -192,15 +212,29 @@ class WorkspaceSources:
         *,
         include_evaluation_report: bool = True,
     ) -> SourceDocument:
+        if candidate.kind == "harness-trial":
+            from .jobs import plugin_document
+
+            return plugin_document(candidate)
         if candidate.kind == "artifact-cell":
             return self._load_local(
                 candidate,
                 include_evaluation_report=include_evaluation_report,
             )
-        return self._load_harbor(
+        document = self._load_harbor(
             candidate,
             include_evaluation_report=include_evaluation_report,
         )
+        from .jobs import variant_metadata
+
+        document.source.update(
+            candidate.projection
+            if candidate.projection is not None
+            else variant_metadata(
+                self.workspace_root, candidate.job_name, candidate.trial_name
+            )
+        )
+        return document
 
     def load_ref(
         self,
@@ -209,6 +243,9 @@ class WorkspaceSources:
         include_evaluation_report: bool = True,
     ) -> SourceDocument:
         wanted = str(source_ref or "").strip()
+        if wanted.startswith("runs/jobs/"):
+            from .jobs import plugin_candidate_for_ref
+            return self.load(plugin_candidate_for_ref(self.workspace_root, wanted))
         if wanted.startswith(f"{HARBOR_OVERLAY_ROOT}/"):
             return self.load(
                 self._harbor_candidate_for_ref(
@@ -217,7 +254,7 @@ class WorkspaceSources:
                 ),
                 include_evaluation_report=include_evaluation_report,
             )
-        if not include_evaluation_report:
+        if not include_evaluation_report and not wanted.startswith("runs/jobs/"):
             candidate = self._local_candidate_for_ref(wanted)
             return self.load(candidate, include_evaluation_report=False)
         for candidate in self.discover():
@@ -923,7 +960,9 @@ class WorkspaceSources:
                 else trial_result_json
             )
             verifier_evidence = None
-            if evidence.dataset_format == "workbuddy.v1":
+            if evidence.dataset_format == "workbuddy.v1" and not (
+                config_json or {}
+            ).get("verifier", {}).get("disable"):
                 verifier_evidence = read_harbor_verifier_evidence(
                     candidate.data_path or candidate.path,
                     containment_root=candidate.containment_root or candidate.path,
@@ -975,7 +1014,7 @@ class WorkspaceSources:
                     fingerprint=current_fingerprint(revision=revision),
                     updated_at_ms=_updated_at_ms(candidate.path, presentation_files),
                     input_bytes=_input_bytes(candidate.path, presentation_files),
-                    readable=False,
+                    readable=result_json is not None,
                     refreshable=True,
                     snapshot=False,
                     active=bool(overlay.get("active", True)),
@@ -1152,40 +1191,3 @@ def _read_local_evaluation_report(candidate: SourceCandidate) -> str | None:
     except (OSError, UnicodeDecodeError, ValueError):
         return None
     return markdown if markdown.strip() else None
-
-
-def _trial_records_workbuddy_task(
-    trial_dir: Path,
-    datasets: tuple[ResolvedHarborDataset, ...],
-) -> bool:
-    recorded_paths: list[str] = []
-    for filename in ("config.json", "lock.json", "result.json"):
-        try:
-            content = _read_bytes_no_follow(
-                trial_dir.parent.parent,
-                trial_dir / filename,
-                max_bytes=_HARBOR_IDENTITY_JSON_MAX_BYTES,
-                label="Harbor Trial identity",
-            )
-            value = json.loads(content.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
-            continue
-        if not isinstance(value, dict):
-            continue
-        for key in ("task", "task_id"):
-            task = value.get(key)
-            if isinstance(task, dict) and isinstance(task.get("path"), str):
-                recorded_paths.append(task["path"])
-    for recorded in recorded_paths:
-        matches = {
-            dataset.format
-            for dataset in datasets
-            for task_name in dataset.task_names
-            if _task_path_matches(
-                dataset.task_root / task_name,
-                recorded,
-            )
-        }
-        if matches == {"workbuddy.v1"}:
-            return True
-    return False

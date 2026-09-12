@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 from typing import Any
 
 from fastapi.responses import JSONResponse
@@ -197,3 +198,8 @@ def opaque_path_value(token: str) -> str:
     if not value or opaque_path_token(value) != token:
         raise ValueError("invalid opaque path token")
     return value
+
+
+def content_disposition(disposition: str, filename: str) -> str:
+    safe_filename = re.sub(r"[^A-Za-z0-9_.:-]", "_", filename)[:145] or "artifact"
+    return f'{disposition}; filename="{safe_filename}"'

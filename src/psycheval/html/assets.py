@@ -21,6 +21,7 @@ WORKSPACE_STYLESHEET_PARTS = (
     "css/28-workspace-reports.css",
     "css/30-workspace-views.css",
     "css/32-acp-client.css",
+    "css/34-jobs.css",
 )
 
 

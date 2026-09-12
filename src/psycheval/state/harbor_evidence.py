@@ -409,13 +409,11 @@ def _task_candidates_once(
                 )
                 config_bytes = loaded_task.config_bytes
                 task = loaded_task.config.task
-                if task is None:
-                    raise ValueError("task.toml must contain a [task] table")
                 metadata = {
-                    "name": optional_str(task.name),
-                    "version": optional_str(task.version),
-                    "description": str(task.description or ""),
-                    "keywords": _string_list(task.keywords),
+                    "name": optional_str(task.name) if task else task_dir.name,
+                    "version": optional_str(task.version) if task else None,
+                    "description": str(task.description or "") if task else "",
+                    "keywords": _string_list(task.keywords) if task else [],
                 }
                 error = None
             except Exception as exc:  # noqa: BLE001 - Harbor owns validation types.

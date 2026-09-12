@@ -1885,6 +1885,10 @@ class HarborWorkspaceTests(unittest.TestCase):
                 )
                 self.assertIn("solution/solve.sh", paths)
                 self.assertIn("tests/test.sh", paths)
+                self.assertTrue(paths["instruction.md"]["previewable"])
+                self.assertTrue(paths["instruction.md"]["editable"])
+                self.assertFalse(paths["binary.bin"]["previewable"])
+                self.assertFalse(paths["large.txt"]["previewable"])
                 self.assertFalse(paths["binary.bin"]["editable"])
                 self.assertFalse(paths["large.txt"]["editable"])
                 self.assertTrue(

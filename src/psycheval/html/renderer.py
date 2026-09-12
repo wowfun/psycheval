@@ -101,6 +101,7 @@ def render_serve_pages(
     pages = [
         ("home", render_serve_home()),
         ("datasets", render_harbor_dataset_page(messages, role=role)),
+        ("jobs", '<div class="jobs-page" data-jobs-page></div>'),
         ("reports", render_serve_report_page(messages, role=role)),
     ]
     if role == "admin":
@@ -117,7 +118,7 @@ def render_serve_pages(
 
 def normalize_serve_page(value: object) -> str:
     page = str(value or "home").strip().lower()
-    if page not in {"home", "datasets", "reports", "config"}:
+    if page not in {"home", "datasets", "jobs", "reports", "config"}:
         raise ValueError(f"unsupported serve page: {page}")
     return page
 

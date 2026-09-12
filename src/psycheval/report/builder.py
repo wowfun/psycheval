@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from psycheval.adapters.base import ConversionResult
@@ -79,7 +80,7 @@ def build_multi_report(
 
 
 def build_report_from_snapshots(
-    trajectories: list[dict[str, Any]],
+    trajectories: list[dict[str, Any] | None],
     metas: list[dict[str, Any]],
     *,
     input_label: str = "serve",
@@ -90,21 +91,32 @@ def build_report_from_snapshots(
     if not trajectories:
         return empty_report(input_label)
     for index, trajectory in enumerate(trajectories):
-        validate_atif_trajectory(trajectory, f"report.trajectory[{index}]")
+        if trajectory is not None:
+            validate_atif_trajectory(trajectory, f"report.trajectory[{index}]")
     projected_metas = [
         project_meta_from_atif(trajectory, meta)
+        if trajectory is not None
+        else {**meta, "trajectory_available": False}
         for trajectory, meta in zip(trajectories, metas, strict=True)
+    ]
+    display_trajectories = [
+        trajectory
+        if trajectory is not None
+        else empty_trajectory_for_meta(
+            meta, Path(str(meta.get("trial_key") or "result"))
+        )
+        for trajectory, meta in zip(trajectories, projected_metas, strict=True)
     ]
     includes = ["core"]
     report: dict[str, Any] = {
         "schema_version": VIEW_SCHEMA_VERSION,
         "includes": includes,
-        "trajectory": trajectories,
+        "trajectory": display_trajectories,
         "trajectory_meta": projected_metas,
     }
     notes = note_reports_from_snapshots(source_reports or [], projected_metas)
     analyses = analysis_reports_from_snapshots(
-        source_reports or [], trajectories, projected_metas
+        source_reports or [], display_trajectories, projected_metas
     )
     if notes or analyses:
         includes.append("annotations")
@@ -112,6 +124,18 @@ def build_report_from_snapshots(
         if analyses:
             report["annotations"]["analysis"] = analyses
     return report
+
+
+def empty_trajectory_for_meta(meta: dict[str, Any], path: Path) -> dict[str, Any]:
+    return {
+        "synthetic": True,
+        "schema_version": "ATIF-v1.7",
+        "session_id": meta.get("session_id") or meta.get("trial_key") or path.stem,
+        "trajectory_id": meta.get("trial_key") or path.stem,
+        "agent": {"name": meta.get("adapter") or "metadata-only", "version": "unknown"},
+        "steps": [],
+        "final_metrics": {},
+    }
 
 
 def empty_report(input_label: str = "serve") -> dict[str, Any]:

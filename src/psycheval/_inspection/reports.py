@@ -15,7 +15,7 @@ from psycheval.config import ToolConfig
 from psycheval.evaluation_reports import EvaluationReports
 from psycheval.inputs import AdapterAssignments, load_inputs, remap_session_selectors
 from psycheval.pipeline import build_report_from_loaded_inputs
-from psycheval.report import project_meta_from_atif
+from psycheval.report import empty_trajectory_for_meta, project_meta_from_atif
 
 
 def inspect_report_for_args(
@@ -333,17 +333,6 @@ def meta_from_trajectory(trajectory: dict[str, Any], path: Path) -> dict[str, An
             "total_events": len(trajectory.get("steps") or []),
         },
     )
-
-
-def empty_trajectory_for_meta(meta: dict[str, Any], path: Path) -> dict[str, Any]:
-    return {
-        "schema_version": "ATIF-v1.7",
-        "session_id": meta.get("session_id") or meta.get("trial_key") or path.stem,
-        "trajectory_id": meta.get("trial_key") or path.stem,
-        "agent": {"name": meta.get("adapter") or "metadata-only"},
-        "steps": [],
-        "final_metrics": {},
-    }
 
 
 def merge_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:

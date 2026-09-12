@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from threading import Event, Lock, Thread
 from typing import Any, Callable, Sequence
 
@@ -42,6 +43,13 @@ class ServeRuntime:
     ) -> None:
         self.store = store
         self.config = config
+        from psycheval.jobs.service import JobsService
+
+        self.jobs = JobsService(store.paths.root)
+        self._jobs_revision = None
+        self._jobs_checked_at = 0
+        self._jobs_thread = None
+        self._closed = False
         self.catalog = WorkspaceCatalog(store, config)
         self.workspace_reports = WorkspaceReportLibrary(
             store.paths.root,
@@ -155,8 +163,53 @@ class ServeRuntime:
             return self.config, self.acp.agents()
 
     def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            jobs_thread = self._jobs_thread
+        if jobs_thread is not None:
+            jobs_thread.join()
         self.acp.close()
         self.evaluation_reports.close()
+
+    def jobs_list(self):
+        from psycheval.jobs.storage import digest
+
+        items = self.jobs.list()
+        revision = digest(
+            [
+                (
+                    item["id"],
+                    item["state"],
+                    item.get("trials_started"),
+                    item.get("trials_completed"),
+                    item.get("error"),
+                    item.get("job_name"),
+                )
+                for item in items
+            ]
+        )
+
+        def reconcile():
+            try:
+                self.catalog.reconcile()
+            except (CatalogBusyError, ValueError, OSError):
+                # Keep the previous revision so the next observation retries.
+                pass
+            else:
+                with self._lock:
+                    self._jobs_revision = revision
+
+        with self._lock:
+            if (
+                not self._closed
+                and time.monotonic() - self._jobs_checked_at >= 2
+                and revision != self._jobs_revision
+                and (self._jobs_thread is None or not self._jobs_thread.is_alive())
+            ):
+                self._jobs_checked_at = time.monotonic()
+                self._jobs_thread = Thread(target=reconcile, daemon=True)
+                self._jobs_thread.start()
+        return items
 
     def catalog_page(
         self,

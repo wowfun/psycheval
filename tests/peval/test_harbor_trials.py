@@ -832,7 +832,7 @@ class HarborTrialTests(unittest.TestCase):
                     .items[0]
                     .to_dict()
                 )
-                self.assertFalse(row["readable"])
+                self.assertTrue(row["readable"])
                 self.assertEqual(row["last_status"], "errored")
                 self.assertEqual(row["status"], "errored")
                 self.assertEqual(row["agent_name"], "opencode")
@@ -842,9 +842,9 @@ class HarborTrialTests(unittest.TestCase):
                     row["last_error"],
                     "AgentExitError: agent command exited with status 17",
                 )
-                self.assertIsNone(row.get("step_outline"))
-                with self.assertRaisesRegex(ValueError, "not readable"):
-                    catalog.load_detail(row["source_key"])
+                self.assertFalse(row.get("step_outline"))
+                detail = catalog.load_detail(row["source_key"]).report
+                self.assertEqual(detail["trajectory"][0]["steps"], [])
             finally:
                 store.close()
 

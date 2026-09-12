@@ -21,6 +21,7 @@ from pydantic import (
 
 from psycheval.harbor.identifiers import HARBOR_ID_RE, validate_harbor_id
 from psycheval.i18n import normalize_locale
+from psycheval.jobs.configuration import HarnessId, JobsDocument
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ACP_AGENT_ID_RE = HARBOR_ID_RE
@@ -309,6 +310,8 @@ class _WorkspaceDocument(_RawConfigModel):
     adapters: dict[str, _AdapterDocument] = Field(default_factory=dict)
     acp: _AcpDocument | None = None
     harbor: _HarborDocument | None = None
+    jobs: JobsDocument = Field(default_factory=JobsDocument)
+    harnesses: dict[HarnessId, dict[str, Any]] = Field(default_factory=dict)
 
 
 def _validate_workspace_document(
