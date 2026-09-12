@@ -51,14 +51,37 @@ metadata contribute to the evidence revision and therefore invalidate the
 rebuildable source projection when they change. It projects explicit
 score/verdict fields and, for administrators, opaque artifact identifiers; it
 never projects raw verifier payloads, host paths, environment maps, process
-output, or LLM responses. An administrator preview or download opens only the
-selected artifact. Its source lookup resolves the exact registered Mount, Job,
-and Trial plus the recorded Task's lightweight Dataset association; it does not
-reconcile unrelated Trials or compute Task-content digests. Preview is restricted
-to the explicit text and raster-image suffix allowlists and is returned under a
-sandbox Content Security Policy. The HTTP boundary independently constrains the
-download filename to the public ASCII artifact-name form. Guests receive only the
-safe score summary and no artifact identity.
+output, or LLM responses into that summary. Catalog and export projections retain this safe summary for guests.
+
+Guests and administrators can inspect retained verification files on demand: `verifier/`,
+`artifacts/`, `result.json`, and `exception.txt` within the selected Trial's
+effective result directory (the selected Harbor Step for multi-step sources).
+This read-only interface includes raw output, free-form verdict reasons, copying,
+and bounded download access. HTTP retains `?download=true`; the bundled browser
+exposes no per-file download button. Preview capability is a renderer capability,
+not an authorization boundary: an unrenderable retained artifact can be downloaded.
+Both roles are readers of the same shared workspace evidence. Known environment
+credentials, recognizable secret literals and explicit JSON credential fields are
+redacted in textual responses, including downloads, without modifying source
+files. Binary artifacts containing recognized credentials are refused; ZIP-based
+artifacts are checked within the same expanded-byte budget. Malformed or
+unsupported compressed members produce a controlled file read error. The
+credential filter does not promise to detect arbitrary private data or encoded secrets:
+publishers must place only reader-shareable evidence in retained directories.
+Malformed text is scanned as non-overlapping string tokens; escaped or
+unterminated strings must not cause repeated scans of the remaining content.
+Markdown uses the [shared file preview](workspace.md), with truncated content
+remaining raw text. The interface grants no mutation capability. Lookup resolves only the
+registered Mount, Job, and Trial; it requires neither Dataset registration nor
+live Task resolution. It does not reconcile other Trials or compute Task digests.
+File lists contain relative metadata and opaque identifiers; listing never reads
+file bodies. A selected preview reads at most 2 MiB of text and marks truncation;
+truncated or unrecognized documents are displayed as literal text. Structured
+previews show recorded scores, weights, reasons, and test statuses without
+recomputing the canonical score. Downloads retain the bounded artifact download
+limit. Links and reparse points are rejected, active document content is never
+executed, and binary responses use a sandbox Content Security Policy. Artifact
+references resolve only to files inside the retained result directories.
 
 ## Deterministic and live validation
 

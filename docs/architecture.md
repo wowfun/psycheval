@@ -10,11 +10,21 @@ psycheval
 ├── adapters, conversion -> retained-session conversion
 ├── report, workspace   -> derived views and user overlays
 ├── serve, state        -> local evaluation workspace and ACP client runtime
+├── jobs                -> evaluation configuration, harness plugins and workers
 ├── assets              -> authored Web modules, templates, and styles
 └── harbor              -> Harbor 0.21 adapters, harness, host, verifier
 ```
 
 ## Module boundaries
+
+`psycheval.jobs` owns requests, configuration, harness plugins and worker
+supervision; native harnesses own execution and scoring. Its Harbor adapter
+consumes the relocatable Harbor integration. See the [Jobs contract](reference/jobs.md).
+`state.jobs` owns managed-run discovery and catalog identity projection. Jobs
+services return native results; the serve boundary adds workspace Trial links.
+`redaction` owns credential filtering shared by Jobs and retained-file reads.
+`file_access` supplies non-following file descriptors; each consumer owns its
+containment policy and read limits.
 
 The package-level implementation reads retained sessions and Harbor Trial
 evidence, converts strict ATIF, and builds reports and workspaces behind the
@@ -85,6 +95,15 @@ UI. `run_serve_command` owns listener selection, the single-process runtime, and
 shutdown through Uvicorn; the application borrows that runtime and does not own
 its lifecycle. The `/api` interface is not a public integration API and does not
 publish interactive API documentation or a generated client contract.
+
+Workspace source resolution owns direct access to a selected retained Trial's
+effective result directory independently of live Tasks. Verification file access
+owns bounded file enumeration, preview, and download within that directory. The
+`serve.verification` module owns its read-only HTTP routes; `state.verification_files`
+owns filesystem access and content limits. The
+browser shares file-tree and selection primitives between Task editing and
+read-only verification; format renderers interpret selected retained documents
+without changing the canonical score projection.
 
 The browser UI is one persistent document. The server renders every page shell
 allowed for the current role and the requested route selects the initial page;

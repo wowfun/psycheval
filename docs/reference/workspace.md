@@ -70,8 +70,15 @@ same inventory, but the entire Dataset workbench is read-only: Task creation,
 rename, archive, restore, deletion, file writes, and manifest synchronization are
 rejected at the server boundary. A Dataset selected through a symlink is stored
 as its strict physical directory; hand-authored configured paths still reject
-symlink traversal. Read-only capability is also carried by each Task tree entry,
-so clients never advertise an editable text node that the server will reject.
+symlink traversal. Each Task file entry separates text-preview capability from
+editability: regular UTF-8 files within the text-size limit can be previewed even
+in read-only Datasets. Binary and oversized files expose metadata only. Clients
+enable editing only when both the file and the current view permit it.
+The Home and Dataset Task browsers share the Verification browser's Markdown
+preview: complete `.md` and `.markdown` files open rendered, with a raw-text
+toggle. Task editing uses the raw view and preserves drafts when switching views.
+Embedded HTML remains literal text. These file browsers expose no per-file
+download controls.
 WorkBuddy inventory rows report registration identity without recursively
 validating or hashing every Task tree. Opening a Task detail validates that
 selected Task against its current files and exposes the resulting diagnostic
@@ -193,6 +200,18 @@ Wide timeline detail tables scroll within their own container; they do not
 expand the workspace beyond the viewport on narrow screens.
 
 ## Access model
+
+The Home Trial sidebar keeps run status, score, and score source visible above
+Verification, Task, and Trajectory tabs. Verification uses a searchable file
+tree and on-demand previews under the [evaluation evidence contract](evaluation.md).
+Its initial tab is Verification; later Trial selections retain the active tab,
+while selecting a trajectory step opens Trajectory. Subagent navigation changes
+the trajectory only, not the Trial or Harbor Step that owns verification.
+Task availability does not control verification access. Sources without retained
+verification files show their existing score summary and an explicit empty state.
+For a missing or removed source (HTTP 404/410), the sidebar uses the catalog's
+existing summary and marks the trajectory unavailable. Temporary server or
+network failures remain errors and do not fabricate missing evidence.
 
 Serve has anonymous `guest` and authenticated `admin` roles. Without
 authentication, only a local listener is allowed and requests act as admin. A

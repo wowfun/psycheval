@@ -50,10 +50,12 @@ from psycheval.harbor.workbuddy import compute_official_metrics, prepare_workbud
 
 base = JobConfig(
     datasets=[DatasetConfig(path=Path("path/to/tasks").resolve())],
-    agents=[AgentConfig(
-        import_path="psycheval.harbor.opencode:HostOpenCodeAgent",
-        model_name="provider/model",
-    )],
+    agents=[
+        AgentConfig(
+            import_path="psycheval.harbor.opencode:HostOpenCodeAgent",
+            model_name="provider/model",
+        )
+    ],
     environment=EnvironmentConfig(
         import_path="psycheval.harbor.environment:HostEnvironment",
         kwargs={"host_access": {"filesystem": True, "process": True}},

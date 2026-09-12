@@ -212,14 +212,19 @@ from pathlib import Path
 import yaml
 from harbor.models.job.config import DatasetConfig, JobConfig
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig
-from downstream._vendor.psycheval_harbor.workbuddy import compute_official_metrics, prepare_workbuddy_job
+from downstream._vendor.psycheval_harbor.workbuddy import (
+    compute_official_metrics,
+    prepare_workbuddy_job,
+)
 
 base = JobConfig(
     datasets=[DatasetConfig(path=Path("path/to/tasks").resolve())],
-    agents=[AgentConfig(
-        import_path="downstream._vendor.psycheval_harbor.opencode:HostOpenCodeAgent",
-        model_name="provider/model",
-    )],
+    agents=[
+        AgentConfig(
+            import_path="downstream._vendor.psycheval_harbor.opencode:HostOpenCodeAgent",
+            model_name="provider/model",
+        )
+    ],
     environment=EnvironmentConfig(
         import_path="downstream._vendor.psycheval_harbor.environment:HostEnvironment",
         kwargs={"host_access": {"filesystem": True, "process": True}},

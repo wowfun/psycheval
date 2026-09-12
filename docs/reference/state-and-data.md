@@ -96,7 +96,9 @@ Live Harbor Task text is read on demand through the bounded Workspace Task file
 interface. Task configuration, required instruction files, and Task ignore
 rules are strict UTF-8, independent of the host locale. Task text is not copied
 into reports, catalog summaries, search documents, or exports; live detail may
-expose only a safe Dataset/Task reference. Task file-tree responses omit
+expose only a safe Dataset/Task reference. That reference requires a unique
+association within the Trial's configured mount, using each Dataset's resolved
+Task root, including manifest-defined nested layouts. Task file-tree responses omit
 `__pycache__` directories and their descendants as generated presentation
 noise. A Task attached to Copilot is user-supplied analysis context. Psycheval
 does not treat it, a Task Skill path, or any other attachment as authoritative

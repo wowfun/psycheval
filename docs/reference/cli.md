@@ -2,7 +2,8 @@
 
 `peval` is the short installed name for the Psycheval CLI. It converts retained
 Agent sessions to ATIF, builds reports, and organizes evaluation workspaces; it
-is not a Python module and does not run Agents or score Tasks.
+is not a Python module. The workspace Jobs interface launches evaluations through
+harnesses, which own Agent execution and Task scoring; see [Jobs](jobs.md).
 
 ## Programmatic and command interfaces
 
