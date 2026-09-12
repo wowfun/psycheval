@@ -1,6 +1,9 @@
 import { $, RENDER_OPTIONS, adminMode, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, statusLabel, t } from "./shared.js";
 import { columnVisibleForLayout, loadColumnLayout, moveColumn, normalizeColumnLayout, presenceForColumns, resolveColumns, saveColumnLayout } from "./leaderboard-columns.js";
 
+const TABLE_CONTROL_SELECTOR = "input,button,a,select,textarea,label,details,[contenteditable='true'],[data-table-cell-editor],[data-workspace-report-control]";
+const tableRowActivations = new WeakMap();
+
 let state = { tables: {}, rowSelection: new Set(), catalogPage: {}, catalogQuery: {} };
 let noteSnippetFor = () => "";
 let notesFor = () => [];
@@ -704,6 +707,36 @@ function tableRowKey(row, rowKey) {
   const value = typeof rowKey === "function" ? rowKey(row) : row?.[rowKey] ?? row?.trial_key ?? row?.source_key;
   return String(value ?? "");
 }
+function bindTableRowActivation(node, activate) {
+  if (!node.hasAttribute("tabindex")) node.setAttribute("tabindex", "0");
+  const scope = node.closest("[data-table-id]") || node;
+  let activation = tableRowActivations.get(scope);
+  if (!activation) {
+    activation = { pending: null };
+    tableRowActivations.set(scope, activation);
+    const cancel = () => { clearTimeout(activation.pending); activation.pending = null; };
+    for (const event of ["pointerdown", "click", "dblclick", "keydown"]) scope.addEventListener(event, cancel, true);
+  }
+  node.addEventListener("click", event => {
+    if (event.defaultPrevented || event.target?.closest?.(TABLE_CONTROL_SELECTOR)) return;
+    if (event.detail > 1) return;
+    if (event.target?.closest?.(".table-cell-editable")) {
+      activation.pending = setTimeout(() => {
+        activation.pending = null;
+        if (node.isConnected && !node.querySelector("[data-table-cell-editor]")) activate(event);
+      }, 250);
+    } else {
+      activate(event);
+    }
+  });
+  node.addEventListener("keydown", event => {
+    if (event.defaultPrevented || event.repeat || event.target !== node || !["Enter", " "].includes(event.key)) return;
+    if (event.key === "Enter" && node.matches(".table-cell-editable")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    activate(event);
+  });
+}
 function bindDataTableEditors(root, { tableId, columns, rows, rowKey, onChange }) {
   if (!columns.length || !rows.length) return;
   const columnByKey = new Map(columns.map(column => [String(column.key), column]));
@@ -712,8 +745,8 @@ function bindDataTableEditors(root, { tableId, columns, rows, rowKey, onChange }
     const column = columnByKey.get(cell.dataset.tableColumnKey);
     const row = rowByKey.get(cell.closest("[data-table-row-key]")?.dataset?.tableRowKey || "");
     if (!row || !resolveTableCellEdit(column, row)) return;
-    cell.addEventListener("click", event => event.stopPropagation());
     cell.addEventListener("dblclick", event => {
+      if (event.target?.closest?.(TABLE_CONTROL_SELECTOR)) return;
       event.preventDefault();
       event.stopPropagation();
       beginTableCellEdit(cell, { tableId, column, row, onChange });
@@ -1054,6 +1087,7 @@ export {
   bindDataTableControls,
   bindDataTableSelection,
   bindDataTableEditors,
+  bindTableRowActivation,
   bindLeaderboardControls,
   bindLeaderboardColumnControls,
   clearFilter,

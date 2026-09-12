@@ -1,7 +1,7 @@
 import { beginFeedback } from "./action-feedback.js";
 // @ts-check
 
-import { bindDataTableEditors } from "./data-tables.js";
+import { bindDataTableEditors, bindTableRowActivation } from "./data-tables.js";
 import {
   applyEvaluationReportPage,
   evaluationReportForRef,
@@ -319,8 +319,7 @@ function bindRenderedControls(root) {
     });
   });
   root.querySelectorAll("[data-report-page-row]").forEach(row => {
-    row.addEventListener("click", event => {
-      if (event.defaultPrevented || event.target?.closest?.("input,button,a,select,textarea,[data-table-column-key]")) return;
+    bindTableRowActivation(row, () => {
       const input = row.querySelector("[data-report-page-binding]");
       if (!input || input.disabled) return;
       input.checked = !input.checked;

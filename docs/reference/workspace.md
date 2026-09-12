@@ -201,6 +201,17 @@ source fingerprint has not changed.
 Wide timeline detail tables scroll within their own container; they do not
 expand the workspace beyond the viewport on narrow screens.
 
+In tables with a row action, clicking an editable cell's display content invokes
+the same row action as other cells. A double click edits that cell without
+triggering the row action or replacing its DOM. Row actions on editable content
+wait briefly to distinguish the two gestures; a new pointer press cancels a
+pending row action before release. Editor controls, links, buttons,
+and selection checkboxes retain their own interactions; Enter on a focused
+editable cell opens its editor.
+Focused rows support Enter and Space for their row action. On an editable Saved
+View cell, Enter edits and Space navigates to its summary. Keyboard row actions
+are immediate and do not consume keystrokes from nested controls.
+
 ## Access model
 
 The Home Trial sidebar keeps run status, score, and score source visible above

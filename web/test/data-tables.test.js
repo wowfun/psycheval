@@ -472,6 +472,128 @@ test("selection columns own visible select-all, placeholders, indeterminate stat
   assert.equal(changes, 2);
 });
 
+test("editable cells allow single-click row activation and keep editor clicks isolated", () => {
+  for (const valueType of ["text", "enum", "list", "scalar-list", "markdown", "yaml"]) {
+    const root = document.querySelector("#table-root");
+    const row = { id: "editable", value: "draft" };
+    const columns = [{
+      key: "value", label: valueType, valueType, value: item => item.value,
+      edit: { value: item => item.value, options: ["draft"], commit: async () => {} },
+    }];
+    root.innerHTML = tables.renderDataTable({ tableId: "activation", columns, rows: [row], rowKey: item => item.id });
+    tables.bindDataTableControls(root, { tableId: "activation", columns, rows: [row], rowKey: item => item.id });
+    let activations = 0;
+    root.querySelector("tbody tr").addEventListener("click", () => { activations += 1; });
+    const cell = root.querySelector("[data-table-column-key=value]");
+    cell.querySelector(".table-cell-content").click();
+    assert.equal(activations, 1, `${valueType}: a single click activates the row`);
+    assert.equal(cell.querySelector("[data-table-cell-editor]"), null);
+    cell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    const editor = cell.querySelector("[data-table-cell-editor]");
+    assert.ok(editor, `${valueType}: a double click edits the cell`);
+    editor.click();
+    editor.querySelector(".table-cell-editor-control").click();
+    assert.equal(activations, 1, `${valueType}: editing does not activate the row`);
+  }
+});
+
+test("row activation waits for editable clicks and cancels for double click, Enter, or detached rows", context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const root = document.querySelector("#table-root");
+  const row = { id: "one", value: "draft" };
+  const columns = [{ key: "value", label: "Value", valueType: "text", value: item => item.value, edit: { value: item => item.value, commit: async () => {} } }];
+  root.innerHTML = tables.renderDataTable({ tableId: "gestures", columns, rows: [row], rowKey: item => item.id });
+  tables.bindDataTableControls(root, { tableId: "gestures", columns, rows: [row], rowKey: item => item.id });
+  const node = root.querySelector('tbody tr');
+  const cell = node.querySelector('[data-table-column-key]');
+  let activations = 0;
+  tables.bindTableRowActivation(node, () => { activations++; });
+  cell.click();
+  assert.equal(activations, 0);
+  context.mock.timers.tick(250);
+  assert.equal(activations, 1);
+  for (const type of ["dblclick", "keydown"]) {
+    cell.dispatchEvent(new window.MouseEvent("click", { bubbles: true, detail: 1 }));
+    if (type === "dblclick") {
+      cell.dispatchEvent(new window.MouseEvent("click", { bubbles: true, detail: 2 }));
+      cell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    } else {
+      cell.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    }
+    context.mock.timers.tick(500);
+    assert.equal(activations, 1);
+    const input = cell.querySelector("input");
+    assert.ok(input);
+    input.click();
+    input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  }
+  cell.click();
+  node.remove();
+  context.mock.timers.tick(500);
+  assert.equal(activations, 1);
+});
+
+test("a second pointer press cancels row activation before release", context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const root = document.querySelector("#table-root");
+  root.innerHTML = '<table data-table-id="held-press"><tbody><tr><td class="table-cell-editable">Editable</td></tr></tbody></table>';
+  const row = root.querySelector("tr");
+  const cell = row.querySelector("td");
+  let activated = 0;
+  tables.bindTableRowActivation(row, () => { activated++; });
+  cell.dispatchEvent(new window.MouseEvent("click", { bubbles: true, detail: 1 }));
+  context.mock.timers.tick(150);
+  cell.dispatchEvent(new window.Event("pointerdown", { bubbles: true }));
+  context.mock.timers.tick(150);
+  assert.equal(activated, 0);
+  cell.dispatchEvent(new window.MouseEvent("click", { bubbles: true, detail: 2 }));
+  cell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+  context.mock.timers.tick(250);
+  assert.equal(activated, 0);
+  cell.click();
+  context.mock.timers.tick(250);
+  assert.equal(activated, 1);
+});
+
+test("row keyboard activation is immediate and leaves editors and controls independent", () => {
+  const root = document.querySelector("#table-root");
+  root.innerHTML = `<table data-table-id="keyboard-activation"><tbody><tr tabindex="0">
+    <td class="table-cell-editable" tabindex="0">Editable</td><td><button>Action</button><details><summary>Expand</summary></details></td>
+  </tr></tbody></table>`;
+  const row = root.querySelector("tr");
+  let count = 0;
+  tables.bindTableRowActivation(row, () => { count++; });
+  for (const key of ["Enter", " "]) row.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true }));
+  assert.equal(count, 2);
+  for (const control of row.querySelectorAll("td[tabindex], button, summary")) {
+    control.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  }
+  assert.equal(count, 2);
+});
+
+test("the latest row or control gesture cancels pending activation in the same table", context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const root = document.querySelector("#table-root");
+  root.innerHTML = `<table data-table-id="activation-cancellation"><tbody>
+    <tr><td class="table-cell-editable">First</td><td><button>Action</button></td></tr>
+    <tr><td class="table-cell-editable">Second</td><td><input type="checkbox"></td></tr>
+  </tbody></table>`;
+  const rows = [...root.querySelectorAll("tr")];
+  const activated = [];
+  rows.forEach((row, index) => tables.bindTableRowActivation(row, () => activated.push(index)));
+  root.querySelector("input").addEventListener("click", event => event.stopPropagation());
+  rows[0].querySelector("td").click();
+  rows[1].querySelector("td").click();
+  context.mock.timers.tick(250);
+  assert.deepEqual(activated, [1]);
+  for (const selector of ["button", "input"]) {
+    rows[0].querySelector("td").click();
+    root.querySelector(selector).click();
+    context.mock.timers.tick(250);
+    assert.deepEqual(activated, [1]);
+  }
+});
+
 function mountEditor(valueType, { value = "draft", options, suggestions, allowCustom, commit }) {
   const root = document.querySelector("#table-root");
   const row = { id: `row-${valueType}`, value };
@@ -678,6 +800,36 @@ test("saved views close and reopen without losing independent scroll state", asy
   assert.equal(document.querySelector("#workspace-views [data-workspace-view-list]").scrollTop, 23);
   await new Promise(resolve => window.requestAnimationFrame(resolve));
   assert.equal(document.activeElement, document.querySelector("#workspace-views [data-sidebar-close]"));
+});
+
+test("Saved View cells navigate on single click and edit on double click", context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const previous = runtime.state.workspaceViews;
+  runtime.state.workspaceViews = [{ name: "Navigation", filters: {}, group_by: "agent", notes: "" }];
+  views.renderWorkspaceViewRail();
+  try {
+    const cell = document.querySelector('#workspace-views [data-table-column-key="name"]');
+    const card = document.querySelector('#workspace-views [data-workspace-view]');
+    cell.click();
+    context.mock.timers.tick(250);
+    assert.equal(card.classList.contains("navigated"), true);
+    card.classList.remove("navigated");
+    cell.focus();
+    cell.dispatchEvent(new window.KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    assert.equal(card.classList.contains("navigated"), true);
+    card.classList.remove("navigated");
+    cell.dispatchEvent(new window.MouseEvent("click", { bubbles: true, detail: 1 }));
+    cell.dispatchEvent(new window.MouseEvent("click", { bubbles: true, detail: 2 }));
+    cell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+    context.mock.timers.tick(500);
+    assert.equal(card.classList.contains("navigated"), false);
+    const input = cell.querySelector("input");
+    assert.ok(input);
+    input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  } finally {
+    runtime.state.workspaceViews = previous;
+    views.renderWorkspaceViewRail();
+  }
 });
 
 test("Leaderboard and saved-view adapters keep persistence behind the shared edit seam", async () => {

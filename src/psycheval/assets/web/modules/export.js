@@ -1,5 +1,6 @@
 import { listValue, lower, state } from "./runtime.js";
 import { exportCurrentScope, selectServeDetail } from "./serve-catalog.js";
+import { bindTableRowActivation } from "./data-tables.js";
 function bindServeExportControls(target) {
   target.querySelectorAll("[data-export-kind]").forEach(button => {
     button.addEventListener("click", event => {
@@ -13,7 +14,6 @@ function bindTrialSelection(root) {
   root.querySelectorAll("tr[data-source-key]").forEach(node => {
     node.setAttribute("tabindex", "0");
     const open = event => {
-      if (event.target !== node && event.target?.closest?.("input,button,a,select,textarea,label,[contenteditable='true'],[data-workspace-report-control]")) return;
       event.stopPropagation();
       selectServeDetail(node.dataset.sourceKey, {
         openSidebar: true,
@@ -21,12 +21,7 @@ function bindTrialSelection(root) {
         openerSelector: `tr[data-source-key="${cssAttributeValue(node.dataset.sourceKey)}"]`,
       });
     };
-    node.addEventListener("click", open);
-    node.addEventListener("keydown", event => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      open(event);
-    });
+    bindTableRowActivation(node, open);
   });
 }
 function cssAttributeValue(value) {

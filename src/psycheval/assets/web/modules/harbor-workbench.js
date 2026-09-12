@@ -2,7 +2,7 @@ import { beginFeedback, pageFeedback, savedContentPreview } from "./action-feedb
 import { openActionForm } from "./action-form.js";
 import { watchOperation } from "./operation-feedback.js";
 import { adminMode, esc, listValue, t } from "./shared.js";
-import { applyDataTableControls, bindDataTableControls, renderDataTable, selectionColumn, tableControls } from "./data-tables.js";
+import { applyDataTableControls, bindDataTableControls, bindTableRowActivation, renderDataTable, selectionColumn, tableControls } from "./data-tables.js";
 import { serveApi, serveEtag } from "./http.js";
 import { createTaskBrowser } from "./harbor-task-browser.js";
 
@@ -237,15 +237,7 @@ function renderHarborOverview(surface, rows) {
   const byKey = new Map(rows.map(row => [overviewRowKey(row), row]));
   container.querySelectorAll("[data-harbor-overview-row]").forEach(node => {
     const select = () => selectOverviewRow(byKey.get(node.dataset.harborRowKey));
-    node.addEventListener("click", event => {
-      if (event.target?.closest?.("button,input,select,textarea,label,details")) return;
-      select();
-    });
-    node.addEventListener("keydown", event => {
-      if (!["Enter", " "].includes(event.key)) return;
-      event.preventDefault();
-      select();
-    });
+    bindTableRowActivation(node, select);
   });
   const count = surface.querySelector("[data-harbor-overview-count]");
   if (count) count.textContent = `${rows.length} / ${overviewRows().length}`;

@@ -103,6 +103,31 @@ test("evaluation catalog refreshes and Category edits preserve the imported bind
   assert.equal(reportStore.manager.selectedId, "report-1");
 });
 
+test("binding Category selects on one click while double-click editing preserves the draft", async context => {
+  await managerPage.initializeReportManagerPage();
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const category = document.querySelector('[data-table-column-key="source_category"]');
+  const checkbox = document.querySelector("[data-report-page-binding]");
+  const before = checkbox.checked;
+  category.click();
+  context.mock.timers.tick(250);
+  assert.equal(checkbox.checked, !before);
+  category.dispatchEvent(new window.MouseEvent("click", { bubbles: true, detail: 1 }));
+  category.dispatchEvent(new window.MouseEvent("click", { bubbles: true, detail: 2 }));
+  category.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+  context.mock.timers.tick(500);
+  assert.equal(checkbox.checked, !before);
+  const input = category.querySelector("input");
+  assert.ok(input);
+  input.click();
+  assert.equal(checkbox.checked, !before);
+  input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  const row = category.closest("[data-report-page-row]");
+  row.focus();
+  row.dispatchEvent(new window.KeyboardEvent("keydown", { key: " ", bubbles: true }));
+  assert.equal(checkbox.checked, before);
+});
+
 test("Reports page keeps canonical evaluations separate and uses opaque library refs", () => {
   const canonical = document.querySelector('[data-evaluation-report-select="analysis:evaluation-1"]');
   assert.ok(canonical);

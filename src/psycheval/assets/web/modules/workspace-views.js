@@ -1,7 +1,7 @@
 import { beginFeedback } from "./action-feedback.js";
 import { offerRefresh } from "./operation-feedback.js";
 import { $, RENDER_OPTIONS, adminMode, closeOpenSubmenus, esc, fmtNum, listValue, normalizeServeSourceMode, state, statusLabel, t } from "./runtime.js";
-import { applyDataTableControls, bindDataTableControls, renderDataTable, selectionColumn, tableCellContent, tableControls, tableValueAttributes } from "./data-tables.js";
+import { applyDataTableControls, bindDataTableControls, bindTableRowActivation, renderDataTable, selectionColumn, tableCellContent, tableControls, tableValueAttributes } from "./data-tables.js";
 import { leaderboardSummaryGroupHeading, leaderboardSummaryGroupUnit, leaderboardSummaryStatistics, leaderboardSummaryValue, renderLeaderboardSummary, summaryNumber, visibleLeaderboardSummaryDefinitions } from "./leaderboard-summary.js";
 import { serveApi } from "./serve-effects.js";
 import { loadCatalogPage, serveDownload } from "./serve-catalog.js";
@@ -235,21 +235,7 @@ function bindWorkspaceViewControls(target) {
     });
   });
   target.querySelectorAll("[data-view-navigate]").forEach(cell => {
-    let navigationTimer = null;
-    cell.addEventListener("click", event => {
-      if (event.target?.closest?.("input,textarea,button")) return;
-      clearTimeout(navigationTimer);
-      navigationTimer = setTimeout(() => {
-        navigationTimer = null;
-        navigateToWorkspaceView(cell.dataset.viewNavigate);
-      }, 220);
-    });
-    cell.addEventListener("dblclick", event => {
-      event.preventDefault();
-      event.stopPropagation();
-      clearTimeout(navigationTimer);
-      navigationTimer = null;
-    });
+    bindTableRowActivation(cell, () => navigateToWorkspaceView(cell.dataset.viewNavigate));
   });
   target.querySelectorAll("[data-view-table-toggle]").forEach(button => {
     button.addEventListener("click", () => toggleWorkspaceViewTable(button.dataset.viewTableToggle));
