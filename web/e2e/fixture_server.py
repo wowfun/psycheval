@@ -59,6 +59,15 @@ def main() -> None:
         )
         if os.environ.get("PEVAL_E2E_VERIFICATION") == "1":
             write_verification_trial(root)
+        if os.environ.get("PEVAL_E2E_TABLES") == "1":
+            from tests.peval.test_harbor_evidence import write_task
+
+            for name in ("first", "second"):
+                write_task(root / "editable" / name, f"org/{name}")
+            with (root / "peval.toml").open("a", encoding="utf-8") as config_file:
+                config_file.write(
+                    '\n[[harbor.datasets]]\nid = "editable"\npath = "editable"\n'
+                )
         write_e2e_trial(
             root / "runs/default/psychevo/e2e-session/e2e-trial",
             "e2e-trial",
