@@ -13,10 +13,26 @@ last. Starting a run does not save defaults. False, zero and empty values remain
 explicit values. Credentials use environment references rather than resolved
 secrets. Relative configuration paths are based on the workspace.
 
+`jobs.preferred_harness` stores the administrator's most recent Harness selection
+in the new-run form. Changing the selection saves it automatically, independently
+of Task, variant and execution defaults. Opening the page restores that choice,
+falling back to the first available harness if it is no longer installed or
+available. Guest selections affect only their current draft.
+
+Harness selection is disabled while its catalog loads or a composer action is
+pending; a catalog failure releases the selector so another harness can be
+chosen. Preference writes use the current configuration revision. On a save
+conflict, the page refreshes options and reports that the change was not saved;
+it does not retry the write automatically. Refreshing options preserves the
+current draft, and subsequent saves use the refreshed revision.
+
 Harbor uses the existing Dataset registry. Other installed harnesses receive
 their configuration from `[harnesses.<id>]` and expose registered sources through
 their catalog. Source discovery does not execute Tasks. Preparation records Task
-identities and revisions; launch rejects a selection changed since preview.
+identities and revisions. Preview is optional: starting directly validates and
+prepares the current draft before allocating a run. When a preview is supplied,
+launch rejects configuration or Tasks changed since that preview. Editing the
+draft clears its preview and allows a direct start with the new values.
 Valid native Harbor Tasks do not require Psycheval's optional `[task]` metadata
 table. When it is absent, the directory name identifies the Task for browsing.
 
@@ -135,7 +151,8 @@ Managed results enter the existing catalog automatically and are deduplicated
 against explicit mounts of the same results. Files remain subject to the
 existing retained-evidence access limits. Guest and administrator read behavior
 is the same, including configuration previews and logs; starting, stopping and
-saving defaults require administrator access. Secrets are redacted for both.
+saving defaults or the preferred harness require administrator access. Secrets
+are redacted for both.
 
 ## Verification
 

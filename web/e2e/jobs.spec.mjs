@@ -56,8 +56,14 @@ test("Jobs configures A/B, saves typed defaults, retains results and cancels a r
     await page.getByRole("button", { name: "Save defaults", exact: true }).click();
     await expect(page.locator("[data-jobs-notice]")).toContainText("Defaults saved");
     await page.reload();
-    await page.locator("[data-job-harness]").selectOption("fixture");
+    await expect(page.locator("[data-job-harness]")).toHaveValue("fixture");
     await expect(page.locator("[data-variant]")).toHaveCount(2);
+    await page.locator('[data-select-task="fixture/one"]').check();
+    await expect(page.locator("[data-job-preview-output]")).toBeHidden();
+    const directStart = page.waitForRequest(request => request.url() === `${fixture.origin}/api/jobs` && request.method() === "POST");
+    await page.locator("[data-job-start]").click();
+    expect((await directStart).postDataJSON()).not.toHaveProperty("preview_id");
+    await expect(page.locator("[data-job-detail]")).toContainText("fixture run finished", { timeout: 20_000 });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: ".local/jobs-mobile.png", fullPage: true });
     expect(await page.locator("[data-workspace-page=jobs]").evaluate(node => node.scrollWidth > node.clientWidth)).toBe(false);
@@ -89,11 +95,17 @@ test("editing a variant invalidates an in-flight preview and source entry preser
     release();
     await expect(page.locator("[data-job-preview]")).toBeEnabled();
     await expect(page.locator("[data-job-preview-output]")).toBeHidden();
-    await expect(page.locator("[data-job-start]")).toBeDisabled();
+    await expect(page.locator("[data-job-start]")).toBeEnabled();
     await page.getByRole("link", { name: "Home", exact: true }).click();
     await page.getByRole("link", { name: "Configure run", exact: true }).click();
     await expect(page.locator("[data-variant-model]")).toHaveValue("changed-model");
     await expect(page.locator('[data-select-task="fixture/one"]')).toBeChecked();
+    const started = page.waitForRequest(request => request.url() === `${fixture.origin}/api/jobs` && request.method() === "POST");
+    await page.locator("[data-job-start]").click();
+    const body = (await started).postDataJSON();
+    expect(body).not.toHaveProperty("preview_id");
+    expect(body.request.variants[0].model).toBe("changed-model");
+    await expect(page.locator("[data-job-detail]")).toContainText("fixture run finished", { timeout: 20_000 });
   } finally { await stopFixture(fixture); }
 });
 
@@ -108,6 +120,8 @@ test("guests can read and preview Jobs but cannot launch or save defaults", asyn
     await expect(page.locator("[data-job-start]")).toBeHidden();
     expect((await page.request.post(`${fixture.origin}/api/jobs`, { data: {} })).status()).toBe(403);
     expect((await page.request.put(`${fixture.origin}/api/jobs/defaults/fixture`, { data: {} })).status()).toBe(403);
+    expect((await page.request.put(`${fixture.origin}/api/jobs/preferred-harness`, { data: { harness: "fixture" } })).status()).toBe(403);
+    expect((await (await page.request.get(`${fixture.origin}/api/jobs/options`)).json()).preferred_harness).toBeNull();
     await page.screenshot({ path: ".local/jobs-guest.png", fullPage: true });
   } finally { await stopFixture(fixture); }
 });

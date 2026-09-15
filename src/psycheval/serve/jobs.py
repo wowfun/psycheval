@@ -44,6 +44,18 @@ def register_jobs_routes(app: FastAPI):
         return call(service(request).preview, payload)
 
     @app.put(
+        "/api/jobs/preferred-harness",
+        dependencies=[Depends(require_admin), Depends(mutation_guard)],
+    )
+    @access(ADMIN_ACCESS)
+    def preferred_harness(request: Request, payload: dict[str, Any]):
+        return call(
+            service(request).save_preferred_harness,
+            payload.get("harness"),
+            payload.get("revision"),
+        )
+
+    @app.put(
         "/api/jobs/defaults/{harness_id}",
         dependencies=[Depends(require_admin), Depends(mutation_guard)],
     )

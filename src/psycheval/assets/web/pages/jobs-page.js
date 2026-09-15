@@ -64,7 +64,9 @@ function createJobsPage({ root, app }) {
   let options = null, datasets = [], harness = "harbor", variants = [], selected = new Set();
   let preview = null, selectedRun = null, runs = [], requestId = identity();
   let renderedRun = null, renderedDetail = null;
-  let changed = false, busy = false;
+  let renderedLog = null, logFollowing = true;
+  let logPosition = [0, 0];
+  let changed = false, busy = false, composerReady = false, harnessLoading = false;
   let variantFilter = "";
   let resultOffset = 0;
   const labels = { preparing: say("准备中", "Preparing"), running: say("运行中", "Running"), stopping: say("停止中", "Stopping"), completed: say("运行完成", "Completed"), failed: say("运行失败", "Failed"), cancelled: say("已取消", "Cancelled"), interrupted: say("已中断", "Interrupted") };
@@ -78,8 +80,13 @@ function createJobsPage({ root, app }) {
   }
   function invalidated() {
     preview = null; changed = true; requestId = identity();
-    q("[data-job-start]").disabled = true;
+    updateComposer();
     q("[data-job-preview-output]").hidden = true;
+  }
+  function updateComposer() {
+    q("[data-job-start]").disabled = busy || !composerReady || !adminMode();
+    for (const node of nodes("[data-job-preview], [data-job-save-defaults]")) node.disabled = busy || !composerReady;
+    q("[data-job-harness]").disabled = busy || harnessLoading;
   }
   function entryRow(entry = { key: "", type: "string", value: "" }) {
     return `<div class="job-kv-row"><input data-kv-key aria-label="${say("配置键", "Configuration key")}" value="${esc(entry.key)}" placeholder="kwargs.temperature"><select data-kv-type aria-label="${say("值类型", "Value type")}">${["string", "number", "boolean", "json"].map(type => `<option ${type === entry.type ? "selected" : ""}>${type}</option>`).join("")}</select><input data-kv-value aria-label="${say("配置值", "Configuration value")}" value="${esc(entry.value)}"><button type="button" class="action-button" data-remove-entry aria-label="${say("删除配置项", "Remove setting")}">×</button></div>`;
@@ -120,27 +127,33 @@ function createJobsPage({ root, app }) {
     for (const node of nodes("[data-task-label]")) node.hidden = !node.dataset.taskLabel.includes(search);
   }
   async function loadHarness(useDefaults = true) {
+    composerReady = false; harnessLoading = true; updateComposer();
     const epoch = ++generation;
-    const data = await serveApi(`/api/jobs/tasks/${encodeURIComponent(harness)}`);
-    if (epoch !== generation || disposed) return;
-    datasets = data.datasets;
-    const description = options.harnesses.find(item => item.id === harness);
-    if (!description) throw new Error(say("Harness 已不可用，请重新加载页面", "Harness is unavailable; reload the page"));
-    if (useDefaults) {
-      const defaults = { ...description.defaults, ...description.saved_defaults };
-      variants = structuredClone(defaults.variants || [{ id: "a", label: "A", agent: "", model: "", options: {} }]);
-      selected = new Set(defaults.tasks || []);
-      const settings = { ...(description.defaults?.settings || {}), ...(description.saved_defaults?.settings || {}) };
-      for (const input of nodes("[data-job-setting]")) {
-        input.value = settings[input.dataset.jobSetting] ?? 1;
-        delete settings[input.dataset.jobSetting];
+    try {
+      const data = await serveApi(`/api/jobs/tasks/${encodeURIComponent(harness)}`);
+      if (epoch !== generation || disposed) return;
+      datasets = data.datasets;
+      const description = options.harnesses.find(item => item.id === harness);
+      if (!description) throw new Error(say("Harness 已不可用，请重新加载页面", "Harness is unavailable; reload the page"));
+      if (useDefaults) {
+        const defaults = { ...description.defaults, ...description.saved_defaults };
+        variants = structuredClone(defaults.variants || [{ id: "a", label: "A", agent: "", model: "", options: {} }]);
+        selected = new Set(defaults.tasks || []);
+        const settings = { ...(description.defaults?.settings || {}), ...(description.saved_defaults?.settings || {}) };
+        for (const input of nodes("[data-job-setting]")) {
+          input.value = settings[input.dataset.jobSetting] ?? 1;
+          delete settings[input.dataset.jobSetting];
+        }
+        q("[data-job-settings]").innerHTML = editor(settings, "settings");
+        renderVariants();
       }
-      q("[data-job-settings]").innerHTML = editor(settings, "settings");
-      renderVariants();
+      q("#jobs-agents").innerHTML = (description.agents || []).map(value => `<option value="${esc(value)}"></option>`).join("");
+      q("#jobs-models").innerHTML = (description.models || []).map(value => `<option value="${esc(value)}"></option>`).join("");
+      renderTasks();
+      composerReady = true;
+    } finally {
+      if (epoch === generation && !disposed) { harnessLoading = false; updateComposer(); }
     }
-    q("#jobs-agents").innerHTML = (description.agents || []).map(value => `<option value="${esc(value)}"></option>`).join("");
-    q("#jobs-models").innerHTML = (description.models || []).map(value => `<option value="${esc(value)}"></option>`).join("");
-    renderTasks();
   }
   function renderRuns() {
     q("[data-jobs-list]").innerHTML = runs.map(run => `<button type="button" class="job-list-item ${run.id === selectedRun ? "selected" : ""}" data-select-run="${esc(run.id)}"><strong>${esc(run.job_name || run.submitted_at)}</strong><span>${esc(run.harness)} · ${esc(stateLabel(run.state))}</span><small>${esc(run.trials_completed ?? 0)} / ${esc(run.trials_total ?? run.prepared?.trial_count ?? "—")} Trials</small></button>`).join("") || `<p class="copy">${say("还没有批次。配置 Task 和对比组后启动。", "No Jobs yet. Select Tasks and configure variants to start.")}</p>`;
@@ -200,6 +213,18 @@ function createJobsPage({ root, app }) {
   async function guarded(action) {
     try { await action(); } catch (error) { notify(error.message || String(error), true); }
   }
+  async function savePreferences(path, body) {
+    try {
+      options = await serveApi(path, { method: "PUT", body: { ...body, revision: options.revision } });
+    } catch (error) {
+      if (error.status === 409) {
+        options = await serveApi("/api/jobs/options");
+        invalidated();
+        error.message = say("配置已变更，已刷新选项；当前更改尚未保存，请重试操作。", "Configuration changed. Options refreshed; this change was not saved. Please retry the action.");
+      }
+      throw error;
+    }
+  }
   async function action(button) {
     if (button.matches("[data-job-page]")) { resultOffset = Math.max(0, resultOffset + (button.dataset.jobPage === "next" ? 50 : -50)); await selectRun(selectedRun); return; }
     if (button.matches("[data-add-entry]")) { button.closest("[data-kv]").querySelector("[data-kv-rows]").insertAdjacentHTML("beforeend", entryRow()); invalidated(); return; }
@@ -213,7 +238,7 @@ function createJobsPage({ root, app }) {
     }
     if (button.matches("[data-select-run]")) { await selectRun(button.dataset.selectRun); return; }
     if (busy) return;
-    busy = true; button.disabled = true;
+    busy = true; button.disabled = true; updateComposer();
     try {
       if (button.matches("[data-job-preview]")) {
         const payload = request(); const epoch = generation;
@@ -223,23 +248,27 @@ function createJobsPage({ root, app }) {
         q("[data-job-preview-output]").hidden = false;
         q("[data-job-preview-count]").textContent = `${payload.tasks.length} Tasks × ${payload.variants.length} ${say("对比组", "variants")} × ${payload.settings.n_attempts} = ${result.prepared.trial_count} Trials`;
         q("[data-job-preview-config]").textContent = JSON.stringify(result.prepared.config || result.prepared, null, 2);
-        q("[data-job-start]").disabled = !adminMode();
         notify(say("配置有效，可启动本批次。", "Configuration validated. Ready to start."));
-      } else if (button.matches("[data-job-start]") && preview) {
-        const run = await serveApi("/api/jobs", { method: "POST", body: { request: preview.request, preview_id: preview.preview_id, request_id: requestId } });
-        selectedRun = run.id; variantFilter = ""; changed = false; preview = null;
+      } else if (button.matches("[data-job-start]")) {
+        const submittedId = requestId;
+        const run = await serveApi("/api/jobs", { method: "POST", body: { request: request(), ...(preview ? { preview_id: preview.preview_id } : {}), request_id: submittedId } });
+        selectedRun = run.id; variantFilter = "";
+        if (requestId === submittedId) {
+          changed = false; preview = null; requestId = identity();
+          q("[data-job-preview-output]").hidden = true;
+        }
         notify(say("批次已启动，关闭页面不会停止运行。", "Job started. It continues when you close this page."));
         await refreshRuns();
       } else if (button.matches("[data-job-save-defaults]")) {
         const payload = request(), defaults = {};
         for (const checkbox of nodes("[data-default-section]:checked")) defaults[checkbox.dataset.defaultSection] = payload[checkbox.dataset.defaultSection];
-        options = await serveApi(`/api/jobs/defaults/${encodeURIComponent(harness)}`, { method: "PUT", body: { defaults, revision: options.revision } });
+        await savePreferences(`/api/jobs/defaults/${encodeURIComponent(harness)}`, { defaults });
         invalidated(); notify(say("默认值已保存。", "Defaults saved."));
       } else if (button.matches("[data-job-stop]") && selectedRun) {
         await serveApi(`/api/jobs/${selectedRun}/stop`, { method: "POST", body: {} });
         await refreshRuns();
       } else if (button.matches("[data-jobs-refresh]")) await refreshRuns();
-    } finally { busy = false; if (button.isConnected) button.disabled = button.matches("[data-job-start]") ? !preview || !adminMode() : false; }
+    } finally { busy = false; if (button.isConnected) button.disabled = false; updateComposer(); }
   }
   function build() {
     root.innerHTML = `<div class="jobs-page"><header class="jobs-heading"><div><p class="eyebrow">${say("评测批次", "EVALUATION RUNS")}</p><h2>Jobs</h2></div><a class="action-button" href="/datasets" data-workspace-route="datasets">${say("管理数据集", "Manage Datasets")}</a></header><div class="serve-notice" data-jobs-notice role="status" hidden></div><div class="jobs-layout"><section class="jobs-composer"><header class="jobs-heading"><h3>${say("新建 Run", "New run")}</h3><label>Harness<select data-job-harness></select></label></header><div class="jobs-selection"><div class="jobs-heading"><h4>${say("选择 Task", "Select Tasks")}</h4><span data-job-task-count></span></div><input type="search" data-job-search placeholder="${say("搜索 Task", "Search Tasks")}" aria-label="${say("搜索 Task", "Search Tasks")}"><div class="job-task-list" data-job-tasks></div></div><div class="jobs-heading"><h4>${say("Agent / Model 对比组", "Agent / Model variants")}</h4><button class="action-button" type="button" data-add-variant>${say("添加对比组", "Add variant")}</button></div><datalist id="jobs-agents"></datalist><datalist id="jobs-models"></datalist><div data-job-variants></div><div class="job-basics">${[["n_attempts", say("重复次数", "Repeats"), "1"], ["n_concurrent_trials", say("并发 Trial", "Concurrent Trials"), "1"], ["timeout_multiplier", say("超时倍数", "Timeout multiplier"), "0.1"]].map(([key, label, min]) => `<label>${label}<input type="number" data-job-setting="${key}" aria-label="${label}" min="${min}" step="${min}"></label>`).join("")}</div><details class="job-advanced"><summary>${say("高级配置：批次、环境、验证器", "Advanced: Job, environment, verifier")}</summary><div data-job-settings></div></details><div class="jobs-actions"><button type="button" class="action-button" data-job-preview>${say("预览配置", "Preview configuration")}</button><button type="button" class="action-button primary" data-job-start disabled ${adminMode() ? "" : "hidden"}>${say("启动 Run", "Start run")}</button></div><div class="job-preview" data-job-preview-output hidden><strong data-job-preview-count></strong><details><summary>${say("最终配置", "Effective configuration")}</summary><pre data-job-preview-config></pre></details></div>${adminMode() ? `<details class="job-defaults"><summary>${say("保存选项作为默认值", "Save selected defaults")}</summary><div class="jobs-actions">${[["variants", say("对比组", "Variants"), true], ["settings", say("执行设置", "Execution settings"), true], ["tasks", say("Task 选择", "Task selection"), false]].map(([key, label, checked]) => `<label><input type="checkbox" data-default-section="${key}" ${checked ? "checked" : ""}>${label}</label>`).join("")}</div><button type="button" class="action-button" data-job-save-defaults>${say("保存默认值", "Save defaults")}</button></details>` : ""}</section><aside class="jobs-history"><header class="jobs-heading"><h3>${say("批次记录", "Run history")}</h3><button class="action-button" type="button" data-jobs-refresh>${say("刷新", "Refresh")}</button></header><div data-jobs-list></div></aside></div><section class="job-detail" data-job-detail hidden></section></div>`;
@@ -253,7 +282,17 @@ function createJobsPage({ root, app }) {
   function onChange(event) {
     const input = event.target;
     if (input.matches("[data-filter-variant]")) { variantFilter = input.value; resultOffset = 0; filterResults(); void guarded(() => selectRun(selectedRun)); }
-    if (input.matches("[data-job-harness]")) { harness = input.value; invalidated(); void guarded(() => loadHarness()); }
+    if (input.matches("[data-job-harness]")) {
+      if (busy || harnessLoading) { input.value = harness; return; }
+      harness = input.value; busy = true; invalidated();
+      void guarded(async () => {
+        try {
+          try {
+            if (adminMode()) await savePreferences("/api/jobs/preferred-harness", { harness });
+          } finally { await loadHarness(); }
+        } finally { busy = false; updateComposer(); }
+      });
+    }
     if (input.matches("[data-select-task]")) { if (input.checked) selected.add(input.dataset.selectTask); else selected.delete(input.dataset.selectTask); invalidated(); renderTasks(); }
     if (input.matches("[data-select-dataset]")) { for (const task of datasets.find(item => item.id === input.dataset.selectDataset)?.tasks || []) { if (task.available !== false) { if (input.checked) selected.add(task.id); else selected.delete(task.id); } } invalidated(); renderTasks(); }
   }
@@ -263,6 +302,9 @@ function createJobsPage({ root, app }) {
       if (!initialized) {
         build(); options = await serveApi("/api/jobs/options");
         q("[data-job-harness]").innerHTML = options.harnesses.map(item => `<option value="${esc(item.id)}">${esc(item.label || item.id)}</option>`).join("");
+        const available = options.harnesses.filter(item => item.available !== false);
+        const preferred = available.find(item => item.id === options.preferred_harness) || available[0];
+        if (preferred) q("[data-job-harness]").value = preferred.id;
         harness = q("[data-job-harness]").value;
         await loadHarness(); initialized = true;
       } else if (changes.has("tasks") || changes.has("dataset-registry")) { invalidated(); await loadHarness(false); }

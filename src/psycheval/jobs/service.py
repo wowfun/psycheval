@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import os
@@ -15,7 +14,14 @@ from datetime import datetime
 from pathlib import Path
 from threading import Lock
 
-from psycheval.redaction import redact_credentials, sanitize_credentials
+import tomlkit
+from tomlkit.exceptions import ConvertError
+
+from psycheval.redaction import (
+    redact_credentials,
+    redact_retained_text,
+    sanitize_credentials,
+)
 
 from . import harnesses
 from .configuration import Defaults, HarnessDocument, JobsDocument
@@ -95,7 +101,13 @@ class JobsService:
                     .get(key, {}),
                 }
             )
-        return redact_credentials({"harnesses": descriptions, "revision": revision})
+        return redact_credentials(
+            {
+                "harnesses": descriptions,
+                "preferred_harness": config.get("jobs", {}).get("preferred_harness"),
+                "revision": revision,
+            }
+        )
 
     def catalog(self, harness_id):
         try:
@@ -139,7 +151,7 @@ class JobsService:
         result["preview_id"] = digest(result)
         return result
 
-    def start(self, payload, preview_id: str, request_id: str):
+    def start(self, payload, preview_id: str | None, request_id: str):
         if not isinstance(request_id, str) or not re.fullmatch(
             r"[A-Za-z0-9_-]{8,100}", request_id
         ):
@@ -156,7 +168,7 @@ class JobsService:
                 )
             return self.detail(run_id)
         preview = self.preview(payload)
-        if preview["preview_id"] != preview_id:
+        if preview_id is not None and preview["preview_id"] != preview_id:
             raise JobsConflict("configuration or Tasks changed; preview again")
         with locked(self.root):
             existing = (
@@ -334,6 +346,12 @@ class JobsService:
             "[earlier log omitted]\n" if size > 128 * 1024 else ""
         ) + sanitize_credentials(text)
 
+    def save_preferred_harness(self, harness_id, revision):
+        JobsDocument.model_validate({"preferred_harness": harness_id})
+        self.plugin(harness_id)
+        self._save_configuration(("preferred_harness",), harness_id, revision)
+        return self.options()
+
     def save_defaults(self, harness_id, defaults, revision):
         if not isinstance(harness_id, str) or not re.fullmatch(
             r"[A-Za-z0-9_-]{1,64}", harness_id
@@ -350,57 +368,59 @@ class JobsService:
         Defaults.model_validate(defaults)
         if redact_credentials(defaults) != defaults:
             raise ValueError("use environment references for credentials")
+        self._save_configuration(("defaults", harness_id), defaults, revision)
+        return self.options()
+
+    def _save_configuration(self, keys, value, revision):
+        # Check TOML representability before touching the workspace document.
+        try:
+            tomlkit.item(value)
+        except ConvertError as exc:
+            raise ValueError("TOML preferences cannot contain null values") from exc
         with locked(self.root):
-            data, current = self.configuration()
+            _, current = self.configuration()
             if revision != current:
                 raise JobsConflict(
-                    "configuration changed; reload before saving defaults"
+                    "configuration changed; reload before saving Jobs preferences"
                 )
-            all_defaults = copy.deepcopy(data.get("jobs", {}).get("defaults", {}))
-            all_defaults[harness_id] = defaults
             path = self.workspace / "peval.toml"
-            # Preserve unrelated tables and comments. Inline TOML values retain types.
-            lines = (
-                read_bytes(path, 2 * 1024 * 1024)
-                .decode("utf-8")
-                .splitlines(keepends=True)
-            )
-            retained, skipping = [], False
-            for line in lines:
-                if re.match(r"^\s*\[", line):
-                    try:
-                        header = tomllib.loads(line)
-                    except tomllib.TOMLDecodeError:
-                        header = {}
-                    skipping = (
-                        isinstance(header.get("jobs"), dict)
-                        and "defaults" in header["jobs"]
-                    )
-                if not skipping:
-                    retained.append(line)
-            body = "".join(retained).rstrip() + "\n\n"
-            for key, value in all_defaults.items():
-                body += f"[jobs.defaults.{json.dumps(key)}]\n"
-                body += (
-                    "".join(f"{json.dumps(k)} = {_toml(v)}\n" for k, v in value.items())
-                    + "\n"
-                )
+            document = tomlkit.parse(read_bytes(path, 2 * 1024 * 1024).decode("utf-8"))
+            table = document
+            for key in ("jobs", *keys[:-1]):
+                if key not in table:
+                    table[key] = {}
+                table = table[key]
+            # Let the owning table select regular versus inline TOML values.
+            table[keys[-1]] = value
+            body = tomlkit.dumps(document)
             from psycheval.config import ToolConfig, apply_toml_config
 
             apply_toml_config(ToolConfig(), tomllib.loads(body), base_dir=path.parent)
             write_text(path, body)
-        return self.options()
 
 
-def _toml(value):
-    if isinstance(value, dict):
-        return (
-            "{ "
-            + ", ".join(f"{json.dumps(k)} = {_toml(v)}" for k, v in value.items())
-            + " }"
-        )
-    if isinstance(value, list):
-        return "[" + ", ".join(_toml(v) for v in value) + "]"
-    if value is None:
-        raise ValueError("TOML defaults cannot contain null values")
-    return json.dumps(value, ensure_ascii=False, allow_nan=False)
+def _log_entry(text, complete):
+    if complete:
+        try:
+            value = json.loads(text)
+            pending = [(value, 0)]
+            while pending:
+                item, depth = pending.pop()
+                if depth > 64:
+                    raise ValueError("log JSON exceeds display depth")
+                if isinstance(item, dict):
+                    pending.extend((child, depth + 1) for child in item.values())
+                elif isinstance(item, list):
+                    pending.extend((child, depth + 1) for child in item)
+            rendered = json.dumps(
+                redact_credentials(value), ensure_ascii=False, indent=2, allow_nan=False
+            )
+            return {"format": "json", "text": _log_text(sanitize_credentials(rendered))}
+        except (ValueError, RecursionError):
+            pass
+    return {"format": "text", "text": text}
+
+
+def _log_text(text):
+    # Escaped lone surrogates are legal JSON strings but not UTF-8 characters.
+    return text.encode("utf-8", errors="backslashreplace").decode("utf-8")

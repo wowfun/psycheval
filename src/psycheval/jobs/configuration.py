@@ -18,6 +18,7 @@ class Defaults(BaseModel):
 
 class JobsDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    preferred_harness: HarnessId | None = None
     defaults: dict[HarnessId, Defaults] = Field(default_factory=dict)
 
 

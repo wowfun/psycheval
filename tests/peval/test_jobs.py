@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -377,6 +378,63 @@ def test_defaults_round_trip_preserves_false_zero_and_unrelated_text(jobs):
         jobs.save_defaults("fixture", {}, "stale")
     jobs.save_defaults("fixture", {}, options["revision"])
     assert jobs.options()["harnesses"][0]["saved_defaults"] == {}
+
+
+@pytest.mark.parametrize(
+    "configuration",
+    [
+        "",
+        '[jobs]\npreferred_harness = "harbor" # Remember\n',
+        'jobs = { preferred_harness = "harbor", defaults = {} }\n',
+        'jobs = { preferred_harness = "harbor" }\n',
+        'jobs.preferred_harness = "harbor"\n',
+        '["jobs".defaults.fixture.settings]\nzero = 0\nenabled = false\n',
+    ],
+)
+def test_preferred_harness_persists_and_preserves_defaults(jobs, configuration):
+    path = jobs.workspace / "peval.toml"
+    unrelated = 'locale = "en"\n# Keep this comment\n'
+    path.write_text(unrelated + configuration, encoding="utf-8")
+    before, revision = jobs.configuration()
+    options = jobs.save_preferred_harness("fixture", revision)
+    after = tomllib.loads(path.read_text(encoding="utf-8"))
+    before.setdefault("jobs", {})["preferred_harness"] = "fixture"
+    assert after == before
+    assert unrelated in path.read_text(encoding="utf-8")
+    assert options["preferred_harness"] == "fixture"
+    assert (
+        JobsService(jobs.workspace, registry=jobs.registry).options()[
+            "preferred_harness"
+        ]
+        == "fixture"
+    )
+    jobs.save_defaults("fixture", {"settings": {"zero": 0}}, options["revision"])
+    assert jobs.options()["preferred_harness"] == "fixture"
+    jobs.save_preferred_harness("harbor", jobs.options()["revision"])
+    assert jobs.options()["harnesses"][0]["saved_defaults"] == {"settings": {"zero": 0}}
+
+
+def test_preferred_harness_rejects_stale_and_invalid_writes(jobs):
+    path = jobs.workspace / "peval.toml"
+    before = path.read_bytes()
+    with pytest.raises(JobsConflict):
+        jobs.save_preferred_harness("fixture", "stale")
+    for value in (None, "missing", "bad.id", [], 42):
+        with pytest.raises(ValueError):
+            jobs.save_preferred_harness(value, jobs.options()["revision"])
+    assert path.read_bytes() == before
+
+
+def test_direct_start_validates_before_allocation_and_deduplicates(jobs):
+    payload = request()
+    payload["tasks"] = []
+    with pytest.raises(ValueError):
+        jobs.start(payload, None, "direct-invalid")
+    assert not list(jobs.root.glob("*/state.json"))
+    payload = request()
+    run = jobs.start(payload, None, "direct-start")
+    assert jobs.start(payload, None, "direct-start")["id"] == run["id"]
+    assert wait_for(jobs, run["id"], terminal=True)["state"] == "completed"
 
 
 def test_secret_references_and_stale_preview(jobs):
