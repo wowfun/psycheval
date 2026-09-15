@@ -10,7 +10,7 @@ test("mobile Jobs results keep scores and navigation readable with long Task nam
       id: "abc", state: "completed", request: {},
       results: [{ id: "one", task: "workbuddy/research-factor-table-extract-L3-016", variant_label: "MiMo Pro", score: 0.2619, score_source: "reward", source_key: "one" }],
     } }));
-    await page.route("**/api/jobs/abc/logs", route => route.fulfill({ json: { text: "" } }));
+    await page.route("**/api/jobs/abc/logs", route => route.fulfill({ json: { entries: [], truncated: false } }));
     await page.goto(`${fixture.origin}/jobs`);
     await page.locator('[data-select-run="abc"]').click();
     const result = page.locator(".job-result");
@@ -140,7 +140,7 @@ test("Jobs tolerates malformed links and polling preserves the reading state", a
     let revision = 0;
     await page.route("**/api/jobs", route => route.fulfill({ json: { items: [{ id: "abc", state: "running", harness: "fixture" }] } }));
     await page.route("**/api/jobs/abc", route => route.fulfill({ json: { id: "abc", state: "running", trials_completed: revision++, request: {}, results: [] } }));
-    await page.route("**/api/jobs/abc/logs", route => route.fulfill({ json: { text: "A log line\n".repeat(100) } }));
+    await page.route("**/api/jobs/abc/logs", route => route.fulfill({ json: { entries: [{ format: "text", text: "A log line\n".repeat(100) }], truncated: false } }));
     await page.locator("[data-jobs-refresh]").click();
     await page.locator('[data-select-run="abc"]').click();
     const details = page.locator("[data-job-detail] details");
@@ -152,4 +152,155 @@ test("Jobs tolerates malformed links and polling preserves the reading state", a
     await expect(details.last()).not.toHaveAttribute("open");
     await expect(page.locator("[data-filter-variant]")).toBeFocused();
   } finally { await stopFixture(fixture); }
+});
+
+test("Jobs shows arbitrary NDJSON from stdout and stderr before the worker finishes", async ({ page }) => {
+  const fixture = await startFixture({ PEVAL_E2E_JOBS: "1", PYTHONPATH: process.cwd(), UV_NO_SYNC: "1" });
+  try {
+    await page.goto(`${fixture.origin}/jobs`);
+    const request = { harness: "fixture", tasks: ["fixture/one"], variants: [{ id: "a", label: "A", agent: "fixture", model: "a", options: {} }], settings: { ndjson: true, delay: 60 } };
+    const response = await page.request.post(`${fixture.origin}/api/jobs`, { data: { request, request_id: "browser-ndjson" } });
+    expect(response.ok()).toBe(true);
+    const run = await response.json();
+    await page.locator("[data-jobs-refresh]").click();
+    await page.locator(`[data-select-run="${run.id}"]`).click();
+    const log = page.locator(".job-log");
+    await expect(log).toContainText("first event");
+    await expect(log).toContainText("中文");
+    await expect(log).toContainText("warning from downstream", { timeout: 10_000 });
+    await expect(log).toContainText("error from downstream");
+    await expect(log).toContainText("plain diagnostic");
+    await expect(log.locator('[data-log-format="json"]')).toHaveCount(2);
+    expect((await (await page.request.get(`${fixture.origin}/api/jobs/${run.id}`)).json()).state).toBe("running");
+    await page.request.post(`${fixture.origin}/api/jobs/${run.id}/stop`, { data: {} });
+    await expect.poll(async () => (await (await page.request.get(`${fixture.origin}/api/jobs/${run.id}`)).json()).state).toBe("cancelled");
+    await page.locator("[data-jobs-refresh]").click();
+    await expect(log).toContainText("error from downstream");
+    await expect(log.locator('[data-log-format="json"]')).toHaveCount(2);
+  } finally { await stopFixture(fixture); }
+});
+
+test("Jobs log refresh follows the bottom and preserves reading, focus and literal JSON", async ({ page }) => {
+  const fixture = await startFixture({ PEVAL_E2E_JOBS: "1", PYTHONPATH: process.cwd(), UV_NO_SYNC: "1" });
+  try {
+    let version = 0;
+    const entries = Array.from({ length: 25 }, (_, i) => ({ format: "json", text: JSON.stringify({ arbitrary: i, html: '<svg onload="unsafe()">', huge: "900719925474099312345" }, null, 2) }));
+    await page.route("**/api/jobs", route => route.fulfill({ json: { items: [{ id: "abc", state: "running", harness: "fixture" }] } }));
+    await page.route("**/api/jobs/abc", route => route.fulfill({ json: { id: "abc", state: "running", trials_completed: version, request: {}, results: [] } }));
+    await page.route("**/api/jobs/abc/logs", route => route.fulfill({ json: { entries, truncated: true } }));
+    await page.goto(`${fixture.origin}/jobs`);
+    await page.locator('[data-select-run="abc"]').click();
+    const log = page.locator(".job-log");
+    const bottomGap = () => log.evaluate(node => node.scrollHeight - node.clientHeight - node.scrollTop);
+    await expect(log.locator(".job-log-entry")).toHaveCount(25);
+    await expect.poll(bottomGap).toBeLessThan(2);
+    await expect(log.locator("svg")).toHaveCount(0);
+    await expect(log).toContainText('900719925474099312345');
+    await expect(page.locator("[data-job-log-truncated]")).toBeVisible();
+    const original = await log.elementHandle();
+    await log.evaluate(node => { node.scrollTop = 80; node.dispatchEvent(new Event("scroll")); });
+    await expect(page.locator("[data-job-log-latest]")).toBeVisible();
+    await page.locator("[data-filter-variant]").focus();
+    entries.push({ format: "json", text: '["new event"]' });
+    version++;
+    await expect(log.locator(".job-log-entry")).toHaveCount(26);
+    expect(await original.evaluate(node => node.isConnected)).toBe(true);
+    expect(await log.evaluate(node => node.scrollTop)).toBe(80);
+    await expect(page.locator("[data-filter-variant]")).toBeFocused();
+    const logSummary = page.locator("[data-job-log-section] > summary");
+    await logSummary.click();
+    entries.push({ format: "json", text: "false" });
+    version++;
+    await expect(log.locator(".job-log-entry")).toHaveCount(27);
+    await expect(page.locator("[data-job-log-section]")).not.toHaveAttribute("open");
+    await logSummary.click();
+    await expect.poll(() => log.evaluate(node => node.scrollTop)).toBe(80);
+    await page.locator("[data-job-log-latest]").click();
+    await expect.poll(bottomGap).toBeLessThan(2);
+    await expect(log).toBeFocused();
+    await expect(page.locator("[data-job-log-latest]")).toBeHidden();
+    entries.push({ format: "text", text: "last diagnostic" });
+    await expect(log).toContainText("last diagnostic");
+    await expect.poll(bottomGap).toBeLessThan(2);
+    await expect(log.locator(".job-log-entry")).toHaveCount(28);
+  } finally { await stopFixture(fixture); }
+});
+
+test("Jobs discards delayed log responses after selecting another run", async ({ page }) => {
+  const fixture = await startFixture({ PEVAL_E2E_JOBS: "1", PYTHONPATH: process.cwd(), UV_NO_SYNC: "1" });
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  try {
+    const items = ["abc", "def"].map(id => ({ id, state: "completed", harness: "fixture", request: {}, results: [] }));
+    await page.route("**/api/jobs", route => route.fulfill({ json: { items } }));
+    for (const item of items) {
+      await page.route(`**/api/jobs/${item.id}`, route => route.fulfill({ json: item }));
+      await page.route(`**/api/jobs/${item.id}/logs`, async route => {
+        if (item.id === "abc") await pending;
+        await route.fulfill({ json: { entries: [{ format: "json", text: JSON.stringify({ run: item.id }) }], truncated: false } });
+      });
+    }
+    await page.goto(`${fixture.origin}/jobs`);
+    const sent = page.waitForRequest("**/api/jobs/abc/logs");
+    await page.locator('[data-select-run="abc"]').click();
+    await sent;
+    await page.locator('[data-select-run="def"]').click();
+    await expect(page.locator(".job-log")).toContainText("def");
+    const received = page.waitForResponse("**/api/jobs/abc/logs");
+    release();
+    await received;
+    await expect(page.locator(".job-log")).not.toContainText("abc");
+    await expect(page.locator(".job-log-entry")).toHaveCount(1);
+  } finally { release(); await stopFixture(fixture); }
+});
+
+test("Jobs serializes harness loading and recovers from an external preference conflict", async ({ page }) => {
+  const fixture = await startFixture({ PEVAL_E2E_JOBS: "1", PYTHONPATH: process.cwd(), UV_NO_SYNC: "1" });
+  function gate() {
+    let release;
+    const pending = new Promise(resolve => { release = resolve; });
+    return { pending, release };
+  }
+  const initial = gate(), save = gate(), catalog = gate();
+  let writes = 0;
+  try {
+    await page.route("**/api/jobs/tasks/harbor", async route => { await initial.pending; await route.continue(); });
+    await page.route("**/api/jobs/tasks/fixture", async route => { await catalog.pending; await route.continue(); });
+    await page.route("**/api/jobs/preferred-harness", async route => { writes++; await save.pending; await route.continue(); });
+    const initialLoad = page.waitForRequest("**/api/jobs/tasks/harbor");
+    await page.goto(`${fixture.origin}/jobs`);
+    await initialLoad;
+    const select = page.locator("[data-job-harness]");
+    await expect(select).toBeDisabled();
+    await expect(page.locator("[data-job-start]")).toBeDisabled();
+    initial.release();
+    await expect(select).toBeEnabled();
+    const saving = page.waitForRequest("**/api/jobs/preferred-harness");
+    await select.selectOption("fixture");
+    await saving;
+    await expect(select).toBeDisabled();
+    await expect(page.locator("[data-job-preview]")).toBeDisabled();
+    await expect(page.locator("[data-job-start]")).toBeDisabled();
+    const options = await (await page.request.get(`${fixture.origin}/api/jobs/options`)).json();
+    const external = await page.request.put(`${fixture.origin}/api/jobs/defaults/harbor`, { data: { defaults: {}, revision: options.revision } });
+    expect(external.ok()).toBe(true);
+    const refreshed = page.waitForRequest("**/api/jobs/tasks/fixture");
+    save.release();
+    await refreshed;
+    await expect(select).toBeDisabled();
+    catalog.release();
+    await expect(page.locator("[data-jobs-notice]")).toContainText("Options refreshed");
+    await expect(select).toBeEnabled();
+    expect(writes).toBe(1);
+    await page.getByText("Save selected defaults", { exact: true }).click();
+    await page.locator("[data-job-save-defaults]").click();
+    await expect(page.locator("[data-jobs-notice]")).toContainText("Defaults saved");
+    await select.selectOption("harbor");
+    await expect(select).toBeEnabled();
+    expect((await (await page.request.get(`${fixture.origin}/api/jobs/options`)).json()).preferred_harness).toBe("harbor");
+    expect(writes).toBe(2);
+  } finally {
+    initial.release(); save.release(); catalog.release();
+    await stopFixture(fixture);
+  }
 });

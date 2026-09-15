@@ -158,6 +158,50 @@ function createJobsPage({ root, app }) {
   function renderRuns() {
     q("[data-jobs-list]").innerHTML = runs.map(run => `<button type="button" class="job-list-item ${run.id === selectedRun ? "selected" : ""}" data-select-run="${esc(run.id)}"><strong>${esc(run.job_name || run.submitted_at)}</strong><span>${esc(run.harness)} · ${esc(stateLabel(run.state))}</span><small>${esc(run.trials_completed ?? 0)} / ${esc(run.trials_total ?? run.prepared?.trial_count ?? "—")} Trials</small></button>`).join("") || `<p class="copy">${say("还没有批次。配置 Task 和对比组后启动。", "No Jobs yet. Select Tasks and configure variants to start.")}</p>`;
   }
+  function updateLogFollowing() {
+    const button = q("[data-job-log-latest]");
+    if (button) button.hidden = logFollowing;
+  }
+  function restoreLogPosition() {
+    const log = q(".job-log");
+    if (!log?.clientHeight) return;
+    log.scrollTop = logFollowing ? log.scrollHeight : logPosition[0];
+    log.scrollLeft = logPosition[1];
+  }
+  function renderLog(logs, sameRun) {
+    const log = q(".job-log");
+    if (!sameRun) { renderedLog = null; logFollowing = true; logPosition = [0, 0]; }
+    const signature = JSON.stringify(logs);
+    if (signature === renderedLog) return;
+    const fragment = document.createDocumentFragment();
+    for (const entry of logs.entries) {
+      const node = document.createElement("pre");
+      node.className = "job-log-entry";
+      node.dataset.logFormat = entry.format;
+      node.textContent = entry.text;
+      fragment.append(node);
+    }
+    if (!logs.entries.length) {
+      const node = document.createElement("p");
+      node.textContent = say("等待日志", "Waiting for log");
+      fragment.append(node);
+    }
+    log.replaceChildren(fragment);
+    q("[data-job-log-truncated]").hidden = !logs.truncated;
+    restoreLogPosition();
+    renderedLog = signature;
+    updateLogFollowing();
+  }
+  function onLogScroll(event) {
+    const log = event.target;
+    if (!log.matches?.(".job-log") || !log.clientHeight) return;
+    logPosition = [log.scrollTop, log.scrollLeft];
+    logFollowing = log.scrollHeight - log.clientHeight - log.scrollTop <= 24;
+    updateLogFollowing();
+  }
+  function onLogToggle(event) {
+    if (event.target.matches?.("[data-job-log-section]") && event.target.open) restoreLogPosition();
+  }
   async function selectRun(id) {
     if (selectedRun !== id) { variantFilter = ""; resultOffset = 0; q("[data-job-detail]").hidden = true; }
     selectedRun = id;
@@ -171,17 +215,19 @@ function createJobsPage({ root, app }) {
     const pane = q("[data-job-detail]");
     const signature = JSON.stringify({ ...detail, heartbeat: undefined });
     const sameRun = renderedRun === id;
-    const log = pane.querySelector(".job-log");
+    const logSection = sameRun ? pane.querySelector("[data-job-log-section]") : null;
+    const log = logSection?.querySelector(".job-log");
+    if (log?.clientHeight) logPosition = [log.scrollTop, log.scrollLeft];
     if (sameRun && renderedDetail === signature) {
-      if (log) log.textContent = logs.text || say("等待日志", "Waiting for log");
+      renderLog(logs, true);
       return;
     }
     const expanded = sameRun ? [...pane.querySelectorAll("details")].map(node => node.open) : [];
-    const logScroll = sameRun && log ? [log.scrollTop, log.scrollLeft] : [0, 0];
+    const focusedLog = logSection?.contains(document.activeElement) ? /** @type {HTMLElement} */ (document.activeElement) : null;
     const focusedFilter = sameRun && document.activeElement === pane.querySelector("[data-filter-variant]");
     renderedRun = id; renderedDetail = signature;
     pane.hidden = false;
-    pane.innerHTML = `<header class="jobs-heading"><div><p class="eyebrow">${esc(stateLabel(detail.state))}</p><h3>${esc(detail.job_name || detail.id)}</h3></div>${adminMode() && ACTIVE.has(detail.state) ? `<button type="button" class="action-button" data-job-stop>${say("停止运行", "Stop run")}</button>` : ""}</header><p class="job-progress">${esc(detail.trials_completed ?? 0)} / ${esc(detail.trials_total ?? detail.prepared?.trial_count ?? "—")} Trials</p>${detail.error || detail.result_error ? `<p class="error">${esc(detail.error || detail.result_error)}</p>` : ""}<div class="job-results">${(detail.results || []).map(result => `<div class="job-result"><span>${esc(result.variant_label || result.variant_id || "")}</span><strong>${esc(result.task || result.id)}</strong><span>${esc(result.score ?? "—")}</span><small>${esc(result.score_source || stateLabel(result.state))}</small>${result.source_key ? `<a href="/#source=${encodeURIComponent(result.source_key)}" data-workspace-route="home">${say("查看 Trial", "View Trial")}</a>` : ""}</div>`).join("")}</div><details><summary>${say("本次配置", "Run configuration")}</summary><pre>${esc(JSON.stringify(detail.request, null, 2))}</pre></details><details open><summary>${say("运行日志", "Run log")}</summary><pre class="job-log">${esc(logs.text || say("等待日志", "Waiting for log"))}</pre></details>`;
+    pane.innerHTML = `<header class="jobs-heading"><div><p class="eyebrow">${esc(stateLabel(detail.state))}</p><h3>${esc(detail.job_name || detail.id)}</h3></div>${adminMode() && ACTIVE.has(detail.state) ? `<button type="button" class="action-button" data-job-stop>${say("停止运行", "Stop run")}</button>` : ""}</header><p class="job-progress">${esc(detail.trials_completed ?? 0)} / ${esc(detail.trials_total ?? detail.prepared?.trial_count ?? "—")} Trials</p>${detail.error || detail.result_error ? `<p class="error">${esc(detail.error || detail.result_error)}</p>` : ""}<div class="job-results">${(detail.results || []).map(result => `<div class="job-result"><span>${esc(result.variant_label || result.variant_id || "")}</span><strong>${esc(result.task || result.id)}</strong><span>${esc(result.score ?? "—")}</span><small>${esc(result.score_source || stateLabel(result.state))}</small>${result.source_key ? `<a href="/#source=${encodeURIComponent(result.source_key)}" data-workspace-route="home">${say("查看 Trial", "View Trial")}</a>` : ""}</div>`).join("")}</div><details><summary>${say("本次配置", "Run configuration")}</summary><pre>${esc(JSON.stringify(detail.request, null, 2))}</pre></details><details open data-job-log-section><summary>${say("运行日志", "Run log")}</summary><button type="button" class="action-button" data-job-log-latest hidden>${say("回到最新", "Back to latest")}</button><p data-job-log-truncated hidden>${say("较早日志已省略，当前显示末尾 128 KiB；首行可能不完整。", "Earlier log omitted. Showing the last 128 KiB; the first line may be incomplete.")}</p><div class="job-log" tabindex="0" role="region" aria-label="${say("运行日志", "Run log")}"></div></details>`;
     if (!ACTIVE.has(detail.state)) invalidateWorkspace("catalog");
     const results = pane.querySelector(".job-results");
     const groups = detail.variant_summary || summarizeVariants(detail.results || []);
@@ -192,15 +238,18 @@ function createJobsPage({ root, app }) {
     const count = detail.result_count ?? detail.results?.length ?? 0;
     if (count > 50 || resultOffset) results.insertAdjacentHTML("afterend", `<div class="jobs-actions"><button type="button" class="action-button" data-job-page="previous" ${resultOffset === 0 ? "disabled" : ""}>${say("上一页", "Previous")}</button><span>${esc(Math.min(resultOffset + 1, count))}–${esc(Math.min(resultOffset + 50, count))} / ${esc(count)}</span><button type="button" class="action-button" data-job-page="next" ${resultOffset + 50 >= count ? "disabled" : ""}>${say("下一页", "Next")}</button></div>`);
     [...pane.querySelectorAll("details")].forEach((node, index) => { if (expanded[index] !== undefined) node.open = expanded[index]; });
-    const nextLog = pane.querySelector(".job-log");
-    nextLog.scrollTop = logScroll[0]; nextLog.scrollLeft = logScroll[1];
+    if (logSection) pane.querySelector("[data-job-log-section]").replaceWith(logSection);
+    renderLog(logs, sameRun);
+    restoreLogPosition();
+    if (focusedLog) focusedLog.focus({ preventScroll: true });
     if (focusedFilter) pane.querySelector("[data-filter-variant]").focus({ preventScroll: true });
   }
   function filterResults() { for (const node of nodes("[data-result-variant]")) node.hidden = Boolean(variantFilter && node.dataset.resultVariant !== variantFilter); }
   async function refreshRuns() {
+    const epoch = selectionGeneration;
     try {
       const data = await serveApi("/api/jobs");
-      if (disposed) return;
+      if (disposed || epoch !== selectionGeneration) return;
       runs = data.items;
       renderRuns();
       if (selectedRun) await selectRun(selectedRun);
@@ -226,6 +275,13 @@ function createJobsPage({ root, app }) {
     }
   }
   async function action(button) {
+    if (button.matches("[data-job-log-latest]")) {
+      logFollowing = true;
+      const log = q(".job-log");
+      log.scrollTop = log.scrollHeight;
+      log.focus({ preventScroll: true });
+      updateLogFollowing(); return;
+    }
     if (button.matches("[data-job-page]")) { resultOffset = Math.max(0, resultOffset + (button.dataset.jobPage === "next" ? 50 : -50)); await selectRun(selectedRun); return; }
     if (button.matches("[data-add-entry]")) { button.closest("[data-kv]").querySelector("[data-kv-rows]").insertAdjacentHTML("beforeend", entryRow()); invalidated(); return; }
     if (button.matches("[data-remove-entry]")) { button.closest(".job-kv-row").remove(); invalidated(); return; }
@@ -275,6 +331,8 @@ function createJobsPage({ root, app }) {
     root.addEventListener("click", onClick);
     root.addEventListener("change", onChange);
     root.addEventListener("input", onInput);
+    root.addEventListener("scroll", onLogScroll, true);
+    root.addEventListener("toggle", onLogToggle, true);
     window.addEventListener("peval:workspace-navigate", onNavigate);
   }
   function onClick(event) { const button = event.target.closest("button"); if (button) void guarded(() => action(button)); }
@@ -315,7 +373,7 @@ function createJobsPage({ root, app }) {
       await refreshRuns();
     },
     snapshot() { return { context: { page: "jobs", run_id: selectedRun }, dirty: changed }; },
-    destroy() { disposed = true; generation++; selectionGeneration++; clearTimeout(timer); root.removeEventListener("click", onClick); root.removeEventListener("change", onChange); root.removeEventListener("input", onInput); window.removeEventListener("peval:workspace-navigate", onNavigate); },
+    destroy() { disposed = true; generation++; selectionGeneration++; clearTimeout(timer); root.removeEventListener("click", onClick); root.removeEventListener("change", onChange); root.removeEventListener("input", onInput); root.removeEventListener("scroll", onLogScroll, true); root.removeEventListener("toggle", onLogToggle, true); window.removeEventListener("peval:workspace-navigate", onNavigate); },
   };
 }
 

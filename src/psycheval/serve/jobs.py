@@ -145,7 +145,7 @@ def register_jobs_routes(app: FastAPI):
     @app.get("/api/jobs/{run_id}/logs")
     @access(GUEST_ACCESS)
     def logs(request: Request, run_id: str):
-        return call(lambda: {"text": service(request).logs(run_id)})
+        return call(service(request).logs, run_id)
 
     @app.post(
         "/api/jobs/{run_id}/stop",

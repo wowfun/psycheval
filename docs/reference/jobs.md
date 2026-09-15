@@ -106,6 +106,28 @@ mapping, progress, logs and worker identity. Starting is idempotent for a reques
 identifier. The independent worker survives browser and web-server shutdown;
 reopening the workbench observes it without starting another evaluation.
 
+### Run logs
+
+Harness stdout and stderr are retained together in `worker.log`. Harnesses may
+emit UTF-8 NDJSON: each newline-terminated JSON value is one event, with no
+required fields or top-level type. Flush each line for timely display. The Jobs
+page polls every two seconds while runs are active and displays each event as
+formatted JSON without interpreting severity, timestamps, or lifecycle state.
+Warnings and errors are displayed as supplied; logs do not change run outcomes.
+Harbor's native output format is unchanged.
+
+The internal log response contains `entries` (each with `format` and display
+`text`) and `truncated`. JSON is formatted on the server so browser number
+conversion cannot round large integers. Plain text, tracebacks, invalid or
+excessively nested JSON, and incomplete line fragments remain readable text.
+Both forms use retained-content credential redaction. Reads return the latest
+128 KiB window with an explicit notice when earlier bytes were omitted;
+incomplete fragments are replaced on the next poll, not accumulated as events.
+
+Log updates preserve other detail controls and follow new content only when the
+reader is at the bottom. Scrolling up pauses following; a return-to-latest
+control resumes it. The final log remains readable after execution ends.
+
 Each retained record is validated independently. A corrupt record appears as an
 invalid run with a diagnostic and cannot start or stop a process; it does not
 prevent reading other runs or discovering their results. Output names must be

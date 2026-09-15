@@ -465,7 +465,10 @@ def test_worker_survives_new_service_and_deduplicates_start(jobs):
     assert (
         jobs.workspace / "jobs" / detail["job_name"] / "native-results.data"
     ).is_file()
-    assert "fixture run finished" in second.logs(run["id"])
+    assert any(
+        "fixture run finished" in entry["text"]
+        for entry in second.logs(run["id"])["entries"]
+    )
     assert len(second.list()) == 1
     with pytest.raises(JobsConflict):
         second.start(request(delay=2), preview["preview_id"], "same-request")

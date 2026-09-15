@@ -59,6 +59,20 @@ class FixtureHarness:
             await control.subprocess(
                 [sys.executable, "-c", "import time; time.sleep(120)"]
             )
+        if config["settings"].get("ndjson"):
+            print(
+                json.dumps({"anything": ["first event", "中文"]}, ensure_ascii=False),
+                flush=True,
+            )
+            await asyncio.sleep(3)
+            print(
+                json.dumps(
+                    ["warning from downstream", {"unexpected": "error from downstream"}]
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+            print("plain diagnostic", flush=True)
         await asyncio.sleep(config["settings"].get("delay", 0.5))
         if config["settings"].get("fail"):
             raise RuntimeError("fixture failure")

@@ -337,14 +337,45 @@ class JobsService:
         self.detail(run_id, results=False)
         path = safe_path(self.root, run_id, "worker.log")
         if not path.exists():
-            return ""
+            return {"entries": [], "truncated": False}
         with open_regular(path) as stream:
             size = stream.seek(0, 2)
-            stream.seek(max(0, size - 128 * 1024))
-            text = stream.read(128 * 1024).decode("utf-8", errors="replace")
-        return (
-            "[earlier log omitted]\n" if size > 128 * 1024 else ""
-        ) + sanitize_credentials(text)
+            offset = max(0, size - 128 * 1024)
+            partial_start = False
+            if offset:
+                stream.seek(offset - 1)
+                partial_start = stream.read(1) != b"\n"
+            stream.seek(offset)
+            raw = stream.read(min(size, 128 * 1024))
+        entries = []
+        text_lines = []
+
+        def flush_text():
+            if text_lines:
+                entries.append(
+                    {
+                        "format": "text",
+                        "text": _log_text(redact_retained_text("\n".join(text_lines))),
+                    }
+                )
+                text_lines.clear()
+
+        lines = raw.split(b"\n")
+        for index, line in enumerate(lines):
+            if index == len(lines) - 1 and not line:
+                break
+            complete = index < len(lines) - 1
+            text = line.decode("utf-8", errors="replace")
+            if complete:
+                text = text.removesuffix("\r")
+            entry = _log_entry(text, complete and not (index == 0 and partial_start))
+            if entry["format"] == "text":
+                text_lines.append(entry["text"])
+            else:
+                flush_text()
+                entries.append(entry)
+        flush_text()
+        return {"entries": entries, "truncated": bool(offset)}
 
     def save_preferred_harness(self, harness_id, revision):
         JobsDocument.model_validate({"preferred_harness": harness_id})

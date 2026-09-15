@@ -164,8 +164,9 @@ def test_logs_redact_recognized_keys_and_environment_for_every_reader(
     (path / "worker.log").write_text(
         f"{secrets[0]} Bearer {secrets[1]} {secrets[2]}", encoding="utf-8"
     )
-    value = jobs.logs(path.name)
-    assert all(secret not in value for secret in secrets)
+    entries = jobs.logs(path.name)["entries"]
+    assert entries
+    assert all(secret not in entry["text"] for entry in entries for secret in secrets)
 
 
 def test_shared_revision_budget_caches_shared_files(tmp_path):
