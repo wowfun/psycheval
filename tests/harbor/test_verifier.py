@@ -14,13 +14,87 @@ from psycheval.harbor.runtime_config import (
     RuntimePaths,
     write_effective_runtime_config,
 )
-from psycheval.harbor.verifier import aggregate, evaluate
+from psycheval.harbor.verifier import (
+    aggregate,
+    build_scoring_plan,
+    evaluate,
+    matching_observations,
+)
 from tests.fixtures import load_pbench_trajectory as _fixture_trajectory
 
 _FIXTURES_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "pbench"
 _WEB_SEARCH_FIXTURE = _FIXTURES_ROOT / "web-search-01"
 _WEB_FETCH_FIXTURE = _FIXTURES_ROOT / "web-fetch-01"
 _BROWSER_CONTROL_FIXTURE = _FIXTURES_ROOT / "browser-control-01"
+
+
+@pytest.mark.parametrize("operation", ["checks", "evidence"])
+def test_repeated_call_matching_serializes_each_arguments_object_once(
+    tmp_path, monkeypatch, operation
+):
+    from psycheval.harbor.verifier import _calls
+
+    trajectory = Trajectory(
+        schema_version="ATIF-v1.7",
+        trajectory_id="repeated-rules",
+        agent={"name": "fixture", "version": "1"},
+        steps=[
+            {"step_id": 1, "source": "user", "message": "Fetch sources"},
+            *[
+                _step_with_call(
+                    i + 2,
+                    f"call-{i}",
+                    "web_fetch",
+                    {"command": f"needle {i}", "data": "x" * 4096},
+                    "matched",
+                )
+                for i in range(12)
+            ],
+            {"step_id": 14, "source": "agent", "message": "done"},
+        ],
+    )
+    # Several observations from one call must not reserialize the same arguments.
+    for step in trajectory.steps[1:-1]:
+        step.observation.results *= 3
+    rule = _required_call(
+        _branch("web_fetch", argument_terms=["needle"], observation_terms=["missing"]),
+        _branch("web_fetch", argument_terms=["needle"], observation_terms=["matched"]),
+    )
+    serialized = []
+    dumps = json.dumps
+
+    def count_dumps(value, **kwargs):
+        serialized.append(id(value))
+        return dumps(value, **kwargs)
+
+    monkeypatch.setattr(_calls.json, "dumps", count_dumps)
+    if operation == "checks":
+        checks = evaluate(trajectory, {"required_calls": [rule] * 8}, tmp_path)
+        assert all(check["passed"] for check in checks)
+    else:
+        assert matching_observations(trajectory, rule) == ["matched"] * 36
+    assert len(serialized) == len(set(serialized)) == 12
+    trajectory.steps[1].tool_calls[0].arguments["command"] = "changed"
+    assert matching_observations(trajectory, rule) == ["matched"] * 33
+
+
+def test_call_matching_does_not_serialize_arguments_without_term_checks(
+    tmp_path, monkeypatch
+):
+    from psycheval.harbor.verifier import _calls
+
+    trajectory = Trajectory(
+        **_fixture_trajectory(_WEB_FETCH_FIXTURE, "Fetch it", tmp_path)
+    )
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("no text predicates need serialized arguments")
+
+    monkeypatch.setattr(_calls.json, "dumps", unexpected)
+    checks = evaluate(
+        trajectory, {"required_calls": [_required_call(_branch("*"))]}, tmp_path
+    )
+    assert all(check["passed"] for check in checks)
 
 
 def test_grader_requires_outcome_and_structured_tool_evidence(tmp_path: Path) -> None:
@@ -591,7 +665,7 @@ def test_browser_computer_action_branches_are_accepted(tmp_path: Path) -> None:
     assert all(check["passed"] for check in checks), checks
 
 
-def test_reward_dimensions_are_binary_and_total_requires_every_check(
+def test_reward_is_fraction_of_declared_builtin_checks(
     tmp_path: Path,
 ) -> None:
     trajectory = Trajectory(
@@ -614,14 +688,21 @@ def test_reward_dimensions_are_binary_and_total_requires_every_check(
         tmp_path,
     )
 
-    assert aggregate(checks) == {
-        "reward": 0,
+    plan = build_scoring_plan(
+        {
+            "required_calls": [_required_call(_branch("web_fetch"))],
+            "final_terms": ["2017-05-13"],
+        }
+    )
+    assert aggregate(checks, plan=plan) == {
+        "reward": 0.5,
         "required_tool": 1,
         "required_arguments": 0,
         "required_observation": 0,
         "forbidden_tools": 1,
         "final_answer": 1,
         "required_artifacts": 1,
+        "custom_outputs": 1,
     }
 
 
@@ -864,12 +945,14 @@ def test_module_cli_writes_total_and_dimension_rewards(tmp_path: Path) -> None:
     rewards = json.loads((verifier_logs / "reward.json").read_text(encoding="utf-8"))
     assert rewards == {
         "reward": 1,
+        "rule_score": 1,
         "required_tool": 1,
         "required_arguments": 1,
         "required_observation": 1,
         "forbidden_tools": 1,
         "final_answer": 1,
         "required_artifacts": 1,
+        "custom_outputs": 1,
     }
 
 

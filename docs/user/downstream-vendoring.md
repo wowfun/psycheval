@@ -22,7 +22,7 @@ commit in your dependency tracking so later updates replace the same source unit
 Add the integration's dependencies to your downstream project:
 
 ```console
-uv add "harbor==0.21.0" "PyYAML>=6.0,<7" "pathspec>=1.0,<2"
+uv add "harbor==0.21.0" "PyYAML>=6.0,<7" "pathspec>=1.0,<2" "httpx>=0.28,<1"
 ```
 
 Commit the resulting `pyproject.toml` and `uv.lock`; use `uv sync --locked` to

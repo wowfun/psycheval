@@ -30,6 +30,7 @@ _SENSITIVE_ENV_PREFIXES = (
     "GROQ_",
     "OPENAI_",
     "OPENCODE_",
+    "PEVAL_JUDGE_",
     "OPENROUTER_",
     "PEVO_",
     "PSYCHEVO_",

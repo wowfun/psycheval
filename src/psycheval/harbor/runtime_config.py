@@ -46,12 +46,19 @@ class HarnessInvocation:
 
 
 @dataclass(frozen=True)
+class VerifierInvocation:
+    instruction: str
+    step_name: str | None = None
+
+
+@dataclass(frozen=True)
 class EffectiveRuntimeConfig:
     paths: RuntimePaths
     workdir_root: str | None = None
     workspace: str | None = None
     python: str | None = None
     harness: HarnessInvocation | None = None
+    verifier: VerifierInvocation | None = None
 
     def to_dict(self) -> dict[str, Any]:
         harbor: dict[str, Any] = {
@@ -64,6 +71,11 @@ class EffectiveRuntimeConfig:
             harbor["harness"] = {
                 "protocol_version": self.harness.protocol_version,
                 "action": self.harness.action,
+            }
+        if self.verifier is not None:
+            harbor["verifier"] = {
+                "instruction": self.verifier.instruction,
+                "step_name": self.verifier.step_name,
             }
         return {
             "schema_version": RUNTIME_SCHEMA_VERSION,
@@ -183,7 +195,7 @@ def load_effective_runtime_config(
     )
 
     raw_harbor = _object(data.get("harbor"), "harbor")
-    _reject_unknown(raw_harbor, {"host", "harness"}, "harbor")
+    _reject_unknown(raw_harbor, {"host", "harness", "verifier"}, "harbor")
     raw_host = _object(raw_harbor.get("host"), "harbor.host")
     _reject_unknown(raw_host, {"workdir_root", "workspace"}, "harbor.host")
     _require_fields(raw_host, {"workdir_root", "workspace"}, "harbor.host")
@@ -210,6 +222,20 @@ def load_effective_runtime_config(
     if require_harness and harness is None:
         raise RuntimeConfigError("effective PEVAL config harbor.harness is required")
 
+    verifier = None
+    if "verifier" in raw_harbor:
+        raw_verifier = _object(raw_harbor["verifier"], "harbor.verifier")
+        _reject_unknown(raw_verifier, {"instruction", "step_name"}, "harbor.verifier")
+        _require_fields(raw_verifier, {"instruction", "step_name"}, "harbor.verifier")
+        verifier = VerifierInvocation(
+            instruction=_nonempty_string(
+                raw_verifier["instruction"], "harbor.verifier.instruction"
+            ),
+            step_name=_optional_string(
+                raw_verifier["step_name"], "harbor.verifier.step_name"
+            ),
+        )
+
     raw_executables = _object(data.get("executables"), "executables")
     _reject_unknown(raw_executables, {"python"}, "executables")
     _require_fields(raw_executables, {"python"}, "executables")
@@ -220,6 +246,7 @@ def load_effective_runtime_config(
         workspace=workspace,
         python=python,
         harness=harness,
+        verifier=verifier,
     )
 
 

@@ -17,7 +17,138 @@ from harbor.models.task.config import MCPServerConfig
 
 from psycheval.harbor.opencode import HostOpenCodeAgent
 from psycheval.harbor.trajectory_validation import load_validated_trajectory
+from psycheval.harbor.verifier import evaluate
 from tests.harbor.test_environment import make_environment
+
+
+@pytest.mark.parametrize(
+    "status,exit_code,passed",
+    [
+        ("completed", 0, True),
+        ("completed", 1, False),
+        ("completed", None, True),
+        ("error", None, False),
+        ("running", None, False),
+    ],
+)
+def test_native_tool_status_and_exit_code_control_observation_gate(
+    tmp_path, status, exit_code, passed
+):
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    agent._instruction = "Fetch source"
+    events = [
+        {"type": "step_start", "sessionID": "fixture"},
+        {
+            "type": "tool_use",
+            "part": {
+                "type": "tool",
+                "callID": "source",
+                "tool": "bash",
+                "state": {
+                    "status": status,
+                    "input": {"command": "python x-daily/fetch.py"},
+                    "output": "source fetch result",
+                    "metadata": {"exit": exit_code},
+                },
+            },
+        },
+        {"type": "step_finish", "part": {}},
+        {"type": "step_start", "sessionID": "fixture"},
+        {"type": "text", "part": {"type": "text", "text": "done"}},
+        {"type": "step_finish", "part": {}},
+    ]
+    trajectory = agent._convert_events_to_trajectory(events)
+    checks = evaluate(
+        trajectory,
+        {
+            "required_calls": [
+                {"any": [{"tool_names": ["bash"], "argument_terms": ["x-daily"]}]}
+            ]
+        },
+        tmp_path,
+    )
+    assert (
+        next(check for check in checks if check["id"] == "required_call_1_observation")[
+            "passed"
+        ]
+        is passed
+    )
+    observation = trajectory.steps[1].observation.results[0]
+    assert observation.extra["is_error"] is not passed
+    if exit_code is not None:
+        assert observation.extra["exit_code"] == exit_code
+
+
+@pytest.mark.parametrize("field", ["part", "state", "metadata", "status"])
+@pytest.mark.parametrize("value", [None, [], "unexpected"])
+def test_malformed_tool_data_is_reported_without_mutating_events(
+    tmp_path, field, value
+):
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    agent._instruction = "Fetch source"
+    part = {
+        "type": "tool",
+        "callID": "source",
+        "tool": "bash",
+        "state": {"status": "completed", "input": {}, "output": "source"},
+    }
+    if field == "part":
+        part = value
+    elif field == "state":
+        part["state"] = value
+    else:
+        part["state"][field] = value
+    events = [
+        {"type": "step_start", "sessionID": "fixture"},
+        {"type": "tool_use", "part": part},
+        {"type": "text", "part": {"type": "text", "text": "retained answer"}},
+        {"type": "step_finish", "part": {}},
+    ]
+    original = copy.deepcopy(events)
+    if field in {"part", "state"}:
+        with pytest.raises(ValueError, match="Malformed OpenCode tool event"):
+            agent._convert_events_to_trajectory(events)
+        assert events == original
+        return
+    trajectory = agent._convert_events_to_trajectory(events)
+    assert trajectory.steps[-1].message == "retained answer"
+    assert events == original
+    if field == "status":
+        assert trajectory.steps[-1].observation.results[0].extra["is_error"]
+
+
+@pytest.mark.parametrize("failure", ["state", "boundary", "unfinished"])
+def test_malformed_forbidden_tool_event_cannot_disappear_from_scoring(
+    tmp_path, failure
+):
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    agent._instruction = "Do not run forbidden_tool"
+    events = [
+        {"type": "step_start", "sessionID": "fixture"},
+        {
+            "type": "tool_use",
+            "part": {
+                "type": "tool",
+                "callID": "forbidden-call",
+                "tool": "forbidden_tool",
+                "state": None,
+            },
+        },
+        {"type": "text", "part": {"type": "text", "text": "done"}},
+        {"type": "step_finish", "part": {}},
+    ]
+    if failure != "state":
+        events[1]["part"]["state"] = {
+            "status": "completed",
+            "input": {},
+            "output": "done",
+        }
+        if failure == "boundary":
+            events[-1]["part"] = None
+        else:
+            events.pop()
+    with pytest.raises(ValueError, match="OpenCode"):
+        agent._convert_events_to_trajectory(events)
 
 
 @pytest.mark.skipif(

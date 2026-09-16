@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from fnmatch import fnmatchcase
+from functools import cached_property
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from harbor.models.trajectories import Trajectory
+from harbor.models.trajectories import ToolCall, Trajectory
 
 _FAILURE_STATUSES = {
     "cancelled",
@@ -18,21 +20,59 @@ _FAILURE_STATUSES = {
 }
 
 
-def required_call_checks(
-    trajectory: Trajectory, required_calls: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
+@dataclass
+class _CallEvidence:
+    position: int
+    call: ToolCall
+    observations: list[Any]
+
+    @cached_property
+    def argument_text(self) -> str:
+        return json.dumps(
+            self.call.arguments, ensure_ascii=False, sort_keys=True
+        ).lower()
+
+
+def _indexed_calls(trajectory: Trajectory) -> list[_CallEvidence]:
     observations: dict[str, list[Any]] = {}
     for step in trajectory.steps:
         for result in step.observation.results if step.observation else []:
             if result.source_call_id:
                 observations.setdefault(result.source_call_id, []).append(result)
-    calls = [
-        (position, call, observations.get(call.tool_call_id, []))
+    return [
+        _CallEvidence(position, call, observations.get(call.tool_call_id, []))
         for position, call in enumerate(
             call for step in trajectory.steps for call in (step.tool_calls or [])
         )
     ]
 
+
+def matching_observations(trajectory: Trajectory, rule: dict[str, Any]) -> list[str]:
+    """Extract evidence for a required-call rule, without adding scoring items."""
+    branches = _required_branches(rule, 1)
+    matches = []
+    for candidate in _indexed_calls(trajectory):
+        accepted = [
+            branch
+            for branch in branches
+            if _tool_name_matches(candidate.call.function_name, branch["tool_names"])
+            and _arguments_match(candidate, branch)
+        ]
+        matches.extend(
+            content_text(observation.content)
+            for observation in candidate.observations
+            if any(
+                _has_successful_observation([observation], branch)
+                for branch in accepted
+            )
+        )
+    return matches
+
+
+def required_call_checks(
+    trajectory: Trajectory, required_calls: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    calls = _indexed_calls(trajectory)
     checks: list[dict[str, Any]] = []
     cursor = -1
     for rule_number, rule in enumerate(required_calls, start=1):
@@ -41,8 +81,8 @@ def required_call_checks(
             (branch, candidate)
             for branch in branches
             for candidate in calls
-            if candidate[0] > cursor
-            and _tool_name_matches(candidate[1].function_name, branch["tool_names"])
+            if candidate.position > cursor
+            and _tool_name_matches(candidate.call.function_name, branch["tool_names"])
         ]
         accepted_patterns = sorted(
             {pattern for branch in branches for pattern in branch["tool_names"]}
@@ -59,7 +99,7 @@ def required_call_checks(
         argument_candidates = [
             (branch, candidate)
             for branch, candidate in tool_candidates
-            if _arguments_match(candidate[1].arguments, branch)
+            if _arguments_match(candidate, branch)
         ]
         checks.append(
             _check(
@@ -73,7 +113,7 @@ def required_call_checks(
         paired_candidates = [
             (branch, candidate)
             for branch, candidate in argument_candidates
-            if _has_successful_observation(candidate[2], branch)
+            if _has_successful_observation(candidate.observations, branch)
         ]
         checks.append(
             _check(
@@ -85,7 +125,7 @@ def required_call_checks(
             )
         )
         if paired_candidates:
-            cursor = min(candidate[0] for _branch, candidate in paired_candidates)
+            cursor = min(candidate.position for _branch, candidate in paired_candidates)
     return checks
 
 
@@ -194,13 +234,13 @@ def _tool_name_matches(name: str, patterns: list[str]) -> bool:
     return any(fnmatchcase(name, pattern) for pattern in patterns)
 
 
-def _arguments_match(arguments: dict[str, Any], rule: dict[str, Any]) -> bool:
+def _arguments_match(candidate: _CallEvidence, rule: dict[str, Any]) -> bool:
+    arguments = candidate.call.arguments
     argument_values = rule.get("argument_values", {})
     if any(arguments.get(key) != value for key, value in argument_values.items()):
         return False
     terms = string_list(rule.get("argument_terms"), field="argument_terms")
-    text = json.dumps(arguments, ensure_ascii=False, sort_keys=True).lower()
-    if not all(term.lower() in text for term in terms):
+    if terms and not all(term.lower() in candidate.argument_text for term in terms):
         return False
     argument_url = rule.get("argument_url")
     if argument_url is None:
@@ -223,6 +263,8 @@ def _has_successful_observation(observations: list[Any], rule: dict[str, Any]) -
             or exit_code not in {None, 0, "0"}
         ):
             continue
+        if not terms:
+            return True
         content = content_text(observation.content).lower()
         if all(term.lower() in content for term in terms):
             return True

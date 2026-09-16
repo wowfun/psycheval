@@ -8,47 +8,23 @@ from harbor.models.trajectories import Trajectory
 
 from ._artifacts import resolve_required_artifacts
 from ._calls import (
+    _check,
     content_text,
     forbidden_tool_check,
     required_call_checks,
     string_list,
 )
-
-_CONFIG_FIELDS = {
-    "required_calls",
-    "forbidden_tool_names",
-    "final_terms",
-    "required_artifacts",
-}
-_REWARD_DIMENSIONS = (
-    "required_tool",
-    "required_arguments",
-    "required_observation",
-    "forbidden_tools",
-    "final_answer",
-    "required_artifacts",
-)
+from ._scoring import build_scoring_plan
 
 
 def evaluate(
     trajectory: Trajectory, config: dict[str, Any], artifacts_dir: Path
 ) -> list[dict[str, Any]]:
     """Evaluate one step-local trajectory and its current artifacts."""
-    unknown_fields = sorted(set(config) - _CONFIG_FIELDS)
-    if unknown_fields:
-        raise ValueError(
-            "verifier config contains unsupported fields: " + ", ".join(unknown_fields)
-        )
-    if not any(config.get(field) for field in _CONFIG_FIELDS):
-        raise ValueError("verifier config requires at least one non-empty constraint")
-
-    required_calls = config.get("required_calls")
-    if required_calls is None:
-        required_calls = []
-    elif not isinstance(required_calls, list) or not required_calls:
-        raise ValueError("verifier 'required_calls' must be a non-empty array")
-    if not all(isinstance(rule, dict) for rule in required_calls):
-        raise ValueError("verifier 'required_calls' entries must be objects")
+    plan = build_scoring_plan(config)
+    if not plan.requires_trajectory:
+        return []
+    required_calls = config.get("required_calls") or []
 
     checks = required_call_checks(trajectory, required_calls)
     forbidden_patterns = string_list(
@@ -58,20 +34,6 @@ def evaluate(
         checks.append(forbidden_tool_check(trajectory, forbidden_patterns))
     checks.extend(_outcome_checks(trajectory, config, artifacts_dir))
     return checks
-
-
-def aggregate(checks: list[dict[str, Any]]) -> dict[str, int]:
-    """Aggregate binary checks without hiding per-dimension evidence."""
-    grouped: dict[str, list[bool]] = {dimension: [] for dimension in _REWARD_DIMENSIONS}
-    for check in checks:
-        dimension = check.get("dimension")
-        if dimension not in grouped:
-            raise ValueError(f"unknown verifier check dimension: {dimension!r}")
-        grouped[dimension].append(bool(check.get("passed")))
-    return {
-        "reward": int(all(bool(check.get("passed")) for check in checks)),
-        **{dimension: int(all(results)) for dimension, results in grouped.items()},
-    }
 
 
 def _outcome_checks(
@@ -141,14 +103,3 @@ def _mentions_exact_path(content: str, relative: str) -> bool:
         )
         is not None
     )
-
-
-def _check(
-    check_id: str, dimension: str, passed: bool, evidence: str
-) -> dict[str, Any]:
-    return {
-        "id": check_id,
-        "dimension": dimension,
-        "passed": bool(passed),
-        "evidence": evidence,
-    }

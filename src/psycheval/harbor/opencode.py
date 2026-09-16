@@ -13,6 +13,7 @@ from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.agents.installed.opencode import OpenCode
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
+from harbor.models.trajectories import Trajectory
 
 from .environment import HostEnvironment
 from .inference_telemetry import populate_context_from_trajectory
@@ -167,6 +168,77 @@ class HostOpenCodeAgent(OpenCode):
                 if isinstance(event, dict):
                     events.append(event)
         return events
+
+    @override
+    def _convert_events_to_trajectory(self, events: list[dict]) -> Trajectory | None:
+        converted_events = []
+        states = {}
+        identities = set()
+        for index, event in enumerate(events):
+            if not isinstance(event, dict):
+                continue
+            part = event.get("part", {})
+            if event.get("type") == "tool_use":
+                if not isinstance(part, dict) or part.get("type") != "tool":
+                    raise ValueError(
+                        f"Malformed OpenCode tool event at index {index}: expected a tool part"
+                    )
+                call_id = part.get("callID", part.get("id"))
+                name, state = part.get("tool"), part.get("state")
+                if (
+                    not isinstance(call_id, str)
+                    or not call_id
+                    or not isinstance(name, str)
+                    or not name
+                    or not isinstance(state, dict)
+                ):
+                    raise ValueError(
+                        f"Malformed OpenCode tool event at index {index}: expected identity and state"
+                    )
+                identities.add((call_id, name))
+                states[call_id] = state
+            elif not isinstance(part, dict):
+                if event.get("type") in {"step_start", "step_finish"}:
+                    raise ValueError(
+                        f"Malformed OpenCode step boundary at index {index}"
+                    )
+                continue
+            converted_events.append(event)
+        trajectory = super()._convert_events_to_trajectory(converted_events)
+        represented = (
+            {
+                (call.tool_call_id, call.function_name)
+                for step in trajectory.steps
+                for call in (step.tool_calls or [])
+            }
+            if trajectory is not None
+            else set()
+        )
+        if identities - represented:
+            raise ValueError("OpenCode tool events could not be represented in ATIF")
+        if trajectory is None:
+            return None
+        for step in trajectory.steps:
+            for observation in step.observation.results if step.observation else []:
+                state = states.get(observation.source_call_id)
+                if state is None:
+                    continue
+                status = state.get("status")
+                metadata = state.get("metadata")
+                metadata = metadata if isinstance(metadata, dict) else {}
+                exit_code = metadata.get("exit")
+                extra = dict(observation.extra or {})
+                extra["status"] = (
+                    status
+                    if isinstance(status, str) and status in {"completed", "error"}
+                    else "incomplete"
+                )
+                extra["is_error"] = bool(extra.get("is_error")) or status != "completed"
+                if type(exit_code) is int:
+                    extra["exit_code"] = exit_code
+                    extra["is_error"] = bool(extra.get("is_error")) or exit_code != 0
+                observation.extra = extra or None
+        return trajectory
 
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:
