@@ -48,6 +48,18 @@ filesystem-only Host operations, WorkBuddy model adaptation and on-demand metric
 project-copy host execution with local fixtures. Project-copy tests exercise
 independent Trial copies, a fresh Git baseline, and cleanup through public Host
 interfaces on each native platform.
+Native Task fixtures also cover preparation before the baseline, process-tree
+cleanup during preparation, custom Python checks with private GT, and weighted
+partial scores. Real Harbor Trials exercise shared/step test overlays and access
+to the current step's trajectory. These tests use synthetic Agents and no live
+model services; Windows fixtures include UTF-8 files under legacy Python encoding.
+The YAML Judge tests use a local Chat Completions server, including partial API
+failures, deadlines, evidence limits, and strict response validation. A real
+three-step Trend Digest Trial verifies fixed partial credit and continuation
+gates. Its upstream Harbor CLI uses `-X utf8` for Harbor's locale-dependent Task
+reader, as documented in the native installation workflow. Preparation sets
+UTF-8 stdout/stderr explicitly; focused preparation and verifier tests set
+`PYTHONUTF8=0` and exercise explicit UTF-8 file decoding under Windows defaults.
 Copied production
 source is never rewritten. These tests also verify that library calls do not
 discover or mutate workspace configuration or print CLI output. Module discovery

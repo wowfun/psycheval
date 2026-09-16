@@ -57,6 +57,13 @@ including on cancellation, and Harbor's pinned OpenCode converter produces ATIF
 and usage metrics. The adapter writes `trajectory.json` as UTF-8 without a BOM,
 preserving non-ASCII characters directly. This adapter supports fresh runs only;
 resume and trajectory loading are not supported.
+Native tool observations retain OpenCode's completion/error state and shell
+exit code, so a completed command with a nonzero exit cannot satisfy a successful
+source-observation check.
+Malformed tool envelopes, identities, states, or step boundaries fail trajectory
+conversion explicitly, retaining native logs. Tool calls must not disappear from
+ATIF and thereby bypass required/forbidden-tool checks. Unsupported optional
+metadata is ignored; an unknown completion status remains incomplete.
 The version probe uses the same isolated Trial configuration as execution and
 retains `opencode-setup.log`. A probe exceeding its 30-second command timeout
 reports that probe failure instead of Harbor's overall Agent setup timeout.
@@ -260,14 +267,15 @@ Calling `start` on a successfully started Host is idempotent, including after
 `stop(delete=False)`.
 `stop(delete=True)`
 removes automatic workspaces; external workspace bind mounts are borrowed and
-retain their existing Task-context merge behavior.
+are preserved, including any changes made during preparation or execution.
 
 `workspace_source` must be an existing, accessible directory, validated during
 construction before any workspace allocation. It copies the project into each
 independent Trial.
 It includes ordinary files, including untracked and Git-ignored files, but
 excludes every `.git` entry from both the project and Task environment. Task
-`environment/` content is then merged into the copy: directories may merge,
+`environment/data/` content is then merged into the copy when no preparation
+script is present: directories may merge,
 but every file or type collision is an error, even for identical files.
 Links, Windows junctions, special files, and source/destination overlap are
 rejected. The caller must keep source trees and output directories stable
@@ -294,6 +302,170 @@ Native Task test scripts that use Psycheval path mapping select
 supplying the Host runtime protocol only within verification. The environment
 scope is restored on success, failure, and cancellation. It requires a Host;
 container scripts retain Harbor's native paths and verifier.
+
+### Native Task input preparation
+
+Ordinary Host Tasks retain Harbor's `environment/` directory, which may contain
+only a placeholder. The Host copies only the contents of `environment/data/`
+into the Task workdir. Other environment files, including Dockerfiles, are
+preparation materials and are neither copied into the workspace nor executed.
+
+An optional `environment/prepare.py` takes full responsibility for input
+preparation instead of the default data copy. It must define the synchronous
+function `prepare(workdir: str) -> None`. The argument is an existing native
+absolute directory. The environment materials are staged outside the workspace;
+the function runs in a separate process using the current Python interpreter.
+Use `__file__` to locate sibling data and helpers. Dependencies must already be
+installed. Task sources are not modified by the framework. Time-dependent
+inputs and the reference time needed by verification belong to the Task.
+Preparation and verification scripts are trusted Task code with native host
+permissions. Their environment retains normal Host/Task settings, including
+explicit credentials needed by the Task; it is not a secret-isolation boundary.
+Judge-specific `PEVAL_JUDGE_*` settings are excluded from these script children.
+
+Preparation runs after copying `workspace_source`, before the Git baseline and
+Agent setup. Repeated starts of a retained Host do not rerun preparation; a new
+workspace does. Borrowed workspaces are never baseline-initialized or deleted.
+The default copy rejects file collisions; scripts explicitly control their own
+workspace changes. Filesystem-only Hosts can copy data, but scripts require
+process access. Missing functions, import errors, and execution failures abort
+the Trial before the Agent runs. Output is retained in `prepare.log` at the Trial
+root. Harbor's environment-start timeout also covers preparation; cancellation
+terminates the process tree before removing owned directories.
+Combined preparation stdout/stderr is limited to 8 MiB; exceeding the limit
+fails preparation and terminates its process tree while retaining the log prefix.
+
+WorkBuddy and separate verifier environments retain their own preparation
+contracts and do not invoke this input hook.
+
+The [prepared-files example](../../examples/tasks/native-prepared-files/README.md)
+combines static source data, a preparation transform, GT comparison, and weighted
+script checks using only the Python standard library.
+
+### Script checks and weighted scoring
+
+The ordinary verifier CLI accepts `grader.json` through the existing `test.sh`
+and `test.bat` entrypoints. `custom_checks` declares a list of unique nonempty
+check IDs implemented by a sibling `test_outputs.py`. The script and declaration
+must either both exist or both be absent. Custom-only configurations do not
+require a trajectory. Registration and preview never execute Task code.
+
+The script runs as native Python argv with `--context <path>` and
+`--output <path>`. Context uses the runtime JSON protocol's `paths`: `workdir`,
+`tests`, `artifacts`, `agent_logs`, and `verifier_logs`. It can read the current
+step's ATIF from `agent_logs/trajectory.json` when available. GT and helpers live
+beside the staged script, outside the Agent workspace. Each verification resets
+its uploaded test context before applying Harbor's shared/step overlay rules.
+This staging is not a host filesystem sandbox.
+
+The output is UTF-8 JSON of the form
+`{"checks":[{"id":"values","passed":true,"evidence":"matched GT"}]}`.
+`passed` must be boolean; `evidence` is optional text. Unknown or duplicate IDs
+are errors. A normal exit with missing declared checks scores those checks zero
+and records them as missing. Nonzero exit, malformed or missing output, and
+timeout are verifier errors, not Agent failures. Stdout and stderr are logs.
+The CLI limits grader and script-result JSON to 16 MiB and ATIF JSON to 128 MiB.
+Harbor's verifier deadline covers custom scripts and all of their descendants.
+
+`build_scoring_plan(config)` declares all scoring items before execution.
+Built-in IDs retain their existing names; script IDs become `custom:<id>` in
+the `custom_outputs` dimension. `scoring.weights` maps declared IDs to finite
+nonnegative weights, defaulting to one; total weight must be positive. For
+example, `{"custom_checks":["values","format"],"scoring":{"weights":
+{"custom:values":3,"custom:format":1}}}` awards 0.75 when only values passes.
+`aggregate(checks, *, plan)` computes `sum(weight * passed) / sum(weight)` over
+the complete plan. Dimension scores use the same rule; empty dimensions score
+one. `evaluate` only evaluates built-in checks and never executes Task code.
+Dataset-owned scorers and WorkBuddy scoring retain their own policies.
+
+`reward.json` contains numeric results. `checks.json` retains the plan, weights,
+normalized checks (including missing results), and calculated scores. A fresh
+temporary output is used for each script invocation. Prior framework reward and
+check outputs are removed before evaluation; successful outputs are atomically
+replaced, with reward published last. Errors retain diagnostics and publish no
+reward for the invocation.
+
+## YAML LLM Judge
+
+The shared verifier optionally reads `tests/judge.yaml`. Its version-1 schema
+uses `artifacts`, `llm_judge`, and `score_merge`, independently of `grader.json`.
+YAML is safely parsed with strict types, unique mapping keys and IDs, known
+methods, contained relative artifact paths, and resolved artifact references.
+Configuration reads are bounded to 1 MiB, with at most 32 artifacts, 32 rubrics,
+and 8 artifact references per rubric.
+Task discovery and preview never execute preparation, verification, or model
+calls. Shared tests are overlaid by step tests; a step's YAML replaces the whole
+shared file. This contract does not replace WorkBuddy's own judge runtime.
+
+Each artifact declares `id`, `path`, `required`, and a text `type` (`txt`, `md`,
+`json`, `yaml`, `csv`, or `html`). Its optional `source` defaults to `workdir`;
+other roots are `tests`, `artifacts`, `agent_logs`, and `verifier_logs`. Links,
+absolute paths, and traversal are rejected. Only declared UTF-8 files are read;
+there is no workspace scan, URL retrieval, rendering, or silent truncation.
+Current-step ATIF JSON can be referenced from `agent_logs`. Custom scripts can
+extract final answers and source material into `verifier_logs/judge-evidence/`.
+`matching_observations(trajectory, rule)` returns successful observation text
+for one required-call rule using the same call/argument/success predicates as
+built-in checks, without assigning another score.
+The verification context adds `harbor.verifier.instruction` and nullable
+`harbor.verifier.step_name` alongside the native runtime paths.
+
+`llm_judge.method` is `rubric_binary_mean`. Each rubric has a unique `id`,
+string `question`, nonempty `artifact_refs`, and string lists `pass_criteria`,
+`fail_criteria`, and optional `scope_limits`. Every list item may be a YAML
+multiline string. Each model response must be exactly an object with the
+rubric's `id`, boolean `passed`, and string `reason`. Prompts include all criteria
+and scope limits, and treat Agent content as evidence, not instructions.
+
+LLM calls are disabled by default. Harbor `verifier.env` supplies these settings:
+
+| Variable | Meaning / default |
+| --- | --- |
+| `PEVAL_JUDGE_ENABLED` | `true` enables calls; default `false`. |
+| `PEVAL_JUDGE_BASE_URL` | OpenAI-compatible API base URL, including `/v1` when required. |
+| `PEVAL_JUDGE_MODEL` | Model name; required when enabled with a judge configuration. |
+| `PEVAL_JUDGE_API_KEY` | Optional bearer credential; use an environment reference. |
+| `PEVAL_JUDGE_CONCURRENCY` | Concurrent rubric requests, default 4. |
+| `PEVAL_JUDGE_REQUEST_TIMEOUT_SEC` | Per-request deadline, default 30 seconds. |
+| `PEVAL_JUDGE_TOTAL_TIMEOUT_SEC` | Complete Judge deadline, default 120 seconds. |
+| `PEVAL_JUDGE_MAX_EVIDENCE_BYTES` | Combined declared evidence limit, default 1 MiB. |
+
+The verifier validates configuration, runs built-in and custom checks, collects
+fresh evidence, calls Chat Completions, and then merges scores. Temporary network
+errors, HTTP 429, and server errors receive at most one retry. Each rubric is
+binary and equally weighted. `score_merge.method` is `weighted_sum`;
+`rule_weight` and `llm_weight` default to 0.8 and 0.2, must be finite and
+nonnegative, and must have a positive sum. Complete results use:
+
+```text
+llm_score = passed rubrics / declared rubrics
+reward = (rule_weight * rule_score + llm_weight * llm_score)
+         / (rule_weight + llm_weight)
+```
+
+An incomplete rubric due to API, timeout, evidence-size, or response-protocol
+failure disables the entire LLM merge for that invocation. The rule score is
+retained with a reason, and no `llm_score` is published. Missing or invalid Agent
+evidence fails the referencing rubrics; missing Task-owned evidence under
+`tests`, invalid configuration, or failed custom scripts are verifier errors.
+An overall Harbor verifier timeout or cancellation still fails the Trial through
+its normal lifecycle. The Judge never provides an LLM-only scoring mode.
+Results finishing after the Judge total deadline remain incomplete, even when
+all rubric responses are available after synchronous diagnostic I/O; they do not
+enable score merging.
+
+`reward.json` contains the final reward, rule dimensions, `rule_score`, and, only
+when complete, `llm_score`. `checks.json` retains the rule plan and checks, Judge
+plan and individual outcomes, completion state, merge decision, and reason.
+`judge/` contains evidence, model responses, request timing, and available token
+usage, without connection credentials. It is diagnostic, not another score
+authority. Every invocation removes previous framework scores, `judge/`, and
+`judge-evidence/` before scripts run. Successful results are atomically published
+with reward last; verifier errors retain diagnostics without a current reward.
+`judge/` is reserved for framework diagnostics and is recreated after custom
+scripts finish, without following links.
+
+## Native process execution
 
 Ordinary child commands receive no automatic `PEVAL_CONFIG`. Control components
 explicitly request effective runtime configuration through the Host protocol;

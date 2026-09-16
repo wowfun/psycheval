@@ -61,7 +61,12 @@ Environment and Agent adapters consume those mechanics without changing the
 reported host OS or choosing the Agent's tool shell. WorkBuddy owns dataset
 contract recognition, WorkBuddyHostEnvironment workspace preparation, and
 execution-format adapters; its verifier reuses the external runtime's registry,
-hooks, and scoring engine. Host owns reusable filesystem and process mechanics.
+hooks, and scoring engine. Host owns reusable filesystem and process mechanics,
+including Task input preparation before the initial workspace baseline. The
+ordinary verifier compiles a fixed scoring plan, executes built-in and script
+checks, and aggregates their results independently of execution.
+Its optional YAML Judge reads declared text evidence and merges complete rubric
+assessments with the rule score; it does not depend on the WorkBuddy runtime.
 External Dataset sources remain read-only, including during plugin loading.
 For native WorkBuddy execution, the Host adapter records the host OS in Harbor's
 in-memory Task environment configuration; Harbor uses it when injecting Skills.
