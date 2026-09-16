@@ -1,17 +1,67 @@
 {
-  "platform": "x",
-  "max_age_seconds": 3600,
-  "snapshot": ".trend-digest/x.json",
-  "users": "input/x-users.xlsx",
   "required_calls": [
     {
       "any": [
         {
-          "tool_names": ["*exec*", "*terminal*", "*shell*", "bash"],
-          "argument_terms": ["x-daily"]
+          "tool_names": [
+            "*exec*",
+            "*terminal*",
+            "*shell*",
+            "bash"
+          ],
+          "argument_terms": [
+            "x-daily"
+          ]
         }
       ]
     }
   ],
-  "required_artifacts": ["x-*.md"]
+  "required_artifacts": [
+    "x-*.md"
+  ],
+  "custom_checks": [
+    "report_unique",
+    "report_filename",
+    "report_timestamp",
+    "report_platform",
+    "report_source",
+    "report_chinese",
+    "report_current",
+    "snapshot_current",
+    "x_snapshot",
+    "x_window",
+    "x_fetched_sama",
+    "x_status_sama",
+    "x_posts_sama",
+    "x_fetched_karpathy",
+    "x_status_karpathy",
+    "x_posts_karpathy",
+    "x_fetched_gdb",
+    "x_status_gdb",
+    "x_posts_gdb",
+    "x_fetched_jeffdean",
+    "x_status_jeffdean",
+    "x_posts_jeffdean",
+    "x_fetched_simonw",
+    "x_status_simonw",
+    "x_posts_simonw",
+    "x_fetched__akhaliq",
+    "x_status__akhaliq",
+    "x_posts__akhaliq",
+    "x_fetched_ylecun",
+    "x_status_ylecun",
+    "x_posts_ylecun",
+    "x_fetched_kaboroeconomics",
+    "x_status_kaboroeconomics",
+    "x_posts_kaboroeconomics",
+    "x_fetched_fchollet",
+    "x_status_fchollet",
+    "x_posts_fchollet",
+    "x_fetched_aidan_mclau",
+    "x_status_aidan_mclau",
+    "x_posts_aidan_mclau",
+    "x_fetched_steipete",
+    "x_status_steipete",
+    "x_posts_steipete"
+  ]
 }

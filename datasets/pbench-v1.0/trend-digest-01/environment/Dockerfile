@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-COPY input/ /app/input/
-COPY skills/ /app/skills/
+COPY data/input/ /app/input/
+COPY data/skills/ /app/skills/
 
 WORKDIR /app

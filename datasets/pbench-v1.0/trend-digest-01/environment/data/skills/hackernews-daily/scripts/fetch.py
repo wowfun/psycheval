@@ -126,7 +126,7 @@ def main() -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("/app/.trend-digest/hacker-news.json"),
+        default=Path(".trend-digest/hacker-news.json"),
     )
     parser.add_argument("--limit", type=int, default=12)
     parser.add_argument("--now", help=argparse.SUPPRESS)

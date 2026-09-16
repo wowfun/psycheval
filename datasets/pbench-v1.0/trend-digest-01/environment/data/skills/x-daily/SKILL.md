@@ -7,12 +7,10 @@ description: 从 Excel 中读取关注账号，通过 Nitter RSS 抓取滚动 24
 
 本 skill 只负责确定性抓取和规范化，不生成最终 Markdown。
 
-运行：
+从 Task 工作目录运行（Windows/Linux 均使用相对路径）：
 
 ```bash
-python /app/skills/x-daily/scripts/fetch.py \
-  --users /app/input/x-users.xlsx \
-  --output /app/.trend-digest/x.json
+python skills/x-daily/scripts/fetch.py --users input/x-users.xlsx --output .trend-digest/x.json
 ```
 
 成功后读取 JSON 中的 `generated_at`、`window_start`、`window_end` 和按 Excel 顺序排列的 `accounts`。每个账号状态只能是：

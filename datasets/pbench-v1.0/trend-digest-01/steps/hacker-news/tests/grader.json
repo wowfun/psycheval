@@ -1,17 +1,46 @@
 {
-  "platform": "hacker-news",
-  "required_count": 12,
-  "max_age_seconds": 3600,
-  "snapshot": ".trend-digest/hacker-news.json",
   "required_calls": [
     {
       "any": [
         {
-          "tool_names": ["*exec*", "*terminal*", "*shell*", "bash"],
-          "argument_terms": ["hackernews-daily"]
+          "tool_names": [
+            "*exec*",
+            "*terminal*",
+            "*shell*",
+            "bash"
+          ],
+          "argument_terms": [
+            "hackernews-daily"
+          ]
         }
       ]
     }
   ],
-  "required_artifacts": ["hacker-news-*.md"]
+  "required_artifacts": [
+    "hacker-news-*.md"
+  ],
+  "custom_checks": [
+    "report_unique",
+    "report_filename",
+    "report_timestamp",
+    "report_platform",
+    "report_source",
+    "report_chinese",
+    "report_current",
+    "snapshot_current",
+    "hn_snapshot",
+    "hn_source",
+    "hn_story_01",
+    "hn_story_02",
+    "hn_story_03",
+    "hn_story_04",
+    "hn_story_05",
+    "hn_story_06",
+    "hn_story_07",
+    "hn_story_08",
+    "hn_story_09",
+    "hn_story_10",
+    "hn_story_11",
+    "hn_story_12"
+  ]
 }

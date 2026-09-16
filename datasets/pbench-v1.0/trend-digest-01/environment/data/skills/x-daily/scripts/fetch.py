@@ -267,9 +267,9 @@ def fetch(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--users", type=Path, default=Path("/app/input/x-users.xlsx"))
+    parser.add_argument("--users", type=Path, default=Path("input/x-users.xlsx"))
     parser.add_argument(
-        "--output", type=Path, default=Path("/app/.trend-digest/x.json")
+        "--output", type=Path, default=Path(".trend-digest/x.json")
     )
     parser.add_argument("--now", help=argparse.SUPPRESS)
     parser.add_argument("--fixture-dir", type=Path, help=argparse.SUPPRESS)

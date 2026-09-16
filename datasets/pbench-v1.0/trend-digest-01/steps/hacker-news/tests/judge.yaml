@@ -1,0 +1,73 @@
+version: 1
+
+artifacts:
+  - id: report
+    source: verifier_logs
+    path: judge-evidence/report.md
+    required: true
+    type: md
+  - id: sources
+    source: verifier_logs
+    path: judge-evidence/sources.md
+    required: true
+    type: md
+
+llm_judge:
+  method: rubric_binary_mean
+  rubrics:
+    - id: summary_faithfulness
+      question: >-
+        中文摘要是否忠实于本步骤提供的来源证据？
+      artifact_refs:
+        - report
+        - sources
+      pass_criteria:
+        - >-
+          主要表述有来源支持，没有虚构关键结论。
+        - >-
+          准确保留来源中的主体、含义和限定条件；证据有限时明确说明。
+      fail_criteria:
+        - >-
+          引入来源不支持的关键事实，或明显改变原意。
+      scope_limits:
+        - 不重新判定文件命名、条目数量、链接、时间戳和窗口。
+        - 只评估提供的本步骤证据，不访问网页，不假定未提供的原文内容。
+    - id: information_value
+      question: >-
+        内容是否具体、有信息价值，避免空泛模板？
+      artifact_refs:
+        - report
+        - sources
+      pass_criteria:
+        - >-
+          结合具体仓库、推文或新闻说明发生了什么，以及有证据支持的关注点。
+        - >-
+          只有标题或有限元数据时明确证据范围，不用编造细节填充；确实无更新的账号可简要说明。
+      fail_criteria:
+        - >-
+          多个不同条目仅重复没有具体信息的模板，或用猜测冒充来源内容。
+      scope_limits:
+        - 不重新判定文件命名、条目数量、链接、时间戳和窗口。
+        - 只评估提供的本步骤证据，不访问网页，不假定未提供的原文内容。
+    - id: clear_chinese
+      question: >-
+        中文表达和对无更新、抓取失败、证据不足的说明是否准确清楚？
+      artifact_refs:
+        - report
+        - sources
+      pass_criteria:
+        - >-
+          中文表达清楚，专有名词和关键限定准确，读者能够区分事实与解释。
+        - >-
+          适用时区分无更新、抓取失败和证据不足，不把未获取内容描述为确认不存在。
+      fail_criteria:
+        - >-
+          表述含糊或误导，将抓取失败说成没有更新，或把有限来源包装成已验证的完整事实。
+      scope_limits:
+        - 不重新判定文件命名、条目数量、链接、时间戳和窗口。
+        - 只评估提供的本步骤证据，不访问网页，不假定未提供的原文内容。
+
+score_merge:
+  method: weighted_sum
+  rule_weight: 0.8
+  llm_weight: 0.2

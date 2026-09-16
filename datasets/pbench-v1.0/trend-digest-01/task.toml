@@ -11,22 +11,25 @@ workdir = "/app"
 network_mode = "public"
 skills_dir = "/app/skills"
 
+[environment.env]
+TREND_ARTIFACTS_DIR = "/logs/artifacts"
+
 [agent]
 timeout_sec = 900.0
 
 [verifier]
-timeout_sec = 60.0
+timeout_sec = 180.0
 
 [[steps]]
 name = "github"
-min_reward = { source_evidence = 1.0, freshness = 1.0, format = 1.0, final_answer = 1.0 }
+min_reward = { required_tool = 1.0, required_arguments = 1.0, required_observation = 1.0, required_artifacts = 1.0, final_answer = 1.0 }
 
 [steps.verifier]
 environment_mode = "shared"
 
 [[steps]]
 name = "x"
-min_reward = { source_evidence = 1.0, freshness = 1.0, format = 1.0, final_answer = 1.0 }
+min_reward = { required_tool = 1.0, required_arguments = 1.0, required_observation = 1.0, required_artifacts = 1.0, final_answer = 1.0 }
 
 [steps.verifier]
 environment_mode = "shared"
