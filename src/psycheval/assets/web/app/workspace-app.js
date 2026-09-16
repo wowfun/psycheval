@@ -55,6 +55,7 @@ const INVALIDATION_PAGES = Object.freeze({
  *   hash?: string,
  *   replace?: boolean,
  *   history?: boolean,
+ *   throwOnError?: boolean, // Rethrow current failures after marking the page; retain pending invalidations.
  * }} NavigateOptions
  */
 
@@ -149,7 +150,9 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
       try {
         controller = await loadPage(target);
       } catch (error) {
-        if (!destroyed && navigation === generation) showLoadFailure(target, error);
+        if (destroyed || navigation !== generation) return;
+        showLoadFailure(target, error);
+        if (options.throwOnError) throw error;
         return;
       }
       if (destroyed || navigation !== generation) return;
@@ -159,7 +162,9 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
         try {
           await controller.activate(changes, hash);
         } catch (error) {
+          if (destroyed || navigation !== generation) return;
           markStale(target, error);
+          if (options.throwOnError) throw error;
           return;
         }
         if (destroyed || navigation !== generation) return;

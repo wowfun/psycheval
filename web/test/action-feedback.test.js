@@ -4,6 +4,34 @@ import { installBrowserDom, submitActionForm } from "./support/browser.js";
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
+for (const failures of [[{ error: "Scan reconciliation failed" }], []]) {
+  test(`failed operation diagnostics survive a failed refresh and its read retry (${failures.length} details)`, async () => {
+    let reads = 0, refreshes = 0;
+    const browser = installBrowserDom('<div id="operation"></div>', { fetch: async () => {
+      reads++;
+      return new Response(JSON.stringify({ kind: "source-discovery", state: "failed", failures }));
+    } });
+    try {
+      const { beginFeedback } = await import("../../src/psycheval/assets/web/modules/action-feedback.js");
+      const { watchOperation } = await import("../../src/psycheval/assets/web/modules/operation-feedback.js");
+      const feedback = beginFeedback("#operation");
+      await watchOperation("scan", { feedback, onComplete: async () => {
+        if (++refreshes === 1) throw new Error("Catalog refresh unavailable");
+      } });
+      const diagnostic = failures.length ? /Scan reconciliation failed/ : /Operation failed.*source-discovery.*scan/;
+      assert.match(document.querySelector("#operation").textContent, diagnostic);
+      assert.match(document.querySelector("#operation").textContent, /Catalog refresh unavailable/);
+      [...document.querySelectorAll("#operation button")].find(button => button.textContent === "Refresh").click();
+      await tick();
+      assert.equal(refreshes, 2);
+      assert.equal(reads, 1);
+      assert.match(document.querySelector("#operation .danger").textContent, diagnostic);
+      assert.doesNotMatch(document.querySelector("#operation").textContent, /Catalog refresh unavailable/);
+      feedback.dispose();
+    } finally { browser.cleanup(); }
+  });
+}
+
 test("changing progress preserves the mounted status node", async () => {
   const browser = installBrowserDom('<div id="feedback"></div>');
   try {

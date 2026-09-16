@@ -8,6 +8,16 @@ function errorWithContext(context, error) {
   return message === context ? context : `${context}: ${message}`;
 }
 
+function operationFailureDetails(operation, id) {
+  const failures = operation.failures || [];
+  if (failures.length) {
+    return failures.map(item => `${item.item?.path ?? item.item?.task ?? item.item?.directory ?? item.index ?? ""}: ${item.error || ""}`);
+  }
+  return operation.state === "failed"
+    ? [`${t("feedback_operation_failed", "Operation failed")}: ${operation.kind || ""} (${id})`]
+    : [];
+}
+
 /** Observe an accepted operation. Retrying this observer never repeats a write. */
 async function watchOperation(id, { feedback, committed = false, onBusy = () => {}, onComplete = async () => {} }) {
   const owner = document, view = window;
@@ -49,15 +59,14 @@ async function watchOperation(id, { feedback, committed = false, onBusy = () => 
           .replace("{succeeded}", String(operation.successes?.length || 0))
           .replace("{failed}", String(failures.length || 1));
         feedback.error(committed ? t("feedback_reconcile_failed", "Saved, but background reconciliation failed") : summary, {
-          details: failures.length
-            ? failures.map(item => `${item.item?.path ?? item.item?.task ?? item.item?.directory ?? item.index ?? ""}: ${item.error || ""}`)
-            : [`${t("feedback_operation_failed", "Operation failed")}: ${operation.kind || ""} (${id})`],
+          details: operationFailureDetails(operation, id),
           ...(committed ? { action: { label: t("serve_refresh", "Refresh"), run: () => finish(operation) } } : {}),
         });
       } else { feedback.success(); stop(); }
     } catch (error) {
       if (stopped) return;
       feedback.error(errorWithContext(committed ? t("feedback_refresh_failed", "Saved, but workspace refresh failed") : t("feedback_unknown", "The operation result is temporarily unavailable"), error), {
+        details: operationFailureDetails(operation, id),
         action: { label: t("serve_refresh", "Refresh"), run: () => finish(operation) },
       });
     } finally { refreshing = false; setBusy(false); }

@@ -151,6 +151,18 @@ a success. Read and refresh retries hold the same busy gate as the initial
 observation; repeated activation cannot start overlapping retries.
 An operation has one active observer per document. Replacing that observer,
 disposing its feedback, or unloading the document stops its reads and timers.
+Completing a source rescan invalidates the catalog again, independently of the
+notification sent when the scan was accepted. The active page reloads affected
+catalog data; inactive catalog views reload on their next activation. A reload waits
+for any in-flight catalog request and preserves filters, sorting, and pagination.
+Pages without catalog data only leave the affected views invalidated; scan success
+does not imply that an inactive view has already loaded. Home rows, pagination
+totals and controls, summaries, and category suggestions use the refreshed catalog.
+Refresh failures remain retryable without submitting another scan, and refreshing
+cannot clear a failed scan's result. If both the scan and the refresh fail, feedback
+retains the scan diagnostics alongside the refresh error. Superseded or destroyed
+page activations cannot publish stale failures. Page stale markers record read
+state; the initiating operation owns its refresh-error feedback and retry.
 Post-save refresh errors have one reporting owner. A failed retry retains its
 Refresh action, and a successful retry clears that action's error.
 Batch results retain failed items and their input; import forms reset only after

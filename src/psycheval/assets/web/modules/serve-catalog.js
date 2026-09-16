@@ -507,7 +507,9 @@ async function loadCatalogPage(changes = {}, options = {}) {
       setTimeout(() => loadCatalogPage({}, { force: true }), 200);
     } else {
       setServeStatus(serveSourceModeStatusText());
-      if (wasChecking) await refreshSourceCategoryOptions();
+      if (wasChecking || (previousGeneration && previousGeneration !== Number(page.generation || 0))) {
+        await refreshSourceCategoryOptions();
+      }
     }
     await ensureCatalogDetail(previousGeneration !== Number(page.generation || 0));
     if (

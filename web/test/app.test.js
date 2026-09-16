@@ -41,6 +41,98 @@ function pageLoaders(calls) {
   ]));
 }
 
+test("operation refresh failures reach their caller and retain invalidation for a read retry", async () => {
+  const browser = installBrowserDom(workspaceShell());
+  const { refreshWorkspace, setWorkspaceApp, setWorkspaceSnapshotProvider } = await import(
+    "../../src/psycheval/assets/web/app/workspace-runtime.js"
+  );
+  let fail = true, refreshes = 0;
+  const app = createWorkspaceApp({
+    platform: createBrowserPlatform(window), initialPage: "home",
+    publishSnapshot: setWorkspaceSnapshotProvider,
+    pageLoaders: {
+      home: () => ({
+        activate(changes) {
+          if (!changes.has("catalog")) return;
+          refreshes++;
+          if (fail) throw new Error("Catalog refresh unavailable");
+        },
+        snapshot: () => ({ context: { page: "home" } }),
+        destroy() {},
+      }),
+    },
+  });
+  setWorkspaceApp(app);
+  try {
+    await app.start();
+    const root = document.querySelector('[data-workspace-page="home"]');
+    await assert.rejects(refreshWorkspace("catalog"), /Catalog refresh unavailable/);
+    assert.equal(root.dataset.workspaceStale, "true");
+    fail = false;
+    await app.navigate("home", { focus: false, history: false });
+    assert.equal(refreshes, 2);
+    assert.equal(root.hasAttribute("data-workspace-stale"), false);
+  } finally {
+    app.destroy(); setWorkspaceApp(null); setWorkspaceSnapshotProvider(null); browser.cleanup();
+  }
+});
+
+for (const phase of ["load", "activate"]) for (const superseded of ["navigation", "destroy"]) {
+  test(`a ${phase} failure after ${superseded} cannot publish a stale error`, async () => {
+    const browser = installBrowserDom(workspaceShell());
+    let rejectPending, started;
+    const ready = new Promise(resolve => { started = resolve; });
+    const pending = new Promise((_, reject) => { rejectPending = reject; });
+    const adapter = { activate() {}, snapshot: () => ({}), destroy() {} };
+    const app = createWorkspaceApp({
+      platform: createBrowserPlatform(window), initialPage: "home",
+      pageLoaders: {
+        home: () => adapter, reports: () => adapter,
+        datasets: () => {
+          if (phase === "load") { started(); return pending; }
+          return { ...adapter, activate() { started(); return pending; } };
+        },
+      },
+    });
+    try {
+      await app.start();
+      const stale = app.navigate("datasets", { focus: false, throwOnError: true });
+      const settled = stale.then(() => null, error => error);
+      await ready;
+      if (superseded === "destroy") app.destroy();
+      else await app.navigate("reports", { focus: false });
+      rejectPending(new Error("Obsolete request failed"));
+      assert.equal(await settled, null);
+      assert.equal(document.querySelector("[data-workspace-stale]"), null);
+      assert.equal(document.querySelector("[data-workspace-load-error]"), null);
+    } finally { app.destroy(); browser.cleanup(); }
+  });
+}
+
+test("a current loader failure is propagated and a later navigation can retry it", async () => {
+  const browser = installBrowserDom(workspaceShell());
+  let attempts = 0;
+  const adapter = { activate() {}, snapshot: () => ({}), destroy() {} };
+  const app = createWorkspaceApp({
+    platform: createBrowserPlatform(window), initialPage: "home",
+    pageLoaders: {
+      home: () => adapter,
+      datasets: () => {
+        if (++attempts === 1) return Promise.reject(new Error("Module unavailable"));
+        return adapter;
+      },
+    },
+  });
+  try {
+    await app.start();
+    await assert.rejects(app.navigate("datasets", { throwOnError: true }), /Module unavailable/);
+    assert.match(document.querySelector("[data-workspace-load-error]").textContent, /Module unavailable/);
+    await app.navigate("datasets", { focus: false });
+    assert.equal(attempts, 2);
+    assert.equal(document.querySelector("[data-workspace-load-error]"), null);
+  } finally { app.destroy(); browser.cleanup(); }
+});
+
 test("workspace navigation preserves page DOM and consumes targeted invalidations", async () => {
   const browser = installBrowserDom(workspaceShell());
   const calls = [];

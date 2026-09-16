@@ -394,7 +394,7 @@ test("Psycheval composes the vendored controller through its gateway and context
   await waitFor(() => workspaceRefreshes.length === 2);
   assert.deepEqual(workspaceRefreshes, [
     ["invalidate", "catalog"],
-    ["navigate", "datasets", { focus: false, history: false }],
+    ["navigate", "datasets", { focus: false, history: false, throwOnError: true }],
   ]);
   host.shadowRoot
     .querySelector('[aria-label="Remove context: source-7 · Step 4"]')
@@ -530,7 +530,7 @@ test("every terminal turn refreshes catalog even when cancelled without source c
 
   assert.deepEqual(workspaceRefreshes, [
     ["invalidate", "catalog"],
-    ["navigate", "reports", { focus: false, history: false }],
+    ["navigate", "reports", { focus: false, history: false, throwOnError: true }],
   ]);
   assert.deepEqual(contextRequests.at(-1).contexts, [{
     kind: "report",

@@ -21,10 +21,11 @@ function invalidateWorkspace(changes) {
   for (const listener of invalidationListeners) listener(new Set(domains));
 }
 
+/** Invalidate affected views and refresh the active page, propagating current read failures. */
 async function refreshWorkspace(changes) {
   invalidateWorkspace(changes);
   const page = snapshotWorkspace().context?.page;
-  if (page) await workspaceApp?.navigate(page, { focus: false, history: false });
+  if (page) await workspaceApp?.navigate(page, { focus: false, history: false, throwOnError: true });
 }
 
 function snapshotWorkspace() {

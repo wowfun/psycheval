@@ -32,7 +32,7 @@ function createHomePage(_context) {
       }
       const requests = [];
       if (changes.has("catalog") || changes.has("dataset-registry")) {
-        requests.push(loadCatalogPage());
+        requests.push(loadCatalogPage({}, { force: true }));
       }
       if (changes.has("reports")) requests.push(refreshWorkspaceReports());
       if (changes.has("tasks")) {

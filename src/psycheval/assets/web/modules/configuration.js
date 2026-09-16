@@ -6,6 +6,7 @@ import { applyDataTableControls, bindDataTableControls, bindDataTableSelection, 
 import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
 import { applyDefaultDbToForm, formPayload, selectedAdapterValue, setAdapterChoice, syncAdapterDefaultDbControls, updateAdapterDefaults } from "./form-controls.js";
 import { serveApi } from "./http.js";
+import { refreshWorkspace } from "../app/workspace-runtime.js";
 
 const harborConfigState = {
   snapshot: null,
@@ -660,6 +661,7 @@ async function pollConfigurationOperation(operationId, sourceForm = null, feedba
       syncConfigurationBusyState();
     },
     async onComplete(operation) {
+      if (operation.kind === "source-discovery") await refreshWorkspace("catalog");
       if (committed && !await refreshHarborConfig()) throw new Error(t("feedback_refresh_failed", "Saved, but workspace refresh failed"));
       if (sourceForm) {
         renderSourceImportResults(sourceForm, operation);
