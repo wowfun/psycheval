@@ -788,9 +788,9 @@ test("Session picker reuses the shared visible-selection behavior", () => {
       ],
     });
     const picker = form.querySelector("[data-session-picker]");
-    assert.match(picker.textContent, /Updated \(UTC\)/);
+    assert.match(picker.textContent, /Updated/);
     const updateTimes = picker.querySelectorAll('td[data-value-type="datetime"]');
-    assert.equal(updateTimes[0].textContent, "1970-01-01T00:00:00.000Z");
+    assert.equal(updateTimes[0].textContent, "1970-01-01 00:00:00.000 +00:00");
     assert.equal(updateTimes[1].textContent, "-");
     const rows = picker.querySelectorAll("[data-table-row-select]");
     const header = picker.querySelector("[data-table-select-visible]");

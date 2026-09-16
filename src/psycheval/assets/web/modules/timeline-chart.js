@@ -1,6 +1,7 @@
+import { renderDateTime } from "./date-time.js";
 import { esc, renderComparisonPanels, selectedKey, state, t } from "./runtime.js";
 import { positiveMetric } from "./analysis-metrics.js";
-import { fmtClockMs, fmtTimelineAxis, fmtTimelineDuration, fmtTimelineMaybeEstimated } from "./timeline-table.js";
+import { fmtTimelineAxis, fmtTimelineDuration, fmtTimelineMaybeEstimated } from "./timeline-table.js";
 import { openDetailSidebar } from "./detail-sidebar.js";
 
 function timelineModel(stages) {
@@ -179,16 +180,16 @@ function timelineTooltipHtml(item) {
     : "-";
   const rows = [
     [t("timeline_col_category", "Category"), item.category_meta?.label || "-"],
-    [t("timeline_col_start", "Start"), fmtTimelineMaybeEstimated(fmtClockMs(item.wall_start_ms), item)],
+    [t("timeline_col_start", "Start"), "", fmtTimelineMaybeEstimated(renderDateTime(item.wall_start_ms, "clock"), item)],
     [t("timeline_active_offset", "Active offset"), fmtTimelineDuration(item.display_offset_ms ?? item.display_start_ms)],
     [t("timeline_ref", "Ref"), item.ref || "-"],
   ];
   if (!isMarker) {
-    rows.splice(2, 0, [t("timeline_col_end", "End"), fmtTimelineMaybeEstimated(fmtClockMs(item.wall_end_ms), item)]);
+    rows.splice(2, 0, [t("timeline_col_end", "End"), "", fmtTimelineMaybeEstimated(renderDateTime(item.wall_end_ms, "clock"), item)]);
     rows.splice(4, 0, [t("timeline_col_duration", "Duration"), fmtTimelineMaybeEstimated(fmtTimelineDuration(item.duration_ms), item)]);
     rows.splice(5, 0, [t("timeline_col_total_pct", "Active Share"), pct]);
   }
-  return `<div class="timeline-tooltip"><strong>${esc(title)}</strong>${rows.map(([key, value]) => `<br><span>${esc(key)}:</span> ${esc(value)}`).join("")}</div>`;
+  return `<div class="timeline-tooltip"><strong>${esc(title)}</strong>${rows.map(([key, value, html]) => `<br><span>${esc(key)}:</span> ${html ?? esc(value)}`).join("")}</div>`;
 }
 function openTimelineStep(item) {
   if (!item || !item.step_id) return;

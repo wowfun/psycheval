@@ -1,5 +1,6 @@
+import { renderDateTime } from "./date-time.js";
 import { renderVerificationSummary } from "./verification-formats.js";
-import { esc, fmtDate, fmtMs, fmtNum, hasMetricValue, listValue, t } from "./runtime.js";
+import { esc, fmtMs, fmtNum, hasMetricValue, listValue, t } from "./runtime.js";
 import { infoGrid, metricExtra } from "./analysis-metrics.js";
 
 function renderAnalysisPaths(analysis) {
@@ -77,7 +78,7 @@ function renderHarborEvidence(meta) {
   const phaseRows = Object.entries(phases).map(([name, value]) => {
     const timing = value && typeof value === "object" ? value : {};
     const duration = hasMetricValue(timing.duration_ms) ? fmtMs(timing.duration_ms) : "-";
-    return [t(`phase.${name}`, name.replaceAll("_", " ")), `${duration} · ${fmtDate(timing.started_at)} → ${fmtDate(timing.finished_at)}`];
+    return [t(`phase.${name}`, name.replaceAll("_", " ")), () => `${esc(duration)} · ${renderDateTime(timing.started_at)} → ${renderDateTime(timing.finished_at)}`];
   });
   return `<section class="selected-extra harbor-evidence"><h3>${esc(t("harbor_evidence", "Harbor Evidence"))}</h3><p class="muted">${esc(t("live_task_metadata_notice", "Task metadata is read live from the configured allowlist; it is not historical Job evidence."))}</p><div class="selected-evidence-list">
     <article class="selected-evidence-card"><h4>${esc(t("identity", "Identity"))}</h4>${infoGrid(identity)}</article>

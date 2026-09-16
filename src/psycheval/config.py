@@ -10,6 +10,7 @@ import tomllib
 from pathlib import Path, PureWindowsPath
 from typing import Any, Iterable, Literal
 
+import tomlkit
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -22,6 +23,7 @@ from pydantic import (
 from psycheval.harbor.identifiers import HARBOR_ID_RE, validate_harbor_id
 from psycheval.i18n import normalize_locale
 from psycheval.jobs.configuration import HarnessId, JobsDocument
+from psycheval.timezones import validate_timezone
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 ACP_AGENT_ID_RE = HARBOR_ID_RE
@@ -153,6 +155,7 @@ class AcpAgent(_FrozenConfigModel):
 class ToolConfig(_FrozenConfigModel):
     adapter: str = "psychevo"
     locale: str = "en"
+    timezone: str | None = None
     workspace_root: str | None = None
     description: str | None = None
     analysis_eval_slug: str = "default"
@@ -189,6 +192,11 @@ class ToolConfig(_FrozenConfigModel):
         if not stripped:
             raise ValueError("adapter must be a non-empty string")
         return stripped
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_display_timezone(cls, value: str | None) -> str | None:
+        return validate_timezone(value)
 
     @field_validator("locale")
     @classmethod
@@ -303,6 +311,7 @@ class _AdapterDocument(BaseModel):
 
 class _WorkspaceDocument(_RawConfigModel):
     locale: str | None = None
+    timezone: str | None = None
     description: str | None = None
     analysis_eval_slug: str | None = None
     defaults: _DefaultsDocument | None = None
@@ -391,6 +400,8 @@ def apply_toml_config(
     base_dir: Path | None = None,
 ) -> ToolConfig:
     _validate_workspace_document(data)
+    if "timezone" in data:
+        config = config.validated_update(timezone=data["timezone"])
     if "locale" in data:
         config = config.validated_update(locale=data["locale"])
     if "description" in data:
@@ -661,6 +672,16 @@ def apply_overrides(config: ToolConfig, args: Any) -> ToolConfig:
 
 def config_for_adapter(config: ToolConfig, adapter: object) -> ToolConfig:
     return config.for_adapter(adapter)
+
+
+def write_workspace_timezone(path: Path, timezone: str | None) -> None:
+    timezone = validate_timezone(timezone)
+    document = tomlkit.parse(path.read_text(encoding="utf-8"))
+    if timezone is None:
+        document.pop("timezone", None)
+    else:
+        document["timezone"] = timezone
+    path.write_text(tomlkit.dumps(document), encoding="utf-8")
 
 
 def write_workspace_locale(config_path: Path, locale: str) -> None:

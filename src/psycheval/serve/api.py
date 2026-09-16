@@ -35,6 +35,7 @@ from psycheval.config import (
     write_workspace_acp_agents,
     write_workspace_adapter_default_db,
     write_workspace_locale,
+    write_workspace_timezone,
 )
 from psycheval.html import render_serve_html
 from psycheval.report_library import ReportNotFound
@@ -176,6 +177,7 @@ from psycheval.serve.visibility import (
     project_harbor_text_file,
 )
 from psycheval.state import CatalogBusyError, CatalogSummaryCapacityError
+from psycheval.timezones import resolve_timezone
 from psycheval.workspace_reports import (
     WorkspaceReportNotFound,
     render_report_preview,
@@ -319,6 +321,9 @@ def _patch_workspace_config(
             handle.write(source)
             handle.flush()
             os.fsync(handle.fileno())
+        if "timezone" in body.model_fields_set:
+            resolve_timezone(body.timezone)
+            write_workspace_timezone(temporary, body.timezone)
         if body.locale is not None:
             write_workspace_locale(temporary, body.locale)
         if adapter_defaults is not None:
@@ -583,6 +588,7 @@ def _serve_page(request: Request, page: str) -> HTMLResponse:
     return HTMLResponse(
         render_serve_html(
             locale=runtime.config.locale,
+            effective_timezone=runtime.effective_timezone,
             adapter_defaults=(
                 runtime.config.adapter_default_db_paths if role == ADMIN_ROLE else {}
             ),

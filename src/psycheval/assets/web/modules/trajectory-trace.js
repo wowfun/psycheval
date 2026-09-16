@@ -1,4 +1,5 @@
-import { $, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtScore, hasMetricValue, listValue, lower, renderComparisonPanels, selectedKey, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, statusLabel, t } from "./runtime.js";
+import { renderDateTime } from "./date-time.js";
+import { $, esc, fmtCost, fmtMs, fmtNum, fmtScore, hasMetricValue, listValue, lower, renderComparisonPanels, selectedKey, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, statusLabel, t } from "./runtime.js";
 import { agentNameFor, bindDataTableSelection, renderRowSelection, selectionColumn } from "./data-tables.js";
 import { bindServeSourceStateControls, renderServeSourceStateControls, renderSourceRefreshControl } from "./source-state-controls.js";
 import { catalogStepOutline, leaderboardRows, metaFor, selectServeDetail, trajectoryFor } from "./serve-catalog.js";
@@ -138,7 +139,7 @@ function renderTrace() {
     [t("variant", "Variant"), trial.variant_label || "-"],
     [t("session", "Session"), trajectory?.session_id || "-"],
     [t("agent_model", "Agent / model"), `${agentName} / ${model}`],
-    [t("time", "Time"), `${fmtDate(trial.started_at_ms)} -> ${fmtDate(trial.finished_at_ms)}`],
+    [t("time", "Time"), () => `${renderDateTime(trial.started_at_ms)} → ${renderDateTime(trial.finished_at_ms)}`],
     [t("wall_duration", "Wall duration"), fmtMs(trialWallDurationMs(trial))],
     [t("steps_events", "Steps/events"), `${(trajectory?.steps || []).length}/${trial.total_events ?? "-"}`],
     [t("system_exposed", "System exposed"), systemExposed(trajectory) ? t("yes", "yes") : t("no", "no")],

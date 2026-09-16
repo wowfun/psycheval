@@ -112,6 +112,34 @@ mutations and do not modify evaluation evidence.
 Configuration controls accept interaction after their event handlers are bound.
 Copilot's Connect button stays disabled until the Agent catalog is available.
 
+### Display timezone
+
+The optional top-level `timezone` in `peval.toml` accepts an IANA timezone name
+(for example, `timezone = "Asia/Shanghai"`) or `UTC`. Names are matched without
+regard to case and saved with the timezone database's spelling. The `Factory`
+placeholder represents an unknown timezone and is rejected. If omitted, Serve resolves
+the server's system local timezone with `tzlocal`; `zoneinfo` validates names and
+retains daylight-saving rules. Unresolvable zones fail with an explicit
+configuration hint. Timezone data is a declared runtime dependency.
+
+Administrators can search for a display timezone in Configuration or select
+server local time, which removes the field. The revisioned `/api/config` response
+includes nullable `timezone` and resolved `effective_timezone`; PATCH accepts a
+name or `null`, with the existing administrator, ETag and atomic-save rules.
+HTML bootstrap includes the effective timezone for every visitor.
+
+Leaderboard, Trial details, phase times, timeline cells and tooltips, and session
+import lists share this timezone. Full timestamps use
+`YYYY-MM-DD HH:mm:ss.SSS ±HH:mm`; timeline clocks retain milliseconds and include
+the offset. Missing values display `-`; invalid or timezone-less strings remain
+literal. Source data, sorting, durations, and JSON/XLSX export semantics do not
+change. Copilot chat timestamps are outside this setting.
+
+Saving updates time nodes in all loaded pages of the current document without
+reloading evaluation data or resetting navigation, filters, pagination, drafts,
+or Copilot. Other browser documents read the new setting on full reload; manual
+file changes require a service restart. There is no cross-client push.
+
 ## Browser input and feedback
 
 Human-entered filesystem paths remove surrounding whitespace, one matching pair

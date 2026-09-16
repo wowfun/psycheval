@@ -23,6 +23,7 @@ from psycheval.state import (
     WorkspaceCatalog,
 )
 from psycheval.state.workspace_sources import WorkspaceSources
+from psycheval.timezones import resolve_timezone
 from psycheval.workspace_reports import WorkspaceReportLibrary
 from psycheval.workspace_views import (
     WorkspaceView,
@@ -43,6 +44,7 @@ class ServeRuntime:
     ) -> None:
         self.store = store
         self.config = config
+        self.effective_timezone = resolve_timezone(config.timezone)
         from psycheval.jobs.service import JobsService
 
         self.jobs = JobsService(store.paths.root)
@@ -147,7 +149,9 @@ class ServeRuntime:
             return self._load_error
 
     def set_config(self, config: ToolConfig) -> None:
+        effective_timezone = resolve_timezone(config.timezone)
         with self._lock:
+            self.effective_timezone = effective_timezone
             self.acp.reconfigure(config.acp_agents)
             self.config = config
             self.catalog.config = config

@@ -1,3 +1,4 @@
+import { renderDateTime } from "./date-time.js";
 import { $, RENDER_OPTIONS, adminMode, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, statusLabel, t } from "./shared.js";
 import { columnVisibleForLayout, loadColumnLayout, moveColumn, normalizeColumnLayout, presenceForColumns, resolveColumns, saveColumnLayout } from "./leaderboard-columns.js";
 
@@ -528,7 +529,7 @@ function renderDataCell(row, column, rows) {
   const valueType = tableValueType(column);
   const edit = resolveTableCellEdit(column, row);
   const classes = [column.numeric ? "num" : "", `table-value-${valueType}`, edit ? "table-cell-editable" : "", column.metric ? metricCellShade(row, column, rows) : "", className || ""].filter(Boolean).join(" ");
-  const html = column.html ? column.html(row) : esc(tableText(row, column));
+  const html = column.html ? column.html(row) : valueType === "datetime" ? renderDateTime(column.value(row)) : esc(tableText(row, column));
   const fullText = tableFullText(row, column);
   const title = column.cellTitle ? (column.cellTitle(row) || fullText) : fullText;
   const attrs = typeof column.cellAttrs === "function" ? column.cellAttrs(row) : (column.cellAttrs || "");

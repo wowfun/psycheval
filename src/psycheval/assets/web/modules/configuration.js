@@ -1,3 +1,4 @@
+import { setDisplayTimezone } from "./date-time.js";
 import { beginFeedback, pageFeedback, savedContentPreview } from "./action-feedback.js";
 import { openActionForm } from "./action-form.js";
 import { watchOperation } from "./operation-feedback.js";
@@ -24,6 +25,73 @@ const promptConfigState = {
   dirty: false,
 };
 const sessionSelections = new WeakMap();
+let timezoneDirty = false;
+
+function timezoneDraft() {
+  return document.querySelector("[data-timezone-mode]")?.value === "local"
+    ? null : (document.querySelector("[data-timezone-name]")?.value || "").trim();
+}
+function syncTimezoneControls() {
+  const form = document.querySelector("[data-timezone-form]");
+  if (!form) return;
+  const local = form.querySelector("[data-timezone-mode]").value === "local";
+  form.querySelector("[data-timezone-name-label]").hidden = local;
+  const name = form.querySelector("[data-timezone-name]");
+  name.required = !local;
+  name.disabled = local || harborConfigState.busy;
+  form.querySelector("[data-timezone-save]").disabled = harborConfigState.busy
+    || !harborConfigState.snapshot || timezoneDraft() === (harborConfigState.snapshot.timezone ?? null);
+}
+function renderTimezoneConfiguration() {
+  const form = document.querySelector("[data-timezone-form]");
+  const snapshot = harborConfigState.snapshot;
+  if (!form || !snapshot) return;
+  if (!timezoneDirty) {
+    form.querySelector("[data-timezone-mode]").value = snapshot.timezone ? "specific" : "local";
+    form.querySelector("[data-timezone-name]").value = snapshot.timezone || snapshot.effective_timezone || "UTC";
+  }
+  form.querySelector("[data-timezone-effective]").textContent = `${t("timezone_effective", "Effective timezone")}: ${snapshot.effective_timezone || "-"}`;
+  // This document adopts a new display timezone only after its own successful save.
+  syncTimezoneControls();
+}
+function bindTimezoneConfiguration(root) {
+  const form = root.querySelector("[data-timezone-form]");
+  if (!form) return;
+  const zones = new Set(["UTC", ...(Intl.supportedValuesOf?.("timeZone") || [])]);
+  form.querySelector("datalist").innerHTML = [...zones].map(zone => `<option value="${esc(zone)}"></option>`).join("");
+  form.addEventListener("input", () => { timezoneDirty = true; syncTimezoneControls(); });
+  form.addEventListener("change", () => { timezoneDirty = true; syncTimezoneControls(); });
+  form.addEventListener("submit", saveTimezone);
+}
+async function saveTimezone(event) {
+  event.preventDefault();
+  if (harborConfigState.busy || !adminMode()) return;
+  const timezone = timezoneDraft();
+  const feedback = beginFeedback("[data-timezone-status]", { page: "config", key: "config:timezone" });
+  if (timezone !== null) {
+    try { new Intl.DateTimeFormat("en", { timeZone: timezone }); }
+    catch { feedback.set(t("timezone_invalid", "Choose a valid IANA timezone."), true); return; }
+  }
+  setConfigurationBusy(true);
+  feedback.pending(t("saving", "Saving"));
+  try {
+    const payload = await serveApi("/api/config", {
+      method: "PATCH", body: { timezone }, ifMatch: true, etagKey: "/api/config",
+    });
+    harborConfigState.snapshot = payload;
+    setDisplayTimezone(payload.effective_timezone);
+    timezoneDirty = false;
+    renderTimezoneConfiguration();
+    feedback.set(t("timezone_saved", "Display timezone saved"));
+  } catch (error) {
+    await refreshConfigurationAfterConflict(error);
+    renderTimezoneConfiguration();
+    feedback.error(error);
+  } finally {
+    setConfigurationBusy(false);
+    syncTimezoneControls();
+  }
+}
 
 function setAcpAgentFormStatus(message = "", error = false) {
   const feedback = beginFeedback("[data-acp-agent-form-status]", { key: "config:agent-form" });
@@ -188,6 +256,7 @@ async function choosePathSourceFiles(button) {
   }
 }
 function renderHarborConfiguration() {
+  renderTimezoneConfiguration();
   renderAcpAgentConfiguration();
   renderPromptConfiguration();
   renderHarborDatasetRegistry();
@@ -279,6 +348,7 @@ function syncConfigurationBusy() {
       delete control.dataset.configPreviousDisabled;
     }
   });
+  syncTimezoneControls();
 }
 function renderHarborDatasetRegistry() {
   const root = document.querySelector("[data-harbor-dataset-registry]");
@@ -346,6 +416,7 @@ function bindConfigurationActions() {
   const root = document.querySelector("[data-config-page]");
   if (!root || root.dataset.configBound === "true") return;
   root.dataset.configBound = "true";
+  bindTimezoneConfiguration(root);
   bindConfigurationSourceControls(root);
   root.querySelector("[data-harbor-add-dataset]")?.addEventListener("click", () => createHarborDataset(false));
   root.querySelector("[data-harbor-register-dataset]")?.addEventListener("click", () => createHarborDataset(true));
@@ -913,7 +984,7 @@ function renderSessionPicker(form, payload) {
     }),
     { key: "index", label: "#", valueType: "number", numeric: true, value: session => session?.index ?? "-" },
     { key: "session_id", label: t("session", "Session"), valueType: "identity", value: session => session?.session_id || "-", html: session => `<code>${esc(session?.session_id || "-")}</code>` },
-    { key: "updated_at_ms", label: t("serve_session_updated", "Updated (UTC)"), valueType: "datetime", value: session => session?.updated_at_ms, format: fmtDate },
+    { key: "updated_at_ms", label: t("serve_session_updated", "Updated"), valueType: "datetime", value: session => session?.updated_at_ms, format: fmtDate },
     { key: "name", label: t("serve_session_name", "Name"), valueType: "text", value: session => session?.name || "-" },
   ];
   picker.innerHTML = `

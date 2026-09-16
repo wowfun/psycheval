@@ -27,11 +27,13 @@ def render_serve_html(
     authentication_enabled: bool = False,
     serve_page: str = "home",
     csp_nonce: str = "static-render",
+    effective_timezone: str = "UTC",
 ) -> str:
     normalized_page = normalize_serve_page(serve_page)
     normalized_locale = normalize_locale(locale)
     messages = messages_for(normalized_locale)
     render_options: dict[str, Any] = {
+        "effective_timezone": effective_timezone,
         "adapter_defaults": adapter_defaults or {},
         "loading": bool(loading),
         "workspace_id": workspace_id or "default",

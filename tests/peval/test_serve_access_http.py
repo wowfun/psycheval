@@ -174,6 +174,9 @@ class ServeAccessHttpTests(unittest.TestCase):
                 self.assertNotIn(str(root).encode(), guest_markup)
                 guest_options = self.script_json(shell, "peval-render-options")
                 self.assertEqual(guest_options["role"], "guest")
+                self.assertEqual(
+                    guest_options["effective_timezone"], runtime.effective_timezone
+                )
                 self.assertTrue(guest_options["authentication_enabled"])
                 self.assertEqual(guest_options["adapter_defaults"], {})
                 self.assertNotIn("harbor_mounts", guest_options)

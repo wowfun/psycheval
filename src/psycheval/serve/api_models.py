@@ -5,6 +5,7 @@ from typing import Annotated, Any, Literal
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from psycheval.serve.path_inputs import required_path_token, source_path_lines
+from psycheval.timezones import validate_timezone
 
 BrowserPath = Annotated[str, AfterValidator(required_path_token)]
 
@@ -124,6 +125,7 @@ class AcpAgentInput(StrictRequest):
 
 class ConfigPatchRequest(StrictRequest):
     locale: str | None = None
+    timezone: Annotated[str, AfterValidator(validate_timezone)] | None = None
     adapter_defaults: dict[str, BrowserPath | None] | None = None
     acp_agents: list[AcpAgentInput] | None = None
 

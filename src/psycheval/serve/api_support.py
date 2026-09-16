@@ -271,6 +271,8 @@ def workspace_config_payload(
     status_by_id = {item["id"]: item for item in acp_status.get("agents", [])}
     payload = harbor_config_payload(store, runtime, config=config)
     payload["locale"] = config.locale
+    payload["timezone"] = config.timezone
+    payload["effective_timezone"] = runtime.effective_timezone
     payload["adapter_defaults"] = dict(config.adapter_default_db_paths)
     payload["acp_agents"] = [
         {

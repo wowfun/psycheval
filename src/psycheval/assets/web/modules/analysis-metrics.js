@@ -1,7 +1,8 @@
 import { esc, fmtMs, hasMetricValue } from "./runtime.js";
 
+// Strings are escaped. Renderer callbacks must return trusted markup and escape source values.
 function infoGrid(items) {
-  return `<div class="info-grid">${items.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("")}</div>`;
+  return `<div class="info-grid">${items.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${typeof value === "function" ? value() : esc(value)}</strong></div>`).join("")}</div>`;
 }
 function trialWallDurationMs(trial) {
   if (hasMetricValue(trial?.wall_duration_ms)) return Number(trial.wall_duration_ms);

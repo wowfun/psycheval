@@ -75,9 +75,110 @@ class ServeApiContractTests(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(
             set(payload),
-            {"acp_agents", "adapter_defaults", "datasets", "locale", "mounts"},
+            {
+                "acp_agents",
+                "adapter_defaults",
+                "datasets",
+                "locale",
+                "mounts",
+                "timezone",
+                "effective_timezone",
+            },
         )
         return payload, headers
+
+    def test_timezone_patch_reset_validation_and_conflict(self) -> None:
+        with patch(
+            "psycheval.timezones.get_localzone_name", return_value="Asia/Kolkata"
+        ):
+            payload, headers = self.config()
+            self.assertIsNone(payload["timezone"])
+            for zone, expected in (
+                ("america/new_york", "America/New_York"),
+                ("utc", "UTC"),
+                (None, None),
+            ):
+                status, updated_headers, body = self.request(
+                    "PATCH",
+                    "/api/config",
+                    json.dumps({"timezone": zone}).encode(),
+                    headers={
+                        "Content-Type": "application/json",
+                        "If-Match": headers["etag"],
+                    },
+                )
+                self.assertEqual(status, 200, body)
+                updated = json.loads(body)
+                self.assertEqual(updated["timezone"], expected)
+                self.assertEqual(
+                    updated["effective_timezone"], expected or "Asia/Kolkata"
+                )
+                self.assertEqual(
+                    load_config(workspace_root=self.root).timezone, expected
+                )
+                if expected:
+                    self.assertIn(
+                        f'timezone = "{expected}"',
+                        self.config_path.read_text(encoding="utf-8"),
+                    )
+                status, _, _ = self.request(
+                    "PATCH",
+                    "/api/config",
+                    b'{"timezone":"UTC"}',
+                    headers={
+                        "Content-Type": "application/json",
+                        "If-Match": headers["etag"],
+                    },
+                )
+                self.assertEqual(status, 412)
+                headers = updated_headers
+            source = self.config_path.read_bytes()
+            status, _, _ = self.request(
+                "PATCH",
+                "/api/config",
+                b'{"timezone":"Invalid/Zone"}',
+                headers={
+                    "Content-Type": "application/json",
+                    "If-Match": headers["etag"],
+                },
+            )
+            self.assertEqual(status, 422)
+            self.assertEqual(self.config_path.read_bytes(), source)
+            self.assertNotIn("timezone", self.config_path.read_text(encoding="utf-8"))
+
+            status, _, body = self.request(
+                "PATCH",
+                "/api/config",
+                b'{"timezone":"Factory"}',
+                headers={
+                    "Content-Type": "application/json",
+                    "If-Match": headers["etag"],
+                },
+            )
+            self.assertEqual(status, 422, body)
+            self.assertEqual(self.config_path.read_bytes(), source)
+
+    def test_timezone_reset_failure_does_not_write_configuration(self) -> None:
+        self.config_path.write_text('timezone = "UTC"\n', encoding="utf-8")
+        self.runtime.set_config(load_config(workspace_root=self.root))
+        _, headers = self.config()
+        source = self.config_path.read_bytes()
+        with patch(
+            "psycheval.timezones.get_localzone_name", side_effect=OSError("unavailable")
+        ):
+            status, _, body = self.request(
+                "PATCH",
+                "/api/config",
+                b'{"timezone":null}',
+                headers={
+                    "Content-Type": "application/json",
+                    "If-Match": headers["etag"],
+                },
+            )
+        self.assertEqual(status, 422, body)
+        self.assertIn(b"set timezone", body)
+        self.assertEqual(self.config_path.read_bytes(), source)
+        self.assertEqual(self.runtime.effective_timezone, "UTC")
 
     def assert_problem_headers(self, headers: dict[str, str]) -> None:
         self.assertEqual(headers["content-type"], "application/problem+json")

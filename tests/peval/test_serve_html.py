@@ -75,6 +75,7 @@ class PevalServeHtmlTests(unittest.TestCase):
                 "adapter_defaults": {},
                 "loading": False,
                 "workspace_id": "workspace-one",
+                "effective_timezone": "UTC",
                 "role": "guest",
                 "authentication_enabled": False,
                 "initial_page": "home",

@@ -100,6 +100,12 @@ def render_serve_configuration_page(
         load_asset_text("serve_configuration.html"),
         {
             "CONFIGURATION": escape(messages["workspace_configuration"]),
+            "DISPLAY_TIMEZONE": escape(messages["display_timezone"]),
+            "DISPLAY_TIMEZONE_COPY": escape(messages["display_timezone_copy"]),
+            "TIMEZONE_LOCAL": escape(messages["timezone_local"]),
+            "TIMEZONE_SPECIFIC": escape(messages["timezone_specific"]),
+            "TIMEZONE_NAME": escape(messages["timezone_name"]),
+            "TIMEZONE_SAVE": escape(messages["timezone_save"]),
             "ADD_SOURCE": escape(messages["serve_add_source"]),
             "SOURCE_FORMS": "".join(
                 [

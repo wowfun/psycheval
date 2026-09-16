@@ -58,13 +58,13 @@ test("Dataset leads existing layouts and uses query-wide presence and server fac
   }
 });
 
-test("absolute timestamps render as UTC across Leaderboard, Harbor evidence, and timeline", () => {
+test("absolute timestamps share the configured timezone across Leaderboard, Harbor evidence, and timeline", () => {
   const previousTimezone = process.env.TZ;
   process.env.TZ = "Asia/Shanghai";
   try {
     const instant = Date.parse("2026-08-12T00:00:02Z");
     const finishedAt = tables.leaderboardColumns().find(column => column.key === "finished_at_ms");
-    assert.equal(tables.tableText({ finished_at_ms: instant }, finishedAt), "2026-08-12T00:00:02.000Z");
+    assert.equal(tables.tableText({ finished_at_ms: instant }, finishedAt), "2026-08-12 00:00:02.000 +00:00");
 
     const evidence = selected.renderHarborEvidence({
       harbor_provenance: { result_id: "result-1" },
@@ -82,12 +82,12 @@ test("absolute timestamps render as UTC across Leaderboard, Harbor evidence, and
         },
       },
     });
-    assert.match(evidence, /6\.0s · 2026-08-12T00:00:02\.000Z → 2026-08-12T00:00:08\.000Z/);
+    assert.match(evidence.replace(/<[^>]+>/g, ""), /6\.0s · 2026-08-12 00:00:02\.000 \+00:00 → 2026-08-12 00:00:08\.000 \+00:00/);
     assert.match(evidence, /not-a-timestamp → -/);
 
     const start = timeline.timelineDetailColumns({ active_total_ms: 1 })
       .find(column => column.key === "wall_start_ms");
-    assert.equal(tables.tableText({ wall_start_ms: instant }, start), "00:00:02.000Z");
+    assert.equal(tables.tableText({ wall_start_ms: instant }, start), "00:00:02.000 +00:00");
   } finally {
     if (previousTimezone === undefined) delete process.env.TZ;
     else process.env.TZ = previousTimezone;

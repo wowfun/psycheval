@@ -1,6 +1,27 @@
   <section class="workspace-page configuration-page" data-config-page aria-label="__CONFIGURATION__" inert>
     <div class="serve-notice workspace-page-status" data-config-page-status aria-live="polite" hidden></div>
     <main class="configuration-sections">
+      <section class="configuration-section" aria-labelledby="display-timezone-title">
+        <header class="configuration-section-head"><div>
+          <h2 id="display-timezone-title">__DISPLAY_TIMEZONE__</h2>
+          <p class="copy">__DISPLAY_TIMEZONE_COPY__</p>
+        </div></header>
+        <form data-timezone-form class="source-form">
+          <label>__DISPLAY_TIMEZONE__
+            <select data-timezone-mode aria-label="__DISPLAY_TIMEZONE__">
+              <option value="local">__TIMEZONE_LOCAL__</option>
+              <option value="specific">__TIMEZONE_SPECIFIC__</option>
+            </select>
+          </label>
+          <label data-timezone-name-label hidden>__TIMEZONE_NAME__
+            <input data-timezone-name list="display-timezones" placeholder="Asia/Shanghai" autocomplete="off">
+          </label>
+          <datalist id="display-timezones"></datalist>
+          <p class="copy" data-timezone-effective></p>
+          <div class="source-form-actions"><button class="action-button primary" type="submit" data-timezone-save disabled>__TIMEZONE_SAVE__</button></div>
+          <div data-timezone-status aria-live="polite" hidden></div>
+        </form>
+      </section>
       <section class="configuration-section" aria-labelledby="trajectory-ingestion-title">
         <header class="configuration-section-head">
           <div>

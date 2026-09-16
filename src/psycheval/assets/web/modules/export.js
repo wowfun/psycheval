@@ -1,3 +1,4 @@
+import { formatUtcDate } from "./date-time.js";
 import { listValue, lower, state } from "./runtime.js";
 import { exportCurrentScope, selectServeDetail } from "./serve-catalog.js";
 import { bindTableRowActivation } from "./data-tables.js";
@@ -42,6 +43,8 @@ function xlsxTableRows(rows, columns) {
 }
 function exportTableText(row, column) {
   const raw = column.value(row);
+  if (column.exportFormat) return column.exportFormat(raw, row);
+  if (column.valueType === "datetime") return formatUtcDate(raw);
   return column.format ? column.format(raw, row) : (raw ?? "-");
 }
 function xlsxBytesForRows(rows, columns) {

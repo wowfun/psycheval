@@ -1,3 +1,4 @@
+import { fmtClockMs, formatUtcClock, renderDateTime } from "./date-time.js";
 import { esc, hasMetricValue, selectedKey, state, t } from "./runtime.js";
 import { applyDataTableControls, bindDataTableControls, renderDataTable } from "./data-tables.js";
 import { renderTrace } from "./trajectory-trace.js";
@@ -52,8 +53,8 @@ function timelineDetailColumns(model) {
   return [
     { key: "number", label: t("timeline_col_row", "#"), valueType: "number", numeric: true, sortable: true, value: row => row.number_sort, format: (_value, row) => row.number || "-" },
     { key: "stage", label: t("timeline_col_stage", "Stage"), valueType: "text", sortable: true, filterable: true, value: row => row.stage || "-", html: row => renderTimelineStageLabel(row), cellTitle: row => row.stage || "-", className: "timeline-label-cell" },
-    { key: "wall_start_ms", label: t("timeline_col_start", "Start"), valueType: "datetime", numeric: true, sortable: true, value: row => row.wall_start_ms, format: (value, row) => fmtTimelineMaybeEstimated(fmtClockMs(value), row) },
-    { key: "wall_end_ms", label: t("timeline_col_end", "End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.wall_end_ms, format: (value, row) => fmtTimelineMaybeEstimated(fmtClockMs(value), row) },
+    { key: "wall_start_ms", label: t("timeline_col_start", "Start"), valueType: "datetime", numeric: true, sortable: true, value: row => row.wall_start_ms, format: (value, row) => fmtTimelineMaybeEstimated(fmtClockMs(value), row), html: row => fmtTimelineMaybeEstimated(renderDateTime(row.wall_start_ms, "clock"), row), exportFormat: (value, row) => fmtTimelineMaybeEstimated(formatUtcClock(value), row) },
+    { key: "wall_end_ms", label: t("timeline_col_end", "End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.wall_end_ms, format: (value, row) => fmtTimelineMaybeEstimated(fmtClockMs(value), row), html: row => fmtTimelineMaybeEstimated(renderDateTime(row.wall_end_ms, "clock"), row), exportFormat: (value, row) => fmtTimelineMaybeEstimated(formatUtcClock(value), row) },
     { key: "duration_ms", label: t("timeline_col_duration", "Duration"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.duration_ms, format: (value, row) => fmtTimelineMaybeEstimated(fmtTimelineDuration(value), row), className: "strong-num" },
     { key: "active_pct", label: t("timeline_col_total_pct", "Active Share"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => timelineActivePctValue(row, model), format: value => hasMetricValue(value) ? `${Number(value).toFixed(1)}%` : "-", html: row => renderTimelineActiveShare(row, model), className: "active-share-cell" },
   ];
@@ -105,12 +106,6 @@ function fmtTimelineAxis(value, intervalMs = null) {
   const remainder = seconds % 60;
   if (interval && interval < 60000 && remainder) return `${minutes}m${Math.round(remainder)}s`;
   return `${minutes}m`;
-}
-function fmtClockMs(value) {
-  if (!hasMetricValue(value)) return "-";
-  const date = new Date(Number(value));
-  const pad = (number, size = 2) => String(number).padStart(size, "0");
-  return `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}.${pad(date.getUTCMilliseconds(), 3)}Z`;
 }
 export {
   bindTimelineControls,

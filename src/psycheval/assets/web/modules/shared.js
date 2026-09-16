@@ -1,4 +1,5 @@
 // @ts-check
+import { fmtDate } from "./date-time.js";
 
 import { RENDER_OPTIONS } from "../app/render-options.js";
 
@@ -41,16 +42,6 @@ function fmtTtft(value) {
   return milliseconds < 1000 ? `${Math.round(milliseconds)} ms` : `${(milliseconds / 1000).toFixed(2)}s`;
 }
 function fmtTps(value) { return hasMetricValue(value) ? `${Number(value).toFixed(1)} tok/s` : "-"; }
-function fmtDate(value) {
-  if (value === null || value === undefined || String(value).trim() === "") return "-";
-  const source = String(value).trim();
-  const date = typeof value === "number" || /^-?\d+(?:\.\d+)?$/.test(source)
-    ? new Date(Number(value))
-    : /(?:Z|[+-]\d{2}:\d{2})$/i.test(source)
-      ? new Date(source)
-      : null;
-  return date && !Number.isNaN(date.getTime()) ? date.toISOString() : source;
-}
 function fmtCost(value) { return hasMetricValue(value) ? `$${Number(value).toFixed(4)}` : "-"; }
 function fmtPct(value) { return hasMetricValue(value) ? `${(Number(value) * 100).toFixed(1)}%` : "-"; }
 function fmtScore(value) { return hasMetricValue(value) ? Number(value).toLocaleString() : "-"; }
