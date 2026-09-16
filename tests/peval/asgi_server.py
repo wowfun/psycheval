@@ -10,6 +10,7 @@ from psycheval.config import ToolConfig
 from psycheval.serve.access import ServeAccess
 from psycheval.serve.acp import MAX_ACP_FRAME_BYTES
 from psycheval.serve.api import create_app
+from psycheval.serve.event_loop import SERVE_LOOP_FACTORY
 from psycheval.serve.lifecycle import bind_listener
 from psycheval.serve.runtime import ServeRuntime
 from psycheval.state import ServeStateStore
@@ -56,7 +57,7 @@ class LocalHTTPServer:
         self._server = uvicorn.Server(
             uvicorn.Config(
                 app,
-                loop="asyncio",
+                loop=SERVE_LOOP_FACTORY,
                 http="h11",
                 ws="websockets-sansio",
                 ws_max_size=MAX_ACP_FRAME_BYTES,

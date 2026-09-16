@@ -12,6 +12,7 @@ from psycheval.serve.access import ServeAccess
 from psycheval.serve.acp import MAX_ACP_FRAME_BYTES
 from psycheval.serve.api import create_app
 from psycheval.serve.constants import DEFAULT_PORT_END, DEFAULT_PORT_START, LOCALHOSTS
+from psycheval.serve.event_loop import SERVE_LOOP_FACTORY
 from psycheval.serve.runtime import ServeRuntime
 from psycheval.state import open_workspace_state
 
@@ -48,7 +49,7 @@ def run_serve_command(args: CliArgs) -> None:
         server = uvicorn.Server(
             uvicorn.Config(
                 create_app(runtime, access),
-                loop="asyncio",
+                loop=SERVE_LOOP_FACTORY,
                 http="h11",
                 ws="websockets-sansio",
                 ws_max_size=MAX_ACP_FRAME_BYTES,

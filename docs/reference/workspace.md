@@ -243,6 +243,13 @@ This interface, its disabled API documentation, and its single-process server
 are local workspace implementation details rather than an external service
 contract.
 
+On Windows, the serve event loop retains Proactor support for ACP subprocess
+pipes. A peer reset reported as WinError 10054 during socket shutdown is treated
+as an already-disconnected peer, allowing socket closure and transport cleanup
+to finish. Other socket and callback errors remain visible. This handling is
+local to serve's socket transports and does not change the process-wide asyncio
+policy or standard-library classes.
+
 The ACP WebSocket and context resolver are administrator-only and same-origin
 because an allowlisted Agent runs with the OS authority of `peval serve`; an ACP
 permission card is Agent protocol state, not an operating-system sandbox.

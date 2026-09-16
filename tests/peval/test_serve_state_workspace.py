@@ -145,6 +145,10 @@ class PevalServeStateWorkspaceTests(unittest.TestCase):
             self.assertEqual(captured["config"].adapter_default_db_paths, expected)
             self.assertGreater(captured["port"], 0)
             self.assertFalse(captured["uvicorn"].server_header)
+            self.assertEqual(
+                captured["uvicorn"].loop,
+                "psycheval.serve.event_loop:create_serve_loop",
+            )
             self.assertEqual(captured.get("returncode"), 0)
 
     def test_port_policy_fallback_and_explicit_strict_failure(self) -> None:
