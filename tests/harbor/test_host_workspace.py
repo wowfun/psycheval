@@ -178,10 +178,10 @@ def test_project_copies_are_independent_with_complete_git_baselines(
         for i in range(2)
     ]
     for environment in environments:
-        (environment.environment_dir / "src").mkdir()
-        (environment.environment_dir / "src" / "task.txt").write_text("task input")
-        (environment.environment_dir / ".git").mkdir()
-        (environment.environment_dir / ".git" / "config").write_text("task repository")
+        (environment.environment_dir / "data/src").mkdir()
+        (environment.environment_dir / "data/src" / "task.txt").write_text("task input")
+        (environment.environment_dir / "data/.git").mkdir()
+        (environment.environment_dir / "data/.git/config").write_text("task repository")
     task_before = [tree_files(env.environment_dir) for env in environments]
 
     async def scenario():
@@ -244,7 +244,7 @@ def test_project_merge_conflicts_clean_only_the_copy(tmp_path, conflict):
     )
     for root, directory in [
         (project, conflict == "source_directory"),
-        (environment.environment_dir, conflict == "task_directory"),
+        (environment.environment_dir / "data", conflict == "task_directory"),
     ]:
         if directory:
             (root / "collision").mkdir()
@@ -498,7 +498,9 @@ def test_project_copy_rejects_links(tmp_path, location):
     )
     target = tmp_path / "outside"
     target.write_text("keep")
-    directory = project if location == "project" else environment.environment_dir
+    directory = (
+        project if location == "project" else environment.environment_dir / "data"
+    )
     try:
         (directory / "link").symlink_to(target)
     except OSError:
@@ -527,6 +529,9 @@ def test_source_is_not_copied_into_separate_verifier(tmp_path):
     project.mkdir()
     (project / "private-agent-file").write_text("agent input")
     environment = make_separate_verifier_environment(tmp_path)
+    (environment.environment_dir / "prepare.py").write_text(
+        "raise AssertionError('Separate verifier must not prepare Task inputs')"
+    )
     # Reconstruct through the public constructor, with the same shared Job kwargs.
     environment = host.HostEnvironment(
         environment_dir=environment.environment_dir,

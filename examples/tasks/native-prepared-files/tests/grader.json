@@ -1,0 +1,4 @@
+{
+  "custom_checks": ["total", "date"],
+  "scoring": {"weights": {"custom:total": 3, "custom:date": 1}}
+}

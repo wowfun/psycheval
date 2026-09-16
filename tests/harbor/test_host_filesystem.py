@@ -27,6 +27,58 @@ def filesystem_host(tmp_path):
     )
 
 
+@pytest.mark.parametrize("close_early", [False, True])
+def test_deep_directory_transfer_bounds_scandir_handles(
+    tmp_path, monkeypatch, close_early
+):
+    host = filesystem_host(tmp_path)
+    source = tmp_path / "deep-source"
+    leaf = source.joinpath(*(["d"] * 20))
+    leaf.mkdir(parents=True)
+    (leaf / "value.txt").write_text("leaf")
+    real_scandir = os.scandir
+    active = peak = 0
+
+    class Scan:
+        def __init__(self, path):
+            nonlocal active, peak
+            self.iterator = real_scandir(path)
+            self.closed = False
+            active += 1
+            peak = max(active, peak)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self.iterator)
+
+        def close(self):
+            nonlocal active
+            if not self.closed:
+                self.closed = True
+                active -= 1
+                self.iterator.close()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.close()
+
+    monkeypatch.setattr(os, "scandir", Scan)
+    entries = host._native_download_entries(source)
+    first, info = next(entries)
+    assert first == leaf / "value.txt" and stat.S_ISREG(info.st_mode)
+    if close_early:
+        entries.close()
+    else:
+        directories = [path for path, info in entries if info is None]
+        assert directories[0] == leaf and directories[-1] == source
+    assert active == 0
+    assert peak <= 1
+
+
 def test_mounted_artifact_collection_preserves_source_bytes(tmp_path):
     async def scenario():
         host = filesystem_host(tmp_path)
@@ -170,7 +222,7 @@ def test_task_git_pointer_cannot_mutate_external_repository(tmp_path):
     git("-c", "commit.gpgSign=false", "commit", "-q", "-m", "original")
     before = git("rev-parse", "HEAD")
     host = make_environment(tmp_path / "host")
-    pointer = host.environment_dir / ".git"
+    pointer = host.environment_dir / "data/.git"
     pointer.write_text(f"gitdir: {(original / '.git').as_posix()}\n", encoding="utf-8")
     pointer_bytes = pointer.read_bytes()
 

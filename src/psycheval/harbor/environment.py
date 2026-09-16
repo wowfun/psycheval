@@ -20,7 +20,7 @@ import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Literal, Protocol
 from uuid import uuid4
@@ -37,6 +37,7 @@ from .runtime_config import (
     PEVAL_CONFIG_ENV,
     EffectiveRuntimeConfig,
     RuntimePaths,
+    VerifierInvocation,
     _resolve_host_path,
     load_effective_runtime_config,
     resolve_workdir_root,
@@ -72,6 +73,7 @@ _DEFAULT_ROOT = object()
 _WORKBUDDY_ARCHIVE_FILE_LIMIT = 64 * 1024 * 1024
 _WORKBUDDY_ARCHIVE_TOTAL_LIMIT = 256 * 1024 * 1024
 _WORKBUDDY_ARCHIVE_ENTRY_LIMIT = 100_000
+_PREPARATION_OUTPUT_LIMIT = 8 * 1024 * 1024
 
 
 async def _await_owned_task(task: asyncio.Task, *, on_cancel=None):
@@ -401,6 +403,8 @@ def _copy_project_tree(
             continue
         info = _workspace_entry_info(entry)
         target = current_destination / entry.name
+        if os.path.lexists(target):
+            _workspace_entry_info(target)
         if stat.S_ISDIR(info.st_mode):
             if target.exists() and not target.is_dir():
                 raise ValueError(f"workspace merge conflict: {target}")
@@ -715,6 +719,7 @@ class HostEnvironment(BaseEnvironment):
         self._started = False
         self._stopping = False
         self._initialization_cancel = threading.Event()
+        self._initialization_task: asyncio.Task | None = None
         self._lifecycle_lock = asyncio.Lock()
         self._launch_lock = asyncio.Lock()
         self._active_processes: dict[
@@ -967,10 +972,10 @@ class HostEnvironment(BaseEnvironment):
                 await self._delete_owned_runtime()
             self._initialization_cancel.clear()
             self._runtime_root = Path(tempfile.mkdtemp(prefix="session-"))
-            worker = asyncio.create_task(asyncio.to_thread(self._initialize_context))
+            self._initialization_task = asyncio.create_task(self._initialize())
             try:
                 await _await_owned_task(
-                    worker, on_cancel=self._initialization_cancel.set
+                    self._initialization_task, on_cancel=self._cancel_initialization
                 )
             except BaseException as error:
                 try:
@@ -978,7 +983,78 @@ class HostEnvironment(BaseEnvironment):
                 except OSError as cleanup_error:
                     error.add_note(f"workspace cleanup failed: {cleanup_error}")
                 raise
+            finally:
+                self._initialization_task = None
             self._started = True
+
+    def _cancel_initialization(self) -> None:
+        self._initialization_cancel.set()
+        if self._initialization_task is not None:
+            self._initialization_task.cancel()
+
+    async def _initialize(self) -> None:
+        await _await_owned_task(
+            asyncio.create_task(asyncio.to_thread(self._initialize_context)),
+            on_cancel=self._initialization_cancel.set,
+        )
+        _check_filesystem_cancel(self._initialization_cancel)
+        await self._run_input_preparation()
+        if not self._is_separate_verifier() and (
+            self._workspace is None or self._workspace.owned
+        ):
+            await _await_owned_task(
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        self._initialize_workspace_baseline,
+                        self._context_target(self._runtime_dirs()),
+                        project=self._workspace_source is not None,
+                        cancel=self._initialization_cancel,
+                    )
+                ),
+                on_cancel=self._initialization_cancel.set,
+            )
+        _check_filesystem_cancel(self._initialization_cancel)
+
+    async def _run_input_preparation(self) -> None:
+        if self._is_separate_verifier():
+            return
+        assert self._runtime_root is not None
+        script = self._runtime_root / "preparation" / "prepare.py"
+        if not script.is_file():
+            return
+        self._require_process_access()
+        workdir = self._context_target(self._runtime_dirs())
+        log_path = self.trial_paths.trial_dir / "prepare.log"
+        with log_path.open("w", encoding="utf-8", errors="backslashreplace") as log:
+
+            async def record(text: str, stream: OutputStream) -> None:
+                log.write(text)
+                log.flush()
+
+            try:
+                with self.scoped_output_callback(record):
+                    result = await self._exec_process(
+                        [
+                            sys.executable,
+                            "-B",
+                            str(Path(__file__).with_name("_prepare.py")),
+                            str(script),
+                            str(workdir),
+                        ],
+                        cwd=str(workdir),
+                        env={"PYTHONIOENCODING": "utf-8"},
+                        timeout_sec=None,
+                        user=None,
+                        initializing=True,
+                    )
+                if result.return_code != 0:
+                    raise RuntimeError(
+                        f"Task preparation failed with exit code {result.return_code}; "
+                        f"see {log_path}"
+                    )
+            except BaseException as error:
+                log.write(f"\n{type(error).__name__}: {error}\n")
+                raise
 
     def _initialize_context(self) -> None:
         cancel = self._initialization_cancel
@@ -1011,6 +1087,36 @@ class HostEnvironment(BaseEnvironment):
     def _materialize_context(
         self, context_target: Path, *, cancel: threading.Event
     ) -> None:
+        if self._is_separate_verifier():
+            self._copy_environment_context(context_target, cancel=cancel)
+            return
+        source_root = self.environment_dir.resolve()
+        if context_target.is_relative_to(source_root) or source_root.is_relative_to(
+            context_target
+        ):
+            raise ValueError("Task environment and workspace destination overlap")
+        if self._workspace_source is not None:
+            _copy_project_tree(self._workspace_source, context_target, cancel=cancel)
+        if os.path.lexists(self.environment_dir / "prepare.py"):
+            self._require_process_access()
+            assert self._runtime_root is not None
+            stage = self._runtime_root / "preparation"
+            stage.mkdir()
+            _copy_project_tree(self.environment_dir, stage, cancel=cancel)
+            if not (stage / "prepare.py").is_file():
+                raise ValueError("environment/prepare.py must be a regular file")
+        elif os.path.lexists(self.environment_dir / "data"):
+            source = self.environment_dir / "data"
+            if source.resolve().is_relative_to(
+                context_target
+            ) or context_target.is_relative_to(source.resolve()):
+                raise ValueError("workspace data source and destination overlap")
+            _copy_project_tree(source, context_target, cancel=cancel)
+
+    def _copy_environment_context(
+        self, context_target: Path, *, cancel: threading.Event
+    ) -> None:
+        """Materialize environment-owned contexts (WorkBuddy or verifier tests)."""
         separate_verifier = self._is_separate_verifier()
         environment_source = self.environment_dir.resolve()
         project = self._workspace_source is not None and not separate_verifier
@@ -1027,10 +1133,6 @@ class HostEnvironment(BaseEnvironment):
                 _copy_project_tree(environment_source, context_target, cancel=cancel)
             else:
                 shutil.copytree(environment_source, context_target, dirs_exist_ok=True)
-        if not separate_verifier and (self._workspace is None or self._workspace.owned):
-            self._initialize_workspace_baseline(
-                context_target, project=project, cancel=cancel
-            )
 
     def _initialize_workspace_baseline(
         self,
@@ -1052,12 +1154,12 @@ class HostEnvironment(BaseEnvironment):
         root = self._workdir_root
         assert root is not None
         workspace = root / f"task_{trial_short_uuid(self.trial_paths.trial_dir.name)}"
+        sources = [self.environment_dir.resolve()]
         if self._workspace_source is not None:
-            for source in (self._workspace_source, self.environment_dir.resolve()):
-                if workspace.is_relative_to(source) or source.is_relative_to(workspace):
-                    raise ValueError(
-                        f"workspace source and destination overlap: {source}"
-                    )
+            sources.append(self._workspace_source)
+        for source in sources:
+            if workspace.is_relative_to(source) or source.is_relative_to(workspace):
+                raise ValueError(f"workspace source and destination overlap: {source}")
         root.mkdir(parents=True, exist_ok=True)
         if not root.is_dir():
             raise ValueError(
@@ -1093,7 +1195,7 @@ class HostEnvironment(BaseEnvironment):
     async def stop(self, delete: bool):
         self._require_lifecycle_caller()
         if not self._started:
-            self._initialization_cancel.set()
+            self._cancel_initialization()
         async with self._lifecycle_lock:
             self._stopping = True
             try:
@@ -1376,11 +1478,13 @@ class HostEnvironment(BaseEnvironment):
         requested_config: str | None,
     ) -> EffectiveRuntimeConfig:
         harness = None
+        verifier = None
         agent_logs = None
         if requested_config:
             requested_path = self._translate_path(requested_config)
             requested = load_effective_runtime_config(requested_path)
             harness = requested.harness
+            verifier = requested.verifier
             agent_logs = self._translate_path(requested.paths.agent_logs)
         paths = self._runtime_dirs()
         workspace = self._workspace.path if self._workspace is not None else None
@@ -1401,6 +1505,7 @@ class HostEnvironment(BaseEnvironment):
             workspace=str(workspace) if workspace is not None else None,
             python=sys.executable,
             harness=harness,
+            verifier=verifier,
         )
 
     def _write_runtime_config(self, config: EffectiveRuntimeConfig) -> Path:
@@ -1423,12 +1528,15 @@ class HostEnvironment(BaseEnvironment):
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def runtime_config_env(self) -> dict[str, str]:
+    def runtime_config_env(
+        self, *, verifier: VerifierInvocation | None = None
+    ) -> dict[str, str]:
         """Explicitly supply path configuration to a trusted control process."""
         self._require_filesystem_ready()
         config = self._effective_runtime_config(
             workdir=self._translate_path(self._task_workdir), requested_config=None
         )
+        config = replace(config, verifier=verifier)
         return {PEVAL_CONFIG_ENV: str(self._write_runtime_config(config))}
 
     async def upload_file(self, source_path: Path | str, target_path: str):
@@ -1464,34 +1572,34 @@ class HostEnvironment(BaseEnvironment):
         cancel: threading.Event | None = None,
     ) -> Iterator[tuple[Path, os.stat_result | None]]:
         """Visit files incrementally and directories after their children."""
-        pending = [(source, os.scandir(source))]
+        pending = [(source, False)]
         skipped_links = 0
         try:
             while pending:
                 _check_filesystem_cancel(cancel)
-                current, entries = pending[-1]
-                entry = next(entries, None)
-                if entry is None:
-                    entries.close()
-                    pending.pop()
+                current, visited = pending.pop()
+                if visited:
                     yield current, None
                     continue
-                info = entry.stat(follow_symlinks=False)
-                path = Path(entry.path)
-                if self._matches_download_exclusion(
-                    path.relative_to(source).as_posix(), exclude
-                ):
-                    continue
-                if _is_link_info(info):
-                    skipped_links += 1
-                    continue
-                if stat.S_ISDIR(info.st_mode):
-                    pending.append((path, os.scandir(path)))
-                else:
-                    yield path, info
+                pending.append((current, True))
+                # Close each directory's scan before descending into its children.
+                with os.scandir(current) as entries:
+                    for entry in entries:
+                        _check_filesystem_cancel(cancel)
+                        info = entry.stat(follow_symlinks=False)
+                        path = Path(entry.path)
+                        if self._matches_download_exclusion(
+                            path.relative_to(source).as_posix(), exclude
+                        ):
+                            continue
+                        if _is_link_info(info):
+                            skipped_links += 1
+                            continue
+                        if stat.S_ISDIR(info.st_mode):
+                            pending.append((path, False))
+                        else:
+                            yield path, info
         finally:
-            for _, entries in pending:
-                entries.close()
             if skipped_links:
                 self.logger.warning(
                     "Directory transfer omitted %d linked entries in %s",
@@ -1665,6 +1773,7 @@ class HostEnvironment(BaseEnvironment):
         cwd: str | None,
         env: dict[str, str] | None,
         user: str | int | None,
+        initializing: bool = False,
     ) -> asyncio.subprocess.Process:
         self._validate_user(user)
         effective_cwd = self._task_workdir if cwd is None else cwd
@@ -1720,6 +1829,12 @@ class HostEnvironment(BaseEnvironment):
         )
         if runtime_config_path is not None:
             process_env[PEVAL_CONFIG_ENV] = str(runtime_config_path)
+        if initializing:
+            process_env = {
+                key: value
+                for key, value in process_env.items()
+                if not key.upper().startswith("PEVAL_JUDGE_")
+            }
         argv = (
             self._process_adapter.shell_argv(self._translate_command(command))
             if isinstance(command, str)
@@ -1741,20 +1856,25 @@ class HostEnvironment(BaseEnvironment):
         env: dict[str, str] | None,
         timeout_sec: float | None,
         user: str | int | None,
+        initializing: bool = False,
     ) -> ExecResult:
         self._require_process_access()
         # Fail promptly during startup/stop, then recheck after waiting for the lock.
-        self._require_command_ready()
+        self._require_command_ready(initializing=initializing)
         async with self._launch_lock:
-            self._require_command_ready()
-            process = await self._spawn_process(command, cwd=cwd, env=env, user=user)
+            self._require_command_ready(initializing=initializing)
+            process = await self._spawn_process(
+                command, cwd=cwd, env=env, user=user, initializing=initializing
+            )
             done = asyncio.get_running_loop().create_future()
             self._active_processes[process] = done
         callback = self._output_callback()
+        output_bytes = 0
 
         async def read_stream(
             stream: asyncio.StreamReader | None, stream_name: OutputStream
         ) -> str:
+            nonlocal output_bytes
             if stream is None:
                 return ""
             chunks: list[str] = []
@@ -1762,6 +1882,9 @@ class HostEnvironment(BaseEnvironment):
             token = self._callback_command.set(done)
             try:
                 while chunk := await stream.read(4096):
+                    output_bytes += len(chunk)
+                    if initializing and output_bytes > _PREPARATION_OUTPUT_LIMIT:
+                        raise RuntimeError("Task preparation output exceeds 8 MiB")
                     text = decoder.decode(chunk)
                     chunks.append(text)
                     if callback is not None:
@@ -1828,7 +1951,12 @@ class HostEnvironment(BaseEnvironment):
             return_code=process.returncode if process.returncode is not None else 1,
         )
 
-    def _require_command_ready(self) -> None:
+    def _require_command_ready(self, *, initializing: bool = False) -> None:
+        if initializing:
+            if asyncio.current_task() is not self._initialization_task:
+                raise RuntimeError("startup commands require the initialization task")
+            _check_filesystem_cancel(self._initialization_cancel)
+            return
         if not self._started:
             raise RuntimeError("HostEnvironment has not started")
         if self._stopping:

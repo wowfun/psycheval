@@ -1,0 +1,7 @@
+schema_version = "1.4"
+
+[environment]
+workdir = "/app"
+
+[verifier]
+timeout_sec = 60

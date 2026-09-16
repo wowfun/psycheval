@@ -86,9 +86,12 @@ class WorkBuddyHostEnvironment(HostEnvironment):
         self, context_target: Path, *, cancel: threading.Event
     ) -> None:
         if self._workspace_archive is None or self._is_separate_verifier():
-            super()._materialize_context(context_target, cancel=cancel)
+            self._copy_environment_context(context_target, cancel=cancel)
             return
         _extract_workspace_archive(
             self._workspace_archive, context_target, cancel=cancel
         )
-        self._initialize_workspace_baseline(context_target, cancel=cancel)
+
+    async def _run_input_preparation(self) -> None:
+        # WorkBuddy's workspace and verifier hooks are owned by its Dataset contract.
+        return

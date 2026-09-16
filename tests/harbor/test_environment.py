@@ -46,6 +46,7 @@ def make_environment(
     environment_dir = tmp_path / "task" / "environment"
     environment_dir.mkdir(parents=True)
     (environment_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+    (environment_dir / "data").mkdir()
     trial_paths = TrialPaths(tmp_path / trial_name)
     trial_paths.mkdir()
     artifact_mount = trial_paths.artifacts_dir / "logs" / "artifacts"
@@ -515,7 +516,7 @@ def test_automatic_workspace_reuses_trial_short_uuid_and_obeys_delete(
         workspace = Path(cwd)
         config_path = Path(config_path_value)
         assert workspace == Path(os.environ["HOME"]) / "workspaces" / "task_YfQLWrD"
-        assert (workspace / "Dockerfile").is_file()
+        assert not (workspace / "Dockerfile").exists()
         assert config_path.is_file()
 
         await environment.stop(delete=False)
@@ -1353,7 +1354,7 @@ def test_workspace_bind_merges_task_context_and_writes_through(
                 }
             ],
         )
-        (environment.environment_dir / "fixture.txt").write_text(
+        (environment.environment_dir / "data/fixture.txt").write_text(
             "task\n", encoding="utf-8"
         )
 
@@ -1390,7 +1391,7 @@ def test_unmounted_custom_workdir_uses_automatic_workspace(tmp_path: Path) -> No
         environment = make_environment(
             tmp_path, config=EnvironmentConfig(workdir="/custom/nested")
         )
-        (environment.environment_dir / "task-input.txt").write_text(
+        (environment.environment_dir / "data/task-input.txt").write_text(
             "input\n", encoding="utf-8"
         )
         await environment.start(force_build=False)

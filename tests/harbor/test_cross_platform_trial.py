@@ -123,9 +123,41 @@ def _make_seed_artifact_check_fail(task_root: Path) -> None:
     grader.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
 
+@pytest.mark.parametrize("prepared", [False, True])
 def test_synthetic_host_trial_selects_native_verifier_entrypoint(
     tmp_path: Path,
+    prepared: bool,
 ) -> None:
+    task_root = _SINGLE_STEP_TASK_ROOT
+    if prepared:
+        task_root = tmp_path / "prepared-task"
+        shutil.copytree(_SINGLE_STEP_TASK_ROOT, task_root)
+        (task_root / "environment/data").mkdir()
+        (task_root / "environment/data/source.txt").write_text("prepared input")
+        (task_root / "environment/prepare.py").write_text(
+            "from pathlib import Path\ndef prepare(workdir):\n"
+            "    data = (Path(__file__).parent / 'data/source.txt').read_text()\n"
+            "    (Path(workdir) / 'prepared.txt').write_text(data)\n"
+        )
+        grader_path = task_root / "tests/grader.json"
+        grader = json.loads(grader_path.read_text())
+        grader["custom_checks"] = ["prepared", "trajectory"]
+        grader_path.write_text(json.dumps(grader))
+        (task_root / "tests/test_outputs.py").write_text("""import argparse, json
+from pathlib import Path
+p = argparse.ArgumentParser()
+p.add_argument('--context'); p.add_argument('--output')
+args = p.parse_args()
+paths = json.loads(Path(args.context).read_text(encoding='utf-8'))['paths']
+workspace = Path(paths['workdir'])
+assert not (workspace / 'source.txt').exists()
+trajectory = json.loads((Path(paths['agent_logs']) / 'trajectory.json').read_text(encoding='utf-8'))
+checks = [
+    {'id': 'prepared', 'passed': (workspace / 'prepared.txt').read_text() == 'prepared input'},
+    {'id': 'trajectory', 'passed': 'single complete' in trajectory['steps'][-1]['message']},
+]
+Path(args.output).write_text(json.dumps({'checks': checks}), encoding='utf-8')
+""")
     native_os = TaskOS.WINDOWS if platform.system() == "Windows" else TaskOS.LINUX
     if native_os == TaskOS.WINDOWS:
         harness_dir = tmp_path / "harness tools"
@@ -154,7 +186,7 @@ def test_synthetic_host_trial_selects_native_verifier_entrypoint(
             "from harbor.cli.main import app; app()",
             "run",
             "--path",
-            str(_SINGLE_STEP_TASK_ROOT),
+            str(task_root),
             "--agent",
             "psycheval.harbor.agent:ExternalHarnessAgent",
             "--agent-kwarg",
@@ -211,9 +243,32 @@ def test_synthetic_host_multi_step_trial_is_step_local(
 ) -> None:
     jobs_dir = tmp_path / "multi step jobs"
     job_name = "native-host-multi-step-" + ("resume" if resume else "fresh")
-    completed = _run_multi_step_job(
-        _MULTI_STEP_TASK_ROOT, jobs_dir, job_name, resume=resume
-    )
+    task_root = _copy_multi_step_fixture(tmp_path / "task")
+    shared_tests = task_root / "tests"
+    (shared_tests / "gt").mkdir(parents=True)
+    (shared_tests / "gt/step.txt").write_text("shared default")
+    (shared_tests / "test_outputs.py").write_text("""import argparse, json
+from pathlib import Path
+p = argparse.ArgumentParser()
+p.add_argument('--context'); p.add_argument('--output')
+args = p.parse_args()
+paths = json.loads(Path(args.context).read_text(encoding='utf-8'))['paths']
+tests = Path(__file__).parent
+step = (tests / 'gt/step.txt').read_text()
+trajectory = json.loads((Path(paths['agent_logs']) / 'trajectory.json').read_text(encoding='utf-8'))
+assert (tests / 'only_seed.txt').exists() == (step == 'seed')
+Path(args.output).write_text(json.dumps({'checks': [{'id': 'step', 'passed': trajectory['steps'][-1]['message'].startswith(step + ' complete')}]}))
+""")
+    for step in ("seed", "continue", "finish"):
+        tests = task_root / "steps" / step / "tests"
+        (tests / "gt").mkdir()
+        (tests / "gt/step.txt").write_text(step)
+        grader_path = tests / "grader.json"
+        grader = json.loads(grader_path.read_text())
+        grader["custom_checks"] = ["step"]
+        grader_path.write_text(json.dumps(grader))
+    (task_root / "steps/seed/tests/only_seed.txt").write_text("seed")
+    completed = _run_multi_step_job(task_root, jobs_dir, job_name, resume=resume)
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
     trial_dir, result = _only_trial_result(jobs_dir, job_name)
@@ -394,8 +449,48 @@ def test_synthetic_host_multi_step_final_reward_selects_last_step(
 
     assert [
         step["verifier_result"]["rewards"]["reward"] for step in result["step_results"]
-    ] == [0, 1, 1]
+    ] == [5 / 6, 1, 1]  # One of six declared seed checks fails.
     assert result["verifier_result"] == result["step_results"][-1]["verifier_result"]
+
+
+def test_preparation_failure_is_recorded_without_aborting_other_trials(tmp_path):
+    dataset = tmp_path / "tasks"
+    for name in ("good", "bad"):
+        task = dataset / name
+        shutil.copytree(_MULTI_STEP_TASK_ROOT, task)
+        config = task / "task.toml"
+        config.write_text(
+            config.read_text().replace("fixtures/harbor-multi-step", f"fixtures/{name}")
+        )
+    script = dataset / "bad/environment/prepare.py"
+    script.write_text("def prepare(workdir): raise RuntimeError('broken input')\n")
+    original = script.read_bytes()
+    jobs = tmp_path / "jobs"
+    workspaces = tmp_path / "workspaces"
+    completed = _run_multi_step_job(
+        dataset, jobs, "preparation-errors", n_concurrent=2, workdir_root=workspaces
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    results = list((jobs / "preparation-errors").glob("*/result.json"))
+    assert len(results) == 2
+    failed = []
+    for path in results:
+        result = json.loads(path.read_text(encoding="utf-8"))
+        if result["exception_info"] is None:
+            assert result["verifier_result"]["rewards"]["reward"] == 1
+        else:
+            failed.append(result)
+            assert (
+                "Task preparation failed"
+                in result["exception_info"]["exception_message"]
+            )
+            assert "broken input" in (path.parent / "prepare.log").read_text(
+                encoding="utf-8"
+            )
+            assert result["agent_setup"] is None
+    assert len(failed) == 1
+    assert not list(workspaces.iterdir())
+    assert script.read_bytes() == original
 
 
 def test_synthetic_host_multi_step_min_reward_stops_remaining_steps(
@@ -411,7 +506,7 @@ def test_synthetic_host_multi_step_min_reward_stops_remaining_steps(
     trial_dir, result = _only_trial_result(jobs_dir, job_name)
 
     assert [step["step_name"] for step in result["step_results"]] == ["seed"]
-    assert result["step_results"][0]["verifier_result"]["rewards"]["reward"] == 0
+    assert result["step_results"][0]["verifier_result"]["rewards"]["reward"] == 5 / 6
     assert not (trial_dir / "steps" / "continue").exists()
     assert not (trial_dir / "steps" / "finish").exists()
 

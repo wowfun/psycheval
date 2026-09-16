@@ -185,6 +185,62 @@ def verifier(root: Path) -> None:
         )
         checks = json.loads((root / "verifier/checks.json").read_text())["checks"]
         assert all(check["passed"] for check in checks) == bool(reward)
+    grader.write_text(json.dumps({"custom_checks": ["value", "missing"]}))
+    (root / "test_outputs.py").write_text(
+        "import argparse, json; from pathlib import Path\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--context', type=Path, required=True)\n"
+        "parser.add_argument('--output', type=Path, required=True)\n"
+        "args = parser.parse_args()\n"
+        "context = json.loads(args.context.read_text(encoding='utf-8'))\n"
+        "assert Path(context['paths']['agent_logs'], 'trajectory.json').is_file()\n"
+        "args.output.write_text(json.dumps({'checks':[{'id':'value','passed':True}]}), encoding='utf-8')\n"
+    )
+    run_module("verifier", str(grader))
+    assert json.loads((root / "verifier/reward.json").read_text())["reward"] == 0.5
+    import yaml
+
+    (root / "judge.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "artifacts": [
+                    {
+                        "id": "report",
+                        "path": "missing.txt",
+                        "type": "txt",
+                        "required": True,
+                    }
+                ],
+                "llm_judge": {
+                    "method": "rubric_binary_mean",
+                    "rubrics": [
+                        {
+                            "id": "quality",
+                            "question": "Is the report supported?",
+                            "artifact_refs": ["report"],
+                            "pass_criteria": ["Supported facts"],
+                            "fail_criteria": ["Missing facts"],
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with patch.dict(
+        os.environ,
+        {
+            "PEVAL_JUDGE_ENABLED": "true",
+            "PEVAL_JUDGE_MODEL": "fixture",
+            "PEVAL_JUDGE_BASE_URL": "http://127.0.0.1:1/v1",
+        },
+    ):
+        # Missing required Agent evidence completes as failure without networking.
+        run_module("verifier", str(grader))
+    scores = json.loads((root / "verifier/reward.json").read_text())
+    assert scores["rule_score"] == 0.5 and scores["llm_score"] == 0
+    assert scores["reward"] == 0.4
 
 
 def psychevo(root: Path) -> None:
@@ -430,7 +486,13 @@ def project(root: Path) -> None:
     (source / "input.txt").write_text("original")
     task_context = root / "environment"
     task_context.mkdir()
-    (task_context / "task.txt").write_text("task input")
+    (task_context / "data").mkdir()
+    (task_context / "data/task.txt").write_text("task input")
+    (task_context / "prepare.py").write_text(
+        "from pathlib import Path\ndef prepare(workdir):\n"
+        "    source = Path(__file__).parent / 'data/task.txt'\n"
+        "    (Path(workdir) / 'task.txt').write_text(source.read_text())\n"
+    )
     paths = TrialPaths(root / "trial__YfQLWrD")
     paths.mkdir()
     os.environ["PEVAL_CONFIG"] = str(root / "missing.toml")

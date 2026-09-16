@@ -35,6 +35,9 @@ def test_task_readers_and_file_selection_preserve_the_callers_root(
     (root / "tests/test.sh").write_text("exit 0\n", encoding="utf-8")
     (root / ".gitignore").write_text("tests/ignored.txt\n", encoding="utf-8")
     (root / "tests/ignored.txt").write_text("ignored", encoding="utf-8")
+    (root / "environment").mkdir()
+    for script in ("environment/prepare.py", "tests/test_outputs.py"):
+        (root / script).write_text("raise AssertionError('Task code was executed')")
     observed = []
 
     def read_bytes(path: Path) -> bytes:
@@ -50,9 +53,11 @@ def test_task_readers_and_file_selection_preserve_the_callers_root(
         read_bytes=read_bytes,
     )
     assert [path.relative_to(lexical_root).as_posix() for path in selected] == [
+        "environment/prepare.py",
         "instruction.md",
         "task.toml",
         "tests/test.sh",
+        "tests/test_outputs.py",
     ]
     with pytest.raises(ValueError):
         select_publishable_task_files(
