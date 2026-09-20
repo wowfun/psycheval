@@ -512,10 +512,20 @@ class ServeAccessHttpTests(unittest.TestCase):
                 status, _headers, body = self.request(
                     server,
                     "GET",
-                    "/api/evaluation-reports",
+                    "/api/report-library?kind=session",
                 )
                 self.assertEqual(status, 200, body)
-                evaluation_item = json.loads(body)["items"][0]
+                items = json.loads(body)["items"]
+                self.assertEqual(
+                    {item["report_ref"] for item in items},
+                    {
+                        report_ref,
+                        runtime.catalog.evaluation_report_rows()[0]["report_ref"],
+                    },
+                )
+                evaluation_item = next(
+                    item for item in items if item["report_ref"].startswith("analysis:")
+                )
                 self.assertNotIn(str(root), json.dumps(evaluation_item))
                 status, _headers, body = self.request(
                     server,

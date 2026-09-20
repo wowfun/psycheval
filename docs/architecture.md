@@ -155,13 +155,12 @@ HTML remains `no-store`, browser modules use strong ETags, and ECharts is loaded
 only from the versioned immutable workspace asset rather than from a browser-side
 third-party fallback.
 
-One read-only ReportLibrary presents canonical source reports and imported
-workspace report packages through separate adapters. Its canonical adapter
-reads the current source `analysis.md`; its package adapter delegates to the
-WorkspaceReportLibrary that owns `reports/`. The catalog contains only the
-rebuildable canonical-report projection needed for listing and lookup, never a
-second copy of the report body. Reports and ACP context use opaque report
-references, so transport responses do not expose source paths or revisions.
+ReportLibrary owns unified report queries and reads through canonical and package
+adapters. WorkspaceReportLibrary owns imported packages and manual associations;
+EvaluationReports remains the only canonical report writer. Report target resolution
+combines the Dataset registry, source catalog, and managed Jobs identities. The catalog
+owns the rebuildable canonical metadata projection. Storage, identity, query, and
+mutation semantics belong to the [report data contract](reference/state-and-data.md#evaluation-reports).
 
 The serve-owned ACP seam launches only administrator-configured local child
 processes and carries bounded JSON-RPC frames through an authenticated,

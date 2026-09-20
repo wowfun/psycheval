@@ -558,26 +558,22 @@ class WorkspaceCatalog:
                 )
             ]
 
-    def evaluation_report_page(
-        self,
-        *,
-        page: int = 1,
-        page_size: int = DEFAULT_PAGE_SIZE,
-        search: str = "",
-    ) -> dict[str, Any]:
-        page = max(1, int(page))
-        page_size = min(MAX_PAGE_SIZE, max(1, int(page_size)))
-        search = str(search or "").strip()
+    def evaluation_report_rows(self) -> list[dict[str, Any]]:
         with self._connect(readonly=True) as connection:
-            return query_evaluation_report_page(
-                connection,
-                generation=self._meta_int(connection, "generation", 0),
-                checking=self.checking,
-                valid=self._meta_int(connection, "valid_generation", 0) == 1,
-                page=page,
-                page_size=page_size,
-                search=search,
-            )
+            if self._meta_int(connection, "valid_generation", 0) != 1:
+                return []
+            return [
+                {
+                    "report_ref": record["report_ref"],
+                    "title": record["title"],
+                    "filename": record["filename"],
+                    "format": record["format"],
+                    "source_keys": json.loads(record["source_keys_json"]),
+                    "primary_source_key": record["primary_source_key"],
+                    "updated_at_ms": record["updated_at_ms"],
+                }
+                for record in connection.execute("SELECT * FROM evaluation_reports")
+            ]
 
     def evaluation_report_location(self, report_ref: str) -> dict[str, Any]:
         with self._connect(readonly=True) as connection:

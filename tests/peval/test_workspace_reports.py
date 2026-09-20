@@ -96,8 +96,6 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
 
             valid = root / "valid.md"
             valid.write_text("ok")
-            with self.assertRaisesRegex(ValueError, "at least one"):
-                library.import_file(valid, [])
             old_cwd = Path.cwd()
             try:
                 os.chdir(root)
@@ -224,7 +222,12 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             report_path.write_text("<p>report</p>")
             report_id = library.import_file(report_path, ["cell_a"])
 
-            library.replace_bindings(report_id, ["cell_b", "cell_b"])
+            library.replace_bindings(
+                "package:" + report_id,
+                source_refs=["runs/default/agent/s2/c2"],
+                dataset_ids=[],
+                job_refs=[],
+            )
             state_path = root / "reports" / report_id / "state.json"
             self.assertEqual(
                 json.loads(state_path.read_text()),
@@ -234,10 +237,17 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
                 any("tmp" in path.name for path in state_path.parent.iterdir())
             )
             before = state_path.read_bytes()
-            with self.assertRaisesRegex(ValueError, "unreadable source"):
-                library.replace_bindings(report_id, ["cell_missing"])
+            with self.assertRaisesRegex(ValueError, "workspace source"):
+                library.replace_bindings(
+                    "package:" + report_id,
+                    source_refs=["../escape"],
+                    dataset_ids=[],
+                    job_refs=[],
+                )
             self.assertEqual(state_path.read_bytes(), before)
-            library.replace_bindings(report_id, [])
+            library.replace_bindings(
+                "package:" + report_id, source_refs=[], dataset_ids=[], job_refs=[]
+            )
             self.assertEqual(
                 json.loads(state_path.read_text()),
                 {"source_refs": []},
@@ -276,7 +286,12 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
                 )
                 self.assertEqual(read_metadata.call_count, 1)
 
-                library.replace_bindings(report_id, ["cell_b"])
+                library.replace_bindings(
+                    "package:" + report_id,
+                    source_refs=["runs/default/agent/s2/c2"],
+                    dataset_ids=[],
+                    job_refs=[],
+                )
                 self.assertEqual(
                     library.bound_source_refs(), {"runs/default/agent/s2/c2"}
                 )

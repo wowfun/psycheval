@@ -156,24 +156,6 @@ def catalog_query(raw_query: str) -> CatalogQuery:
         raise HttpError(400, str(exc)) from exc
 
 
-def evaluation_report_query(raw_query: str) -> tuple[int, int, str]:
-    values = parse_qs(raw_query, keep_blank_values=True)
-
-    def integer(key: str, default: int) -> int:
-        raw = values.get(key)
-        value = str(raw[0]) if raw else str(default)
-        try:
-            return int(value)
-        except ValueError as exc:
-            raise HttpError(400, f"{key} must be an integer") from exc
-
-    return (
-        integer("page", 1),
-        integer("page_size", 100),
-        str((values.get("search") or [""])[0]),
-    )
-
-
 def catalog_query_payload(value: Any) -> CatalogQuery:
     if value is None:
         return CatalogQuery()

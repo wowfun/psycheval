@@ -160,13 +160,18 @@ class ViewDeletionRequest(StrictRequest):
     names: list[str] = Field(min_length=1)
 
 
-class ReportImportRequest(StrictRequest):
-    path: BrowserPath
-    source_keys: list[str] = Field(default_factory=list)
+class ReportBinding(StrictRequest):
+    kind: Literal["session", "dataset", "job"]
+    key: str = Field(min_length=1)
 
 
 class ReportBindingsRequest(StrictRequest):
-    source_keys: list[str]
+    bindings: list[ReportBinding]
+
+
+class ReportImportRequest(StrictRequest):
+    path: BrowserPath
+    bindings: list[ReportBinding] = Field(default_factory=list)
 
 
 class SessionInspectionRequest(StrictRequest):

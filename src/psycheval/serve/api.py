@@ -130,7 +130,6 @@ from psycheval.serve.api_support import (
     catalog_view_names_payload,
     delete_harbor_task,
     delete_source_operation,
-    evaluation_report_query,
     harbor_config_payload,
     harbor_error_status,
     harbor_workspace,
@@ -1320,18 +1319,51 @@ def _register_view_report_routes(app: FastAPI) -> None:
         runtime: ServeRuntime = request.app.state.runtime
         return _json(runtime.workspace_report_catalog())
 
-    @app.get("/api/evaluation-reports")
+    @app.get("/api/report-library")
     @access(GUEST_ACCESS)
-    def evaluation_reports(request: Request) -> JSONResponse:
+    def report_library(
+        request: Request, page: int = 1, page_size: int = 50, search: str = ""
+    ) -> JSONResponse:
         runtime: ServeRuntime = request.app.state.runtime
-        page, page_size, search = evaluation_report_query(request.url.query)
-        return _json(
-            runtime.evaluation_report_catalog(
-                page=page,
-                page_size=page_size,
-                search=search,
+        try:
+            return _json(
+                runtime.report_library.query(
+                    page=page,
+                    page_size=page_size,
+                    search=search,
+                    kinds=request.query_params.getlist("kind"),
+                    datasets=request.query_params.getlist("dataset"),
+                    jobs=request.query_params.getlist("job"),
+                )
             )
-        )
+        except ValueError as exc:
+            raise ProblemException(400, str(exc)) from exc
+
+    @app.get("/api/report-library/targets")
+    @access(GUEST_ACCESS)
+    def report_targets(
+        request: Request,
+        kind: str,
+        page: int = 1,
+        page_size: int = 50,
+        search: str = "",
+    ) -> JSONResponse:
+        try:
+            return _json(
+                request.app.state.runtime.report_library.targets(
+                    kind=kind, page=page, page_size=page_size, search=search
+                )
+            )
+        except ValueError as exc:
+            raise ProblemException(400, str(exc)) from exc
+
+    @app.get("/api/report-library/{report_ref}")
+    @access(GUEST_ACCESS)
+    def report_metadata(request: Request, report_ref: str) -> JSONResponse:
+        try:
+            return _json(request.app.state.runtime.report_library.metadata(report_ref))
+        except ReportNotFound as exc:
+            raise ProblemException(404, str(exc)) from exc
 
     @app.post(
         "/api/reports",
@@ -1342,40 +1374,47 @@ def _register_view_report_routes(app: FastAPI) -> None:
         runtime = writable_runtime(request)
         try:
             with workspace_write(runtime):
+                bindings = [binding.model_dump() for binding in body.bindings]
+                state = runtime.report_library.validate_bindings(bindings)
                 report_id = runtime.workspace_reports.import_file(
-                    body.path, body.source_keys
+                    body.path,
+                    [
+                        binding["key"]
+                        for binding in bindings
+                        if binding["kind"] == "session"
+                    ],
+                    dataset_ids=state["dataset_ids"],
+                    job_refs=state["job_refs"],
                 )
-                report = next(
-                    item
-                    for item in runtime.workspace_report_catalog()
-                    if item["report_id"] == report_id
-                )
+                report = runtime.report_library.metadata("package:" + report_id)
         except ValueError as exc:
             raise ProblemException(400, str(exc)) from exc
         return _json(
             report,
             status=201,
-            headers={"Location": f"/api/reports/{quote(report_id)}"},
+            headers={
+                "Location": f"/api/report-library/{quote(report['report_ref'], safe='')}"
+            },
         )
 
     @app.put(
-        "/api/reports/{report_id}/bindings",
+        "/api/report-library/{report_ref}/bindings",
         dependencies=[Depends(require_admin), Depends(mutation_guard)],
     )
     @access(ADMIN_ACCESS)
     def replace_report_bindings(
-        request: Request, report_id: str, body: ReportBindingsRequest
+        request: Request, report_ref: str, body: ReportBindingsRequest
     ) -> JSONResponse:
         runtime = writable_runtime(request)
         try:
             with workspace_write(runtime):
-                runtime.workspace_reports.replace_bindings(report_id, body.source_keys)
-                report = next(
-                    item
-                    for item in runtime.workspace_report_catalog()
-                    if item["report_id"] == report_id
+                state = runtime.report_library.validate_bindings(
+                    [binding.model_dump() for binding in body.bindings],
+                    report_ref=report_ref,
                 )
-        except WorkspaceReportNotFound as exc:
+                runtime.workspace_reports.replace_bindings(report_ref, **state)
+                report = runtime.report_library.metadata(report_ref)
+        except (ReportNotFound, WorkspaceReportNotFound) as exc:
             raise ProblemException(404, str(exc)) from exc
         except ValueError as exc:
             raise ProblemException(400, str(exc)) from exc

@@ -42,7 +42,7 @@ class ReportLibraryTests(unittest.TestCase):
             store = open_workspace_state(str(root))
             runtime = ServeRuntime(store, ToolConfig(workspace_root=str(root)))
             try:
-                page = runtime.evaluation_report_catalog()
+                page = runtime.report_library.query()
                 self.assertEqual(page["total"], 1)
                 item = page["items"][0]
                 expected_ref = evaluation_report_ref(source_ref)
@@ -53,13 +53,13 @@ class ReportLibraryTests(unittest.TestCase):
                 self.assertNotIn("source_ref", item)
                 self.assertNotIn("revision", item)
                 self.assertEqual(
-                    runtime.evaluation_report_catalog(
-                        search=item["primary_source_key"]
-                    )["total"],
+                    runtime.report_library.query(search=item["primary_source_key"])[
+                        "total"
+                    ],
                     1,
                 )
                 self.assertEqual(
-                    runtime.evaluation_report_catalog(search="does-not-match")["total"],
+                    runtime.report_library.query(search="does-not-match")["total"],
                     0,
                 )
 
@@ -108,7 +108,7 @@ class ReportLibraryTests(unittest.TestCase):
                         ToolConfig(workspace_root=str(root)),
                     )
                 try:
-                    page = runtime.evaluation_report_catalog()
+                    page = runtime.report_library.query()
                     self.assertEqual(page["total"], 1)
                     self.assertEqual(
                         page["items"][0]["report_ref"],
@@ -136,7 +136,7 @@ class ReportLibraryTests(unittest.TestCase):
                 ),
             )
             try:
-                page = runtime.evaluation_report_catalog()
+                page = runtime.report_library.query()
                 self.assertEqual(page["total"], 1)
                 item = page["items"][0]
                 parent_ref = "harbor/jobs/job-a/trial-a"
@@ -181,7 +181,7 @@ class ReportLibraryTests(unittest.TestCase):
                 ),
             )
             try:
-                page = runtime.evaluation_report_catalog()
+                page = runtime.report_library.query()
                 self.assertEqual(page["total"], 1)
                 item = page["items"][0]
                 parent_ref = "harbor/jobs/job-a/trial-a"

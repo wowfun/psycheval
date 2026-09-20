@@ -442,19 +442,6 @@ class ServeRuntime:
     def workspace_report_catalog(self) -> list[dict[str, Any]]:
         return self.workspace_reports.catalog()
 
-    def evaluation_report_catalog(
-        self,
-        *,
-        page: int = 1,
-        page_size: int = 100,
-        search: str = "",
-    ) -> dict[str, Any]:
-        return self.report_library.evaluation_catalog(
-            page=page,
-            page_size=page_size,
-            search=search,
-        )
-
     def empty_envelope(
         self,
         *,

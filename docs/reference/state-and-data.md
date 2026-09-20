@@ -194,9 +194,63 @@ phases into one parent report, and never stores the report body. JSON-only,
 blank, oversized, symlinked, or otherwise unsafe reports do not enter this
 projection.
 
+Canonical report listing reads the last committed catalog projection during
+ordinary reconciliation. A new or invalidated cache has no canonical rows until
+its first valid projection commits; catalog invalidation then refreshes Reports.
+
 The read-only ReportLibrary combines this canonical adapter with the existing
 workspace-package adapter. Canonical reads always return the current source
 file; package reads delegate to WorkspaceReportLibrary. Stable opaque report
 references identify the two kinds without encoding paths. Report replacement
 does not change a reference, and browser or ACP projections do not disclose
 source paths or revisions.
+
+Reports share one searchable, paginated library. Imported reports may stand alone
+or have multiple session, Dataset, and Job associations. Canonical reports retain
+their immutable source sessions and may have additional manual Dataset and Job
+associations. WorkspaceReportLibrary owns these manual associations: imported
+packages retain `source_refs` in `state.json` and may add `dataset_ids` and `job_refs`
+arrays; canonical associations live under `reports/.associations/`, keyed by report
+reference.
+Absent optional associations are empty, so existing packages need no rewrite.
+Changing associations never writes canonical `analysis.md` or imported report bodies.
+Association metadata is validated before publication. An unreadable canonical
+association file marks only that report's manual associations unavailable; its
+original source and report body remain readable. Such metadata cannot be overwritten
+through association editing until repaired. Missing sources retain their association
+files so temporary unavailability cannot erase manual links.
+
+Dataset identity is its registration ID. Managed Job identity is its run ID;
+external Harbor Job identity includes both mount ID and Job name. A managed run
+and a mounted Job are merged only when they identify the same actual output
+directory. Dataset targets include registrations without Trials; managed Job
+targets include runs without results. External Jobs come from the complete source
+catalog. Removed targets remain visible as unavailable associations until explicitly
+removed; new associations must resolve to available targets.
+
+The report-library HTTP interface uses typed `{kind, key}` association references.
+Session keys are catalog source keys; Dataset keys are registration IDs; Job keys
+are `managed:<run-id>` or `harbor:<mount-id>/<job-name>`. Missing session references
+retain an opaque key so they can be removed without exposing source paths.
+`GET /api/report-library` accepts `page`, `page_size`, `search`, and repeatable
+`kind`, `dataset`, and `job` filters (`kind=unassociated` selects reports
+without associations). The default ordering is descending update time, with report
+reference as a stable tie breaker. `GET /api/report-library/targets` accepts a
+`kind`, `search`, `page`, and `page_size`. Both queries cap pages at 100 items and
+clamp the requested page to the available range after filtering. Unknown association
+kinds are rejected; Dataset and Job IDs may refer to unavailable retained links.
+`PUT /api/report-library/{report_ref}/bindings` replaces the manual `bindings` list;
+canonical report session bindings cannot be edited through this endpoint.
+`POST /api/reports` imports a server `path` with an optional `bindings` list.
+Its Location points to `GET /api/report-library/{report_ref}`, which returns metadata;
+the `/preview` and `/reader` suffixes provide the sandboxed document and standalone
+reader. `DELETE /api/reports/{id}` deletes an imported package only.
+`GET /api/reports` supplies Home's direct-session package projection.
+
+Report-page Dataset and Job filters include both manual associations and ownership
+derived from associated sessions. Associations retain their origin and are deduplicated
+per target. Selected values within a filter are alternatives; different filters
+intersect. Search matches report names and association labels, not report bodies.
+All matching metadata is combined before pagination. These broader associations
+do not add reports to a session's Leaderboard Reports column: that column continues
+to show only directly attached imported reports.

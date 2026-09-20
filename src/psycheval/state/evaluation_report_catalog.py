@@ -7,76 +7,6 @@ from typing import Any
 from psycheval.evaluation_report_identity import evaluation_report_ref
 
 
-def query_evaluation_report_page(
-    connection: sqlite3.Connection,
-    *,
-    generation: int,
-    checking: bool,
-    valid: bool,
-    page: int,
-    page_size: int,
-    search: str,
-) -> dict[str, Any]:
-    if not valid:
-        return {
-            "generation": 0,
-            "checking": checking,
-            "stale": checking,
-            "total": 0,
-            "page": page,
-            "page_size": page_size,
-            "items": [],
-        }
-    where = "1"
-    parameters: list[Any] = []
-    if search:
-        pattern = f"%{_escape_like(search)}%"
-        where = (
-            "(title LIKE ? ESCAPE '\\' COLLATE NOCASE "
-            "OR source_label LIKE ? ESCAPE '\\' COLLATE NOCASE "
-            "OR source_keys_json LIKE ? ESCAPE '\\' COLLATE NOCASE)"
-        )
-        parameters.extend((pattern, pattern, pattern))
-    total = int(
-        connection.execute(
-            f"SELECT COUNT(*) FROM evaluation_reports WHERE {where}",
-            parameters,
-        ).fetchone()[0]
-    )
-    offset = (page - 1) * page_size
-    records = connection.execute(
-        f"""
-        SELECT report_ref, title, source_label, filename, format,
-               source_keys_json, primary_source_key
-        FROM evaluation_reports
-        WHERE {where}
-        ORDER BY updated_at_ms DESC, report_ref ASC
-        LIMIT ? OFFSET ?
-        """,
-        [*parameters, page_size, offset],
-    ).fetchall()
-    return {
-        "generation": generation,
-        "checking": checking,
-        "stale": checking,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "items": [
-            {
-                "report_ref": str(record["report_ref"]),
-                "title": str(record["title"]),
-                "filename": str(record["filename"]),
-                "format": str(record["format"]),
-                "source_keys": json.loads(str(record["source_keys_json"])),
-                "primary_source_key": str(record["primary_source_key"]),
-                "source_label": str(record["source_label"]),
-            }
-            for record in records
-        ],
-    }
-
-
 def evaluation_report_location(
     connection: sqlite3.Connection,
     report_ref: str,
@@ -200,14 +130,7 @@ def _source_label(row: dict[str, Any]) -> str:
     return "Evaluation report"
 
 
-def _escape_like(value: str) -> str:
-    return (
-        value.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    )
-
-
 __all__ = [
     "evaluation_report_location",
-    "query_evaluation_report_page",
     "replace_evaluation_report_projection",
 ]

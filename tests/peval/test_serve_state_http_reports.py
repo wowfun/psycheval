@@ -11,15 +11,10 @@ from tests.peval.serve_state_support import (
     json,
     make_handler,
     open_workspace_state,
-    parse_adapter_assignments,
     peval_workspace,
     raw_get_json,
     request_bytes,
     request_json,
-    request_text,
-    script_json,
-    serve_args,
-    shutil,
     tempfile,
     threading,
     unittest,
@@ -28,208 +23,6 @@ from tests.peval.serve_state_support import (
 
 
 class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
-    @unittest.skip(
-        "superseded by shell-first catalog and paged report binding coverage"
-    )
-    def test_loading_and_ready_envelopes_keep_report_inventory(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = peval_workspace(Path(tmp))
-            cell = root / "runs" / "default" / "psychevo" / "s1" / "s1_t001"
-            write_trial_cell_artifacts(cell, session_id="s1", trial_key="s1_t001")
-            report_path = root / "analysis.md"
-            report_path.write_text("report")
-            config = ToolConfig(adapter="psychevo", workspace_root=str(root))
-            store = open_workspace_state(str(root))
-            runtime = ServeRuntime(store, config)
-            source_key = runtime.source_envelope()["sources"][0]["source_key"]
-            report_id = runtime.workspace_reports.import_file(report_path, [source_key])
-            original_sync = store.sync_artifact_sources
-            release_sync = threading.Event()
-
-            def slow_sync(sync_config):
-                release_sync.wait(timeout=5)
-                return original_sync(sync_config)
-
-            store.sync_artifact_sources = slow_sync
-            runtime.start_initial_load(
-                serve_args(),
-                parse_adapter_assignments([], config.adapter),
-            )
-            server = LocalHTTPServer(("127.0.0.1", 0), make_handler(runtime))
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            port = server.server_port
-            try:
-                status, _, body = request_bytes(port, "/api/sources")
-                self.assertEqual(status, 200)
-                loading = json.loads(body)
-                self.assertTrue(loading["loading"])
-                self.assertEqual(loading["reports"][0]["report_id"], report_id)
-                self.assertEqual(loading["reports"][0]["source_keys"], [])
-
-                release_sync.set()
-                self.assertTrue(runtime.wait_until_ready(timeout=5))
-                status, _, body = request_bytes(port, "/api/sources")
-                self.assertEqual(status, 200)
-                ready = json.loads(body)
-                self.assertFalse(ready["loading"])
-                self.assertEqual(ready["reports"][0]["source_keys"], [source_key])
-            finally:
-                release_sync.set()
-                server.shutdown()
-                server.server_close()
-                thread.join(timeout=5)
-                runtime.wait_until_ready(timeout=5)
-                store.close()
-
-    @unittest.skip("superseded by paged workspace report binding coverage")
-    def test_report_import_rebind_delete_and_source_projection_recovery(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = peval_workspace(Path(tmp))
-            first_cell = root / "runs" / "default" / "psychevo" / "s1" / "s1_t001"
-            second_cell = root / "runs" / "default" / "psychevo" / "s2" / "s2_t001"
-            write_trial_cell_artifacts(first_cell, session_id="s1", trial_key="s1_t001")
-            write_trial_cell_artifacts(
-                second_cell, session_id="s2", trial_key="s2_t001"
-            )
-            report_path = root / "cross-session-report.md"
-            report_path.write_text("# Cross-session report\n")
-            config = ToolConfig(adapter="psychevo", workspace_root=str(root))
-            store = open_workspace_state(str(root))
-            runtime = ServeRuntime(store, config)
-            sources = runtime.source_envelope()["sources"]
-            source_keys = {
-                source["trial_session_id"]: source["source_key"] for source in sources
-            }
-            server = LocalHTTPServer(("127.0.0.1", 0), make_handler(runtime))
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            port = server.server_port
-            origin = f"http://127.0.0.1:{port}"
-            try:
-                status, _, body = request_json(
-                    port,
-                    "POST",
-                    "/api/reports",
-                    {
-                        "path": str(report_path.resolve()),
-                        "source_keys": [source_keys["s1"], source_keys["s2"]],
-                    },
-                    origin=origin,
-                )
-                self.assertEqual(status, 200)
-                report_id = body["report_id"]
-                self.assertEqual(
-                    body["reports"][0]["source_keys"],
-                    [source_keys["s1"], source_keys["s2"]],
-                )
-                state_path = root / "reports" / report_id / "state.json"
-                self.assertEqual(
-                    json.loads(state_path.read_text()),
-                    {
-                        "source_keys": [
-                            "runs/default/psychevo/s1/s1_t001",
-                            "runs/default/psychevo/s2/s2_t001",
-                        ]
-                    },
-                )
-
-                status, _, sources_body = request_bytes(port, "/api/sources")
-                self.assertEqual(status, 200)
-                self.assertEqual(
-                    json.loads(sources_body)["reports"][0]["report_id"],
-                    report_id,
-                )
-                status, _, html = request_text(port, "/")
-                self.assertEqual(status, 200)
-                self.assertEqual(
-                    script_json(html, "peval-render-options")["reports"][0][
-                        "report_id"
-                    ],
-                    report_id,
-                )
-
-                status, _, archive_body = request_json(
-                    port,
-                    "POST",
-                    f"/api/sources/{source_keys['s2']}/archive",
-                    {},
-                    origin=origin,
-                )
-                self.assertEqual(status, 200)
-                self.assertEqual(
-                    archive_body["reports"][0]["source_keys"],
-                    [source_keys["s1"], source_keys["s2"]],
-                )
-                status, _, body = request_json(
-                    port,
-                    "POST",
-                    f"/api/reports/{report_id}/bindings",
-                    {"source_keys": [source_keys["s2"]]},
-                    origin=origin,
-                )
-                self.assertEqual(status, 200)
-                self.assertEqual(body["reports"][0]["source_keys"], [source_keys["s2"]])
-                self.assertEqual(
-                    json.loads(state_path.read_text()),
-                    {"source_keys": ["runs/default/psychevo/s2/s2_t001"]},
-                )
-
-                shutil.rmtree(second_cell)
-                status, _, sources_body = request_bytes(port, "/api/sources")
-                self.assertEqual(status, 200)
-                self.assertEqual(
-                    json.loads(sources_body)["reports"][0]["source_keys"], []
-                )
-                self.assertEqual(
-                    json.loads(state_path.read_text()),
-                    {"source_keys": ["runs/default/psychevo/s2/s2_t001"]},
-                )
-                write_trial_cell_artifacts(
-                    second_cell, session_id="s2", trial_key="s2_t001"
-                )
-                status, _, sources_body = request_bytes(port, "/api/sources")
-                self.assertEqual(status, 200)
-                self.assertEqual(
-                    json.loads(sources_body)["reports"][0]["source_keys"],
-                    [source_keys["s2"]],
-                )
-
-                status, _, body = request_json(
-                    port,
-                    "POST",
-                    f"/api/reports/{report_id}/bindings",
-                    {"source_keys": ["cell_unknown"]},
-                    origin=origin,
-                )
-                self.assertEqual(status, 400)
-                self.assertIn("unknown or unreadable source", body["error"])
-                status, _, body = request_json(
-                    port,
-                    "POST",
-                    "/api/reports/20260710-000000-000000/delete",
-                    {},
-                    origin=origin,
-                )
-                self.assertEqual(status, 404)
-                self.assertIn("unknown report", body["error"])
-
-                status, _, body = request_json(
-                    port,
-                    "POST",
-                    f"/api/reports/{report_id}/delete",
-                    {},
-                    origin=origin,
-                )
-                self.assertEqual(status, 200)
-                self.assertEqual(body, {"reports": []})
-                self.assertFalse((root / "reports" / report_id).exists())
-            finally:
-                server.shutdown()
-                server.server_close()
-                thread.join(timeout=5)
-                store.close()
-
     def test_report_bindings_can_clear_the_final_association(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_workspace(Path(tmp))
@@ -257,12 +50,12 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                     ({"source_keys": None}, 422),
                     ({"source_key": source_key}, 422),
                     ({"source_keys": source_key}, 422),
-                    ({"source_keys": [""]}, 400),
+                    ({"bindings": [{"kind": "session", "key": ""}]}, 422),
                 ):
                     status, _, body = request_json(
                         port,
                         "PUT",
-                        f"/api/reports/{report_id}/bindings",
+                        f"/api/report-library/package:{report_id}/bindings",
                         invalid_payload,
                         origin=origin,
                     )
@@ -273,8 +66,8 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                 status, _, body = request_json(
                     port,
                     "PUT",
-                    f"/api/reports/{report_id}/bindings",
-                    {"source_keys": []},
+                    f"/api/report-library/package:{report_id}/bindings",
+                    {"bindings": []},
                     origin=origin,
                 )
 
@@ -316,7 +109,7 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
             try:
                 status, headers, body = request_bytes(
                     port,
-                    "/api/evaluation-reports?page=1&page_size=1",
+                    "/api/report-library?page=1&page_size=1",
                 )
                 self.assertEqual(status, 200)
                 self.assertEqual(headers["cache-control"], "no-store")
@@ -361,10 +154,10 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
 
                 status, _, body = request_bytes(
                     port,
-                    "/api/evaluation-reports?page=not-an-integer",
+                    "/api/report-library?page=not-an-integer",
                 )
-                self.assertEqual(status, 400)
-                self.assertIn(b"page must be an integer", body)
+                self.assertEqual(status, 422)
+                self.assertIn(b"integer", body)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -399,7 +192,7 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
             origin = f"http://127.0.0.1:{port}"
             payload = {
                 "path": str(markdown_path.resolve()),
-                "source_keys": [source_key],
+                "bindings": [{"kind": "session", "key": source_key}],
             }
             try:
                 for rejected_origin in ("null", "not-an-origin", f"{origin}/path"):
@@ -466,7 +259,10 @@ class PevalServeWorkspaceReportHttpTests(unittest.TestCase):
                     port,
                     "POST",
                     "/api/reports",
-                    {"path": str(html_path.resolve()), "source_keys": [source_key]},
+                    {
+                        "path": str(html_path.resolve()),
+                        "bindings": [{"kind": "session", "key": source_key}],
+                    },
                     origin=origin,
                 )
                 self.assertEqual(status, 201)
