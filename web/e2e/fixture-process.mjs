@@ -1,9 +1,11 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
 
 async function startFixture(environment = {}) {
   const fixture = spawn("uv", ["run", "python", "web/e2e/fixture_server.py"], {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, ...environment },
+    windowsHide: true,
   });
   const output = [];
   let stdout = "";
@@ -43,6 +45,15 @@ async function startFixture(environment = {}) {
 
 async function stopFixture(fixture) {
   if (!fixture || fixture.exitCode !== null) return;
+  if (process.platform === "win32") {
+    // Killing uv alone leaves its Python server holding the pipes and listener open.
+    try {
+      await promisify(execFile)("taskkill", ["/PID", String(fixture.pid), "/T", "/F"], { windowsHide: true });
+    } catch (error) {
+      if (fixture.exitCode === null) throw error;
+    }
+    return;
+  }
   fixture.kill("SIGINT");
   await Promise.race([
     new Promise(resolve => fixture.once("exit", resolve)),
