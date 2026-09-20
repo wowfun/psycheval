@@ -13,8 +13,7 @@ function initializeGlobalShell() {
   bound = true;
   document.addEventListener("keydown", event => {
     if (event.defaultPrevented || event.key !== "Escape") return;
-    if (closeAcpDrawer()) return;
-    closeAdminLogin();
+    if (closeAcpDrawer() || closeAdminLogin()) event.preventDefault();
   });
   window.addEventListener("peval:workspace-navigate", () => {
     closeAdminLogin({ restoreFocus: false });

@@ -1,71 +1,108 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-
 import { installBrowserDom } from "./support/browser.js";
+import { reportPageHtml, response, target, report, pageOf, deferred, tick } from "./support/report-library.js";
 
-function deferred() {
-  let resolve;
-  const promise = new Promise(done => { resolve = done; });
-  return { promise, resolve };
-}
+let handler;
+const browser = installBrowserDom(reportPageHtml, { fetch: (...args) => handler(...args) });
+const manager = await import("../../src/psycheval/assets/web/modules/report-manager-page.js");
+const { reportLibraryStore: store, acceptReport, editBinding, draftChanged } = await import("../../src/psycheval/assets/web/modules/report-library-store.js");
+test.after(() => browser.cleanup());
 
-const response = payload => new Response(JSON.stringify(payload), {
-  status: 200,
-  headers: { "Content-Type": "application/json" },
+test("older page responses cannot replace the newest page", async () => {
+  const pages = new Map([[1, deferred()], [2, deferred()]]);
+  handler = path => pages.get(Number(new URL(path, "http://localhost").searchParams.get("page"))).promise;
+  const first = manager.loadReportManagerPage({ page: 1 });
+  const second = manager.loadReportManagerPage({ page: 2 });
+  pages.get(2).resolve(response(pageOf([report("newest")], 2, 100)));
+  await second;
+  pages.get(1).resolve(response(pageOf([report("stale")], 1, 100)));
+  await first;
+  assert.equal(store.page, 2);
+  assert.equal(store.items[0].report_ref, "package:newest");
 });
 
-test("Reports page ignores an older load that finishes after the latest request", async () => {
-  const pages = new Map([[1, deferred()], [2, deferred()]]);
-  const browser = installBrowserDom(`
-    <script type="application/json" id="peval-i18n">{}</script>
-    <script type="application/json" id="peval-render-options">{"role":"admin"}</script>
-    <div data-report-manager>
-      <p data-report-manager-status hidden></p>
-      <input type="search" data-evaluation-report-search>
-      <div data-evaluation-report-inventory></div>
-      <span data-evaluation-report-count></span>
-      <div data-evaluation-report-pagination></div>
-      <div data-report-inventory></div>
-      <span data-report-count></span>
-      <label data-report-page-search-control hidden><input type="search" data-report-page-search></label>
-      <div data-report-bindings></div>
-    </div>
-  `, {
-    fetch: async path => {
-      const url = String(path);
-      if (url === "/api/reports") return response([]);
-      const page = Number(new URL(url, "http://localhost").searchParams.get("page"));
-      return pages.get(page).promise;
-    },
-  });
-  try {
-    const { loadImportedReports } = await import(
-      "../../src/psycheval/assets/web/modules/report-manager-page.js"
-    );
-    const { reportStore } = await import(
-      "../../src/psycheval/assets/web/modules/report-store.js"
-    );
+test("late save and refresh responses preserve another selection and edits made during save", async () => {
+  const oldRead = deferred();
+  const write = deferred();
+  let reads = 0;
+  let persisted = report("editable");
+  const other = report("other");
+  acceptReport(persisted); acceptReport(other);
+  store.activeRef = persisted.report_ref;
+  const firstTarget = target("dataset", "first");
+  const newerTarget = target("job", "second");
+  editBinding(persisted.report_ref, firstTarget, true);
+  handler = (path, options = {}) => {
+    if (options.method === "PUT") return write.promise;
+    if (++reads === 1) return oldRead.promise;
+    return Promise.resolve(response(pageOf([persisted, other])));
+  };
+  const reading = manager.loadReportManagerPage();
+  const saving = manager.saveBindings();
+  editBinding(persisted.report_ref, newerTarget, true);
+  store.activeRef = other.report_ref;
+  persisted = report("editable", [firstTarget]);
+  write.resolve(response(persisted));
+  await saving;
+  oldRead.resolve(response(pageOf([report("editable")])));
+  await reading;
+  assert.equal(store.activeRef, other.report_ref);
+  const draft = store.drafts.get(persisted.report_ref);
+  assert.equal(draft.values.size, 2);
+  assert.ok(draftChanged(draft));
+  assert.deepEqual(draft.baseline, [firstTarget]);
+  assert.equal(store.items.length, 2);
+});
 
-    const first = loadImportedReports({ page: 1 });
-    const second = loadImportedReports({ page: 2 });
-    pages.get(2).resolve(response({
-      page: 2,
-      page_size: 100,
-      total: 200,
-      items: [{ source_key: "newest", readable: true }],
-    }));
-    await second;
-    pages.get(1).resolve(response({
-      page: 1,
-      page_size: 100,
-      total: 200,
-      items: [{ source_key: "stale", readable: true }],
-    }));
-    await first;
+test("a missing active report closes details while retaining its draft for reappearance", async () => {
+  const selected = report("missing");
+  acceptReport(selected);
+  manager.openReportPreview(selected.report_ref);
+  editBinding(selected.report_ref, target("dataset", "draft"), true);
+  handler = path => Promise.resolve(path.includes("?")
+    ? response(pageOf([])) : response({ detail: "Report no longer exists" }, 404));
+  await manager.loadReportManagerPage();
+  assert.equal(manager.activeReportSnapshot().report_ref, null);
+  assert.equal(document.querySelector("#report-library-detail").hidden, true);
+  assert.equal(document.body.classList.contains("workspace-sidebar-right-open"), false);
+  assert.equal(store.reports.has(selected.report_ref), false);
+  assert.equal(store.drafts.get(selected.report_ref).values.size, 1);
+  handler = () => Promise.resolve(response(pageOf([selected])));
+  await manager.loadReportManagerPage();
+  manager.openReportPreview(selected.report_ref);
+  assert.equal(document.querySelector("#report-library-detail").hidden, false);
+  assert.match(document.querySelector("#report-library-detail iframe").src, /package%3Amissing/);
+  assert.equal(store.drafts.get(selected.report_ref).values.size, 1);
+});
 
-    assert.equal(reportStore.manager.pageData.page, 2);
-    assert.deepEqual(reportStore.manager.sourceRows.map(row => row.source_key), ["newest"]);
-  } finally {
-    browser.cleanup();
-  }
+test("a temporary metadata failure retains the selected report and its draft", async () => {
+  const selected = report("retryable");
+  acceptReport(selected);
+  manager.openReportPreview(selected.report_ref);
+  editBinding(selected.report_ref, target("job", "draft"), true);
+  handler = path => Promise.resolve(path.includes("?")
+    ? response(pageOf([])) : response({ detail: "Metadata temporarily unavailable" }, 503));
+  await manager.loadReportManagerPage();
+  assert.equal(store.activeRef, selected.report_ref);
+  assert.equal(document.querySelector("#report-library-detail").hidden, false);
+  assert.equal(store.drafts.get(selected.report_ref).values.size, 1);
+});
+
+test("a late metadata 404 cannot close a newer report selection", async () => {
+  const missing = report("late-missing");
+  const current = report("current");
+  acceptReport(missing); acceptReport(current);
+  manager.openReportPreview(missing.report_ref);
+  const metadata = deferred();
+  handler = path => path.includes("?")
+    ? Promise.resolve(response(pageOf([current]))) : metadata.promise;
+  const loading = manager.loadReportManagerPage();
+  await tick();
+  manager.openReportPreview(current.report_ref);
+  metadata.resolve(response({ detail: "Report no longer exists" }, 404));
+  await loading;
+  assert.equal(store.activeRef, current.report_ref);
+  assert.equal(document.querySelector("#report-library-detail").hidden, false);
+  assert.match(document.querySelector("#report-library-detail iframe").src, /package%3Acurrent/);
 });

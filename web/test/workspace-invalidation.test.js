@@ -14,7 +14,7 @@ test.after(() => browser.cleanup());
 test("successful mutations map to stable Workspace invalidation domains", () => {
   const domains = (path, method, body) => [...requestInvalidations(path, method, body)];
   assert.deepEqual(domains("/api/sources/source-1", "PATCH", {}), ["catalog"]);
-  assert.deepEqual(domains("/api/reports/report-1/bindings", "PUT", {}), ["reports"]);
+  assert.deepEqual(domains("/api/report-library/package:report-1/bindings", "PUT", {}), ["reports"]);
   assert.deepEqual(domains("/api/harbor/datasets", "POST", {}), ["dataset-registry"]);
   assert.deepEqual(
     domains("/api/harbor/datasets/demo/tasks/task/files/instructions.md", "PUT", {}),

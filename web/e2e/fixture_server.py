@@ -76,6 +76,41 @@ def main() -> None:
             root / "runs/default/psychevo/e2e-session/e2e-trial-2",
             "e2e-trial-2",
         )
+        if os.environ.get("PEVAL_E2E_REPORTS") == "1":
+            (root / "library-dataset").mkdir()
+            with (root / "peval.toml").open("a", encoding="utf-8") as config_file:
+                config_file.write(
+                    '\n[[harbor.datasets]]\nid = "empty-library"\npath = "library-dataset"\n'
+                )
+            (root / "library.md").write_text(
+                "# Independent report\n\n中文报告 <script>unsafe()</script>\n",
+                encoding="utf-8",
+            )
+            (root / "library.html").write_text(
+                "<!doctype html><h1>HTML report</h1>", encoding="utf-8"
+            )
+            (
+                root / "runs/default/psychevo/e2e-session/e2e-trial/analysis.md"
+            ).write_text("# Canonical report\n", encoding="utf-8")
+            for index in range(28):
+                write_e2e_trial(
+                    root / f"runs/default/psychevo/many/session-{index:02}",
+                    f"session-{index:02}",
+                )
+            control = root / ".peval/jobs" / ("a" * 32)
+            control.mkdir(parents=True)
+            (control / "state.json").write_text(
+                json.dumps(
+                    {
+                        "id": "a" * 32,
+                        "harness": "harbor",
+                        "job_name": "2026-09-18__10-00-00",
+                        "state": "completed",
+                        "submitted_at": "2026-09-18T10:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
         agent = Path(__file__).with_name("synthetic_acp.py").resolve()
         command = os.environ.get("PEVAL_E2E_ACP_COMMAND") or str(
             Path(sys.executable).resolve()

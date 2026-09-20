@@ -1,37 +1,7 @@
   <section class="workspace-page report-manager-page" data-report-manager aria-label="__REPORTS__">
     <div class="report-manager-status workspace-page-status" data-report-manager-status aria-live="polite" hidden></div>
-    <div class="report-manager-body__REPORT_MANAGER_BODY_CLASS__">
-      <section class="report-inventory-panel evaluation-report-panel" aria-labelledby="evaluation-report-inventory-title">
-        <div class="report-manager-section-head">
-          <h2 id="evaluation-report-inventory-title">__EVALUATION_REPORTS__</h2>
-          <div class="report-manager-section-actions">
-            <span data-evaluation-report-count></span>
-            <button class="action-button" type="button" data-report-manager-reload>__RELOAD__</button>
-          </div>
-        </div>
-        <label class="report-binding-search">
-          <span>__EVALUATION_REPORT_SEARCH__</span>
-          <input type="search" data-evaluation-report-search>
-        </label>
-        <div class="report-inventory" data-evaluation-report-inventory></div>
-        <div class="catalog-page-controls report-inventory-pagination" data-evaluation-report-pagination></div>
-      </section>
-      <section class="report-inventory-panel imported-report-panel" aria-labelledby="imported-report-inventory-title">
-        <div class="report-manager-section-head">
-          <h2 id="imported-report-inventory-title">__IMPORTED_REPORTS__</h2>
-          <div class="report-manager-section-actions">
-            <span data-report-count></span>
-          </div>
-        </div>
-        <div class="report-inventory" data-report-inventory></div>
-      </section>
-      <section class="report-bindings-panel" aria-labelledby="report-bindings-title"__REPORT_BINDINGS_HIDDEN__>
-        <h2 id="report-bindings-title">__REPORT_BINDINGS__</h2>
-        <label class="report-binding-search" data-report-page-search-control hidden>
-          <span>__REPORT_SEARCH_SESSIONS__</span>
-          <input type="search" data-report-page-search>
-        </label>
-        <div data-report-bindings></div>
-      </section>
-    </div>
+    <div data-report-toolbar></div>
+    <div class="report-library-table" data-report-inventory></div>
+    <div class="catalog-page-controls" data-report-pagination></div>
+    <aside id="report-library-detail" class="report-library-detail" aria-label="__REPORTS__" hidden></aside>
   </section>

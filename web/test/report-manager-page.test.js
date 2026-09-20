@@ -1,211 +1,118 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-
 import { installBrowserDom } from "./support/browser.js";
+import { reportPageHtml, response, target, report, pageOf, tick, deferred } from "./support/report-library.js";
 
 const requests = [];
-const response = payload => new Response(JSON.stringify(payload), {
-  status: 200,
-  headers: { "Content-Type": "application/json" },
-});
-const browser = installBrowserDom(`
-  <script type="application/json" id="peval-i18n">{}</script>
-  <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","authentication_enabled":false}</script>
-  <div data-report-manager>
-    <button data-report-manager-reload>Reload</button>
-    <p data-report-manager-status hidden></p>
-    <input type="search" data-evaluation-report-search>
-    <div data-evaluation-report-inventory></div>
-    <span data-evaluation-report-count></span>
-    <div data-evaluation-report-pagination></div>
-    <div data-report-inventory></div>
-    <span data-report-count></span>
-    <label data-report-page-search-control hidden><input type="search" data-report-page-search></label>
-    <div data-report-bindings></div>
-  </div>
-  <aside id="workspace-report-reader" hidden></aside>
-`, {
-  fetch: async (path, options = {}) => {
-    requests.push({ path: String(path), options });
-    if (String(path) === "/api/reports") {
-      return response([{ report_id: "report-1", report_ref: "package:report-1", filename: "report.md", format: "markdown", source_keys: ["source-1"] }]);
-    }
-    if (String(path).startsWith("/api/evaluation-reports?")) {
-      return response({
-        page: 1,
-        page_size: 100,
-        total: 1,
-        items: [{
-          report_ref: "analysis:evaluation-1",
-          title: "Run one evaluation",
-          filename: "analysis.md",
-          source_keys: ["source-1"],
-          primary_source_key: "source-1",
-          source_label: "Run one",
-        }],
-      });
-    }
-    if (String(path).startsWith("/api/catalog?")) {
-      return response({
-        page: 3,
-        page_size: 100,
-        total: 301,
-        items: [{ source_key: "source-1", source_alias: "Run one", source_category: "baseline", active: true }],
-      });
-    }
-    if (String(path) === "/api/sources/source-1" && options.method === "PATCH") return response({});
-    if (String(path) === "/api/reports/report-1/bindings" && options.method === "PUT") {
-      return response({ report_id: "report-1", report_ref: "package:report-1", filename: "report.md", format: "markdown", source_keys: [] });
-    }
-    throw new Error(`unexpected request: ${path}`);
-  },
-});
-
-const managerPage = await import("../../src/psycheval/assets/web/modules/report-manager-page.js");
-const { sourceKeyFromHash } = await import("../../src/psycheval/assets/web/pages/home-page.js");
-const { reportStore } = await import("../../src/psycheval/assets/web/modules/report-store.js");
-const tick = () => new Promise(resolve => setTimeout(resolve, 0));
-
+let reports = [report("first", [target("session", "session-1")]), report("canonical", [], "evaluation")];
+let failSave = false;
+let deleting;
+const browser = installBrowserDom(reportPageHtml, { fetch: async (path, options = {}) => {
+  requests.push({ path: String(path), options });
+  const url = new URL(path, "http://localhost");
+  if (url.pathname === "/api/report-library/targets") return response(pageOf([target(url.searchParams.get("kind"), "one")]));
+  if (url.pathname === "/api/path-selections") return response({ paths: ["C:/report.md"] });
+  if (path === "/api/reports" && options.method === "POST") {
+    const created = report("independent"); reports.push(created); return response(created, 201);
+  }
+  if (options.method === "DELETE") return deleting.promise;
+  if (options.method === "PUT") {
+    if (failSave) return response({ detail: "Save failed; try again" }, 503);
+    const index = reports.findIndex(item => path.includes(encodeURIComponent(item.report_ref)));
+    reports[index] = report(reports[index].report_id, JSON.parse(options.body).bindings.map(item => target(item.kind, item.key)));
+    return response(reports[index]);
+  }
+  if (url.pathname === "/api/report-library") return response(pageOf(reports));
+  throw new Error(`Unexpected request: ${path}`);
+} });
+const manager = await import("../../src/psycheval/assets/web/modules/report-manager-page.js");
+const { reportLibraryStore: store, draftChanged } = await import("../../src/psycheval/assets/web/modules/report-library-store.js");
 test.after(() => browser.cleanup());
 
-test("evaluation catalog refreshes and Category edits preserve the imported binding draft", async () => {
-  await managerPage.initializeReportManagerPage();
-
-  const checkbox = document.querySelector("[data-report-page-binding]");
-  checkbox.click();
-  assert.deepEqual([...reportStore.manager.draftBindings], []);
-  reportStore.manager.search = "needle";
-  reportStore.manager.page = 3;
-  const list = document.querySelector('[data-table-id="report-bindings"]');
-  list.scrollTop = 37;
-
-  const category = document.querySelector('[data-table-column-key="source_category"]');
-  category.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
-  const editor = category.querySelector("input");
-  editor.value = "candidate";
-  editor.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+test("unified table uses a right reader and retains independent drafts through selection and refresh", async () => {
+  await manager.initializeReportManagerPage();
+  assert.equal(document.querySelectorAll("[data-report-row]").length, 2);
+  assert.deepEqual([...document.querySelectorAll(".report-library-grid th")].map(node => node.textContent), ["Report", "Format", "Associations", "Updated"]);
+  assert.doesNotMatch(document.querySelector("[data-report-toolbar]").textContent, /Source type|Evaluation reports|Imported reports/);
+  assert.equal(new URL(requests.at(-1).path, "http://localhost").searchParams.has("origin"), false);
+  document.querySelector('[data-report-select="package:first"]').click();
+  assert.ok(document.body.classList.contains("workspace-sidebar-right-open"));
+  const frame = document.querySelector("#report-library-detail iframe");
+  assert.equal(frame.getAttribute("sandbox"), "allow-scripts");
+  assert.match(frame.getAttribute("src"), /package%3Afirst/);
+  document.querySelector('[data-report-tab="associations"]').click();
   await tick();
+  document.querySelector("[data-binding-remove]").click();
+  assert.ok(draftChanged(store.drafts.get("package:first")));
+  document.querySelector('[data-report-select="analysis:canonical"]').click();
+  document.querySelector('[data-report-tab="associations"]').click();
   await tick();
-
-  const patch = requests.find(request => request.path === "/api/sources/source-1");
-  assert.equal(patch.options.method, "PATCH");
-  assert.deepEqual(JSON.parse(patch.options.body), { category: "candidate" });
-  assert.deepEqual([...reportStore.manager.draftBindings], []);
-  assert.equal(reportStore.manager.search, "needle");
-  assert.equal(reportStore.manager.page, 3);
-  assert.equal(list.scrollTop, 37);
-  assert.match(category.textContent, /candidate/);
-  assert.equal(document.activeElement, category);
-
-  await managerPage.loadEvaluationReports();
-  assert.deepEqual([...reportStore.manager.draftBindings], []);
-  assert.equal(reportStore.manager.dirty, true);
-  assert.equal(reportStore.manager.selectedId, "report-1");
+  assert.equal(document.querySelector('[data-binding-kind] option[value="session"]'), null);
+  assert.equal(document.querySelector("[data-report-delete]"), null);
+  document.querySelector('[data-report-select="package:first"]').click();
+  document.querySelector('[data-report-tab="associations"]').click();
+  await manager.loadReportManagerPage();
+  assert.equal(store.drafts.get("package:first").values.size, 0);
+  assert.equal(document.querySelector("[data-report-save]").disabled, false);
+  assert.equal(document.querySelector('[data-table-column-key="source_category"]'), null);
 });
 
-test("binding Category selects on one click while double-click editing preserves the draft", async context => {
-  await managerPage.initializeReportManagerPage();
-  context.mock.timers.enable({ apis: ["setTimeout"] });
-  const category = document.querySelector('[data-table-column-key="source_category"]');
-  const checkbox = document.querySelector("[data-report-page-binding]");
-  const before = checkbox.checked;
-  category.click();
-  context.mock.timers.tick(250);
-  assert.equal(checkbox.checked, !before);
-  category.dispatchEvent(new window.MouseEvent("click", { bubbles: true, detail: 1 }));
-  category.dispatchEvent(new window.MouseEvent("click", { bubbles: true, detail: 2 }));
-  category.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
-  context.mock.timers.tick(500);
-  assert.equal(checkbox.checked, !before);
-  const input = category.querySelector("input");
-  assert.ok(input);
-  input.click();
-  assert.equal(checkbox.checked, !before);
-  input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  const row = category.closest("[data-report-page-row]");
-  row.focus();
-  row.dispatchEvent(new window.KeyboardEvent("keydown", { key: " ", bubbles: true }));
-  assert.equal(checkbox.checked, before);
+test("save failure retains draft and retry saves an empty association list", async () => {
+  failSave = true;
+  await manager.saveBindings();
+  assert.ok(draftChanged(store.drafts.get("package:first")));
+  assert.match(document.body.textContent, /Save failed; try again/);
+  failSave = false;
+  await manager.saveBindings();
+  assert.equal(draftChanged(store.drafts.get("package:first")), false);
+  const saved = requests.filter(item => item.options.method === "PUT").at(-1);
+  assert.equal(saved.path, "/api/report-library/package%3Afirst/bindings");
+  assert.deepEqual(JSON.parse(saved.options.body), { bindings: [] });
 });
 
-test("Reports page keeps canonical evaluations separate and uses opaque library refs", () => {
-  const canonical = document.querySelector('[data-evaluation-report-select="analysis:evaluation-1"]');
-  assert.ok(canonical);
-  assert.match(canonical.textContent, /Run one evaluation/);
-  assert.equal(
-    document.querySelector('[data-report-open="analysis:evaluation-1"]').getAttribute("href"),
-    "/api/report-library/analysis%3Aevaluation-1/reader",
-  );
-  assert.equal(
-    document.querySelector('[data-report-view-source="analysis:evaluation-1"]').getAttribute("href"),
-    "/#source=source-1",
-  );
-  assert.equal(document.querySelectorAll('[data-report-page-select="report-1"]').length, 1);
-  assert.equal(sourceKeyFromHash("#source=source-1"), "source-1");
-  assert.equal(sourceKeyFromHash("#source=harbor%2Fmount%2Fjob%2Ftrial"), "harbor/mount/job/trial");
-  assert.equal(sourceKeyFromHash("#analysis"), null);
+test("independent import requires no selected object and opens the saved report", async () => {
+  document.querySelector("[data-report-import]").click();
+  await tick(); await tick();
+  const imported = requests.find(item => item.path === "/api/reports" && item.options.method === "POST");
+  assert.deepEqual(JSON.parse(imported.options.body), { path: "C:/report.md", bindings: [] });
+  assert.deepEqual(manager.activeReportSnapshot(), { report_ref: "package:independent", report_name: "independent.md" });
+  assert.match(document.querySelector("#report-library-detail iframe").getAttribute("src"), /package%3Aindependent/);
 });
 
-test("Reports search keeps the focused input node while debounced results load", async () => {
-  reportStore.manager.search = "";
-  managerPage.renderReportManagerPage();
-  const search = document.querySelector("[data-report-page-search]");
-  search.focus();
-  search.value = "needle";
-  search.setSelectionRange(6, 6);
-  search.dispatchEvent(new window.Event("input", { bubbles: true }));
-
-  await new Promise(resolve => setTimeout(resolve, 180));
+test("pending deletion prevents a concurrent save and retry keeps the draft", async () => {
+  document.querySelector('[data-report-tab="associations"]').click();
   await tick();
-
-  assert.equal(document.querySelector("[data-report-page-search]"), search);
-  assert.equal(document.activeElement, search);
-  assert.equal(search.value, "needle");
-  assert.equal(search.selectionStart, 6);
+  document.querySelector("[data-target-key]").click();
+  deleting = deferred();
+  document.querySelector("[data-report-delete]").click();
+  assert.equal(document.querySelector("[data-report-save]").disabled, true);
+  assert.equal(document.querySelector("[data-report-delete]").disabled, true);
+  const writes = requests.filter(item => item.options.method === "PUT").length;
+  await manager.saveBindings();
+  assert.equal(requests.filter(item => item.options.method === "PUT").length, writes);
+  deleting.resolve(response({ detail: "Delete failed" }, 503));
+  await tick(); await tick();
+  assert.equal(document.querySelector("[data-report-delete]").disabled, false);
+  assert.equal(document.querySelector("[data-report-save]").disabled, false);
+  assert.ok(draftChanged(store.drafts.get("package:independent")));
 });
 
-test("Reports page persists an empty binding set through its owned API path", async () => {
-  reportStore.manager.draftBindings = new Set();
-  reportStore.manager.dirty = true;
-  managerPage.renderReportManagerPage();
-  document.querySelector("[data-report-page-save]").click();
+test("unreadable associations keep the preview and draft but disable editing until recovery", async () => {
+  document.querySelector('[data-report-select="analysis:canonical"]').click();
+  document.querySelector('[data-report-tab="associations"]').click();
   await tick();
-  await tick();
-
-  const save = requests.find(request => request.path === "/api/reports/report-1/bindings");
-  assert.deepEqual(JSON.parse(save.options.body), { source_keys: [] });
-  assert.deepEqual(reportStore.reports[0].source_keys, []);
-  assert.equal(reportStore.manager.dirty, false);
-});
-
-test("Reports preview shares resize, focus, Escape, and navigation behavior", async () => {
-  managerPage.renderReportManagerPage();
-  const opener = document.querySelector('[data-report-page-preview="package:report-1"]');
-  assert.equal(managerPage.openReportPreview("package:report-1", { opener }), true);
-  const preview = document.getElementById("workspace-report-reader");
-  assert.equal(
-    preview.querySelector("iframe").getAttribute("src"),
-    "/api/report-library/package%3Areport-1/preview",
-  );
-  const resize = preview.querySelector("[data-sidebar-resize]");
-  assert.ok(resize);
-  assert.equal(resize.getAttribute("aria-label"), "Resize report reader");
-  assert.equal(document.body.classList.contains("workspace-sidebar-left-open"), true);
-  assert.match(document.documentElement.style.getPropertyValue("--workspace-left-sidebar-width"), /^\d+px$/);
-  await new Promise(resolve => window.requestAnimationFrame(resolve));
-  assert.equal(document.activeElement, preview.querySelector("[data-sidebar-close]"));
-  document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  await new Promise(resolve => window.requestAnimationFrame(resolve));
-  assert.equal(preview.hidden, true);
-  assert.equal(document.body.classList.contains("report-reader-open"), false);
-  assert.equal(document.body.classList.contains("workspace-sidebar-left-open"), false);
-  assert.equal(document.activeElement, opener);
-
-  assert.equal(managerPage.openReportPreview("package:report-1", { opener }), true);
-  const search = document.querySelector("[data-report-page-search]");
-  search.focus();
-  window.dispatchEvent(new window.CustomEvent("peval:workspace-navigate"));
-  assert.equal(preview.hidden, true);
-  assert.equal(document.body.classList.contains("report-reader-open"), false);
-  assert.equal(document.activeElement, search);
+  document.querySelector("[data-target-key]").click();
+  const canonical = reports.find(item => item.report_ref === "analysis:canonical");
+  canonical.associations_available = false;
+  await manager.loadReportManagerPage();
+  assert.match(document.querySelector("[data-association-summary]").textContent, /Report associations could not be read/);
+  assert.equal(document.querySelector("[data-binding-picker],[data-report-save],[data-binding-remove]"), null);
+  assert.equal(store.drafts.get(canonical.report_ref).values.size, 1);
+  document.querySelector('[data-report-tab="preview"]').click();
+  assert.match(document.querySelector("#report-library-detail iframe").src, /analysis%3Acanonical\/preview$/);
+  canonical.associations_available = true;
+  await manager.loadReportManagerPage();
+  document.querySelector('[data-report-tab="associations"]').click();
+  assert.equal(document.querySelector("[data-report-save]").disabled, false);
+  assert.equal(store.drafts.get(canonical.report_ref).values.size, 1);
 });

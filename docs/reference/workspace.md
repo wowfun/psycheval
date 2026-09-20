@@ -254,6 +254,34 @@ are immediate and do not consume keystrokes from nested controls.
 
 ## Access model
 
+The Reports page uses one report table and a right-hand detail area with Preview
+and Associations tabs. The table shows report name, format, associations, and update
+time. Reports are searched and filtered by their associations without a source-type
+column or filter. Administrators can import a server-side Markdown or HTML
+file without selecting a session, then add associations independently. Guests can
+browse and filter the same library but cannot import, delete, or change associations.
+Import shows a waiting message while the native file chooser is open on the
+server's desktop. The chooser stays above other windows while active; cancelling
+clears the waiting message without showing a cancellation notice, leaves the
+library unchanged, and makes import available again. Selection failures remain
+visible and allow retry.
+Report filters open one menu at a time. Clicking outside or pressing Escape closes
+the menu without clearing selected filters; Escape returns focus to its trigger.
+The existing UTF-8, 20 MiB import limit and sandboxed HTML reader apply.
+Report selection, pagination, and refresh preserve per-report association drafts;
+responses for an older selection or draft cannot overwrite newer edits.
+If the selected report's metadata returns 404 on refresh, its detail closes and
+the active selection is cleared. A late response for another report cannot clear
+the current selection. Temporary read failures retain the selection for retry;
+association drafts remain available if a missing report reappears.
+Escape closes report details and restores focus to the selected report's button.
+Page navigation closes details without moving focus back to the previous page.
+Saving associations and deleting the same report are mutually exclusive; a failed
+deletion keeps the report and its draft available for retry.
+Canonical source associations are read-only, while imported reports may also change
+their directly associated sessions. Only imported report packages can be deleted here.
+Dataset and Job associations follow the [report data contract](state-and-data.md#evaluation-reports).
+
 The Home Trial sidebar keeps run status, score, and score source visible above
 Verification, Task, and Trajectory tabs. Verification uses a searchable file
 tree and on-demand previews under the [evaluation evidence contract](evaluation.md).

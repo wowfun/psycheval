@@ -154,7 +154,7 @@ async function attachWorkspaceReport(button) {
     if (!path) return;
     const payload = await serveApi("/api/reports", {
       method: "POST",
-      body: { path, source_keys: sourceKeys }
+      body: { path, bindings: sourceKeys.map(key => ({ kind: "session", key })) }
     });
     applyWorkspaceReportCatalog([...workspaceReports().filter(report => report.report_id !== payload.report_id), payload]);
     state.rowSelection.clear();

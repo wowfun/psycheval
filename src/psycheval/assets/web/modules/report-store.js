@@ -2,19 +2,6 @@
 
 const reportStore = {
   reports: [],
-  manager: {
-    selectedId: null,
-    search: "",
-    page: 1,
-    pageData: { page: 1, page_size: 100, total: 0 },
-    sourceRows: [],
-    searchTimer: null,
-    draftBindings: new Set(),
-    dirty: false,
-    loading: false,
-    busy: false,
-    opener: null,
-  },
   reader: {
     openId: null,
     objectUrl: null,
@@ -54,37 +41,14 @@ function reportForId(reportId) {
   return reportStore.reports.find(report => report.report_id === wanted) || null;
 }
 
-function syncReportDraft() {
-  reportStore.manager.draftBindings = new Set(
-    reportForId(reportStore.manager.selectedId)?.source_keys || [],
-  );
-  reportStore.manager.dirty = false;
-}
-
 function applyReportCatalog(reports) {
-  const selectedId = reportStore.manager.selectedId;
-  replaceReports(reports);
-  if (!reportForId(selectedId)) {
-    reportStore.manager.selectedId = reportStore.reports[0]?.report_id || null;
-    syncReportDraft();
-  } else if (!reportStore.manager.dirty) {
-    syncReportDraft();
-  }
-  return reportStore.reports;
-}
-
-function reportBindingsChanged() {
-  const persisted = new Set(reportForId(reportStore.manager.selectedId)?.source_keys || []);
-  const draft = reportStore.manager.draftBindings;
-  return persisted.size !== draft.size || [...persisted].some(key => !draft.has(key));
+  return replaceReports(reports);
 }
 
 export {
   applyReportCatalog,
   normalizedReports,
   replaceReports,
-  reportBindingsChanged,
   reportForId,
   reportStore,
-  syncReportDraft,
 };

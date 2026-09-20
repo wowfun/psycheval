@@ -76,7 +76,7 @@ function requestInvalidations(path, method, body) {
   if (path !== "/api/source-key-resolutions" && /^\/api\/(?:sources|source-|analysis)/.test(path)) {
     changes.add("catalog");
   }
-  if (/^\/api\/reports(?:\/|$)/.test(path)) changes.add("reports");
+  if (/^\/api\/(?:reports|report-library)(?:\/|$)/.test(path)) changes.add("reports");
   if (
     /^\/api\/harbor\/(?:dataset-unregistration-operations|mounts|mount-deletion-operations)(?:\/|$)/.test(path)
     || /^\/api\/harbor\/datasets(?:\/[^/]+)?$/.test(path)

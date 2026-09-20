@@ -11,9 +11,9 @@ const PAGE_PATHS = Object.freeze({
 const INVALIDATION_PAGES = Object.freeze({
   catalog: ["home", "reports"],
   reports: ["home", "reports"],
-  "dataset-registry": ["home", "datasets", "jobs", "config"],
+  "dataset-registry": ["home", "datasets", "jobs", "reports", "config"],
   tasks: ["home", "datasets", "jobs"],
-  jobs: ["jobs", "home"],
+  jobs: ["jobs", "home", "reports"],
   "assistant-config": ["config"],
   "prompt-assets": ["config"],
 });

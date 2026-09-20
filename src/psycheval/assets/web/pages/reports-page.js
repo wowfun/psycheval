@@ -3,10 +3,9 @@
 import {
   activeReportSnapshot,
   initializeReportManagerPage,
-  loadEvaluationReports,
-  loadImportedReports,
+  loadReportManagerPage,
 } from "../modules/report-manager-page.js";
-import { reportBindingsChanged } from "../modules/report-store.js";
+import { reportBindingsChanged } from "../modules/report-library-store.js";
 
 /** @param {import("../app/workspace-app.js").PageLoaderContext} _context */
 function createReportsPage(_context) {
@@ -18,10 +17,9 @@ function createReportsPage(_context) {
         initialized = true;
         return;
       }
-      const requests = [];
-      if (changes.has("catalog")) requests.push(loadEvaluationReports());
-      if (changes.has("reports")) requests.push(loadImportedReports());
-      await Promise.all(requests);
+      if (["catalog", "reports", "dataset-registry", "jobs"].some(domain => changes.has(domain))) {
+        await loadReportManagerPage();
+      }
     },
     snapshot() {
       const active = activeReportSnapshot();
