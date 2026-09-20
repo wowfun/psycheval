@@ -6,11 +6,7 @@ const TABLE_CONTROL_SELECTOR = "input,button,a,select,textarea,label,details,[co
 const tableRowActivations = new WeakMap();
 
 let state = { tables: {}, rowSelection: new Set(), catalogPage: {}, catalogQuery: {} };
-let noteSnippetFor = () => "";
-let notesFor = () => [];
-let notesPlainText = () => "";
 let renderComparisonPanels = () => {};
-let renderNotesCell = () => "";
 let renderReadOnlySourceCategory = () => "";
 let renderReadOnlySourceTags = () => "";
 let renderTaskAlias = () => "";
@@ -46,11 +42,7 @@ function configureLeaderboardDataTables(dependencies) {
   if (dependencies.state) state = dependencies.state;
   for (const [name, value] of Object.entries(dependencies)) {
     if (name === "state" || typeof value !== "function") continue;
-    if (name === "noteSnippetFor") noteSnippetFor = value;
-    else if (name === "notesFor") notesFor = value;
-    else if (name === "notesPlainText") notesPlainText = value;
-    else if (name === "renderComparisonPanels") renderComparisonPanels = value;
-    else if (name === "renderNotesCell") renderNotesCell = value;
+    if (name === "renderComparisonPanels") renderComparisonPanels = value;
     else if (name === "renderReadOnlySourceCategory") renderReadOnlySourceCategory = value;
     else if (name === "renderReadOnlySourceTags") renderReadOnlySourceTags = value;
     else if (name === "renderTaskAlias") renderTaskAlias = value;
@@ -116,9 +108,9 @@ function leaderboardColumns() {
     { key: "cache_hit_rate", label: t("cache_hit", "Cache Hit"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.cache_hit_rate, format: fmtPct },
     { key: "cost_usd", label: t("cost", "Cost"), valueType: "number", numeric: true, sortable: true, value: row => row.cost_usd, format: fmtCost },
     { key: "analysis_count", label: t("analysis_count", "#Analysis"), valueType: "number", numeric: true, filterable: true, value: row => rowAnalysisCount(row) },
-    { key: "notes", label: t("notes", "Notes"), valueType: "markdown", value: row => noteSnippetFor(row.trial_key), html: row => renderNotesCell(row.trial_key), cellTitle: row => {
-      const text = notesPlainText(notesFor(row.trial_key));
-      return text && text !== noteSnippetFor(row.trial_key) ? text : "";
+    { key: "notes", label: t("notes", "Notes"), valueType: "markdown", value: noteSnippetFor, html: renderNotesCell, cellTitle: row => {
+      const text = notesText(row);
+      return text && text !== noteSnippetFor(row) ? text : "";
     } },
     { key: "session_id", label: t("session", "Session"), valueType: "identity", filterable: true, value: row => sourceIdentityFor(row), cellTitle: row => row.trial_key && row.trial_key !== sourceIdentityFor(row) ? row.trial_key : "" }
   ];
@@ -133,6 +125,18 @@ function leaderboardColumns() {
     workspaceReportLeaderboardColumn(),
     ...serveColumns.slice(2)
   ];
+}
+function notesText(row) {
+  return String(row?.notes_markdown || "").trim();
+}
+function noteSnippetFor(row) {
+  const text = notesText(row).replace(/\s+/g, " ");
+  if (!text) return "-";
+  return text.length > 96 ? `${text.slice(0, 96)}...` : text;
+}
+function renderNotesCell(row) {
+  const summary = noteSnippetFor(row);
+  return summary === "-" ? `<span class="muted">-</span>` : `<span class="note-snippet">${esc(summary)}</span>`;
 }
 function rewardValue(row) {
   if (hasMetricValue(row?.score)) return fmtNum(row.score);

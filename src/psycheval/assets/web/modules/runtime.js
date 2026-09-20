@@ -32,11 +32,7 @@ Object.defineProperty(state, "workspaceReports", {
 });
 configureLeaderboardDataTables({
   state,
-  noteSnippetFor: (...args) => noteSnippetFor(...args),
-  notesFor: (...args) => notesFor(...args),
-  notesPlainText: (...args) => notesPlainText(...args),
   renderComparisonPanels: (...args) => renderComparisonPanels(...args),
-  renderNotesCell: (...args) => renderNotesCell(...args),
   renderReadOnlySourceCategory: (...args) => renderReadOnlySourceCategory(...args),
   renderReadOnlySourceTags: (...args) => renderReadOnlySourceTags(...args),
   renderTaskAlias: (...args) => renderTaskAlias(...args),
@@ -254,18 +250,6 @@ function editableNotesSource(trialKey) {
   const source = sourceForTrialKey(trialKey);
   if (!source || source.refreshable === false || source.snapshot) return null;
   return source;
-}
-function notesPlainText(notes) {
-  return notes.map(note => String(note.markdown || "").trim()).filter(Boolean).join("\\n\\n");
-}
-function noteSnippetFor(trialKey) {
-  const text = notesPlainText(notesFor(trialKey)).replace(/\\s+/g, " ").trim();
-  if (!text) return "-";
-  return text.length > 96 ? `${text.slice(0, 96)}...` : text;
-}
-function renderNotesCell(trialKey) {
-  const summary = noteSnippetFor(trialKey);
-  return summary === "-" ? `<span class="muted">-</span>` : `<span class="note-snippet">${esc(summary)}</span>`;
 }
 function sourceAliasFor(row) {
   return String(row?.source_alias || "").trim();
@@ -499,15 +483,12 @@ export {
   listValue,
   lower,
   normalizeServeSourceMode,
-  noteSnippetFor,
   notesFor,
-  notesPlainText,
   readableServeSources,
   readableServeSourcesFrom,
   render,
   renderComparison,
   renderComparisonPanels,
-  renderNotesCell,
   renderReadOnlySourceCategory,
   renderReadOnlySourceTags,
   renderWorkspaceDescription,

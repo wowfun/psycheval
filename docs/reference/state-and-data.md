@@ -123,6 +123,16 @@ Dataset sorting places missing values last in both directions. Direct edits to
 workspace configuration become visible after configuration reload and source
 reconciliation; the catalog does not watch configuration files itself.
 
+The Leaderboard Notes column reads each row's workspace note from the catalog,
+independently of the selected Trial or loaded detail. It shows a whitespace-folded
+excerpt and exposes the complete note as hover text when abbreviated. Notes
+use the detail reader's 1 MiB UTF-8 byte limit per file; catalog rows carry that
+bounded full content so hover text does not require opening a detail. Missing,
+unreadable, and oversized files project an empty note.
+Note presence reflects non-blank readable content. Saving or clearing a note refreshes
+the catalog projection through the existing generation-aware mutation flow;
+the workspace note remains authoritative.
+
 ## Telemetry
 
 Inference aggregates retain sufficient statistics for weighted recomputation.

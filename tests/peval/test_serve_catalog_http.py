@@ -10,6 +10,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 from psycheval.config import HarborDataset, HarborMount, ToolConfig
 from psycheval.serve import (
@@ -17,6 +18,7 @@ from psycheval.serve import (
     ServeRuntime,
 )
 from psycheval.serve.api_support import catalog_query
+from psycheval.serve.visibility import project_catalog_payload
 from psycheval.state import (
     CatalogQuery,
     CatalogSummaryCapacityError,
@@ -50,6 +52,64 @@ def leaderboard_summary_query(**changes) -> dict:
 
 
 class ServeCatalogHttpTests(unittest.TestCase):
+    def test_saved_harbor_notes_reach_catalog_and_guest_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_evidence_trial(root / "jobs/job/trial")
+            store, runtime, server, thread = self.running_server(root)
+            try:
+                runtime.set_config(
+                    runtime.config.validated_update(
+                        harbor_mounts=(
+                            HarborMount(id="jobs", path=str(root / "jobs")),
+                        ),
+                    )
+                )
+                runtime.catalog.reconcile()
+                row = runtime.catalog.query(CatalogQuery()).items[0].to_dict()
+                key = row["source_key"]
+                self.assertNotEqual(key, row["trial_key"])
+                revision = row["artifact_revision"]
+                for markdown in (
+                    "中文备注\n\n**first**",
+                    "Updated <note>",
+                    " \n\t",
+                    "",
+                ):
+                    with self.subTest(markdown=markdown):
+                        status, _, body = self.request(
+                            server,
+                            "PATCH",
+                            f"/api/sources/{quote(key, safe='')}",
+                            {"notes": markdown},
+                        )
+                        self.assertEqual(status, 200, body)
+                        detail = json.loads(body)
+                        notes = detail["report"].get("annotations", {}).get("notes", [])
+                        self.assertEqual(
+                            notes[0]["markdown"] if notes else "", markdown
+                        )
+                        status, _, body = self.request(server, "GET", "/api/catalog")
+                        self.assertEqual(status, 200, body)
+                        page = json.loads(body)
+                        for role in ("admin", "guest"):
+                            projected = project_catalog_payload(page, role)
+                            current = projected["items"][0]
+                            self.assertEqual(current["notes_markdown"], markdown)
+                            self.assertEqual(
+                                current["notes_present"], bool(markdown.strip())
+                            )
+                            self.assertEqual(
+                                projected["column_presence"]["notes"],
+                                int(bool(markdown.strip())),
+                            )
+                            self.assertNotEqual(current["artifact_revision"], revision)
+                            if role == "guest":
+                                self.assertNotIn("source_ref", current)
+                        revision = page["items"][0]["artifact_revision"]
+            finally:
+                self.stop(store, server, thread)
+
     def test_catalog_query_accepts_repeated_harbor_semantic_filters(self) -> None:
         query = catalog_query(
             "task=pbench-v1.0%2Fweb-search-01"

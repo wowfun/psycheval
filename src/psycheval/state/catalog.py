@@ -14,12 +14,12 @@ from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from psycheval._harbor_datasets import resolve_harbor_datasets_for_mount
 from psycheval._state.annotations import optional_int, optional_str
+from psycheval.analysis import cached_note_report_for_cell
 from psycheval.config import ToolConfig
 from psycheval.report.inference import inference_row_metrics
 from psycheval.report.metrics import final_metric, token_total
 from psycheval.state.evaluation_report_catalog import (
     evaluation_report_location,
-    query_evaluation_report_page,
     replace_evaluation_report_projection,
 )
 from psycheval.state.store import ServeStateStore
@@ -29,7 +29,7 @@ from psycheval.state.workspace_sources import (
     WorkspaceSources,
 )
 
-CATALOG_SCHEMA_VERSION = 17
+CATALOG_SCHEMA_VERSION = 18
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 SUMMARY_CACHE_ENTRY_LIMIT = 128
@@ -917,6 +917,12 @@ class WorkspaceCatalog:
     ) -> tuple[dict[str, Any], bool, str]:
         trajectory = document.trajectory or {}
         meta = document.meta or {}
+        note = cached_note_report_for_cell(
+            workspace_root=self.store.paths.root,
+            cell_dir=document.source_ref,
+            trial_key=str(meta.get("trial_key") or ""),
+        )
+        notes_markdown = note["markdown"] if note else ""
         if document.readable or document.meta is not None:
             summary = _catalog_summary(
                 trajectory,
@@ -951,7 +957,8 @@ class WorkspaceCatalog:
             "last_error": document.last_error,
             "last_refreshed_at_ms": None,
             "input_bytes": document.input_bytes,
-            "notes_present": self._notes_present(document.source_ref, document.source),
+            "notes_markdown": notes_markdown,
+            "notes_present": bool(notes_markdown.strip()),
         }
         if document.source_ref.startswith("runs/"):
             row["artifact_dir"] = document.source_ref
@@ -973,11 +980,6 @@ class WorkspaceCatalog:
                 for filename in ("analysis.json", "analysis.md")
             )
         )
-
-    def _notes_present(self, source_ref: str, source: dict[str, Any]) -> bool:
-        if source.get("kind") == HARBOR_SOURCE_KIND:
-            return self.sources.annotation_path(source_ref, "notes.md").is_file()
-        return (self.store.resolve_artifact_dir(source_ref) / "notes.md").is_file()
 
     def _query_where(self, query: CatalogQuery) -> tuple[str, list[Any]]:
         scope_where, parameters = self._facet_scope_where(query)

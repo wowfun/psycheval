@@ -35,6 +35,43 @@ from tests.peval.cli_inputs_support import write_trial_cell_artifacts
 
 
 class WorkspaceCatalogTests(unittest.TestCase):
+    def test_notes_projection_tracks_local_content_and_reuses_unchanged_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cell = self.write_cell(root, 1)
+            note_path = cell / "notes.md"
+            store, catalog = self.catalog(root)
+            self.addCleanup(store.close)
+            for content, expected in (
+                (None, ""),
+                ("中文备注\n\n**first**".encode(), "中文备注\n\n**first**"),
+                (b"Changed note", "Changed note"),
+                (b" \n\t", " \n\t"),
+                (b"", ""),
+                (b"\xff", ""),
+                (b"a" * (1024 * 1024 + 1), ""),
+                (None, ""),
+            ):
+                with self.subTest(content=expected, size=len(content or b"")):
+                    if content is None:
+                        note_path.unlink(missing_ok=True)
+                    else:
+                        note_path.write_bytes(content)
+                    catalog.reconcile()
+                    page = catalog.query(CatalogQuery())
+                    row = page.items[0].to_dict()
+                    self.assertEqual(row["notes_markdown"], expected)
+                    self.assertEqual(row["notes_present"], bool(expected.strip()))
+                    self.assertEqual(
+                        page.column_presence["notes"], int(bool(expected.strip()))
+                    )
+                    with patch.object(catalog.sources, "load") as load:
+                        catalog.reconcile()
+                        load.assert_not_called()
+                    self.assertEqual(
+                        catalog.query(CatalogQuery()).items[0].to_dict(), row
+                    )
+
     def test_reconcile_reloads_corrupt_cached_rows_and_preserves_local_fast_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1080,7 +1117,8 @@ class WorkspaceCatalogTests(unittest.TestCase):
     def test_corrupt_and_version_mismatched_cache_rebuild(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.write_cell(root, 1)
+            cell = self.write_cell(root, 1)
+            (cell / "notes.md").write_text("Existing note", encoding="utf-8")
             store, catalog = self.catalog(root)
             catalog.reconcile()
             cache_path = catalog.path
@@ -1126,6 +1164,12 @@ class WorkspaceCatalogTests(unittest.TestCase):
             self.assertFalse(version_rebuilt.has_generation)
             version_rebuilt.reconcile()
             self.assertEqual(version_rebuilt.query(CatalogQuery()).total, 1)
+            self.assertEqual(
+                version_rebuilt.query(CatalogQuery())
+                .items[0]
+                .payload["notes_markdown"],
+                "Existing note",
+            )
             store.close()
 
     def test_next_generation_is_not_visible_until_commit(self) -> None:

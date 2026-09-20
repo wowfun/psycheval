@@ -26,6 +26,32 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());
 
+test("Notes cells use their catalog row independently of the selected detail", () => {
+  const previousView = runtime.state.view;
+  try {
+    const column = tables.leaderboardColumns().find(column => column.key === "notes");
+    const first = { source_key: "cell-first", trial_key: "cell-first", artifact_trial_key: "trial-first", notes_markdown: "中文备注\n\n **first**\tline" };
+    const second = { source_key: "cell-second", trial_key: "cell-second", artifact_trial_key: "trial-second", notes_markdown: 'Second <script>alert("x")</script> & note' };
+    for (const view of [null, { annotations: { notes: [{ trial_key: "trial-first", markdown: "Unrelated detail" }] } }]) {
+      runtime.state.view = view;
+      assert.equal(column.value(first), "中文备注 **first** line");
+      assert.equal(column.cellTitle(first), first.notes_markdown);
+      const target = document.getElementById("table-root");
+      target.innerHTML = `<table><tbody><tr>${tables.renderDataCell(second, column)}</tr></tbody></table>`;
+      assert.equal(target.querySelector("td").textContent, second.notes_markdown);
+      assert.equal(target.querySelector("script"), null);
+      assert.equal(target.querySelector("td").title, second.notes_markdown);
+    }
+    const long = { notes_markdown: "长".repeat(97) };
+    assert.equal(column.value(long), `${"长".repeat(96)}...`);
+    assert.equal(column.cellTitle(long), long.notes_markdown);
+    for (const notes_markdown of [undefined, "", " \n\t "]) {
+      assert.equal(column.value({ notes_markdown }), "-");
+      assert.match(column.html({ notes_markdown }), /class="muted"/);
+    }
+  } finally { runtime.state.view = previousView; }
+});
+
 test("Dataset leads existing layouts and uses query-wide presence and server facets", () => {
   const previousLayout = runtime.state.leaderboardColumnLayout;
   const previousPage = runtime.state.catalogPage;
