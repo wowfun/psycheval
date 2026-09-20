@@ -29,8 +29,11 @@ def tkinter_file_paths(*, multiple: bool) -> list[str]:
     from tkinter import filedialog
 
     root = tk.Tk()
-    root.withdraw()
     try:
+        root.withdraw()
+        # A server launched from a terminal has no visible owner for the dialog.
+        root.attributes("-topmost", True)
+        root.update_idletasks()
         if multiple:
             selected = filedialog.askopenfilenames(parent=root)
             return normalized_paths(selected)
