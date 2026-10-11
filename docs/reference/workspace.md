@@ -90,8 +90,15 @@ Mount-owned `dataset_ids`; adding a Dataset through the reverse Dataset view
 appends it after that Mount's existing evidence lookup order.
 
 ACP agents form an executable allowlist. Each entry names a path-safe identity,
-display title, executable, and argument array. Serve starts that array directly,
-without a shell, in the workspace root and with the serve process environment.
+display title, executable, and argument array. On Windows, serve resolves commands
+without a directory component through its current PATH and PATHEXT at each
+launch. The resolved executable is not written back to configuration; explicit
+paths retain their native subprocess behavior. A command that cannot be found
+fails the connection attempt and releases its reserved connection slot.
+Serve passes the executable and argument array to the subprocess API in the
+workspace root with the serve process environment. Psycheval does not construct
+a shell command; Windows `.cmd` and `.bat` launchers run through the system batch
+interpreter, so their arguments follow Windows batch syntax.
 Each administrator WebSocket names only an Agent ID; serve resolves its array
 from the current workspace configuration and gives that socket one child
 process. The gateway transports bounded text frames and does not interpret or

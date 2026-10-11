@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import signal
 import subprocess
 import threading
@@ -263,13 +264,19 @@ class AcpGateway:
             self._bridges.get(bridge.agent_id, set()).discard(bridge)
 
     async def _spawn(self, config: AcpAgent) -> asyncio.subprocess.Process:
+        command = config.command
         process_options: dict[str, object] = {}
         if os.name == "posix":
             process_options["start_new_session"] = True
         elif os.name == "nt":
             process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            if not os.path.dirname(command):
+                executable = shutil.which(command)
+                if executable is None:
+                    raise FileNotFoundError(f"ACP executable not found: {command}")
+                command = executable
         return await asyncio.create_subprocess_exec(
-            config.command,
+            command,
             *config.args,
             cwd=self.workspace_root,
             env=os.environ.copy(),

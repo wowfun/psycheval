@@ -12,6 +12,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from websockets.exceptions import ConnectionClosedError, InvalidStatus
 from websockets.sync.client import connect
@@ -174,6 +175,111 @@ class AcpGatewayTests(unittest.TestCase):
         while self._agents()["agents"][0]["connected"] and time.monotonic() < deadline:  # type: ignore[index]
             time.sleep(0.02)
         self.assertFalse(self._agents()["agents"][0]["connected"])  # type: ignore[index]
+
+    @unittest.skipUnless(os.name == "nt", "requires Windows batch launchers")
+    def test_windows_bare_command_resolves_cmd_launcher_on_path(self) -> None:
+        command = f"psycheval-acp-{self.root.name}"
+        first_dir = self.root / "first npm bin"
+        second_dir = self.root / "second npm bin"
+        for directory in (first_dir, second_dir):
+            directory.mkdir()
+            (directory / f"{command}.cmd").write_text(
+                '@echo off\n"%PEVAL_TEST_ACP_PYTHON%" -X utf8 "%~dp0agent.py" %*\n',
+                encoding="ascii",
+            )
+            (directory / "agent.py").write_text(
+                "import json, os, sys\n"
+                "message = sys.stdin.readline().rstrip('\\n')\n"
+                "print(json.dumps({'message': message, 'args': sys.argv[1:], "
+                "'cwd': os.getcwd(), 'script': __file__}), flush=True)\n",
+                encoding="utf-8",
+            )
+        args = ("acp", "two words", "", "中文参数")
+        python_args = ("-X", "utf8", str(first_dir / "agent.py"), *args)
+        cases = (
+            (command, args, first_dir, first_dir),
+            (command, args, second_dir, second_dir),
+            (f"{command}.cmd", args, first_dir, first_dir),
+            (str(first_dir / f"{command}.cmd"), args, second_dir, first_dir),
+            (sys.executable, python_args, second_dir, first_dir),
+            (
+                Path(sys.executable).name,
+                python_args,
+                Path(sys.executable).parent,
+                first_dir,
+            ),
+        )
+        for executable, launch_args, search_dir, expected_dir in cases:
+            with self.subTest(executable=executable, search_dir=search_dir):
+                config = AcpAgent(
+                    id="synthetic",
+                    title="Synthetic",
+                    command=executable,
+                    args=launch_args,
+                )
+                self.runtime.acp.reconfigure((config,))
+                with patch.dict(
+                    os.environ,
+                    {
+                        "PATH": str(search_dir),
+                        "PATHEXT": ".EXE;.CMD",
+                        "PEVAL_TEST_ACP_PYTHON": sys.executable,
+                    },
+                ):
+                    with connect(
+                        self.ws_url,
+                        origin=self.origin,
+                        additional_headers={"Cookie": self.cookie},
+                    ) as socket:
+                        payload = '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
+                        socket.send(payload)
+                        result = json.loads(socket.recv(timeout=3))
+                        self.assertEqual(result["message"], payload)
+                        self.assertEqual(result["args"], list(args))
+                        self.assertEqual(Path(result["cwd"]), self.root.resolve())
+                        self.assertEqual(
+                            Path(result["script"]), expected_dir / "agent.py"
+                        )
+
+                deadline = time.monotonic() + 3
+                while (
+                    self._agents()["agents"][0]["connections"]
+                    and time.monotonic() < deadline
+                ):  # type: ignore[index]
+                    time.sleep(0.02)
+                self.assertEqual(self._agents()["agents"][0]["connections"], 0)  # type: ignore[index]
+                self.assertEqual(self.runtime.acp.configuration("synthetic"), config)
+
+    def test_missing_command_releases_reservations_and_allows_recovery(self) -> None:
+        working = self.runtime.acp.configuration("synthetic")
+        missing = f"psycheval-acp-missing-{self.root.name}"
+        for command in (missing, str(self.root / f"{missing}.cmd")):
+            with self.subTest(command=command):
+                self.runtime.acp.reconfigure(
+                    (AcpAgent(id="synthetic", title="Missing", command=command),)
+                )
+                with patch.dict(
+                    os.environ, {"PATH": str(self.root), "PATHEXT": ".CMD"}
+                ):
+                    for _attempt in range(MAX_AGENT_CONNECTIONS + 1):
+                        with self.assertRaises(InvalidStatus) as rejected:
+                            connect(
+                                self.ws_url,
+                                origin=self.origin,
+                                additional_headers={"Cookie": self.cookie},
+                            )
+                        self.assertEqual(rejected.exception.response.status_code, 403)
+                        agent = self._agents()["agents"][0]  # type: ignore[index]
+                        self.assertEqual(agent["connections"], 0)
+
+        self.runtime.acp.reconfigure((working,))
+        with connect(
+            self.ws_url,
+            origin=self.origin,
+            additional_headers={"Cookie": self.cookie},
+        ) as socket:
+            socket.send("recovered")
+            self.assertEqual(socket.recv(timeout=3), "recovered")
 
     def test_rejects_guest_cross_origin_binary_and_unknown_agent_connections(
         self,
