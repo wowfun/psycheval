@@ -788,3 +788,64 @@ def test_native_harbor_job_lifecycle_and_mapping(jobs, variant_count):
     finally:
         runtime.close()
         store.close()
+
+
+def test_native_harbor_acp_preview_requires_host_adapter(jobs):
+    from shutil import copytree
+
+    copytree(
+        Path(__file__).parents[1] / "fixtures/harbor-single-step",
+        jobs.workspace / "dataset/one",
+    )
+    with (jobs.workspace / "peval.toml").open("a", encoding="utf-8") as stream:
+        stream.write('[[harbor.datasets]]\nid="native"\npath="dataset"\n')
+    payload = {
+        "harness": "harbor",
+        "tasks": ["native/one"],
+        "variants": [
+            {
+                "id": "a",
+                "label": "ACP",
+                "agent": "acp",
+                "model": "label",
+                "options": {"kwargs": {"argv": ["rsi"]}},
+            }
+        ],
+        "settings": {
+            "environment": {
+                "import_path": "psycheval.harbor.environment:HostEnvironment",
+                "kwargs": {"host_access": {"filesystem": True, "process": True}},
+            }
+        },
+    }
+    with pytest.raises(ValueError, match="HostACPAgent"):
+        jobs.preview(payload)
+    payload["variants"][0]["agent"] = "psycheval.harbor.acp_agent:HostACPAgent"
+    preview = jobs.preview(payload)
+    assert (
+        preview["prepared"]["config"]["agents"][0]["import_path"]
+        == payload["variants"][0]["agent"]
+    )
+    assert not jobs.root.exists()
+
+
+@pytest.mark.parametrize("environment", [None, "invalid"])
+def test_harbor_invalid_environment_is_a_validation_failure(jobs, environment):
+    from shutil import copytree
+
+    copytree(
+        Path(__file__).parents[1] / "fixtures/harbor-single-step",
+        jobs.workspace / "dataset/one",
+    )
+    with (jobs.workspace / "peval.toml").open("a", encoding="utf-8") as stream:
+        stream.write('[[harbor.datasets]]\nid="native"\npath="dataset"\n')
+    payload = request(environment=environment)
+    payload.update(harness="harbor", tasks=["native/one"])
+    with pytest.raises(ValueError):
+        jobs.preview(payload)
+
+
+def test_harbor_agent_suggestions_use_explicit_acp_adapter(jobs):
+    suggestions = jobs.registry["harbor"].describe(None)["agents"]
+    assert "acp" not in suggestions
+    assert "psycheval.harbor.acp_agent:HostACPAgent" in suggestions

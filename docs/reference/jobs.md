@@ -93,6 +93,13 @@ native configuration. A launch retains Harbor's generated `job.yaml` in the
 control directory. TOML defaults cannot represent JSON null; saving such a value
 fails explicitly.
 
+Native Host ACP variants select
+[`psycheval.harbor.acp_agent:HostACPAgent`](harbor.md#host-acp-agent) explicitly.
+The Harbor built-in `acp` installer is rejected for native Hosts.
+Agent suggestions use the explicit Host adapter for ACP. Built-in installer
+names may still be entered for compatible non-Host environments. Environment
+settings are validated before native adapter selection.
+
 ## Lifetime and retained state
 
 Each batch starts in `<workspace>/jobs/YYYY-MM-DD__hh-mm-ss/`, using the local

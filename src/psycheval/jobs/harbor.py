@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 from harbor.models.job.config import JobConfig
-from harbor.models.trial.config import AgentConfig
+from harbor.models.trial.config import AgentConfig, EnvironmentConfig
 from pydantic.json_schema import GenerateJsonSchema
 
 from psycheval.config import load_config
@@ -139,7 +139,8 @@ class HarborHarness:
         return {
             "label": "Harbor",
             "version": 1,
-            "agents": [name.value for name in AgentName],
+            "agents": [name.value for name in AgentName if name.value != "acp"]
+            + ["psycheval.harbor.acp_agent:HostACPAgent"],
             "models": [],
             "capabilities": ["variants", "stop", "trajectory", "verification"],
             "defaults": {
@@ -241,7 +242,8 @@ class HarborHarness:
                 "These Datasets require different verifiers; use separate Jobs"
             )
         agents = []
-        native_host = settings.get("environment", {}).get("import_path") in {
+        environment = EnvironmentConfig.model_validate(settings.get("environment", {}))
+        native_host = environment.import_path in {
             "psycheval.harbor.environment:HostEnvironment",
             "psycheval.harbor.workbuddy_environment:WorkBuddyHostEnvironment",
         }
@@ -277,6 +279,13 @@ class HarborHarness:
         if formats == {"workbuddy.v1"}:
             job = prepare_workbuddy_job(
                 job, host_settings=load_host_settings(context.workspace / "peval.toml")
+            )
+        if job.environment.import_path in {
+            "psycheval.harbor.environment:HostEnvironment",
+            "psycheval.harbor.workbuddy_environment:WorkBuddyHostEnvironment",
+        } and any(agent.name == "acp" for agent in job.agents):
+            raise ValueError(
+                "Native Host ACP evaluation requires psycheval.harbor.acp_agent:HostACPAgent"
             )
         job.validate_agent_concurrency_limits()
         native = job_values(job)
