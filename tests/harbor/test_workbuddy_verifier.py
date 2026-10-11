@@ -28,16 +28,195 @@ from tests.fixtures.native_office import write_native_office
 from tests.harbor.test_environment import make_environment
 
 
+@pytest.mark.parametrize("fail", [False, True])
+def test_native_namespace_restores_environment_when_namespace_is_disabled(
+    tmp_path, fail
+):
+    from types import SimpleNamespace
+
+    from psycheval.harbor.workbuddy_verifier import _native_namespace
+
+    original = object()
+    verifier = SimpleNamespace(environment=original, linux_namespace=False)
+    try:
+        with _native_namespace(verifier, tmp_path):
+            verifier.environment = object()
+            if fail:
+                raise RuntimeError("fixture verification failure")
+    except RuntimeError:
+        assert fail
+    assert verifier.environment is original
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or shutil.which("bwrap") is None,
+    reason="Linux Bubblewrap namespace wiring",
+)
+@pytest.mark.parametrize(
+    "operation",
+    ["exec_argv", "directories", "filtered_transfers", "runtime_control", "scoped_env"],
+)
+def test_namespace_public_host_operations_use_the_mount_map(tmp_path, operation):
+    from types import SimpleNamespace
+
+    from psycheval.harbor.workbuddy_verifier import _native_namespace
+
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        await host.start(False)
+        root = tmp_path / "staged"
+        root.mkdir()
+        verifier = SimpleNamespace(environment=host, linux_namespace=True)
+        try:
+            with _native_namespace(verifier, root):
+                namespace = verifier.environment
+                gold = root / "gold.txt"
+                gold.write_text("private gold")
+                await namespace.upload_file(gold, "/tests/gold.txt")
+                if operation == "exec_argv":
+                    result = await namespace.exec_argv(
+                        [
+                            sys.executable,
+                            "-c",
+                            "import os, sys; from pathlib import Path; "
+                            "assert Path(os.environ['GOLD']).read_text() == 'private gold'; "
+                            "assert sys.argv[1] == 'literal $(unused)'; print(Path.cwd())",
+                            "literal $(unused)",
+                        ],
+                        cwd="/app",
+                        env={"GOLD": "/tests/gold.txt"},
+                    )
+                    assert result.return_code == 0, result.stderr
+                    assert result.stdout.strip() == "/app"
+                    for argv in ([], "echo escaped", [""], [1], ["echo", "\x00"]):
+                        with pytest.raises(ValueError):
+                            await namespace.exec_argv(argv)
+                elif operation == "directories":
+                    host_file = host.native_path("/app/host-only.txt")
+                    host_file.write_text("host")
+                    await namespace.upload_file(gold, "/app/old.txt")
+                    await namespace.empty_dirs(["/app"])
+                    assert not namespace.native_path("/app/old.txt").exists()
+                    assert host_file.read_text() == "host"
+                    await namespace.ensure_dirs(["/app/nested"])
+                    assert await namespace.is_dir("/app/nested")
+                    assert await namespace.is_file("/tests/gold.txt")
+                    await namespace.reset_dirs(
+                        remove_dirs=["/tests"], create_dirs=["/tests/new"]
+                    )
+                    assert namespace.native_path("/tests/new").is_dir()
+                    assert not await namespace.is_file("/tests/gold.txt")
+                elif operation == "filtered_transfers":
+                    await namespace.upload_file(gold, "/tests/drop.txt")
+                    destination = tmp_path / "download"
+                    await namespace.download_dir_filtered(
+                        source_dir="/tests",
+                        target_dir=destination,
+                        include=["gold.txt"],
+                    )
+                    assert (destination / "gold.txt").read_text() == "private gold"
+                    assert not (destination / "drop.txt").exists()
+                    await namespace.download_dir_with_exclusions(
+                        source_dir="/tests",
+                        target_dir=tmp_path / "excluded",
+                        exclude=["drop.txt"],
+                    )
+                    assert (
+                        tmp_path / "excluded/gold.txt"
+                    ).read_text() == "private gold"
+                elif operation == "runtime_control":
+                    with pytest.raises(NotImplementedError, match="runtime control"):
+                        namespace.runtime_config_env()
+                    from psycheval.harbor.runtime_config import PEVAL_CONFIG_ENV
+
+                    with pytest.raises(NotImplementedError, match="runtime control"):
+                        await namespace.exec_argv(
+                            [sys.executable, "-c", "raise AssertionError('executed')"],
+                            env={PEVAL_CONFIG_ENV: str(root / "control.json")},
+                        )
+                else:
+                    with namespace.scoped_exec_env({"GOLD": "/tests/gold.txt"}):
+                        result = await namespace.exec(
+                            'test "$GOLD" = /tests/gold.txt && cat "$GOLD"',
+                            env={"GOLD": "/ignored/default"},
+                        )
+                    assert result.return_code == 0, result.stderr
+                    assert result.stdout == "private gold"
+        finally:
+            assert verifier.environment is host
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or shutil.which("bwrap") is None,
+    reason="Linux Bubblewrap namespace wiring",
+)
+@pytest.mark.parametrize("fail", [False, True])
+def test_namespace_verifications_have_fresh_state_and_release_mounts(tmp_path, fail):
+    from types import SimpleNamespace
+
+    from psycheval.harbor.workbuddy_verifier import _native_namespace
+
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        await host.start(False)
+        verifier = SimpleNamespace(environment=host, linux_namespace=True)
+        root = tmp_path / "staged"
+        root.mkdir()
+        owned = []
+        try:
+            for invocation in range(2):
+                try:
+                    with _native_namespace(verifier, root):
+                        namespace = verifier.environment
+                        owned.append(namespace.native_path("/app").parent)
+                        for mount in ("/app", "/tests", "/tmp", "/logs"):
+                            old = namespace.native_path(mount + "/previous")
+                            assert not old.exists()
+                            old.write_text("must not enter the next verification")
+                        marker = namespace.native_path("/logs/verifier/shared")
+                        if invocation:
+                            assert marker.read_text() == "Trial logs"
+                        marker.write_text("Trial logs")
+                        if fail:
+                            raise RuntimeError("fixture verification failure")
+                except RuntimeError as error:
+                    assert fail and str(error) == "fixture verification failure"
+                assert verifier.environment is host
+            assert owned[0] != owned[1]
+            assert all(not path.exists() for path in owned)
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.skipif(
     os.environ.get("PEVAL_WORKBUDDY_RUNTIME_TESTS") != "1",
     reason="opt-in pinned WorkBuddy runtime integration",
 )
 @pytest.mark.parametrize(
-    "mode", ["hooks", "custom", "module", "bundled", "failure", "missing_env"]
+    "mode",
+    [
+        "hooks",
+        "custom",
+        "module",
+        "bundled",
+        "failure",
+        "missing_env",
+        "reentrant",
+        "namespace",
+    ],
 )
 def test_real_runtime_generic_plugins_preserve_hooks_and_sources(
     tmp_path, monkeypatch, mode
 ):
+    if mode == "namespace" and (
+        sys.platform != "linux" or shutil.which("bwrap") is None
+    ):
+        pytest.skip("Linux Bubblewrap namespace wiring")
     from harbor.models.task.task import Task
 
     from psycheval.harbor.datasets import validate_harbor_dataset
@@ -96,7 +275,42 @@ def build_registry(build):
         return VerifierResult(rewards={"reward": 0.7})
     return VerifierRegistry(plan_builder=plan, scoring_policy=PassRateScoringPolicy(),
         prepare=prepare, finalize_score=finalize, custom_verify=CUSTOM)
-""".replace("CUSTOM", "custom" if mode in {"custom", "module", "bundled"} else "None")
+""".replace(
+        "CUSTOM",
+        "custom"
+        if mode in {"custom", "module", "bundled", "reentrant", "namespace"}
+        else "None",
+    )
+    if mode == "reentrant":
+        plugin = plugin.replace("def custom(verifier):", "async def custom(verifier):")
+        plugin = plugin.replace(
+            "        assert verifier.task.paths.task_dir == build.contract.task_dir",
+            '        if getattr(verifier, "_reentry_probe", False):\n'
+            '            return VerifierResult(rewards={"reward": 0.1})\n'
+            "        verifier._reentry_probe = True\n"
+            "        try:\n"
+            "            await verifier.verify()\n"
+            "        except RuntimeError as error:\n"
+            '            assert "already active" in str(error)\n'
+            "        else:\n"
+            '            raise AssertionError("reentrant verification was admitted")\n'
+            "        verifier._reentry_probe = False\n"
+            "        assert verifier.task.paths.task_dir == build.contract.task_dir",
+        )
+    if mode == "namespace":
+        plugin = plugin.replace("def custom(verifier):", "async def custom(verifier):")
+        plugin = plugin.replace(
+            '        output.write_text("custom")',
+            '        await verifier.environment.upload_file(build.contract.task_dir / "tests/gold.txt", "/tests/gold.txt")\n'
+            '        assert build.runtime.workspace == "/workspace" and build.runtime.tests_dir == "/tests"\n'
+            '        assert build.runtime.container_verifier_dir == "/logs/verifier"\n'
+            '        assert not verifier.environment.native_path("/app/namespace-proof").exists()\n'
+            '        result = await verifier.environment.exec("printf proof > /app/namespace-proof; cat /tests/gold.txt")\n'
+            '        assert result.return_code == 0 and result.stdout == "grading input"\n'
+            '        assert verifier.environment.native_path("/app/namespace-proof").read_text() == "proof"\n'
+            '        assert not (verifier.environment.native_path(build.runtime.workspace) / "namespace-proof").exists()\n'
+            '        output.write_text("custom")',
+        )
     if mode == "failure":
         plugin = plugin.replace(
             'output.write_text("prepare")',
@@ -142,6 +356,7 @@ def build_registry(build):
                 environment=host,
                 trial_paths=host.trial_paths,
                 verifier_env={"WORKBUDDY_TEST_API_KEY": "${WORKBUDDY_TEST_SECRET}"},
+                linux_namespace=mode == "namespace",
             )
             original_override = verifier.override_env
             if mode in {"failure", "missing_env"}:
@@ -155,14 +370,19 @@ def build_registry(build):
                     await verifier.verify()
             else:
                 await verifier.verify()
+                if mode in {"reentrant", "namespace"}:
+                    await verifier.verify()
                 assert (host.trial_paths.verifier_dir / "hooks.txt").read_text() == (
-                    "custom" if mode in {"custom", "module", "bundled"} else "finalize"
+                    "custom"
+                    if mode in {"custom", "module", "bundled", "reentrant", "namespace"}
+                    else "finalize"
                 )
                 assert (
                     secret
                     not in (host.trial_paths.verifier_dir / "score.json").read_text()
                 )
             assert verifier.task is source
+            assert verifier.environment is host
             assert verifier.override_env is original_override
             assert verifier.verifier_env == {
                 "WORKBUDDY_TEST_API_KEY": "${WORKBUDDY_TEST_SECRET}"

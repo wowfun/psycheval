@@ -236,7 +236,7 @@ execution environment; the adapter never treats them as successfully executed.
 The recognized inert WorkBuddy Compose metadata may accompany an archive.
 Native preparation does not install Task dependencies.
 
-The Windows Python/pytest execution-format adapter recognizes
+The native Host Python/pytest execution-format adapter recognizes
 `workbuddy.office.verifier.v1`, independently of Dataset ID. It executes the
 source profile's score/reward snippets and supported pipeline using native argv,
 with copied tests as the collection root. Other plugins use their own commands
@@ -246,6 +246,25 @@ produce adaptation diagnostics. Only recognized file-access paths, interpreter
 launches, and snapshot ordering are changed; instructions, gold data, and scoring
 conditions remain intact. Necessary source/transformed digests remain in the
 Trial verifier audit.
+
+On Linux, verifier kwarg `linux_namespace=true` runs non-Office plugin `exec`
+and `exec_argv` commands in a Trial-owned mount namespace using preinstalled
+Bubblewrap and enabled user namespaces. `/workspace`, `/tests`, `/logs`, `/app`,
+and `/tmp` refer to owned paths, including inside Python and browser processes.
+The host root remains
+readable and networking stays enabled; this is execution-format adaptation under
+the existing trusted-host policy. Unsupported namespace setup is a verifier
+error. Dataset source and scoring code are unchanged.
+Each verification has fresh private `/app`, `/tests`, `/tmp`, and auxiliary
+`/logs` storage, removed when verification ends. The Task workspace and Trial
+Agent/verifier logs remain shared. Runtime command paths stay logical inside
+the namespace; `native_path`, file transfers and directory operations use the
+same mount map, including nested test paths. Traversal outside a logical mount
+is rejected. Scoped command environment values keep their logical paths.
+Host runtime control configuration is unsupported on this wrapper; direct
+Python filesystem access remains trusted host access. Each WorkBuddyVerifier
+instance admits one verification at a time. Overlapping or
+reentrant calls fail before changing its staged Task or environment.
 
 Workspace extraction rejects unsafe paths, links, `.git` metadata, conflicting
 duplicate members, and oversized input. Identical repeated entries remain valid.

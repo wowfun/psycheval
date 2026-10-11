@@ -1267,6 +1267,59 @@ def test_actual_harbor_trial_scores_current_acp_evidence(tmp_path, multi, mode):
         assert sessions[0] == sessions[1]
 
 
+@linux
+@pytest.mark.skipif(not shutil.which("bwrap"), reason="Bubblewrap is unavailable")
+def test_workbuddy_namespace_maps_python_literals_and_isolates_app(tmp_path):
+    from psycheval.harbor.workbuddy_namespace import NamespaceEnvironment
+
+    async def run():
+        host = make_environment(
+            tmp_path,
+            environment_kwargs={
+                "workdir_root": tmp_path / "work",
+                "workspace_baseline": "none",
+            },
+        )
+        await host.start(False)
+        try:
+            private = host.runtime_directory("workbuddy-namespace-fixture")
+            wrapped = NamespaceEnvironment(host, host.environment_dir.parent, private)
+            result = await wrapped.exec(
+                'python -c \'from pathlib import Path; Path("/app/result").write_text("owned"); Path("/workspace/result").write_text(Path("/app/result").read_text())\'',
+                env={"PATH": os.environ["PATH"]},
+            )
+            assert result.return_code == 0, result.stderr
+            assert (host.work_dir / "result").read_text() == "owned"
+            assert (private / "app/result").read_text() == "owned"
+            assert wrapped.native_path("/app/result") == private / "app/result"
+            source = tmp_path / "private-tests"
+            source.mkdir()
+            (source / "gold.txt").write_text("private grader")
+            await wrapped.upload_dir(source, "/tests/nested")
+            assert (
+                wrapped.native_path("/tests/nested") / "gold.txt"
+            ).read_text() == "private grader"
+            result = await wrapped.exec("cat /tests/nested/gold.txt")
+            assert result.return_code == 0 and result.stdout == "private grader"
+            assert wrapped.native_path("/workspace/result") == host.work_dir / "result"
+            copied = tmp_path / "download.txt"
+            await wrapped.download_file("/app/result", copied)
+            assert copied.read_text() == "owned"
+            await wrapped.upload_file(source / "gold.txt", "/tests/single.txt")
+            assert (
+                wrapped.native_path("/tests/single.txt").read_text() == "private grader"
+            )
+            downloaded = tmp_path / "downloaded-tests"
+            await wrapped.download_dir("/tests/nested", downloaded)
+            assert (downloaded / "gold.txt").read_text() == "private grader"
+            with pytest.raises(ValueError, match="unsupported"):
+                wrapped.native_path("/tests/../outside")
+        finally:
+            await host.stop(True)
+
+    asyncio.run(run())
+
+
 def test_evidence_preserves_nontext_content_and_interleaved_tool_identity(tmp_path):
     updates = [
         {

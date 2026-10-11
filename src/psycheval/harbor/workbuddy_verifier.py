@@ -29,7 +29,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from harbor.models.task.config import TaskOS
 from harbor.models.task.paths import TaskPaths
 from harbor.models.verifier.result import VerifierResult
 from harbor.utils.env import (
@@ -952,7 +951,23 @@ def _staged_contract(task: Path):
 class WorkBuddyVerifier(NativePythonVerifier):
     """Run the upstream plugin lifecycle, with native execution-format adaptation."""
 
+    def __init__(self, *args, linux_namespace=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        if type(linux_namespace) is not bool:
+            raise ValueError("linux_namespace must be a boolean")
+        self.linux_namespace = linux_namespace
+        self._verifying = False
+
     async def verify(self) -> VerifierResult:
+        if self._verifying:
+            raise RuntimeError("WorkBuddy verification is already active")
+        self._verifying = True
+        try:
+            return await self._verify()
+        finally:
+            self._verifying = False
+
+    async def _verify(self) -> VerifierResult:
         from workbuddy_bench.judge.registry import (
             RegistryBuildContext,
             build_default_context,
@@ -965,17 +980,15 @@ class WorkBuddyVerifier(NativePythonVerifier):
 
         validate_workbuddy_runtime()
         manifest = self.task.paths.task_dir / "tests/verifier.toml"
-        if (
-            isinstance(self.environment, HostEnvironment)
-            and self.environment.os == TaskOS.WINDOWS
-            and manifest.is_file()
-        ):
+        if isinstance(self.environment, HostEnvironment) and manifest.is_file():
             declaration = tomllib.loads(_read_source(manifest.parent, manifest))
             if declaration.get("schema_version") == "workbuddy.office.verifier.v1":
                 return await super().verify()
-        with _staged_verifier_task(self):
+        with _staged_verifier_task(self) as root, _native_namespace(self, root):
             contract = _staged_contract(self.task.paths.task_dir)
             runtime = _workbuddy_runtime_type().from_verifier(self)
+            # Namespace mounts implement the runtime's logical container paths;
+            # only a plain Host needs native paths in its command templates.
             if isinstance(self.environment, HostEnvironment):
                 runtime.workspace = str(
                     self.environment.native_path(
@@ -1005,3 +1018,27 @@ class WorkBuddyVerifier(NativePythonVerifier):
                 score = await maybe_await(registry.finalize_score(score, context, plan))
             runtime.write_score(score)
             return VerifierResult(rewards=score.reward_payload())
+
+
+@contextmanager
+def _native_namespace(verifier, root):
+    from .environment import HostEnvironment
+    from .workbuddy_namespace import NamespaceEnvironment
+
+    original = verifier.environment
+    if not verifier.linux_namespace:
+        try:
+            yield
+        finally:
+            verifier.environment = original
+        return
+    if not isinstance(original, HostEnvironment):
+        raise ValueError("linux_namespace requires HostEnvironment")
+    with tempfile.TemporaryDirectory(
+        prefix="verification-", dir=original.runtime_directory("workbuddy-namespace")
+    ) as private:
+        verifier.environment = NamespaceEnvironment(original, root, Path(private))
+        try:
+            yield
+        finally:
+            verifier.environment = original
