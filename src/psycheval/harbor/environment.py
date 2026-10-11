@@ -5,6 +5,7 @@ import codecs
 import fnmatch
 import getpass
 import hashlib
+import math
 import os
 import platform
 import re
@@ -74,6 +75,7 @@ _WORKBUDDY_ARCHIVE_FILE_LIMIT = 64 * 1024 * 1024
 _WORKBUDDY_ARCHIVE_TOTAL_LIMIT = 256 * 1024 * 1024
 _WORKBUDDY_ARCHIVE_ENTRY_LIMIT = 100_000
 _PREPARATION_OUTPUT_LIMIT = 8 * 1024 * 1024
+_DEFAULT_TERMINATION_GRACE_SEC = 2.0
 
 
 async def _await_owned_task(task: asyncio.Task, *, on_cancel=None):
@@ -657,14 +659,18 @@ class _LinuxProcessAdapter:
                 "only root/current-user aliases are accepted"
             )
 
-    async def terminate(self, process: asyncio.subprocess.Process) -> None:
+    async def terminate(
+        self,
+        process: asyncio.subprocess.Process,
+        grace_sec: float = _DEFAULT_TERMINATION_GRACE_SEC,
+    ) -> None:
         # Descendants may still own the group and output pipes after the leader exits.
         try:
             os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             return
         try:
-            await asyncio.wait_for(process.wait(), timeout=2)
+            await asyncio.wait_for(process.wait(), timeout=grace_sec)
         except asyncio.TimeoutError:
             pass
         try:
@@ -715,6 +721,9 @@ class HostEnvironment(BaseEnvironment):
             )
         self._workspace_baseline = workspace_baseline
         self._runtime_root: Path | None = None
+        self._short_runtime_dirs: dict[str, Path] = {}
+        self._termination_graces: dict[asyncio.subprocess.Process, float] = {}
+        self._termination_tasks: dict[asyncio.subprocess.Process, asyncio.Task] = {}
         self._workspace: _Workspace | None = None
         self._started = False
         self._stopping = False
@@ -1218,8 +1227,19 @@ class HostEnvironment(BaseEnvironment):
             cancel.set()
         async with self._launch_lock:
             commands = list(self._active_processes.items())
-        for process, _ in commands:
-            await self._terminate_process(process)
+        terminations = await asyncio.gather(
+            *(self._terminate_process(process) for process, _ in commands),
+            return_exceptions=True,
+        )
+        errors = [
+            result for result in terminations if isinstance(result, BaseException)
+        ]
+        if errors:
+            for error in errors[1:]:
+                errors[0].add_note(
+                    f"additional command termination failure: {type(error).__name__}"
+                )
+            raise errors[0]
         if commands:
             await asyncio.gather(*(done for _, done in commands))
         if self._active_filesystem:
@@ -1262,6 +1282,15 @@ class HostEnvironment(BaseEnvironment):
             else:
                 self._runtime_root = None
         self._transient_workdirs.clear()
+        for name, path in list(self._short_runtime_dirs.items()):
+            try:
+                shutil.rmtree(path)
+            except FileNotFoundError:
+                self._short_runtime_dirs.pop(name)
+            except OSError as exc:
+                errors.append(exc)
+            else:
+                self._short_runtime_dirs.pop(name)
         if errors:
             for additional in errors[1:]:
                 errors[0].add_note(f"additional cleanup failure: {additional}")
@@ -1514,12 +1543,30 @@ class HostEnvironment(BaseEnvironment):
         directory = self._runtime_root / "configs" / uuid4().hex
         return write_effective_runtime_config(directory / "peval.json", config)
 
-    def runtime_directory(self, name: str) -> Path:
+    def runtime_directory(self, name: str, *, short_path: bool = False) -> Path:
         """Return owned neutral storage outside the Task workspace and Job paths."""
         self._require_filesystem_ready()
         if not name or re.fullmatch(r"[A-Za-z0-9_-]+", name) is None:
             raise ValueError("runtime directory name must be one plain component")
         assert self._runtime_root is not None
+        if short_path:
+            if self.os != TaskOS.LINUX:
+                raise ValueError("short runtime directories require Linux")
+            path = self._short_runtime_dirs.get(name)
+            if path is None:
+                path = Path(tempfile.mkdtemp(prefix="peacp-", dir="/tmp"))
+                self._short_runtime_dirs[name] = path
+            info = path.lstat()
+            if (
+                _is_native_link(path)
+                or not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o700
+            ):
+                raise ValueError(
+                    "short runtime directory ownership or permissions changed"
+                )
+            return path
         path = self._runtime_root / "state" / name
         if any(
             _is_native_link(part) for part in (self._runtime_root, path.parent, path)
@@ -1751,6 +1798,7 @@ class HostEnvironment(BaseEnvironment):
         env: dict[str, str] | None = None,
         timeout_sec: float | None = None,
         user: str | int | None = None,
+        termination_grace_sec: float = _DEFAULT_TERMINATION_GRACE_SEC,
     ) -> ExecResult:
         """Execute literal argv/per-call env; map declared environment paths."""
         if (
@@ -1762,8 +1810,25 @@ class HostEnvironment(BaseEnvironment):
             raise ValueError(
                 "HostEnvironment argv must contain an executable and NUL-free string arguments"
             )
+        if (
+            isinstance(termination_grace_sec, bool)
+            or not isinstance(termination_grace_sec, (int, float))
+            or not math.isfinite(termination_grace_sec)
+            or termination_grace_sec <= 0
+        ):
+            raise ValueError("termination grace must be finite and positive")
+        if (
+            self.os != TaskOS.LINUX
+            and termination_grace_sec != _DEFAULT_TERMINATION_GRACE_SEC
+        ):
+            raise ValueError("custom termination grace requires a Linux Host")
         return await self._exec_process(
-            argv, cwd=cwd, env=env, timeout_sec=timeout_sec, user=user
+            argv,
+            cwd=cwd,
+            env=env,
+            timeout_sec=timeout_sec,
+            user=user,
+            termination_grace_sec=termination_grace_sec,
         )
 
     async def _spawn_process(
@@ -1857,6 +1922,7 @@ class HostEnvironment(BaseEnvironment):
         timeout_sec: float | None,
         user: str | int | None,
         initializing: bool = False,
+        termination_grace_sec: float = _DEFAULT_TERMINATION_GRACE_SEC,
     ) -> ExecResult:
         self._require_process_access()
         # Fail promptly during startup/stop, then recheck after waiting for the lock.
@@ -1868,6 +1934,7 @@ class HostEnvironment(BaseEnvironment):
             )
             done = asyncio.get_running_loop().create_future()
             self._active_processes[process] = done
+            self._termination_graces[process] = termination_grace_sec
         callback = self._output_callback()
         output_bytes = 0
 
@@ -1943,6 +2010,8 @@ class HostEnvironment(BaseEnvironment):
                 )
             finally:
                 self._active_processes.pop(process, None)
+                self._termination_graces.pop(process, None)
+                self._termination_tasks.pop(process, None)
                 if not done.done():
                     done.set_result(None)
         return ExecResult(
@@ -1963,4 +2032,15 @@ class HostEnvironment(BaseEnvironment):
             raise RuntimeError("HostEnvironment is stopping")
 
     async def _terminate_process(self, process: asyncio.subprocess.Process) -> None:
-        await self._process_adapter.terminate(process)
+        if self.os != TaskOS.LINUX:
+            await self._process_adapter.terminate(process)
+            return
+        task = self._termination_tasks.get(process)
+        if task is None:
+            work = self._process_adapter.terminate(
+                process,
+                self._termination_graces.get(process, _DEFAULT_TERMINATION_GRACE_SEC),
+            )
+            task = asyncio.create_task(work)
+            self._termination_tasks[process] = task
+        await _await_owned_task(task)

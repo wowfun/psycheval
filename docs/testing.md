@@ -39,6 +39,13 @@ uses an isolated Trial home and a local HTTP model fixture with a dummy key. It
 checks provider/model registration, Unicode stdin, JSON events, and ATIF without
 contacting a live model provider.
 
+The Host ACP tests use synthetic stdio peers by default. Opt-in RSIversi
+acceptance uses `PEVAL_RSIVERSI_ACP` as the absolute prebuilt executable. Its
+test owns a local HTTP provider and a private configuration seed. Run
+`uv run pytest tests/harbor/test_acp.py -k rsiversi` on Linux. Local-fixture and
+live-provider evidence are reported separately. WSL uses an independent
+`UV_PROJECT_ENVIRONMENT`; it must not replace a native Windows virtualenv.
+
 ## Downstream source-copy checks
 
 The Python suite copies the complete Harbor subtree into an unrelated nested

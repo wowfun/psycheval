@@ -47,6 +47,13 @@ def _indexed_calls(trajectory: Trajectory) -> list[_CallEvidence]:
     ]
 
 
+def _canonical(trajectory: Trajectory, call: ToolCall) -> bool:
+    # Identity is usable only when both the stream and this call establish it.
+    return (trajectory.extra or {}).get("acp_tool_evidence_complete") is not False and (
+        call.extra or {}
+    ).get("acp_canonical_name") is not False
+
+
 def matching_observations(trajectory: Trajectory, rule: dict[str, Any]) -> list[str]:
     """Extract evidence for a required-call rule, without adding scoring items."""
     branches = _required_branches(rule, 1)
@@ -55,7 +62,8 @@ def matching_observations(trajectory: Trajectory, rule: dict[str, Any]) -> list[
         accepted = [
             branch
             for branch in branches
-            if _tool_name_matches(candidate.call.function_name, branch["tool_names"])
+            if _canonical(trajectory, candidate.call)
+            and _tool_name_matches(candidate.call.function_name, branch["tool_names"])
             and _arguments_match(candidate, branch)
         ]
         matches.extend(
@@ -82,6 +90,7 @@ def required_call_checks(
             for branch in branches
             for candidate in calls
             if candidate.position > cursor
+            and _canonical(trajectory, candidate.call)
             and _tool_name_matches(candidate.call.function_name, branch["tool_names"])
         ]
         accepted_patterns = sorted(
@@ -131,6 +140,18 @@ def required_call_checks(
 
 def forbidden_tool_check(trajectory: Trajectory, patterns: list[str]) -> dict[str, Any]:
     _validate_tool_patterns(patterns, field="forbidden_tool_names")
+    # An incomplete stream cannot prove absence, including when it has no calls.
+    if (trajectory.extra or {}).get("acp_tool_evidence_complete") is False or any(
+        not _canonical(trajectory, call)
+        for step in trajectory.steps
+        for call in step.tool_calls or []
+    ):
+        return _check(
+            "forbidden_tools",
+            "forbidden_tools",
+            False,
+            "incomplete canonical Tool identity evidence",
+        )
     observed = sorted(
         {
             call.function_name
@@ -235,6 +256,11 @@ def _tool_name_matches(name: str, patterns: list[str]) -> bool:
 
 
 def _arguments_match(candidate: _CallEvidence, rule: dict[str, Any]) -> bool:
+    if (candidate.call.extra or {}).get("arguments_available") is False and any(
+        rule.get(field)
+        for field in ("argument_values", "argument_terms", "argument_url")
+    ):
+        return False
     arguments = candidate.call.arguments
     argument_values = rule.get("argument_values", {})
     if any(arguments.get(key) != value for key, value in argument_values.items()):

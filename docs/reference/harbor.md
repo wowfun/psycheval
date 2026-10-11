@@ -3,6 +3,95 @@
 Psycheval supports the public Harbor `0.21.0` contract through
 `psycheval.harbor`.
 
+## Host ACP Agent
+
+`psycheval.harbor.acp_agent:HostACPAgent` evaluates a preinstalled ACP v1 Agent
+on a Linux Host. `argv` is literal executable/argument input. `config_dir` seeds
+isolated XDG configuration once; linked entries are rejected. HOME/XDG state
+stays private and stable within a Trial, separately from per-invocation evidence.
+Only explicitly supplied configuration is copied; ambient user configuration is
+not discovered. The child receives effective Agent environment with generated
+isolation paths taking precedence and evaluation control variables removed.
+
+`config_options` is an ordered mapping of exact advertised select IDs to values.
+It is applied and confirmed before prompting; dependent options follow their
+prerequisites. `model_name` is only a reporting label. Authentication is attempted
+only with `authenticate_method_id`. Client filesystem/terminal services and
+Skills injection are unsupported. MCP transport capabilities are negotiated.
+Resume uses the exact saved Session and setup, preferring advertised resume over
+load; load replay is excluded using wire order. Recovery never creates a replacement.
+
+`permission_mode=allow|deny` prefers the corresponding once option, then always.
+Unavailable policy choices cancel the request and fail the invocation. Decisions
+are retained. `tool_result_format=acp|rsiversi` defaults to ACP status semantics;
+the RSIversi policy additionally interprets the native ToolResult envelope and
+recognizable process outcomes independently of tool name. A running background
+command, timeout, signal, nonzero exit or unknown terminal result cannot prove
+successful execution.
+Tool-name grading requires the Agent's non-standard `name` extension on tool
+updates. The pinned ACP v1 SDK schema does not define a canonical tool-name field;
+`title` is presentation and cannot establish identity. The adapter explicitly
+validates and retains `name` from the raw wire before SDK projection. Agents
+without this extension remain usable for artifact and answer grading, but
+missing identity or incomplete protocol evidence cannot pass name-based rules.
+Observation terms inspect delivered content blocks; RSIversi process observations
+use stdout/stderr text, excluding execution metadata. Raw structured results
+remain in observation extras and do not become synthetic observation text.
+
+Raw frames and stderr are streamed to current-call logs before SDK projection.
+Each invocation shares a finite `max_evidence_bytes` budget across raw stdin,
+stdout, decoded events and stderr. Exhaustion fails the invocation, marks protocol
+evidence incomplete, retains its admitted prefix, and still settles descendants.
+Peer-derived summary metadata also consumes this budget. The fixed cleanup and
+integrity records are retained even when admission is exhausted.
+The strict wire limits and byte-budget default belong to
+[`acp_protocol`](../../src/psycheval/harbor/acp_protocol.py).
+The closed evidence files are bound to an invocation by a summary manifest of
+sizes and digests. Missing, truncated or substituted retained files fail
+conversion explicitly. Publication failures cannot admit partial evidence.
+Malformed known protocol data fails explicitly. Context/capacity usage is not
+token accounting; absent token and cost evidence remains unknown. Conversion is
+performed once by Harbor post-run context population, including partial prompts.
+Configuration failures do not fabricate a user turn.
+
+The harness owns a Linux subreaper and all Agent descendants, including separate
+tool process groups. Every outcome settles cleanup before verifier admission.
+`shutdown_timeout_sec` is a shared cleanup deadline with a reserved forced-cleanup
+interval. `handshake_timeout_sec` bounds the entire setup sequence, including
+initialization, authentication, Session restoration and configuration selection;
+each RPC consumes the remaining deadline. Defaults belong to
+[`HostACPAgent`](../../src/psycheval/harbor/acp_agent.py).
+Cancel delivery and connection teardown are bounded by the cleanup deadline;
+another stop signal interrupts cooperative waits. Cleanup failures still retain
+categorical summary evidence.
+If the harness exits before publishing its invocation summary, its captured
+stdout/stderr tails are retained in `acp.harness.stdout.log` and
+`acp.harness.stderr.log`, bounded separately by a combined `max_evidence_bytes`
+cap with stderr taking priority. These diagnostics cannot establish protocol
+evidence.
+Missing cleanup confirmation raises from post-run population and aborts both
+single- and multi-step Trials before verification. Ordinary prompt failures may
+still be verified after confirmed cleanup. Arbitrary external hard-kill recovery
+and restoration across rebuilt Hosts are outside this adapter's guarantee.
+One Agent retains a stable private Session state and reuses one call staging
+directory. Closed evidence is moved to the current Agent logs before staging
+reuse, including on cancellation. Concurrent invocations of that Agent reject
+before modifying evidence. Context population preserves caller metadata.
+Each accepted invocation clears prior published evidence before validating its
+Host. Post-run population admits only that invocation and writes a trajectory
+after cleanup confirmation. A deleted or replaced Host runtime requires a new
+Agent, even when the same Host object is reused.
+
+`HostEnvironment.runtime_directory(name, short_path=True)` allocates a private
+short Linux directory independently of TMPDIR, owned and reused by this Host.
+It survives `stop(delete=False)` and is removed on `delete=True`; failed removals
+retain ownership for retry. RSIversi's XDG runtime is limited to 28 UTF-8 bytes.
+`exec_argv` accepts a positive `termination_grace_sec` on Linux; its default
+belongs to [`environment`](../../src/psycheval/harbor/environment.py).
+Windows uses owned Job termination and rejects a custom grace.
+ACP requests its shutdown budget plus five seconds; cancellation and
+Host stop share the same command termination operation.
+
 ## Public seams
 
 - `psycheval.harbor.agent:ExternalHarnessAgent` runs a configured external
@@ -263,6 +352,8 @@ deletion so their configuration remains available after completion. Runtime JSON
 run off the event loop; cancellation waits for the write to finish before releasing
 the command's runtime. After `stop(delete=False)` completes, commands may run again
 in the retained workspace.
+Host stop initiates every admitted command's termination before waiting for
+completion; one command's grace period does not defer signaling its siblings.
 Calling `start` on a successfully started Host is idempotent, including after
 `stop(delete=False)`.
 `stop(delete=True)`

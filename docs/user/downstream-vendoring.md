@@ -22,13 +22,19 @@ commit in your dependency tracking so later updates replace the same source unit
 Add the integration's dependencies to your downstream project:
 
 ```console
-uv add "harbor==0.21.0" "PyYAML>=6.0,<7" "pathspec>=1.0,<2" "httpx>=0.28,<1"
+uv add "harbor==0.21.0" "PyYAML>=6.0,<7" "pathspec>=1.0,<2" "httpx>=0.28,<1" "psutil>=7,<8" "jsonschema>=4.26,<5"
 ```
 
 Commit the resulting `pyproject.toml` and `uv.lock`; use `uv sync --locked` to
 reproduce the environment. The direct dependency constraints are maintained in
 Psycheval's [pyproject.toml](../../pyproject.toml). Harbor installs its own
-transitive dependencies.
+transitive dependencies. ACP evaluation additionally requires
+`agent-client-protocol==0.12.1` on Python 3.12–3.14. Keep this dependency pinned
+when copying the ACP adapter; other integrations do not import the SDK.
+
+```console
+uv add "agent-client-protocol==0.12.1; python_version < '3.15'"
+```
 
 Install your downstream package in this environment, including the copied
 subtree in its package configuration. Harbor and child harnesses must be able

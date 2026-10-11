@@ -38,15 +38,21 @@ def copied_harbor(tmp_path: Path) -> Path:
         "host",
         "host_filesystem",
         "project",
+        "acp",
     ],
 )
 def test_copied_harbor_runs_without_the_original_package(
     copied_harbor: Path, scenario: str
 ) -> None:
-    if scenario == "host" and sys.platform != "linux":
+    if scenario in {"host", "acp"} and sys.platform != "linux":
         pytest.skip("synthetic host command uses Linux shell quoting")
     if scenario == "workbuddy":
         write_office_bundle(copied_harbor / "bundle")
+    if scenario == "acp":
+        shutil.copy2(ROOT / "tests/fixtures/acp_peer.py", copied_harbor / "acp_peer.py")
+        (copied_harbor / "sitecustomize.py").write_text(
+            "import sys\nclass Block:\n def find_spec(self, fullname, path, target=None):\n  if fullname.split('.')[0] == 'psycheval': raise AssertionError(fullname)\nsys.meta_path.insert(0, Block())\n"
+        )
     python_flags = ["-I"]
     if scenario == "trajectory_file":
         python_flags += ["-X", "utf8=0"]

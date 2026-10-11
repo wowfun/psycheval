@@ -528,6 +528,47 @@ def project(root: Path) -> None:
     asyncio.run(scenario())
 
 
+def acp(root):
+    from harbor.models.agent.context import AgentContext
+    from harbor.models.task.config import EnvironmentConfig
+    from harbor.models.trial.paths import TrialPaths
+
+    paths = TrialPaths(root / "trial")
+    paths.mkdir()
+    environment_dir = root / "environment"
+    environment_dir.mkdir()
+    (environment_dir / "Dockerfile").write_text("FROM scratch\n")
+    # Emulate an installed downstream package for the child interpreter.
+    host = module("environment").HostEnvironment(
+        environment_dir=environment_dir,
+        environment_name="copied-acp",
+        session_id="copied",
+        trial_paths=paths,
+        task_env_config=EnvironmentConfig(workdir="/workspace"),
+        host_access={"filesystem": True, "process": True},
+        workdir_root=root / "work",
+        workspace_baseline="none",
+        persistent_env={"PYTHONPATH": str(root)},
+    )
+    agent = module("acp_agent").HostACPAgent(
+        logs_dir=paths.agent_dir, argv=[sys.executable, str(root / "acp_peer.py")]
+    )
+
+    async def scenario():
+        await host.start(False)
+        try:
+            await agent.setup(host)
+            for action in (agent.run, agent.resume):
+                context = AgentContext()
+                await action("copied ACP", host, context)
+                agent.populate_context_post_run(context)
+                assert context.metadata["acp_stop_reason"] == "end_turn"
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
 if __name__ == "__main__":
     sys.dont_write_bytecode = True
     root = Path(sys.argv[1])
@@ -544,6 +585,7 @@ if __name__ == "__main__":
         "synthetic_harness": synthetic_harness,
         "native_office": native_office,
         "project": project,
+        "acp": acp,
     }
     scenarios[sys.argv[2]](root)
     assert not any(name.split(".")[0] == "psycheval" for name in sys.modules)

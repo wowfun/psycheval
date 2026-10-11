@@ -34,6 +34,75 @@ _LINUX_ONLY = pytest.mark.skipif(
 )
 
 
+def test_stop_starts_all_command_terminations_before_waiting(tmp_path, monkeypatch):
+    async def scenario():
+        host = make_environment(tmp_path)
+        await host.start(False)
+        release, both_started = asyncio.Event(), asyncio.Event()
+        started = set()
+        original = host._process_adapter.terminate
+
+        async def tracked_terminate(process, *args):
+            started.add(process.pid)
+            if len(started) == 2:
+                both_started.set()
+            await release.wait()
+            await original(process, *args)
+
+        monkeypatch.setattr(host._process_adapter, "terminate", tracked_terminate)
+        commands = [
+            asyncio.create_task(
+                host.exec_argv(
+                    [
+                        sys.executable,
+                        "-c",
+                        f"from pathlib import Path; import time; Path('ready-{index}').touch(); time.sleep(120)",
+                    ]
+                )
+            )
+            for index in range(2)
+        ]
+        stop = None
+        try:
+            async with asyncio.timeout(10):
+                while not all(
+                    (host.work_dir / f"ready-{index}").exists() for index in range(2)
+                ):
+                    await asyncio.sleep(0.01)
+            stop = asyncio.create_task(host.stop(False))
+            await asyncio.wait_for(both_started.wait(), 2)
+        finally:
+            release.set()
+            if stop is not None:
+                await stop
+            await asyncio.gather(*commands)
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job termination")
+def test_custom_termination_grace_rejects_unsupported_windows_host(tmp_path):
+    async def scenario():
+        host = make_environment(tmp_path)
+        await host.start(False)
+        try:
+            with pytest.raises(ValueError, match="Linux"):
+                await host.exec_argv(
+                    [
+                        sys.executable,
+                        "-c",
+                        "from pathlib import Path; Path('executed').touch()",
+                    ],
+                    termination_grace_sec=3,
+                )
+            assert not (host.work_dir / "executed").exists()
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
 def make_environment(
     tmp_path: Path,
     *,

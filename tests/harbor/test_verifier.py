@@ -28,6 +28,70 @@ _WEB_FETCH_FIXTURE = _FIXTURES_ROOT / "web-fetch-01"
 _BROWSER_CONTROL_FIXTURE = _FIXTURES_ROOT / "browser-control-01"
 
 
+def test_acp_zero_calls_with_incomplete_protocol_cannot_prove_no_forbidden_tools():
+    from psycheval.harbor.verifier._calls import forbidden_tool_check
+
+    trajectory = Trajectory(
+        schema_version="ATIF-v1.7",
+        trajectory_id="no-calls",
+        agent={"name": "fixture", "version": "1"},
+        steps=[{"step_id": 1, "source": "user", "message": "task"}],
+    )
+    assert forbidden_tool_check(trajectory, ["forbidden"])["passed"]
+    trajectory.extra = {"acp_tool_evidence_complete": False}
+    assert not forbidden_tool_check(trajectory, ["forbidden"])["passed"]
+
+
+@pytest.mark.parametrize("incomplete", ["trajectory", "identity"])
+def test_acp_call_identity_gates_observation_matching(incomplete):
+    trajectory = Trajectory(
+        schema_version="ATIF-v1.7",
+        trajectory_id="unknown-identity",
+        agent={"name": "fixture", "version": "1"},
+        steps=[_step_with_call(1, "call", "bash", {}, "matched")],
+    )
+    rule = _required_call(_branch("bash", observation_terms=["matched"]))
+    assert matching_observations(trajectory, rule) == ["matched"]
+    if incomplete == "trajectory":
+        trajectory.extra = {"acp_tool_evidence_complete": False}
+    else:
+        trajectory.steps[0].tool_calls[0].extra = {"acp_canonical_name": False}
+    assert matching_observations(trajectory, rule) == []
+
+
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        {"argument_values": {"command": "matched"}},
+        {"argument_terms": ["matched"]},
+        {"argument_url": "https://example.test/"},
+    ],
+)
+def test_acp_missing_arguments_cannot_pass_argument_rules(constraint):
+    from psycheval.harbor.verifier._calls import required_call_checks
+
+    trajectory = Trajectory(
+        schema_version="ATIF-v1.7",
+        trajectory_id="unknown-arguments",
+        agent={"name": "fixture", "version": "1"},
+        steps=[
+            _step_with_call(
+                1,
+                "call",
+                "bash",
+                {"command": "matched", "url": "https://example.test/"},
+                "matched",
+            )
+        ],
+    )
+    rule = _required_call(_branch("bash", **constraint))
+    assert all(check["passed"] for check in required_call_checks(trajectory, [rule]))
+    trajectory.steps[0].tool_calls[0].extra = {"arguments_available": False}
+    checks = required_call_checks(trajectory, [rule])
+    assert [check["passed"] for check in checks] == [True, False, False]
+    assert matching_observations(trajectory, rule) == []
+
+
 @pytest.mark.parametrize("operation", ["checks", "evidence"])
 def test_repeated_call_matching_serializes_each_arguments_object_once(
     tmp_path, monkeypatch, operation

@@ -44,6 +44,9 @@ trajectory, verifier, and external-Dataset seams. It owns host execution,
 harness integration, evidence scoring, non-executing Dataset resolution, and
 the public WorkBuddy configuration and metrics functions. Its subtree is a relocatable source-copy
 unit: it imports no other Psycheval module and uses relative internal imports.
+Its Host ACP adapter owns evaluation-side negotiation, isolated Session lifetime
+and strict raw-event conversion. It does not use the serve WebSocket gateway;
+the two ACP boundaries retain their own trust and execution contracts.
 Its trajectory-validation boundary owns UTF-8 file decoding and delegates
 schema and image-reference validation to Harbor.
 Dataset services accept explicit identifiers, paths, and formats. WorkBuddy
