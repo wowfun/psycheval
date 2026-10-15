@@ -10,9 +10,9 @@ from harbor.models.trajectories import Trajectory
 from .acp_protocol import (
     DEFAULT_MAX_EVIDENCE_BYTES,
     MAX_EVENT_FRAME,
-    MAX_EVIDENCE_FRAMES,
     MAX_JSON_DEPTH,
     ProtocolError,
+    evidence_frame_limit,
     verify_evidence,
 )
 
@@ -36,6 +36,15 @@ def _text(content, depth=0):
     return ""
 
 
+def _metadata(state):
+    metadata = state.get("_meta")
+    if metadata is None:
+        return {}
+    if not isinstance(metadata, dict):
+        raise ProtocolError("invalid retained tool metadata")
+    return metadata
+
+
 def outcome(state, result_format):
     raw = state.get("rawOutput")
     status = state.get("status")
@@ -53,6 +62,55 @@ def outcome(state, result_format):
         "is_error": normalized != "completed",
     }
     content = _text(state.get("content", []))
+    if result_format == "codebuddy":
+        metadata = _metadata(state)
+        native = metadata.get("codebuddy.ai/rawResponse")
+        if native is None:
+            native = raw
+        extra["raw_response"] = native
+        content = _text(raw) or content
+        if isinstance(native, dict):
+            code = native.get("exitCode", native.get("exit_code"))
+            signal = native.get("signal")
+            extra.update(exit_code=code, signal=signal)
+            if (type(code) is int and code != 0) or signal is not None:
+                extra.update(status="failed", is_error=True)
+            if (
+                native.get("interrupted") is True
+                or native.get("sandboxDenied") is True
+                or native.get("tool_error_code") is not None
+            ):
+                extra.update(status="failed", is_error=True)
+            output = native.get("output")
+            if isinstance(output, str):
+                content = output
+            elif isinstance(output, dict):
+                content = (
+                    "\n".join(
+                        output.get(key, "")
+                        for key in ("stdout", "stderr")
+                        if isinstance(output.get(key), str) and output[key]
+                    )
+                    or content
+                )
+        if (
+            (
+                state.get("name") == "Bash"
+                or state.get("kind") == "execute"
+                or isinstance(native, dict)
+                and any(key in native for key in ("exitCode", "exit_code", "signal"))
+            )
+            and normalized == "completed"
+            and extra["status"] == "completed"
+        ):
+            if (
+                not isinstance(native, dict)
+                or type(native.get("exitCode", native.get("exit_code"))) is not int
+                or "signal" not in native
+            ):
+                extra.update(status="incomplete", is_error=True)
+        if metadata.get("codebuddy.ai/businessFailed") is True:
+            extra.update(status="failed", is_error=True)
     if (
         result_format == "rsiversi"
         and normalized == "completed"
@@ -104,6 +162,29 @@ def outcome(state, result_format):
     return content, extra
 
 
+def _merge_call(state, update, result_format):
+    if "name" in update and state.get("name") not in {None, update["name"]}:
+        raise ProtocolError("Tool canonical identity changed")
+    if result_format == "codebuddy":
+        metadata = _metadata(state)
+        incoming = _metadata(update)
+        native_name = incoming.get("codebuddy.ai/toolName")
+        if native_name is not None:
+            if state.get("name") not in (None, native_name) or update.get(
+                "name"
+            ) not in (None, native_name):
+                raise ProtocolError("Tool canonical identity changed")
+        metadata.update(
+            {key: value for key, value in incoming.items() if value is not None}
+        )
+        state.update(update)
+        state["_meta"] = metadata
+        if native_name is not None:
+            state["name"] = native_name
+    else:
+        state.update(update)
+
+
 def convert(
     directory: Path, summary: dict, instruction: str, agent: dict, result_format: str
 ) -> Trajectory | None:
@@ -119,14 +200,15 @@ def _events(path, maximum):
     if not path.exists():
         raise ProtocolError("retained ACP events are missing")
     consumed = 0
+    maximum_frames = evidence_frame_limit(maximum)
     with path.open("rb") as stream:
-        for index in range(MAX_EVIDENCE_FRAMES + 1):
+        for index in range(maximum_frames + 1):
             line = stream.readline(MAX_EVENT_FRAME + 1)
             if not line:
                 return
             consumed += len(line)
             if (
-                index == MAX_EVIDENCE_FRAMES
+                index == maximum_frames
                 or len(line) > MAX_EVENT_FRAME
                 or consumed > maximum
             ):
@@ -188,11 +270,21 @@ def _convert(
         elif kind == "tool_call":
             identity = update["toolCallId"]
             if identity in calls:
+                state = calls[identity]
+                if (
+                    result_format == "codebuddy"
+                    and state.get("status") in {"pending", "in_progress"}
+                    and state.get("name")
+                    and _metadata(update).get("codebuddy.ai/toolName") == state["name"]
+                ):
+                    _merge_call(state, update, result_format)
+                    continue
                 raise ProtocolError("duplicate Tool call identity")
             if active is None:
                 active = {"step_id": len(steps) + 1, "source": "agent", "message": ""}
                 steps.append(active)
-            state = dict(update)
+            state = {}
+            _merge_call(state, update, result_format)
             calls[identity] = state
             tool_ids.setdefault(active["step_id"], []).append(identity)
         elif kind == "tool_call_update":
@@ -200,9 +292,7 @@ def _convert(
             if identity not in calls:
                 raise ProtocolError("Tool update without initial identity")
             state = calls[identity]
-            if "name" in update and state.get("name") not in {None, update["name"]}:
-                raise ProtocolError("Tool canonical identity changed")
-            state.update(update)
+            _merge_call(state, update, result_format)
     for (step_id, field), chunks in text_chunks.items():
         steps[step_id - 1][field] = "".join(chunks)
     for step in steps:
@@ -237,6 +327,7 @@ def _convert(
     agent = {
         **agent,
         "extra": {
+            **agent.get("extra", {}),
             "acp_agent_info": summary.get("agent_info"),
             "config_options": summary.get("config_options", []),
         },
@@ -247,7 +338,14 @@ def _convert(
             "agent": agent,
             "steps": steps,
             "extra": {
-                "acp_tool_evidence_complete": summary.get("protocol_complete", False),
+                "acp_tool_evidence_complete": summary.get("protocol_complete", False)
+                and not (
+                    result_format == "codebuddy"
+                    and any(
+                        state.get("name") == "DeferExecuteTool"
+                        for state in calls.values()
+                    )
+                ),
                 "acp_stop_reason": summary.get("stop_reason"),
                 "cleanup_complete": summary.get("cleanup_complete", False),
             },

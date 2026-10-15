@@ -44,7 +44,7 @@ def copied_harbor(tmp_path: Path) -> Path:
 def test_copied_harbor_runs_without_the_original_package(
     copied_harbor: Path, scenario: str
 ) -> None:
-    if scenario in {"host", "acp"} and sys.platform != "linux":
+    if scenario == "host" and sys.platform != "linux":
         pytest.skip("synthetic host command uses Linux shell quoting")
     if scenario == "workbuddy":
         write_office_bundle(copied_harbor / "bundle")
@@ -65,7 +65,9 @@ def test_copied_harbor_runs_without_the_original_package(
         check=False,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    for source in SOURCE.rglob("*.py"):
+    for source in SOURCE.rglob("*"):
+        if source.suffix not in {".py", ".cjs"}:
+            continue
         copied = (
             copied_harbor
             / "downstream/_vendor/harbor_copy"

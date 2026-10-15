@@ -1,4 +1,4 @@
-"""Owned Linux ACP subprocess, strict SDK transport and descendant settlement."""
+"""Owned native ACP subprocess, strict SDK transport and descendant settlement."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from .acp_protocol import (
     EvidenceBudget,
     ProtocolError,
     StrictTransport,
+    config_option_choices,
     evidence_manifest,
 )
 
@@ -35,11 +36,6 @@ def _save(path, value):
         encoding="utf-8",
     )
     temporary.replace(path)
-
-
-def _choices(option):
-    for entry in option.get("options", []):
-        yield from entry["options"] if "group" in entry else [entry]
 
 
 class Client:
@@ -112,9 +108,7 @@ async def _wait_cleanup(work, stopping, deadline):
         await asyncio.gather(task, interrupt, return_exceptions=True)
 
 
-async def _settle(process, connection, prompt, stopping, budget, summary):
-    import psutil
-
+async def _settle(process, connection, prompt, stopping, budget, summary, adapter=None):
     loop = asyncio.get_running_loop()
     deadline = loop.time() + budget
     forced_at = deadline - FORCED_CLEANUP_RESERVE_SEC
@@ -136,11 +130,18 @@ async def _settle(process, connection, prompt, stopping, budget, summary):
     if process.stdin and not process.stdin.is_closing():
         process.stdin.close()
     await _wait_cleanup(process.wait(), stopping, forced_at)
+    if adapter is not None:
+        await adapter.settle(process, max(0.01, deadline - loop.time()))
+        summary["cleanup_complete"] = True
+        summary["agent_exit_code"] = process.returncode
+        return
+    import psutil
+
     parent = psutil.Process()
     signaled = set()
     delay = 0.02
     while loop.time() < deadline:
-        children = parent.children(recursive=True)
+        children = await asyncio.to_thread(parent.children, recursive=True)
         if process.returncode is not None and not children:
             summary["cleanup_complete"] = True
             summary["agent_exit_code"] = process.returncode
@@ -148,7 +149,9 @@ async def _settle(process, connection, prompt, stopping, budget, summary):
         for child in children:
             try:
                 forced = loop.time() >= deadline - KILL_REAP_RESERVE_SEC
-                identity = (child.pid, child.create_time(), forced)
+                # psutil's Process identity uses kernel start time on Linux;
+                # its public wall-clock create_time can change after NTP updates.
+                identity = (child, forced)
                 if identity not in signaled:
                     child.kill() if forced else child.terminate()
                     signaled.add(identity)
@@ -165,7 +168,7 @@ async def _settle(process, connection, prompt, stopping, budget, summary):
         delay = min(delay * 2, 0.25)
     summary["cleanup_complete"] = False
     summary["surviving_descendants"] = [
-        child.pid for child in parent.children(recursive=True)
+        child.pid for child in await asyncio.to_thread(parent.children, recursive=True)
     ]
 
 
@@ -183,13 +186,26 @@ async def run(config_path: Path):
     }
     stopping = asyncio.Event()
     loop = asyncio.get_running_loop()
-    for signum in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(signum, stopping.set)
-    _subreaper()
+    if sys.platform == "win32":
+        from .windows import WindowsProcessAdapter
+
+        adapter = WindowsProcessAdapter()
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(signum, lambda *_: loop.call_soon_threadsafe(stopping.set))
+    else:
+        adapter = None
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(signum, stopping.set)
+        _subreaper()
+    excluded = ("PEVAL_",) + (
+        ("CODEBUDDY_", "WORKBUDDY_", "ACC_PRODUCT_")
+        if config.get("tool_result_format") == "codebuddy"
+        else ()
+    )
     environment = {
         key: value
         for key, value in os.environ.items()
-        if not key.upper().startswith("PEVAL_")
+        if not key.upper().startswith(excluded)
     }
     environment.update(config["child_env"])
     stderr = (directory / "acp.stderr.log").open("wb")
@@ -234,27 +250,41 @@ async def run(config_path: Path):
             await asyncio.gather(task, interrupt, return_exceptions=True)
 
     try:
-        process = await asyncio.create_subprocess_exec(
-            *config["argv"],
+        kwargs = dict(
             cwd=config["cwd"],
             env=environment,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
             limit=MAX_FRAME + 1,
         )
+        if adapter is not None:
+            process = await adapter.spawn(config["argv"], **kwargs)
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *config["argv"], start_new_session=True, **kwargs
+            )
         stderr_task = asyncio.create_task(drain_stderr(process.stderr))
         transport = StrictTransport(
-            process.stdout, process.stdin, directory, summary, evidence
+            process.stdout,
+            process.stdin,
+            directory,
+            summary,
+            evidence,
+            result_format=config.get("tool_result_format", "acp"),
         )
+        if config.get("tool_result_format") == "codebuddy":
+            transport.expected_model = config["config_options"].get("model")
         connection = connect_to_agent(
             Client(summary, directory, config["permission_mode"], stopping, evidence),
             transport,
         )
         initialization = await request(
             "initialize",
-            connection.initialize(protocol_version=1, client_capabilities={}),
+            connection.initialize(
+                protocol_version=1,
+                client_capabilities={"session": {"configOptions": {"boolean": {}}}},
+            ),
         )
         init = initialization.model_dump(mode="json", by_alias=True, exclude_none=True)
         if init["protocolVersion"] != 1:
@@ -301,7 +331,7 @@ async def run(config_path: Path):
                 )
         setup = {"cwd": config["cwd"], "mcp_servers": servers}
         session_path = state / "session.json"
-        if config["action"] == "run":
+        if config["action"] in {"run", "inspect"}:
             response = await request("session/new", connection.new_session(**setup))
             summary["session_id"] = response.session_id
             evidence.retain(response.session_id)
@@ -331,6 +361,10 @@ async def run(config_path: Path):
                 )
             else:
                 raise ValueError("Agent cannot restore this Session")
+        summary["models"] = response.model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        ).get("models", {})
+        evidence.retain(summary["models"])
         options = response.model_dump(
             mode="json", by_alias=True, exclude_none=True
         ).get("configOptions", [])
@@ -338,8 +372,17 @@ async def run(config_path: Path):
             option = next((item for item in options if item["id"] == identity), None)
             if (
                 option is None
-                or option["type"] != "select"
-                or not any(choice["value"] == value for choice in _choices(option))
+                or (option["type"] == "boolean" and type(value) is not bool)
+                or (
+                    option["type"] == "select"
+                    and (
+                        not isinstance(value, str)
+                        or not any(
+                            choice["value"] == value
+                            for choice in config_option_choices(option)
+                        )
+                    )
+                )
             ):
                 raise ValueError("requested configuration is not advertised")
             response = await request(
@@ -359,6 +402,9 @@ async def run(config_path: Path):
             raise ValueError("Agent did not confirm requested configuration")
         evidence.retain(options)
         summary["config_options"] = options
+        if config["action"] == "inspect":
+            summary["inspection_complete"] = True
+            return 0
         if loop.time() >= setup_deadline:
             raise TimeoutError("ACP setup deadline exceeded")
         summary["stage"] = "prompt"
@@ -375,7 +421,15 @@ async def run(config_path: Path):
                 [prompt, interrupt], return_when=asyncio.FIRST_COMPLETED
             )
             if prompt in done:
-                summary["stop_reason"] = prompt.result().stop_reason
+                result = prompt.result()
+                summary["stop_reason"] = result.stop_reason
+                metadata = result.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ).get("_meta", {})
+                if config.get("tool_result_format") == "codebuddy" and metadata.get(
+                    "codebuddy.ai/errorMessage"
+                ):
+                    summary["error_type"] = "WorkBuddyPromptError"
             else:
                 summary["cancel_requested"] = True
         finally:
@@ -402,6 +456,7 @@ async def run(config_path: Path):
                     stopping,
                     config["shutdown_timeout_sec"],
                     summary,
+                    adapter,
                 )
             except Exception as exc:
                 cleanup_error(exc)

@@ -6,24 +6,25 @@ Psycheval supports the public Harbor `0.21.0` contract through
 ## Host ACP Agent
 
 `psycheval.harbor.acp_agent:HostACPAgent` evaluates a preinstalled ACP v1 Agent
-on a Linux Host. `argv` is literal executable/argument input. `config_dir` seeds
+on a native Linux or Windows Host. `argv` is literal executable/argument input. `config_dir` seeds
 isolated XDG configuration once; linked entries are rejected. HOME/XDG state
 stays private and stable within a Trial, separately from per-invocation evidence.
 Only explicitly supplied configuration is copied; ambient user configuration is
 not discovered. The child receives effective Agent environment with generated
 isolation paths taking precedence and evaluation control variables removed.
 
-`config_options` is an ordered mapping of exact advertised select IDs to values.
+`config_options` is an ordered mapping of exact advertised select or boolean IDs to values.
 It is applied and confirmed before prompting; dependent options follow their
 prerequisites. `model_name` is only a reporting label. Authentication is attempted
 only with `authenticate_method_id`. Client filesystem/terminal services and
-Skills injection are unsupported. MCP transport capabilities are negotiated.
+generic Skills injection are unsupported. Vendor adapters may inject Skills
+through native configuration. MCP transport capabilities are negotiated.
 Resume uses the exact saved Session and setup, preferring advertised resume over
 load; load replay is excluded using wire order. Recovery never creates a replacement.
 
 `permission_mode=allow|deny` prefers the corresponding once option, then always.
 Unavailable policy choices cancel the request and fail the invocation. Decisions
-are retained. `tool_result_format=acp|rsiversi` defaults to ACP status semantics;
+are retained. `tool_result_format=acp|rsiversi|codebuddy` defaults to ACP status semantics;
 the RSIversi policy additionally interprets the native ToolResult envelope and
 recognizable process outcomes independently of tool name. A running background
 command, timeout, signal, nonzero exit or unknown terminal result cannot prove
@@ -42,6 +43,9 @@ Raw frames and stderr are streamed to current-call logs before SDK projection.
 Each invocation shares a finite `max_evidence_bytes` budget across raw stdin,
 stdout, decoded events and stderr. Exhaustion fails the invocation, marks protocol
 evidence incomplete, retains its admitted prefix, and still settles descendants.
+The bounded wire frame admits inline image results. Frame-count admission scales
+with the declared evidence-byte budget up to an independent finite ceiling;
+larger retained-evidence budgets can therefore support longer streamed tool output.
 Peer-derived summary metadata also consumes this budget. The fixed cleanup and
 integrity records are retained even when admission is exhausted.
 The strict wire limits and byte-budget default belong to
@@ -54,10 +58,14 @@ token accounting; absent token and cost evidence remains unknown. Conversion is
 performed once by Harbor post-run context population, including partial prompts.
 Configuration failures do not fabricate a user turn.
 
-The harness owns a Linux subreaper and all Agent descendants, including separate
+The harness owns a Linux subreaper or a Windows Job and all Agent descendants, including separate
 tool process groups. Every outcome settles cleanup before verifier admission.
+Linux cleanup deduplicates each signal by stable process identity, including
+kernel start time, so wall-clock adjustments cannot signal the same descendant twice.
 `shutdown_timeout_sec` is a shared cleanup deadline with a reserved forced-cleanup
-interval. `handshake_timeout_sec` bounds the entire setup sequence, including
+interval. On both platforms, cooperative exit may use all time before that
+reserve; Windows then terminates the Job and confirms it is empty.
+`handshake_timeout_sec` bounds the entire setup sequence, including
 initialization, authentication, Session restoration and configuration selection;
 each RPC consumes the remaining deadline. Defaults belong to
 [`HostACPAgent`](../../src/psycheval/harbor/acp_agent.py).
@@ -89,7 +97,7 @@ retain ownership for retry. RSIversi's XDG runtime is limited to 28 UTF-8 bytes.
 `exec_argv` accepts a positive `termination_grace_sec` on Linux; its default
 belongs to [`environment`](../../src/psycheval/harbor/environment.py).
 Windows uses owned Job termination and rejects a custom grace.
-ACP requests its shutdown budget plus five seconds; cancellation and
+On Linux ACP requests its shutdown budget plus five seconds; cancellation and
 Host stop share the same command termination operation.
 After forced Linux group termination, Host waits for remaining group members to
 exit or become zombies before completing the command or releasing its workspace.
@@ -109,6 +117,74 @@ and member-status checks run off the event loop. Host retains members observed
 before SIGTERM as well as after SIGKILL, including those that leave the group
 during shutdown; inaccessible unrelated process groups are skipped, while an
 unreadable retained member cannot confirm settlement.
+
+## Native WorkBuddy ACP
+
+`psycheval.harbor.workbuddy_agent:HostWorkBuddyAgent` runs the desktop-bundled
+CodeBuddy CLI on Windows. Supply explicit absolute `installation_dir`,
+`profile_dir` and `auth_file` paths and an exact advertised `model_name`.
+`inspect_workbuddy` accepts the same paths and returns version and model
+configuration information without submitting a prompt. It creates a temporary,
+isolated profile and settles its process tree before returning.
+
+Each Trial copies only the selected desktop model configuration, encrypted
+authentication and required product/encryption metadata. The desktop source is
+read-only. A bundled Electron Node bootstrap obtains native at-rest material
+and supplies the CLI's v1 credential bootstrap through authenticated local pipes.
+Before transferring key material, an owned Python helper checks the credential
+pipe's server PID against the launched CLI process on the same open handle.
+It pins a non-inheritable process handle through the transfer, requires the CLI
+to remain alive, and rejects a process born after the helper started.
+An identity mismatch fails before any credential bytes are written. Bootstrap
+control variables are consumed before launching model-driven tools.
+Normal Trials seed only the requested custom model's credentials; inspection
+substitutes inert provider-key placeholders and never submits a prompt.
+Selection uses the exact advertised ACP ID; custom IDs use `custom-local:` before
+the profile's model ID. Built-in model selection seeds no custom provider keys.
+Seed reads validate the opened regular
+file's identity, links and byte limit before copying admitted bytes.
+The bootstrap watchdog uses the configured handshake budget; setup RPCs still
+share the harness's single deadline.
+Native keys and API credentials are not command arguments or retained evidence.
+Missing authentication or unsupported bootstrap capabilities fail before prompting;
+the adapter never initiates desktop login or falls back to another CLI or model.
+Custom models still require WorkBuddy authentication in ACP mode.
+
+WorkBuddy's complete streaming tool-argument updates use a vendor-specific,
+finite evidence budget; `max_evidence_bytes` remains explicitly configurable.
+Its default belongs to the WorkBuddy adapter. Exhaustion preserves the prefix,
+settles the Job and rejects incomplete tool evidence, as in generic ACP.
+
+The full headless bundle is used, with native session persistence under the
+private profile. Every new or restored session confirms its requested model.
+Each prompt includes the native workspace root and explains how Task `/workspace`
+paths map to it, so native tools can address the prepared files.
+Unless overridden through `config_options`, mode defaults to `bypassPermissions`
+and multitask defaults to disabled. Harbor Skills
+use `CODEBUDDY_SESSION_SKILL_DIRS`; MCP uses ACP session setup. Resume restores
+the exact session through advertised resume/load support, excluding replay.
+
+The `codebuddy` evidence policy validates `codebuddy.ai/toolName` vendor metadata
+as canonical identity, rejects identity changes, and interprets business failure
+and known raw results. Its vendor metadata checks and open configuration category
+labels apply only to this policy. Null optional metadata is treated as absent.
+An explicitly present, non-null native `tool_error_code` marks a failed result,
+including zero or an empty string; truthiness does not decide error presence.
+Display titles do not prove identity; incomplete or failed
+commands cannot prove successful execution. Command detection uses the canonical
+shell name, ACP execute kind, or native execution fields; renaming a command does
+not remove terminal-result checks. Windows cleanup queries an owned Job
+until empty before evidence admission; missing cleanup confirmation aborts verification.
+The bundled CLI may announce an active tool again when its arguments resolve.
+The WorkBuddy policy merges that snapshot only for the same canonical identity
+while the existing call is nonterminal. Reusing a terminal call ID is rejected;
+generic ACP still rejects duplicate starts. Every original frame remains retained.
+Deferred MCP execution retains its native wrapper identity and arguments. When
+the CLI does not emit the underlying invocation as a separate identified call,
+tool-name evidence is incomplete; artifact and answer scoring remain available.
+
+Desktop 5.7.7 / CLI 2.156.0 is the initial acceptance baseline. Desktop upgrades
+are checked through required files and native bootstrap capabilities.
 
 ## Public seams
 

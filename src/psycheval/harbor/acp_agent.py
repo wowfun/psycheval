@@ -1,4 +1,4 @@
-"""Run an explicitly configured ACP Agent in a Linux Harbor Host."""
+"""Run an explicitly configured ACP Agent in a native Harbor Host."""
 
 from __future__ import annotations
 
@@ -32,7 +32,8 @@ from .inference_telemetry import populate_context_from_trajectory
 class HostACPAgent(BaseAgent):
     SUPPORTS_ATIF = True
     SUPPORTS_RESUME = True
-    SUPPORTS_WINDOWS = False
+    SUPPORTS_WINDOWS = True
+    _supports_skills = False
 
     def __init__(
         self,
@@ -58,13 +59,14 @@ class HostACPAgent(BaseAgent):
             raise ValueError(
                 "ACP argv requires an executable and NUL-free string arguments"
             )
-        if self.skills_dir or self.load_trajectory:
-            raise ValueError(
-                "HostACPAgent does not support Skills or trajectory import"
-            )
+        if self.skills_dir and not self._supports_skills:
+            raise ValueError("This ACP Agent does not support Skills")
+        if self.load_trajectory:
+            raise ValueError("ACP Agents do not support trajectory import")
         if permission_mode not in {"allow", "deny"} or tool_result_format not in {
             "acp",
             "rsiversi",
+            "codebuddy",
         }:
             raise ValueError("unsupported ACP permission mode or result format")
         config_options = {} if config_options is None else config_options
@@ -76,15 +78,20 @@ class HostACPAgent(BaseAgent):
                 or not key
                 or len(key.encode()) > MAX_CONFIG_ID_BYTES
                 or "\0" in key
-                or not isinstance(value, str)
-                or not value
-                or len(value.encode()) > MAX_CONFIG_VALUE_BYTES
-                or "\0" in value
+                or (
+                    type(value) is not bool
+                    and (
+                        not isinstance(value, str)
+                        or not value
+                        or len(value.encode()) > MAX_CONFIG_VALUE_BYTES
+                        or "\0" in value
+                    )
+                )
                 for key, value in config_options.items()
             )
         ):
             raise ValueError(
-                "ACP config_options requires bounded exact select assignments"
+                "ACP config_options requires bounded exact select or boolean assignments"
             )
         for value in (handshake_timeout_sec, shutdown_timeout_sec):
             if (
@@ -124,6 +131,7 @@ class HostACPAgent(BaseAgent):
         self._instruction = ""
         self._invocation_id = None
         self._invoking = False
+        self._agent_metadata = {}
 
     @staticmethod
     def name():
@@ -134,11 +142,13 @@ class HostACPAgent(BaseAgent):
 
     @staticmethod
     def _host(environment):
-        if (
-            not isinstance(environment, HostEnvironment)
-            or environment.os != TaskOS.LINUX
-        ):
-            raise TypeError("HostACPAgent requires a Linux HostEnvironment")
+        if not isinstance(environment, HostEnvironment) or environment.os not in {
+            TaskOS.LINUX,
+            TaskOS.WINDOWS,
+        }:
+            raise TypeError(
+                "HostACPAgent requires a native Linux or Windows HostEnvironment"
+            )
         return environment
 
     async def setup(self, environment):
@@ -169,14 +179,20 @@ class HostACPAgent(BaseAgent):
                 ("XDG_CACHE_HOME", "cache"),
             )
         }
-        for path in paths.values():
-            path.mkdir(parents=True, exist_ok=True)
         runtime = host.runtime_directory(
-            f"acp-runtime-{self._runtime_id}", short_path=True
+            f"acp-runtime-{self._runtime_id}", short_path=host.os == TaskOS.LINUX
         )
-        if len(str(runtime).encode()) > 28:
+        if host.os == TaskOS.LINUX and len(str(runtime).encode()) > 28:
             raise RuntimeError("ACP XDG runtime exceeds the RSIversi socket budget")
         paths["XDG_RUNTIME_DIR"] = runtime
+        if host.os == TaskOS.WINDOWS:
+            paths.update(
+                USERPROFILE=paths["HOME"],
+                APPDATA=paths["HOME"] / "AppData/Roaming",
+                LOCALAPPDATA=paths["HOME"] / "AppData/Local",
+            )
+        for path in paths.values():
+            path.mkdir(parents=True, exist_ok=True)
         self._child_env = {key: str(path) for key, path in paths.items()}
         if self.config_dir is not None:
             for source in [self.config_dir, *self.config_dir.parents]:
@@ -221,7 +237,7 @@ class HostACPAgent(BaseAgent):
             raise RuntimeError("ACP invocation is already active")
         self._invoking = True
         try:
-            await self._run_invocation(action, instruction, environment)
+            return await self._run_invocation(action, instruction, environment)
         finally:
             self._invoking = False
 
@@ -260,6 +276,7 @@ class HostACPAgent(BaseAgent):
             "handshake_timeout_sec": self.handshake_timeout_sec,
             "shutdown_timeout_sec": self.shutdown_timeout_sec,
             "max_evidence_bytes": self.max_evidence_bytes,
+            "tool_result_format": self.tool_result_format,
         }
         config_path = invocation / "request.json"
         config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
@@ -267,7 +284,11 @@ class HostACPAgent(BaseAgent):
         try:
             result = await host.exec_argv(
                 [sys.executable, "-m", f"{__package__}.acp_harness", str(config_path)],
-                termination_grace_sec=self.shutdown_timeout_sec + 5,
+                **(
+                    {"termination_grace_sec": self.shutdown_timeout_sec + 5}
+                    if host.os == TaskOS.LINUX
+                    else {}
+                ),
             )
         finally:
             await _await_owned_task(
@@ -291,6 +312,15 @@ class HostACPAgent(BaseAgent):
             raise RuntimeError(
                 "ACP setup or cleanup failed; see current Agent evidence"
             )
+        if action == "inspect":
+            if (
+                not summary.get("cleanup_complete")
+                or not summary.get("inspection_complete")
+                or summary.get("error_type")
+            ):
+                raise RuntimeError("ACP inspection failed; see current Agent evidence")
+            verify_evidence(self.logs_dir, summary)
+            return summary
         if not summary.get("cleanup_complete") or not summary.get("prompt_submitted"):
             raise RuntimeError(
                 "ACP setup or cleanup failed; see current Agent evidence"
@@ -331,6 +361,7 @@ class HostACPAgent(BaseAgent):
             or summary.get("invocation_id") != self._invocation_id
             or not summary.get("cleanup_complete")
             or not summary.get("prompt_submitted")
+            or summary.get("model_mismatch")
         ):
             raise RuntimeError(
                 "ACP invocation is unsafe to verify; see current Agent evidence"
@@ -343,6 +374,7 @@ class HostACPAgent(BaseAgent):
                 "name": self.name(),
                 "version": self.version(),
                 "model_name": self.model_name,
+                "extra": self._agent_metadata,
             },
             self.tool_result_format,
         )

@@ -43,7 +43,17 @@ The Host ACP tests use synthetic stdio peers by default. Opt-in RSIversi
 acceptance uses `PEVAL_RSIVERSI_ACP` as the absolute prebuilt executable. Its
 test owns a local HTTP provider and a private configuration seed. Run
 `uv run pytest tests/harbor/test_acp.py -k rsiversi` on Linux. Local-fixture and
-live-provider evidence are reported separately. WSL uses an independent
+live-provider evidence are reported separately. WorkBuddy desktop ACP acceptance
+is separately enabled with `PEVAL_WORKBUDDY_ACP_TESTS=1` and explicit absolute
+`PEVAL_WORKBUDDY_INSTALLATION`, `PEVAL_WORKBUDDY_PROFILE`, and
+`PEVAL_WORKBUDDY_AUTH` paths. Run `tests/harbor/test_workbuddy_agent.py` on native
+Windows. Model-calling acceptance also requires `PEVAL_WORKBUDDY_ACP_MODEL` with
+an exact advertised model ID. Default tests use synthetic peers and fake profile seeds; live tests
+read the selected desktop credentials and may contact model services.
+`tests/harbor/test_workbuddy_bootstrap.py` uses only synthetic keys and local named
+pipes. It verifies server identity before transmission, bounded acknowledgement,
+credential-free logs/tool environments and bounded profile reads on Windows.
+WSL uses an independent
 `UV_PROJECT_ENVIRONMENT`; it must not replace a native Windows virtualenv.
 
 ## Downstream source-copy checks

@@ -7,8 +7,12 @@ import sys
 import time
 from pathlib import Path
 
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
+
 mode = sys.argv[1] if len(sys.argv) > 1 else "normal"
 current = "a"
+multitask = False
 prompt_id = None
 session = "fixture-session"
 
@@ -18,7 +22,7 @@ def send(value):
 
 
 def options():
-    return [
+    result = [
         {
             "id": "model",
             "name": "Model",
@@ -27,6 +31,28 @@ def options():
             "options": [{"value": "a", "name": "A"}, {"value": "b", "name": "B"}],
         }
     ]
+    if mode in {"boolean", "codebuddy"}:
+        if mode == "codebuddy":
+            result[0]["category"] = "vendor-display-category"
+            result[0]["options"].append({"value": "custom-local:b", "name": "Custom B"})
+        result.extend(
+            [
+                {
+                    "id": "multitask",
+                    "name": "Multitask",
+                    "type": "boolean",
+                    "currentValue": multitask,
+                },
+                {
+                    "id": "mode",
+                    "name": "Mode",
+                    "type": "select",
+                    "currentValue": "bypassPermissions",
+                    "options": [{"name": "Execute", "value": "bypassPermissions"}],
+                },
+            ]
+        )
+    return result
 
 
 def update(value):
@@ -40,6 +66,11 @@ for line in sys.stdin:
     method, params = request.get("method"), request.get("params", {})
     identity = request.get("id")
     if method == "initialize":
+        if mode in {"boolean", "codebuddy"}:
+            assert (
+                params["clientCapabilities"]["session"]["configOptions"]["boolean"]
+                == {}
+            )
         if mode == "slow-setup":
             time.sleep(0.3)
         send(
@@ -95,12 +126,24 @@ for line in sys.stdin:
             result["sessionId"] = session
         send({"id": identity, "result": result})
     elif method == "session/set_config_option":
-        if mode != "unconfirmed":
+        if params["configId"] == "multitask":
+            assert params["type"] == "boolean" and type(params["value"]) is bool
+            multitask = params["value"]
+        elif params["configId"] == "model" and mode != "unconfirmed":
             current = params["value"]
         send({"id": identity, "result": {"configOptions": options()}})
     elif method == "session/prompt":
+        if mode == "codebuddy" and current == "custom-local:b":
+            seeded = json.loads(
+                (Path(os.environ["CODEBUDDY_CONFIG_DIR"]) / "models.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            assert seeded == [
+                {"id": "b", "name": "Selected", "apiKey": "PRIVATE_FIXTURE_KEY"}
+            ]
         prompt_id = identity
-        Path("result.txt").write_text("fixture artifact 中文")
+        Path("result.txt").write_text("fixture artifact 中文", encoding="utf-8")
         Path("state-paths.json").write_text(
             json.dumps(
                 {
@@ -130,13 +173,16 @@ for line in sys.stdin:
         }
         if mode == "no-name":
             call.pop("name")
+        if mode == "codebuddy":
+            call.pop("name")
+            call["_meta"] = {"codebuddy.ai/toolName": "Bash"}
         update(call)
         if mode == "malformed":
             print('{"jsonrpc":"2.0","jsonrpc":"2.0"}', flush=True)
             break
         if mode == "eof":
             break
-        if mode in {"background", "cancel", "stubborn"}:
+        if mode in {"background", "cancel", "stubborn", "boolean"}:
             script = "import time; time.sleep(120)"
             if mode == "stubborn":
                 script = "import signal,time; from pathlib import Path; signal.signal(signal.SIGTERM, lambda *_: Path('term-count').open('a').write('t')); Path('descendant-ready').touch(); time.sleep(120)"

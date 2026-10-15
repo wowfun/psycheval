@@ -83,6 +83,23 @@ Keep the `PEVAL_CONFIG` locator and runtime document fields unchanged; see
 [Host configuration](../reference/harbor.md#host-configuration) for their meaning
 and the trusted-host execution boundary.
 
+## Evaluate desktop WorkBuddy through ACP
+
+Install WorkBuddy on a native Windows host and finish desktop login first.
+Use the copied `workbuddy_agent:HostWorkBuddyAgent` import path in the Job's
+Agent configuration, with explicit absolute `installation_dir`, `profile_dir`,
+and `auth_file` kwargs. For the standard desktop profile these point to the
+directory containing `WorkBuddy.exe`, the `.workbuddy` profile, and the selected
+`CodeBuddyExtension/Data/Public/auth/workbuddy-desktop.info` file respectively.
+
+Call `inspect_workbuddy` with those same paths to obtain model IDs without
+calling a model. Set the Job Agent's `model_name` to an advertised ID; for a
+desktop custom model this may be `custom-local:mimo-v2.6-pro`. Run the Job using
+the existing Host or WorkBuddy Host environment. Desktop configuration remains
+read-only, while Skills, MCP and restored sessions use the Trial's private state.
+See the [WorkBuddy ACP contract](../reference/harbor.md#native-workbuddy-acp) for
+authentication, model selection and evidence semantics.
+
 ## Configure a host workspace
 
 Configure the copied Host directly in an ordinary Harbor Job:

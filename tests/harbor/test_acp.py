@@ -28,10 +28,59 @@ from psycheval.harbor.acp_protocol import (
     decode,
 )
 from psycheval.harbor.verifier._calls import forbidden_tool_check, required_call_checks
-from tests.harbor.test_environment import make_environment
+from tests.harbor.environment_support import make_environment
 
 PEER = Path(__file__).resolve().parents[1] / "fixtures/acp_peer.py"
 linux = pytest.mark.skipif(sys.platform != "linux", reason="Linux ACP ownership")
+
+
+@linux
+def test_real_psutil_process_identity_survives_linux_boot_time_adjustment(monkeypatch):
+    import psutil
+    from psutil import _pslinux
+
+    before = psutil.Process(os.getpid())
+    wall_birth = before.create_time()
+    original = _pslinux.boot_time
+    monkeypatch.setattr(_pslinux, "boot_time", lambda: original() + 60)
+    after = psutil.Process(os.getpid())
+    assert after.create_time() == wall_birth + 60
+    assert before == after
+    assert hash(before) == hash(after)
+    assert {before: "owned"}[after] == "owned"
+
+
+@pytest.mark.parametrize("metadata", ["x", ["x"], 1, True])
+def test_codebuddy_malformed_metadata_is_rejected_categorically(tmp_path, metadata):
+    async def scenario():
+        reader = asyncio.StreamReader()
+        frame = {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "fixture",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "fixture"},
+                    "_meta": metadata,
+                },
+            },
+        }
+        reader.feed_data((json.dumps(frame) + "\n").encode())
+        reader.feed_eof()
+        summary = {}
+        transport = StrictTransport(
+            reader, None, tmp_path, summary, result_format="codebuddy"
+        )
+        transport.expected_model, transport.phase = "fixture-model", "prompt"
+        try:
+            with pytest.raises(ProtocolError, match="invalid known ACP payload"):
+                await transport.receive()
+            assert summary["protocol_complete"] is False
+        finally:
+            transport.finish()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("summary_kind", ["missing", "unbound", "malformed"])
@@ -39,6 +88,7 @@ def test_harness_bootstrap_failure_retains_bounded_diagnostics(
     tmp_path, monkeypatch, summary_kind
 ):
     from harbor.environments.base import ExecResult
+    from harbor.models.task.config import TaskOS
 
     staging, logs = tmp_path / "staging", tmp_path / "logs"
     staging.mkdir()
@@ -46,6 +96,7 @@ def test_harness_bootstrap_failure_retains_bounded_diagnostics(
 
     class Host:
         work_dir = tmp_path
+        os = TaskOS.LINUX
 
         def runtime_directory(self, name):
             return staging
@@ -159,10 +210,96 @@ def test_summary_metadata_shares_wire_admission_budget():
     assert summary["evidence_limit_exceeded"] is True
 
 
+@pytest.mark.parametrize(
+    "maximum,frames",
+    [(64 * 1024**2, 65536), (512 * 1024**2, 524288), (4 * 1024**3, 1048576)],
+)
+def test_frame_admission_scales_with_byte_budget_and_remains_bounded(maximum, frames):
+    summary = {"protocol_complete": True}
+    budget = EvidenceBudget(summary, maximum=maximum)
+    assert budget.maximum_frames == frames == summary["max_evidence_frames"]
+    budget.frames = frames - 1
+    budget.admit_frame()
+    with pytest.raises(ProtocolError):
+        budget.admit_frame()
+    assert summary["protocol_complete"] is False
+
+
+def test_inline_image_frame_above_one_mib_is_retained_without_truncation(
+    tmp_path,
+):
+    message = {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": "s",
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c",
+                "content": [
+                    {
+                        "type": "content",
+                        "content": {
+                            "type": "image",
+                            "data": "A" * (1100 * 1024),
+                            "mimeType": "image/png",
+                        },
+                    }
+                ],
+            },
+        },
+    }
+    wire = json.dumps(message, separators=(",", ":")).encode() + b"\n"
+    assert 1024**2 < len(wire) < MAX_FRAME
+
+    async def run():
+        reader = asyncio.StreamReader(limit=MAX_FRAME + 1)
+        reader.feed_data(wire)
+        reader.feed_eof()
+        summary = {"protocol_complete": True}
+        transport = StrictTransport(
+            reader, None, tmp_path, summary, EvidenceBudget(summary)
+        )
+        try:
+            assert await transport.receive() == message
+        finally:
+            transport.finish()
+
+    asyncio.run(run())
+    assert (tmp_path / "acp.stdout.ndjson").read_bytes() == wire
+
+
+def test_wire_frame_limit_is_still_enforced():
+    wire = (
+        json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "result": {"data": "A" * MAX_FRAME}}
+        ).encode()
+        + b"\n"
+    )
+    with pytest.raises(ProtocolError, match="oversized"):
+        decode(wire)
+
+
+def test_long_stream_retention_and_projection_share_the_declared_admission(tmp_path):
+    from psycheval.harbor.acp_evidence import _events
+
+    path = tmp_path / "events.ndjson"
+    event = (
+        json.dumps({"direction": "receive", "phase": "prompt", "message": {}}).encode()
+        + b"\n"
+    )
+    with path.open("wb") as stream:
+        for _ in range(65537):
+            stream.write(event)
+    assert sum(1 for _ in _events(path, 512 * 1024**2)) == 65537
+    with pytest.raises(ProtocolError, match="limits"):
+        sum(1 for _ in _events(path, 64 * 1024**2))
+
+
 def test_failed_wire_send_rolls_back_correlation_and_phase(tmp_path, monkeypatch):
     from psycheval.harbor import acp_protocol
 
-    monkeypatch.setattr(acp_protocol, "sdk_validators", lambda: {})
+    monkeypatch.setattr(acp_protocol, "sdk_validators", lambda result_format="acp": {})
 
     class Writer:
         def write(self, data):
@@ -198,7 +335,7 @@ def test_legal_control_dense_wire_frame_roundtrips_retained_event(
 ):
     from psycheval.harbor import acp_protocol
 
-    monkeypatch.setattr(acp_protocol, "sdk_validators", lambda: {})
+    monkeypatch.setattr(acp_protocol, "sdk_validators", lambda result_format="acp": {})
     text = "\x01" * 150000
     message = {
         "jsonrpc": "2.0",
@@ -803,6 +940,69 @@ def test_cleanup_cancel_is_bounded(tmp_path, monkeypatch):
             await asyncio.gather(prompt, return_exceptions=True)
 
     asyncio.run(run())
+
+
+@linux
+def test_cleanup_signal_identity_survives_wall_clock_changes(monkeypatch):
+    from types import SimpleNamespace
+
+    import psutil
+
+    from psycheval.harbor import acp_harness
+
+    signals = []
+    alive = True
+    wall_clock = 0
+
+    class Child:
+        pid = 4243
+
+        def __hash__(self):
+            return hash((self.pid, "kernel-start-time"))
+
+        def __eq__(self, other):
+            return isinstance(other, Child)
+
+        def create_time(self):
+            nonlocal wall_clock
+            wall_clock += 1
+            return wall_clock
+
+        def terminate(self):
+            signals.append("term")
+
+        def kill(self):
+            nonlocal alive
+            signals.append("kill")
+            alive = False
+
+        def ppid(self):
+            return -1
+
+    import threading
+
+    loop_thread = threading.get_ident()
+
+    def children(**kwargs):
+        assert threading.get_ident() != loop_thread
+        return [Child()] if alive else []
+
+    parent = SimpleNamespace(pid=4242, children=children)
+    monkeypatch.setattr(psutil, "Process", lambda: parent)
+    monkeypatch.setattr(acp_harness, "FORCED_CLEANUP_RESERVE_SEC", 3)
+    monkeypatch.setattr(acp_harness, "KILL_REAP_RESERVE_SEC", 2.8)
+
+    async def run():
+        async def exited():
+            return 0
+
+        process = SimpleNamespace(pid=4241, stdin=None, returncode=0, wait=exited)
+        summary = {}
+        await acp_harness._settle(process, None, None, asyncio.Event(), 3, summary)
+        assert summary["cleanup_complete"]
+        assert signals == ["term", "kill"]
+
+    asyncio.run(asyncio.wait_for(run(), 5))
 
 
 @linux
