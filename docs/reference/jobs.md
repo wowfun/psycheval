@@ -5,6 +5,11 @@ shared selection of registered Tasks and named Agent/Model variants. The
 workspace owns configuration, process lifetime and derived views; the harness
 owns execution, retries, native artifacts and scoring. Harbor is built in.
 
+Atomic control-file replacement tolerates temporary Windows reader contention
+within a finite retry deadline. Its default belongs to
+[`storage`](../../src/psycheval/jobs/storage.py). Expiry preserves the previous
+control file and reports the write error; temporary files are removed.
+
 ## Configuration and registration
 
 `[jobs.defaults.<harness-id>]` in `peval.toml` stores explicitly selected defaults.

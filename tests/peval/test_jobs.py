@@ -407,6 +407,39 @@ def test_control_read_survives_concurrent_atomic_updates(tmp_path):
     assert read_json(path) == {"revision": 100}
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows atomic replacement contention")
+@pytest.mark.parametrize("persistent", [False, True])
+def test_atomic_control_replace_waits_for_transient_contention_with_a_deadline(
+    tmp_path, monkeypatch, persistent
+):
+    from psycheval.jobs import storage
+
+    path = tmp_path / "state.json"
+    write_json(path, {"revision": 0})
+    clock = [0.0]
+    replace = type(path).replace
+
+    def contended(source, target):
+        if target == path and (persistent or clock[0] < 2):
+            raise PermissionError("fixture reader denies replacement")
+        return replace(source, target)
+
+    monkeypatch.setattr(type(path), "replace", contended)
+    monkeypatch.setattr(storage.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        storage.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay)
+    )
+    if persistent:
+        with pytest.raises(PermissionError):
+            write_json(path, {"revision": 1})
+        assert 2 < clock[0] < 10
+        assert read_json(path) == {"revision": 0}
+    else:
+        write_json(path, {"revision": 1})
+        assert read_json(path) == {"revision": 1}
+    assert not list(tmp_path.glob("*.tmp"))
+
+
 def test_invalid_start_and_unrepresentable_defaults_do_not_write(jobs):
     with pytest.raises(ValueError, match="identity"):
         jobs.start({}, None, None)

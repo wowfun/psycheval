@@ -21,6 +21,7 @@ import psutil
 from psycheval.file_access import open_read_descriptor
 
 ACTIVE = frozenset({"preparing", "running", "stopping"})
+ATOMIC_REPLACE_TIMEOUT_SEC = 5.0
 
 
 class JobsConflict(ValueError):
@@ -171,15 +172,17 @@ def write_text(path: Path, value: str) -> None:
             stream.write(value)
             stream.flush()
             os.fsync(stream.fileno())
-        for attempt in range(100):
+        deadline = time.monotonic() + ATOMIC_REPLACE_TIMEOUT_SEC
+        while True:
             try:
                 temporary.replace(path)
                 break
             except PermissionError:
-                if os.name != "nt" or attempt == 99:
+                remaining = deadline - time.monotonic()
+                if os.name != "nt" or remaining <= 0:
                     raise
-                # A Windows reader briefly holds the destination without delete sharing.
-                time.sleep(0.01)
+                # Windows may temporarily deny replacement of an open destination.
+                time.sleep(min(0.01, remaining))
                 safe_path(path.parent, path.name)
     finally:
         temporary.unlink(missing_ok=True)
