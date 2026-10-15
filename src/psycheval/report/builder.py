@@ -237,20 +237,20 @@ def canonical_time_bounds(
             step_extra = (
                 step.get("extra") if isinstance(step.get("extra"), dict) else {}
             )
-            duration = step_extra.get("duration_ms")
-            if isinstance(duration, (int, float)) and not isinstance(duration, bool):
-                timestamps.append(timestamp + max(0, int(duration)))
+            duration = strict_nonnegative_int(step_extra.get("duration_ms"))
+            if duration is not None:
+                timestamps.append(timestamp + duration)
         for call in step.get("tool_calls") or []:
             if not isinstance(call, dict) or not isinstance(call.get("extra"), dict):
                 continue
             call_started = iso_timestamp_ms(call["extra"].get("started_at"))
             if call_started is not None:
                 timestamps.append(call_started)
-                generation = call["extra"].get("generation_duration_ms")
-                if isinstance(generation, (int, float)) and not isinstance(
-                    generation, bool
-                ):
-                    timestamps.append(call_started + max(0, int(generation)))
+                generation = strict_nonnegative_int(
+                    call["extra"].get("generation_duration_ms")
+                )
+                if generation is not None:
+                    timestamps.append(call_started + generation)
         for result in (step.get("observation") or {}).get("results") or []:
             if not isinstance(result, dict) or not isinstance(
                 result.get("extra"), dict
@@ -320,7 +320,7 @@ def project_meta_from_atif(
         else {}
     )
     for key in ("duration_ms", "wall_duration_ms"):
-        value = optional_int_value(source_timing.get(key))
+        value = strict_nonnegative_int(source_timing.get(key))
         if value is not None:
             projected[key] = max(0, value)
     projected["prompt_unavailable"] = not any(
@@ -430,18 +430,22 @@ def active_duration_from_sidecar(
             isinstance(trajectory_step, dict)
             and trajectory_step.get("source") == "agent"
         ):
-            duration = optional_int_value(step.get("duration_ms"))
+            duration = strict_nonnegative_int(step.get("duration_ms"))
             if duration is not None:
                 total += duration
                 observed = True
         for tool in step.get("tool_calls") or []:
             if not isinstance(tool, dict):
                 continue
-            duration = optional_int_value(tool.get("execution_duration_ms"))
+            duration = strict_nonnegative_int(tool.get("execution_duration_ms"))
             if duration is not None:
                 total += duration
                 observed = True
-    return total if observed else optional_int_value(fallback)
+    return total if observed else strict_nonnegative_int(fallback)
+
+
+def strict_nonnegative_int(value: Any) -> int | None:
+    return value if type(value) is int and value >= 0 else None
 
 
 def optional_int_value(value: Any) -> int | None:
@@ -449,8 +453,39 @@ def optional_int_value(value: Any) -> int | None:
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
+
+
+def _tool_execution_timing(extras: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return None for absent timing, an empty mapping for explicit unknown."""
+    measurements = [
+        extra
+        for extra in extras
+        if "execution_duration_ms" in extra
+        and (
+            extra["execution_duration_ms"] is None
+            or strict_nonnegative_int(extra["execution_duration_ms"]) is not None
+        )
+    ]
+    if not measurements:
+        return None
+    duration = measurements[0]["execution_duration_ms"]
+    if duration is None or any(
+        extra["execution_duration_ms"] != duration for extra in measurements
+    ):
+        return {}
+    timing = {"execution_duration_ms": duration}
+    source = measurements[0].get("execution_duration_source")
+    if (
+        isinstance(source, str)
+        and source.strip()
+        and all(
+            extra.get("execution_duration_source") == source for extra in measurements
+        )
+    ):
+        timing["execution_duration_source"] = source
+    return timing
 
 
 def project_canonical_step_facts(
@@ -469,6 +504,9 @@ def project_canonical_step_facts(
         for key in ("duration_ms", "duration_source", "truncated"):
             if key in extra:
                 report[key] = extra[key]
+        report["duration_ms"] = strict_nonnegative_int(report.get("duration_ms"))
+        if report["duration_ms"] is None:
+            report.pop("duration_source", None)
 
         calls = {
             str(call.get("tool_call_id")): call
@@ -480,11 +518,10 @@ def project_canonical_step_facts(
             for item in (step.get("observation") or {}).get("results") or []
             if isinstance(item, dict)
         ]
-        result_by_call = {
-            str(item["source_call_id"]): item
-            for item in results
-            if item.get("source_call_id") is not None
-        }
+        results_by_call: dict[str, list[dict[str, Any]]] = {}
+        for item in results:
+            if item.get("source_call_id") is not None:
+                results_by_call.setdefault(str(item["source_call_id"]), []).append(item)
         for tool_report in report.get("tool_calls") or []:
             call_id = str(tool_report.get("tool_call_id") or "")
             call = calls.get(call_id) or {}
@@ -497,15 +534,33 @@ def project_canonical_step_facts(
             for key in ("generation_duration_ms", "truncated"):
                 if key in call_extra:
                     tool_report[key] = call_extra[key]
-            result = result_by_call.get(call_id) or {}
+            generation = strict_nonnegative_int(
+                tool_report.pop("generation_duration_ms", None)
+            )
+            if generation is not None:
+                tool_report["generation_duration_ms"] = generation
+            matching_results = results_by_call.get(call_id, [])
+            result = matching_results[-1] if matching_results else {}
             result_extra = (
                 result.get("extra") if isinstance(result.get("extra"), dict) else {}
             )
             if "status" in result_extra:
                 tool_report["status"] = result_extra["status"]
-            for key in ("execution_duration_ms", "execution_duration_source"):
-                if key in result_extra:
-                    tool_report[key] = result_extra[key]
+            timing = _tool_execution_timing(
+                [
+                    item["extra"]
+                    for item in matching_results
+                    if isinstance(item.get("extra"), dict)
+                ]
+            )
+            if timing is None:
+                timing = _tool_execution_timing([call_extra])
+            if timing is None:
+                timing = _tool_execution_timing([tool_report])
+            tool_report.pop("execution_duration_ms", None)
+            tool_report.pop("execution_duration_source", None)
+            if timing is not None:
+                tool_report.update(timing)
 
         for observation_report, result in zip(
             report.get("observations") or [], results, strict=False

@@ -1384,8 +1384,11 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 meta_path = cell / "agent" / "trajectory_meta.json"
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
                 meta["status"] = "failed" if index % 10 == 0 else "passed"
-                meta["duration_ms"] = index
                 meta_path.write_text(json.dumps(meta), encoding="utf-8")
+                trajectory_path = cell / "agent/trajectory.json"
+                trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
+                trajectory["steps"][1]["extra"] = {"duration_ms": index}
+                trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
                 if index % 2 == 0:
                     state_path = cell / ".peval/state.json"
                     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1568,6 +1571,13 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     trial_key=f"s{index}_t001",
                     tool_error=index == 1,
                 )
+                trajectory_path = (
+                    root
+                    / f"runs/default/psychevo/s{index}/s{index}_t001/agent/trajectory.json"
+                )
+                trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
+                trajectory["steps"][1]["extra"] = {"duration_ms": 200}
+                trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
             store, runtime, server, thread = self.running_server(root)
             items = runtime.catalog.query(CatalogQuery()).items
             runtime.catalog.mutate(
@@ -1622,13 +1632,14 @@ class ServeCatalogHttpTests(unittest.TestCase):
                             if name.startswith("xl/charts/") and name.endswith(".xml")
                         }
                     ),
-                    4,
+                    5,
                 )
                 self.assertIn("Complete Leaderboard query", strings)
                 self.assertIn("Category", strings)
                 self.assertIn("Regression", strings)
                 self.assertIn("<t>-</t>", strings)
                 self.assertIn("Active Duration", strings)
+                self.assertIn("Model call duration", strings)
                 self.assertIn("Turns", strings)
                 self.assertIn("Tool Calls", strings)
                 self.assertIn("Tool Error Rate", strings)
@@ -1682,6 +1693,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertIn('name="All_ sessions"', workbook)
                 self.assertIn('name="Failed only"', workbook)
                 self.assertIn("=literal note", strings)
+                self.assertIn("Model call duration", strings)
                 self.assertEqual(
                     len(
                         {
@@ -1690,7 +1702,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                             if name.startswith("xl/charts/") and name.endswith(".xml")
                         }
                     ),
-                    4,
+                    5,
                 )
 
                 status, _headers, body = self.request(

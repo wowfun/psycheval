@@ -10,8 +10,9 @@ from unittest.mock import patch
 from psycheval._state.artifacts import write_json_files_atomically
 from psycheval.atif import validate_atif_trajectory
 from psycheval.config import ToolConfig
-from psycheval.conversion import convert_records
+from psycheval.conversion import convert_atif_trajectory, convert_records
 from psycheval.report import build_report, project_meta_from_atif
+from psycheval.report.metrics import automatic_analysis_metrics
 from psycheval.sources import MessageRecord
 from psycheval.state import open_workspace_state
 
@@ -33,7 +34,451 @@ def valid_trajectory() -> dict:
     }
 
 
+def tool_timing_trajectory(call_extra: dict, result_extras: list[dict]) -> dict:
+    trajectory = valid_trajectory()
+    trajectory["steps"][0].update(
+        source="agent",
+        timestamp="2026-01-01T00:00:00Z",
+        extra={"duration_ms": 1000},
+        tool_calls=[
+            {
+                "tool_call_id": "call-1",
+                "function_name": "read_file",
+                "arguments": {},
+                "extra": call_extra,
+            }
+        ],
+        observation={
+            "results": [
+                {"source_call_id": "call-1", "content": "ok", "extra": extra}
+                for extra in result_extras
+            ]
+        },
+    )
+    return trajectory
+
+
 class PevalAtifContractTests(unittest.TestCase):
+    def test_generation_duration_validates_canonical_and_sidecar_measurements(self):
+        for value in (
+            True,
+            False,
+            -1,
+            "25",
+            2.5,
+            2.0,
+            float("inf"),
+            float("nan"),
+            [],
+            {},
+            None,
+            0,
+            25,
+        ):
+            for canonical in (True, False):
+                with self.subTest(value=value, canonical=canonical):
+                    trajectory = tool_timing_trajectory(
+                        {"generation_duration_ms": value} if canonical else {}, [{}]
+                    )
+                    prior = {
+                        "steps": [
+                            {
+                                "step_id": 1,
+                                "tool_calls": [
+                                    {
+                                        "tool_call_id": "call-1",
+                                        "generation_duration_ms": value,
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                    tool = project_meta_from_atif(trajectory, prior)["steps"][0][
+                        "tool_calls"
+                    ][0]
+                    expected = value if type(value) is int and value >= 0 else None
+                    self.assertEqual(tool.get("generation_duration_ms"), expected)
+
+    def test_projected_durations_reject_coercion_and_nonfinite_values(self):
+        for value in (float("inf"), float("nan"), "420", 42.7, -1, True):
+            with self.subTest(value=value):
+                trajectory = tool_timing_trajectory({}, [{}])
+                trajectory["steps"][0]["extra"]["duration_ms"] = value
+                projected = project_meta_from_atif(
+                    trajectory,
+                    {
+                        "import_context": {"source_timing": {"duration_ms": value}},
+                    },
+                )
+                self.assertIsNone(projected["duration_ms"])
+                self.assertIsNone(projected["steps"][0]["duration_ms"])
+
+    def test_tool_execution_timing_ignores_invalid_measurements(self) -> None:
+        invalid_values = [
+            "bad-string",
+            "420",
+            42.7,
+            42.0,
+            -5,
+            True,
+            False,
+            [],
+            {},
+            float("inf"),
+            float("nan"),
+        ]
+        for value in invalid_values:
+            with self.subTest(value=value):
+                call_extra = {
+                    "execution_duration_ms": 420,
+                    "execution_duration_source": "call",
+                }
+                trajectory = tool_timing_trajectory(
+                    call_extra, [{"execution_duration_ms": value}]
+                )
+                meta = project_meta_from_atif(trajectory, {})
+                tool = meta["steps"][0]["tool_calls"][0]
+                self.assertEqual(tool["execution_duration_ms"], 420)
+                self.assertEqual(tool["execution_duration_source"], "call")
+                self.assertEqual(meta["duration_ms"], 1420)
+
+                trajectory = tool_timing_trajectory(
+                    {"execution_duration_ms": value}, [{}]
+                )
+                meta = project_meta_from_atif(trajectory, {})
+                self.assertNotIn(
+                    "execution_duration_ms", meta["steps"][0]["tool_calls"][0]
+                )
+                self.assertEqual(meta["duration_ms"], 1000)
+
+                trajectory = tool_timing_trajectory({}, [{}])
+                prior = {
+                    "steps": [
+                        {
+                            "step_id": 1,
+                            "tool_calls": [
+                                {
+                                    "tool_call_id": "call-1",
+                                    "execution_duration_ms": value,
+                                    "execution_duration_source": "old-sidecar",
+                                }
+                            ],
+                        }
+                    ]
+                }
+                meta = project_meta_from_atif(trajectory, prior)
+                self.assertNotIn(
+                    "execution_duration_ms", meta["steps"][0]["tool_calls"][0]
+                )
+                self.assertNotIn(
+                    "execution_duration_source", meta["steps"][0]["tool_calls"][0]
+                )
+                self.assertEqual(meta["duration_ms"], 1000)
+
+        for source in (123, True, [], {}, None, "", "   "):
+            with self.subTest(source=source):
+                trajectory = tool_timing_trajectory(
+                    {},
+                    [
+                        {
+                            "execution_duration_ms": 420,
+                            "execution_duration_source": source,
+                        }
+                    ],
+                )
+                tool = project_meta_from_atif(trajectory, {})["steps"][0]["tool_calls"][
+                    0
+                ]
+                self.assertEqual(tool["execution_duration_ms"], 420)
+                self.assertNotIn("execution_duration_source", tool)
+
+    def test_multiple_results_project_only_unambiguous_tool_timing(self) -> None:
+        cases = [
+            (
+                [{"execution_duration_ms": 10}, {"execution_duration_ms": 20}],
+                None,
+                None,
+            ),
+            (
+                [{"execution_duration_ms": None}, {"execution_duration_ms": 20}],
+                None,
+                None,
+            ),
+            ([{"execution_duration_ms": None}, {}], None, None),
+            (
+                [
+                    {
+                        "execution_duration_ms": 20,
+                        "execution_duration_source": "result",
+                    },
+                    {
+                        "execution_duration_ms": 20,
+                        "execution_duration_source": "result",
+                    },
+                ],
+                20,
+                "result",
+            ),
+            (
+                [
+                    {"execution_duration_ms": 20, "execution_duration_source": "a"},
+                    {"execution_duration_ms": 20, "execution_duration_source": "b"},
+                ],
+                20,
+                None,
+            ),
+            (
+                [
+                    {"execution_duration_ms": 20, "execution_duration_source": "a"},
+                    {"execution_duration_ms": 20},
+                ],
+                20,
+                None,
+            ),
+            (
+                [
+                    {},
+                    {
+                        "execution_duration_ms": 20,
+                        "execution_duration_source": "result",
+                    },
+                ],
+                20,
+                "result",
+            ),
+            (
+                [
+                    {"execution_duration_ms": "bad-string"},
+                    {"execution_duration_ms": 20},
+                ],
+                20,
+                None,
+            ),
+            ([{}, {"execution_duration_ms": "bad-string"}], 420, "call"),
+        ]
+        for extras, duration, source in cases:
+            with self.subTest(extras=extras):
+                for ordered in (extras, list(reversed(extras))):
+                    trajectory = tool_timing_trajectory(
+                        {
+                            "execution_duration_ms": 420,
+                            "execution_duration_source": "call",
+                        },
+                        ordered,
+                    )
+                    original = deepcopy(trajectory)
+                    validate_atif_trajectory(trajectory)
+                    meta = project_meta_from_atif(trajectory, {})
+                    tool = meta["steps"][0]["tool_calls"][0]
+                    self.assertEqual(tool.get("execution_duration_ms"), duration)
+                    self.assertEqual(tool.get("execution_duration_source"), source)
+                    if duration is None:
+                        self.assertNotIn("execution_duration_ms", tool)
+                    self.assertEqual(meta["duration_ms"], 1000 + (duration or 0))
+                    self.assertEqual(len(meta["steps"][0]["observations"]), 2)
+                    self.assertEqual(trajectory, original)
+
+    def test_tool_execution_timing_selects_one_canonical_location(self) -> None:
+        cases = [
+            (
+                {"execution_duration_ms": 420, "execution_duration_source": "call"},
+                {},
+                420,
+                "call",
+            ),
+            (
+                {},
+                {"execution_duration_ms": 99, "execution_duration_source": "result"},
+                99,
+                "result",
+            ),
+            (
+                {"execution_duration_ms": 420, "execution_duration_source": "call"},
+                {"execution_duration_ms": 99, "execution_duration_source": "result"},
+                99,
+                "result",
+            ),
+            (
+                {"execution_duration_ms": 420, "execution_duration_source": "call"},
+                {"execution_duration_ms": None},
+                None,
+                None,
+            ),
+            (
+                {"execution_duration_ms": 420, "execution_duration_source": "call"},
+                {"execution_duration_ms": 0},
+                0,
+                None,
+            ),
+            ({"execution_duration_ms": 0}, {}, 0, None),
+            (
+                {"execution_duration_ms": 420},
+                {"execution_duration_source": "result"},
+                420,
+                None,
+            ),
+            (
+                {"execution_duration_ms": 420, "execution_duration_source": "call"},
+                {"execution_duration_ms": 99},
+                99,
+                None,
+            ),
+            ({"execution_duration_source": "call"}, {}, None, None),
+            ({}, {}, None, None),
+        ]
+        for call_extra, result_extra, duration, source in cases:
+            with self.subTest(call=call_extra, result=result_extra):
+                trajectory = valid_trajectory()
+                trajectory["steps"][0].update(
+                    source="agent",
+                    timestamp="2026-01-01T00:00:00Z",
+                    extra={"duration_ms": 1000},
+                    tool_calls=[
+                        {
+                            "tool_call_id": "call-1",
+                            "function_name": "read_file",
+                            "arguments": {},
+                            "extra": {"generation_duration_ms": 1000, **call_extra},
+                        }
+                    ],
+                    observation={
+                        "results": [
+                            {
+                                "source_call_id": "call-1",
+                                "content": "ok",
+                                "extra": result_extra,
+                            }
+                        ]
+                    },
+                )
+                original = deepcopy(trajectory)
+                report = build_report(
+                    convert_atif_trajectory(trajectory),
+                    ToolConfig(adapter="atif", redact=False),
+                    "inline",
+                )
+                for meta in (
+                    report["trajectory_meta"][0],
+                    project_meta_from_atif(trajectory, {}),
+                ):
+                    tool = meta["steps"][0]["tool_calls"][0]
+                    self.assertEqual(tool.get("execution_duration_ms"), duration)
+                    if duration is None:
+                        self.assertNotIn("execution_duration_ms", tool)
+                    self.assertEqual(tool.get("execution_duration_source"), source)
+                    if source is None:
+                        self.assertNotIn("execution_duration_source", tool)
+                    self.assertEqual(tool["generation_duration_ms"], 1000)
+                    self.assertEqual(meta["steps"][0]["duration_ms"], 1000)
+                    self.assertEqual(meta["duration_ms"], 1000 + (duration or 0))
+                    latency = automatic_analysis_metrics(trajectory, meta).get(
+                        "latency", {}
+                    )
+                    self.assertEqual(
+                        latency.get("tool_execution_duration_ms", {}).get("max"),
+                        duration,
+                    )
+                self.assertEqual(trajectory, original)
+
+    def test_canonical_tool_duration_replaces_stale_sidecar_provenance(self) -> None:
+        trajectory = valid_trajectory()
+        trajectory["steps"][0].update(
+            source="agent",
+            extra={"duration_ms": 1000},
+            tool_calls=[
+                {
+                    "tool_call_id": "call-1",
+                    "function_name": "read_file",
+                    "arguments": {},
+                }
+            ],
+            observation={"results": [{"source_call_id": "call-1", "content": "ok"}]},
+        )
+        prior = {
+            "steps": [
+                {
+                    "step_id": 1,
+                    "tool_calls": [
+                        {
+                            "tool_call_id": "call-1",
+                            "execution_duration_ms": 900,
+                            "execution_duration_source": "old-sidecar",
+                        }
+                    ],
+                }
+            ]
+        }
+        for location in (
+            trajectory["steps"][0]["tool_calls"][0],
+            trajectory["steps"][0]["observation"]["results"][0],
+        ):
+            for extra in (
+                {"execution_duration_ms": 420},
+                {"execution_duration_ms": None},
+                {"execution_duration_ms": 0, "execution_duration_source": None},
+            ):
+                with self.subTest(extra=extra):
+                    location["extra"] = extra
+                    projected = project_meta_from_atif(trajectory, prior)
+                    tool = projected["steps"][0]["tool_calls"][0]
+                    self.assertEqual(
+                        tool.get("execution_duration_ms"),
+                        extra["execution_duration_ms"],
+                    )
+                    if extra["execution_duration_ms"] is None:
+                        self.assertNotIn("execution_duration_ms", tool)
+                    self.assertNotIn("execution_duration_source", tool)
+            location.pop("extra")
+        projected = project_meta_from_atif(trajectory, prior)
+        self.assertEqual(
+            projected["steps"][0]["tool_calls"][0]["execution_duration_ms"], 900
+        )
+        self.assertEqual(
+            projected["steps"][0]["tool_calls"][0]["execution_duration_source"],
+            "old-sidecar",
+        )
+
+    def test_tool_execution_timing_matches_results_by_call_identity(self) -> None:
+        trajectory = valid_trajectory()
+        trajectory["steps"][0].update(
+            source="agent",
+            extra={"duration_ms": 1000},
+            tool_calls=[
+                {
+                    "tool_call_id": f"call-{index}",
+                    "function_name": "read_file",
+                    "arguments": {},
+                    "extra": {
+                        "execution_duration_ms": index * 100,
+                        "execution_duration_source": "call",
+                    },
+                }
+                for index in (1, 2)
+            ],
+            observation={
+                "results": [
+                    {
+                        "source_call_id": "call-2",
+                        "content": "second",
+                        "extra": {
+                            "execution_duration_ms": 42,
+                            "execution_duration_source": "result",
+                        },
+                    },
+                    {"source_call_id": "call-1", "content": "first"},
+                ]
+            },
+        )
+        projected = project_meta_from_atif(trajectory, {})
+        self.assertEqual(
+            [
+                (tool["execution_duration_ms"], tool["execution_duration_source"])
+                for tool in projected["steps"][0]["tool_calls"]
+            ],
+            [(100, "call"), (42, "result")],
+        )
+        self.assertEqual(projected["duration_ms"], 1142)
+
     def test_validator_rejects_required_order_type_and_unknown_field_errors(
         self,
     ) -> None:

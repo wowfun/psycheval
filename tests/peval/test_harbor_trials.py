@@ -119,6 +119,48 @@ def completed_result(*, reward: float = 0.75) -> dict[str, object]:
 
 
 class HarborTrialTests(unittest.TestCase):
+    def test_harbor_tool_call_extra_timing_reaches_catalog_and_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            jobs = base / "jobs"
+            trial = jobs / "job-a" / "trial-a"
+            trajectory = atif_trajectory()
+            trajectory["steps"][1].update(
+                extra={"duration_ms": 1000},
+                tool_calls=[
+                    {
+                        "tool_call_id": "call-1",
+                        "function_name": "read_file",
+                        "arguments": {},
+                        "extra": {
+                            "generation_duration_ms": 1000,
+                            "execution_duration_ms": 420,
+                        },
+                    }
+                ],
+                observation={
+                    "results": [{"source_call_id": "call-1", "content": "ok"}]
+                },
+            )
+            write_trial(trial, trajectory=trajectory, result=completed_result())
+            source_path = trial / "agent/trajectory.json"
+            original = source_path.read_bytes()
+            store, config, catalog = self.workspace(base / "workspace", jobs)
+            try:
+                catalog.reconcile()
+                row = catalog.query(CatalogQuery()).items[0].to_dict()
+                self.assertEqual(row["duration_ms"], 1420)
+                self.assertEqual(row["model_duration_ms"], 1000)
+                detail = catalog.load_detail(row["source_key"]).report
+                meta = detail["trajectory_meta"][0]
+                self.assertEqual(
+                    meta["steps"][1]["tool_calls"][0]["execution_duration_ms"], 420
+                )
+                self.assertEqual(meta["duration_ms"], 1420)
+                self.assertEqual(source_path.read_bytes(), original)
+            finally:
+                store.close()
+
     def test_trial_identity_wins_over_agent_trajectory_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             trial = Path(tmp) / "jobs" / "job-a" / "trial-a"

@@ -25,6 +25,7 @@ from psycheval.state import (
     open_workspace_state,
 )
 from psycheval.state.catalog import (
+    CATALOG_PROJECTION_VERSION,
     CATALOG_SCHEMA_VERSION,
     SUMMARY_GROUP_LIMIT,
     CatalogSummaryCapacityError,
@@ -32,6 +33,7 @@ from psycheval.state.catalog import (
     _summary_rows,
 )
 from tests.peval.cli_inputs_support import write_trial_cell_artifacts
+from tests.peval.test_atif_contract import valid_trajectory
 
 
 class WorkspaceCatalogTests(unittest.TestCase):
@@ -982,11 +984,8 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 trajectory["agent"]["model_name"] = (
                     "model-a" if index % 4 else "model-b"
                 )
+                trajectory["steps"][1]["extra"] = {"duration_ms": index}
                 trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
-                meta_path = cell / "agent" / "trajectory_meta.json"
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                meta["duration_ms"] = index
-                meta_path.write_text(json.dumps(meta), encoding="utf-8")
                 if index % 2 == 0 or index == 1:
                     state_path = cell / ".peval" / "state.json"
                     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1171,6 +1170,82 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 "Existing note",
             )
             store.close()
+
+    def test_projection_refresh_reprojects_tool_timing_without_source_changes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cell = self.write_cell(root, 1)
+            trajectory = valid_trajectory()
+            trajectory["steps"][0].update(
+                source="agent",
+                timestamp="2026-01-01T00:00:00Z",
+                extra={"duration_ms": 1000},
+                tool_calls=[
+                    {
+                        "tool_call_id": "call-1",
+                        "function_name": "read_file",
+                        "arguments": {},
+                        "extra": {"execution_duration_ms": 420},
+                    }
+                ],
+                observation={
+                    "results": [{"source_call_id": "call-1", "content": "ok"}]
+                },
+            )
+            trajectory_path = cell / "agent/trajectory.json"
+            trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
+            before = {
+                path: path.read_bytes() for path in cell.rglob("*") if path.is_file()
+            }
+            store, catalog = self.catalog(root)
+            self.addCleanup(store.close)
+            catalog.reconcile()
+            with catalog._connect() as connection:
+                row = connection.execute(
+                    "SELECT row_json, fingerprint FROM cells"
+                ).fetchone()
+                old_row = json.loads(row["row_json"])
+                old_row["duration_ms"] = 1000
+                connection.execute(
+                    "UPDATE cells SET duration_ms = ?, row_json = ?",
+                    (1000, json.dumps(old_row)),
+                )
+                catalog._set_meta(
+                    connection,
+                    "projection_version",
+                    str(CATALOG_PROJECTION_VERSION - 1),
+                )
+                connection.commit()
+            generation = catalog.generation
+            with patch.object(
+                WorkspaceCatalog,
+                "_delete_database_files",
+                side_effect=AssertionError("projection refresh must not wipe storage"),
+            ):
+                rebuilt = WorkspaceCatalog(store, catalog.config)
+            self.assertFalse(rebuilt.has_generation)
+            with rebuilt._connect(readonly=True) as connection:
+                self.assertEqual(
+                    connection.execute("SELECT count(*) FROM cells").fetchone()[0], 1
+                )
+            rebuilt.reconcile()
+            self.assertEqual(rebuilt.generation, generation + 1)
+            fresh = rebuilt.query(CatalogQuery()).items[0].to_dict()
+            self.assertEqual(fresh["duration_ms"], 1420)
+            self.assertEqual(
+                rebuilt.load_detail(fresh["source_key"]).report["trajectory_meta"][0][
+                    "duration_ms"
+                ],
+                1420,
+            )
+            with rebuilt._connect(readonly=True) as connection:
+                self.assertEqual(
+                    connection.execute("SELECT fingerprint FROM cells").fetchone()[0],
+                    row["fingerprint"],
+                )
+            self.assertEqual({path: path.read_bytes() for path in before}, before)
 
     def test_next_generation_is_not_visible_until_commit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

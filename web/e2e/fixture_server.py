@@ -79,6 +79,45 @@ def main() -> None:
             root / "runs/default/psychevo/e2e-session/e2e-trial-2",
             "e2e-trial-2",
         )
+        if os.environ.get("PEVAL_E2E_TIMELINE") == "1":
+            path = (
+                root
+                / "runs/default/psychevo/e2e-session/e2e-trial/agent/trajectory.json"
+            )
+            trajectory = json.loads(path.read_text(encoding="utf-8"))
+            trajectory["steps"][0]["timestamp"] = "2026-01-01T00:00:00Z"
+            trajectory["steps"][1].update(
+                timestamp="2026-01-01T00:00:01Z",
+                extra={"duration_ms": 1000},
+                tool_calls=[
+                    {
+                        "tool_call_id": call_id,
+                        "function_name": name,
+                        "arguments": {},
+                        "extra": {"execution_duration_ms": duration},
+                    }
+                    for call_id, name, duration in (
+                        ("call-measured", "read_file", 420),
+                        ("call-zero", "cached_read", 0),
+                        ("call-unknown", "unknown_read", 222),
+                    )
+                ],
+                observation={
+                    "results": [
+                        {"source_call_id": "call-measured", "content": "ok"},
+                        {"source_call_id": "call-zero", "content": "cached"},
+                        {
+                            "source_call_id": "call-unknown",
+                            "content": "unknown",
+                            "extra": {"execution_duration_ms": None},
+                        },
+                    ]
+                },
+            )
+            trajectory["final_metrics"]["extra"].update(
+                total_tool_calls=3, total_tool_errors=0
+            )
+            path.write_text(json.dumps(trajectory), encoding="utf-8")
         if os.environ.get("PEVAL_E2E_REPORTS") == "1":
             (root / "library-dataset").mkdir()
             with (root / "peval.toml").open("a", encoding="utf-8") as config_file:

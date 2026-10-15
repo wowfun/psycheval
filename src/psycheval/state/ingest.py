@@ -395,7 +395,9 @@ class StateIngestMixin:
             try:
                 trajectory = read_json_object(artifacts.trajectory_path)
                 validate_atif_trajectory(trajectory, str(artifacts.trajectory_path))
-                meta = read_json_object(artifacts.meta_path)
+                meta = project_meta_from_atif(
+                    trajectory, read_json_object(artifacts.meta_path)
+                )
             except Exception:
                 continue
             source = self.source_row_for_artifact_cell(cell_dir, trajectory, meta)

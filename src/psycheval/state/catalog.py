@@ -30,6 +30,7 @@ from psycheval.state.workspace_sources import (
 )
 
 CATALOG_SCHEMA_VERSION = 18
+CATALOG_PROJECTION_VERSION = 3
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 SUMMARY_CACHE_ENTRY_LIMIT = 128
@@ -771,6 +772,10 @@ class WorkspaceCatalog:
         task_roots: dict[str, tuple[tuple[str, Path], ...]] = {}
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            projection_current = (
+                self._meta_int(connection, "projection_version", -1)
+                == CATALOG_PROJECTION_VERSION
+            )
             existing = {
                 str(row["source_ref"]): (
                     str(row["fingerprint"]),
@@ -787,7 +792,11 @@ class WorkspaceCatalog:
                 seen.add(source_ref)
                 prior = existing.get(source_ref)
                 row = None
-                if prior is not None and prior[0] == candidate.fingerprint:
+                if (
+                    projection_current
+                    and prior is not None
+                    and prior[0] == candidate.fingerprint
+                ):
                     try:
                         cached = json.loads(prior[2])
                     except (ValueError, RecursionError):
@@ -905,6 +914,9 @@ class WorkspaceCatalog:
             generation = self._meta_int(connection, "generation", 0) + 1
             self._set_meta(connection, "generation", str(generation))
             self._set_meta(connection, "valid_generation", "1")
+            self._set_meta(
+                connection, "projection_version", str(CATALOG_PROJECTION_VERSION)
+            )
             connection.commit()
             return generation
 
@@ -1203,6 +1215,11 @@ class WorkspaceCatalog:
         if self._meta(connection, "generation") is None:
             self._set_meta(connection, "generation", "0")
         if self._meta(connection, "valid_generation") is None:
+            self._set_meta(connection, "valid_generation", "0")
+        if (
+            self._meta_int(connection, "projection_version", -1)
+            != CATALOG_PROJECTION_VERSION
+        ):
             self._set_meta(connection, "valid_generation", "0")
         connection.commit()
 

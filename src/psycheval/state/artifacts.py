@@ -102,7 +102,9 @@ class StateArtifactMixin:
             raise ValueError(f"Invalid ATIF artifact: {exc}") from exc
         return {
             "trajectory": trajectory,
-            "meta": read_json_object(artifacts.meta_path),
+            "meta": project_meta_from_atif(
+                trajectory, read_json_object(artifacts.meta_path)
+            ),
         }
 
     def read_source_document(
@@ -247,7 +249,9 @@ class StateArtifactMixin:
                     validate_atif_trajectory(trajectory, str(artifacts.trajectory_path))
                 except ValueError as exc:
                     raise ValueError(f"Invalid ATIF artifact: {exc}") from exc
-                meta = read_json_object(artifacts.meta_path)
+                meta = project_meta_from_atif(
+                    trajectory, read_json_object(artifacts.meta_path)
+                )
                 source = self.source_row_for_artifact_cell(cell_dir, trajectory, meta)
                 source["source_alias"] = optional_str(state.get("source_alias"))
                 source["source_category"] = self.source_category_from_state(state)

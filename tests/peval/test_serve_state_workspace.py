@@ -5,6 +5,7 @@ from psycheval._inputs.workspace_snapshots import (
 )
 from psycheval.cli import main as cli_main
 from psycheval.config import load_config
+from psycheval.state import CatalogQuery, WorkspaceCatalog
 from tests.peval.serve_state_support import (
     DEFAULT_PORT_END,
     DEFAULT_PORT_START,
@@ -38,6 +39,7 @@ from tests.peval.serve_state_support import (
     write_cached_note,
     write_trial_cell_artifacts,
 )
+from tests.peval.test_atif_contract import tool_timing_trajectory
 
 DERIVED_SOURCE_STATE_FIELDS = {
     "source_key",
@@ -61,6 +63,52 @@ DERIVED_SOURCE_STATE_FIELDS = {
 
 
 class PevalServeStateWorkspaceTests(unittest.TestCase):
+    def test_local_cell_read_and_sync_use_canonical_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = peval_workspace(Path(tmp))
+            cell = root / "runs/default/psychevo/session/trial"
+            write_trial_cell_artifacts(cell, session_id="session", trial_key="trial")
+            trajectory = tool_timing_trajectory({"execution_duration_ms": 420}, [{}])
+            path = cell / "agent/trajectory.json"
+            path.write_text(json.dumps(trajectory), encoding="utf-8")
+            before = {
+                path: path.read_bytes()
+                for path in (path, cell / "agent/trajectory_meta.json")
+            }
+            store = open_workspace_state(str(root))
+            try:
+                config = load_config(workspace_root=root)
+                catalog = WorkspaceCatalog(store, config)
+                catalog.reconcile()
+                expected = catalog.query(CatalogQuery()).items[0].to_dict()
+                self.assertEqual(expected["duration_ms"], 1420)
+                for rows in (store.source_rows(), store.source_payload()):
+                    self.assertEqual(
+                        rows[0]["last_turn_finished_at_ms"],
+                        expected["last_turn_finished_at_ms"],
+                    )
+                payload = store.read_trial_artifacts(store.source_rows()[0])
+                self.assertEqual(payload["meta"]["duration_ms"], 1420)
+                with patch.object(
+                    store,
+                    "update_existing_artifact_source",
+                    wraps=store.update_existing_artifact_source,
+                ) as update:
+                    store.sync_artifact_sources(config)
+                synced_meta = update.call_args.args[4]
+                self.assertEqual(synced_meta["duration_ms"], 1420)
+                self.assertEqual(
+                    synced_meta["steps"][0]["tool_calls"][0]["execution_duration_ms"],
+                    420,
+                )
+                self.assertEqual(
+                    store.source_payload()[0]["last_turn_finished_at_ms"],
+                    expected["last_turn_finished_at_ms"],
+                )
+                self.assertEqual({path: path.read_bytes() for path in before}, before)
+            finally:
+                store.close()
+
     def test_workspace_discovery_and_missing_workspace_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = peval_workspace(Path(tmp) / "workspace")

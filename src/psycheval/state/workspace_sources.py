@@ -17,6 +17,7 @@ from psycheval._state.artifacts import (
 from psycheval._state.sources import refresh_binding
 from psycheval.atif import validate_atif_trajectory
 from psycheval.config import HarborMount, ToolConfig, validate_harbor_mount_paths
+from psycheval.report import project_meta_from_atif
 from psycheval.state.constants import SOURCE_STATE_DIR, SOURCE_STATE_FILENAME
 from psycheval.state.harbor_evidence import (
     HarborTaskIndex,
@@ -801,7 +802,9 @@ class WorkspaceSources:
                 )
             trajectory = read_json_object(artifacts.trajectory_path)
             validate_atif_trajectory(trajectory, str(artifacts.trajectory_path))
-            meta = read_json_object(artifacts.meta_path)
+            meta = project_meta_from_atif(
+                trajectory, read_json_object(artifacts.meta_path)
+            )
             source = self.store.source_row_for_artifact_cell(cell_dir, trajectory, meta)
             source["source_alias"] = optional_str(state.get("source_alias"))
             source["source_category"] = self.store.source_category_from_state(state)

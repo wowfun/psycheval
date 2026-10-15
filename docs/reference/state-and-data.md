@@ -24,8 +24,8 @@ blocks, stable session identity, and explicit unknowns. It never invents a call
 from prose. Existing ATIF imports are validated without repair. A Harbor
 ATIF-v1.x artifact is exposed as v1.7 only when changing the schema label alone
 passes the current strict validator; the compatibility view is not persisted.
-Derived browser views render absolute timestamps as UTC without rewriting the
-underlying ATIF, Harbor, or catalog values.
+Derived browser views use the workspace's [display timezone](workspace.md#display-timezone)
+without rewriting the underlying ATIF, Harbor, or catalog values.
 
 Converted trajectories retain adapter-owned explicit trajectory IDs; only absent
 IDs are derived from Agent and session identity. Embedded subagent trajectories
@@ -141,6 +141,27 @@ also needs an exact terminal boundary and output usage. Cache rate uses explicit
 cache-read measurements over inclusive prompt tokens. Missing evidence is
 unknown, numeric zero remains a value, and Agent or wall duration is not
 relabelled as model timing.
+
+Active duration sums recorded Agent-step and tool execution contributions. It
+measures aggregate activity rather than the union of elapsed intervals; parallel
+contributions can overlap. Wall duration remains the separate elapsed measure.
+Projected durations accept only nonnegative integer milliseconds, excluding
+booleans, numeric strings, fractional values, and non-finite numbers.
+
+Tool execution timing is projected from matching observation results' `extra`,
+falling back to the tool call's `extra` when the results omit timing or contain
+only invalid measurements. An explicit unknown result duration
+takes precedence over a call measurement and clears prior sidecar timing;
+unknown durations are omitted from the sidecar. Projected tool durations are
+nonnegative integer milliseconds, with optional nonblank string source labels from the
+same location. Multiple matching results must agree on a duration; conflicting
+measurements remain unknown, and differing source labels are omitted. Without
+canonical timing, valid sidecar derivations are retained. All local-cell readers
+project mirrored facts from ATIF before deriving summaries. Schema and projection
+versions are independent. A projection mismatch makes the current generation
+unavailable and refreshes cached rows in the next reconciliation transaction,
+even when source fingerprints are unchanged. A schema mismatch rebuilds the
+derived SQLite index. Neither operation changes source artifacts.
 
 Leaderboard summaries cover every Trial matched by the current source state,
 search, facets, and applied Saved Views, including browser-local Saved Views.
