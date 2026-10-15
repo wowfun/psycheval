@@ -1,8 +1,7 @@
+import { BROWSER_VIEW_LIMIT, VIEW_NAME_MAX_CHARS, VIEW_GROUPS, normalizeViewFilterValues } from "../app/workspace-view-contract.js";
+
 const BROWSER_VIEW_VERSION = 1;
-const BROWSER_VIEW_LIMIT = 100;
-const VIEW_NAME_LIMIT = 120;
 const VIEW_NOTES_BYTE_LIMIT = 1024 * 1024;
-const VIEW_GROUPS = new Set(["overall", "agent", "model", "category", "task", "job", "provider"]);
 const FILTER_KEYS = new Set([
   "state", "search", "categories", "tags", "agents", "models", "results",
   "tasks", "jobs", "providers",
@@ -26,7 +25,7 @@ function normalizeName(value) {
   if (typeof value !== "string") throw repositoryError("View name must be a string.");
   const name = value.trim();
   if (!name) throw repositoryError("View name is required.");
-  if (name.length > VIEW_NAME_LIMIT) throw repositoryError(`View name exceeds ${VIEW_NAME_LIMIT} characters.`);
+  if ([...name].length > VIEW_NAME_MAX_CHARS) throw repositoryError(`View name exceeds ${VIEW_NAME_MAX_CHARS} characters.`);
   if (name === "." || name === ".." || /[\\/]/.test(name)) throw repositoryError("View name must be one filename stem.");
   if (Array.from(name).some(character => {
     const code = character.codePointAt(0);
@@ -39,12 +38,7 @@ function normalizeStringList(value, key) {
   if (!Array.isArray(value) || value.some(item => typeof item !== "string")) {
     throw repositoryError(`View filters ${key} must be a string array.`);
   }
-  const seen = new Set();
-  return value.filter(item => {
-    if (seen.has(item)) return false;
-    seen.add(item);
-    return true;
-  });
+  return normalizeViewFilterValues(value);
 }
 
 function normalizeFilters(value) {

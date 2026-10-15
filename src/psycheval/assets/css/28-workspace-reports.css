@@ -188,7 +188,10 @@
     display:none;
   }
 .report-reader-head {
-    grid-template-columns:minmax(0,1fr) auto;
+    grid-template-columns:1fr;
+  }
+.report-reader-actions {
+    justify-content:flex-start;
   }
 
 }

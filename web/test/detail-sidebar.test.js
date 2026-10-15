@@ -19,6 +19,18 @@ const catalog = await import("../../src/psycheval/assets/web/modules/serve-catal
 
 test.after(() => browser.cleanup());
 
+test("opening another Trial starts at its default tab unless a position is supplied", () => {
+  runtime.state.selectedSourceKey = "first";
+  sidebarModule.openDetailSidebar({ trialKey:"first", tab:"task" });
+  assert.equal(runtime.state.detailSidebar.tab, "task");
+  runtime.state.selectedSourceKey = "second";
+  sidebarModule.openDetailSidebar({ trialKey:"second" });
+  assert.equal(runtime.state.detailSidebar.tab, "verification");
+  sidebarModule.openDetailSidebar({ trialKey:"second", stepId:"1" });
+  assert.equal(runtime.state.detailSidebar.tab, "trajectory");
+  sidebarModule.closeDetailSidebar({ render:false });
+});
+
 function harborReport() {
   return {
     trajectory: [{
@@ -259,7 +271,7 @@ test("guest verification is independent of Task resolution and child Agent navig
     assert.deepEqual(calls, ["/api/verification-files/root-source", "/api/verification-files/root-source/reward"]);
     sidebar.querySelector('[data-trial-tab="task"]').click();
     sidebarModule.openDetailSidebar({ trialKey: "trial-two" });
-    assert.equal(runtime.state.detailSidebar.tab, "task");
+    assert.equal(runtime.state.detailSidebar.tab, "verification");
     sidebarModule.openDetailSidebar({ trialKey: "trial-one", stepId: 2 });
     assert.equal(runtime.state.detailSidebar.tab, "trajectory");
     assert.deepEqual(runtime.state.selectedStep, { trialKey: "trial-one", stepId: "2" });

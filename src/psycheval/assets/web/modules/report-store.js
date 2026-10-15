@@ -3,7 +3,8 @@
 const reportStore = {
   reports: [],
   reader: {
-    openId: null,
+    openRef: null,
+    report: null,
     objectUrl: null,
     previewObserver: null,
   },

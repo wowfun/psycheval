@@ -41,6 +41,14 @@ function subscribeWorkspaceInvalidation(listener) {
   return () => invalidationListeners.delete(listener);
 }
 
+function workspaceLocationChanged(page, kind = "replace") {
+  workspaceApp?.locationChanged(page, kind);
+}
+function workspaceShareLink(page) {
+  if (!workspaceApp) throw new Error("Workspace navigation is unavailable");
+  return workspaceApp.shareLink(page);
+}
+
 export {
   navigateWorkspace,
   invalidateWorkspace,
@@ -49,4 +57,6 @@ export {
   setWorkspaceSnapshotProvider,
   snapshotWorkspace,
   subscribeWorkspaceInvalidation,
+  workspaceLocationChanged,
+  workspaceShareLink,
 };

@@ -1043,11 +1043,10 @@ class WorkspaceCatalog:
                 )
                 parameters.append(_fts_literal(query.search))
         if query.tags:
-            placeholders = ",".join("?" for _ in query.tags)
             clauses.append(
-                f"EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value IN ({placeholders}))"
+                "EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value IN (SELECT value FROM json_each(?)))"
             )
-            parameters.extend(query.tags)
+            parameters.append(json.dumps(query.tags))
         for column, values in (
             ("category", query.categories),
             ("agent", query.agents),
@@ -1060,9 +1059,8 @@ class WorkspaceCatalog:
         ):
             if not values:
                 continue
-            placeholders = ",".join("?" for _ in values)
-            clauses.append(f"{column} IN ({placeholders})")
-            parameters.extend(values)
+            clauses.append(f"{column} IN (SELECT value FROM json_each(?))")
+            parameters.append(json.dumps(values))
         return " AND ".join(clauses) if clauses else "1", parameters
 
     def _combined_query_where(

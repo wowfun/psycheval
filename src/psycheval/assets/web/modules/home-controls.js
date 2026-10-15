@@ -18,6 +18,12 @@ function bindHomeControls() {
   window.addEventListener("peval:workspace-navigate", () => {
     closeAllSidebars({ reason: "navigate", restoreFocus: false });
   });
+  document.addEventListener("input", event => {
+    const editor = /** @type {HTMLTextAreaElement | null} */ (event.target);
+    if (editor?.matches?.("[data-notes-editor]") && state.notesEditor?.trialKey === editor.dataset.trialKey) {
+      state.notesEditor.markdown = editor.value;
+    }
+  });
   document.addEventListener("click", event => {
     closeOpenSubmenus(/** @type {Element | null} */ (event.target)?.closest?.(SUBMENU_DETAILS_SELECTOR) || null);
   }, true);

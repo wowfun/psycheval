@@ -63,3 +63,12 @@
   cursor:col-resize;
   user-select:none;
 }
+@media(max-width:700px) {
+  .workspace-sidebar-left-open .workspace,
+  .workspace-sidebar-right-open .workspace,
+  .workspace-sidebar-left-open.workspace-sidebar-right-open .workspace {
+    width:auto;
+    max-width:1180px;
+    margin:0 auto;
+  }
+}

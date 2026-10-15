@@ -17,6 +17,7 @@ test("saving, editing and clearing Trial notes refreshes the Leaderboard without
     const trial = (await catalogRows(page.request, fixture.origin)).find(row => row.kind === "harbor-trial");
     expect(trial.source_key).not.toBe(trial.trial_key);
     await page.goto(fixture.origin);
+    await expect(page.locator("[data-notes-edit]")).toBeVisible();
     const query = { page: 1, page_size: 1, jobs: [trial.job_name], sort: "task", direction: "asc" };
     await page.evaluate(async query => {
       const { loadCatalogPage } = await import("/assets/peval/modules/serve-catalog.js");
@@ -99,8 +100,15 @@ test("catalog notes survive detail switches, pagination, reload and guest reads"
       const key = await row.getAttribute("data-source-key");
       await expect(notesCell(page, key)).toHaveText(notes.get(key) || "-");
     }
+    const restoredKey = await page.locator("#leaderboard tbody tr").getAttribute("data-source-key");
     await page.reload();
-    await expectNotes(page);
+    await expect(page.locator("#leaderboard tbody tr")).toHaveCount(1);
+    await expect(notesCell(page, restoredKey)).toHaveText(notes.get(restoredKey) || "-");
+    const restoredQuery = await page.evaluate(async () => {
+      const { state } = await import("/assets/peval/modules/runtime.js");
+      return state.catalogQuery;
+    });
+    expect(restoredQuery).toMatchObject({ page: rows.length, page_size: 1 });
     guest = await browser.newContext();
     const guestPage = await guest.newPage();
     await guestPage.goto(fixture.origin);

@@ -288,8 +288,11 @@ test("standalone import, mixed associations, target pagination, report drafts an
     await expect(page.locator("[data-report-save]")).toBeEnabled();
     await save(page);
     await page.reload();
-    await page.locator(`[data-report-select="${html.report_ref}"]`).click();
-    await associations(page);
+    // The URL restores the selected report independently of the retained page.
+    await expect(page.locator("#report-library-detail")).toBeVisible();
+    expect(new URL(page.url()).searchParams.get("report")).toBe(html.report_ref);
+    await expect(page.locator('[data-report-tab="associations"]')).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("[data-report-pagination]")).toContainText("2 / 4");
     await expect(page.locator("[data-binding-remove]")).toHaveCount(0);
   } finally { await stopFixture(fixture); }
 });

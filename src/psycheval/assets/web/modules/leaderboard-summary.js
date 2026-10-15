@@ -2,6 +2,7 @@ import { $, esc, fmtMs, fmtNum, fmtPct, hasMetricValue, listValue, state, t } fr
 import { tableCellContent, tableValueAttributes } from "./data-tables.js";
 import { exportLeaderboardSummary, loadLeaderboardSummary } from "./serve-catalog.js";
 import { bindWorkspaceViewControls, renderWorkspaceViewControls } from "./workspace-views.js";
+import { workspaceLocationChanged } from "../app/workspace-runtime.js";
 
 function renderLeaderboardSummary() {
   const target = $("leaderboard-summary");
@@ -246,6 +247,7 @@ function bindLeaderboardSummaryControls(target) {
 async function setLeaderboardSummaryGroupBy(value) {
   if (!["overall", "agent", "model", "category", "task", "job", "provider"].includes(value)) return;
   state.leaderboardSummaryGroupBy = value;
+  workspaceLocationChanged("home");
   const request = loadLeaderboardSummary();
   renderLeaderboardSummary();
   await request;
@@ -274,12 +276,14 @@ function leaderboardSummaryGroupUnit(groupBy = state.leaderboardSummaryGroupBy) 
 
 function toggleLeaderboardSummaryTable() {
   state.leaderboardSummaryTableOpen = !state.leaderboardSummaryTableOpen;
+  workspaceLocationChanged("home");
   renderLeaderboardSummary();
 }
 
 function setLeaderboardSummaryStatistic(value) {
   if (!leaderboardSummaryStatistics().some(statistic => statistic.key === value)) return;
   state.leaderboardSummaryStatistic = value;
+  workspaceLocationChanged("home");
   renderLeaderboardSummary();
 }
 

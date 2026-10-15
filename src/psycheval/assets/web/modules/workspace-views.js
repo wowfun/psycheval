@@ -9,6 +9,7 @@ import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
 import { renderMarkdown } from "./markdown.js";
 import { createSidebarController } from "./sidebar.js";
 import { createWorkspaceViewRepository } from "./workspace-view-repository.js";
+import { normalizeViewFilterValues } from "../app/workspace-view-contract.js";
 
 let liveWorkspaceViewRepository = null;
 let workspaceViewController = null;
@@ -79,14 +80,14 @@ function workspaceViewFilters(value) {
   return {
     state: normalizeServeSourceMode(filters.state),
     search: typeof filters.search === "string" ? filters.search : "",
-    categories: listValue(filters.categories).map(String),
-    tags: listValue(filters.tags).map(String),
-    agents: listValue(filters.agents).map(String),
-    models: listValue(filters.models).map(String),
-    tasks: listValue(filters.tasks).map(String),
-    jobs: listValue(filters.jobs).map(String),
-    providers: listValue(filters.providers).map(String),
-    results: listValue(filters.results).map(String),
+    categories: normalizeViewFilterValues(listValue(filters.categories).map(String)),
+    tags: normalizeViewFilterValues(listValue(filters.tags).map(String)),
+    agents: normalizeViewFilterValues(listValue(filters.agents).map(String)),
+    models: normalizeViewFilterValues(listValue(filters.models).map(String)),
+    tasks: normalizeViewFilterValues(listValue(filters.tasks).map(String)),
+    jobs: normalizeViewFilterValues(listValue(filters.jobs).map(String)),
+    providers: normalizeViewFilterValues(listValue(filters.providers).map(String)),
+    results: normalizeViewFilterValues(listValue(filters.results).map(String)),
   };
 }
 
@@ -181,7 +182,7 @@ function workspaceViewMessage(key, fallback, values = {}) {
 }
 
 function renderWorkspaceViewControls() {
-  const compositeApplied = state.workspaceAppliedViewNames.size > 0;
+  const compositeApplied = state.workspaceAppliedViewNames.size > 0 || state.sharedViewSnapshots.length > 0;
   const reopen = state.workspaceViewsClosed && workspaceViews().length
     ? `<button type="button" class="action-button" data-workspace-views-open>${esc(t("saved_views", "Saved views"))}</button>`
     : "";
@@ -263,7 +264,7 @@ function bindWorkspaceViewDialog() {
 
 function openWorkspaceViewSaveDialog(opener) {
   if (state.workspaceAppliedViewNames.size) {
-    beginFeedback("#comparison .leaderboard-action-row", { key: "home:view-save-guard", page: "home" }).error(t("clear_conditions_before_saving_view", "Clear applied views before saving a new view."));
+    beginFeedback("#leaderboard .leaderboard-action-row", { key: "home:view-save-guard", page: "home" }).error(t("clear_conditions_before_saving_view", "Clear applied views before saving a new view."));
     return;
   }
   const dialog = document.querySelector?.("[data-view-save-dialog]");
@@ -428,7 +429,6 @@ async function refreshWorkspaceViewData() {
       refreshError = null;
       state.workspaceViewsRefreshQueued = false;
       const revision = state.workspaceViewsRefreshVersion;
-      const appliedBefore = new Set(state.workspaceAppliedViewNames);
       try {
         const repository = workspaceViewRepository();
         const views = repository ? await repository.refresh() : workspaceViews();
@@ -459,6 +459,8 @@ async function refreshWorkspaceViewData() {
         state.workspaceViewSummaries = summaries;
         state.workspaceViewsLoaded = true;
         state.workspaceViewSummaryGeneration = generation;
+        // Navigation may have changed the selection while these reads were pending.
+        const appliedBefore = new Set(state.workspaceAppliedViewNames);
         pruneWorkspaceViewState();
         renderWorkspaceViewRail();
         if ($("leaderboard-summary")) renderLeaderboardSummary();
@@ -472,6 +474,7 @@ async function refreshWorkspaceViewData() {
           const repository = workspaceViewRepository();
           state.workspaceViews = repository?.list() || [];
           state.workspaceViewsLoaded = Boolean(repository?.ready());
+          const appliedBefore = new Set(state.workspaceAppliedViewNames);
           pruneWorkspaceViewState();
           renderWorkspaceViewRail();
           if (Array.from(appliedBefore).some(id => !state.workspaceAppliedViewNames.has(id))) {
@@ -506,9 +509,7 @@ function pruneWorkspaceViewState() {
   state.workspaceAppliedViewNames = new Set(
     Array.from(state.workspaceAppliedViewNames).filter(id => ids.has(id))
   );
-  state.catalogQuery.views = workspaceViewQueryPayload(
-    Array.from(state.workspaceAppliedViewNames)
-  ).views;
+  state.catalogQuery.views = workspaceViewQueryPayload({ ids: Array.from(state.workspaceAppliedViewNames), includeShared: false }).views;
 }
 
 function renderWorkspaceViewRail() {
@@ -1020,11 +1021,10 @@ function selectedWorkspaceViewNames() {
   return selectedWorkspaceViewIds().map(id => workspaceViewForId(id)?.name).filter(Boolean);
 }
 
-function workspaceViewQueryPayload(ids = Array.from(state.workspaceAppliedViewNames)) {
+function workspaceViewQueryPayload({ ids = Array.from(state.workspaceAppliedViewNames), includeShared = true } = {}) {
   const repository = workspaceViewRepository();
-  if (repository?.ready()) return repository.queryPayload(ids);
   const selected = workspaceViews().filter(view => ids.includes(view.id));
-  return {
+  const payload = repository?.ready() ? repository.queryPayload(ids) : {
     views: selected.length
       ? selected.filter(view => view.origin === "server").map(view => view.name)
       : listValue(state.catalogQuery?.views).map(String),
@@ -1032,6 +1032,14 @@ function workspaceViewQueryPayload(ids = Array.from(state.workspaceAppliedViewNa
       .filter(view => view.origin === "browser")
       .map(view => ({ name: view.name, filters: workspaceViewFilterConfig(view.filters), group_by: view.group_by, notes: view.notes })),
   };
+  return { ...payload, ...(includeShared && state.sharedViewSnapshots.length ? { inline_views: state.sharedViewSnapshots.map(view => view.filters) } : {}) };
+}
+
+function captureAppliedViewSnapshots() {
+  return [
+    ...workspaceViews().filter(view => state.workspaceAppliedViewNames.has(view.id)).map(view => ({ name: view.name, filters: view.filters })),
+    ...state.sharedViewSnapshots,
+  ];
 }
 
 function browserWorkspaceViewDefinitions() {
@@ -1043,7 +1051,7 @@ function browserWorkspaceViewDefinitions() {
 function exportSelectedWorkspaceViews() {
   const ids = selectedWorkspaceViewIds();
   if (!ids.length) return;
-  const payload = workspaceViewQueryPayload(ids);
+  const payload = workspaceViewQueryPayload({ ids, includeShared: false });
   return serveDownload("summary_xlsx", {
     kind: "summary_xlsx",
     summary: { scope: "saved_views", ...payload }
@@ -1051,20 +1059,23 @@ function exportSelectedWorkspaceViews() {
 }
 
 function appliedWorkspaceViewNames() {
-  return workspaceViewQueryPayload(Array.from(state.workspaceAppliedViewNames)).views;
+  return workspaceViewQueryPayload({ ids: Array.from(state.workspaceAppliedViewNames), includeShared: false }).views;
 }
 
 async function applySelectedWorkspaceViews() {
   const ids = selectedWorkspaceViewIds();
   if (!ids.length) return;
-  const payload = workspaceViewQueryPayload(ids);
+  const payload = workspaceViewQueryPayload({ ids, includeShared: false });
+  state.sharedViewSnapshots = [];
   closeOpenSubmenus();
   state.rowSelection.clear();
-  state.selectedSourceKey = null;
-  state.selectedArtifactRevision = null;
-  state.selectedTrial = null;
-  state.selectedStep = null;
-  state.detailSidebar.open = false;
+  if (!state.homeLocationTarget.source) {
+    state.selectedSourceKey = null;
+    state.selectedArtifactRevision = null;
+    state.selectedTrial = null;
+    state.selectedStep = null;
+    state.detailSidebar.open = false;
+  }
   state.workspaceAppliedViewNames = new Set(ids);
   state.search.query = "";
   state.search.scope = "all";
@@ -1106,7 +1117,7 @@ async function applySelectedWorkspaceViews() {
 
 async function reloadAppliedWorkspaceViews() {
   const ids = Array.from(state.workspaceAppliedViewNames);
-  const payload = workspaceViewQueryPayload(ids);
+  const payload = workspaceViewQueryPayload({ ids, includeShared: false });
   state.catalogQuery.views = payload.views;
   if (!ids.length) return;
   await loadCatalogPage({ page: 1, views: payload.views }, { force: true });
@@ -1115,6 +1126,7 @@ async function reloadAppliedWorkspaceViews() {
 async function clearWorkspaceViewConditions() {
   closeOpenSubmenus();
   state.workspaceAppliedViewNames.clear();
+  state.sharedViewSnapshots = [];
   state.workspaceViewSelection.clear();
   state.workspaceViewTableOpen.clear();
   state.leaderboardSummaryGroupBy = "agent";
@@ -1169,6 +1181,7 @@ async function cancelWorkspaceViewApplication() {
   return clearWorkspaceViewConditions();
 }
 export {
+  captureAppliedViewSnapshots,
   appliedWorkspaceViewNames,
   applySelectedWorkspaceViews,
   applyWorkspaceView,

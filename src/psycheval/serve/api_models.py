@@ -41,6 +41,7 @@ class CatalogQueryRequest(StrictRequest):
     results: list[str]
     views: list[str]
     browser_views: list[dict[str, Any]]
+    inline_views: list[dict[str, Any]] = Field(default_factory=list)
     tasks: list[str] = Field(default_factory=list)
     jobs: list[str] = Field(default_factory=list)
     providers: list[str] = Field(default_factory=list)
@@ -61,6 +62,7 @@ class CatalogSummaryRequest(StrictRequest):
     results: list[str]
     views: list[str]
     browser_views: list[dict[str, Any]]
+    inline_views: list[dict[str, Any]] = Field(default_factory=list)
     group_by: str
 
 

@@ -158,6 +158,7 @@ from psycheval.serve.path_picker import PathPickerUnavailable, pick_file_paths
 from psycheval.serve.payloads import (
     catalog_post_query_payload,
     catalog_summary_payload,
+    inline_view_queries,
     source_keys_payload,
     summary_export_payload,
 )
@@ -717,7 +718,7 @@ def _register_catalog_routes(app: FastAPI) -> None:
                 catalog_query(request.url.query),
                 view_names=catalog_view_names(request.url.query),
             )
-        except WorkspaceViewNotFound as exc:
+        except (WorkspaceViewNotFound, ValueError) as exc:
             raise ProblemException(400, str(exc)) from exc
         return _json(project_catalog_payload(page.to_dict(), role_for(request)))
 
@@ -725,13 +726,16 @@ def _register_catalog_routes(app: FastAPI) -> None:
     @access(GUEST_ACCESS)
     def query_catalog(request: Request, body: CatalogQueryRequest) -> JSONResponse:
         runtime: ServeRuntime = request.app.state.runtime
-        query, view_names, raw_browser_views = catalog_post_query_payload(
+        query, view_names, raw_browser_views, inline_views = catalog_post_query_payload(
             body.payload()
         )
         try:
             browser_views = runtime.validated_browser_views(raw_browser_views)
             page = runtime.catalog_page(
-                query, view_names=view_names, browser_views=browser_views
+                query,
+                view_names=view_names,
+                browser_views=browser_views,
+                inline_views=inline_views,
             )
             runtime.ensure_browser_view_names_available(browser_views)
         except WorkspaceViewConflict as exc:
@@ -755,6 +759,7 @@ def _register_catalog_routes(app: FastAPI) -> None:
                 summary_request.query,
                 view_names=summary_request.views,
                 browser_views=browser_views,
+                inline_views=summary_request.inline_views,
                 group_by=summary_request.group_by,
             )
             runtime.ensure_browser_view_names_available(browser_views)
@@ -795,6 +800,7 @@ def _register_catalog_routes(app: FastAPI) -> None:
                             summary_request.query,
                             view_names=summary_request.query_views,
                             browser_views=browser_views,
+                            inline_views=summary_request.inline_views,
                             group_by=summary_request.group_by,
                             statistic=summary_request.statistic,
                         )
@@ -830,7 +836,11 @@ def _register_catalog_routes(app: FastAPI) -> None:
                     kind=body.kind,
                     query=export_query,
                     view_queries=runtime.workspace_view_queries(
-                        view_names, browser_views
+                        view_names,
+                        browser_views,
+                        inline_view_queries(
+                            body.query.get("inline_views", []) if body.query else []
+                        ),
                     ),
                     source_keys=source_keys_payload(payload),
                     audience=role_for(request),

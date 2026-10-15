@@ -40,12 +40,16 @@ function renderNotesEditor(trialKey) {
 function beginNotesEdit(trialKey) {
   if (!adminMode() || !trialKey || !editableNotesSource(trialKey)) return;
   const note = cellNoteFor(trialKey);
-  state.notesEditor = { trialKey, markdown: note?.markdown || "", error: "", saving: false };
+  const markdown = note?.markdown || "";
+  state.notesEditor = { trialKey, markdown, baselineMarkdown: markdown, error: "", saving: false };
   renderTrace();
 }
 function cancelNotesEdit() {
   state.notesEditor = null;
   renderTrace();
+}
+function notesDraftChanged() {
+  return Boolean(state.notesEditor && state.notesEditor.markdown !== (state.notesEditor.baselineMarkdown ?? ""));
 }
 async function saveSelectedNotes(button) {
   if (!adminMode()) return;
@@ -55,7 +59,8 @@ async function saveSelectedNotes(button) {
   const textarea = panel?.querySelector?.("[data-notes-editor]");
   if (!source?.source_key || !textarea) return;
   const markdown = textarea.value || "";
-  state.notesEditor = { trialKey, markdown, error: "", saving: true };
+  const baselineMarkdown = state.notesEditor?.baselineMarkdown ?? cellNoteFor(trialKey)?.markdown ?? "";
+  state.notesEditor = { trialKey, markdown, baselineMarkdown, error: "", saving: true };
   renderTrace();
   const pendingEditor = state.notesEditor;
   const feedback = beginFeedback(() => state.notesEditor?.trialKey === trialKey ? document.querySelector('[data-notes-editor-panel]') : null, {
@@ -72,12 +77,13 @@ async function saveSelectedNotes(button) {
     applyServeMutationPayload({}, { preserveTrial: trialKey });
   } catch (error) {
     const message = `${t("notes_save_failed", "Save notes failed")}: ${error.message || String(error)}`;
-    if (state.notesEditor === pendingEditor) state.notesEditor = { trialKey, markdown, error: message, saving: false };
+    if (state.notesEditor === pendingEditor) state.notesEditor = { trialKey, markdown, baselineMarkdown, error: message, saving: false };
     feedback.set(message, true);
     renderTrace();
   }
 }
 export {
+  notesDraftChanged,
   beginNotesEdit,
   cancelNotesEdit,
   renderNotesAction,

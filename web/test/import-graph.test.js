@@ -25,9 +25,12 @@ function staticGraph(entry) {
 test("the static entry graph contains only the Workspace kernel", () => {
   assert.deepEqual([...staticGraph("main.js")].sort(), [
     "app/browser-platform.js",
+    "app/catalog-sort.js",
     "app/render-options.js",
     "app/workspace-app.js",
+    "app/workspace-location.js",
     "app/workspace-runtime.js",
+    "app/workspace-view-contract.js",
     "main.js",
   ]);
 });
@@ -54,6 +57,8 @@ test("lightweight shared seams do not import the Home runtime", () => {
     "modules/report-store.js",
     "modules/report-sidebar.js",
     "modules/sidebar.js",
+    "modules/workspace-links.js",
+    "app/home-detail-controller.js",
   ]) {
     assert.equal(staticGraph(module).has("modules/runtime.js"), false, module);
   }

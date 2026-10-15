@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -22,7 +23,11 @@ from psycheval.serve.path_inputs import (
     validate_path_token,
 )
 from psycheval.state import CatalogQuery, ServeStateStore
-from psycheval.workspace_views import WorkspaceView, browser_views_from_payload
+from psycheval.workspace_views import (
+    BROWSER_VIEW_LIMIT,
+    WorkspaceView,
+    browser_views_from_payload,
+)
 
 SUMMARY_GROUP_BY_VALUES = frozenset(
     {"overall", "agent", "model", "category", "task", "job", "provider"}
@@ -39,6 +44,7 @@ class SummaryExportPayload:
     group_by: str = "agent"
     statistic: str = "mean"
     browser_views: tuple[WorkspaceView, ...] = ()
+    inline_views: tuple[CatalogQuery, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -47,6 +53,7 @@ class CatalogSummaryPayload:
     views: tuple[str, ...]
     browser_views: tuple[WorkspaceView, ...]
     group_by: str
+    inline_views: tuple[CatalogQuery, ...] = ()
 
 
 _CATALOG_SUMMARY_QUERY_FIELDS = frozenset(
@@ -70,7 +77,7 @@ _CATALOG_SUMMARY_QUERY_FIELDS = frozenset(
 
 def catalog_post_query_payload(
     value: Any,
-) -> tuple[CatalogQuery, tuple[str, ...], Any]:
+) -> tuple[CatalogQuery, tuple[str, ...], Any, tuple[CatalogQuery, ...]]:
     if not isinstance(value, dict):
         raise HttpError(400, "catalog query must be an object")
     required_fields = {
@@ -88,7 +95,7 @@ def catalog_post_query_payload(
         "views",
         "browser_views",
     }
-    optional_fields = {"tasks", "jobs", "providers", "datasets"}
+    optional_fields = {"tasks", "jobs", "providers", "datasets", "inline_views"}
     if not required_fields.issubset(value) or not set(value).issubset(
         required_fields | optional_fields
     ):
@@ -127,15 +134,18 @@ def catalog_post_query_payload(
         query,
         tuple(_string_array(value.get("views"), "query views")),
         value.get("browser_views"),
+        inline_view_queries(value.get("inline_views", [])),
     )
 
 
 def _strict_catalog_summary_query_payload(
     query_value: object,
-) -> tuple[CatalogQuery, tuple[str, ...], tuple[WorkspaceView, ...]]:
+) -> tuple[
+    CatalogQuery, tuple[str, ...], tuple[WorkspaceView, ...], tuple[CatalogQuery, ...]
+]:
     if not isinstance(query_value, dict):
         raise HttpError(400, "query must be an object")
-    if set(query_value) != _CATALOG_SUMMARY_QUERY_FIELDS:
+    if set(query_value) - {"inline_views"} != _CATALOG_SUMMARY_QUERY_FIELDS:
         raise HttpError(400, "catalog query fields are invalid")
     try:
         query = CatalogQuery(
@@ -162,24 +172,30 @@ def _strict_catalog_summary_query_payload(
     except ValueError as exc:
         raise HttpError(400, str(exc)) from exc
     view_names = tuple(_string_array(query_value.get("views"), "query views"))
-    return query, view_names, _browser_views(query_value.get("browser_views"))
+    return (
+        query,
+        view_names,
+        _browser_views(query_value.get("browser_views")),
+        inline_view_queries(query_value.get("inline_views", [])),
+    )
 
 
 def catalog_summary_payload(value: Any) -> CatalogSummaryPayload:
     if not isinstance(value, dict):
         raise HttpError(400, "catalog summary must be an object")
-    if set(value) != _CATALOG_SUMMARY_QUERY_FIELDS | {"group_by"}:
+    if set(value) - {"inline_views"} != _CATALOG_SUMMARY_QUERY_FIELDS | {"group_by"}:
         raise HttpError(400, "catalog summary fields are invalid")
     group_by = value.get("group_by")
     _validate_summary_group_by(group_by)
-    query, views, browser_views = _strict_catalog_summary_query_payload(
-        {key: value[key] for key in _CATALOG_SUMMARY_QUERY_FIELDS}
+    query, views, browser_views, inline_views = _strict_catalog_summary_query_payload(
+        {key: item for key, item in value.items() if key != "group_by"}
     )
     return CatalogSummaryPayload(
         query=query,
         views=views,
         browser_views=browser_views,
         group_by=group_by,
+        inline_views=inline_views,
     )
 
 
@@ -188,6 +204,30 @@ def _browser_views(value: Any) -> tuple[WorkspaceView, ...]:
         return tuple(browser_views_from_payload(value))
     except ValueError as exc:
         raise HttpError(400, str(exc)) from exc
+
+
+def inline_view_queries(value: Any) -> tuple[CatalogQuery, ...]:
+    """Validate anonymous predicates without entering the Saved View namespace."""
+    if not isinstance(value, list) or len(value) > BROWSER_VIEW_LIMIT:
+        raise HttpError(400, "inline_views must be a bounded filter array")
+    if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
+        raise HttpError(400, "inline_views exceeds the sharing byte limit")
+    fields = _CATALOG_SUMMARY_QUERY_FIELDS - {"views", "browser_views"}
+    queries = []
+    for filters in value:
+        if not isinstance(filters, dict) or not set(filters).issubset(fields):
+            raise HttpError(400, "inline view filter fields are invalid")
+        payload = {
+            **{key: [] for key in fields - {"state", "search"}},
+            "state": "active",
+            "search": "",
+            **filters,
+            "views": [],
+            "browser_views": [],
+        }
+        query, _, _, _ = _strict_catalog_summary_query_payload(payload)
+        queries.append(query)
+    return tuple(queries)
 
 
 def _string_array(value: Any, field: str) -> list[str]:
@@ -228,8 +268,8 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
                 400,
                 "statistic must be mean, min, q1, p50, q3, p95, or max",
             )
-        query, query_views, browser_views = _strict_catalog_summary_query_payload(
-            value.get("query")
+        query, query_views, browser_views, inline_views = (
+            _strict_catalog_summary_query_payload(value.get("query"))
         )
         return SummaryExportPayload(
             scope=scope,
@@ -238,6 +278,7 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
             group_by=group_by,
             statistic=statistic,
             browser_views=browser_views,
+            inline_views=inline_views,
         )
     if scope == "saved_views":
         if not {"scope", "views"}.issubset(value) or not set(value).issubset(

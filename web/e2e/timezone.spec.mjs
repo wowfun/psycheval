@@ -44,6 +44,7 @@ test("server timezone updates loaded time surfaces without reloading data or dra
     adapter: "psychevo", db: "fixture.db", sessions: [{ session_id: "timezone-session", name: "Timezone session", updated_at_ms: 1000 }],
   } }));
   const source = page.locator('[data-source-add-form][data-source-kind="db"]');
+  await expect(page.locator("[data-timezone-effective]")).toContainText("Asia/Shanghai");
   await source.locator('[name="db"]').fill("fixture.db");
   await source.locator("[data-session-inspect]").click();
   await expect(source.locator("time")).toContainText("+08:00");
@@ -97,7 +98,8 @@ test("server timezone updates loaded time surfaces without reloading data or dra
 
 test("conflicting timezone save retains draft and error until explicit retry", async ({ page }) => {
   await page.goto(`${fixture.origin}/config`);
-  await expect(page.locator("[data-timezone-mode]")).toBeEnabled();
+  // Establish the loaded browser revision before making a conflicting external write.
+  await expect(page.locator("[data-timezone-effective]")).toContainText("Asia/Shanghai");
   const config = await page.request.get(`${fixture.origin}/api/config`);
   const update = await page.request.patch(`${fixture.origin}/api/config`, {
     headers: { "If-Match": config.headers().etag, Origin: fixture.origin }, data: { timezone: "UTC" },

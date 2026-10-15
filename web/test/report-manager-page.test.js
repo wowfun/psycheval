@@ -29,6 +29,29 @@ const manager = await import("../../src/psycheval/assets/web/modules/report-mana
 const { reportLibraryStore: store, draftChanged } = await import("../../src/psycheval/assets/web/modules/report-library-store.js");
 test.after(() => browser.cleanup());
 
+test("report search publishes only the debounced final query and resets its page", async t => {
+  const { setWorkspaceApp } = await import("../../src/psycheval/assets/web/app/workspace-runtime.js");
+  const commits = [];
+  await manager.initializeReportManagerPage();
+  setWorkspaceApp({ locationChanged: page => commits.push({ page, query: manager.captureReportLocation().state.query }) });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    store.page = 3;
+    const input = document.querySelector("[data-report-search]");
+    for (const query of ["a", "ab", "abc"]) {
+      input.value = query; input.dispatchEvent(new window.Event("input"));
+    }
+    assert.deepEqual(commits, []);
+    assert.equal(manager.captureReportLocation().state.query.page, 1);
+    t.mock.timers.tick(150);
+    await Promise.resolve(); await Promise.resolve();
+    assert.equal(commits.length, 1);
+    assert.equal(commits[0].query.search, "abc");
+  } finally {
+    setWorkspaceApp(null); t.mock.timers.reset(); store.search = "";
+  }
+});
+
 test("unified table uses a right reader and retains independent drafts through selection and refresh", async () => {
   await manager.initializeReportManagerPage();
   assert.equal(document.querySelectorAll("[data-report-row]").length, 2);
@@ -48,7 +71,7 @@ test("unified table uses a right reader and retains independent drafts through s
   document.querySelector('[data-report-tab="associations"]').click();
   await tick();
   assert.equal(document.querySelector('[data-binding-kind] option[value="session"]'), null);
-  assert.equal(document.querySelector("[data-report-delete]"), null);
+  assert.ok(document.querySelector("[data-report-delete]"));
   document.querySelector('[data-report-select="package:first"]').click();
   document.querySelector('[data-report-tab="associations"]').click();
   await manager.loadReportManagerPage();
@@ -115,4 +138,27 @@ test("unreadable associations keep the preview and draft but disable editing unt
   document.querySelector('[data-report-tab="associations"]').click();
   assert.equal(document.querySelector("[data-report-save]").disabled, false);
   assert.equal(store.drafts.get(canonical.report_ref).values.size, 1);
+});
+
+test("restored report filters position once and keep menu dismissal working", () => {
+  const location = manager.captureReportLocation();
+  for (let index = 0; index < 20; index++) manager.restoreReportLocation(location);
+  const menu = document.querySelector(".report-filter");
+  const panel = menu.querySelector(":scope > div");
+  let measurements = 0;
+  panel.getBoundingClientRect = () => { measurements++; return { left: 0, right: 100 }; };
+  menu.open = true;
+  menu.dispatchEvent(new Event("toggle"));
+  assert.equal(measurements, 1, "new menus retain positioning after restoration");
+  measurements = 0;
+  window.dispatchEvent(new Event("resize"));
+  assert.equal(measurements, 1, "one resize must measure each open menu once");
+  menu.querySelector("summary").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.equal(menu.open, false);
+  menu.open = true;
+  document.body.click();
+  assert.equal(menu.open, false);
+  menu.open = true;
+  window.dispatchEvent(new Event("peval:workspace-navigate"));
+  assert.equal(menu.open, false);
 });

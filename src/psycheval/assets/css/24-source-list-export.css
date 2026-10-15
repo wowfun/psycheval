@@ -8,14 +8,23 @@
 }
 .leaderboard-actions {
   display:grid;
+  flex:1 1 420px;
+  min-width:0;
   gap:7px;
   justify-items:end;
+}
+.leaderboard-panel-head {
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:space-between;
 }
 .leaderboard-title-stack {
   display:grid;
   justify-items:start;
   gap:7px;
   min-width:0;
+  flex:0 0 auto;
+  max-width:100%;
 }
 .leaderboard-action-row {
   flex-wrap:wrap;

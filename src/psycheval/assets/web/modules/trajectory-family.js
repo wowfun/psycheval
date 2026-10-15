@@ -1,4 +1,4 @@
-import { esc, renderComparisonPanels, state, t } from "./runtime.js";
+import { esc, homeDetail, renderComparisonPanels, state, t } from "./runtime.js";
 import { bindCopyButton } from "./clipboard.js";
 
 function trajectoryFamily(trajectory, meta, depth = 0, parent = null) {
@@ -71,6 +71,7 @@ function bindTrajectoryNavigation(target, trajectory, meta) {
     state.selectedStep = stepId ? { trialKey: meta.trial_key, stepId: String(stepId) } : null;
     if (open) state.detailSidebar.open = true;
     renderComparisonPanels();
+    homeDetail.position({ trajectory: id, step: stepId ? String(stepId) : null, tab: state.detailSidebar.tab });
   };
   target?.querySelectorAll("[data-trajectory-id]").forEach(button => {
     button.addEventListener("click", () => {

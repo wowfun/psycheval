@@ -88,6 +88,20 @@ filesystem changes; a related mutation made in another page refreshes the stale
 page when it is next activated. Reloading or closing the browser still warns
 before discarding an unsaved draft.
 
+Use **Copy link** on the Leaderboard or a Trial/report reader to share its current
+location. The address bar follows opened details and current conditions; links
+restore filtering, sorting, pagination, aggregate display and the selected
+trajectory, step or report tab. Applied Saved Views carry their actual conditions,
+including browser-local Views, so recipients need no matching saved definition.
+If a query reports too many applied View conditions, choose fewer Views before
+retrying.
+Opening a link does not save Views or include unsaved edits. Recipients need
+access to the same workbench; results reflect its current data. Browser Back and
+Forward restore object/page navigation, while condition changes replace the
+current entry. Invalid links or links exceeding 64 KiB show an error; **Open
+default view** explicitly clears the requested conditions. See the
+[location contract](../../reference/state-and-data.md#shareable-workspace-locations).
+
 The **Reports** page combines canonical evaluation reports and imported packages
 in one searchable library. It reads canonical content from the current source
 `analysis.md`; imported content stays in its workspace package. Administrators can

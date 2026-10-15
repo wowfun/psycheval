@@ -9,6 +9,7 @@ test.afterAll(async () => { await stopFixture(fixture); });
 
 test("Home editable cells activate the row on click and edit on double click", async ({ page }) => {
   await page.goto(fixture.origin);
+  await expect(page.locator("[data-notes-edit]")).toBeVisible();
   const row = page.locator('#leaderboard tbody tr').filter({ hasText: 'office-one' });
   const sourceKey = await row.getAttribute('data-source-key');
   const cell = page.locator(`#leaderboard [data-source-key="${sourceKey}"] [data-table-column-key="task_name"]`);
@@ -27,9 +28,12 @@ test("Home editable cells activate the row on click and edit on double click", a
 
 test("Dataset Task cells keep single-click selection and double-click editing separate", async ({ page }) => {
   await page.goto(`${fixture.origin}/datasets`);
+  const workbench = page.locator("[data-harbor-workbench]");
+  await expect(workbench).toHaveAttribute("aria-busy", "false");
   const first = page.locator('[data-harbor-row-key="dataset:editable|task:first"]');
   await first.locator('[data-table-column-key="task"]').click();
   await expect(first).toHaveClass(/selected-row/);
+  await expect(workbench).toHaveAttribute("aria-busy", "false");
   const row = page.locator('[data-harbor-row-key="dataset:editable|task:second"]');
   const cell = row.locator('[data-table-column-key="task"]');
   await cell.dblclick({ delay: 150 });
@@ -42,6 +46,7 @@ test("Dataset Task cells keep single-click selection and double-click editing se
 
 test("Dataset is the first data column and filters and sorts the complete catalog", async ({ page }) => {
   await page.goto(fixture.origin);
+  await expect(page.locator("[data-notes-edit]")).toBeVisible();
   const table = page.locator('#leaderboard table');
   await expect(table.locator('thead th').nth(1)).toContainText('Dataset');
   await expect(table.locator('tbody [data-table-column-key="dataset_id"]').filter({ hasText: 'office' })).toHaveCount(1);

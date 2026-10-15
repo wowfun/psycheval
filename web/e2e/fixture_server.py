@@ -79,6 +79,33 @@ def main() -> None:
             root / "runs/default/psychevo/e2e-session/e2e-trial-2",
             "e2e-trial-2",
         )
+        if os.environ.get("PEVAL_E2E_LINKS") == "1":
+            path = (
+                root
+                / "runs/default/psychevo/e2e-session/e2e-trial/agent/trajectory.json"
+            )
+            trajectory = json.loads(path.read_text(encoding="utf-8"))
+            trajectory["subagent_trajectories"] = [
+                {
+                    "schema_version": "ATIF-v1.7",
+                    "trajectory_id": "child-中文",
+                    "session_id": "child-session",
+                    "agent": {"name": "child-agent", "version": "test"},
+                    "steps": [
+                        {"step_id": 1, "source": "user", "message": "Child request"},
+                        {"step_id": 2, "source": "agent", "message": "Child response"},
+                    ],
+                    "final_metrics": {"total_steps": 2},
+                }
+            ]
+            path.write_text(json.dumps(trajectory), encoding="utf-8")
+            other = (
+                root
+                / "runs/default/psychevo/e2e-session/e2e-trial-2/agent/trajectory.json"
+            )
+            trajectory = json.loads(other.read_text(encoding="utf-8"))
+            trajectory["agent"]["name"] = "link-target"
+            other.write_text(json.dumps(trajectory), encoding="utf-8")
         if os.environ.get("PEVAL_E2E_TIMELINE") == "1":
             path = (
                 root

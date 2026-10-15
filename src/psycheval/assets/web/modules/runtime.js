@@ -11,6 +11,8 @@ import { bindWorkspaceReportLeaderboardControls, workspaceReportLeaderboardColum
 import { refreshWorkspaceViews } from "./workspace-views.js";
 import { finalMetric, tokenTotal, trialWallDurationMs } from "./analysis-metrics.js";
 import { renderMarkdown } from "./markdown.js";
+import { createHomeDetailController } from "../app/home-detail-controller.js";
+import { workspaceLocationChanged } from "../app/workspace-runtime.js";
 import { inferenceRowMetrics } from "./inference-metrics.js";
 import { replaceReports, reportStore } from "./report-store.js";
 import { $, I18N, RENDER_OPTIONS, adminMode, authenticationEnabled, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtScore, fmtTps, fmtTtft, hasMetricValue, listValue, lower, scriptJson, statusLabel, t } from "./shared.js";
@@ -76,6 +78,13 @@ state.leaderboardSummaryRequestVersion = 0;
 state.leaderboardSummaryRequestPromise = null;
 state.leaderboardSummaryCache = new Map();
 const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.column-control";
+state.sharedViewSnapshots = [];
+state.homeLocationTarget = {};
+const homeDetail = createHomeDetailController({
+  read: () => state.homeLocationTarget,
+  write: target => { state.homeLocationTarget = target; },
+  notify: kind => workspaceLocationChanged("home", kind),
+});
 const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.column-control[open]";
 function closeOpenSubmenus(except = null) {
   document.querySelectorAll(OPEN_SUBMENU_DETAILS_SELECTOR).forEach(details => {
@@ -170,14 +179,6 @@ function renderComparison(options = {}) {
   const scrollState = comparisonScrollState();
   const rows = reportRows();
   const leaderboardRegion = $("leaderboard-region");
-  if (!rows.length) {
-    if (leaderboardRegion) leaderboardRegion.innerHTML = "";
-    $("comparison").innerHTML = `<section class="leaderboard-summary panel" aria-labelledby="leaderboard-summary-title" id="leaderboard-summary"></section>`;
-    renderLeaderboardSummary();
-    if (options.trace === true) renderTrace();
-    renderDetailSidebar();
-    return;
-  }
   if (leaderboardRegion) leaderboardRegion.innerHTML = `<section class="leaderboard panel" aria-labelledby="leaderboard-title" id="leaderboard"></section>`;
   $("comparison").innerHTML = `
     ${leaderboardRegion ? "" : `<section class="leaderboard panel" aria-labelledby="leaderboard-title" id="leaderboard"></section>`}
@@ -379,7 +380,7 @@ function renderComparisonPanels(
   scrollState = options.preserveScroll === false ? null : comparisonScrollState()
 ) {
   const rows = leaderboardRows();
-  syncSelectionWithVisibleRows(rows);
+  syncSelectionWithVisibleRows();
   renderLeaderboard(rows);
   if ($("leaderboard-summary")) renderLeaderboardSummary();
   renderTrajectoryOverview(rows);
@@ -448,6 +449,7 @@ function scrollProgress(node, range = scrollRange(node)) {
   return Math.max(0, Math.min(1, (node.scrollTop || 0) / range));
 }
 export {
+  homeDetail,
   $,
   I18N,
   OPEN_SUBMENU_DETAILS_SELECTOR,

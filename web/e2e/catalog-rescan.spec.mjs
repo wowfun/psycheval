@@ -66,6 +66,7 @@ async function rescanScenario(page, { failed = false } = {}) {
   });
   await page.goto(fixture.origin);
   await expect(page.locator("[data-catalog-page-controls]")).toContainText("/ 2");
+  await expect(page.locator("[data-notes-edit]")).toBeVisible();
   // Use the real query loader to retain a non-default page, filter, and sort.
   await page.evaluate(async () => {
     const { loadCatalogPage } = await import("/assets/peval/modules/serve-catalog.js");
@@ -74,6 +75,7 @@ async function rescanScenario(page, { failed = false } = {}) {
   await expect(page.locator("[data-catalog-page-controls]")).toContainText("2-2 / 2");
   await expect(page.locator("[data-catalog-next]")).toBeDisabled();
   await page.locator('.workspace-nav-link[data-workspace-route="config"]').click();
+  await expect(page.locator("[data-config-page]")).toHaveAttribute("aria-busy", "false");
   await page.locator("[data-source-config-rescan]").click();
   await observed.pending;
   return {

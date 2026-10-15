@@ -7,6 +7,8 @@ import { createReportTargetPicker } from "./report-target-picker.js";
 import { createSidebarController } from "./sidebar.js";
 import { adminMode, esc, t } from "./shared.js";
 import { RENDER_OPTIONS } from "../app/render-options.js";
+import { workspaceLocationChanged } from "../app/workspace-runtime.js";
+import { bindWorkspaceLinkButtons, workspaceLinkButton } from "./workspace-links.js";
 
 let generation = 0;
 let selectionVersion = 0;
@@ -41,7 +43,7 @@ function renderToolbar() {
   const root = document.querySelector("[data-report-toolbar]");
   if (!root) return;
   root.innerHTML = `<div class="report-library-toolbar">
-    
+    ${workspaceLinkButton()}
     ${adminMode() ? `<button class="action-button primary" type="button" data-report-import>${esc(t("report_import", "Import report"))}</button>` : ""}
     <button class="action-button" type="button" data-report-manager-reload>${esc(t("serve_reload", "Refresh"))}</button>
     <label class="report-binding-search report-state-filter"><span>${esc(t("report_state", "Status"))}</span><select data-report-state>${["active", "archived", "all"].map(value => `<option value="${value}" ${store.stateFilter === value ? "selected" : ""}>${esc(t(`report_state_${value}`, { active: "Active", archived: "Archived", all: "All" }[value]))}</option>`).join("")}</select></label>
@@ -50,6 +52,7 @@ function renderToolbar() {
     ${["dataset", "job"].map(kind => `<details class="report-filter" data-report-filter="${kind}"><summary>${kindLabel(kind)} <span data-filter-count="${kind}"></span></summary><div data-filter-picker="${kind}"></div></details>`).join("")}
     </div><div data-report-filter-summary class="report-filter-summary"></div>`;
   bindFilterMenus(root);
+  bindWorkspaceLinkButtons(root, "reports");
   root.querySelector("[data-report-state]").addEventListener("change", event => {
     store.stateFilter = /** @type {HTMLSelectElement} */ (event.target).value;
     void loadReportManagerPage({ page: 1, locationChange: true }).catch(() => {});
@@ -134,6 +137,7 @@ function renderFilterSummary() {
 async function loadReportManagerPage({ page = store.page, signal, locationChange = false } = {}) {
   const request = ++generation;
   store.page = page;
+  if (locationChange) workspaceLocationChanged("reports");
   store.loading = true;
   renderReportManagerPage();
   const params = new URLSearchParams({ page: String(page), page_size: String(store.pageSize), search: store.search, state: store.stateFilter });
@@ -167,6 +171,7 @@ async function loadReportManagerPage({ page = store.page, signal, locationChange
     store.loading = false;
     renderReportManagerPage();
     renderDetail();
+    if (locationChange) workspaceLocationChanged("reports");
     if (store.tab === "associations") void picker?.load();
   } catch (error) {
     if (request !== generation || signal?.aborted) return;
@@ -207,10 +212,12 @@ function openReportPreview(ref, options = {}) {
   selectionVersion++;
   store.activeRef = ref;
   store.tab = options.tab || "preview";
+  store.locationTarget = { report: ref, tab: store.tab };
   renderReportManagerPage();
   renderDetail();
   const opener = [...document.querySelectorAll("[data-report-select]")].find(button => button.getAttribute("data-report-select") === ref);
   const opened = surface().open({ opener: opener || options.opener || document.activeElement, openerSelector: `[data-report-select="${ref}"]`, focusTarget: "#report-library-detail [data-sidebar-close]" });
+  workspaceLocationChanged("reports", options.locationKind || "object");
   return opened;
 }
 
@@ -220,8 +227,10 @@ function clearReportSelection(ref, options = {}) {
   picker?.destroy(); picker = null;
   detailIdentity = "";
   store.activeRef = null;
+  store.locationTarget = {};
   sidebar?.close(options);
   document.getElementById("report-library-detail")?.replaceChildren();
+  workspaceLocationChanged("reports", options.locationKind || "replace");
 }
 
 function renderDetail() {
@@ -233,7 +242,7 @@ function renderDetail() {
     picker?.destroy();
     picker = null;
     detailIdentity = identity;
-    root.innerHTML = `<div class="report-library-detail-panel"><header class="report-reader-head"><h2>${esc(report.title)}</h2><div class="report-reader-actions"><a class="action-button compact" href="${reportPath(report.report_ref)}/reader" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a><button class="action-button compact" type="button" data-sidebar-close>${esc(t("close", "Close"))}</button></div><div class="report-management-actions" data-report-management></div></header>
+    root.innerHTML = `<div class="report-library-detail-panel"><header class="report-reader-head"><h2>${esc(report.title)}</h2><div class="report-reader-actions">${workspaceLinkButton()}<a class="action-button compact" href="${reportPath(report.report_ref)}/reader" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a><button class="action-button compact" type="button" data-sidebar-close>${esc(t("close", "Close"))}</button></div><div class="report-management-actions" data-report-management></div></header>
       <div class="report-detail-tabs" role="tablist">${["preview", "associations"].map(tab => `<button type="button" class="action-button" role="tab" aria-selected="${store.tab === tab}" data-report-tab="${tab}">${esc(t(`report_${tab}`, tab === "preview" ? "Preview" : "Associations"))}</button>`).join("")}</div>
       ${store.tab === "preview" ? `<div class="report-reader-frame-viewport" role="tabpanel"><iframe class="report-reader-frame" src="${reportPath(report.report_ref)}/preview" title="${esc(report.title)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>` : `<div class="report-associations-pane" role="tabpanel"><div data-association-summary></div>${canEditAssociations(report) ? `<label class="report-binding-search"><span>${esc(t("report_add_association", "Add associations"))}</span><select data-binding-kind>${(report.origin === "imported" ? ["session", "dataset", "job"] : ["dataset", "job"]).map(kind => `<option value="${kind}">${kindLabel(kind)}</option>`).join("")}</select></label><div data-binding-picker></div>` : ""}</div>`}</div>`;
     if (store.tab === "associations" && canEditAssociations(report)) {
@@ -242,6 +251,7 @@ function renderDetail() {
       openBindingPicker(report.report_ref, select.value);
     }
     sidebar?.sync();
+    bindWorkspaceLinkButtons(root, "reports");
   }
   renderAssociationSummary();
 }
@@ -386,7 +396,7 @@ function onClick(event) {
   const select = target.closest("[data-report-select],[data-report-row]");
   if (select) openReportPreview(select.getAttribute("data-report-select") || select.getAttribute("data-report-row"), { opener: target });
   const tab = target.closest("[data-report-tab]");
-  if (tab) { store.tab = tab.getAttribute("data-report-tab"); renderDetail(); }
+  if (tab) { store.tab = tab.getAttribute("data-report-tab"); store.locationTarget = { report: store.activeRef, tab: store.tab }; renderDetail(); workspaceLocationChanged("reports"); }
   const remove = target.closest("[data-binding-remove]");
   if (remove && adminMode()) {
     const item = store.drafts.get(store.activeRef).values.get(remove.getAttribute("data-binding-remove"));
@@ -407,4 +417,36 @@ function activeReportSnapshot() {
   return { report_ref: report?.report_ref || null, report_name: report?.title || null };
 }
 
-export { activeReportSnapshot, deleteReport, initializeReportManagerPage, loadReportManagerPage, openReportPreview, renderReportManagerPage, saveBindings, setArchived };
+function captureReportLocation() {
+  return { object: { ...store.locationTarget }, state: { query: {
+    state: store.stateFilter, search: store.search, page: store.page, page_size: store.pageSize,
+    kinds: [...store.kinds], datasets: [...store.datasets.values()].map(item => item.key), jobs: [...store.jobs.values()].map(item => item.key),
+  } } };
+}
+function restoreReportLocation(location) {
+  generation++;
+  clearTimeout(searchTimer);
+  clearReportSelection(store.activeRef, { restoreFocus: false });
+  const query = location.state.query;
+  store.stateFilter = query.state; store.search = query.search; store.page = query.page; store.pageSize = query.page_size;
+  store.kinds = new Set(query.kinds);
+  for (const kind of ["dataset", "job"]) {
+    const values = query[kind === "dataset" ? "datasets" : "jobs"].map(key => ({ kind, key, label: key, available: true }));
+    store[kind === "dataset" ? "datasets" : "jobs"] = new Map(values.map(item => [bindingId(item), item]));
+  }
+  store.locationTarget = { ...location.object };
+  renderToolbar(); renderFilterSummary();
+}
+async function openReportRef(ref, options = {}) {
+  const selection = ++selectionVersion;
+  try {
+    const report = await serveApi(reportPath(ref), { signal: options.signal });
+    if (options.signal?.aborted || selection !== selectionVersion) return;
+    acceptReport(report);
+    openReportPreview(ref, options);
+  } catch (error) {
+    if (options.signal?.aborted || selection !== selectionVersion) return;
+    beginFeedback("[data-report-manager-status]", { page: "reports", key: "reports:location" }).error(error);
+  }
+}
+export { activeReportSnapshot, captureReportLocation, restoreReportLocation, openReportRef, deleteReport, initializeReportManagerPage, loadReportManagerPage, openReportPreview, renderReportManagerPage, saveBindings, setArchived };

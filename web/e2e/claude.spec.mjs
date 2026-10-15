@@ -70,7 +70,7 @@ test("unified session input inspects IDs and reports mixed imports independently
   }
 });
 
-test("Claude project selection imports one family and navigates children without extra sources", async ({ page, context }) => {
+test("Claude project selection imports one family and navigates children without extra sources", async ({ page, context }, testInfo) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto(new URL("/config", fixture.origin).href);
   const form = page.locator('[data-source-add-form][data-source-kind="path"]');
@@ -82,9 +82,16 @@ test("Claude project selection imports one family and navigates children without
   const project = (await (await inspected).json()).path;
   const picker = form.locator("[data-session-picker]");
   await expect(picker.locator("[data-table-row-select]")).toHaveCount(2);
-  await expect(picker.getByRole("columnheader", { name: "Updated (UTC)" })).toBeVisible();
-  await expect(picker.getByRole("row").filter({ hasText: "newer" })).toContainText("2026-01-01T00:00:50.000Z");
-  await expect(picker.getByRole("row").filter({ hasText: "root-session" })).toContainText("2026-01-01T00:00:08.000Z");
+  await expect(picker.getByRole("columnheader", { name: "Updated", exact: true })).toBeVisible();
+  for (const [session, timestamp] of [
+    ["newer", "2026-01-01T00:00:50.000Z"],
+    ["root-session", "2026-01-01T00:00:08.000Z"],
+  ]) {
+    const time = picker.getByRole("row").filter({ hasText: session }).locator("time");
+    await expect(time).toHaveAttribute("datetime", timestamp);
+    await expect(time).toHaveAttribute("data-display-time", "full");
+    await expect(time).toHaveText(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{2}:\d{2}$/);
+  }
   await expect(picker.locator("[data-session-diagnostics] li")).toHaveCount(3);
   await expect(picker.locator("[data-session-diagnostics]")).toContainText("bad.jsonl");
   await expect(picker.locator("[data-session-diagnostics]")).toContainText("duplicate-session");
@@ -178,9 +185,12 @@ test("Claude project selection imports one family and navigates children without
     const navigation = await sidebar.locator(".trajectory-navigation").boundingBox();
     const steps = await sidebar.locator("[data-detail-sidebar-step-list]").boundingBox();
     const heading = await sidebar.locator("#detail-sidebar-title").boundingBox();
+    const dismissNotification = page.locator(".action-notifications").getByRole("button", { name: "Close", exact: true });
+    while (await dismissNotification.count()) await dismissNotification.first().click();
     expect(navigation.y + navigation.height).toBeLessThanOrEqual(steps.y);
     expect(navigation.x).toBeGreaterThanOrEqual(heading.x);
     expect(steps.height).toBeGreaterThan(100);
+    await page.screenshot({ path: testInfo.outputPath(`trajectory-long-history-${viewport.width}.png`) });
     const copy = sidebar.locator('[data-trajectory-copy="claude:root-session"]');
     const childCopy = sidebar.locator('[data-trajectory-copy="claude:root-session:agent:child-0"]');
     const copyBounds = await copy.boundingBox();

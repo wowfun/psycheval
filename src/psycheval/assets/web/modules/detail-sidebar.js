@@ -1,13 +1,14 @@
-import { $, RENDER_OPTIONS, esc, listValue, renderComparisonPanels, state, t } from "./runtime.js";
+import { $, RENDER_OPTIONS, esc, homeDetail, listValue, renderComparisonPanels, state, t } from "./runtime.js";
 import { stepTimingStats } from "./analysis-metrics.js";
 import { bindBlockCopyControls, bindStepToggle, renderStep, renderStepsHeader } from "./steps.js";
-import { sourceKeyForTrialKey } from "./serve-catalog.js";
+import { cancelTrialDetailRequest, sourceKeyForTrialKey } from "./serve-catalog.js";
 import { createVerificationBrowser } from "./verification-browser.js";
 import { renderVerificationSummary } from "./verification-formats.js";
 import { createTaskBrowser } from "./harbor-task-browser.js";
 import { serveApi } from "./serve-effects.js";
 import { createSidebarController } from "./sidebar.js";
 import { selectedTrajectoryDetail, renderTrajectoryNavigation, bindTrajectoryNavigation } from "./trajectory-family.js";
+import { bindWorkspaceLinkButtons, workspaceLinkButton } from "./workspace-links.js";
 
 let detailSidebarController = null;
 
@@ -27,11 +28,18 @@ function detailSidebarSurface() {
       onRequestClose: options => closeDetailSidebar({
         restoreFocus: options.restoreFocus,
         render: options.reason === "dismiss",
+        locationKind: options.reason === "dismiss" ? "object" : "replace",
       }),
       onResize: () => state.timelineChart?.resize?.(),
     });
   }
+  homeDetail.register("source", { cancel: cancelTrialDetailRequest, close: closeDetailSidebar });
   return detailSidebarController;
+}
+
+function requestDetailSidebarLocation(target) {
+  detailSidebarSurface();
+  homeDetail.activate(target);
 }
 
 function detailSidebarState() {
@@ -44,15 +52,24 @@ function detailSidebarState() {
 
 function openDetailSidebar(options = {}) {
   const sidebar = detailSidebarState();
+  sidebar.tab = options.tab || (options.stepId !== null && options.stepId !== undefined ? "trajectory" : "verification");
   sidebar.open = true;
   sidebar.pendingOpener = options.opener || document.activeElement || null;
   sidebar.pendingOpenerSelector = options.openerSelector || null;
   if (options.trialKey) state.selectedTrial = options.trialKey;
   if (options.stepId !== null && options.stepId !== undefined) {
-    sidebar.tab = "trajectory";
     state.selectedStep = { trialKey: state.selectedTrial, stepId: String(options.stepId) };
   } else {
     state.selectedStep = null;
+  }
+  const source = sourceKeyForTrialKey(state.selectedTrial);
+  if (source) {
+    requestDetailSidebarLocation({
+      source,
+      ...(state.selectedTrajectory?.trajectoryId ? { trajectory: state.selectedTrajectory.trajectoryId } : {}),
+      ...(state.selectedStep?.stepId ? { step: state.selectedStep.stepId } : {}),
+      tab: options.tab || sidebar.tab,
+    });
   }
 }
 
@@ -61,10 +78,12 @@ function closeDetailSidebar(options = {}) {
   const target = $("detail-sidebar");
   const surface = detailSidebarSurface();
   if (!sidebar.open && (!target || target.hidden)) return false;
+  cancelTrialDetailRequest();
   sidebar.open = false;
   sidebar.pendingOpener = null;
   sidebar.pendingOpenerSelector = null;
   state.selectedStep = null;
+  homeDetail.clear("source", options.locationKind || "object");
   sidebar.taskBrowser?.clear();
   sidebar.verificationBrowser?.clear();
   surface.close({ restoreFocus: options.restoreFocus });
@@ -110,7 +129,10 @@ function renderDetailSidebar() {
     <div class="detail-sidebar-panel" role="complementary" aria-labelledby="detail-sidebar-title">
       <div class="detail-sidebar-head">
         <div><p class="eyebrow">${esc(t("selected_trial_details", "Selected trial details"))}</p><h2 id="detail-sidebar-title">${esc(rootMeta.trial_key || "-")}</h2></div>
-        <button class="action-button compact" type="button" data-sidebar-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
+        <div class="detail-sidebar-actions">
+          ${workspaceLinkButton()}
+          <button class="action-button compact" type="button" data-sidebar-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
+        </div>
         ${renderVerificationSummary(rootMeta)}
       </div>
       <div class="detail-sidebar-tabs" role="tablist" aria-label="${esc(t("selected_trial_details", "Trial details"))}">
@@ -144,7 +166,16 @@ function renderDetailSidebar() {
   const sourceKey = sourceKeyForTrialKey(rootMeta.trial_key) || rootMeta.verifier_evidence?.source_key;
   sidebar.verificationBrowser.setSource(sourceKey, rootMeta.verifier_evidence?.revision || rootMeta.evidence_revision || state.catalogPage?.generation);
   sidebar.verificationBrowser.attach(target.querySelector("[data-verification-browser]"));
-  const activate = id => {
+  bindWorkspaceLinkButtons(target, "home");
+  target.querySelectorAll("[data-detail-sidebar-step-list] .step > summary").forEach(summary => {
+    summary.addEventListener("click", event => {
+      if (event.target.closest("button,a,input,select")) return;
+      const row = summary.parentElement;
+      state.selectedStep = row.open ? null : { trialKey: state.selectedTrial, stepId: String(row.dataset.step) };
+      homeDetail.position({ step: state.selectedStep?.stepId });
+    });
+  });
+  const activate = (id, notify = true) => {
     sidebar.tab = id;
     target.querySelectorAll("[data-trial-tab]").forEach(button => {
       button.setAttribute("aria-selected", String(button.dataset.trialTab === id));
@@ -154,6 +185,7 @@ function renderDetailSidebar() {
     if (id === "verification") void sidebar.verificationBrowser.load(rootMeta);
     if (id === "task") bindDetailSidebarTaskBrowser(target, rootMeta);
     if (id === "trajectory") focusSelectedStep(target, selectedStepId);
+    if (notify) homeDetail.position({ tab: id });
   };
   const buttons = [...target.querySelectorAll("[data-trial-tab]")];
   buttons.forEach((button, index) => {
@@ -164,7 +196,7 @@ function renderDetailSidebar() {
       event.preventDefault(); buttons[next].focus(); activate(buttons[next].dataset.trialTab);
     });
   });
-  activate(sidebar.tab);
+  activate(sidebar.tab, false);
 }
 
 function renderDetailSidebarTask(trial) {
@@ -226,6 +258,7 @@ function focusSelectedStep(target, stepId) {
 }
 
 export {
+  requestDetailSidebarLocation,
   closeDetailSidebar,
   detailSidebarState,
   openDetailSidebar,

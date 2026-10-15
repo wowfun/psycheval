@@ -6,6 +6,7 @@ const reportLibraryStore = {
   items: [], total: 0, page: 1, pageSize: 50, search: "", stateFilter: "active",
   kinds: new Set(), datasets: new Map(), jobs: new Map(),
   activeRef: null, tab: "preview", loading: false, importing: false,
+  locationTarget: {},
   reports: new Map(), drafts: new Map(),
 };
 

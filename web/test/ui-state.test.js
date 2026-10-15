@@ -34,6 +34,48 @@ const etagHeaders = revision => ({
 });
 
 test.after(() => browser.cleanup());
+
+test("Home notes are dirty only when their draft differs from the opened baseline", async () => {
+  const { createHomePage } = await import("../../src/psycheval/assets/web/pages/home-page.js");
+  const page = createHomePage({});
+  const previous = runtime.state.notesEditor;
+  try {
+    runtime.state.notesEditor = { trialKey: "draft", markdown: "saved", baselineMarkdown: "saved" };
+    assert.equal(page.snapshot().dirty, false);
+    runtime.state.notesEditor.markdown = "new draft"; assert.equal(page.snapshot().dirty, true);
+    runtime.state.notesEditor.markdown = "saved"; assert.equal(page.snapshot().dirty, false);
+  } finally { runtime.state.notesEditor = previous; }
+});
+
+test("shared conditions are included by default and excluded only by an explicit view-query option", () => {
+  const previous = runtime.state.sharedViewSnapshots;
+  try {
+    runtime.state.sharedViewSnapshots = [{ name: "Shared", filters: { models: ["mimo"] } }];
+    assert.deepEqual(views.workspaceViewQueryPayload(undefined).inline_views, [{ models: ["mimo"] }]);
+    assert.deepEqual(views.workspaceViewQueryPayload({ ids: [] }).inline_views, [{ models: ["mimo"] }]);
+    assert.equal(views.workspaceViewQueryPayload({ ids: [], includeShared: false }).inline_views, undefined);
+  } finally { runtime.state.sharedViewSnapshots = previous; }
+});
+
+test("Home location restoration retains unsaved note text without sharing it", async () => {
+  const { bindHomeControls } = await import("../../src/psycheval/assets/web/modules/home-controls.js");
+  const { renderNotesEditor } = await import("../../src/psycheval/assets/web/modules/analysis-notes.js");
+  const { restoreHomeLocation, captureHomeLocation } = await import("../../src/psycheval/assets/web/modules/home-location.js");
+  const { decodeWorkspaceLocation, encodeWorkspaceLocation } = await import("../../src/psycheval/assets/web/app/workspace-location.js");
+  bindHomeControls();
+  const previous = runtime.state.notesEditor;
+  const host = document.createElement("div");
+  try {
+    runtime.state.notesEditor = { trialKey: "draft-trial", markdown: "original" };
+    host.innerHTML = renderNotesEditor("draft-trial"); document.body.append(host);
+    const input = host.querySelector("textarea"); input.value = "unsaved private note";
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    restoreHomeLocation(decodeWorkspaceLocation("home", new URL("http://localhost/?source=another")));
+    assert.equal(runtime.state.notesEditor.markdown, "unsaved private note");
+    assert.ok(renderNotesEditor("draft-trial").includes("unsaved private note"));
+    assert.ok(!encodeWorkspaceLocation("home", captureHomeLocation()).includes("unsaved"));
+  } finally { host.remove(); runtime.state.notesEditor = previous; }
+});
 test("Notes save finishes and removes its local pending feedback", async () => {
   const notes = await import("../../src/psycheval/assets/web/modules/analysis-notes.js");
   const previousFetch = globalThis.fetch;
@@ -63,10 +105,13 @@ test("Notes save finishes and removes its local pending feedback", async () => {
 test("Home scan and source-mode status stays inline without clearing action errors", async () => {
   const { beginFeedback } = await import("../../src/psycheval/assets/web/modules/action-feedback.js");
   const { setServeStatus } = await import("../../src/psycheval/assets/web/modules/serve-effects.js");
-  const row = document.createElement("div");
-  row.className = "leaderboard-action-row";
-  document.querySelector("#comparison").append(row);
-  const action = beginFeedback("#comparison .leaderboard-action-row", { key: "test-home-action" });
+  const existing = document.querySelector("#leaderboard .leaderboard-action-row");
+  const row = existing || document.createElement("div");
+  if (!existing) {
+    row.className = "leaderboard-action-row";
+    document.querySelector("#leaderboard").append(row);
+  }
+  const action = beginFeedback("#leaderboard .leaderboard-action-row", { key: "test-home-action" });
   try {
     action.error("Export failed");
     for (const text of ["Checking runs", "Archived snapshots"]) {
@@ -79,7 +124,7 @@ test("Home scan and source-mode status stays inline without clearing action erro
     setServeStatus("");
     assert.match(row.textContent, /Export failed/);
     assert.doesNotMatch(row.textContent, /Archived snapshots/);
-  } finally { action.dispose(); row.remove(); }
+  } finally { action.dispose(); if (!existing) row.remove(); }
 });
 function addFeedbackRegions(root) {
   for (const title of ["trajectory-ingestion-title", "acp-agents-title", "prompt-assets-title", "dataset-registry-title", "harbor-mounts-title"]) {
@@ -1340,7 +1385,7 @@ test("a session with multiple reports lets each report open from the Leaderboard
       picker.value = reportId;
       picker.dispatchEvent(new window.Event("change", { bubbles: true }));
 
-      assert.equal(runtime.state.reportReader.openId, reportId);
+      assert.equal(runtime.state.reportReader.openRef, `package:${reportId}`);
       assert.equal(document.querySelector("#workspace-report-reader h2").textContent, filename);
       assert.equal(
         document.querySelector("#workspace-report-reader iframe").getAttribute("src"),

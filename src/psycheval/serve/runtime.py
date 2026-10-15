@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from itertools import chain
 from threading import Event, Lock, Thread
 from typing import Any, Callable, Sequence
 
@@ -32,6 +33,8 @@ from psycheval.workspace_views import (
     browser_views_from_payload,
     render_editable_view_configuration,
 )
+
+MAX_APPLIED_VIEW_CONDITIONS = 100
 
 
 class ServeRuntime:
@@ -221,11 +224,14 @@ class ServeRuntime:
         *,
         view_names: Sequence[str] = (),
         browser_views: Sequence[WorkspaceView] = (),
+        inline_views: Sequence[CatalogQuery] = (),
     ) -> CatalogPage:
         bound_refs = self.workspace_reports.bound_source_refs()
         return self.catalog.query(
             query,
-            any_queries=self.workspace_view_queries(view_names, browser_views),
+            any_queries=self.workspace_view_queries(
+                view_names, browser_views, inline_views
+            ),
             workspace_report_source_refs=tuple(bound_refs),
         )
 
@@ -233,11 +239,22 @@ class ServeRuntime:
         self,
         names: Sequence[str],
         browser_views: Sequence[WorkspaceView] = (),
+        inline_views: Sequence[CatalogQuery] = (),
     ) -> list[CatalogQuery]:
         ordered = list(dict.fromkeys(str(name) for name in names if str(name)))
-        return [self.workspace_views.get(name).filters for name in ordered] + [
-            view.filters for view in browser_views
-        ]
+        conditions = {}
+        for filters in chain(
+            (self.workspace_views.get(name).filters for name in ordered),
+            (view.filters for view in browser_views),
+            inline_views,
+        ):
+            query = filters.normalized()
+            conditions.setdefault(query, query)
+            if len(conditions) > MAX_APPLIED_VIEW_CONDITIONS:
+                raise ValueError(
+                    f"combined View conditions exceed the {MAX_APPLIED_VIEW_CONDITIONS} condition limit"
+                )
+        return list(conditions.values())
 
     def validated_browser_views(self, value: Any) -> list[WorkspaceView]:
         views = (
@@ -279,11 +296,14 @@ class ServeRuntime:
         *,
         view_names: Sequence[str] = (),
         browser_views: Sequence[WorkspaceView] = (),
+        inline_views: Sequence[CatalogQuery] = (),
         group_by: str,
     ) -> dict[str, Any]:
         return self.catalog.summarize_query(
             query,
-            any_queries=self.workspace_view_queries(view_names, browser_views),
+            any_queries=self.workspace_view_queries(
+                view_names, browser_views, inline_views
+            ),
             name="Leaderboard Summary",
             group_by=group_by,
         )
@@ -310,6 +330,7 @@ class ServeRuntime:
         *,
         view_names: Sequence[str] = (),
         browser_views: Sequence[WorkspaceView] = (),
+        inline_views: Sequence[CatalogQuery] = (),
         group_by: str,
         statistic: str,
     ) -> SummaryWorksheet:
@@ -317,6 +338,7 @@ class ServeRuntime:
             query,
             view_names=view_names,
             browser_views=browser_views,
+            inline_views=inline_views,
             group_by=group_by,
         )
         if not int(payload["generation"]):

@@ -1,13 +1,17 @@
 import { beginFeedback } from "./action-feedback.js";
 import { watchOperation } from "./operation-feedback.js";
-import { adminMode, esc, hasMetricValue, isAnalysisArtifactPath, listValue, lower, normalizeServeSourceMode, render, renderComparison, renderComparisonPanels, selectedIndex, selectedKey, state, synthesizedReportRow, t } from "./runtime.js";
+import { adminMode, esc, hasMetricValue, homeDetail, isAnalysisArtifactPath, listValue, lower, normalizeServeSourceMode, render, renderComparison, renderComparisonPanels, selectedIndex, selectedKey, state, synthesizedReportRow, t } from "./runtime.js";
 import { filterValues, renderLeaderboardColumnControls, renderLeaderboardExportControls, tableControls } from "./data-tables.js";
 import { downloadBlob, firstUserStepSelection } from "./export.js";
-import { openDetailSidebar } from "./detail-sidebar.js";
+import { closeDetailSidebar, openDetailSidebar, requestDetailSidebarLocation } from "./detail-sidebar.js";
 import { renderServeSourceStateControls, serveSourceModeStatusText } from "./source-state-controls.js";
 import { emptyServeReport, reloadExpiredAdminSession, serveApi, setServeStatus } from "./serve-effects.js";
 import { refreshWorkspaceReports, renderAttachWorkspaceReportAction } from "./workspace-reports.js";
 import { clearWorkspaceViewConditions, refreshWorkspaceViews, workspaceViewQueryPayload, workspaceViews } from "./workspace-views.js";
+import { workspaceLocationChanged } from "../app/workspace-runtime.js";
+import { bindWorkspaceLinkButtons, workspaceLinkButton } from "./workspace-links.js";
+import { selectedTrajectoryDetail, trajectoryFamily } from "./trajectory-family.js";
+import { catalogSortKey, tableSortKey } from "../app/catalog-sort.js";
 
 function reportRows() {
   if (state.catalogRows.length || state.catalogPage.generation) return listValue(state.catalogRows);
@@ -116,8 +120,8 @@ function sourceForTrialIndex(index) {
   return listValue(state.serveSources).find(source => source?.source_key === state.selectedSourceKey) || null;
 }
 
-function syncSelectionWithVisibleRows(rows) {
-  if (!rows.length || !state.selectedSourceKey) state.selectedStep = null;
+function syncSelectionWithVisibleRows() {
+  if (!state.selectedSourceKey) state.selectedStep = null;
 }
 
 function visibleSelectedSourceKeys(rows = leaderboardRows()) {
@@ -140,7 +144,8 @@ function filterOptions(column, rows) {
 function renderLeaderboardPanelControls(rows) {
   const selectedCount = state.rowSelection.size;
   return `<div class="leaderboard-actions">
-    <div class="leaderboard-action-row">${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardColumnControls(rows)}${renderLeaderboardExportControls()}</div>
+    <div class="leaderboard-action-row">${workspaceLinkButton()}${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardColumnControls(rows)}${renderLeaderboardExportControls()}</div>
+    ${state.sharedViewSnapshots.length ? `<p class="copy" data-shared-view-conditions>${esc(t("shared_view_conditions", "Shared conditions"))}: ${state.sharedViewSnapshots.map(view => esc(view.name)).join(" · ")}</p>` : ""}
     <div class="catalog-page-controls" data-catalog-page-controls>
       <button type="button" class="action-button icon-only" data-catalog-prev aria-label="${esc(t("previous", "Previous"))}" ${state.catalogPage.page <= 1 ? "disabled" : ""}>‹</button>
       <span>${esc(catalogPageLabel())}</span>
@@ -171,6 +176,7 @@ function catalogPageLabel() {
 
 function bindLeaderboardCatalogControls(target) {
   if (!target) return;
+  bindWorkspaceLinkButtons(target, "home");
   target.querySelector("[data-catalog-prev]")?.addEventListener("click", event => {
     event.stopPropagation();
     loadCatalogPage({ page: Math.max(1, Number(state.catalogQuery.page || 1) - 1) });
@@ -188,7 +194,7 @@ function bindLeaderboardCatalogControls(target) {
 function leaderboardConditionsAreDefault() {
   const query = state.catalogQuery || {};
   const filters = tableControls("leaderboard").filters || {};
-  return state.workspaceViewSelection.size < 1
+  return !state.sharedViewSnapshots.length && state.workspaceViewSelection.size < 1
     && !listValue(query.views).length
     && normalizeServeSourceMode(query.state) === "active"
     && !String(query.search || "")
@@ -211,8 +217,9 @@ function leaderboardConditionsAreDefault() {
 
 function requestCatalogSort(key) {
   const query = state.catalogQuery;
-  if (query.sort !== key) {
-    query.sort = key;
+  const sort = catalogSortKey(key);
+  if (catalogSortKey(query.sort) !== sort) {
+    query.sort = sort;
     query.direction = "asc";
   } else if (query.direction === "asc") {
     query.direction = "desc";
@@ -220,7 +227,7 @@ function requestCatalogSort(key) {
     query.sort = "last_turn_end";
     query.direction = "desc";
   }
-  tableControls("leaderboard").sort = query.sort === "last_turn_end" ? "finished_at_ms" : key;
+  tableControls("leaderboard").sort = tableSortKey(query.sort);
   tableControls("leaderboard").direction = query.direction;
   loadCatalogPage({ page: 1 });
 }
@@ -280,18 +287,6 @@ function catalogQueryString(surface = "leaderboard") {
   return params.toString();
 }
 
-function catalogSortKey(key) {
-  return ({
-    finished_at_ms: "last_turn_end",
-    session_id: "session",
-    status: "result",
-    task_name: "task",
-    job_name: "job",
-    model_provider: "provider",
-    dataset_id: "dataset",
-  })[key] || key || "last_turn_end";
-}
-
 function leaderboardSummaryQueryPayload(groupBy = state.leaderboardSummaryGroupBy) {
   const query = state.catalogQuery || {};
   const applied = workspaceViewQueryPayload();
@@ -309,6 +304,7 @@ function leaderboardSummaryQueryPayload(groupBy = state.leaderboardSummaryGroupB
     results: listValue(query.results),
     views: listValue(applied.views),
     browser_views: listValue(applied.browser_views),
+    ...(applied.inline_views ? { inline_views: applied.inline_views } : {}),
     group_by: groupBy,
   };
 }
@@ -449,27 +445,43 @@ async function loadLeaderboardSummary() {
   return request;
 }
 
+let catalogRequestId = 0;
+let catalogAbort = null;
+function cancelHomeLocationRequests() {
+  clearTimeout(state.catalogSearchTimer);
+  catalogAbort?.abort();
+  catalogRequestId++;
+  detailRequestId++;
+  state.leaderboardSummaryRequestVersion++;
+  state.catalogLoading = false;
+}
+
 async function loadCatalogPage(changes = {}, options = {}) {
   if (state.catalogLoading) {
-    if (options.force) {
-      return new Promise(resolve => {
-        setTimeout(() => resolve(loadCatalogPage(changes, options)), 50);
-      });
-    }
-    return;
+    if (!options.force && !Object.keys(changes).length) return;
+    catalogAbort?.abort();
   }
   state.catalogQuery = { ...state.catalogQuery, ...changes };
+  if (Object.keys(changes).length) workspaceLocationChanged("home");
   state.catalogQuery.state = normalizeServeSourceMode(state.catalogQuery.state);
   state.catalogLoading = true;
+  const request = ++catalogRequestId;
+  const controller = new AbortController();
+  catalogAbort = controller;
+  const isStale = () => controller.signal.aborted || request !== catalogRequestId;
+  const abort = () => controller.abort();
+  options.signal?.addEventListener("abort", abort, { once: true });
+  if (options.signal?.aborted) controller.abort();
   try {
     const wasChecking = Boolean(state.catalogPage?.checking);
     const previousGeneration = Number(state.catalogPage?.generation || 0);
     const applied = workspaceViewQueryPayload();
     state.catalogQuery.views = applied.views;
     if (prepareLeaderboardSummaryScope()) renderCatalogComparison();
-    const page = applied.browser_views.length
+    const page = applied.browser_views.length || listValue(applied.inline_views).length
       ? await serveApi("/api/catalog-queries", {
         method: "POST",
+        signal: controller.signal,
         body: {
           state: state.catalogQuery.state || "active",
           page: Number(state.catalogQuery.page || 1),
@@ -489,13 +501,15 @@ async function loadCatalogPage(changes = {}, options = {}) {
           ...applied,
         },
       })
-      : await serveApi(`/api/catalog?${catalogQueryString(options.surface || "leaderboard")}`);
+      : await serveApi(`/api/catalog?${catalogQueryString(options.surface || "leaderboard")}`, { signal: controller.signal });
+    if (isStale()) return;
     state.catalogPage = page;
     state.serveSourceMode = normalizeServeSourceMode(state.catalogQuery.state);
     state.serveSources = listValue(page.items);
     state.catalogRows = listValue(page.items).filter(row => row?.readable !== false).map(normalizeCatalogRow);
     state.serveLoading = Boolean(page.checking && !page.generation);
-    if (page.generation && page.generation !== previousGeneration) await resolveCatalogSelections();
+    if (page.generation && page.generation !== previousGeneration) await resolveCatalogSelections(controller.signal);
+    if (isStale()) return;
     const summaryRequest = document.getElementById("comparison")
       ? loadLeaderboardSummary()
       : Promise.resolve(null);
@@ -511,18 +525,23 @@ async function loadCatalogPage(changes = {}, options = {}) {
         await refreshSourceCategoryOptions();
       }
     }
-    await ensureCatalogDetail(previousGeneration !== Number(page.generation || 0));
+    if (isStale()) return;
+    if (!options.skipDetail) await ensureCatalogDetail(previousGeneration !== Number(page.generation || 0), controller.signal);
+    if (isStale()) return;
     if (
       !state.workspaceViewsLoaded
       || (workspaceViews().length >= 1 && Number(state.workspaceViewSummaryGeneration) !== Number(page.generation || 0))
     ) refreshWorkspaceViews();
     return page;
   } catch (error) {
+    if (isStale()) return;
     if (error?.status === 409 && state.workspaceAppliedViewNames.size) {
       const appliedCount = state.workspaceAppliedViewNames.size;
       await refreshWorkspaceViews();
+      if (isStale()) return;
       if (state.workspaceAppliedViewNames.size < appliedCount) {
         setTimeout(() => {
+          if (isStale()) return;
           if (state.workspaceAppliedViewNames.size) loadCatalogPage({ page: 1 }, { force: true });
           else clearWorkspaceViewConditions();
         }, 0);
@@ -536,25 +555,29 @@ async function loadCatalogPage(changes = {}, options = {}) {
     setServeStatus(error.message || String(error), true);
     return null;
   } finally {
-    state.catalogLoading = false;
+    options.signal?.removeEventListener("abort", abort);
+    if (request === catalogRequestId) state.catalogLoading = false;
   }
 }
 
-async function resolveCatalogSelections() {
+async function resolveCatalogSelections(signal) {
   const selected = Array.from(new Set([...state.rowSelection, state.selectedSourceKey].filter(Boolean)));
   if (!selected.length) return;
-  const payload = await serveApi("/api/source-key-resolutions", { method: "POST", body: { source_keys: selected } });
+  const payload = await serveApi("/api/source-key-resolutions", { method: "POST", signal, body: { source_keys: selected } });
+  if (signal?.aborted) return;
   const present = new Set(listValue(payload?.source_keys));
-  Array.from(state.rowSelection).forEach(key => { if (!present.has(key)) state.rowSelection.delete(key); });
-  if (state.selectedSourceKey && !present.has(state.selectedSourceKey)) {
+  selected.forEach(key => { if (!present.has(key)) state.rowSelection.delete(key); });
+  if (state.selectedSourceKey && selected.includes(state.selectedSourceKey) && !present.has(state.selectedSourceKey)) {
+    closeDetailSidebar({ restoreFocus: false, render: false, locationKind: "replace" });
     state.selectedSourceKey = null;
     state.selectedArtifactRevision = null;
     state.selectedTrial = null;
   }
 }
 
-async function ensureCatalogDetail(generationChanged = false) {
-  let sourceKey = state.selectedSourceKey;
+async function ensureCatalogDetail(generationChanged = false, signal) {
+  if (state.homeLocationTarget.report) return;
+  let sourceKey = state.homeLocationTarget.source || state.selectedSourceKey;
   const selectedRow = state.catalogRows.find(row => row.source_key === sourceKey);
   if (!sourceKey) {
     const failed = state.catalogRows.find(row => lower(row.status) !== "passed");
@@ -568,13 +591,13 @@ async function ensureCatalogDetail(generationChanged = false) {
   }
   if (!generationChanged && sourceKey === state.selectedSourceKey && state.view?.trajectory_meta?.length) return;
   if (generationChanged && selectedRow && selectedRow.artifact_revision === state.selectedArtifactRevision) return;
-  await loadServeSourceReport(sourceKey);
+  await loadServeSourceReport(sourceKey, { signal });
 }
 
-async function loadServeWorkspace() {
+async function loadServeWorkspace(options = {}) {
   const [catalog, reports] = await Promise.all([
-    loadCatalogPage(),
-    refreshWorkspaceReports(),
+    loadCatalogPage({}, options),
+    refreshWorkspaceReports(options),
     refreshSourceCategoryOptions(),
   ]);
   if (catalog === null || reports === null) throw new Error("Workspace data is stale");
@@ -592,41 +615,74 @@ function loadedServeDetailIsCurrent(sourceKey) {
     && (!row?.artifact_revision || row.artifact_revision === state.selectedArtifactRevision);
 }
 
-function detailStepSelection(report, trialKey, selection = {}) {
+function detailStepSelection(report, trialKey, selection = {}, selected = null) {
+  const root = report?.trajectory?.[0];
+  const trajectory = selected || selectedTrajectoryDetail(root, report?.trajectory_meta?.[0]).trajectory;
   if (selection.stepId !== null && selection.stepId !== undefined) {
-    const step = listValue(report?.trajectory?.[0]?.steps).find(item => String(item?.step_id) === String(selection.stepId));
+    const step = listValue(trajectory?.steps).find(item => String(item?.step_id) === String(selection.stepId));
     return step ? { trialKey, stepId: String(step.step_id) } : null;
   }
   return selection.firstUserStep ? firstUserStepSelection(trialKey, report) : null;
 }
 
 function applyServeDetailSelection(sourceKey, report, artifactRevision, selection = {}) {
-  const trialKey = listValue(report?.trajectory_meta)[0]?.trial_key || null;
-  if (state.selectedSourceKey !== sourceKey || selection.stepId != null || selection.firstUserStep) state.selectedTrajectory = null;
-  state.selectedSourceKey = sourceKey;
-  state.selectedArtifactRevision = artifactRevision || null;
-  state.selectedTrial = trialKey;
-  const selectedStep = trialKey ? detailStepSelection(report, trialKey, selection) : null;
-  if (selection.openSidebar && trialKey) {
-    openDetailSidebar({
-      trialKey,
-      stepId: selectedStep?.stepId,
-      opener: selection.opener,
-      openerSelector: selection.openerSelector,
-    });
-  } else {
-    state.selectedStep = selectedStep;
-  }
-  render(report || emptyServeReport());
+  return homeDetail.transaction(() => {
+    const trialKey = listValue(report?.trajectory_meta)[0]?.trial_key || null;
+    const nextTrajectory = selection.trajectoryId && trialKey
+      ? { trialKey, trajectoryId: selection.trajectoryId }
+      : state.selectedSourceKey !== sourceKey || selection.stepId != null || selection.firstUserStep ? null : state.selectedTrajectory;
+    const root = report?.trajectory?.[0];
+    const entries = trajectoryFamily(root, report?.trajectory_meta?.[0]);
+    const trajectory = entries.find(entry => entry.trajectory?.trajectory_id === nextTrajectory?.trajectoryId)?.trajectory || root;
+    if (selection.trajectoryId && trajectory?.trajectory_id !== selection.trajectoryId) {
+      throw new Error(t("shared_link_trajectory_unavailable", "Requested trajectory is unavailable"));
+    }
+    const selectedStep = trialKey ? detailStepSelection(report, trialKey, selection, trajectory) : null;
+    if (selection.stepId != null && !selectedStep) throw new Error(t("shared_link_step_unavailable", "Requested step is unavailable"));
+    state.selectedTrajectory = nextTrajectory;
+    state.selectedSourceKey = sourceKey;
+    state.selectedArtifactRevision = artifactRevision || null;
+    state.selectedTrial = trialKey;
+    if (selection.openSidebar && trialKey) {
+      openDetailSidebar({
+        trialKey,
+        stepId: selectedStep?.stepId,
+        opener: selection.opener,
+        openerSelector: selection.openerSelector,
+        tab: selection.tab,
+      });
+      if (selection.tab) state.detailSidebar.tab = selection.tab;
+    } else {
+      state.selectedStep = selectedStep;
+    }
+    render(report || emptyServeReport());
+    if (selection.openSidebar) homeDetail.position({ tab: state.detailSidebar.tab });
+  });
 }
 
 let detailRequestId = 0;
+function cancelTrialDetailRequest() { detailRequestId++; }
 
 function selectServeDetail(sourceKey, selection = {}) {
+  if (selection.signal?.aborted) return Promise.resolve();
   if (!sourceKey) { detailRequestId++; return Promise.resolve(); }
+  if (selection.openSidebar) {
+    requestDetailSidebarLocation({
+      source: String(sourceKey),
+      ...(selection.trajectoryId ? { trajectory: selection.trajectoryId } : {}),
+      ...(selection.stepId != null ? { step: String(selection.stepId) } : {}),
+      ...(selection.tab ? { tab: selection.tab } : {}),
+    });
+  }
   if (loadedServeDetailIsCurrent(sourceKey)) {
     detailRequestId += 1;
-    applyServeDetailSelection(sourceKey, state.view, state.selectedArtifactRevision, selection);
+    try {
+      applyServeDetailSelection(sourceKey, state.view, state.selectedArtifactRevision, selection);
+      setServeStatus(serveSourceModeStatusText());
+    } catch (error) {
+      setServeStatus(error.message || String(error), true);
+      if (selection.throwOnError) return Promise.reject(error);
+    }
     return Promise.resolve();
   }
   return loadServeSourceReport(sourceKey, selection);
@@ -640,14 +696,15 @@ async function loadServeSourceReport(sourceKey, selection = {}) {
   if (!sourceKey) return;
   const requestId = ++detailRequestId;
   try {
-    const envelope = await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}`);
+    const envelope = await serveApi(`/api/sources/${encodeURIComponent(sourceKey)}`, { signal: selection.signal });
+    if (selection.signal?.aborted) return;
     if (requestId !== detailRequestId) return;
     applyServeDetailSelection(sourceKey, envelope.report || emptyServeReport(), envelope.artifact_revision, selection);
     setServeStatus(serveSourceModeStatusText());
   } catch (error) {
-    if (requestId !== detailRequestId) return;
+    if (selection.signal?.aborted || requestId !== detailRequestId) return;
     const row = catalogRowForSourceKey(sourceKey);
-    if (row && selection.openSidebar && [404, 410].includes(error.status)) {
+    if (row && selection.openSidebar && !selection.trajectoryId && selection.stepId == null && [404, 410].includes(error.status)) {
       applyServeDetailSelection(sourceKey, {
         trajectory: [{ synthetic: true, steps: [], final_metrics: {} }],
         trajectory_meta: [{ ...row, trial_key: row.artifact_trial_key || row.trial_key, detail_unavailable: true }],
@@ -655,11 +712,14 @@ async function loadServeSourceReport(sourceKey, selection = {}) {
       }, row.artifact_revision, selection);
     }
     setServeStatus(error.message || String(error), true);
+    if (selection.throwOnError) throw error;
   }
 }
 
 function applyLeaderboardSearchMode() {
   clearTimeout(state.catalogSearchTimer);
+  state.catalogQuery.search = String(state.search?.query || "");
+  state.catalogQuery.page = 1;
   state.catalogSearchTimer = setTimeout(() => {
     loadCatalogPage({ page: 1, search: String(state.search?.query || "") });
   }, 150);
@@ -671,10 +731,13 @@ async function switchServeSourceMode(mode) {
   state.catalogQuery.state = nextMode;
   state.catalogQuery.page = 1;
   state.serveSourceMode = nextMode;
-  state.selectedSourceKey = null;
-  state.selectedArtifactRevision = null;
+  if (!state.homeLocationTarget.source) {
+    state.selectedSourceKey = null;
+    state.selectedArtifactRevision = null;
+  }
   state.rowSelection.clear();
-  await loadCatalogPage();
+  workspaceLocationChanged("home");
+  await loadCatalogPage({ state: nextMode, page: 1 });
 }
 
 function applyServeMutationPayload(payload, options = {}) {
@@ -689,7 +752,7 @@ async function applyServeSourceStateMutationPayload(payload, options = {}) {
 }
 
 async function pollCatalogOperation(operationId, options = {}) {
-  const feedback = options.feedback || beginFeedback("#comparison .leaderboard-action-row", { key: `home:operation:${operationId}`, page: "home" });
+  const feedback = options.feedback || beginFeedback("#leaderboard .leaderboard-action-row", { key: `home:operation:${operationId}`, page: "home" });
   await watchOperation(operationId, {
     feedback, onBusy: setWorkspaceWriteControlsDisabled,
     async onComplete(operation) {
@@ -721,7 +784,7 @@ function setWorkspaceWriteControlsDisabled(disabled) {
 
 async function refreshServeSourcesFromServer() {
   if (!adminMode()) return;
-  const feedback = beginFeedback("#comparison .leaderboard-action-row", { page: "home", key: "home:rescan" });
+  const feedback = beginFeedback("#leaderboard .leaderboard-action-row", { page: "home", key: "home:rescan" });
   try {
     const payload = await serveApi("/api/source-discovery-operations", {
       method: "POST",
@@ -751,7 +814,7 @@ function exportCurrentScope(kind) {
     ? Array.from(state.rowSelection)
     : state.catalogRows.map(row => row.source_key).filter(Boolean);
   if (keys.length > 100) {
-    beginFeedback("#comparison .leaderboard-action-row", { key: "home:export", page: "home" }).error(t("serve_export_cell_limit", "JSON export is limited to 100 cells"));
+    beginFeedback("#leaderboard .leaderboard-action-row", { key: "home:export", page: "home" }).error(t("serve_export_cell_limit", "JSON export is limited to 100 cells"));
     return;
   }
   serveDownload(kind, { kind, source_keys: keys });
@@ -772,7 +835,7 @@ function exportLeaderboardSummary() {
 }
 
 async function serveDownload(kind, body, requestedFilename = "") {
-  const feedback = beginFeedback("#comparison .leaderboard-action-row", { page: "home", key: "home:export" });
+  const feedback = beginFeedback("#leaderboard .leaderboard-action-row", { page: "home", key: "home:export" });
   try {
     const response = await fetch("/api/exports", {
       method: "POST",
@@ -794,6 +857,8 @@ async function serveDownload(kind, body, requestedFilename = "") {
   }
 }
 export {
+  cancelTrialDetailRequest,
+  cancelHomeLocationRequests,
   applyLeaderboardSearchMode,
   applyServeDetailSelection,
   applyServeMutationPayload,

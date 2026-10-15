@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import http.client
 import json
+import sqlite3
 import tempfile
 import threading
 import time
 import unittest
 import zipfile
+from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
@@ -52,6 +54,218 @@ def leaderboard_summary_query(**changes) -> dict:
 
 
 class ServeCatalogHttpTests(unittest.TestCase):
+    def test_combined_view_limit_and_deduplication_apply_to_every_query_surface(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cell = root / "runs/default/psychevo/s0/s0_t001"
+            write_trial_cell_artifacts(cell, session_id="s0", trial_key="s0_t001")
+            store, runtime, server, thread = self.running_server(root)
+            try:
+                filters = [{"search": f"condition-{index}"} for index in range(100)]
+                runtime.workspace_views.save(
+                    name="Existing",
+                    filters=filters[0],
+                    group_by="overall",
+                    notes="retained",
+                )
+                retained = {p: p.read_bytes() for p in (root / "views").iterdir()}
+                for extra, expected in (
+                    (filters[0], 200),
+                    ({"search": "condition-100"}, 400),
+                ):
+                    browser = [
+                        {
+                            "name": "Browser",
+                            "filters": extra,
+                            "group_by": "overall",
+                            "notes": "",
+                        }
+                    ]
+                    summary = leaderboard_summary_query(
+                        views=["Existing"], browser_views=browser, inline_views=filters
+                    )
+                    query = {k: v for k, v in summary.items() if k != "group_by"}
+                    for route, payload in (
+                        (
+                            "/api/catalog-queries",
+                            {
+                                **query,
+                                "page": 1,
+                                "page_size": 100,
+                                "sort": "session",
+                                "direction": "asc",
+                            },
+                        ),
+                        ("/api/catalog-summaries", summary),
+                        ("/api/exports", {"kind": "xlsx", "query": query}),
+                        (
+                            "/api/exports",
+                            {
+                                "kind": "summary_xlsx",
+                                "summary": {
+                                    "scope": "leaderboard",
+                                    "query": query,
+                                    "group_by": "overall",
+                                    "statistic": "mean",
+                                },
+                            },
+                        ),
+                    ):
+                        with self.subTest(extra=extra, route=route):
+                            status, _, body = self.request(
+                                server, "POST", route, payload
+                            )
+                            self.assertEqual(status, expected, body[:200])
+                            if expected == 400:
+                                self.assertIn(
+                                    "combined View conditions",
+                                    json.loads(body)["detail"],
+                                )
+                for index in range(101):
+                    runtime.workspace_views.save(
+                        name=f"Unique-{index}",
+                        filters={"search": f"unique-{index}"},
+                        group_by="overall",
+                        notes="",
+                    )
+                status, _, body = self.request(
+                    server,
+                    "GET",
+                    "/api/catalog?"
+                    + "&".join(f"view=Unique-{index}" for index in range(101)),
+                )
+                self.assertEqual(status, 400, body[:200])
+                self.assertIn("combined View conditions", json.loads(body)["detail"])
+                self.assertTrue(
+                    all(p.read_bytes() == content for p, content in retained.items())
+                )
+            finally:
+                self.stop(store, server, thread)
+
+    def test_inline_view_snapshots_share_query_summary_and_export_without_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index, result in enumerate(("passed", "failed")):
+                cell = root / f"runs/default/psychevo/s{index}/s{index}_t001"
+                write_trial_cell_artifacts(
+                    cell, session_id=f"s{index}", trial_key=f"s{index}_t001"
+                )
+                path = cell / "agent/trajectory_meta.json"
+                meta = json.loads(path.read_text(encoding="utf-8"))
+                meta["status"] = result
+                path.write_text(json.dumps(meta), encoding="utf-8")
+            store, runtime, server, thread = self.running_server(root)
+            connect = runtime.catalog._connect
+
+            @contextmanager
+            def limited_connect(**kwargs):
+                with connect(**kwargs) as connection:
+                    connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 128)
+                    yield connection
+
+            limited = patch.object(runtime.catalog, "_connect", limited_connect)
+            limited.start()
+            try:
+                runtime.workspace_views.save(
+                    name="Existing",
+                    filters={"results": ["failed"]},
+                    group_by="overall",
+                    notes="unchanged",
+                )
+                retained = {p: p.read_bytes() for p in (root / "views").iterdir()}
+                query = leaderboard_summary_query(
+                    state="all",
+                    search="s0",
+                    inline_views=[{"results": ["passed"]}, {"results": ["failed"]}],
+                    agents=["psychevo", *[f"absent-{i}" for i in range(500)]],
+                )
+                table_query = {k: v for k, v in query.items() if k != "group_by"}
+                status, _, body = self.request(
+                    server,
+                    "POST",
+                    "/api/catalog-queries",
+                    {
+                        **table_query,
+                        "page": 1,
+                        "page_size": 100,
+                        "sort": "session",
+                        "direction": "asc",
+                    },
+                )
+                self.assertEqual(status, 200, body)
+                self.assertEqual(json.loads(body)["total"], 1)
+                status, _, body = self.request(
+                    server, "POST", "/api/catalog-summaries", query
+                )
+                self.assertEqual(status, 200, body)
+                self.assertEqual(json.loads(body)["summary"]["matched_count"], 1)
+                for changes, expected in (
+                    ({"search": "", "inline_views": [{"results": ["passed"]}]}, 1),
+                    (
+                        {
+                            "search": "",
+                            "views": ["Existing"],
+                            "inline_views": [{"results": ["passed"]}],
+                        },
+                        2,
+                    ),
+                    ({"search": "s0", "inline_views": [{"results": ["failed"]}]}, 0),
+                ):
+                    status, _, body = self.request(
+                        server, "POST", "/api/catalog-summaries", {**query, **changes}
+                    )
+                    self.assertEqual(status, 200, body)
+                    self.assertEqual(
+                        json.loads(body)["summary"]["matched_count"], expected
+                    )
+                for payload in (
+                    {"kind": "xlsx", "query": table_query},
+                    {
+                        "kind": "summary_xlsx",
+                        "summary": {
+                            "scope": "leaderboard",
+                            "query": table_query,
+                            "group_by": "overall",
+                            "statistic": "mean",
+                        },
+                    },
+                ):
+                    status, _, body = self.request(
+                        server, "POST", "/api/exports", payload
+                    )
+                    self.assertEqual(status, 200, body[:200])
+                    with zipfile.ZipFile(BytesIO(body)) as archive:
+                        sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                        if payload["kind"] == "xlsx":
+                            self.assertEqual(sheet.count("<row "), 2)
+                            self.assertIn("<t>s0</t>", sheet)
+                            self.assertNotIn("<t>s1</t>", sheet)
+                        else:
+                            strings = archive.read("xl/sharedStrings.xml").decode(
+                                "utf-8"
+                            )
+                            self.assertIn("Match count", strings)
+                            self.assertIn("<v>1</v>", sheet)
+                self.assertEqual(
+                    {p: p.read_bytes() for p in (root / "views").iterdir()}, retained
+                )
+                for invalid in (
+                    [{"notes": "not a query"}],
+                    [{"models": "wrong"}],
+                    [{"state": True}],
+                    [{}] * 101,
+                ):
+                    status, _, body = self.request(
+                        server,
+                        "POST",
+                        "/api/catalog-summaries",
+                        {**query, "inline_views": invalid},
+                    )
+                    self.assertEqual(status, 400, body)
+            finally:
+                limited.stop()
+                self.stop(store, server, thread)
+
     def test_saved_harbor_notes_reach_catalog_and_guest_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

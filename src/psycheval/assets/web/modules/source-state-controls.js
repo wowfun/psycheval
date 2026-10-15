@@ -69,7 +69,7 @@ function bindServeSourceStateControls(target) {
         await applyServeMutationPayload(payload);
       } catch (error) {
         setWorkspaceWriteControlsDisabled(false);
-        beginFeedback("#comparison .leaderboard-action-row", { key: "home:source-refresh", page: "home" }).error(error);
+        beginFeedback("#leaderboard .leaderboard-action-row", { key: "home:source-refresh", page: "home" }).error(error);
       }
     });
   });
@@ -79,14 +79,14 @@ async function mutateVisibleServeSourceState() {
   if (!adminMode()) return;
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
-  const guardFeedback = beginFeedback("#comparison .leaderboard-action-row", { key: "home:source-guard", page: "home" });
+  const guardFeedback = beginFeedback("#leaderboard .leaderboard-action-row", { key: "home:source-guard", page: "home" });
   const mode = currentServeSourceMode();
   if (mode === "all") {
     guardFeedback.error(t("mixed_state_action_disabled", "Mixed view"));
     return;
   }
   const targetMode = mode === "archived" ? "active" : "archived";
-  const feedback = beginFeedback("#comparison .leaderboard-action-row", { page: "home", key: "home:source-operation" });
+  const feedback = beginFeedback("#leaderboard .leaderboard-action-row", { page: "home", key: "home:source-operation" });
   try {
     const payload = await serveApi("/api/source-state-operations", {
       method: "POST",
@@ -105,7 +105,7 @@ async function deleteVisibleServeSources() {
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
   if (!window.confirm(t("serve_delete_selected_confirm", "Permanently delete the selected sources? This cannot be undone."))) return;
-  const feedback = beginFeedback("#comparison .leaderboard-action-row", { page: "home", key: "home:source-operation" });
+  const feedback = beginFeedback("#leaderboard .leaderboard-action-row", { page: "home", key: "home:source-operation" });
   try {
     const payload = await serveApi("/api/source-deletion-operations", {
       method: "POST",

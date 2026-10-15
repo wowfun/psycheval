@@ -128,12 +128,28 @@ The browser UI is one persistent document. The server renders every page shell
 allowed for the current role and the requested route selects the initial page;
 the browser application owns later navigation, page activation, and history.
 Page adapters load on first activation and keep their DOM and draft state until
-the document is unloaded. They consume explicit invalidation domains instead of
+the document is unloaded. Persistent page roots bind document/window listeners
+once; restoring controls binds only the newly created controls.
+They consume explicit invalidation domains instead of
 using navigation as a data-refresh mechanism. Agent launch changes use the
 `assistant-config` domain; prompt-library changes use the independent
 `prompt-assets` domain, so editing a prompt never replaces a live ACP
 connection. Direct page URLs remain complete
 entry points with the same server-side access checks.
+The navigation layer owns shareable location encoding and browser history;
+page adapters own capture/restoration of query and detail state. Anonymous View
+predicates belong to the existing serve query, summary and export boundary and
+do not enter Saved View storage. See the
+[location contract](reference/state-and-data.md#shareable-workspace-locations).
+The initial browser kernel includes the pure location codec and shared query
+vocabulary. It never imports page implementations or storage repositories.
+Page activation receives the navigation layer's cancellation signal.
+Home's detail coordinator owns the active Trial/report identity, excludes the
+other reader, validates identity before changing reader state, and commits each
+synchronous detail transition once. Readers supply
+cancel and close callbacks rather than importing each other. Report deletion
+responses declare their invalidation domains; the browser does not infer them
+from opaque report references.
 
 `WorkspaceApp` owns the active page and maps the `catalog`, `reports`,
 `dataset-registry`, `tasks`, and `assistant-config` invalidation domains to page

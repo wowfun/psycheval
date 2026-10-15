@@ -37,6 +37,19 @@ Tests isolate HOME/XDG state, config, sockets, timers, and environment secrets.
 Focused success is not a release claim unless the expected test inventory is
 visible.
 
+Shareable workspace locations use isolated catalog and report fixtures. Focused
+coverage includes URL encoding and history, anonymous View query/summary/export
+semantics, and Chromium restoration in an empty-storage guest context. The browser
+checks retain desktop and mobile screenshots without refreshing golden images,
+and ensure that Home toolbar actions do not overlap when a report reader narrows
+the page pane:
+
+```console
+node --test web/test/workspace-location.test.js web/test/app.test.js web/test/home-location.test.js web/test/report-manager-race.test.js
+uv run pytest tests/peval/test_serve_catalog_http.py tests/peval/test_workspace_views.py
+npm run test:e2e -- web/e2e/workspace-links.spec.mjs web/e2e/reports.spec.mjs
+```
+
 The native Harbor OpenCode adapter has a separate opt-in CLI test. With a
 preinstalled `opencode` on PATH, run
 `PEVAL_OPENCODE_CLI_TESTS=1 uv run --no-sync pytest tests/harbor/test_opencode.py -k real_cli`.

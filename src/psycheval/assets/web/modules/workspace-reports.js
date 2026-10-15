@@ -1,9 +1,10 @@
 import { beginFeedback } from "./action-feedback.js";
-import { $, adminMode, esc, listValue, renderComparisonPanels, state, t } from "./runtime.js";
+import { $, adminMode, esc, homeDetail, listValue, renderComparisonPanels, state, t } from "./runtime.js";
 import { serveApi } from "./serve-effects.js";
 import { leaderboardRows, visibleSelectedSourceKeys } from "./serve-catalog.js";
 import { applyReportCatalog, normalizedReports, reportForId, reportStore } from "./report-store.js";
 import { createReportSidebarAdapter } from "./report-sidebar.js";
+import { bindWorkspaceLinkButtons, workspaceLinkButton } from "./workspace-links.js";
 
 function reportMessage(key, fallback, values = {}) {
   let message = String(t(key, fallback));
@@ -20,7 +21,7 @@ function reportReaderSurface() {
   if (!reportReaderController) {
     reportReaderController = createReportSidebarAdapter({
       ownerId: "home-report-reader",
-      onRequestClose: options => closeWorkspaceReportReader({ restoreFocus: options.restoreFocus }),
+      onRequestClose: options => closeWorkspaceReportReader({ restoreFocus: options.restoreFocus, locationKind: options.reason === "dismiss" ? "object" : "replace" }),
       onResize: () => {
         fitWorkspaceReportReaderPreview();
         state.timelineChart?.resize?.();
@@ -58,21 +59,41 @@ function reportsForSourceKey(sourceKey) {
 
 function applyWorkspaceReportCatalog(reports) {
   applyReportCatalog(reports);
-  if (state.reportReader.openId && !workspaceReportForId(state.reportReader.openId)) {
-    closeWorkspaceReportReader({ restoreFocus: false });
-  } else if (state.reportReader.openId) {
-    renderWorkspaceReportReader();
+  if (state.reportReader.openRef) {
+    const report = workspaceReports().find(item => item.report_ref === state.reportReader.openRef);
+    if (report) {
+      state.reportReader.report = report;
+      renderWorkspaceReportReader();
+    }
   }
 }
 
 async function refreshWorkspaceReports(options = {}) {
+  const request = ++reportCatalogRequestId;
   try {
-    const payload = await serveApi("/api/reports");
+    const payload = await serveApi("/api/reports", { signal: options.signal });
+    if (options.signal?.aborted || request !== reportCatalogRequestId) return;
     applyWorkspaceReportCatalog(Array.isArray(payload) ? payload : []);
+    const ref = state.reportReader.openRef;
+    if (ref && !workspaceReports().some(report => report.report_ref === ref)) {
+      try {
+        const report = await serveApi(`/api/report-library/${encodeURIComponent(ref)}`, { signal: options.signal });
+        if (request !== reportCatalogRequestId || options.signal?.aborted) return;
+        if (state.reportReader.openRef === ref) {
+          state.reportReader.report = report;
+          renderWorkspaceReportReader();
+        }
+      } catch (error) {
+        if (request !== reportCatalogRequestId || options.signal?.aborted) return;
+        if (state.reportReader.openRef === ref && !options.signal?.aborted && error.status === 404) closeWorkspaceReportReader({ restoreFocus: false, locationKind: "replace" });
+        else if (!options.signal?.aborted) throw error;
+      }
+    }
     if (options.renderLeaderboard !== false) renderComparisonPanels({ trace: false });
     return workspaceReports();
   } catch (error) {
-    beginFeedback("#comparison .leaderboard-action-row", { key: "home:reports:load", page: "home" }).error(error);
+    if (options.signal?.aborted || request !== reportCatalogRequestId) return;
+    beginFeedback("#leaderboard .leaderboard-action-row", { key: "home:reports:load", page: "home" }).error(error);
     return null;
   }
 }
@@ -144,7 +165,7 @@ async function attachWorkspaceReport(button) {
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
   button.disabled = true;
-  const feedback = beginFeedback("#comparison .leaderboard-action-row", { page: "home", key: "home:report-attach" });
+  const feedback = beginFeedback("#leaderboard .leaderboard-action-row", { page: "home", key: "home:report-attach" });
   try {
     const pickerPayload = await serveApi("/api/path-selections", {
       method: "POST",
@@ -173,18 +194,36 @@ async function attachWorkspaceReport(button) {
 function openWorkspaceReportReader(reportId, options = {}) {
   const report = workspaceReportForId(reportId);
   if (!report) return false;
-  state.reportReader.openId = report.report_id;
+  cancelWorkspaceReportRequest();
+  state.reportReader.openRef = report.report_ref;
+  state.reportReader.report = report;
+  homeDetail.register("report", { cancel: cancelWorkspaceReportRequest, close: closeWorkspaceReportReader });
+  homeDetail.activate({ report: report.report_ref });
   renderWorkspaceReportReader({ opener: options.opener || document.activeElement || null });
   return true;
 }
 
+let reportRequestId = 0;
+let reportCatalogRequestId = 0;
+function cancelWorkspaceReportRequest(options = {}) { reportRequestId++; if (options.catalog) reportCatalogRequestId++; }
+async function openWorkspaceReportRef(ref, options = {}) {
+  homeDetail.register("report", { cancel: cancelWorkspaceReportRequest, close: closeWorkspaceReportReader });
+  const request = ++reportRequestId;
+  const report = await serveApi(`/api/report-library/${encodeURIComponent(ref)}`, { signal: options.signal });
+  if (options.signal?.aborted || request !== reportRequestId) return;
+  state.reportReader.openRef = ref;
+  state.reportReader.report = report;
+  homeDetail.activate({ report: ref }, options.locationKind || "object");
+  renderWorkspaceReportReader({ opener: options.opener || null });
+}
+
 function renderWorkspaceReportReader(options = {}) {
   const target = $("workspace-report-reader");
-  const report = workspaceReportForId(state.reportReader.openId);
+  const report = state.reportReader.report;
   if (!target || !report) return;
   disconnectWorkspaceReportPreviewObserver();
   const previewUrl = workspaceReportPreviewPath(report);
-  const openTab = `<a class="action-button compact report-reader-open-tab" data-report-reader-open-tab href="${workspaceReportOpenPath(report)}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>`;
+  const openTab = `<a class="action-button compact report-reader-open-tab" data-report-reader-open-tab href="${esc(workspaceReportOpenPath(report))}" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a>`;
   const fitAttribute = report.format === "html" ? " data-report-preview-fit" : "";
   const preview = `<iframe class="report-reader-frame" data-report-reader-frame src="${esc(previewUrl)}" title="${esc(report.filename)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>`;
   const content = `<div class="report-reader-panel" role="dialog" aria-modal="false" aria-labelledby="report-reader-title">
@@ -196,6 +235,7 @@ function renderWorkspaceReportReader(options = {}) {
       </div>
       <div class="report-reader-actions">
         ${openTab}
+        ${workspaceLinkButton()}
         <button class="action-button compact" type="button" data-sidebar-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
       </div>
     </header>
@@ -212,6 +252,7 @@ function renderWorkspaceReportReader(options = {}) {
     } : {}),
   });
   observeWorkspaceReportReaderPreview(target);
+  bindWorkspaceLinkButtons(target, "home");
 }
 
 function reportReaderPreviewGeometry(viewportWidth, viewportHeight) {
@@ -259,15 +300,21 @@ function observeWorkspaceReportReaderPreview(target = $("workspace-report-reader
 function closeWorkspaceReportReader(options = {}) {
   const target = $("workspace-report-reader");
   const surface = reportReaderSurface();
-  if (!state.reportReader.openId || !target || target.hidden) return false;
+  if (!state.reportReader.openRef) return false;
+  cancelWorkspaceReportRequest();
+  const ref = state.reportReader.openRef;
   disconnectWorkspaceReportPreviewObserver();
-  if (!surface.close({ restoreFocus: options.restoreFocus })) return false;
-  target.innerHTML = "";
-  state.reportReader.openId = null;
+  surface.close({ restoreFocus: options.restoreFocus });
+  if (target) target.innerHTML = "";
+  state.reportReader.openRef = null;
+  state.reportReader.report = null;
+  homeDetail.clear("report", options.locationKind || "object");
   return true;
 }
 
 export {
+  cancelWorkspaceReportRequest,
+  openWorkspaceReportRef,
   REPORT_READER_PREVIEW_WIDTH,
   applyWorkspaceReportCatalog,
   attachWorkspaceReport,

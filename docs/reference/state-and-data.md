@@ -187,6 +187,66 @@ mutations return or produce a generation; clients reconcile by generation and
 stable key. Rebuilding a catalog or report never silently deletes original
 inputs or Harbor-owned evidence.
 
+## Shareable workspace locations
+
+The browser location identifies the current page and open detail independently
+of list membership. Home uses `?source=<source_key>` for a Trial, with optional
+`trajectory`, `step`, and `tab`; reports use `?report=<report_ref>` on Home or
+Reports, with an optional Reports `tab`. Identities are stable keys, not aliases
+or list positions. A closed detail leaves the page's list location.
+
+`#view=<base64url>` contains a versioned UTF-8 JSON snapshot of that page's
+query and presentation state. It preserves search, facets, ordering, pagination
+and page size, plus Home's applied View conditions and aggregate grouping,
+statistic and table disclosure. Defaults are omitted deterministically. Applied
+server and browser Views become transient snapshots with labels and actual
+conditions; opening a link never saves them or resolves them by name. They use
+the query, summary and export interfaces' optional `inline_views` filter array:
+the filters are ORed with other applied Views, then intersected with the base
+query. Inline filters share query validation without saved-name collision checks.
+Saved View facet values are normalized before application and capture using the
+query service's trim, blank-removal and deduplication rules. Malformed values
+remain errors rather than silently changing a shared query.
+The serve boundary deduplicates identical applied conditions across saved,
+browser and inline Views. Their combined query permits at most 100 distinct
+conditions; excess conditions report an error for lists, summaries and exports
+instead of truncating the query. Search and empty predicates keep their normal
+query semantics.
+
+Initial loads and browser history restoration apply the complete snapshot before
+loading a list and its independently requested detail. Invalid, oversized or
+unknown-version locations report an error rather than dropping conditions.
+On Home and Reports, the fragment is reserved for `#view=` snapshots; plain
+anchors and legacy `#source=` fragments are unsupported and show the same explicit
+link error. Trial identity belongs in the `source` query parameter.
+Complete links are limited to 64 KiB. Missing details retain their requested
+identity and report unavailability instead of selecting another object.
+Opening/closing details and switching pages add history entries; condition and
+detail-position changes replace the current entry. Restoration suppresses URL
+writes and obsolete requests. Hidden pages and background reads cannot overwrite
+the active location. Unsaved drafts remain local and are not restored from links.
+Ordinary page activation also defers location writes until its state is ready.
+An explicit detail change during activation retains its add-history intent when
+activation settles. Search input publishes its URL with the debounced list query;
+copying a link still captures the current controls immediately.
+Refreshes requested during restoration run after it settles; newer invalidations
+are not acknowledged by an older read. Capture errors remain visible without
+replacing the requested URL or dropping any conditions.
+Saved View refresh and conflict recovery may only prune the currently applied
+named Views; they cannot clear a newer shared snapshot or publish an obsolete
+query error after asynchronous work completes.
+Home retains one authoritative detail identity and position; its detail coordinator
+owns reader exclusion and batches synchronous location changes.
+Trajectory position changes apply only to the Trial reader.
+Report detail requests are superseded by a new detail selection or navigation,
+independently of concurrent list reads and filter changes.
+Trial openings without an explicit tab or step start at the default detail tab.
+
+Copy-link controls use the current normalized location without credentials,
+content, checked rows, ACP state or personal layout. Links require access to the
+same workspace; they restore query definitions against current data, not frozen
+results. Existing access checks apply to each object and action.
+
 ## Evaluation reports
 
 Each source has at most one canonical Markdown evaluation report. A Harbor

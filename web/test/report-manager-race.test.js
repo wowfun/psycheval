@@ -9,6 +9,32 @@ const manager = await import("../../src/psycheval/assets/web/modules/report-mana
 const { reportLibraryStore: store, acceptReport, editBinding, draftChanged } = await import("../../src/psycheval/assets/web/modules/report-library-store.js");
 test.after(() => browser.cleanup());
 
+test("a pending linked report cannot replace a newer manually opened report", async () => {
+  const pending = deferred();
+  const newest = report("new-selection");
+  acceptReport(newest);
+  handler = () => pending.promise;
+  const old = manager.openReportRef("package:old-link", { tab: "preview" });
+  manager.openReportPreview(newest.report_ref);
+  pending.resolve(response(report("old-link")));
+  await old;
+  assert.equal(store.activeRef, newest.report_ref);
+  assert.equal(store.locationTarget.report, newest.report_ref);
+});
+
+test("a linked report survives an unrelated overlapping list refresh", async () => {
+  const linked = report("outside-page"), pending = deferred();
+  manager.restoreReportLocation({ ...manager.captureReportLocation(), object: { report: linked.report_ref } });
+  handler = path => String(path).includes("?") ? Promise.resolve(response(pageOf([]))) : pending.promise;
+  const opening = manager.openReportRef(linked.report_ref);
+  await manager.loadReportManagerPage();
+  pending.resolve(response(linked));
+  await opening;
+  assert.equal(store.activeRef, linked.report_ref);
+  assert.equal(store.locationTarget.report, linked.report_ref);
+  assert.equal(document.querySelector("#report-library-detail").hidden, false);
+});
+
 test("failed deletion releases a list read's busy state and keeps its draft", async () => {
   const selected = report("failed-delete"), deletion = deferred(), list = deferred();
   acceptReport(selected);

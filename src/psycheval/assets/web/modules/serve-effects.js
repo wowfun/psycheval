@@ -98,7 +98,7 @@ async function commitSourceCellEdit(row, field, value) {
     return { rowKey: sourceKey, source: updated || row };
   } catch (error) {
     if (committed) {
-      offerRefresh(beginFeedback("#comparison .leaderboard-action-row", { key: `home:source:${sourceKey}:refresh`, page: "home" }), error, refresh);
+      offerRefresh(beginFeedback("#leaderboard .leaderboard-action-row", { key: `home:source:${sourceKey}:refresh`, page: "home" }), error, refresh);
       return { rowKey: sourceKey, source: row };
     }
     throw error;
@@ -150,7 +150,7 @@ function reportHasTrialKey(report, trialKey) {
   return Boolean(trialKey) && listValue(report?.trajectory_meta).some(meta => meta?.trial_key === trialKey);
 }
 function setServeStatus(text, error = false) {
-  const feedback = pageFeedback("#comparison .leaderboard-action-row");
+  const feedback = pageFeedback("#leaderboard .leaderboard-action-row");
   if (error) feedback.error(text);
   else if (text) feedback.info(text);
   else feedback.clear();

@@ -7,6 +7,7 @@ test.afterAll(async () => { await stopFixture(fixture); });
 
 test("Dataset forms retain failures and register a quoted native absolute path", async ({ page }) => {
   await page.goto(`${fixture.origin}/config`);
+  await expect(page.locator("[data-config-page]")).toHaveAttribute("aria-busy", "false");
   await page.locator("[data-harbor-register-dataset]").click();
   let dialog = page.locator(".action-form-overlay");
   await dialog.locator('[name="path"]').fill('"  "');

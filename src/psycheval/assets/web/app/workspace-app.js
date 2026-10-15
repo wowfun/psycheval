@@ -1,4 +1,6 @@
 // @ts-check
+import { decodeWorkspaceLocation, encodeWorkspaceLocation } from "./workspace-location.js";
+const SHAREABLE_PAGES = new Set(["home", "reports"]);
 
 const PAGE_PATHS = Object.freeze({
   home: "/",
@@ -22,9 +24,11 @@ const INVALIDATION_PAGES = Object.freeze({
 /** @typedef {keyof typeof INVALIDATION_PAGES} InvalidationDomain */
 /**
  * @typedef {{
- *   activate: (changes: ReadonlySet<InvalidationDomain>, hash: string) => void | Promise<void>,
+ *   activate: (changes: ReadonlySet<InvalidationDomain>, hash: string, signal: AbortSignal) => void | Promise<void>,
  *   snapshot: () => {context?: Record<string, unknown>, dirty?: boolean},
  *   destroy: () => void,
+ *   captureLocation?: () => any,
+ *   restoreLocation?: (location: any, signal: AbortSignal) => void | Promise<void>,
  * }} PageAdapter
  */
 /**
@@ -46,6 +50,8 @@ const INVALIDATION_PAGES = Object.freeze({
  *   start: () => Promise<void>,
  *   navigate: (page: WorkspacePage, options?: NavigateOptions) => Promise<void>,
  *   invalidate: (changes: InvalidationDomain | Iterable<InvalidationDomain>) => void,
+ *   locationChanged: (page: WorkspacePage, kind?: string) => void,
+ *   shareLink: (page: WorkspacePage) => string,
  *   destroy: () => void,
  * }} WorkspaceApp
  */
@@ -53,8 +59,10 @@ const INVALIDATION_PAGES = Object.freeze({
  * @typedef {{
  *   focus?: boolean,
  *   hash?: string,
+ *   search?: string,
+ *   restore?: boolean,
  *   replace?: boolean,
- *   history?: boolean,
+ *   history?: boolean, // Background refreshes must explicitly use false (and no restore).
  *   throwOnError?: boolean, // Rethrow current failures after marking the page; retain pending invalidations.
  * }} NavigateOptions
  */
@@ -85,8 +93,10 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
   const controllers = new Map();
   /** @type {Map<WorkspacePage, Promise<PageAdapter>>} */
   const loading = new Map();
-  /** @type {Map<WorkspacePage, Set<InvalidationDomain>>} */
-  const pending = new Map([...roots.keys()].map(page => [page, new Set()]));
+  /** @type {Map<WorkspacePage, Map<InvalidationDomain, number>>} */
+  const pending = new Map([...roots.keys()].map(page => [page, new Map()]));
+  const deferredRefresh = new Set();
+  let invalidationRevision = 0;
   /** @type {Set<WorkspacePage>} */
   const activationNeeded = new Set(roots.keys());
   /** @type {Map<WorkspacePage, {windowY: number, elements: Map<Element, number>}>} */
@@ -96,6 +106,10 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
   let started = false;
   let destroyed = false;
   let generation = 0;
+  let navigating = 0;
+  let navigationObject = null;
+  let pendingObjectHistory = false;
+  let navigationAbort = new AbortController();
   const previousScrollRestoration = "scrollRestoration" in window.history
     ? window.history.scrollRestoration
     : null;
@@ -118,6 +132,8 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
       await app.navigate(activePage, {
         focus: false,
         hash: window.location.hash,
+        search: window.location.search,
+        restore: true,
         history: false,
       });
     },
@@ -126,7 +142,18 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
       if (destroyed) return;
       const target = availablePage(page, roots);
       if (!target) return;
+      // A background refresh must not interrupt a pending location restoration.
+      if (navigating && target === activePage && !options.restore && options.history === false) {
+        deferredRefresh.add(target);
+        return;
+      }
       const navigation = ++generation;
+      navigationAbort.abort();
+      navigationAbort = new AbortController();
+      const signal = navigationAbort.signal;
+      navigating = navigation;
+      navigationObject = null;
+      pendingObjectHistory = false;
       const previous = activePage;
       if (started && previous && previous !== target) {
         rememberScroll(previous);
@@ -140,42 +167,96 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
 
       const hash = normalizeHash(options.hash ?? "");
       if (options.history !== false) {
-        const href = `${PAGE_PATHS[target]}${hash}`;
+        const href = `${PAGE_PATHS[target]}${options.search || ""}${hash}`;
         const state = { ...historyState(window.history.state), workspacePage: target };
         if (options.replace) window.history.replaceState(state, "", href);
         else window.history.pushState(state, "", href);
       }
 
       let controller;
+      let location;
       try {
+        // Validate before a page can issue queries with partial link conditions.
         controller = await loadPage(target);
+        if (options.restore && controller.restoreLocation && SHAREABLE_PAGES.has(target)) {
+          // Read after updating history: "Open default view" must decode its new
+          // clean URL, not the invalid link that triggered recovery.
+          location = decodeWorkspaceLocation(target, window.location);
+        }
       } catch (error) {
         if (destroyed || navigation !== generation) return;
+        navigating = 0;
         showLoadFailure(target, error);
         if (options.throwOnError) throw error;
         return;
       }
       if (destroyed || navigation !== generation) return;
 
-      const changes = new Set(pending.get(target));
-      if (activationNeeded.has(target) || changes.size || previous !== target || hash) {
+      const revisions = new Map(pending.get(target));
+      const changes = new Set(revisions.keys());
+      if (options.restore || activationNeeded.has(target) || changes.size || previous !== target || hash) {
         try {
-          await controller.activate(changes, hash);
+          if (options.restore && controller.restoreLocation && SHAREABLE_PAGES.has(target)) {
+            await controller.restoreLocation(location, signal);
+            if (signal.aborted || navigation !== generation) return;
+          }
+          navigationObject = controller.captureLocation?.().object || {};
+          await controller.activate(changes, hash, signal);
         } catch (error) {
           if (destroyed || navigation !== generation) return;
+          navigating = 0;
           markStale(target, error);
           if (options.throwOnError) throw error;
           return;
         }
         if (destroyed || navigation !== generation) return;
         activationNeeded.delete(target);
-        for (const change of changes) pending.get(target)?.delete(change);
+        for (const [change, revision] of revisions) {
+          if (pending.get(target)?.get(change) === revision) pending.get(target)?.delete(change);
+        }
         clearStale(target);
       }
       clearLoadFailure(target);
+      if (navigating === navigation) navigating = 0;
+      try {
+        if (controller.captureLocation) writeLocation(target, pendingObjectHistory ? "object" : "replace");
+      } catch (error) {
+        markStale(target, error);
+        if (options.throwOnError) throw error;
+      }
 
       restoreScroll(target, hash);
       if (options.focus !== false || hash) focusPage(target, hash);
+      if (deferredRefresh.delete(target) && pending.get(target)?.size) {
+        await app.navigate(target, { focus: false, history: false, throwOnError: options.throwOnError });
+      }
+    },
+
+    locationChanged(page, kind = "replace") {
+      if (destroyed || activePage !== page || roots.get(page)?.querySelector("[data-workspace-load-error]")) return;
+      try {
+        if (navigating) {
+          if (kind === "object" && navigationObject) {
+            const current = controllers.get(page)?.captureLocation?.().object || {};
+            if (current.source !== navigationObject.source || current.report !== navigationObject.report) pendingObjectHistory = true;
+          }
+          return;
+        }
+        writeLocation(page, kind);
+      }
+      catch (error) { markStale(page, error); }
+    },
+
+    shareLink(page) {
+      if (page !== activePage || navigating) throw new Error(workspaceMessage(messages, "shared_link_loading", "Workspace location is still loading"));
+      if (roots.get(page)?.querySelector("[data-workspace-load-error]")) throw new Error(workspaceMessage(messages, "shared_link_unrestored", "Workspace location could not be restored"));
+      const controller = controllers.get(page);
+      if (!controller?.captureLocation) throw new Error(workspaceMessage(messages, "shared_link_unavailable", "This page cannot be shared"));
+      let href;
+      try { href = encodeWorkspaceLocation(page, controller.captureLocation(), window.location.origin); }
+      catch (error) { throw new Error(localizedErrorMessage(error)); }
+      commitLocation(page, href, "replace");
+      return href;
     },
 
     invalidate(changes) {
@@ -184,7 +265,7 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
         const pages = INVALIDATION_PAGES[domain];
         if (!pages) continue;
         for (const page of pages) {
-          pending.get(/** @type {WorkspacePage} */ (page))?.add(domain);
+          pending.get(/** @type {WorkspacePage} */ (page))?.set(domain, ++invalidationRevision);
         }
       }
     },
@@ -192,6 +273,7 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      navigationAbort.abort();
       generation += 1;
       document.removeEventListener("click", onClick);
       window.removeEventListener("popstate", onPopState);
@@ -228,7 +310,7 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
     const page = pageForPath(url.pathname);
     if (!page || !roots.has(page)) return;
     event.preventDefault();
-    void app.navigate(page, { hash: url.hash }).catch(reportNavigationError);
+    void app.navigate(page, { hash: url.hash, search: url.search, restore: Boolean(url.search || url.hash) }).catch(reportNavigationError);
   }
 
   function onPopState() {
@@ -237,8 +319,24 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
     void app.navigate(page, {
       focus: false,
       hash: window.location.hash,
+      search: window.location.search,
+      restore: true,
       history: false,
     }).catch(reportNavigationError);
+  }
+
+  function writeLocation(page, kind) {
+    const controller = controllers.get(page);
+    if (!controller?.captureLocation || !SHAREABLE_PAGES.has(page)) return;
+    const href = encodeWorkspaceLocation(page, controller.captureLocation(), window.location.origin);
+    commitLocation(page, href, kind);
+  }
+
+  function commitLocation(page, href, kind) {
+    if (href === window.location.href) return;
+    const next = { ...historyState(window.history.state), workspacePage: page };
+    if (kind === "object") window.history.pushState(next, "", href);
+    else window.history.replaceState(next, "", href);
   }
 
   function snapshot() {
@@ -359,13 +457,21 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
     }
     failure.replaceChildren();
     const message = document.createElement("p");
-    message.textContent = `${workspaceMessage(messages, "serve_page_load_failed", "This page could not be loaded.")} ${errorMessage(error)}`;
+    message.textContent = `${workspaceMessage(messages, "serve_page_load_failed", "This page could not be loaded.")} ${localizedErrorMessage(error)}`;
     const reload = document.createElement("button");
     reload.type = "button";
     reload.className = "action-button primary";
     reload.textContent = workspaceMessage(messages, "serve_reload", "Reload");
     reload.addEventListener("click", () => window.location.reload(), { once: true });
     failure.append(message, reload);
+    if (SHAREABLE_PAGES.has(page)) {
+      const reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "action-button";
+      reset.textContent = workspaceMessage(messages, "shared_link_reset", "Open default view");
+      reset.addEventListener("click", () => { void app.navigate(page, { restore: true, replace: true }); });
+      failure.append(reset);
+    }
   }
 
   /** @param {WorkspacePage} page */
@@ -378,7 +484,7 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
     const root = roots.get(page);
     if (!root) return;
     root.dataset.workspaceStale = "true";
-    root.setAttribute("data-workspace-stale-message", errorMessage(error));
+    root.setAttribute("data-workspace-stale-message", localizedErrorMessage(error));
   }
 
   /** @param {WorkspacePage} page */
@@ -387,6 +493,10 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
     if (!root) return;
     delete root.dataset.workspaceStale;
     root.removeAttribute("data-workspace-stale-message");
+  }
+
+  function localizedErrorMessage(error) {
+    return workspaceMessage(messages, error?.messageKey, errorMessage(error));
   }
 
   return app;

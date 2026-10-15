@@ -25,6 +25,16 @@ function view(name, overrides = {}) {
   };
 }
 
+test("stored browser filters normalize blanks without rewriting retained definitions", async () => {
+  const key = browserViewStorageKey("workspace-a");
+  const retained = JSON.stringify({ version: 1, views: [view("Legacy", { filters: { tags: [" keep ", "", "  ", "keep"] } })] });
+  const storage = memoryStorage({ [key]: retained });
+  const repository = createWorkspaceViewRepository({ workspaceId: "workspace-a", storage, request: async () => [] });
+  assert.deepEqual((await repository.refresh())[0].filters.tags, ["keep"]);
+  assert.equal(storage.entries.get(key), retained);
+  await assert.rejects(repository.save(view("Invalid", { filters: { tags: ["a\0b"] } }), { location: "browser" }), /NUL/);
+});
+
 test("browser views are versioned, workspace-scoped, and survive repository recreation", async () => {
   const storage = memoryStorage();
   const request = async () => [];
