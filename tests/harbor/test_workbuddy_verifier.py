@@ -25,7 +25,7 @@ from psycheval.harbor.workbuddy_verifier import (
     _load_rule,
 )
 from tests.fixtures.native_office import write_native_office
-from tests.harbor.test_environment import make_environment
+from tests.harbor.environment_support import make_environment
 
 
 @pytest.mark.parametrize("fail", [False, True])

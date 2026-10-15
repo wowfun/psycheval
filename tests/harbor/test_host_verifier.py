@@ -8,7 +8,7 @@ from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.verifier import Verifier
 
 from psycheval.harbor.verifier.host import HostVerifier
-from tests.harbor.test_environment import make_environment
+from tests.harbor.environment_support import make_environment
 
 
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])

@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from psycheval.harbor.environment import HostProcessAccessError
-from tests.harbor.test_environment import make_environment
+from tests.harbor.environment_support import make_environment
 
 
 def make_host(tmp_path, script=None, **kwargs):

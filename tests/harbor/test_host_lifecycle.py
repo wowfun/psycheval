@@ -8,7 +8,311 @@ from pathlib import Path
 
 import pytest
 
-from tests.harbor.test_environment import make_environment
+from tests.harbor.environment_support import make_environment
+
+
+def test_failed_command_termination_remains_owned_until_stop_retry(
+    tmp_path, monkeypatch
+):
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        await host.start(False)
+        workspace = host.work_dir
+        terminate = host._process_adapter.terminate
+        settled = False
+
+        async def unsettled(process, *args):
+            await terminate(process, *args)
+            if not settled:
+                raise RuntimeError("fixture group remains unsettled")
+
+        monkeypatch.setattr(host._process_adapter, "terminate", unsettled)
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await host.exec_argv(
+                    [sys.executable, "-c", "import time; time.sleep(30)"],
+                    timeout_sec=0.05,
+                )
+            assert not host._active_processes
+            with pytest.raises(RuntimeError, match="remains unsettled") as failure:
+                await host.stop(True)
+            assert workspace.is_dir()
+            notes = "\n".join(failure.value.__notes__)
+            assert str(workspace) in notes
+            assert str(host._runtime_root) in notes
+            with pytest.raises(RuntimeError, match="stopping"):
+                await host.exec_argv([sys.executable, "-c", "pass"])
+            settled = True
+            await host.stop(True)
+            assert not workspace.exists()
+            assert not host._termination_tasks
+        finally:
+            settled = True
+            await host.stop(True)
+
+    asyncio.run(asyncio.wait_for(scenario(), 10))
+
+
+def test_command_cleanup_bounds_pipe_draining(tmp_path, monkeypatch):
+    from psycheval.harbor import environment
+
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        await host.start(False)
+        spawn = host._process_adapter.spawn
+        release = asyncio.Event()
+        monkeypatch.setattr(environment, "_TERMINATION_RESERVE_SEC", 0.03)
+
+        async def stuck_pipes(*args, **kwargs):
+            process = await spawn(*args, **kwargs)
+
+            async def communicate():
+                await release.wait()
+                return b"", b""
+
+            monkeypatch.setattr(process, "communicate", communicate)
+            return process
+
+        monkeypatch.setattr(host._process_adapter, "spawn", stuck_pipes)
+        command = asyncio.create_task(
+            host.exec_argv(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                timeout_sec=0.05,
+            )
+        )
+        try:
+            done, _ = await asyncio.wait([command], timeout=5)
+            assert done, "pipe draining exceeded the cleanup deadline"
+            with pytest.raises(TimeoutError) as error:
+                await command
+            assert any(
+                "command cleanup failed: TimeoutError" in note
+                for note in error.value.__notes__
+            )
+        finally:
+            release.set()
+            await asyncio.gather(command, return_exceptions=True)
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
+def test_start_retry_settles_retained_processes_before_replacing_workspace(
+    tmp_path, monkeypatch
+):
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        await host.start(False)
+        workspace = host.work_dir
+        # A failed initialization retains its runtime and termination task.
+        host._started = False
+        settled = False
+
+        async def terminate(*args):
+            if not settled:
+                raise RuntimeError("fixture process remains unsettled")
+
+        monkeypatch.setattr(host._process_adapter, "terminate", terminate)
+        process = object()
+        failed = asyncio.create_task(terminate(process))
+        await asyncio.gather(failed, return_exceptions=True)
+        host._termination_tasks[process] = failed
+        try:
+            with pytest.raises(RuntimeError, match="remains unsettled"):
+                await host.start(False)
+            assert workspace.is_dir()
+            settled = True
+            await host.start(False)
+            assert host._started
+            assert not host._termination_tasks
+        finally:
+            settled = True
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process group settlement")
+def test_termination_retry_checks_retained_members_even_after_group_disappears(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    import psutil
+
+    from psycheval.harbor import environment
+
+    async def scenario():
+        settled = False
+        member = SimpleNamespace(
+            pid=4243,
+            is_running=lambda: True,
+            status=lambda: psutil.STATUS_ZOMBIE if settled else psutil.STATUS_RUNNING,
+        )
+        monkeypatch.setattr(psutil, "process_iter", lambda: [member])
+        monkeypatch.setattr(environment.os, "getpgid", lambda pid: 4242)
+        monkeypatch.setattr(environment.os, "killpg", lambda *args: None)
+
+        async def leader_exited():
+            return 0
+
+        class Leader:
+            pid = 4242
+            wait = staticmethod(leader_exited)
+
+        adapter = environment._LinuxProcessAdapter()
+        leader = Leader()
+        with pytest.raises(RuntimeError, match="did not settle"):
+            await adapter.terminate(leader)
+
+        def gone(*args):
+            raise ProcessLookupError()
+
+        monkeypatch.setattr(environment.os, "killpg", gone)
+        monkeypatch.setattr(psutil, "process_iter", lambda: [])
+        with pytest.raises(RuntimeError, match="did not settle"):
+            await adapter.terminate(leader)
+        settled = True
+        await adapter.terminate(leader)
+        assert not adapter._unsettled_groups
+
+    asyncio.run(asyncio.wait_for(scenario(), 8))
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux forced termination")
+def test_post_kill_wait_has_a_deadline_and_remains_retryable(monkeypatch):
+    from psycheval.harbor import environment
+
+    async def scenario():
+        exited = asyncio.Event()
+
+        class Process:
+            pid = 4242
+
+            async def wait(self):
+                await exited.wait()
+
+        monkeypatch.setattr(environment.psutil, "process_iter", lambda: [])
+        monkeypatch.setattr(environment.os, "killpg", lambda *args: None)
+        monkeypatch.setattr(
+            environment, "_TERMINATION_RESERVE_SEC", 0.03, raising=False
+        )
+        adapter, process = environment._LinuxProcessAdapter(), Process()
+        termination = asyncio.create_task(adapter.terminate(process, 0.01))
+        try:
+            done, _ = await asyncio.wait([termination], timeout=0.3)
+            assert done, "post-SIGKILL wait exceeded the cleanup deadline"
+            with pytest.raises(RuntimeError, match="did not settle"):
+                await termination
+            assert process in adapter._unsettled_groups
+        finally:
+            exited.set()
+            await asyncio.gather(termination, return_exceptions=True)
+        await adapter.terminate(process, 0.01)
+        assert process not in adapter._unsettled_groups
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process group settlement")
+def test_termination_waits_for_descendants_after_leader_exit(monkeypatch):
+    from types import SimpleNamespace
+
+    import psutil
+
+    from psycheval.harbor import environment
+
+    async def scenario():
+        observed, released = threading.Event(), threading.Event()
+
+        def status():
+            observed.set()
+            return psutil.STATUS_ZOMBIE if released.is_set() else psutil.STATUS_RUNNING
+
+        member = SimpleNamespace(pid=4243, status=status, is_running=lambda: True)
+        monkeypatch.setattr(psutil, "process_iter", lambda: [member])
+        monkeypatch.setattr(environment.os, "getpgid", lambda pid: 4242)
+        monkeypatch.setattr(environment.os, "killpg", lambda *args: None)
+
+        async def leader_exited():
+            return 0
+
+        class Leader:
+            pid = 4242
+            wait = staticmethod(leader_exited)
+
+        settling = asyncio.create_task(
+            environment._LinuxProcessAdapter().terminate(Leader())
+        )
+        assert await asyncio.to_thread(observed.wait, 1)
+        assert not settling.done()
+        released.set()
+        await settling
+
+    asyncio.run(asyncio.wait_for(scenario(), 2))
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process group settlement")
+def test_process_inspection_runs_off_loop_and_retains_members_that_leave_group(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    import psutil
+
+    from psycheval.harbor import environment
+
+    async def scenario():
+        loop_thread = threading.get_ident()
+        signalled = False
+        inspected = threading.Event()
+        released = threading.Event()
+
+        def status():
+            assert threading.get_ident() != loop_thread
+            inspected.set()
+            return psutil.STATUS_ZOMBIE if released.is_set() else psutil.STATUS_RUNNING
+
+        member = SimpleNamespace(pid=4243, status=status, is_running=lambda: True)
+        inaccessible = SimpleNamespace(pid=9876)
+
+        def members():
+            assert threading.get_ident() != loop_thread
+            return [inaccessible, member]
+
+        def group(pid):
+            assert threading.get_ident() != loop_thread
+            if pid == inaccessible.pid:
+                raise PermissionError("unrelated protected process")
+            return 5000 if signalled else 4242
+
+        def kill_group(*args):
+            nonlocal signalled
+            signalled = True
+
+        async def exited():
+            return 0
+
+        class Leader:
+            pid = 4242
+            wait = staticmethod(exited)
+
+        monkeypatch.setattr(psutil, "process_iter", members)
+        monkeypatch.setattr(environment.os, "getpgid", group)
+        monkeypatch.setattr(environment.os, "killpg", kill_group)
+        settling = asyncio.create_task(
+            environment._LinuxProcessAdapter().terminate(Leader())
+        )
+        try:
+            assert await asyncio.to_thread(inspected.wait, 1)
+            assert not settling.done(), (
+                "a member that left the group still owns its cwd"
+            )
+        finally:
+            released.set()
+            await settling
+
+    asyncio.run(asyncio.wait_for(scenario(), 3))
 
 
 def test_stop_waits_for_process_launch_before_deleting_runtime(tmp_path, monkeypatch):
@@ -504,7 +808,7 @@ def test_runtime_deletion_does_not_block_loop_and_drains_on_cancel(
 def test_project_copy_cancellation_stops_between_chunks(
     tmp_path, monkeypatch, cancel_via
 ):
-    from psycheval.harbor import environment as module
+    from psycheval.harbor import host_files as module
 
     project = tmp_path / "project"
     project.mkdir()

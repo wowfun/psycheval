@@ -14,7 +14,8 @@ import pytest
 from harbor.models.task.config import EnvironmentConfig
 
 from psycheval.harbor import environment as host
-from tests.harbor.test_environment import (
+from psycheval.harbor import host_files
+from tests.harbor.environment_support import (
     make_environment,
     make_separate_verifier_environment,
 )
@@ -26,6 +27,35 @@ def tree_files(root: Path) -> dict[str, bytes]:
         for path in root.rglob("*")
         if path.is_file()
     }
+
+
+def test_borrowed_workspace_inputs_replace_only_existing_regular_files(tmp_path):
+    workspace = tmp_path / "borrowed"
+    workspace.mkdir()
+    (workspace / "input.txt").write_text("old", encoding="utf-8")
+    (workspace / "unrelated.txt").write_text("keep", encoding="utf-8")
+    environment = make_environment(
+        tmp_path / "host",
+        host_access={"filesystem": True, "process": False},
+        extra_mounts=[{"type": "bind", "source": str(workspace), "target": "/app"}],
+        environment_kwargs={"workspace_baseline": "none"},
+    )
+    (environment.environment_dir / "data/input.txt").write_text(
+        "task", encoding="utf-8"
+    )
+
+    async def scenario():
+        try:
+            await environment.start(False)
+            assert environment.work_dir == workspace
+            assert (workspace / "input.txt").read_text(encoding="utf-8") == "task"
+            assert (workspace / "unrelated.txt").read_text(encoding="utf-8") == "keep"
+        finally:
+            await environment.stop(True)
+        assert (workspace / "input.txt").read_text(encoding="utf-8") == "task"
+        assert (workspace / "unrelated.txt").read_text(encoding="utf-8") == "keep"
+
+    asyncio.run(scenario())
 
 
 def test_project_copy_does_not_depend_on_python_recursion_depth(tmp_path):
@@ -43,7 +73,7 @@ def test_project_copy_does_not_depend_on_python_recursion_depth(tmp_path):
             sys.executable,
             "-c",
             "import sys; from pathlib import Path; "
-            "from psycheval.harbor.environment import _copy_project_tree; "
+            "from psycheval.harbor.host_files import _copy_project_tree; "
             "sys.setrecursionlimit(100); "
             "_copy_project_tree(Path(sys.argv[1]), Path(sys.argv[2]))",
             str(source),
@@ -298,7 +328,7 @@ def test_project_start_cancellation_waits_for_copy_then_cleans(tmp_path, monkeyp
         environment_kwargs={"workspace_source": project, "workdir_root": root},
     )
     entered, release = threading.Event(), threading.Event()
-    copy_tree = host._copy_project_tree
+    copy_tree = host_files._copy_project_tree
 
     def blocked_copy(source, destination, *, cancel=None):
         if source == project:
@@ -306,7 +336,7 @@ def test_project_start_cancellation_waits_for_copy_then_cleans(tmp_path, monkeyp
             assert release.wait(10), "test did not release copy worker"
         copy_tree(source, destination, cancel=cancel)
 
-    monkeypatch.setattr(host, "_copy_project_tree", blocked_copy)
+    monkeypatch.setattr(host_files, "_copy_project_tree", blocked_copy)
 
     async def scenario():
         task = asyncio.create_task(environment.start(False))
@@ -449,7 +479,7 @@ def test_failed_git_initialization_removes_the_copy(tmp_path, monkeypatch):
     def missing_git(*args, **kwargs):
         raise FileNotFoundError("git is unavailable")
 
-    monkeypatch.setattr(host.subprocess, "run", missing_git)
+    monkeypatch.setattr(host_files.subprocess, "run", missing_git)
     with pytest.raises(ValueError, match="Git baseline"):
         asyncio.run(environment.start(False))
     assert not list(root.iterdir())

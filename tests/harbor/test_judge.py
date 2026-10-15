@@ -345,7 +345,7 @@ def test_native_judge_cancellation_terminates_verifier_and_keeps_diagnostics(
     from harbor.models.task.task import Task
 
     from psycheval.harbor.verifier.host import HostVerifier
-    from tests.harbor.test_environment import make_environment
+    from tests.harbor.environment_support import make_environment
 
     host = make_environment(
         tmp_path / "host",

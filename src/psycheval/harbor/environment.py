@@ -4,7 +4,6 @@ import asyncio
 import codecs
 import fnmatch
 import getpass
-import hashlib
 import math
 import os
 import platform
@@ -13,25 +12,23 @@ import shlex
 import shutil
 import signal
 import stat
-import subprocess
 import sys
-import tarfile
 import tempfile
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePath, PurePosixPath
 from typing import Literal, Protocol
 from uuid import uuid4
 
+import psutil
 from harbor.environments.base import BaseEnvironment, ExecResult, OutputStream
 from harbor.environments.capabilities import EnvironmentCapabilities
 from harbor.models.task.config import TaskOS
 from harbor.utils.scripts import quote_windows_shell_arg
 
-from . import windows
+from . import host_files, windows
 from .paths import HostPathMapper, split_virtual_path, trial_short_uuid
 from .runtime_config import (
     DEFAULT_WORKDIR_ROOT,
@@ -71,11 +68,9 @@ _WORKSPACE_RESERVED_ROOTS = (
 )
 _LEGACY_RUNTIME_ENV_PREFIX = "PSYCHEVAL_"
 _DEFAULT_ROOT = object()
-_WORKBUDDY_ARCHIVE_FILE_LIMIT = 64 * 1024 * 1024
-_WORKBUDDY_ARCHIVE_TOTAL_LIMIT = 256 * 1024 * 1024
-_WORKBUDDY_ARCHIVE_ENTRY_LIMIT = 100_000
 _PREPARATION_OUTPUT_LIMIT = 8 * 1024 * 1024
 _DEFAULT_TERMINATION_GRACE_SEC = 2.0
+_TERMINATION_RESERVE_SEC = 2.0
 
 
 async def _await_owned_task(task: asyncio.Task, *, on_cancel=None):
@@ -95,358 +90,6 @@ async def _await_owned_task(task: asyncio.Task, *, on_cancel=None):
         if not task.cancelled() and (error := task.exception()):
             cancelled.add_note(f"owned operation failed: {error}")
         raise
-
-
-def _check_filesystem_cancel(cancel: threading.Event | None) -> None:
-    if cancel is not None and cancel.is_set():
-        raise asyncio.CancelledError("Host filesystem operation cancelled")
-
-
-def _read_regular_nofollow(path: Path, *, max_bytes: int) -> bytes:
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_BINARY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
-    descriptor = os.open(path, flags)
-    try:
-        opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode):
-            raise ValueError("file is not regular")
-        if opened.st_size > max_bytes:
-            raise ValueError(f"file exceeds {max_bytes} bytes")
-        with os.fdopen(descriptor, "rb", closefd=False) as handle:
-            content = handle.read(max_bytes + 1)
-        if len(content) > max_bytes:
-            raise ValueError(f"file exceeds {max_bytes} bytes")
-        return content
-    finally:
-        os.close(descriptor)
-
-
-@contextmanager
-def _open_workspace_archive(archive: Path) -> Iterator[tarfile.TarFile]:
-    descriptor = -1
-    try:
-        before = archive.stat(follow_symlinks=False)
-        if not stat.S_ISREG(before.st_mode):
-            raise ValueError("WorkBuddy workspace archive cannot be extracted")
-        flags = (
-            os.O_RDONLY
-            | getattr(os, "O_BINARY", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0)
-        )
-        descriptor = os.open(archive, flags)
-        opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode) or (
-            before.st_ino
-            and opened.st_ino
-            and (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
-        ):
-            raise ValueError("WorkBuddy workspace archive cannot be extracted")
-        raw = os.fdopen(descriptor, "rb")
-        descriptor = -1
-        with raw:
-            try:
-                stream = tarfile.open(fileobj=raw, mode="r:gz")
-            except (OSError, tarfile.TarError) as exc:
-                raise ValueError(
-                    "WorkBuddy workspace archive cannot be extracted"
-                ) from exc
-            with stream:
-                yield stream
-    except OSError as exc:
-        raise ValueError("WorkBuddy workspace archive cannot be extracted") from exc
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-
-
-def _extract_workspace_archive(
-    archive: Path, destination: Path, *, cancel: threading.Event | None = None
-) -> None:
-    total = 0
-    seen: dict[PurePosixPath, tuple[str, int, int, bytes]] = {}
-    try:
-        with _open_workspace_archive(archive) as stream:
-            for index, member in enumerate(stream, start=1):
-                _check_filesystem_cancel(cancel)
-                if index > _WORKBUDDY_ARCHIVE_ENTRY_LIMIT:
-                    raise ValueError(
-                        "WorkBuddy workspace archive exceeds 100000 entries"
-                    )
-                relative = PurePosixPath(member.name)
-                if member.isdir() and member.name in {".", "./"}:
-                    continue
-                if (
-                    relative.is_absolute()
-                    or "\\" in member.name
-                    or ":" in member.name
-                    or not relative.parts
-                    or any(
-                        part.endswith((" ", ".")) or part.lower() == ".git"
-                        for part in relative.parts
-                    )
-                ):
-                    raise ValueError("WorkBuddy workspace archive path is unsafe")
-                if (
-                    member.issym()
-                    or member.islnk()
-                    or not (member.isdir() or member.isfile())
-                ):
-                    raise ValueError("WorkBuddy workspace archive has unsafe entries")
-                target = destination.joinpath(*relative.parts)
-                if member.isdir():
-                    identity = ("directory", member.mode & 0o777, 0, b"")
-                    previous = seen.get(relative)
-                    if previous is not None and previous != identity:
-                        raise ValueError(
-                            "WorkBuddy workspace archive has conflicting duplicate paths"
-                        )
-                    seen[relative] = identity
-                    target.mkdir(parents=True, exist_ok=True)
-                    continue
-                if member.size > _WORKBUDDY_ARCHIVE_FILE_LIMIT:
-                    raise ValueError("WorkBuddy workspace archive file exceeds 64 MiB")
-                total += member.size
-                if total > _WORKBUDDY_ARCHIVE_TOTAL_LIMIT:
-                    raise ValueError("WorkBuddy workspace archive exceeds 256 MiB")
-                target.parent.mkdir(parents=True, exist_ok=True)
-                source = stream.extractfile(member)
-                if source is None:
-                    raise ValueError("WorkBuddy workspace archive file cannot be read")
-                content = source.read(_WORKBUDDY_ARCHIVE_FILE_LIMIT + 1)
-                if len(content) != member.size:
-                    raise ValueError("WorkBuddy workspace archive file is truncated")
-                identity = (
-                    "file",
-                    member.mode & 0o777,
-                    member.size,
-                    hashlib.sha256(content).digest(),
-                )
-                previous = seen.get(relative)
-                if previous is not None:
-                    if previous != identity:
-                        raise ValueError(
-                            "WorkBuddy workspace archive has conflicting duplicate paths"
-                        )
-                    continue
-                seen[relative] = identity
-                _check_filesystem_cancel(cancel)
-                try:
-                    with target.open("xb") as output:
-                        output.write(content)
-                except FileExistsError as exc:
-                    raise ValueError(
-                        "WorkBuddy workspace archive has conflicting duplicate paths"
-                    ) from exc
-                target.chmod(member.mode & 0o777)
-    except (OSError, tarfile.TarError) as exc:
-        raise ValueError("WorkBuddy workspace archive cannot be extracted") from exc
-
-
-def _initialize_git_baseline(
-    workspace: Path, *, project: bool = False, cancel: threading.Event | None = None
-) -> None:
-    commands = (
-        ("init", "-q", "-b", "main"),
-        ("config", "user.email", "dev@project"),
-        ("config", "user.name", "Developer"),
-        ("add", "-A", *(("--force",) if project else ())),
-        ("commit", "--allow-empty", "--no-verify", "-q", "-m", "initial setup"),
-    )
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.upper().startswith("GIT_")
-    }
-    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
-    for arguments in commands:
-        _check_filesystem_cancel(cancel)
-        try:
-            result = subprocess.run(
-                [
-                    "git",
-                    "-c",
-                    "core.hooksPath=" + os.devnull,
-                    "-c",
-                    "commit.gpgSign=false",
-                    "-C",
-                    str(workspace),
-                    *arguments,
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=environment,
-                timeout=30,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise ValueError(
-                "Host workspace could not create its Git baseline"
-            ) from exc
-        if result.returncode != 0:
-            diagnostic = (result.stderr or result.stdout).strip()
-            raise ValueError(
-                "Host workspace could not create its Git baseline"
-                + (f": {diagnostic}" if diagnostic else "")
-            )
-
-
-def _workspace_entry_info(path: Path) -> os.stat_result:
-    info = path.stat(follow_symlinks=False)
-    if _is_link_info(info):
-        raise ValueError(f"workspace source contains a link or junction: {path}")
-    if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
-        raise ValueError(f"workspace source contains a special file: {path}")
-    return info
-
-
-def _is_link_info(info: os.stat_result) -> bool:
-    return bool(
-        stat.S_ISLNK(info.st_mode)
-        or getattr(info, "st_file_attributes", 0)
-        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    )
-
-
-def _is_native_link(path: Path) -> bool:
-    try:
-        return _is_link_info(path.stat(follow_symlinks=False))
-    except FileNotFoundError:
-        return False
-
-
-def _native_regular_file_info(path: Path) -> os.stat_result:
-    try:
-        info = path.stat(follow_symlinks=False)
-    except OSError as exc:
-        raise ValueError(f"native filesystem source is not readable: {path}") from exc
-    if _is_link_info(info) or not stat.S_ISREG(info.st_mode):
-        raise ValueError(f"native filesystem source is not a regular file: {path}")
-    return info
-
-
-def _copy_native_file(
-    source: Path, target: Path, *, cancel: threading.Event | None = None
-) -> None:
-    """Copy one regular file from an already checked native path safely."""
-
-    _check_filesystem_cancel(cancel)
-    before = _native_regular_file_info(source)
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_BINARY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_NONBLOCK", 0)
-    )
-    descriptor = os.open(source, flags)
-    try:
-        opened = os.fstat(descriptor)
-        if (
-            _is_link_info(opened)
-            or not stat.S_ISREG(opened.st_mode)
-            or not os.path.samestat(before, opened)
-        ):
-            raise ValueError(
-                f"native filesystem source changed while copying: {source}"
-            )
-        # Harbor collects mounted artifacts onto their existing host files.
-        # Preserve the file and every hardlink alias in that case.
-        if target.exists() and os.path.samestat(opened, target.stat()):
-            return
-        with os.fdopen(descriptor, "rb") as incoming:
-            descriptor = -1
-            target.parent.mkdir(parents=True, exist_ok=True)
-            temporary_fd, temporary_name = tempfile.mkstemp(
-                prefix=".peval-copy-", dir=target.parent
-            )
-            temporary = Path(temporary_name)
-            try:
-                with os.fdopen(temporary_fd, "wb") as outgoing:
-                    while True:
-                        _check_filesystem_cancel(cancel)
-                        chunk = incoming.read(1024 * 1024)
-                        _check_filesystem_cancel(cancel)
-                        if not chunk:
-                            break
-                        outgoing.write(chunk)
-                temporary.chmod(stat.S_IMODE(opened.st_mode))
-                os.utime(temporary, ns=(opened.st_atime_ns, opened.st_mtime_ns))
-                _check_filesystem_cancel(cancel)
-                temporary.replace(target)
-            finally:
-                try:
-                    temporary.unlink(missing_ok=True)
-                except PermissionError as exc:
-                    windows.retry_readonly_removal(os.unlink, str(temporary), exc)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-
-
-def _copy_project_tree(
-    source: Path, destination: Path, *, cancel: threading.Event | None = None
-) -> None:
-    _check_filesystem_cancel(cancel)
-    if not stat.S_ISDIR(_workspace_entry_info(source).st_mode):
-        raise ValueError(f"workspace source must be a directory: {source}")
-    pending = [(source.iterdir(), destination)]
-    while pending:
-        _check_filesystem_cancel(cancel)
-        entries, current_destination = pending[-1]
-        entry = next(entries, None)
-        if entry is None:
-            pending.pop()
-            continue
-        if entry.name.lower() == ".git":
-            continue
-        info = _workspace_entry_info(entry)
-        target = current_destination / entry.name
-        if os.path.lexists(target):
-            _workspace_entry_info(target)
-        if stat.S_ISDIR(info.st_mode):
-            if target.exists() and not target.is_dir():
-                raise ValueError(f"workspace merge conflict: {target}")
-            target.mkdir(exist_ok=True)
-            pending.append((entry.iterdir(), target))
-        else:
-            if target.exists():
-                raise ValueError(f"workspace merge conflict: {target}")
-            flags = (
-                os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-            )
-            flags |= getattr(os, "O_NONBLOCK", 0)
-            with os.fdopen(os.open(entry, flags), "rb") as incoming:
-                opened = os.fstat(incoming.fileno())
-                if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(
-                    info, opened
-                ):
-                    raise ValueError(f"workspace source changed while copying: {entry}")
-                try:
-                    with target.open("xb") as outgoing:
-                        while True:
-                            _check_filesystem_cancel(cancel)
-                            chunk = incoming.read(1024 * 1024)
-                            _check_filesystem_cancel(cancel)
-                            if not chunk:
-                                break
-                            outgoing.write(chunk)
-                except FileExistsError as exc:
-                    raise ValueError(f"workspace merge conflict: {target}") from exc
-            target.chmod(stat.S_IMODE(info.st_mode))
-
-
-def _validate_project_directory(source: Path) -> None:
-    source = source.expanduser().absolute()
-    try:
-        for ancestor in (source, *source.parents):
-            if not stat.S_ISDIR(_workspace_entry_info(ancestor).st_mode):
-                raise ValueError(f"workspace source must be a directory: {source}")
-    except OSError as exc:
-        raise ValueError(f"cannot access workspace source directory: {source}") from exc
 
 
 @dataclass(frozen=True)
@@ -632,6 +275,11 @@ class HostProcessAccessError(PermissionError):
 class _LinuxProcessAdapter:
     os = TaskOS.LINUX
 
+    def __init__(self):
+        self._unsettled_groups: dict[
+            asyncio.subprocess.Process, list[psutil.Process]
+        ] = {}
+
     async def spawn(self, argv: Sequence[str], **kwargs) -> asyncio.subprocess.Process:
         return await asyncio.create_subprocess_exec(
             *argv, **kwargs, **self.process_kwargs()
@@ -664,20 +312,78 @@ class _LinuxProcessAdapter:
         process: asyncio.subprocess.Process,
         grace_sec: float = _DEFAULT_TERMINATION_GRACE_SEC,
     ) -> None:
-        # Descendants may still own the group and output pipes after the leader exits.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _TERMINATION_RESERVE_SEC
+
+        def group_members():
+            members = []
+            for member in psutil.process_iter():
+                try:
+                    if os.getpgid(member.pid) == process.pid:
+                        members.append(member)
+                except (ProcessLookupError, PermissionError):
+                    continue
+            return members
+
+        members = self._unsettled_groups.get(process)
+        if members is None:
+            members = await asyncio.to_thread(group_members)
+            self._unsettled_groups[process] = members
+            # Descendants may own the group and pipes after the leader exits.
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(
+                    process.wait(),
+                    timeout=grace_sec,
+                )
+            except asyncio.TimeoutError:
+                pass
+            deadline = loop.time() + _TERMINATION_RESERVE_SEC
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            # Keep pre-signal identities too: a TERM handler can leave the group.
+            for member in await asyncio.to_thread(group_members):
+                if member not in members:
+                    members.append(member)
+        self._unsettled_groups[process] = members
         try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        try:
-            await asyncio.wait_for(process.wait(), timeout=grace_sec)
-        except asyncio.TimeoutError:
-            pass
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
-        await process.wait()
+            await asyncio.wait_for(
+                process.wait(), timeout=max(0, deadline - loop.time())
+            )
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "Host process group did not settle after SIGKILL"
+            ) from exc
+
+        def running_members(members):
+            remaining = []
+            for member in members:
+                try:
+                    if member.is_running() and member.status() not in {
+                        psutil.STATUS_ZOMBIE,
+                        psutil.STATUS_DEAD,
+                    }:
+                        remaining.append(member)
+                except psutil.NoSuchProcess:
+                    pass
+            return remaining
+
+        while members:
+            remaining = await asyncio.to_thread(running_members, members)
+            if not remaining:
+                self._unsettled_groups.pop(process, None)
+                return
+            if asyncio.get_running_loop().time() >= deadline:
+                self._unsettled_groups[process] = remaining
+                raise RuntimeError("Host process group did not settle after SIGKILL")
+            members = remaining
+            await asyncio.sleep(0.01)
+        self._unsettled_groups.pop(process, None)
 
 
 class HostEnvironment(BaseEnvironment):
@@ -710,7 +416,7 @@ class HostEnvironment(BaseEnvironment):
             workspace_source, base=Path.cwd(), label="HostEnvironment workspace_source"
         )
         if workspace_source is not None:
-            _validate_project_directory(Path(workspace_source))
+            host_files._validate_project_directory(Path(workspace_source))
         self._host_access = HostAccessPolicy.from_value(host_access)
         if not isinstance(workspace_baseline, str) or workspace_baseline not in {
             "git",
@@ -802,7 +508,7 @@ class HostEnvironment(BaseEnvironment):
 
         async def run():
             async with self._filesystem_slots:
-                _check_filesystem_cancel(cancel)
+                host_files._check_filesystem_cancel(cancel)
                 return await asyncio.to_thread(
                     operation,
                     *args,
@@ -834,7 +540,7 @@ class HostEnvironment(BaseEnvironment):
 
     def _validate_task_environment(self) -> None:
         if self._workspace_source is not None:
-            _validate_project_directory(self.environment_dir)
+            host_files._validate_project_directory(self.environment_dir)
         if (
             self.task_env_config.os == TaskOS.WINDOWS
             and self._process_adapter.os != TaskOS.WINDOWS
@@ -978,7 +684,7 @@ class HostEnvironment(BaseEnvironment):
             if self._runtime_root is not None or (
                 self._workspace is not None and self._workspace.owned
             ):
-                await self._delete_owned_runtime()
+                await self._stop_commands(delete=True)
             self._initialization_cancel.clear()
             self._runtime_root = Path(tempfile.mkdtemp(prefix="session-"))
             self._initialization_task = asyncio.create_task(self._initialize())
@@ -988,8 +694,8 @@ class HostEnvironment(BaseEnvironment):
                 )
             except BaseException as error:
                 try:
-                    await self._delete_owned_runtime()
-                except OSError as cleanup_error:
+                    await self._stop_commands(delete=True)
+                except Exception as cleanup_error:
                     error.add_note(f"workspace cleanup failed: {cleanup_error}")
                 raise
             finally:
@@ -1006,7 +712,7 @@ class HostEnvironment(BaseEnvironment):
             asyncio.create_task(asyncio.to_thread(self._initialize_context)),
             on_cancel=self._initialization_cancel.set,
         )
-        _check_filesystem_cancel(self._initialization_cancel)
+        host_files._check_filesystem_cancel(self._initialization_cancel)
         await self._run_input_preparation()
         if not self._is_separate_verifier() and (
             self._workspace is None or self._workspace.owned
@@ -1022,7 +728,7 @@ class HostEnvironment(BaseEnvironment):
                 ),
                 on_cancel=self._initialization_cancel.set,
             )
-        _check_filesystem_cancel(self._initialization_cancel)
+        host_files._check_filesystem_cancel(self._initialization_cancel)
 
     async def _run_input_preparation(self) -> None:
         if self._is_separate_verifier():
@@ -1067,12 +773,12 @@ class HostEnvironment(BaseEnvironment):
 
     def _initialize_context(self) -> None:
         cancel = self._initialization_cancel
-        _check_filesystem_cancel(cancel)
+        host_files._check_filesystem_cancel(cancel)
         self._prepare_automatic_workspace()
         mappings = self._create_runtime_directories()
         context_target = self._context_target(mappings)
         self._materialize_context(context_target, cancel=cancel)
-        _check_filesystem_cancel(cancel)
+        host_files._check_filesystem_cancel(cancel)
 
     def _create_runtime_directories(self) -> dict[str, Path]:
         mappings = self._runtime_dirs()
@@ -1105,13 +811,15 @@ class HostEnvironment(BaseEnvironment):
         ):
             raise ValueError("Task environment and workspace destination overlap")
         if self._workspace_source is not None:
-            _copy_project_tree(self._workspace_source, context_target, cancel=cancel)
+            host_files._copy_project_tree(
+                self._workspace_source, context_target, cancel=cancel
+            )
         if os.path.lexists(self.environment_dir / "prepare.py"):
             self._require_process_access()
             assert self._runtime_root is not None
             stage = self._runtime_root / "preparation"
             stage.mkdir()
-            _copy_project_tree(self.environment_dir, stage, cancel=cancel)
+            host_files._copy_project_tree(self.environment_dir, stage, cancel=cancel)
             if not (stage / "prepare.py").is_file():
                 raise ValueError("environment/prepare.py must be a regular file")
         elif os.path.lexists(self.environment_dir / "data"):
@@ -1120,7 +828,12 @@ class HostEnvironment(BaseEnvironment):
                 context_target
             ) or context_target.is_relative_to(source.resolve()):
                 raise ValueError("workspace data source and destination overlap")
-            _copy_project_tree(source, context_target, cancel=cancel)
+            host_files._copy_project_tree(
+                source,
+                context_target,
+                cancel=cancel,
+                overwrite=self._workspace is not None and not self._workspace.owned,
+            )
 
     def _copy_environment_context(
         self, context_target: Path, *, cancel: threading.Event
@@ -1130,8 +843,12 @@ class HostEnvironment(BaseEnvironment):
         environment_source = self.environment_dir.resolve()
         project = self._workspace_source is not None and not separate_verifier
         if project:
-            _copy_project_tree(self._workspace_source, context_target, cancel=cancel)
-            _copy_project_tree(environment_source, context_target, cancel=cancel)
+            host_files._copy_project_tree(
+                self._workspace_source, context_target, cancel=cancel
+            )
+            host_files._copy_project_tree(
+                environment_source, context_target, cancel=cancel
+            )
         elif context_target != environment_source:
             if context_target.is_relative_to(environment_source):
                 raise ValueError(
@@ -1139,7 +856,9 @@ class HostEnvironment(BaseEnvironment):
                     f"the Task environment directory: {str(context_target)!r}"
                 )
             if self._workspace is not None and self._workspace.owned:
-                _copy_project_tree(environment_source, context_target, cancel=cancel)
+                host_files._copy_project_tree(
+                    environment_source, context_target, cancel=cancel
+                )
             else:
                 shutil.copytree(environment_source, context_target, dirs_exist_ok=True)
 
@@ -1155,7 +874,9 @@ class HostEnvironment(BaseEnvironment):
                 raise ValueError(
                     "Host workspace baseline cannot reuse inherited .git metadata"
                 )
-            _initialize_git_baseline(context_target, project=project, cancel=cancel)
+            host_files._initialize_git_baseline(
+                context_target, project=project, cancel=cancel
+            )
 
     def _prepare_automatic_workspace(self) -> None:
         if self._workspace is not None or self._is_separate_verifier():
@@ -1207,12 +928,8 @@ class HostEnvironment(BaseEnvironment):
             self._cancel_initialization()
         async with self._lifecycle_lock:
             self._stopping = True
-            try:
-                await _await_owned_task(
-                    asyncio.create_task(self._stop_commands(delete))
-                )
-            finally:
-                self._stopping = False
+            await _await_owned_task(asyncio.create_task(self._stop_commands(delete)))
+            self._stopping = False
 
     def _require_lifecycle_caller(self) -> None:
         command = self._callback_command.get()
@@ -1227,8 +944,20 @@ class HostEnvironment(BaseEnvironment):
             cancel.set()
         async with self._launch_lock:
             commands = list(self._active_processes.items())
+            processes = list(
+                dict.fromkeys(
+                    [
+                        *(process for process, _ in commands),
+                        *self._termination_tasks,
+                        *getattr(self._process_adapter, "pending_spawns", ()),
+                    ]
+                )
+            )
+            for process, task in list(self._termination_tasks.items()):
+                if task.done() and (task.cancelled() or task.exception() is not None):
+                    self._termination_tasks.pop(process)
         terminations = await asyncio.gather(
-            *(self._terminate_process(process) for process, _ in commands),
+            *(self._terminate_process(process) for process in processes),
             return_exceptions=True,
         )
         errors = [
@@ -1239,9 +968,25 @@ class HostEnvironment(BaseEnvironment):
                 errors[0].add_note(
                     f"additional command termination failure: {type(error).__name__}"
                 )
+            retained = [
+                *(
+                    [self._workspace.path]
+                    if self._workspace and self._workspace.owned
+                    else []
+                ),
+                *([self._runtime_root] if self._runtime_root else []),
+                *self._short_runtime_dirs.values(),
+            ]
+            errors[0].add_note(
+                "Host cleanup remains pending; retry stop after processes settle. "
+                f"Retained owned paths: {', '.join(map(str, retained)) or '(none)'}"
+            )
             raise errors[0]
         if commands:
             await asyncio.gather(*(done for _, done in commands))
+        for process in processes:
+            self._termination_tasks.pop(process, None)
+            self._termination_graces.pop(process, None)
         if self._active_filesystem:
             await asyncio.gather(*self._active_filesystem, return_exceptions=True)
         if delete:
@@ -1397,7 +1142,7 @@ class HostEnvironment(BaseEnvironment):
         if not os.path.lexists(path):
             return
         info = path.stat(follow_symlinks=False)
-        if _is_link_info(info) and stat.S_ISDIR(info.st_mode):
+        if host_files._is_link_info(info) and stat.S_ISDIR(info.st_mode):
             path.rmdir()
         elif stat.S_ISDIR(info.st_mode):
             shutil.rmtree(path, onexc=windows.retry_readonly_removal)
@@ -1408,7 +1153,7 @@ class HostEnvironment(BaseEnvironment):
                 windows.retry_readonly_removal(os.unlink, str(path), exc)
 
     def _empty_native_directory(self, path: Path) -> None:
-        if path.is_dir() and not _is_native_link(path):
+        if path.is_dir() and not host_files._is_native_link(path):
             for child in path.iterdir():
                 self._remove_native_path(child)
             return
@@ -1464,7 +1209,7 @@ class HostEnvironment(BaseEnvironment):
         self._validate_user(user)
         native = self._translate_path(path)
         return await self._run_filesystem(
-            lambda: native.is_dir() and not _is_native_link(native)
+            lambda: native.is_dir() and not host_files._is_native_link(native)
         )
 
     async def is_file(self, path: str, user: str | int | None = None) -> bool:
@@ -1472,7 +1217,7 @@ class HostEnvironment(BaseEnvironment):
         self._validate_user(user)
         native = self._translate_path(path)
         return await self._run_filesystem(
-            lambda: native.is_file() and not _is_native_link(native)
+            lambda: native.is_file() and not host_files._is_native_link(native)
         )
 
     def _translate_path(self, value: str | Path) -> Path:
@@ -1558,7 +1303,7 @@ class HostEnvironment(BaseEnvironment):
                 self._short_runtime_dirs[name] = path
             info = path.lstat()
             if (
-                _is_native_link(path)
+                host_files._is_native_link(path)
                 or not stat.S_ISDIR(info.st_mode)
                 or info.st_uid != os.getuid()
                 or stat.S_IMODE(info.st_mode) != 0o700
@@ -1569,7 +1314,8 @@ class HostEnvironment(BaseEnvironment):
             return path
         path = self._runtime_root / "state" / name
         if any(
-            _is_native_link(part) for part in (self._runtime_root, path.parent, path)
+            host_files._is_native_link(part)
+            for part in (self._runtime_root, path.parent, path)
         ):
             raise ValueError("runtime directory traverses a link or junction")
         path.mkdir(parents=True, exist_ok=True)
@@ -1590,7 +1336,9 @@ class HostEnvironment(BaseEnvironment):
         self._require_filesystem_ready()
         source = Path(source_path)
         target = self._translate_path(target_path)
-        await self._run_filesystem(_copy_native_file, source, target, cancellable=True)
+        await self._run_filesystem(
+            host_files._copy_native_file, source, target, cancellable=True
+        )
 
     async def upload_dir(self, source_dir: Path | str, target_dir: str):
         self._require_filesystem_ready()
@@ -1604,7 +1352,9 @@ class HostEnvironment(BaseEnvironment):
         self._require_filesystem_ready()
         source = self._translate_path(source_path)
         target = Path(target_path)
-        await self._run_filesystem(_copy_native_file, source, target, cancellable=True)
+        await self._run_filesystem(
+            host_files._copy_native_file, source, target, cancellable=True
+        )
 
     async def download_dir(self, source_dir: str, target_dir: Path | str):
         await self.download_dir_with_exclusions(
@@ -1623,7 +1373,7 @@ class HostEnvironment(BaseEnvironment):
         skipped_links = 0
         try:
             while pending:
-                _check_filesystem_cancel(cancel)
+                host_files._check_filesystem_cancel(cancel)
                 current, visited = pending.pop()
                 if visited:
                     yield current, None
@@ -1632,14 +1382,14 @@ class HostEnvironment(BaseEnvironment):
                 # Close each directory's scan before descending into its children.
                 with os.scandir(current) as entries:
                     for entry in entries:
-                        _check_filesystem_cancel(cancel)
+                        host_files._check_filesystem_cancel(cancel)
                         info = entry.stat(follow_symlinks=False)
                         path = Path(entry.path)
                         if self._matches_download_exclusion(
                             path.relative_to(source).as_posix(), exclude
                         ):
                             continue
-                        if _is_link_info(info):
+                        if host_files._is_link_info(info):
                             skipped_links += 1
                             continue
                         if stat.S_ISDIR(info.st_mode):
@@ -1690,11 +1440,11 @@ class HostEnvironment(BaseEnvironment):
                 if not os.path.samefile(path, destination):
                     shutil.copystat(path, destination)
             else:
-                _copy_native_file(path, destination, cancel=cancel)
+                host_files._copy_native_file(path, destination, cancel=cancel)
 
     @staticmethod
     def _validate_native_download_directory(source: Path, target: Path) -> None:
-        if _is_native_link(source) or not source.is_dir():
+        if host_files._is_native_link(source) or not source.is_dir():
             raise NotADirectoryError(source)
         resolved_source, resolved_target = source.resolve(), target.resolve()
         if resolved_target != resolved_source and resolved_target.is_relative_to(
@@ -1754,7 +1504,9 @@ class HostEnvironment(BaseEnvironment):
                     continue
                 if exclude and any(fnmatch.fnmatch(relative, p) for p in exclude):
                     continue
-            _copy_native_file(path, target / path.relative_to(source), cancel=cancel)
+            host_files._copy_native_file(
+                path, target / path.relative_to(source), cancel=cancel
+            )
             copied = True
         if not copied:
             self.logger.warning(
@@ -1981,7 +1733,10 @@ class HostEnvironment(BaseEnvironment):
                 await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
                 outcomes = await asyncio.gather(
                     self._terminate_process(process),
-                    process.communicate(),
+                    asyncio.wait_for(
+                        process.communicate(),
+                        termination_grace_sec + _TERMINATION_RESERVE_SEC,
+                    ),
                     return_exceptions=True,
                 )
                 for outcome in outcomes:
@@ -2000,7 +1755,13 @@ class HostEnvironment(BaseEnvironment):
             raise
         finally:
             try:
-                self._process_adapter.release(process)
+                termination = self._termination_tasks.get(process)
+                if termination is None or (
+                    termination.done()
+                    and not termination.cancelled()
+                    and termination.exception() is None
+                ):
+                    self._process_adapter.release(process)
             except BaseException as release_error:
                 if command_error is None:
                     raise
@@ -2010,8 +1771,14 @@ class HostEnvironment(BaseEnvironment):
                 )
             finally:
                 self._active_processes.pop(process, None)
-                self._termination_graces.pop(process, None)
-                self._termination_tasks.pop(process, None)
+                termination = self._termination_tasks.get(process)
+                if termination is None or (
+                    termination.done()
+                    and not termination.cancelled()
+                    and termination.exception() is None
+                ):
+                    self._termination_graces.pop(process, None)
+                    self._termination_tasks.pop(process, None)
                 if not done.done():
                     done.set_result(None)
         return ExecResult(
@@ -2024,7 +1791,7 @@ class HostEnvironment(BaseEnvironment):
         if initializing:
             if asyncio.current_task() is not self._initialization_task:
                 raise RuntimeError("startup commands require the initialization task")
-            _check_filesystem_cancel(self._initialization_cancel)
+            host_files._check_filesystem_cancel(self._initialization_cancel)
             return
         if not self._started:
             raise RuntimeError("HostEnvironment has not started")
@@ -2032,14 +1799,17 @@ class HostEnvironment(BaseEnvironment):
             raise RuntimeError("HostEnvironment is stopping")
 
     async def _terminate_process(self, process: asyncio.subprocess.Process) -> None:
-        if self.os != TaskOS.LINUX:
-            await self._process_adapter.terminate(process)
-            return
         task = self._termination_tasks.get(process)
         if task is None:
-            work = self._process_adapter.terminate(
-                process,
-                self._termination_graces.get(process, _DEFAULT_TERMINATION_GRACE_SEC),
+            work = (
+                self._process_adapter.terminate(
+                    process,
+                    self._termination_graces.get(
+                        process, _DEFAULT_TERMINATION_GRACE_SEC
+                    ),
+                )
+                if self.os == TaskOS.LINUX
+                else self._process_adapter.terminate(process)
             )
             task = asyncio.create_task(work)
             self._termination_tasks[process] = task

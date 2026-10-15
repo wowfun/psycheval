@@ -14,10 +14,51 @@ import stat
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from functools import cache
 from pathlib import Path, PurePosixPath
 
 from harbor.models.task.config import TaskOS
 from harbor.utils.scripts import quote_windows_shell_arg
+
+
+@cache
+def _windows_file_api():
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    return kernel
+
+
+def open_read_descriptor(path: Path) -> int:
+    """Open the leaf without following a reparse point; callers validate identity."""
+    if os.name != "nt":
+        return os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = _windows_file_api()
+    handle = kernel.CreateFileW(str(path), 0x80000000, 7, None, 3, 0x00200000, None)
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        kernel.CloseHandle(handle)
+        raise
+
 
 _ABSOLUTE = re.compile(r"^[A-Za-z]:[/\\]")
 
@@ -257,6 +298,18 @@ class _ProcessJob:
                 ctypes.c_int,
             ),
             ("CloseHandle", [ctypes.c_void_p], ctypes.c_int),
+            ("TerminateJobObject", [ctypes.c_void_p, dword], ctypes.c_int),
+            (
+                "QueryInformationJobObject",
+                [
+                    ctypes.c_void_p,
+                    ctypes.c_int,
+                    ctypes.c_void_p,
+                    dword,
+                    ctypes.c_void_p,
+                ],
+                ctypes.c_int,
+            ),
         ):
             function = getattr(kernel, name)
             function.argtypes = args
@@ -316,6 +369,29 @@ class _ProcessJob:
             self.kernel.CloseHandle(self.handle)
             self.handle = None
 
+    def terminate(self) -> None:
+        if self.handle is None:
+            return
+        if not self.kernel.TerminateJobObject(self.handle, 1):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def active_processes(self) -> int:
+        class Accounting(ctypes.Structure):
+            _fields_ = [
+                ("times", ctypes.c_int64 * 4),
+                ("faults", ctypes.c_uint32),
+                ("total", ctypes.c_uint32),
+                ("active", ctypes.c_uint32),
+                ("terminated", ctypes.c_uint32),
+            ]
+
+        value = Accounting()
+        if not self.kernel.QueryInformationJobObject(
+            self.handle, 1, ctypes.byref(value), ctypes.sizeof(value), None
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return value.active
+
 
 class _CmdShellArgv(tuple):
     """The final argument is cmd program text, already quoted for its shell."""
@@ -326,10 +402,12 @@ class WindowsProcessAdapter:
 
     def __init__(self):
         self._jobs: dict[asyncio.subprocess.Process, _ProcessJob] = {}
+        self.pending_spawns: set[asyncio.subprocess.Process] = set()
 
     async def spawn(self, argv: Sequence[str], **kwargs) -> asyncio.subprocess.Process:
-        if "stdin" in kwargs:
-            raise ValueError("stdin is reserved for the Windows launch gate")
+        persistent_stdin = kwargs.pop("stdin", None)
+        if persistent_stdin not in (None, asyncio.subprocess.PIPE):
+            raise ValueError("Windows stdin must be PIPE or omitted")
         job = _ProcessJob()
         process = None
         try:
@@ -345,8 +423,9 @@ class WindowsProcessAdapter:
                 "-I",
                 "-S",
                 "-c",
-                "import subprocess,sys; token=sys.stdin.buffer.read(1); "
-                f"sys.exit(subprocess.call({target}) if token == b'1' else 125)",
+                "import os,subprocess,sys; token=os.read(sys.stdin.fileno(),1); "
+                f"sys.exit(subprocess.call({target},stdin=sys.stdin.buffer,"
+                "stdout=sys.stdout.buffer,stderr=sys.stderr.buffer) if token == b'1' else 125)",
                 *argv,
                 stdin=asyncio.subprocess.PIPE,
                 **kwargs,
@@ -356,21 +435,42 @@ class WindowsProcessAdapter:
             self._jobs[process] = job
             process.stdin.write(b"1")
             await process.stdin.drain()
-            process.stdin.close()
+            if persistent_stdin is None:
+                process.stdin.close()
             return process
-        except BaseException:
-            job.close()
+        except BaseException as error:
             if process is not None:
-                self._jobs.pop(process, None)
-                if process.returncode is None:
-                    process.kill()
-                await process.communicate()
+                self.pending_spawns.add(process)
+                try:
+                    if process not in self._jobs:
+                        job.close()
+                        if process.returncode is None:
+                            process.kill()
+                    await self.terminate(process)
+                except Exception as cleanup_error:
+                    error.add_note(f"Windows launcher cleanup failed: {cleanup_error}")
+            else:
+                job.close()
             raise
 
     def release(self, process: asyncio.subprocess.Process) -> None:
         job = self._jobs.pop(process, None)
         if job is not None:
             job.close()
+
+    async def settle(self, process: asyncio.subprocess.Process, timeout: float) -> None:
+        """Confirm every owned process has exited before closing the Job handle."""
+        job = self._jobs[process]
+        deadline = asyncio.get_running_loop().time() + timeout
+        job.terminate()
+        while job.active_processes():
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError("Windows Job still contains active processes")
+            await asyncio.sleep(0.02)
+        await asyncio.wait_for(
+            process.wait(), max(0, deadline - asyncio.get_running_loop().time())
+        )
+        self.release(process)
 
     def translate_command(self, command: str, mappings: dict[str, Path]) -> str:
         return translate_command(command, mappings)
@@ -400,10 +500,8 @@ class WindowsProcessAdapter:
             )
 
     async def terminate(self, process: asyncio.subprocess.Process) -> None:
-        self.release(process)
-        try:
+        if process in self._jobs:
+            await self.settle(process, 2)
+        else:
             await asyncio.wait_for(process.wait(), timeout=2)
-        except asyncio.TimeoutError:
-            if process.returncode is None:
-                process.kill()
-            await process.wait()
+        self.pending_spawns.discard(process)

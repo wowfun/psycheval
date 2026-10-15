@@ -18,7 +18,7 @@ from harbor.models.task.config import MCPServerConfig
 from psycheval.harbor.opencode import HostOpenCodeAgent
 from psycheval.harbor.trajectory_validation import load_validated_trajectory
 from psycheval.harbor.verifier import evaluate
-from tests.harbor.test_environment import make_environment
+from tests.harbor.environment_support import make_environment
 
 
 @pytest.mark.parametrize(

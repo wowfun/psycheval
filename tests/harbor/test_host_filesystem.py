@@ -13,7 +13,7 @@ import pytest
 from harbor.models.task.config import ArtifactConfig
 from harbor.trial.artifact_handler import ArtifactHandler
 
-from tests.harbor.test_environment import make_environment
+from tests.harbor.environment_support import make_environment
 
 
 def filesystem_host(tmp_path):
@@ -241,7 +241,7 @@ def test_task_git_pointer_cannot_mutate_external_repository(tmp_path):
 
 @pytest.mark.parametrize("cancel", [False, True])
 def test_stop_and_cancellation_drain_filesystem_workers(tmp_path, monkeypatch, cancel):
-    from psycheval.harbor import environment
+    from psycheval.harbor import host_files as environment
 
     async def scenario():
         host = filesystem_host(tmp_path)
@@ -284,7 +284,7 @@ def test_stop_and_cancellation_drain_filesystem_workers(tmp_path, monkeypatch, c
 
 
 def test_download_cancellation_discards_partial_file(tmp_path, monkeypatch):
-    from psycheval.harbor import environment
+    from psycheval.harbor import host_files as environment
 
     source, target = tmp_path / "source", tmp_path / "target"
     source.write_bytes(b"a" * (3 * 1024 * 1024))
@@ -325,7 +325,7 @@ def test_download_cancellation_discards_partial_file(tmp_path, monkeypatch):
 def test_directory_download_cancels_before_copying_remaining_files(
     tmp_path, monkeypatch, filtered
 ):
-    from psycheval.harbor import environment
+    from psycheval.harbor import host_files as environment
 
     async def scenario():
         host = filesystem_host(tmp_path)
@@ -368,7 +368,7 @@ def test_directory_download_cancels_before_copying_remaining_files(
 def test_filesystem_workers_leave_executor_capacity_for_other_work(
     tmp_path, monkeypatch
 ):
-    from psycheval.harbor import environment
+    from psycheval.harbor import host_files as environment
 
     async def scenario():
         loop = asyncio.get_running_loop()

@@ -37,7 +37,7 @@ _LINUX_ONLY = pytest.mark.skipif(
 
 
 def test_external_agent_virtual_override_uses_prepared_host_workspace(tmp_path):
-    from tests.harbor.test_environment import make_environment
+    from tests.harbor.environment_support import make_environment
 
     async def scenario():
         host = make_environment(tmp_path / "host")
@@ -63,7 +63,7 @@ def test_external_agent_virtual_override_uses_prepared_host_workspace(tmp_path):
 
 
 def test_native_harness_restores_state_in_neutral_invocation_directories(tmp_path):
-    from tests.harbor.test_environment import make_environment
+    from tests.harbor.environment_support import make_environment
 
     async def scenario():
         host = make_environment(tmp_path / "evaluation-host")
@@ -99,7 +99,7 @@ def test_native_harness_restores_state_in_neutral_invocation_directories(tmp_pat
 def test_native_harness_collects_state_after_failure_or_cancellation(tmp_path, cancel):
     import sqlite3
 
-    from tests.harbor.test_environment import make_environment
+    from tests.harbor.environment_support import make_environment
 
     async def scenario():
         host = make_environment(tmp_path / "host")
@@ -434,7 +434,7 @@ class _RecordingWindowsEnvironment:
 def test_state_collection_failure_preserves_invocation_error(
     tmp_path, monkeypatch, failure_type
 ):
-    from tests.harbor.test_environment import make_environment
+    from tests.harbor.environment_support import make_environment
 
     async def scenario():
         host = make_environment(tmp_path / "host")
@@ -467,7 +467,7 @@ def test_state_collection_failure_preserves_invocation_error(
 def test_harness_output_is_retained_after_state_collection(
     tmp_path, monkeypatch, collection_fails
 ):
-    from tests.harbor.test_environment import make_environment
+    from tests.harbor.environment_support import make_environment
 
     async def scenario():
         host = make_environment(tmp_path / "host")

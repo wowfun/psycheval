@@ -28,6 +28,10 @@ from psycheval.harbor.environment import (
     HostProcessAccessError,
 )
 from psycheval.harbor.workbuddy_environment import WorkBuddyHostEnvironment
+from tests.harbor.environment_support import (
+    make_environment,
+    make_separate_verifier_environment,
+)
 
 _LINUX_ONLY = pytest.mark.skipif(
     platform.system() != "Linux", reason="test exercises the Linux process adapter"
@@ -101,74 +105,6 @@ def test_custom_termination_grace_rejects_unsupported_windows_host(tmp_path):
             await host.stop(True)
 
     asyncio.run(scenario())
-
-
-def make_environment(
-    tmp_path: Path,
-    *,
-    host_access: object | None = None,
-    config: EnvironmentConfig | None = None,
-    extra_mounts: list[dict] | None = None,
-    trial_name: str = "trial",
-    environment_kwargs: dict[str, object] | None = None,
-) -> HostEnvironment:
-    environment_dir = tmp_path / "task" / "environment"
-    environment_dir.mkdir(parents=True)
-    (environment_dir / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
-    (environment_dir / "data").mkdir()
-    trial_paths = TrialPaths(tmp_path / trial_name)
-    trial_paths.mkdir()
-    artifact_mount = trial_paths.artifacts_dir / "logs" / "artifacts"
-    artifact_mount.mkdir(parents=True)
-    mounts = [
-        {"type": "bind", "source": str(trial_paths.agent_dir), "target": "/logs/agent"},
-        {
-            "type": "bind",
-            "source": str(trial_paths.verifier_dir),
-            "target": "/logs/verifier",
-        },
-        {"type": "bind", "source": str(artifact_mount), "target": "/logs/artifacts"},
-    ]
-    mounts.extend(extra_mounts or [])
-    return HostEnvironment(
-        environment_dir=environment_dir,
-        environment_name="test",
-        session_id="test-env",
-        trial_paths=trial_paths,
-        task_env_config=config or EnvironmentConfig(workdir="/app"),
-        logger=logging.getLogger("test"),
-        mounts=mounts,
-        host_access=(
-            host_access
-            if host_access is not None
-            else {"filesystem": True, "process": True}
-        ),
-        **(environment_kwargs or {}),
-    )
-
-
-def make_separate_verifier_environment(tmp_path: Path) -> HostEnvironment:
-    environment_dir = tmp_path / "task" / "steps" / "continue" / "tests"
-    environment_dir.mkdir(parents=True)
-    (environment_dir / "test.sh").write_text("#!/bin/sh\n", encoding="utf-8")
-    trial_paths = TrialPaths(tmp_path / "trial")
-    trial_paths.mkdir()
-    return HostEnvironment(
-        environment_dir=environment_dir,
-        environment_name="test-verifier",
-        session_id="test-verifier-env",
-        trial_paths=trial_paths,
-        task_env_config=EnvironmentConfig(workdir="/app"),
-        logger=logging.getLogger("test"),
-        mounts=[
-            {
-                "type": "bind",
-                "source": str(trial_paths.verifier_dir),
-                "target": "/logs/verifier",
-            }
-        ],
-        host_access={"filesystem": True, "process": True},
-    )
 
 
 def test_requires_filesystem_access_policy(tmp_path: Path) -> None:
@@ -671,7 +607,7 @@ def test_start_failure_removes_owned_automatic_workspace(
     def fail_copy(*_args, **_kwargs) -> None:
         raise OSError("fixture copy failed")
 
-    monkeypatch.setattr("psycheval.harbor.environment._copy_project_tree", fail_copy)
+    monkeypatch.setattr("psycheval.harbor.host_files._copy_project_tree", fail_copy)
 
     async def scenario() -> None:
         with pytest.raises(OSError, match="fixture copy failed"):
@@ -928,7 +864,7 @@ def test_workbuddy_bootstrap_rejects_unsafe_workspace_archive_paths(
         pytest.fail("unsafe archive reached Git baseline initialization")
 
     monkeypatch.setattr(
-        "psycheval.harbor.environment._initialize_git_baseline", forbidden_git
+        "psycheval.harbor.host_files._initialize_git_baseline", forbidden_git
     )
 
     async def scenario() -> None:
@@ -948,7 +884,7 @@ def test_workbuddy_bootstrap_rejects_unsafe_workspace_archive_paths(
 def test_workspace_archive_rejects_drive_paths_before_native_path_join(
     tmp_path, monkeypatch, member_name
 ):
-    from psycheval.harbor.environment import _extract_workspace_archive
+    from psycheval.harbor.host_files import _extract_workspace_archive
 
     archive = tmp_path / "workspace.tar.gz"
     entry = tarfile.TarInfo(member_name)
@@ -972,7 +908,7 @@ def test_workspace_archive_rejects_drive_paths_before_native_path_join(
 
 @pytest.mark.parametrize("kind", [tarfile.DIRTYPE, tarfile.REGTYPE, tarfile.SYMTYPE])
 def test_workspace_archive_accepts_only_directory_root_entries(tmp_path, kind):
-    from psycheval.harbor.environment import _extract_workspace_archive
+    from psycheval.harbor.host_files import _extract_workspace_archive
 
     archive = tmp_path / "workspace.tar.gz"
     with tarfile.open(archive, "w:gz") as stream:
@@ -996,7 +932,7 @@ def test_workspace_archive_accepts_only_directory_root_entries(tmp_path, kind):
 
 @pytest.mark.skipif(os.name != "nt", reason="native Windows filename aliases")
 def test_workspace_archive_does_not_overwrite_a_native_filename_alias(tmp_path):
-    from psycheval.harbor.environment import _extract_workspace_archive
+    from psycheval.harbor.host_files import _extract_workspace_archive
 
     archive = tmp_path / "workspace.tar.gz"
     with tarfile.open(archive, "w:gz") as stream:
@@ -1848,9 +1784,14 @@ def test_windows_timeout_closes_the_owned_job(
     closed = []
 
     class Job:
+        def terminate(self):
+            target.returncode = 1
+
+        def active_processes(self):
+            return 0
+
         def close(self):
             closed.append(True)
-            target.returncode = 1
 
     async def spawn(adapter, argv, **kwargs):
         adapter._jobs[target] = Job()
@@ -2016,7 +1957,7 @@ def test_runtime_storage_and_uploads_do_not_follow_directory_links(
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
 def test_workspace_archive_strips_special_permission_bits(tmp_path):
-    from psycheval.harbor.environment import _extract_workspace_archive
+    from psycheval.harbor.host_files import _extract_workspace_archive
 
     archive = tmp_path / "workspace.tar.gz"
     entry = tarfile.TarInfo("executable")

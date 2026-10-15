@@ -91,6 +91,24 @@ belongs to [`environment`](../../src/psycheval/harbor/environment.py).
 Windows uses owned Job termination and rejects a custom grace.
 ACP requests its shutdown budget plus five seconds; cancellation and
 Host stop share the same command termination operation.
+After forced Linux group termination, Host waits for remaining group members to
+exit or become zombies before completing the command or releasing its workspace.
+The termination deadline covers leader exit, pipe draining and member settlement,
+including after forced termination. Failure to settle within that bounded cleanup
+reserve is reported as a cleanup error.
+Failed termination remains owned after the command finishes. Subsequent Host stop
+retries settlement of the retained process identities and keeps the runtime and
+workspace until settlement succeeds; a missing group leader does not clear this
+ownership or permit signalling a reused process group.
+Stop failures identify the retained owned paths for a later stop retry. Host does
+not admit new commands or filesystem operations until that retry succeeds, and
+does not delete directories while a process may still use them. Windows retains
+the Job handle on failed settlement so a retry can verify all descendants.
+Process-table scans
+and member-status checks run off the event loop. Host retains members observed
+before SIGTERM as well as after SIGKILL, including those that leave the group
+during shutdown; inaccessible unrelated process groups are skipped, while an
+unreadable retained member cannot confirm settlement.
 
 ## Public seams
 
@@ -378,6 +396,9 @@ Calling `start` on a successfully started Host is idempotent, including after
 `stop(delete=True)`
 removes automatic workspaces; external workspace bind mounts are borrowed and
 are preserved, including any changes made during preparation or execution.
+Task `environment/data/` overlays a borrowed workspace's regular files while
+preserving unrelated entries. Links, special files, and file/directory type
+collisions remain errors.
 
 `workspace_source` must be an existing, accessible directory, validated during
 construction before any workspace allocation. It copies the project into each
@@ -621,7 +642,8 @@ unnamed Job Object and assigns a waiting, isolated Python launcher before
 allowing it to start the requested argv. Closing the Job terminates remaining
 descendants; this also avoids a child-spawn race during assignment. See
 [Windows Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
-The launcher's stdin is reserved for this gate.
+The launcher consumes the assignment gate token before forwarding the remaining
+stdin stream to the owned child, including ACP protocol frames.
 Job ownership ends on successful command completion as well as cancellation or
 timeout. Remaining descendants are terminated even if they were deliberately
 backgrounded; a Windows exec call does not provide a persistent service lifetime.

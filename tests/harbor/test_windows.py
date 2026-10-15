@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from psycheval.harbor import windows
-from tests.harbor.test_environment import make_environment
+from tests.harbor.environment_support import make_environment
 
 
 @pytest.mark.parametrize("stage", ["stat", "chmod", "remove"])
@@ -253,7 +253,7 @@ def test_windows_launch_gate_assigns_ownership_before_starting_target(
     assert events == ["assign", "close"]
 
 
-def test_windows_launch_rejects_caller_stdin_before_allocating_a_job(monkeypatch):
+def test_windows_launch_rejects_nonpipe_stdin_before_allocating_a_job(monkeypatch):
     def unexpected_job():
         pytest.fail("invalid launch allocated a Job")
 
@@ -261,12 +261,64 @@ def test_windows_launch_rejects_caller_stdin_before_allocating_a_job(monkeypatch
 
     async def scenario():
         adapter = windows.WindowsProcessAdapter()
-        with pytest.raises(ValueError, match="stdin.*reserved"):
+        with pytest.raises(ValueError, match="stdin.*PIPE"):
             await adapter.spawn(
-                [sys.executable, "-c", "pass"], stdin=asyncio.subprocess.PIPE
+                [sys.executable, "-c", "pass"], stdin=asyncio.subprocess.DEVNULL
             )
 
     asyncio.run(scenario())
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows failed launcher ownership")
+def test_failed_launcher_cleanup_remains_owned_by_host(tmp_path, monkeypatch):
+    class Job:
+        def assign(self, pid):
+            raise OSError("fixture assignment failed")
+
+        def close(self):
+            pass
+
+    async def scenario():
+        host = make_environment(tmp_path)
+        await host.start(False)
+        workspace = host.work_dir
+        exited = asyncio.Event()
+
+        class Process:
+            pid = 4242
+            returncode = None
+
+            def kill(self):
+                pass
+
+            async def wait(self):
+                await exited.wait()
+                self.returncode = 0
+
+        process = Process()
+
+        async def spawn(*args, **kwargs):
+            return process
+
+        monkeypatch.setattr(windows, "_ProcessJob", Job)
+        monkeypatch.setattr(windows.asyncio, "create_subprocess_exec", spawn)
+        try:
+            with pytest.raises(OSError, match="assignment") as error:
+                await host.exec_argv([sys.executable, "-c", "pass"])
+            assert "launcher cleanup failed" in "\n".join(error.value.__notes__)
+            assert process in host._process_adapter.pending_spawns
+            with pytest.raises(TimeoutError):
+                await host.stop(True)
+            assert workspace.is_dir()
+            exited.set()
+            await host.stop(True)
+            assert not workspace.exists()
+            assert not host._process_adapter.pending_spawns
+        finally:
+            exited.set()
+            await host.stop(True)
+
+    asyncio.run(asyncio.wait_for(scenario(), 10))
 
 
 @pytest.mark.parametrize("membership", [True, False, None])
@@ -343,7 +395,111 @@ def test_native_nested_job_owns_launcher_and_descendant():
             assert job.contains(process.pid)
             assert job.contains(inner_launcher) and job.contains(descendant)
             assert not job.contains(os.getpid())
+            assert job.active_processes() >= 3
         finally:
             await adapter.terminate(process)
+
+    asyncio.run(scenario())
+
+
+def test_settle_keeps_job_until_active_process_count_reaches_zero():
+    calls = []
+    counts = iter([2, 1, 0])
+
+    class Job:
+        def terminate(self):
+            calls.append("terminate")
+
+        def active_processes(self):
+            count = next(counts)
+            calls.append(count)
+            return count
+
+        def close(self):
+            calls.append("close")
+
+    class Process:
+        async def wait(self):
+            calls.append("wait")
+
+    async def scenario():
+        adapter = windows.WindowsProcessAdapter()
+        process = Process()
+        adapter._jobs[process] = Job()
+        await adapter.settle(process, 2)
+        assert process not in adapter._jobs
+
+    asyncio.run(scenario())
+    assert calls == ["terminate", 2, 1, 0, "wait", "close"]
+
+
+@pytest.mark.parametrize("failure", ["terminate", "query", "active", "wait"])
+def test_settle_retains_job_on_failure_until_retry_succeeds(failure):
+    settled = False
+
+    class Job:
+        closed = False
+
+        def terminate(self):
+            if failure == "terminate" and not settled:
+                raise OSError("fixture terminate failure")
+
+        def active_processes(self):
+            if failure == "query" and not settled:
+                raise OSError("fixture query failure")
+            return int(failure == "active" and not settled)
+
+        def close(self):
+            self.closed = True
+
+    class Process:
+        async def wait(self):
+            if not settled:
+                await asyncio.Event().wait()
+
+    async def scenario():
+        nonlocal settled
+        adapter = windows.WindowsProcessAdapter()
+        process, job = Process(), Job()
+        adapter._jobs[process] = job
+        with pytest.raises((OSError, TimeoutError)):
+            await adapter.settle(process, 0.03)
+        assert not job.closed and process in adapter._jobs
+        settled = True
+        await adapter.settle(process, 0.03)
+        assert job.closed and process not in adapter._jobs
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="native GUI process standard handles"
+)
+def test_gui_executable_inherits_persistent_protocol_stdio():
+    gui = Path(sys._base_executable).with_name("pythonw.exe")
+    assert gui.is_file()
+
+    async def scenario():
+        adapter = windows.WindowsProcessAdapter()
+        process = await adapter.spawn(
+            [
+                str(gui),
+                "-I",
+                "-S",
+                "-c",
+                "import os; data=os.read(0,65536); os.write(1,data); os.write(2,b'diagnostic')",
+            ],
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            payload = '{"text":"中文🙂"}\n'.encode()
+            stdout, stderr = await asyncio.wait_for(process.communicate(payload), 10)
+            assert stdout == payload and stderr == b"diagnostic"
+            await adapter.settle(process, 5)
+            assert not adapter._jobs
+        finally:
+            adapter.release(process)
 
     asyncio.run(scenario())

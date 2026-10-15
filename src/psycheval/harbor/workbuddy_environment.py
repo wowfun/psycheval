@@ -9,8 +9,8 @@ from pathlib import Path
 import yaml
 
 from .datasets import _read_toml, _regular_file, _required_relative
-from .environment import (
-    HostEnvironment,
+from .environment import HostEnvironment
+from .host_files import (
     _extract_workspace_archive,
     _read_regular_nofollow,
 )

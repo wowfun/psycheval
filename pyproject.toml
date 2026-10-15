@@ -14,7 +14,8 @@ dependencies = [
     "markdown-it-py>=4.2,<5",
     "pandas>=2.2",
     "pathspec>=1.0,<2",
-    "psutil>=7,<8",
+    # Process-keyed descendant tracking requires birth-aware psutil 7 equality.
+    "psutil>=7.2.2,<8",
     "pydantic>=2.13.4,<3",
     "python-dotenv>=1.2,<2",
     "PyYAML>=6.0,<7",
