@@ -36,6 +36,66 @@ def install_fixture_plugin(path):
     )
 
 
+def test_owned_process_identity_survives_wall_clock_adjustment(monkeypatch):
+    identity = process_identity(os.getpid())
+    original = time.time
+    monkeypatch.setattr(time, "time", lambda: original() + 60)
+    assert owned_process(json.loads(json.dumps(identity))).pid == os.getpid()
+
+
+def test_process_identity_retains_full_birth_and_rejects_changed_birth(monkeypatch):
+    import psutil
+
+    identity = process_identity(os.getpid())
+    assert "identity" not in identity, "hashes cannot prove process ownership"
+    bad = {**identity}
+    field = "start_ticks" if sys.platform == "linux" else "created_at"
+    bad[field] += 1
+    monkeypatch.setattr(psutil.Process, "__hash__", lambda process: 1)
+    assert owned_process(identity).pid == os.getpid()
+    assert owned_process(bad) is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows partial fast identity")
+def test_windows_process_identity_uses_complete_birth_when_fast_identity_is_denied(
+    monkeypatch,
+):
+    import psutil
+
+    original = psutil.Process._get_ident
+    birth = psutil.Process(os.getpid()).create_time()
+    monkeypatch.setattr(
+        psutil.Process, "_get_ident", lambda process: (process.pid, None)
+    )
+    identity = process_identity(os.getpid())
+    assert identity == {"pid": os.getpid(), "created_at": birth}
+    monkeypatch.setattr(psutil.Process, "create_time", lambda process: birth + 1)
+    assert owned_process(identity) is None
+    monkeypatch.setattr(psutil.Process, "_get_ident", original)
+
+
+def test_unavailable_complete_process_birth_fails_closed(monkeypatch):
+    import psutil
+
+    identity = process_identity(os.getpid())
+
+    def denied(process):
+        raise psutil.AccessDenied(process.pid)
+
+    if sys.platform == "linux":
+        original = Path.read_text
+
+        def unreadable(path, *args, **kwargs):
+            if str(path).startswith("/proc/"):
+                raise PermissionError("fixture denied")
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", unreadable)
+    else:
+        monkeypatch.setattr(psutil.Process, "create_time", denied)
+    assert owned_process(identity) is None
+
+
 @pytest.fixture
 def jobs(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
@@ -499,12 +559,13 @@ def test_failure_and_missing_process_are_not_completed(jobs):
     assert wait_for(jobs, run["id"], terminal=True)["state"] == "failed"
     path = jobs.root / run["id"] / "state.json"
     state = json.loads(path.read_text())
-    state.update(
-        state="running", heartbeat=0, worker={"pid": os.getpid(), "created": -1}
-    )
+    wrong_birth = process_identity(os.getpid())
+    field = "start_ticks" if sys.platform == "linux" else "created_at"
+    wrong_birth[field] += 1
+    state.update(state="running", heartbeat=0, worker=wrong_birth)
     write_json(path, state)
     assert jobs.detail(run["id"])["state"] == "interrupted"
-    assert owned_process({"pid": os.getpid(), "created": -1}) is None
+    assert owned_process(wrong_birth) is None
     assert owned_process(process_identity(os.getpid())) is not None
 
 
@@ -597,6 +658,8 @@ server.serve_forever()
             if process:
                 process.kill()
         for process in processes:
+            if process.poll() is None:
+                process.kill()
             process.wait(timeout=10)
 
 

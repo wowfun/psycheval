@@ -73,7 +73,6 @@ class WorkerControl:
             process = await pending
             cancelled = True
         owner = psutil.Process(process.pid)
-        owner.create_time()
         descendants = {}
         try:
             if cancelled:
@@ -81,7 +80,7 @@ class WorkerControl:
             while process.returncode is None:
                 try:
                     for child in owner.children(recursive=True):
-                        descendants[(child.pid, child.create_time())] = child
+                        descendants[child] = child
                 except psutil.Error:
                     pass
                 await asyncio.sleep(0.1)
@@ -89,7 +88,7 @@ class WorkerControl:
         finally:
             try:
                 for child in owner.children(recursive=True):
-                    descendants[(child.pid, child.create_time())] = child
+                    descendants[child] = child
             except psutil.Error:
                 pass
             for child in [*reversed(list(descendants.values())), owner]:

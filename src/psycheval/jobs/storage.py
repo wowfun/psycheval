@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
 import stat
+import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime
@@ -204,16 +206,45 @@ def locked(root: Path):
 
 
 def process_identity(pid: int) -> dict:
-    return {"pid": pid, "created": psutil.Process(pid).create_time()}
+    return _process_birth(psutil.Process(pid))
+
+
+def _process_birth(process) -> dict:
+    if sys.platform == "linux":
+        fields = (
+            Path(f"/proc/{process.pid}/stat")
+            .read_text(encoding="utf-8")
+            .rpartition(")")[2]
+            .split()
+        )
+        start_ticks = int(fields[19])
+        boot_id = (
+            Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+        )
+        if start_ticks < 0 or not boot_id:
+            raise ValueError("complete process birth is unavailable")
+        return {"pid": process.pid, "start_ticks": start_ticks, "boot_id": boot_id}
+    created_at = process.create_time()
+    if (
+        type(created_at) not in {int, float}
+        or not math.isfinite(created_at)
+        or created_at <= 0
+    ):
+        raise ValueError("complete process birth is unavailable")
+    return {"pid": process.pid, "created_at": created_at}
 
 
 def owned_process(identity: dict | None):
-    if not identity:
+    if (
+        not isinstance(identity, dict)
+        or type(identity.get("pid")) is not int
+        or identity["pid"] <= 0
+    ):
         return None
     try:
         process = psutil.Process(identity["pid"])
-        if process.create_time() == identity["created"] and process.is_running():
+        if _process_birth(process) == identity and process.is_running():
             return process
-    except (psutil.Error, KeyError, TypeError, ValueError):
+    except (psutil.Error, OSError, IndexError, KeyError, TypeError, ValueError):
         pass
     return None

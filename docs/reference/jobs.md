@@ -166,7 +166,12 @@ Dataset registration; explicit mounts take precedence.
 Cancellation first gives the harness an opportunity to clean up. Forced cleanup
 is restricted to the owned process tree. A stale heartbeat is not completion;
 lost workers are reported as interrupted. Process identity includes creation
-identity, not just a PID. Completed execution and passing evaluation are separate
+identity, not just a PID. On Linux, process identity uses kernel start time and
+boot identity; other platforms retain the complete kernel creation time.
+Birth values are stored directly, never as hashes. Unavailable birth information
+cannot establish ownership. Linux identity remains stable when the wall clock changes.
+Retained identities reject replacement
+processes with reused PIDs. Completed execution and passing evaluation are separate
 states. Missing scores are not zero. Resume and failed-Trial reruns are not part
 of this interface.
 
