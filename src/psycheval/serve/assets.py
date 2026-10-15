@@ -10,7 +10,7 @@ from psycheval.html.assets import load_workspace_stylesheet
 from psycheval.serve.errors import HttpError
 from psycheval.state import ServeStateStore
 
-ECHARTS_VERSION = "6.0.0"
+ECHARTS_VERSION = "6.1.0"
 ECHARTS_ASSET_PATH = f"/assets/echarts/{ECHARTS_VERSION}/echarts.min.js"
 PEVAL_WEB_ASSET_PREFIX = "/assets/peval/"
 WORKSPACE_STYLESHEET_PATH = "/assets/peval/workspace.css"

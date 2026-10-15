@@ -1,6 +1,6 @@
 // @ts-check
 
-const LOCAL_SRC = "/assets/echarts/6.0.0/echarts.min.js";
+const LOCAL_SRC = "/assets/echarts/6.1.0/echarts.min.js";
 /** @type {Promise<void> | null} */
 let loading = null;
 

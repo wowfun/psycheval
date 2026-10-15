@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import uvicorn
 
@@ -13,6 +15,7 @@ from psycheval.config import AcpAgent, load_config
 from psycheval.serve.access import ServeAccess
 from psycheval.serve.acp import MAX_ACP_FRAME_BYTES
 from psycheval.serve.api import create_app
+from psycheval.serve.assets import ECHARTS_VERSION, echarts_cache_path
 from psycheval.serve.runtime import ServeRuntime
 from psycheval.state import open_workspace_state
 
@@ -123,6 +126,17 @@ def main() -> None:
             raise ValueError("PEVAL_E2E_ACP_ARGS must be a JSON string array")
         args = tuple(decoded_args)
         store = open_workspace_state(str(root))
+        echarts_package = Path(__file__).resolve().parents[2] / "node_modules/echarts"
+        package = json.loads(
+            (echarts_package / "package.json").read_text(encoding="utf-8")
+        )
+        if package["version"] != ECHARTS_VERSION:
+            raise RuntimeError(
+                "The ECharts test dependency must match the workspace asset version"
+            )
+        chart_asset = echarts_cache_path(store)
+        chart_asset.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(echarts_package / "dist/echarts.min.js", chart_asset)
         runtime = ServeRuntime(
             store,
             load_config(workspace_root=root).validated_update(
@@ -167,7 +181,13 @@ def main() -> None:
                     server_header=False,
                     log_config=None,
                 )
-                uvicorn.Server(config).run(sockets=[listener])
+                with patch(
+                    "psycheval.serve.assets.download_echarts_asset",
+                    side_effect=RuntimeError(
+                        "Browser fixtures must use the seeded ECharts asset"
+                    ),
+                ):
+                    uvicorn.Server(config).run(sockets=[listener])
         finally:
             runtime.close()
             store.close()
