@@ -57,15 +57,46 @@ def _evaluation_report_process_worker(
         else:
             reports = EvaluationReports(workspace)
             try:
-                payload = reports.publish(
-                    source_ref=source_ref,
-                    draft_path=draft_path,
-                ).to_jsonable()
+                if operation == "delete":
+                    payload = {"generation": reports.delete(source_ref)}
+                else:
+                    payload = reports.publish(
+                        source_ref=source_ref,
+                        draft_path=draft_path,
+                    ).to_jsonable()
             finally:
                 reports.close()
         results.put((operation, "ok", payload))
     except BaseException as exc:  # noqa: BLE001 - subprocess test boundary.
         results.put((operation, "error", repr(exc)))
+
+
+def test_unrelated_source_leases_do_not_block_each_other(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    held, release, acquired = threading.Event(), threading.Event(), threading.Event()
+
+    def hold():
+        with evaluation_reports._evaluation_report_lease(first):
+            held.set()
+            assert release.wait(3)
+
+    def acquire():
+        with evaluation_reports._evaluation_report_lease(second):
+            acquired.set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        one = executor.submit(hold)
+        try:
+            assert held.wait(3)
+            two = executor.submit(acquire)
+            assert acquired.wait(1)
+        finally:
+            release.set()
+        one.result(timeout=3)
+        two.result(timeout=3)
 
 
 class EvaluationReportsTests(unittest.TestCase):
@@ -691,6 +722,78 @@ class EvaluationReportsTests(unittest.TestCase):
                 )
             finally:
                 reports.close()
+
+    def test_delete_multistep_phase_removes_only_parent_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace, trial = self.harbor_fixture(Path(tmp), multi_step=True)
+            report_path = trial / "analysis.md"
+            report_path.write_text("# Parent report\n", encoding="utf-8")
+            child_report = trial / "steps/first/analysis.md"
+            child_report.write_text("# Retained phase evidence\n", encoding="utf-8")
+            before = {
+                path.relative_to(trial): path.read_bytes()
+                for path in trial.rglob("*")
+                if path.is_file() and path != report_path
+            }
+            reports = EvaluationReports(workspace)
+            try:
+                reports.delete("harbor/jobs/job-a/trial-a/steps/second")
+                self.assertFalse(report_path.exists())
+                self.assertIsNone(reports.read("harbor/jobs/job-a/trial-a/steps/first"))
+                for path, content in before.items():
+                    self.assertEqual((trial / path).read_bytes(), content)
+            finally:
+                reports.close()
+
+    def test_cross_process_publication_and_deletion_share_source_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace, source_ref, cell = self.local_fixture(root)
+            (cell / "analysis.md").write_text("# Original\n", encoding="utf-8")
+            evidence = {
+                path.relative_to(cell): path.read_bytes()
+                for path in cell.rglob("*")
+                if path.is_file() and path.name != "analysis.md"
+            }
+            draft = root / "draft.md"
+            draft.write_text("# Published\n", encoding="utf-8")
+            context = multiprocessing.get_context("spawn")
+            start = context.Event()
+            results = context.Queue()
+            processes = [
+                context.Process(
+                    target=_evaluation_report_process_worker,
+                    args=(
+                        operation,
+                        str(workspace),
+                        source_ref,
+                        str(draft),
+                        start,
+                        results,
+                    ),
+                )
+                for operation in ("publish", "delete")
+            ]
+            try:
+                for process in processes:
+                    process.start()
+                start.set()
+                outcomes = [results.get(timeout=30) for _ in processes]
+                for process in processes:
+                    process.join(timeout=30)
+                    self.assertEqual(process.exitcode, 0)
+                self.assertTrue(all(result[1] == "ok" for result in outcomes), outcomes)
+                report = cell / "analysis.md"
+                if report.exists():
+                    self.assertEqual(report.read_bytes(), draft.read_bytes())
+                for path, content in evidence.items():
+                    self.assertEqual((cell / path).read_bytes(), content)
+            finally:
+                for process in processes:
+                    if process.is_alive():
+                        process.terminate()
+                    process.join(timeout=5)
+                results.close()
 
     def test_unfinished_harbor_trial_is_not_publishable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -23,7 +23,8 @@ consumes the relocatable Harbor integration. See the [Jobs contract](reference/j
 `state.jobs` owns managed-run discovery and catalog identity projection. Jobs
 services return native results; the serve boundary adds workspace Trial links.
 `redaction` owns credential filtering shared by Jobs and retained-file reads.
-`file_access` supplies non-following file descriptors; each consumer owns its
+`file_access` supplies non-following file descriptors and per-file coordination
+leases; each consumer owns its
 containment policy and read limits.
 
 The package-level implementation reads retained sessions and Harbor Trial
@@ -37,7 +38,8 @@ catalog records. One EvaluationReports module resolves normalized Harbor and
 local source references, reads their canonical evaluation reports, and
 atomically upserts reviewed Markdown under a cross-process lock. It is the only
 Psycheval module allowed to create or replace canonical source `analysis.md`.
-It validates the source and document, but does not infer evaluation criteria
+It also owns canonical deletion, serialized with publication under the same source
+lock. It validates the source and document, but does not infer evaluation criteria
 from a live Task or any other Copilot context.
 `psycheval.harbor` is the adapter module for Harbor's Agent, Environment,
 trajectory, verifier, and external-Dataset seams. It owns host execution,
@@ -109,6 +111,9 @@ UI. `run_serve_command` owns listener selection, the single-process runtime, and
 shutdown through Uvicorn; the application borrows that runtime and does not own
 its lifecycle. The `/api` interface is not a public integration API and does not
 publish interactive API documentation or a generated client contract.
+Report HTTP routes own report lookup, management, and reader responses in
+`serve.reports`, borrowing the shared request readiness and workspace write
+guards. Report storage and publication remain with their domain owners.
 
 Workspace source resolution owns direct access to a selected retained Trial's
 effective result directory independently of live Tasks. Verification file access
@@ -164,12 +169,15 @@ HTML remains `no-store`, browser modules use strong ETags, and ECharts is loaded
 only from the versioned immutable workspace asset rather than from a browser-side
 third-party fallback.
 
-ReportLibrary owns unified report queries and reads through canonical and package
-adapters. WorkspaceReportLibrary owns imported packages and manual associations;
-EvaluationReports remains the only canonical report writer. Report target resolution
+ReportLibrary owns unified report queries, reads, and management dispatch through
+canonical and package adapters. WorkspaceReportLibrary owns imported packages and
+report management overlays, including manual associations and archival state;
+EvaluationReports remains the only canonical report writer and deleter. Report target resolution
 combines the Dataset registry, source catalog, and managed Jobs identities. The catalog
 owns the rebuildable canonical metadata projection. Storage, identity, query, and
 mutation semantics belong to the [report data contract](reference/state-and-data.md#evaluation-reports).
+Single-report metadata resolves only that report's source rows; complete target
+enumeration remains owned by library queries and association pickers.
 
 The serve-owned ACP seam launches only administrator-configured local child
 processes and carries bounded JSON-RPC frames through an authenticated,

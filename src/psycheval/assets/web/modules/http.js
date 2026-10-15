@@ -53,6 +53,7 @@ async function serveApi(path, options = {}) {
     }
   }
   if (!response.ok) {
+    if (payload?.committed === true) publishInvalidations(response, path, method, options.body);
     const error = /** @type {Error & {status: number, problem?: unknown}} */ (
       new Error(payload?.detail || payload?.title || response.statusText)
     );
@@ -60,14 +61,19 @@ async function serveApi(path, options = {}) {
     error.problem = payload;
     throw error;
   }
-  for (const change of requestInvalidations(path, method, options.body)) {
-    invalidateWorkspace(change);
-  }
+  publishInvalidations(response, path, method, options.body);
   return payload;
 }
 
 function serveEtag(key) {
   return responseEtags.get(key) || null;
+}
+
+function publishInvalidations(response, path, method, body) {
+  const declared = response.headers?.get?.("X-Peval-Invalidations");
+  const changes = declared === null || declared === undefined
+    ? requestInvalidations(path, method, body) : declared.split(",").map(value => value.trim()).filter(Boolean);
+  for (const change of changes) invalidateWorkspace(change);
 }
 
 function requestInvalidations(path, method, body) {

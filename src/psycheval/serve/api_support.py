@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote
+
+from fastapi import Request
 
 from psycheval.config import (
     HarborMount,
@@ -15,6 +19,7 @@ from psycheval.config import (
     validate_harbor_mount_paths,
     write_workspace_harbor_mounts,
 )
+from psycheval.serve.api_http import ProblemException
 from psycheval.serve.errors import HttpError
 from psycheval.serve.harbor_workspace import (
     HarborConflictError,
@@ -34,33 +39,19 @@ from psycheval.state import (
 )
 from psycheval.state.workspace_sources import WorkspaceSources, is_harbor_source
 
-REPORT_PREVIEW_CSP = "; ".join(
-    [
-        "default-src 'none'",
-        "sandbox allow-scripts",
-        "script-src 'unsafe-inline' http: https: data: blob:",
-        "style-src 'unsafe-inline' http: https: data: blob:",
-        "img-src http: https: data: blob:",
-        "media-src http: https: data: blob:",
-        "font-src http: https: data: blob:",
-        "connect-src http: https: data: blob:",
-        "frame-src http: https: data: blob:",
-        "object-src 'none'",
-        "base-uri 'none'",
-        "form-action 'none'",
-    ]
-)
 
-REPORT_READER_CSP = "; ".join(
-    [
-        "default-src 'none'",
-        "frame-src 'self'",
-        "style-src 'unsafe-inline'",
-        "base-uri 'none'",
-        "form-action 'none'",
-        "frame-ancestors 'none'",
-    ]
-)
+def writable_runtime(request: Request) -> ServeRuntime:
+    runtime: ServeRuntime = request.app.state.runtime
+    runtime.ensure_ready()
+    if runtime.is_loading():
+        raise ProblemException(409, "serve catalog is checking runs")
+    return runtime
+
+
+@contextmanager
+def workspace_write(runtime: ServeRuntime) -> Iterator[None]:
+    with runtime.catalog.workspace_write_guard():
+        yield
 
 
 def harbor_error_status(exc: HarborWorkspaceError) -> int:

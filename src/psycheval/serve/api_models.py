@@ -169,6 +169,10 @@ class ReportBindingsRequest(StrictRequest):
     bindings: list[ReportBinding]
 
 
+class ReportStateRequest(StrictRequest):
+    archived: bool
+
+
 class ReportImportRequest(StrictRequest):
     path: BrowserPath
     bindings: list[ReportBinding] = Field(default_factory=list)

@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import errno
 import os
 import stat
 import tempfile
-import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from psycheval.config import load_config
 from psycheval.evaluation_report_identity import evaluation_report_ref
+from psycheval.file_access import blocking_file_lease
 from psycheval.state import ServeStateStore, workspace_paths
 from psycheval.state.catalog import WorkspaceCatalog
 from psycheval.state.workspace_harbor import (
@@ -26,10 +25,14 @@ from psycheval.state.workspace_source_models import (
     SourceDocument,
 )
 from psycheval.state.workspace_sources import WorkspaceSources
+from psycheval.workspace_reports import (
+    ReportDeletionCommittedError,
+    WorkspaceReportLibrary,
+    WorkspaceReportNotFound,
+)
 
 EVALUATION_REPORT_MAX_BYTES = HARBOR_ANALYSIS_MAX_BYTES
 EVALUATION_REPORT_LOCK_FILE = ".peval-analysis.lock"
-_EVALUATION_REPORT_THREAD_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -139,12 +142,30 @@ class EvaluationReports:
         source_ref: str,
         *,
         include_documents: bool,
+        require_readable: bool = True,
     ) -> EvaluationReportTarget:
         requested = str(source_ref or "").strip()
         if requested.startswith("harbor/"):
             return self._resolve_harbor(
                 requested,
                 include_documents=include_documents,
+            )
+        if not require_readable:
+            report_dir = self.sources.annotation_dir(requested)
+            if (
+                Path(requested).parts[1] != self.config.analysis_eval_slug
+                or not report_dir.is_dir()
+            ):
+                raise ValueError(f"unknown source reference: {requested}")
+            return EvaluationReportTarget(
+                requested,
+                requested,
+                (requested,),
+                (),
+                report_dir,
+                report_dir / HARBOR_ANALYSIS_MD_FILE,
+                False,
+                (),
             )
         document = self.sources.load_ref(
             requested,
@@ -180,7 +201,9 @@ class EvaluationReports:
         return documents
 
     def read(self, source_ref: str) -> EvaluationReportDocument | None:
-        target = self._resolve(source_ref, include_documents=False)
+        target = self._resolve(
+            source_ref, include_documents=False, require_readable=False
+        )
         try:
             content = _read_optional_report(target.report_dir, target.report_path)
         except (OSError, ValueError):
@@ -225,7 +248,7 @@ class EvaluationReports:
                 replaced=replaced_existing,
             )
             try:
-                _atomic_replace_text(target.report_dir, target.report_path, draft)
+                write_report(draft)
             except _AtomicReplaceCommittedError as exc:
                 committed = receipt
                 raise EvaluationReportDurabilityError(receipt, exc) from exc
@@ -237,7 +260,9 @@ class EvaluationReports:
             # concurrent publications queue instead of racing the catalog's
             # deliberately non-blocking workspace lock, and gives Markdown
             # imports the same lock order.
-            with _evaluation_report_lease(initial.report_dir):
+            with evaluation_report_writer(
+                self.root, initial.source_ref, initial.report_dir
+            ) as write_report:
                 catalog = WorkspaceCatalog(self.store, self.config)
                 generation, receipt = catalog.mutate(action)
         except EvaluationReportCommittedError:
@@ -250,6 +275,77 @@ class EvaluationReports:
             if catalog is not None:
                 catalog.close()
         return replace(receipt, catalog_generation=generation)
+
+    def delete(
+        self, source_ref: str, *, catalog: WorkspaceCatalog | None = None
+    ) -> int:
+        initial = self._resolve(
+            source_ref, include_documents=False, require_readable=False
+        )
+        report_ref = evaluation_report_ref(initial.source_ref)
+        owns_catalog = catalog is None
+        deleted = metadata_cleared = catalog_reconciled = False
+
+        def action(active_catalog: WorkspaceCatalog) -> None:
+            nonlocal deleted
+            target = self._resolve(
+                source_ref, include_documents=False, require_readable=False
+            )
+            if target.report_dir != initial.report_dir:
+                raise ValueError("evaluation report target changed during deletion")
+            _assert_safe_descendant(
+                target.report_dir, target.report_path, label="Evaluation report"
+            )
+            try:
+                status = target.report_path.stat(follow_symlinks=False)
+            except FileNotFoundError as exc:
+                raise WorkspaceReportNotFound(f"unknown report: {report_ref}") from exc
+            if not stat.S_ISREG(status.st_mode):
+                raise ValueError("evaluation report must be a regular file")
+            target.report_path.unlink()
+            deleted = True
+            active_catalog.discard_evaluation_report(report_ref)
+            _fsync_replaced_file_directory(target.report_dir)
+
+        try:
+            with _evaluation_report_lease(initial.report_dir):
+                # Discard the committed row before cleanup so a later failure
+                # cannot resurrect the removed report in the current projection.
+                if catalog is None:
+                    catalog = WorkspaceCatalog(self.store, self.config)
+                primary = None
+                try:
+                    generation, _ = catalog.mutate(lambda: action(catalog))
+                    catalog_reconciled = True
+                except Exception as exc:
+                    primary = exc
+                    raise
+                finally:
+                    if deleted:
+                        try:
+                            WorkspaceReportLibrary(
+                                self.root, lambda: []
+                            ).clear_management_state(report_ref)
+                            metadata_cleared = True
+                        except Exception as exc:
+                            if primary is None:
+                                raise
+                            primary.add_note(
+                                f"Report management cleanup also failed: {exc}"
+                            )
+        except Exception as exc:
+            if deleted:
+                raise ReportDeletionCommittedError(
+                    report_ref,
+                    exc,
+                    metadata_cleared=metadata_cleared,
+                    catalog_reconciled=catalog_reconciled,
+                ) from exc
+            raise
+        finally:
+            if owns_catalog and catalog is not None:
+                catalog.close()
+        return generation
 
     def _resolve_harbor(
         self,
@@ -363,77 +459,32 @@ def _read_text_file(
 
 
 @contextmanager
-def _evaluation_report_lease(report_dir: Path) -> Iterator[None]:
+def _evaluation_report_lease(
+    report_dir: Path, *, blocking: bool = True
+) -> Iterator[None]:
     lock_path = report_dir / EVALUATION_REPORT_LOCK_FILE
     _assert_safe_descendant(report_dir, lock_path, label="Evaluation report lock")
-    with _EVALUATION_REPORT_THREAD_LOCK:
-        if lock_path.is_symlink():
-            raise ValueError(
-                f"Evaluation report lock must not be a symlink: {lock_path}"
+    with blocking_file_lease(
+        lock_path, label="Evaluation report lock", blocking=blocking
+    ):
+        yield
+
+
+@contextmanager
+def evaluation_report_writer(
+    workspace_root: Path, source_ref: str, report_dir: Path, *, blocking: bool = True
+) -> Iterator[Callable[[str], None]]:
+    """Serialize canonical writes and clear deleted-body overlays before publication.
+
+    Callers already holding a catalog writer must use immediate lease acquisition.
+    """
+    path = report_dir / HARBOR_ANALYSIS_MD_FILE
+    with _evaluation_report_lease(report_dir, blocking=blocking):
+        if not path.exists() and not path.is_symlink():
+            WorkspaceReportLibrary(workspace_root, lambda: []).clear_management_state(
+                evaluation_report_ref(source_ref), blocking=blocking
             )
-        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        try:
-            descriptor = os.open(lock_path, flags, 0o600)
-        except OSError as exc:
-            raise ValueError(
-                f"Evaluation report lock must be a regular file: {lock_path}"
-            ) from exc
-        handle = os.fdopen(descriptor, "r+b")
-        lock_kind: str | None = None
-        try:
-            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-                raise ValueError(
-                    f"Evaluation report lock must be a regular file: {lock_path}"
-                )
-            try:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-                lock_kind = "fcntl"
-            except ImportError:
-                import msvcrt
-
-                if os.fstat(handle.fileno()).st_size == 0:
-                    handle.write(b"0")
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                _acquire_windows_file_lock(handle, msvcrt)
-                lock_kind = "msvcrt"
-            yield
-        finally:
-            try:
-                if lock_kind == "msvcrt":
-                    import msvcrt
-
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                elif lock_kind == "fcntl":
-                    import fcntl
-
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except (ImportError, OSError, ValueError):
-                pass
-            finally:
-                handle.close()
-
-
-def _acquire_windows_file_lock(handle: Any, msvcrt: Any) -> None:
-    """Match POSIX blocking-lock semantics beyond msvcrt's ten-second retry."""
-    retryable_errors = {errno.EACCES, errno.EAGAIN, errno.EDEADLK}
-    retryable_windows_errors = {32, 33, 36}
-    while True:
-        handle.seek(0)
-        try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-            return
-        except OSError as exc:
-            if (
-                exc.errno not in retryable_errors
-                and getattr(exc, "winerror", None) not in retryable_windows_errors
-            ):
-                raise
+        yield lambda content: _atomic_replace_text(report_dir, path, content)
 
 
 def _atomic_replace_text(root: Path, path: Path, content: str) -> None:

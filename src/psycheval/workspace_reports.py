@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import os
 import re
 import shutil
+import stat
 from collections.abc import Callable
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from threading import Lock
@@ -16,7 +19,10 @@ from uuid import uuid4
 
 from markdown_it import MarkdownIt
 
+from psycheval.file_access import blocking_file_lease, open_read_descriptor
+
 REPORT_MAX_BYTES = 20 * 1024 * 1024
+REPORT_STATE_MAX_BYTES = 20 * 1024 * 1024
 REPORT_STATE_FILENAME = "state.json"
 PACKAGE_REPORT_REF_PREFIX = "package:"
 REPORT_ID_RE = re.compile(
@@ -64,10 +70,42 @@ class WorkspaceReportMetadata:
     dataset_ids: tuple[str, ...]
     job_refs: tuple[str, ...]
     updated_at_ms: int
+    archived: bool = False
+    associations_available: bool = True
+
+
+@dataclass(frozen=True)
+class ReportManagementState:
+    source_refs: tuple[str, ...] = ()
+    dataset_ids: tuple[str, ...] = ()
+    job_refs: tuple[str, ...] = ()
+    archived: bool = False
+
+    def bindings(self) -> dict[str, list[str]]:
+        return {
+            "source_refs": list(self.source_refs),
+            "dataset_ids": list(self.dataset_ids),
+            "job_refs": list(self.job_refs),
+        }
 
 
 class WorkspaceReportNotFound(ValueError):
     pass
+
+
+class ReportDeletionCommittedError(RuntimeError):
+    def __init__(
+        self,
+        report_ref: str,
+        error: Exception,
+        *,
+        metadata_cleared: bool,
+        catalog_reconciled: bool,
+    ) -> None:
+        self.report_ref = report_ref
+        self.metadata_cleared = metadata_cleared
+        self.catalog_reconciled = catalog_reconciled
+        super().__init__(f"Report was removed but finalization failed: {error}")
 
 
 class WorkspaceReportLibrary:
@@ -125,6 +163,8 @@ class WorkspaceReportLibrary:
     def catalog(
         self,
         source_rows: list[dict[str, Any]] | None = None,
+        *,
+        include_archived: bool = True,
     ) -> list[dict[str, Any]]:
         if not self._reports_root_is_safe():
             return []
@@ -143,9 +183,12 @@ class WorkspaceReportLibrary:
                 ],
             }
             for report in reports
+            if include_archived or not report.archived
         ]
 
-    def metadata(self) -> list[WorkspaceReportMetadata]:
+    def metadata(self, report_id: str | None = None) -> list[WorkspaceReportMetadata]:
+        if report_id is not None:
+            return [self._package_metadata_or_damaged(report_id)]
         if not self._reports_root_is_safe():
             return []
         reports: list[WorkspaceReportMetadata] = []
@@ -157,7 +200,7 @@ class WorkspaceReportLibrary:
             ):
                 continue
             try:
-                reports.append(self._read_package_metadata(child.name))
+                reports.append(self._package_metadata_or_damaged(child.name))
             except (OSError, UnicodeError, ValueError):
                 continue
         reports.sort(
@@ -168,21 +211,9 @@ class WorkspaceReportLibrary:
     def bound_source_refs(self) -> set[str]:
         with self._bound_source_refs_lock:
             if self._bound_source_refs_cache is None:
-                source_refs: set[str] = set()
-                if self._reports_root_is_safe():
-                    for child in self.reports_root.iterdir():
-                        if (
-                            child.is_symlink()
-                            or not child.is_dir()
-                            or not self._is_valid_report_id(child.name)
-                        ):
-                            continue
-                        try:
-                            source_refs.update(
-                                self._read_package_metadata(child.name).source_refs
-                            )
-                        except (OSError, UnicodeError, ValueError):
-                            continue
+                source_refs = {
+                    ref for report in self.metadata() for ref in report.source_refs
+                }
                 self._bound_source_refs_cache = frozenset(source_refs)
             return set(self._bound_source_refs_cache)
 
@@ -198,58 +229,114 @@ class WorkspaceReportLibrary:
             content=content,
         )
 
-    def associations(self, report_ref: str) -> tuple[dict[str, list[str]], int]:
+    def management_state(self, report_ref: str) -> tuple[ReportManagementState, int]:
         if report_ref.startswith(PACKAGE_REPORT_REF_PREFIX):
             report = self._read_package_metadata(
                 report_ref[len(PACKAGE_REPORT_REF_PREFIX) :]
             )
-            return {
-                "source_refs": list(report.source_refs),
-                "dataset_ids": list(report.dataset_ids),
-                "job_refs": list(report.job_refs),
-            }, report.updated_at_ms
+            if not report.associations_available:
+                raise ValueError(
+                    "report management state is unavailable; repair it before editing"
+                )
+            return ReportManagementState(
+                report.source_refs, report.dataset_ids, report.job_refs, report.archived
+            ), report.updated_at_ms
         path = self._association_path(report_ref)
-        if not path.exists():
-            return {"source_refs": [], "dataset_ids": [], "job_refs": []}, 0
-        if path.is_symlink() or not path.is_file():
+        if path.is_symlink() or (path.exists() and not path.is_file()):
             raise ValueError("invalid report associations file")
-        state = self._read_state(path)
-        if state["source_refs"]:
+        if not path.exists():
+            return ReportManagementState(), 0
+        state, updated_at_ns = self._read_state(path)
+        if state.source_refs:
             raise ValueError(
                 "canonical report associations cannot contain session bindings"
             )
-        return state, path.stat().st_mtime_ns // 1_000_000
+        return state, updated_at_ns // 1_000_000
 
     def replace_bindings(
         self,
         report_ref: str,
-        *,
-        source_refs: list[str],
-        dataset_ids: list[str],
-        job_refs: list[str],
+        resolve_bindings: Callable[[ReportManagementState], dict[str, list[str]]],
     ) -> None:
-        source_refs = [self._validate_source_ref(ref) for ref in source_refs]
-        if report_ref.startswith(PACKAGE_REPORT_REF_PREFIX):
-            report = self._read_package_metadata(
-                report_ref[len(PACKAGE_REPORT_REF_PREFIX) :]
+        with self._management_state_lease(report_ref):
+            current, _ = self.management_state(report_ref)
+            bindings = resolve_bindings(current)
+            source_refs = [
+                self._validate_source_ref(ref) for ref in bindings["source_refs"]
+            ]
+            self._replace_management_state(
+                report_ref,
+                replace(
+                    current,
+                    source_refs=tuple(source_refs),
+                    dataset_ids=tuple(bindings["dataset_ids"]),
+                    job_refs=tuple(bindings["job_refs"]),
+                ),
             )
-            path = self._package_dir(report.report_id) / REPORT_STATE_FILENAME
+
+    def set_archived(
+        self,
+        report_ref: str,
+        archived: bool,
+        *,
+        validate_exists: Callable[[], None] | None = None,
+    ) -> None:
+        if type(archived) is not bool:
+            raise ValueError("archived must be a boolean")
+        with self._management_state_lease(report_ref):
+            if validate_exists is not None:
+                validate_exists()
+            current, _ = self.management_state(report_ref)
+            if current.archived == archived:
+                return
+            self._replace_management_state(
+                report_ref, replace(current, archived=archived)
+            )
+
+    def _replace_management_state(
+        self,
+        report_ref: str,
+        state: ReportManagementState,
+    ) -> None:
+        if report_ref.startswith(PACKAGE_REPORT_REF_PREFIX):
+            path = (
+                self._package_dir(report_ref[len(PACKAGE_REPORT_REF_PREFIX) :])
+                / REPORT_STATE_FILENAME
+            )
         else:
-            if source_refs:
+            if state.source_refs:
                 raise ValueError(
                     "evaluation report source associations cannot be edited"
                 )
             self._ensure_reports_root()
             path = self._association_path(report_ref)
             path.parent.mkdir(exist_ok=True)
-        temp_path = path.parent / f".{path.name}.tmp-{uuid4().hex}"
+        temp_path = self.reports_root / f".state-tmp-{uuid4().hex}"
         try:
-            self._write_state(temp_path, source_refs, dataset_ids, job_refs)
+            self._write_state(temp_path, **state.bindings(), archived=state.archived)
             temp_path.replace(path)
         finally:
             if temp_path.exists() and not temp_path.is_symlink():
                 temp_path.unlink()
-        self._invalidate_bound_source_refs()
+        if report_ref.startswith(PACKAGE_REPORT_REF_PREFIX):
+            self._invalidate_bound_source_refs()
+
+    @contextmanager
+    def _management_state_lease(self, report_ref: str, *, blocking: bool = True):
+        if report_ref.startswith(PACKAGE_REPORT_REF_PREFIX):
+            self._package_dir(report_ref[len(PACKAGE_REPORT_REF_PREFIX) :])
+        else:
+            self._association_path(report_ref)
+        self._ensure_reports_root()
+        root = self.reports_root / ".management-locks"
+        if root.is_symlink():
+            raise ValueError("report management lock directory must not be a symlink")
+        root.mkdir(exist_ok=True)
+        path = root / (hashlib.sha256(report_ref.encode("utf-8")).hexdigest() + ".lock")
+        with blocking_file_lease(
+            path, label="Report management lock", blocking=blocking
+        ):
+            yield
 
     def _association_path(self, report_ref: str) -> Path:
         if not re.fullmatch(r"analysis:[0-9a-f]{64}", report_ref):
@@ -260,27 +347,71 @@ class WorkspaceReportLibrary:
         return root / (hashlib.sha256(report_ref.encode("utf-8")).hexdigest() + ".json")
 
     def delete(self, report_id: str) -> None:
-        report = self._read_package_metadata(report_id)
-        package_dir = self._package_dir(report.report_id)
-        tombstone = self.reports_root / f".delete-{report.report_id}-{uuid4().hex}"
+        with self._management_state_lease(workspace_report_ref(report_id)):
+            self._delete_package(report_id)
+
+    def _delete_package(self, report_id: str) -> None:
+        package_dir = self._package_dir(report_id)
+        if package_dir.is_symlink() or not package_dir.is_dir():
+            raise WorkspaceReportNotFound(f"unknown report: {report_id}")
+        tombstone = self.reports_root / f".delete-{report_id}-{uuid4().hex}"
         package_dir.replace(tombstone)
-        shutil.rmtree(tombstone)
         self._invalidate_bound_source_refs()
+        try:
+            shutil.rmtree(tombstone)
+        except Exception as exc:
+            # Metadata was detached with the package; imported reports have no
+            # catalog projection to reconcile. Only tombstone cleanup remains.
+            raise ReportDeletionCommittedError(
+                workspace_report_ref(report_id),
+                exc,
+                metadata_cleared=True,
+                catalog_reconciled=True,
+            ) from exc
+
+    def clear_management_state(self, report_ref: str, *, blocking: bool = True) -> None:
+        with self._management_state_lease(report_ref, blocking=blocking):
+            path = self._association_path(report_ref)
+            if path.exists() and not path.is_symlink() and not path.is_file():
+                raise ValueError("invalid report associations file")
+            path.unlink(missing_ok=True)
 
     def _invalidate_bound_source_refs(self) -> None:
         with self._bound_source_refs_lock:
             self._bound_source_refs_cache = None
+
+    def _package_metadata_or_damaged(self, report_id: str) -> WorkspaceReportMetadata:
+        try:
+            return self._read_package_metadata(report_id)
+        except (OSError, UnicodeError, ValueError):
+            package = self._package_dir(report_id)
+            try:
+                info = package.stat(follow_symlinks=False)
+            except FileNotFoundError as exc:
+                raise WorkspaceReportNotFound(f"unknown report: {report_id}") from exc
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or getattr(info, "st_file_attributes", 0) & 0x400
+            ):
+                raise WorkspaceReportNotFound(f"unknown report: {report_id}")
+            return WorkspaceReportMetadata(
+                report_id,
+                report_id,
+                "unavailable",
+                (),
+                package,
+                (),
+                (),
+                info.st_mtime_ns // 1_000_000,
+                associations_available=False,
+            )
 
     def _read_package_metadata(self, report_id: str) -> WorkspaceReportMetadata:
         package_dir = self._package_dir(report_id)
         if package_dir.is_symlink() or not package_dir.is_dir():
             raise WorkspaceReportNotFound(f"unknown report: {report_id}")
         entries = list(package_dir.iterdir())
-        if len(entries) != 2:
-            raise ValueError(f"invalid report package: {report_id}")
         state_path = package_dir / REPORT_STATE_FILENAME
-        if state_path.is_symlink() or not state_path.is_file():
-            raise ValueError(f"invalid report package: {report_id}")
         report_files = [
             path
             for path in entries
@@ -290,42 +421,57 @@ class WorkspaceReportLibrary:
         if len(report_files) != 1:
             raise ValueError(f"invalid report package: {report_id}")
         report_path = report_files[0]
+        if any(path not in {state_path, report_path} for path in entries):
+            raise ValueError(f"invalid report package: {report_id}")
         if report_path.is_symlink() or not report_path.is_file():
             raise ValueError(f"invalid report package: {report_id}")
         if report_path.resolve().parent != package_dir.resolve():
             raise ValueError(f"invalid report package: {report_id}")
 
-        state = self._read_state(state_path)
-        if report_path.stat().st_size > REPORT_MAX_BYTES:
-            raise ValueError(
-                f"report exceeds {REPORT_MAX_BYTES} byte limit: {report_path}"
-            )
+        report_info = report_path.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(report_info.st_mode)
+            or getattr(report_info, "st_file_attributes", 0) & 0x400
+        ):
+            raise ValueError(f"invalid report package: {report_id}")
+        available = True
+        updated_at_ns = 0
+        try:
+            if state_path.is_symlink() or not state_path.is_file():
+                raise ValueError("invalid report state file")
+            state, updated_at_ns = self._read_state(state_path)
+        except (OSError, UnicodeError, ValueError):
+            state, available = ReportManagementState(), False
+            try:
+                updated_at_ns = state_path.lstat().st_mtime_ns
+            except FileNotFoundError:
+                pass
         return WorkspaceReportMetadata(
             report_id=report_id,
             filename=report_path.name,
             format=self._format_for_filename(report_path.name),
-            source_refs=tuple(state["source_refs"]),
+            source_refs=state.source_refs,
             report_path=report_path,
-            dataset_ids=tuple(state["dataset_ids"]),
-            job_refs=tuple(state["job_refs"]),
-            updated_at_ms=max(
-                state_path.stat().st_mtime_ns, report_path.stat().st_mtime_ns
-            )
-            // 1_000_000,
+            dataset_ids=state.dataset_ids,
+            job_refs=state.job_refs,
+            updated_at_ms=max(updated_at_ns, report_info.st_mtime_ns) // 1_000_000,
+            archived=state.archived,
+            associations_available=available,
         )
 
-    def _read_state(self, state_path: Path) -> dict[str, list[str]]:
+    def _read_state(self, state_path: Path) -> tuple[ReportManagementState, int]:
+        content, opened = self._read_file(state_path, REPORT_STATE_MAX_BYTES)
         try:
-            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            payload = json.loads(content.decode("utf-8"))
         except json.JSONDecodeError as exc:
             raise ValueError(f"failed to parse {state_path}: {exc}") from exc
-        return self._validate_state(payload, str(state_path))
+        return self._validate_state(payload, str(state_path)), opened.st_mtime_ns
 
-    def _validate_state(self, payload: Any, label: str) -> dict[str, list[str]]:
+    def _validate_state(self, payload: Any, label: str) -> ReportManagementState:
         if (
             not isinstance(payload, dict)
             or "source_refs" not in payload
-            or set(payload) - {"source_refs", "dataset_ids", "job_refs"}
+            or set(payload) - {"source_refs", "dataset_ids", "job_refs", "archived"}
         ):
             raise ValueError(
                 f"{label} must contain source_refs and optional dataset_ids / job_refs"
@@ -354,7 +500,15 @@ class WorkspaceReportLibrary:
                     f"{label} {field} must contain unique nonempty strings"
                 )
             result[field] = values
-        return result
+        archived = payload.get("archived", False)
+        if type(archived) is not bool:
+            raise ValueError(f"{label} archived must be a boolean")
+        return ReportManagementState(
+            tuple(source_refs),
+            tuple(result["dataset_ids"]),
+            tuple(result["job_refs"]),
+            archived,
+        )
 
     def _source_refs_for_source_keys(
         self,
@@ -531,12 +685,34 @@ class WorkspaceReportLibrary:
 
     @classmethod
     def _read_content(cls, path: Path) -> bytes:
-        if path.stat().st_size > REPORT_MAX_BYTES:
-            raise ValueError(f"report exceeds {REPORT_MAX_BYTES} byte limit: {path}")
-        with path.open("rb") as source:
-            content = source.read(REPORT_MAX_BYTES + 1)
+        content, _ = cls._read_file(path, REPORT_MAX_BYTES)
         cls._validate_content(content, path)
         return content
+
+    @staticmethod
+    def _read_file(path: Path, limit: int) -> tuple[bytes, os.stat_result]:
+        before = path.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or getattr(before, "st_file_attributes", 0) & 0x400
+        ):
+            raise ValueError(f"report path must be a regular file: {path}")
+        if before.st_size > limit:
+            raise ValueError(f"report exceeds {limit} byte limit: {path}")
+        with os.fdopen(open_read_descriptor(path), "rb") as source:
+            opened = os.fstat(source.fileno())
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or getattr(opened, "st_file_attributes", 0) & 0x400
+                or not os.path.samestat(before, opened)
+            ):
+                raise ValueError(f"report changed while opening: {path}")
+            if opened.st_size > limit:
+                raise ValueError(f"report exceeds {limit} byte limit: {path}")
+            content = source.read(limit + 1)
+        if len(content) > limit:
+            raise ValueError(f"report exceeds {limit} byte limit: {path}")
+        return content, opened
 
     def _write_state(
         self,
@@ -544,22 +720,32 @@ class WorkspaceReportLibrary:
         source_refs: list[str],
         dataset_ids: list[str] | None = None,
         job_refs: list[str] | None = None,
+        *,
+        archived: bool = False,
     ) -> None:
-        payload = {"source_refs": source_refs}
+        payload: dict[str, Any] = {"source_refs": source_refs}
         if dataset_ids is not None:
             payload["dataset_ids"] = dataset_ids
         if job_refs is not None:
             payload["job_refs"] = job_refs
+        if archived:
+            payload["archived"] = True
         state = self._validate_state(payload, "report associations")
         payload = {
             key: values
-            for key, values in state.items()
+            for key, values in state.bindings().items()
             if key == "source_refs" or values
         }
-        path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        if state.archived:
+            payload["archived"] = True
+        content = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode(
+            "utf-8"
         )
+        if len(content) > REPORT_STATE_MAX_BYTES:
+            raise ValueError(
+                f"report state exceeds {REPORT_STATE_MAX_BYTES} byte limit: {path}"
+            )
+        path.write_bytes(content)
 
 
 def workspace_report_ref(report_id: str) -> str:

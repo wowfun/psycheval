@@ -15,6 +15,9 @@ test("successful mutations map to stable Workspace invalidation domains", () => 
   const domains = (path, method, body) => [...requestInvalidations(path, method, body)];
   assert.deepEqual(domains("/api/sources/source-1", "PATCH", {}), ["catalog"]);
   assert.deepEqual(domains("/api/report-library/package:report-1/bindings", "PUT", {}), ["reports"]);
+  assert.deepEqual(domains("/api/report-library/analysis%3Areport-1/state", "PUT", { archived: true }), ["reports"]);
+  assert.deepEqual(domains("/api/report-library/package%3Areport-1", "DELETE", undefined), ["reports"]);
+  assert.deepEqual(domains("/api/report-library/analysis%3Areport-1", "DELETE", undefined), ["reports"]);
   assert.deepEqual(domains("/api/harbor/datasets", "POST", {}), ["dataset-registry"]);
   assert.deepEqual(
     domains("/api/harbor/datasets/demo/tasks/task/files/instructions.md", "PUT", {}),
@@ -27,6 +30,21 @@ test("successful mutations map to stable Workspace invalidation domains", () => 
   assert.deepEqual(domains("/api/prompts/task-audit", "PUT", {}), ["prompt-assets"]);
   assert.deepEqual(domains("/api/reports", "GET", undefined), []);
   assert.deepEqual(domains("/api/source-key-resolutions", "POST", { items: [] }), []);
+});
+
+test("server declarations invalidate canonical detail on successful and committed failed deletions", async () => {
+  const { subscribeWorkspaceInvalidation } = await import("../../src/psycheval/assets/web/app/workspace-runtime.js");
+  const changes = [];
+  const unsubscribe = subscribeWorkspaceInvalidation(domains => changes.push([...domains]));
+  const previous = globalThis.fetch;
+  try {
+    for (const status of [204, 500]) {
+      globalThis.fetch = async () => new Response(status === 500 ? '{"committed":true,"detail":"cleanup failed"}' : null, { status, headers: { "X-Peval-Invalidations": "reports,catalog" } });
+      const request = serveApi("/api/report-library/opaque-identity", { method: "DELETE" });
+      if (status === 500) await assert.rejects(request, /cleanup failed/); else await request;
+    }
+    assert.deepEqual(changes, [["reports"], ["catalog"], ["reports"], ["catalog"]]);
+  } finally { unsubscribe(); globalThis.fetch = previous; }
 });
 
 test("failed responses cannot replace a successful cached ETag", async () => {

@@ -9,6 +9,24 @@ const manager = await import("../../src/psycheval/assets/web/modules/report-mana
 const { reportLibraryStore: store, acceptReport, editBinding, draftChanged } = await import("../../src/psycheval/assets/web/modules/report-library-store.js");
 test.after(() => browser.cleanup());
 
+test("failed deletion releases a list read's busy state and keeps its draft", async () => {
+  const selected = report("failed-delete"), deletion = deferred(), list = deferred();
+  acceptReport(selected);
+  manager.openReportPreview(selected.report_ref);
+  editBinding(selected.report_ref, target("dataset", "draft"), true);
+  handler = (path, options = {}) => options.method === "DELETE" ? deletion.promise : list.promise;
+  const deleting = manager.deleteReport();
+  const reading = manager.loadReportManagerPage();
+  deletion.resolve(response({ detail: "fixture deletion failed" }, 503));
+  await deleting;
+  list.resolve(response(pageOf([selected])));
+  await reading;
+  assert.equal(store.loading, false);
+  assert.equal(document.querySelector("[data-report-inventory]").getAttribute("aria-busy"), "false");
+  assert.equal(store.activeRef, selected.report_ref);
+  assert.ok(draftChanged(store.drafts.get(selected.report_ref)));
+});
+
 test("older page responses cannot replace the newest page", async () => {
   const pages = new Map([[1, deferred()], [2, deferred()]]);
   handler = path => pages.get(Number(new URL(path, "http://localhost").searchParams.get("page"))).promise;

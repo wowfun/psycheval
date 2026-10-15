@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from psycheval.config import HarborDataset
+from psycheval.serve.assets import ECHARTS_VERSION
 from psycheval.serve.path_picker import PathPickerUnavailable
 from tests.peval.serve_state_support import (
     ECHARTS_ASSET_PATH,
@@ -142,7 +143,11 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 cache_path = echarts_cache_path(store)
                 self.assertEqual(
                     cache_path,
-                    root.resolve() / ".cache" / "echarts" / "6.0.0" / "echarts.min.js",
+                    root.resolve()
+                    / ".cache"
+                    / "echarts"
+                    / ECHARTS_VERSION
+                    / "echarts.min.js",
                 )
                 cache_path.parent.mkdir(parents=True)
                 cache_path.write_bytes(b"console.log('cached');")
@@ -193,6 +198,10 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
                 self.assertEqual(headers["x-content-type-options"], "nosniff")
                 self.assertEqual(headers["referrer-policy"], "no-referrer")
                 self.assertEqual(body, b"window.echarts={};")
+
+                status, _, loader = request_bytes(port, "/assets/peval/app/echarts.js")
+                self.assertEqual(status, 200)
+                self.assertIn(ECHARTS_ASSET_PATH.encode(), loader)
 
                 cache_path.unlink()
                 with patch(

@@ -21,6 +21,9 @@ class Problem(BaseModel):
     detail: str
     instance: str | None = None
     errors: list[dict[str, str]] | None = None
+    committed: bool | None = None
+    metadata_cleared: bool | None = None
+    catalog_reconciled: bool | None = None
 
 
 class ProblemException(Exception):

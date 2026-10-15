@@ -44,9 +44,82 @@ def library_at(tmp_path):
 
 
 def save(runtime, ref, bindings):
-    state = runtime.report_library.validate_bindings(bindings, report_ref=ref)
-    runtime.workspace_reports.replace_bindings(ref, **state)
+    runtime.report_library.replace_bindings(ref, bindings)
     return runtime.report_library.metadata(ref)
+
+
+def test_binding_validation_uses_state_after_management_lease_acquisition(tmp_path):
+    from contextlib import contextmanager
+
+    with library_at(tmp_path) as runtime:
+        ref = runtime.report_library.query()["items"][0]["report_ref"]
+        save(runtime, ref, [{"kind": "dataset", "key": "empty"}])
+        runtime.set_config(runtime.config.validated_update(harbor_datasets=()))
+        lease = runtime.workspace_reports._management_state_lease
+
+        @contextmanager
+        def removed_before_acquisition(report_ref):
+            # Another writer removes the now-unavailable association while this
+            # caller is waiting. It is no longer eligible for retention.
+            runtime.workspace_reports._write_state(
+                runtime.workspace_reports._association_path(ref), []
+            )
+            with lease(report_ref):
+                yield
+
+        with patch.object(
+            runtime.workspace_reports,
+            "_management_state_lease",
+            removed_before_acquisition,
+        ):
+            with pytest.raises(ValueError, match="unknown or unavailable dataset"):
+                save(runtime, ref, [{"kind": "dataset", "key": "empty"}])
+        assert runtime.workspace_reports.management_state(ref)[0].dataset_ids == ()
+
+
+def test_single_report_keeps_an_external_job_binding_without_session_bindings(tmp_path):
+    from tests.peval.test_harbor_evidence import write_evidence_trial
+
+    with library_at(tmp_path) as runtime:
+        jobs = tmp_path / "external-jobs"
+        write_evidence_trial(jobs / "run-one/trial")
+        runtime.set_config(
+            runtime.config.validated_update(
+                harbor_mounts=(HarborMount(id="external", path=str(jobs)),)
+            )
+        )
+        runtime.catalog.reconcile()
+        path = tmp_path / "standalone.md"
+        path.write_text("report", encoding="utf-8")
+        ref = "package:" + runtime.workspace_reports.import_file(path, [])
+        save(runtime, ref, [{"kind": "job", "key": "harbor:external/run-one"}])
+        single = runtime.report_library.metadata(ref)
+        listed = next(
+            item
+            for item in runtime.report_library.query()["items"]
+            if item["report_ref"] == ref
+        )
+        assert single["bindings"] == listed["bindings"]
+        assert single["bindings"][0]["available"] is True
+
+
+def test_declared_job_targets_cannot_escape_their_registered_mount(tmp_path):
+    root = tmp_path / "external"
+    root.mkdir()
+    (root / "valid").mkdir()
+    (tmp_path / "outside").mkdir()
+    config = ToolConfig(
+        workspace_root=str(tmp_path),
+        harbor_mounts=(HarborMount(id="external", path=str(root)),),
+    )
+    refs = [
+        "harbor:external/valid",
+        "harbor:external/../outside",
+        "harbor:external/C:outside",
+    ]
+    targets = ReportTargets(tmp_path, config, [], job_refs=refs)
+    assert targets.resolve("job", refs[0])["available"] is True
+    assert all(not targets.resolve("job", ref)["available"] for ref in refs[1:])
 
 
 def test_independent_import_mixed_bindings_clear_and_legacy_state(tmp_path):
@@ -144,7 +217,7 @@ def test_invalid_import_associations_never_publish_a_package(tmp_path, field, va
         bindings = {"source_refs": [], "dataset_ids": [], "job_refs": [], field: value}
         with pytest.raises(ValueError):
             runtime.workspace_reports.replace_bindings(
-                "package:" + report_id, **bindings
+                "package:" + report_id, lambda current: bindings
             )
         assert state_path.read_bytes() == before
 
@@ -415,7 +488,7 @@ def test_http_typed_associations_and_copilot_read_both_origins(tmp_path):
             try:
                 connection.request(
                     "DELETE",
-                    f"/api/reports/{imported['report_id']}",
+                    f"/api/report-library/{ref}",
                     headers={"Origin": origin},
                 )
                 deleted = connection.getresponse()

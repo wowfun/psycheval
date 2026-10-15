@@ -52,7 +52,7 @@ test("externally deleted reports close on refresh without losing another selecti
     await associations(page);
     await chooseKind(page, "dataset");
     await page.locator('[data-binding-picker] [data-target-key="empty-library"]').check();
-    const deleted = await page.request.delete(`${fixture.origin}/api/reports/${imported.report_id}`, { headers });
+    const deleted = await page.request.delete(`${fixture.origin}/api/report-library/${encodeURIComponent(imported.report_ref)}`, { headers });
     expect(deleted.status()).toBe(204);
     const metadataPath = `/api/report-library/${encodeURIComponent(imported.report_ref)}`;
     await page.route(`**${metadataPath}`, async route => {
@@ -76,7 +76,7 @@ test("externally deleted reports close on refresh without losing another selecti
     await associations(page);
     await chooseKind(page, "dataset");
     await page.locator('[data-binding-picker] [data-target-key="empty-library"]').check();
-    expect((await page.request.delete(`${fixture.origin}/api/reports/${second.report_id}`, { headers })).status()).toBe(204);
+    expect((await page.request.delete(`${fixture.origin}/api/report-library/${encodeURIComponent(second.report_ref)}`, { headers })).status()).toBe(204);
     await page.locator("[data-report-manager-reload]").click();
     await expect(detail).toBeHidden();
     await expect(detail.locator("iframe")).toHaveCount(0);
@@ -307,7 +307,7 @@ test("canonical sources stay immutable; guest filters and reads reports without 
     await associations(page);
     await expect(page.locator("[data-association-summary]")).toContainText("Original source");
     await expect(page.locator('[data-binding-kind] option[value="session"]')).toHaveCount(0);
-    await expect(page.locator("[data-report-delete]")).toHaveCount(0);
+    await expect(page.locator("[data-report-delete]")).toHaveCount(1);
     await page.locator('[data-binding-picker] [data-target-key="empty-library"]').check();
     const canonical = await save(page);
     const preview = await page.request.get(`${fixture.origin}/api/report-library/${encodeURIComponent(canonical.report_ref)}/preview`);
@@ -324,11 +324,104 @@ test("canonical sources stay immutable; guest filters and reads reports without 
     await guestPage.locator('[data-report-filter="dataset"] summary').click();
     await guestPage.locator("[data-report-select]").click();
     await guestPage.locator('[data-report-tab="associations"]').click();
-    await expect(guestPage.locator("[data-report-save],[data-report-delete],[data-binding-picker]")).toHaveCount(0);
+    await expect(guestPage.locator("[data-report-save],[data-report-delete],[data-report-archive],[data-binding-picker]")).toHaveCount(0);
     const rejected = await guest.request.put(`${fixture.origin}/api/report-library/${encodeURIComponent(canonical.report_ref)}/bindings`, { headers, data: { bindings: [] } });
     expect(rejected.status()).toBe(403);
+    const statePath = `${fixture.origin}/api/report-library/${encodeURIComponent(canonical.report_ref)}/state`;
+    expect((await page.request.put(statePath, { headers, data: { archived: true } })).status()).toBe(200);
+    await guestPage.locator("[data-report-state]").selectOption("archived");
+    await expect(guestPage.locator("[data-report-row]")).toHaveCount(1);
+    await guestPage.locator("[data-report-select]").click();
+    await expect(guestPage.locator("#report-library-detail iframe")).toBeVisible();
+    await expect(guestPage.locator("[data-report-archive],[data-report-delete]")).toHaveCount(0);
+    expect((await guest.request.put(statePath, { headers, data: { archived: false } })).status()).toBe(403);
+    expect((await guest.request.delete(statePath.replace(/\/state$/, ""), { headers })).status()).toBe(403);
   } finally { await guest?.close(); await stopFixture(fixture); }
 });
+
+for (const origin of ["evaluation", "imported"]) {
+  test(`${origin} report archives, restores, and deletes with Home refresh and retained evidence`, async ({ page }) => {
+    const fixture = await startFixture({ PEVAL_E2E_REPORTS: "1", PYTHONPATH: process.cwd() });
+    try {
+      const headers = { Origin: fixture.origin };
+      await page.goto(`${fixture.origin}/reports`);
+      const canonical = (await (await page.request.get(`${fixture.origin}/api/report-library`)).json()).items.find(item => item.origin === "evaluation");
+      const files = await reportFiles(page, fixture.origin);
+      const selected = origin === "imported" ? await importFromPage(page, files.markdown) : canonical;
+      const ref = selected.report_ref;
+      const resource = `${fixture.origin}/api/report-library/${encodeURIComponent(ref)}`;
+      const row = page.locator(`[data-report-select="${ref}"]`);
+      const homeReport = page.locator(`[data-workspace-page="home"] [data-report-preview="${selected.report_id}"]`);
+      if (origin === "imported") {
+        expect((await page.request.put(`${resource}/bindings`, { headers, data: { bindings: [{ kind: "session", key: canonical.source_keys[0] }] } })).status()).toBe(200);
+        await page.locator('[data-workspace-route="home"]').first().click();
+        await expect(homeReport).toBeVisible();
+        await page.locator('[data-workspace-route="reports"]').first().click();
+      }
+      await row.click();
+      const archived = page.waitForResponse(response => response.request().method() === "PUT" && response.url() === `${resource}/state`);
+      await page.locator("[data-report-archive]").click();
+      expect((await archived).status()).toBe(200);
+      await expect(row).toHaveCount(0);
+      await expect(page.locator("#report-library-detail")).toBeHidden();
+      await page.reload();
+      await expect(row).toHaveCount(0);
+      await page.locator("[data-report-state]").selectOption("archived");
+      await row.click();
+      await expect(page.locator("[data-report-archive]")).toHaveText("Restore report");
+      expect((await page.request.get(`${resource}/preview`)).status()).toBe(200);
+      if (origin === "imported") {
+        await page.locator('[data-workspace-route="home"]').first().click();
+        await expect(homeReport).toHaveCount(0);
+        await page.locator('[data-workspace-route="reports"]').first().click();
+        await row.click();
+      }
+      const restored = page.waitForResponse(response => response.request().method() === "PUT" && response.url() === `${resource}/state`);
+      await page.locator("[data-report-archive]").click();
+      expect((await restored).status()).toBe(200);
+      await expect(row).toHaveCount(0);
+      await page.locator("[data-report-state]").selectOption("active");
+      if (origin === "imported") {
+        await page.locator('[data-workspace-route="home"]').first().click();
+        await expect(homeReport).toBeVisible();
+        await page.locator('[data-workspace-route="reports"]').first().click();
+      }
+      const sourceReportContainsCanonical = async () => page.evaluate(async key => {
+        const { selectServeDetail } = await import("/assets/peval/modules/serve-catalog.js");
+        const { state } = await import("/assets/peval/modules/runtime.js");
+        await selectServeDetail(key, { openSidebar: true });
+        return { selected: state.selectedSourceKey, contains: JSON.stringify(state.view).includes("Canonical report") };
+      }, canonical.source_keys[0]);
+      if (origin === "evaluation") {
+        await page.locator('[data-workspace-route="home"]').first().click();
+        expect((await sourceReportContainsCanonical()).contains).toBe(true);
+        await page.locator('[data-workspace-route="reports"]').first().click();
+      }
+      await row.click();
+      page.once("dialog", dialog => dialog.dismiss());
+      await page.locator("[data-report-delete]").click();
+      await expect(row).toBeVisible();
+      page.once("dialog", dialog => { expect(dialog.message()).toContain("evidence"); return dialog.accept(); });
+      const deleted = page.waitForResponse(response => response.request().method() === "DELETE" && response.url() === resource);
+      await page.locator("[data-report-delete]").click();
+      expect((await deleted).status()).toBe(204);
+      await expect(row).toHaveCount(0);
+      await expect(page.locator("#report-library-detail")).toBeHidden();
+      expect((await page.request.get(`${resource}/preview`)).status()).toBe(404);
+      const targets = await (await page.request.get(`${fixture.origin}/api/report-library/targets?kind=session`)).json();
+      expect(targets.items.some(item => item.key === canonical.source_keys[0])).toBe(true);
+      if (origin === "evaluation") {
+        await page.locator('[data-workspace-route="home"]').first().click();
+        expect(await sourceReportContainsCanonical()).toEqual({ selected: canonical.source_keys[0], contains: false });
+      }
+      if (origin === "imported") {
+        const reimported = await page.request.post(`${fixture.origin}/api/reports`, { headers, data: { path: files.markdown } });
+        expect(reimported.status()).toBe(201);
+        expect((await reimported.json()).archived).toBe(false);
+      }
+    } finally { await stopFixture(fixture); }
+  });
+}
 
 test("failed saves retry; late saves and list responses preserve newer edits and selection", async ({ page }) => {
   const fixture = await startFixture({ PEVAL_E2E_REPORTS: "1", PYTHONPATH: process.cwd() });

@@ -9,6 +9,7 @@ import { adminMode, esc, t } from "./shared.js";
 import { RENDER_OPTIONS } from "../app/render-options.js";
 
 let generation = 0;
+let selectionVersion = 0;
 let searchTimer;
 let sidebar;
 let picker;
@@ -16,8 +17,10 @@ let detailIdentity = "";
 const reportPath = ref => `/api/report-library/${encodeURIComponent(ref)}`;
 const kindLabel = kind => ({ session: "Session", dataset: "Dataset", job: "Job", unassociated: t("report_unassociated", "Unassociated") })[kind] || kind;
 const canEditAssociations = report => adminMode() && report?.associations_available !== false;
+const reportBusy = draft => draft?.saving || draft?.deleting || draft?.archiving;
+const matchesState = report => store.stateFilter === "all" || Boolean(report.archived) === (store.stateFilter === "archived");
 
-async function initializeReportManagerPage() {
+async function initializeReportManagerPage(options = {}) {
   const root = document.querySelector("[data-report-manager]");
   if (root && root.getAttribute("data-page-bound") !== "true") {
     root.setAttribute("data-page-bound", "true");
@@ -26,37 +29,44 @@ async function initializeReportManagerPage() {
     window.addEventListener("keydown", event => {
       if (!event.defaultPrevented && event.key === "Escape" && sidebar?.close()) event.preventDefault();
     });
-    window.addEventListener("peval:workspace-navigate", () => sidebar?.close({ restoreFocus: false }));
+    window.addEventListener("peval:workspace-navigate", () => clearReportSelection(store.activeRef, { restoreFocus: false }));
     window.addEventListener("beforeunload", event => {
       if (reportBindingsChanged()) { event.preventDefault(); event.returnValue = ""; }
     });
   }
-  await loadReportManagerPage();
+  await loadReportManagerPage(options);
 }
 
 function renderToolbar() {
   const root = document.querySelector("[data-report-toolbar]");
   if (!root) return;
   root.innerHTML = `<div class="report-library-toolbar">
+    
     ${adminMode() ? `<button class="action-button primary" type="button" data-report-import>${esc(t("report_import", "Import report"))}</button>` : ""}
     <button class="action-button" type="button" data-report-manager-reload>${esc(t("serve_reload", "Refresh"))}</button>
+    <label class="report-binding-search report-state-filter"><span>${esc(t("report_state", "Status"))}</span><select data-report-state>${["active", "archived", "all"].map(value => `<option value="${value}" ${store.stateFilter === value ? "selected" : ""}>${esc(t(`report_state_${value}`, { active: "Active", archived: "Archived", all: "All" }[value]))}</option>`).join("")}</select></label>
     <label class="report-binding-search report-library-search"><span>${esc(t("report_library_search", "Search reports and associated objects"))}</span><input type="search" data-report-search value="${esc(store.search)}"></label>
-    <details class="report-filter"><summary>${esc(t("report_association_type", "Association type"))}</summary><div class="report-filter-options">${["session", "dataset", "job", "unassociated"].map(value => `<label><input type="checkbox" data-report-kind="${value}">${esc(kindLabel(value))}</label>`).join("")}</div></details>
+    <details class="report-filter"><summary>${esc(t("report_association_type", "Association type"))}</summary><div class="report-filter-options">${["session", "dataset", "job", "unassociated"].map(value => `<label><input type="checkbox" data-report-kind="${value}" ${store.kinds.has(value) ? "checked" : ""}>${esc(kindLabel(value))}</label>`).join("")}</div></details>
     ${["dataset", "job"].map(kind => `<details class="report-filter" data-report-filter="${kind}"><summary>${kindLabel(kind)} <span data-filter-count="${kind}"></span></summary><div data-filter-picker="${kind}"></div></details>`).join("")}
     </div><div data-report-filter-summary class="report-filter-summary"></div>`;
   bindFilterMenus(root);
+  root.querySelector("[data-report-state]").addEventListener("change", event => {
+    store.stateFilter = /** @type {HTMLSelectElement} */ (event.target).value;
+    void loadReportManagerPage({ page: 1, locationChange: true }).catch(() => {});
+  });
   root.querySelector("[data-report-search]").addEventListener("input", event => {
     store.search = /** @type {HTMLInputElement} */ (event.target).value;
+    store.page = 1;
     generation += 1;
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => void loadReportManagerPage({ page: 1 }).catch(() => {}), 150);
+    searchTimer = setTimeout(() => void loadReportManagerPage({ page: 1, locationChange: true }).catch(() => {}), 150);
   });
   root.querySelectorAll("[data-report-kind]").forEach(input => input.addEventListener("change", () => {
     const values = store.kinds;
     const value = input.getAttribute("data-report-kind");
     if (/** @type {HTMLInputElement} */ (input).checked) values.add(value); else values.delete(value);
     renderFilterSummary();
-    void loadReportManagerPage({ page: 1 }).catch(() => {});
+    void loadReportManagerPage({ page: 1, locationChange: true }).catch(() => {});
   }));
   for (const kind of ["dataset", "job"]) {
     const values = kind === "dataset" ? store.datasets : store.jobs;
@@ -65,7 +75,7 @@ function renderToolbar() {
       onChange(item, selected) {
         if (selected) values.set(bindingId(item), item); else values.delete(bindingId(item));
         renderFilterSummary();
-        void loadReportManagerPage({ page: 1 }).catch(() => {});
+        void loadReportManagerPage({ page: 1, locationChange: true }).catch(() => {});
       },
     });
     root.querySelector(`[data-report-filter="${kind}"]`).addEventListener("toggle", event => {
@@ -75,6 +85,8 @@ function renderToolbar() {
 }
 
 function bindFilterMenus(root) {
+  if (root.dataset.filterMenusBound === "true") return;
+  root.dataset.filterMenusBound = "true";
   const closeMenus = (except = null) => {
     root.querySelectorAll(".report-filter[open]").forEach(menu => {
       if (menu !== except) menu.open = false;
@@ -100,9 +112,10 @@ function bindFilterMenus(root) {
     menu.open = false;
     menu.querySelector("summary").focus();
   });
-  root.querySelectorAll(".report-filter").forEach(menu => {
-    menu.addEventListener("toggle", () => { if (menu.open) positionMenu(menu); });
-  });
+  root.addEventListener("toggle", event => {
+    const menu = event.target;
+    if (menu.matches(".report-filter") && menu.open) positionMenu(menu);
+  }, true);
   window.addEventListener("resize", () => root.querySelectorAll(".report-filter[open]").forEach(positionMenu));
   window.addEventListener("peval:workspace-navigate", () => closeMenus());
 }
@@ -117,30 +130,31 @@ function renderFilterSummary() {
   }
 }
 
-async function loadReportManagerPage({ page = store.page } = {}) {
+/** @param {{page?: number, signal?: AbortSignal, locationChange?: boolean}} options */
+async function loadReportManagerPage({ page = store.page, signal, locationChange = false } = {}) {
   const request = ++generation;
   store.page = page;
   store.loading = true;
   renderReportManagerPage();
-  const params = new URLSearchParams({ page: String(page), page_size: String(store.pageSize), search: store.search });
+  const params = new URLSearchParams({ page: String(page), page_size: String(store.pageSize), search: store.search, state: store.stateFilter });
   for (const value of store.kinds) params.append("kind", value);
   for (const item of store.datasets.values()) params.append("dataset", item.key);
   for (const item of store.jobs.values()) params.append("job", item.key);
   const feedback = beginFeedback("[data-report-manager]", { page: "reports", key: "reports:load" });
   try {
-    const result = await serveApi(`/api/report-library?${params}`);
-    if (request !== generation) return;
+    const result = await serveApi(`/api/report-library?${params}`, { signal });
+    if (request !== generation || signal?.aborted) return;
     store.items = result.items.map(acceptReport);
     store.total = result.total;
     store.page = result.page;
     if (store.activeRef && !store.items.some(item => item.report_ref === store.activeRef)) {
       const ref = store.activeRef;
       try {
-        const report = await serveApi(reportPath(ref));
-        if (request !== generation) return;
+        const report = await serveApi(reportPath(ref), { signal });
+        if (request !== generation || signal?.aborted) return;
         acceptReport(report);
       } catch (error) {
-        if (request !== generation) return;
+        if (request !== generation || signal?.aborted) return;
         const stillSelected = store.activeRef === ref;
         if (error.status === 404) {
           store.reports.delete(ref);
@@ -149,13 +163,13 @@ async function loadReportManagerPage({ page = store.page } = {}) {
         if (stillSelected) feedback.error(error);
       }
     }
-    if (request !== generation) return;
+    if (request !== generation || signal?.aborted) return;
     store.loading = false;
     renderReportManagerPage();
     renderDetail();
     if (store.tab === "associations") void picker?.load();
   } catch (error) {
-    if (request !== generation) return;
+    if (request !== generation || signal?.aborted) return;
     store.loading = false;
     renderReportManagerPage();
     feedback.error(error);
@@ -168,7 +182,7 @@ function renderReportManagerPage() {
   if (!inventory) return;
   inventory.setAttribute("aria-busy", String(store.loading));
   inventory.innerHTML = `<table class="report-library-grid"><thead><tr>${[t("report_name", "Report"), t("report_format", "Format"), t("report_associations", "Associations"), t("report_updated", "Updated")].map(label => `<th scope="col">${esc(label)}</th>`).join("")}</tr></thead><tbody>${store.items.map(report => `<tr class="${report.report_ref === store.activeRef ? "selected" : ""}" data-report-row="${esc(report.report_ref)}">
-    <td><button class="report-inventory-select" type="button" data-report-select="${esc(report.report_ref)}">${esc(report.title)}</button></td>
+    <td><button class="report-inventory-select" type="button" data-report-select="${esc(report.report_ref)}">${esc(report.title)}</button>${report.archived ? ` <span class="report-archived">${esc(t("report_state_archived", "Archived"))}</span>` : ""}</td>
     <td>${esc(report.format.toUpperCase())}</td>
     <td title="${esc(report.associations.map(item => `${kindLabel(item.kind)}: ${item.label}`).join("; "))}">${esc(report.associations.map(item => item.label).join(" · ") || t("report_unassociated", "Unassociated"))}</td>
     <td>${renderDateTime(report.updated_at_ms)}</td></tr>`).join("")}</tbody></table>${store.items.length ? "" : `<p class="report-manager-empty">${esc(store.loading ? t("loading", "Loading") : t("report_no_reports", "No reports found"))}</p>`}`;
@@ -183,23 +197,26 @@ function surface() {
     bodyClass: "report-library-detail-open", cssVariable: "--report-library-detail-width",
     workspaceId: RENDER_OPTIONS.workspace_id || "default", minWidth: 360, minWorkspaceWidth: 360,
     defaultWidth: width => Math.min(760, width * .48), resizeLabel: () => t("report_details_resize", "Resize report details"),
-    onRequestClose: options => sidebar.close(options),
+    onRequestClose: options => clearReportSelection(store.activeRef, { ...options, locationKind: options.reason === "dismiss" ? "object" : "replace" }),
   });
   return sidebar;
 }
 
 function openReportPreview(ref, options = {}) {
   if (!store.reports.has(ref)) return false;
+  selectionVersion++;
   store.activeRef = ref;
-  store.tab = "preview";
+  store.tab = options.tab || "preview";
   renderReportManagerPage();
   renderDetail();
   const opener = [...document.querySelectorAll("[data-report-select]")].find(button => button.getAttribute("data-report-select") === ref);
-  return surface().open({ opener: opener || options.opener || document.activeElement, openerSelector: `[data-report-select="${ref}"]`, focusTarget: "#report-library-detail [data-sidebar-close]" });
+  const opened = surface().open({ opener: opener || options.opener || document.activeElement, openerSelector: `[data-report-select="${ref}"]`, focusTarget: "#report-library-detail [data-sidebar-close]" });
+  return opened;
 }
 
 function clearReportSelection(ref, options = {}) {
   if (store.activeRef !== ref) return;
+  selectionVersion++;
   picker?.destroy(); picker = null;
   detailIdentity = "";
   store.activeRef = null;
@@ -216,7 +233,7 @@ function renderDetail() {
     picker?.destroy();
     picker = null;
     detailIdentity = identity;
-    root.innerHTML = `<div class="report-library-detail-panel"><header class="report-reader-head"><h2>${esc(report.title)}</h2><div class="report-reader-actions"><a class="action-button compact" href="${reportPath(report.report_ref)}/reader" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a><button class="action-button compact" type="button" data-sidebar-close>${esc(t("close", "Close"))}</button></div></header>
+    root.innerHTML = `<div class="report-library-detail-panel"><header class="report-reader-head"><h2>${esc(report.title)}</h2><div class="report-reader-actions"><a class="action-button compact" href="${reportPath(report.report_ref)}/reader" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a><button class="action-button compact" type="button" data-sidebar-close>${esc(t("close", "Close"))}</button></div><div class="report-management-actions" data-report-management></div></header>
       <div class="report-detail-tabs" role="tablist">${["preview", "associations"].map(tab => `<button type="button" class="action-button" role="tab" aria-selected="${store.tab === tab}" data-report-tab="${tab}">${esc(t(`report_${tab}`, tab === "preview" ? "Preview" : "Associations"))}</button>`).join("")}</div>
       ${store.tab === "preview" ? `<div class="report-reader-frame-viewport" role="tabpanel"><iframe class="report-reader-frame" src="${reportPath(report.report_ref)}/preview" title="${esc(report.title)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>` : `<div class="report-associations-pane" role="tabpanel"><div data-association-summary></div>${canEditAssociations(report) ? `<label class="report-binding-search"><span>${esc(t("report_add_association", "Add associations"))}</span><select data-binding-kind>${(report.origin === "imported" ? ["session", "dataset", "job"] : ["dataset", "job"]).map(kind => `<option value="${kind}">${kindLabel(kind)}</option>`).join("")}</select></label><div data-binding-picker></div>` : ""}</div>`}</div>`;
     if (store.tab === "associations" && canEditAssociations(report)) {
@@ -239,6 +256,7 @@ function openBindingPicker(ref, kind) {
 }
 
 function renderAssociationSummary() {
+  renderManagementActions();
   const root = document.querySelector("[data-association-summary]");
   const report = store.reports.get(store.activeRef);
   if (!root || !report) return;
@@ -250,14 +268,23 @@ function renderAssociationSummary() {
     return items.length ? `<h3>${esc(t(`report_${origin}_associations`, origin === "source" ? "Original source" : "Session ownership"))}</h3><ul class="report-associated-list">${items.map(item => row(item)).join("")}</ul>` : "";
   }).join("")}
     <h3>${esc(t("report_manual_associations", "Manual associations"))}</h3>${report.associations_available === false ? `<p role="status" class="report-unavailable">${esc(t("report_associations_unavailable", "Report associations could not be read. Repair the association data and refresh to edit."))}</p>` : ""}<ul class="report-associated-list">${[...draft.values.values()].map(item => row(item, editable)).join("") || (report.associations_available === false ? "" : `<li>${esc(t("report_unassociated", "Unassociated"))}</li>`)}</ul>
-    ${editable ? `<div class="report-binding-actions"><button class="action-button primary" type="button" data-report-save ${!draftChanged(draft) || draft.saving || draft.deleting ? "disabled" : ""}>${esc(t("report_save_bindings", "Save associations"))}</button>${report.origin === "imported" ? `<button class="action-button danger" type="button" data-report-delete ${draft.saving || draft.deleting ? "disabled" : ""}>${esc(t("report_delete", "Delete report"))}</button>` : ""}</div>` : ""}`;
+    ${editable ? `<div class="report-binding-actions"><button class="action-button primary" type="button" data-report-save ${!draftChanged(draft) || reportBusy(draft) ? "disabled" : ""}>${esc(t("report_save_bindings", "Save associations"))}</button></div>` : ""}`;
+}
+
+function renderManagementActions() {
+  const root = document.querySelector("[data-report-management]");
+  const report = store.reports.get(store.activeRef);
+  if (!root || !report) return;
+  if (!adminMode()) { root.replaceChildren(); return; }
+  const busy = reportBusy(store.drafts.get(report.report_ref));
+  root.innerHTML = `<button class="action-button compact" type="button" data-report-archive ${busy || report.associations_available === false ? "disabled" : ""}>${esc(report.archived ? t("report_restore", "Restore report") : t("report_archive", "Archive report"))}</button><button class="action-button compact danger" type="button" data-report-delete ${busy ? "disabled" : ""}>${esc(t("report_delete", "Delete report"))}</button>`;
 }
 
 async function saveBindings() {
   const ref = store.activeRef;
   const report = store.reports.get(ref);
   const draft = store.drafts.get(ref);
-  if (!report || !canEditAssociations(report) || !draft || draft.saving || draft.deleting || !draftChanged(draft)) return;
+  if (!report || !canEditAssociations(report) || !draft || reportBusy(draft) || !draftChanged(draft)) return;
   const version = draft.version;
   const submitted = [...draft.values.values()].map(({ kind, key }) => ({ kind, key }));
   draft.saving = true;
@@ -295,22 +322,63 @@ async function importReport() {
   finally { store.importing = false; renderReportManagerPage(); }
 }
 
+async function setArchived() {
+  const report = store.reports.get(store.activeRef);
+  const draft = store.drafts.get(store.activeRef);
+  if (!report || !canEditAssociations(report) || !draft || reportBusy(draft)) return;
+  const archived = !report.archived;
+  const feedback = beginFeedback("[data-report-manager]", { page: "reports", key: `reports:state:${report.report_ref}`, label: report.title });
+  try {
+    const updated = await mutateReportDraft(draft, "archiving", () => serveApi(`${reportPath(report.report_ref)}/state`, { method: "PUT", body: { archived } }));
+    acceptReport(updated);
+    if (!matchesState(updated)) clearReportSelection(report.report_ref);
+    feedback.set(archived ? t("report_archived", "Report archived") : t("report_restored", "Report restored"));
+  } catch (error) { feedback.error(error); }
+  finally { renderAssociationSummary(); }
+  // Settlement also refreshes any list read invalidated by the mutation.
+  await loadReportManagerPage().catch(() => {});
+}
+
+async function mutateReportDraft(draft, field, action) {
+  draft[field] = true;
+  generation++;
+  store.loading = false;
+  renderAssociationSummary();
+  try { return await action(); }
+  finally {
+    // Release the pending mutation before accepting authoritative metadata.
+    generation++;
+    draft[field] = false;
+    store.loading = false;
+    renderReportManagerPage();
+    renderAssociationSummary();
+  }
+}
+
 async function deleteReport() {
   const report = store.reports.get(store.activeRef);
   const draft = store.drafts.get(store.activeRef);
-  if (!adminMode() || report?.origin !== "imported" || !draft || draft.saving || draft.deleting || !window.confirm(`${t("report_delete", "Delete report")}: ${report.title}?`)) return;
-  draft.deleting = true;
-  renderAssociationSummary();
+  if (!adminMode() || !report || !draft || reportBusy(draft) || !window.confirm(t("report_delete_confirm", "Permanently delete {filename}? Sessions, Trial evidence, and imported original files are kept.").replaceAll("{filename}", report.title))) return;
   const feedback = beginFeedback("[data-report-manager]", { page: "reports", key: `reports:delete:${report.report_ref}` });
-  try {
-    await serveApi(`/api/reports/${encodeURIComponent(report.report_id)}`, { method: "DELETE" });
+  let deleted = false;
+  const clearDeleted = () => {
+    deleted = true;
     store.reports.delete(report.report_ref);
     store.drafts.delete(report.report_ref);
     clearReportSelection(report.report_ref);
-    feedback.success();
-    await loadReportManagerPage();
-  } catch (error) { feedback.error(error); }
-  finally { draft.deleting = false; renderAssociationSummary(); }
+  };
+  try {
+    await mutateReportDraft(draft, "deleting", () => serveApi(reportPath(report.report_ref), { method: "DELETE" }));
+    clearDeleted();
+    feedback.set(t("report_deleted", "Report deleted"));
+  } catch (error) {
+    if (error.problem?.committed === true) {
+      clearDeleted();
+      feedback.set(`${t("report_delete_committed", "Report was removed, but cleanup or refresh failed.")} ${error.message}`, true);
+    } else feedback.error(error);
+  }
+  finally { renderAssociationSummary(); }
+  if (deleted) await loadReportManagerPage().catch(() => {});
 }
 
 function onClick(event) {
@@ -326,11 +394,12 @@ function onClick(event) {
     renderAssociationSummary(); picker?.renderSelected();
   }
   if (target.closest("[data-report-manager-reload]")) void loadReportManagerPage().catch(() => {});
-  if (target.closest("[data-report-prev]")) void loadReportManagerPage({ page: store.page - 1 }).catch(() => {});
-  if (target.closest("[data-report-next]")) void loadReportManagerPage({ page: store.page + 1 }).catch(() => {});
+  if (target.closest("[data-report-prev]")) void loadReportManagerPage({ page: store.page - 1, locationChange: true }).catch(() => {});
+  if (target.closest("[data-report-next]")) void loadReportManagerPage({ page: store.page + 1, locationChange: true }).catch(() => {});
   if (target.closest("[data-report-save]")) void saveBindings();
   if (target.closest("[data-report-import]")) void importReport();
   if (target.closest("[data-report-delete]")) void deleteReport();
+  if (target.closest("[data-report-archive]")) void setArchived();
 }
 
 function activeReportSnapshot() {
@@ -338,4 +407,4 @@ function activeReportSnapshot() {
   return { report_ref: report?.report_ref || null, report_name: report?.title || null };
 }
 
-export { activeReportSnapshot, initializeReportManagerPage, loadReportManagerPage, openReportPreview, renderReportManagerPage, saveBindings };
+export { activeReportSnapshot, deleteReport, initializeReportManagerPage, loadReportManagerPage, openReportPreview, renderReportManagerPage, saveBindings, setArchived };

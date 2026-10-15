@@ -19,7 +19,6 @@ from psycheval._state.artifacts import (
     trial_artifacts,
     workspace_analysis_eval_slug,
     write_json_file,
-    write_text_file,
 )
 from psycheval._state.sources import (
     loaded_session_from_source,
@@ -375,7 +374,15 @@ class StateIngestMixin:
             write_json_file(cell_dir / "analysis.json", analysis_payload)
         analysis_markdown = merged_analysis_markdown(analyses)
         if analysis_markdown:
-            write_text_file(cell_dir / "analysis.md", analysis_markdown)
+            from psycheval.evaluation_reports import evaluation_report_writer
+
+            with evaluation_report_writer(
+                self.paths.root,
+                cell_dir.relative_to(self.paths.root).as_posix(),
+                cell_dir,
+                blocking=False,
+            ) as write_report:
+                write_report(analysis_markdown)
 
     def sync_artifact_sources(self, config: ToolConfig | None = None) -> list[str]:
         eval_slug = (

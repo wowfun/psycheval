@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,12 @@ from psycheval.state.jobs import managed_config, records
 
 class ReportTargets:
     def __init__(
-        self, workspace: Path, config: Any, rows: list[dict[str, Any]]
+        self,
+        workspace: Path,
+        config: Any,
+        rows: list[dict[str, Any]],
+        *,
+        job_refs: Iterable[str] = (),
     ) -> None:
         self.items: dict[tuple[str, str], dict[str, Any]] = {}
         self.session_refs: dict[str, str] = {}
@@ -34,6 +40,33 @@ class ReportTargets:
             for path, key in managed_paths.items():
                 if path.parent == root:
                     self.job_aliases[f"harbor:{mount_id}/{path.name}"] = key
+
+        def external_job(mount_id: str, job_name: str) -> str:
+            external_key = f"harbor:{mount_id}/{job_name}"
+            key = self.job_aliases.get(external_key, external_key)
+            self.job_aliases[external_key] = key
+            if key == external_key:
+                root = mounts.get(mount_id)
+                safe_name = (
+                    bool(job_name)
+                    and job_name not in {".", ".."}
+                    and Path(job_name).name == job_name
+                    and not any(char in job_name for char in "/\\\0")
+                )
+                self.add(
+                    "job",
+                    key,
+                    f"{job_name} · {mount_id}",
+                    available=safe_name
+                    and root is not None
+                    and (root / job_name).is_dir()
+                    and not (root / job_name).is_symlink(),
+                )
+            return key
+
+        for ref in job_refs:
+            if ref.startswith("harbor:") and "/" in ref:
+                external_job(*ref.removeprefix("harbor:").split("/", 1))
         for row in rows:
             key = str(row.get("source_key") or "")
             source_ref = str(row.get("source_ref") or row.get("artifact_dir") or "")
@@ -58,19 +91,7 @@ class ReportTargets:
             job_key = ""
             if parts[0] == "harbor" and len(parts) >= 4:
                 mount_id, job_name = parts[1:3]
-                external_key = f"harbor:{mount_id}/{job_name}"
-                root = mounts.get(mount_id)
-                job_key = self.job_aliases.get(external_key, external_key)
-                self.job_aliases[external_key] = job_key
-                if job_key == external_key:
-                    self.add(
-                        "job",
-                        job_key,
-                        f"{job_name} · {mount_id}",
-                        available=root is not None
-                        and (root / job_name).is_dir()
-                        and not (root / job_name).is_symlink(),
-                    )
+                job_key = external_job(mount_id, job_name)
             elif len(parts) == 5 and parts[:2] == ["runs", "jobs"]:
                 job_key = "managed:" + parts[3]
             if job_key:

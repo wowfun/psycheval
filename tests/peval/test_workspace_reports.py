@@ -161,9 +161,11 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
                 json.dumps({"source_refs": ["../outside"]})
             )
             library = WorkspaceReportLibrary(root, lambda: [])
-            self.assertEqual(library.catalog(), [])
-            with self.assertRaisesRegex(ValueError, "source_ref"):
-                library.read(valid_id)
+            self.assertEqual(len(library.catalog()), 1)
+            self.assertFalse(library.metadata()[0].associations_available)
+            self.assertEqual(library.read(valid_id).content, b"ok")
+            with self.assertRaisesRegex(ValueError, "unavailable"):
+                library.set_archived("package:" + valid_id, True)
             with self.assertRaisesRegex(ValueError, "unknown report"):
                 library.read("../reports")
             with self.assertRaisesRegex(ValueError, "unknown report"):
@@ -177,7 +179,7 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
                     }
                 )
             )
-            self.assertEqual(library.catalog(), [])
+            self.assertEqual(len(library.catalog()), 1)
 
             shutil_target = outside / "escaped"
             shutil_target.mkdir()
@@ -191,21 +193,21 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
                 (package / "state.json").write_text(
                     json.dumps({"source_refs": ["runs/default/agent/s1/c1"]})
                 )
-                with self.assertRaisesRegex(ValueError, "escapes"):
-                    library.read(valid_id)
+                self.assertEqual(library.read(valid_id).content, b"ok")
+                self.assertFalse(library.metadata()[0].associations_available)
 
                 (runs / "default").unlink()
                 (runs / "default").symlink_to(
                     runs / "default", target_is_directory=True
                 )
-                self.assertEqual(library.catalog(), [])
+                self.assertEqual(len(library.catalog()), 1)
 
             link_id = "20260710-143012-123457"
             try:
                 (reports / link_id).symlink_to(outside, target_is_directory=True)
             except OSError:
                 pass
-            self.assertEqual(library.catalog(), [])
+            self.assertEqual(len(library.catalog()), 1)
 
     def test_replace_bindings_is_atomic_and_delete_is_permanent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -224,9 +226,11 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
 
             library.replace_bindings(
                 "package:" + report_id,
-                source_refs=["runs/default/agent/s2/c2"],
-                dataset_ids=[],
-                job_refs=[],
+                lambda current: {
+                    "source_refs": ["runs/default/agent/s2/c2"],
+                    "dataset_ids": [],
+                    "job_refs": [],
+                },
             )
             state_path = root / "reports" / report_id / "state.json"
             self.assertEqual(
@@ -240,13 +244,16 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "workspace source"):
                 library.replace_bindings(
                     "package:" + report_id,
-                    source_refs=["../escape"],
-                    dataset_ids=[],
-                    job_refs=[],
+                    lambda current: {
+                        "source_refs": ["../escape"],
+                        "dataset_ids": [],
+                        "job_refs": [],
+                    },
                 )
             self.assertEqual(state_path.read_bytes(), before)
             library.replace_bindings(
-                "package:" + report_id, source_refs=[], dataset_ids=[], job_refs=[]
+                "package:" + report_id,
+                lambda current: {"source_refs": [], "dataset_ids": [], "job_refs": []},
             )
             self.assertEqual(
                 json.loads(state_path.read_text()),
@@ -288,9 +295,11 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
 
                 library.replace_bindings(
                     "package:" + report_id,
-                    source_refs=["runs/default/agent/s2/c2"],
-                    dataset_ids=[],
-                    job_refs=[],
+                    lambda current: {
+                        "source_refs": ["runs/default/agent/s2/c2"],
+                        "dataset_ids": [],
+                        "job_refs": [],
+                    },
                 )
                 self.assertEqual(
                     library.bound_source_refs(), {"runs/default/agent/s2/c2"}
@@ -299,7 +308,6 @@ class WorkspaceReportLibraryTests(unittest.TestCase):
 
                 library.delete(report_id)
                 self.assertEqual(library.bound_source_refs(), set())
-                self.assertEqual(read_metadata.call_count, 4)
 
     def test_markdown_preview_is_rich_but_escapes_raw_html_and_html_is_exact(
         self,

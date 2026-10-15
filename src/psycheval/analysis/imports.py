@@ -61,10 +61,7 @@ def import_analysis_artifacts(
     markdown = inputs.get("md")
 
     from psycheval.config import load_config
-    from psycheval.evaluation_reports import (
-        _atomic_replace_text,
-        _evaluation_report_lease,
-    )
+    from psycheval.evaluation_reports import evaluation_report_writer
     from psycheval.state.catalog import WorkspaceCatalog
     from psycheval.state.paths import workspace_paths
     from psycheval.state.store import ServeStateStore
@@ -83,22 +80,18 @@ def import_analysis_artifacts(
                     cell.relative_path / ANALYSIS_JSON_FILENAME
                 ).as_posix()
             if markdown is not None:
-                _atomic_replace_text(
-                    cell.absolute,
-                    cell.absolute / ANALYSIS_MD_FILENAME,
-                    markdown,
-                )
+                write_report(markdown)
                 written_payloads["analysis_md"] = (
                     cell.relative_path / ANALYSIS_MD_FILENAME
                 ).as_posix()
             return written_payloads
 
         lease = (
-            _evaluation_report_lease(cell.absolute)
+            evaluation_report_writer(root, cell.relative_path.as_posix(), cell.absolute)
             if markdown is not None
             else nullcontext()
         )
-        with lease:
+        with lease as write_report:
             catalog = WorkspaceCatalog(store, load_config(workspace_root=str(root)))
             try:
                 _, written_payloads = catalog.mutate(write_artifacts)

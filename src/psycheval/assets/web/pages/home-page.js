@@ -31,6 +31,10 @@ function createHomePage(_context) {
         return;
       }
       const requests = [];
+      if (changes.has("catalog")) {
+        state.serveReportCache = {};
+        state.selectedArtifactRevision = null;
+      }
       if (changes.has("catalog") || changes.has("dataset-registry")) {
         requests.push(loadCatalogPage({}, { force: true }));
       }

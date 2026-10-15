@@ -246,6 +246,7 @@ class WorkspaceSources:
         wanted = str(source_ref or "").strip()
         if wanted.startswith("runs/jobs/"):
             from .jobs import plugin_candidate_for_ref
+
             return self.load(plugin_candidate_for_ref(self.workspace_root, wanted))
         if wanted.startswith(f"{HARBOR_OVERLAY_ROOT}/"):
             return self.load(
@@ -361,7 +362,9 @@ class WorkspaceSources:
         if not (
             _regular_file(artifacts.trajectory_path)
             and _regular_file(artifacts.meta_path)
-        ) and not _regular_file(state_path):
+        ) and not (
+            _regular_file(state_path) or _regular_file(path / HARBOR_ANALYSIS_MD_FILE)
+        ):
             raise ValueError(f"unknown source reference: {source_ref}")
         return SourceCandidate(
             source_ref=source_ref,
@@ -501,7 +504,10 @@ class WorkspaceSources:
                     if not (
                         _regular_file(artifacts.trajectory_path)
                         and _regular_file(artifacts.meta_path)
-                    ) and not _regular_file(state_path):
+                    ) and not (
+                        _regular_file(state_path)
+                        or _regular_file(cell / HARBOR_ANALYSIS_MD_FILE)
+                    ):
                         continue
                     source_ref = cell.relative_to(self.workspace_root).as_posix()
                     candidates.append(
@@ -591,7 +597,11 @@ class WorkspaceSources:
                     path=trial_dir,
                     fingerprint=_fingerprint(
                         trial_dir,
-                        HARBOR_JSON_SOURCE_FILES,
+                        (
+                            (*HARBOR_JSON_SOURCE_FILES, HARBOR_ANALYSIS_MD_FILE)
+                            if include_evaluation_report
+                            else HARBOR_JSON_SOURCE_FILES
+                        ),
                         extra_root=overlay_dir,
                         extra_files=HARBOR_OVERLAY_FILES,
                     ),
@@ -600,6 +610,11 @@ class WorkspaceSources:
                     job_name=job_name,
                     trial_name=trial_name,
                     diagnostic=str(exc),
+                    harbor_analysis_relative_path=(
+                        _harbor_analysis_relative_path(trial_dir)
+                        if include_evaluation_report
+                        else None
+                    ),
                     multi_step=_is_multi_step_trial(trial_dir),
                     containment_root=mount_root,
                     task_paths=dataset_paths,
@@ -855,6 +870,11 @@ class WorkspaceSources:
                 if not artifacts.trajectory_path.exists()
                 else "error",
                 last_error=str(exc),
+                evaluation_report_markdown=(
+                    _read_local_evaluation_report(candidate)
+                    if include_evaluation_report
+                    else None
+                ),
             )
 
     @classmethod

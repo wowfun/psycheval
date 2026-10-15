@@ -16,6 +16,7 @@ from psycheval._harbor_datasets import resolve_harbor_datasets_for_mount
 from psycheval._state.annotations import optional_int, optional_str
 from psycheval.analysis import cached_note_report_for_cell
 from psycheval.config import ToolConfig
+from psycheval.file_access import FileLeaseTimeout, blocking_file_lease
 from psycheval.report.inference import inference_row_metrics
 from psycheval.report.metrics import final_metric, token_total
 from psycheval.state.evaluation_report_catalog import (
@@ -550,8 +551,29 @@ class WorkspaceCatalog:
             raise ValueError(f"unknown source: {source_key}")
         return json.loads(str(record[0]))
 
-    def binding_rows(self) -> list[dict[str, Any]]:
+    def binding_rows(
+        self,
+        *,
+        source_keys: Iterable[str] | None = None,
+        source_refs: Iterable[str] | None = None,
+    ) -> list[dict[str, Any]]:
         with self._connect(readonly=True) as connection:
+            if source_keys is not None or source_refs is not None:
+                rows = {}
+                for field, values in (
+                    ("source_key", tuple(dict.fromkeys(source_keys or ()))),
+                    ("source_ref", tuple(dict.fromkeys(source_refs or ()))),
+                ):
+                    for start in range(0, len(values), 500):
+                        chunk = values[start : start + 500]
+                        records = connection.execute(
+                            f"SELECT row_json FROM cells WHERE {field} IN ({','.join('?' for _ in chunk)})",
+                            chunk,
+                        )
+                        for record in records:
+                            row = json.loads(str(record[0]))
+                            rows[row["source_key"]] = row
+                return [rows[key] for key in sorted(rows)]
             return [
                 json.loads(str(record[0]))
                 for record in connection.execute(
@@ -559,7 +581,9 @@ class WorkspaceCatalog:
                 )
             ]
 
-    def evaluation_report_rows(self) -> list[dict[str, Any]]:
+    def evaluation_report_rows(
+        self, report_ref: str | None = None
+    ) -> list[dict[str, Any]]:
         with self._connect(readonly=True) as connection:
             if self._meta_int(connection, "valid_generation", 0) != 1:
                 return []
@@ -573,12 +597,29 @@ class WorkspaceCatalog:
                     "primary_source_key": record["primary_source_key"],
                     "updated_at_ms": record["updated_at_ms"],
                 }
-                for record in connection.execute("SELECT * FROM evaluation_reports")
+                for record in connection.execute(
+                    "SELECT * FROM evaluation_reports"
+                    + (" WHERE report_ref = ?" if report_ref is not None else ""),
+                    (report_ref,) if report_ref is not None else (),
+                )
             ]
 
     def evaluation_report_location(self, report_ref: str) -> dict[str, Any]:
         with self._connect(readonly=True) as connection:
             return evaluation_report_location(connection, report_ref)
+
+    def discard_evaluation_report(self, report_ref: str) -> None:
+        """Forget a removed body's projection within an owned catalog mutation."""
+        with self._connect() as connection, connection:
+            removed = connection.execute(
+                "DELETE FROM evaluation_reports WHERE report_ref = ?", (report_ref,)
+            )
+            if removed.rowcount:
+                self._set_meta(
+                    connection,
+                    "generation",
+                    str(self._meta_int(connection, "generation", 0) + 1),
+                )
 
     def start_operation(
         self,
@@ -1253,47 +1294,17 @@ class WorkspaceCatalog:
     def _workspace_writer_lease(self) -> Iterator[None]:
         lease_path = self.path.with_suffix(self.path.suffix + ".writer.lock")
         lease_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = lease_path.open("a+")
-        lock_kind = "fcntl"
+        entered = False
         try:
-            try:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except ImportError:
-                import msvcrt
-
-                lock_kind = "msvcrt"
-                handle.seek(0)
-                if not handle.read(1):
-                    handle.write("0")
-                    handle.flush()
-                handle.seek(0)
-                try:
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                except OSError as exc:
-                    raise CatalogBusyError(
-                        "serve catalog is busy in another process"
-                    ) from exc
-            except BlockingIOError as exc:
-                raise CatalogBusyError(
-                    "serve catalog is busy in another process"
-                ) from exc
-            yield
-        finally:
-            try:
-                if lock_kind == "msvcrt":
-                    import msvcrt
-
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except (ImportError, OSError, ValueError):
-                pass
-            handle.close()
+            with blocking_file_lease(
+                lease_path, label="Catalog writer lock", blocking=False
+            ):
+                entered = True
+                yield
+        except FileLeaseTimeout as exc:
+            if entered:
+                raise
+            raise CatalogBusyError("serve catalog is busy in another process") from exc
 
     def _delete_database_files(self) -> None:
         for path in (

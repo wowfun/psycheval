@@ -88,11 +88,19 @@ filesystem changes; a related mutation made in another page refreshes the stale
 page when it is next activated. Reloading or closing the browser still warns
 before discarding an unsaved draft.
 
-The **Reports** page keeps canonical evaluation reports separate from imported
-report packages. **Evaluation reports** is a read-only catalog projection with
-Preview, Open, and View source actions. It reads each report from the current
-source `analysis.md` and does not copy the body into `reports/`. **Imported
-reports** retains package binding and deletion controls for administrators.
+The **Reports** page combines canonical evaluation reports and imported packages
+in one searchable library. It reads canonical content from the current source
+`analysis.md`; imported content stays in its workspace package. Administrators can
+edit manual associations and archive, restore, or permanently delete either kind
+from the detail panel. Use the Active, Archived, or All filter to find reports.
+If local source evidence becomes unreadable, its retained report can still be read or
+deleted. Damaged imported packages remain listed for deletion; their preview
+may be unavailable.
+Archived reports remain readable but disappear from the default list and Home's
+Reports column. Publishing updated content keeps a report archived. Deletion
+removes the report body and management metadata while preserving sessions, Trial
+evidence, and imported original files. A later publication starts unarchived.
+See the [report data contract](../../reference/state-and-data.md#evaluation-reports).
 Guests can preview either kind through the same bounded renderer, but do not
 receive source paths or revision metadata.
 
@@ -203,7 +211,7 @@ Harbor parent and MultiStep phase references share the parent Trial
 does not use revisions or a separate replace flag. If a report already exists,
 the confirmed publication replaces it atomically; concurrent publications are
 serialized and the last completed write wins. The Home Trial detail and the
-read-only **Evaluation reports** inventory read this canonical file after the
+**Reports** library read this canonical file after the
 catalog refreshes.
 
 ## Serve access

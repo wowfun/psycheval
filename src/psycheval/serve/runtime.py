@@ -440,7 +440,7 @@ class ServeRuntime:
         return self.catalog.operation(operation_id)
 
     def workspace_report_catalog(self) -> list[dict[str, Any]]:
-        return self.workspace_reports.catalog()
+        return self.workspace_reports.catalog(include_archived=False)
 
     def empty_envelope(
         self,

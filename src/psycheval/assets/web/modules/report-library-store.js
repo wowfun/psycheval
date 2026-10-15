@@ -3,7 +3,7 @@
 const bindingId = target => JSON.stringify([target.kind, target.key]);
 const signature = bindings => JSON.stringify(bindings.map(bindingId).sort());
 const reportLibraryStore = {
-  items: [], total: 0, page: 1, pageSize: 50, search: "",
+  items: [], total: 0, page: 1, pageSize: 50, search: "", stateFilter: "active",
   kinds: new Set(), datasets: new Map(), jobs: new Map(),
   activeRef: null, tab: "preview", loading: false, importing: false,
   reports: new Map(), drafts: new Map(),
@@ -14,10 +14,10 @@ function acceptReport(report) {
   store.reports.set(report.report_ref, report);
   let draft = store.drafts.get(report.report_ref);
   if (!draft) {
-    draft = { baseline: [], values: new Map(), version: 0, saving: false, deleting: false };
+    draft = { baseline: [], values: new Map(), version: 0, saving: false, deleting: false, archiving: false };
     store.drafts.set(report.report_ref, draft);
   }
-  if (!draft.saving && !draft.deleting && !draftChanged(draft) && report.associations_available !== false) {
+  if (!draft.saving && !draft.deleting && !draft.archiving && !draftChanged(draft) && report.associations_available !== false) {
     draft.baseline = report.bindings || [];
     draft.values = new Map(draft.baseline.map(item => [bindingId(item), item]));
   } else {

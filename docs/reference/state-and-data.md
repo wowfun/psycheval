@@ -6,7 +6,7 @@ rebuildable projections.
 | Data | Authority | Mutation rule |
 | --- | --- | --- |
 | Task, Job, Trial, result, reward, artifacts | Harbor files | Read-only to ordinary CLI views |
-| Canonical evaluation report | Harbor parent Trial or local source-cell `analysis.md` | Atomic source-scoped upsert through EvaluationReports; local Markdown imports use the same writer |
+| Canonical evaluation report | Harbor parent Trial or local source-cell `analysis.md` | Source-scoped publication and deletion through EvaluationReports; local Markdown imports use the same writer |
 | Portable steps, calls, observations, timestamps, usage | ATIF trajectory | Strictly validate before writing |
 | Aliases, state, notes, local analysis JSON, report bindings | Workspace overlay | Explicit user mutation |
 | Imported report package | Workspace `reports/` directory | Explicit package mutation through WorkspaceReportLibrary |
@@ -218,8 +218,11 @@ projection.
 Canonical report listing reads the last committed catalog projection during
 ordinary reconciliation. A new or invalidated cache has no canonical rows until
 its first valid projection commits; catalog invalidation then refreshes Reports.
+Safe retained canonical reports for local sources remain discoverable when their evidence
+is unreadable or missing. Reading and deletion need the validated source location,
+not readable trajectory evidence; publication still requires readable evidence.
 
-The read-only ReportLibrary combines this canonical adapter with the existing
+ReportLibrary combines this canonical adapter with the existing
 workspace-package adapter. Canonical reads always return the current source
 file; package reads delegate to WorkspaceReportLibrary. Stable opaque report
 references identify the two kinds without encoding paths. Report replacement
@@ -233,13 +236,88 @@ associations. WorkspaceReportLibrary owns these manual associations: imported
 packages retain `source_refs` in `state.json` and may add `dataset_ids` and `job_refs`
 arrays; canonical associations live under `reports/.associations/`, keyed by report
 reference.
+The same metadata stores the optional boolean `archived`, defaulting to false.
 Absent optional associations are empty, so existing packages need no rewrite.
 Changing associations never writes canonical `analysis.md` or imported report bodies.
+Association edits preserve archival state; archival edits preserve associations.
+Management mutations serialize the complete read-modify-write cycle, including
+validation of retained unavailable associations, under a per-report cross-process
+lease. State replacements stage beside report packages,
+then atomically replace the package's state file; readers never see staging files
+inside the package. Report bodies and management JSON are read through
+non-following regular-file handles, with a 20 MiB limit per file. Management
+snapshots take their content and modification time from the same opened file,
+so a concurrent atomic replacement cannot pair old state with a new timestamp.
+Canonical archival validates report existence
+inside that lease, so a completed deletion cannot leave newly written state.
+Management lock files are retained for the workspace's lifetime: removing them
+would let existing waiters and new callers lock different files for one report.
+Each report source or management lease acquisition uses one finite deadline across
+the in-process mutex and OS lock. Its default belongs to
+[`file_access`](../../src/psycheval/file_access.py); expiry raises
+`FileLeaseTimeout` before entering the protected operation. The API returns a
+retryable 409 conflict for this contention. If deletion has already committed
+before a later lease expires, the existing committed-deletion error still applies.
+The deadline bounds lock waiting, not the mutation after acquisition; disconnecting
+an HTTP caller does not interrupt an accepted mutation midway.
+The catalog writer uses the same non-following lease primitive with immediate
+contention failure. Waiting for report management never holds the catalog writer:
+first publication clears stale management before acquiring it, and deletion clears
+management after releasing it, while retaining the source lease throughout.
+Report association and archival edits, and imported-package deletion, use only
+their report management lease without acquiring the catalog writer. The existing
+catalog-loading admission guard still applies.
+Storage enumeration includes archived packages;
+Home and report queries select their presentation state explicitly.
+Archival hides a report from the default library and Home's Reports column,
+but does not prevent direct preview, source-detail reads, or Copilot context reads.
+Replacing canonical content preserves archival state. Creating a canonical body
+after its deletion clears any management state left by interrupted cleanup before
+publishing the new body. Markdown import, snapshot annotations and copied Trial
+sidecars all use the EvaluationReports writer for this rule. Snapshot and sidecar
+ingestion can run inside a catalog operation, so their report leases fail immediately
+on contention instead of waiting while holding the catalog writer.
 Association metadata is validated before publication. An unreadable canonical
 association file marks only that report's manual associations unavailable; its
 original source and report body remain readable. Such metadata cannot be overwritten
-through association editing until repaired. Missing sources retain their association
+through association or archival editing until repaired. Missing sources retain their association
 files so temporary unavailability cannot erase manual links.
+Imported packages with missing or unreadable state also retain their safe body
+preview, but reject association and archival edits until repaired.
+Damaged packages under safe report directories retain their stable identities in
+the library for deletion. Missing or invalid layout uses unavailable metadata;
+oversized bodies remain listed but cannot be previewed. Package-directory links
+are never admitted through this fallback.
+When management metadata is unreadable, its archival state is unknown. The
+library projects `archived=false` and unavailable associations, keeping the report
+discoverable in Active and All for repair or deletion. This fallback does not
+rewrite metadata; repairing it restores the retained archival state.
+
+Administrators may permanently delete either report kind. EvaluationReports owns
+canonical deletion and serializes it with publication and Markdown import using
+the source lock before the catalog writer lease. It revalidates the target and
+removes only the canonical regular `analysis.md`, reconciles the catalog, then
+clears that report's manual associations and archival metadata. MultiStep phases
+share the parent deletion. Imported deletion removes only the workspace package.
+An imported package with a valid ID may be deleted even if its state, body size,
+or file layout is invalid; deletion never follows a package-directory symlink.
+Neither operation removes sessions, Trial evidence, or the imported original file.
+Deletion accepts damaged management metadata without overwriting it. A report
+published after deletion starts unarchived, with no previous manual associations.
+Failures after removing the body report the committed deletion separately from
+metadata cleanup and catalog reconciliation, so clients can refresh accurately.
+The deleted report's catalog row is discarded before cleanup and full
+reconciliation, so either failure cannot restore it to the library. Discarding a
+committed projection advances its catalog generation in the same transaction,
+including when subsequent cleanup or reconciliation fails.
+Report presence participates in source fingerprints even when Harbor evidence is
+unreadable, so adding, changing, or removing the body invalidates cached projections.
+Imported deletion first detaches the package into a hidden `reports/.delete-*`
+directory, then removes that directory. If removal fails, the report stays absent
+from the library and the API reports a committed failure; the detached files remain
+on disk. After stopping serve and releasing file handles, an administrator can
+remove the matching directory within this workspace's `reports/` directory.
+The server does not automatically retry or collect these detached packages.
 
 Dataset identity is its registration ID. Managed Job identity is its run ID;
 external Harbor Job identity includes both mount ID and Job name. A managed run
@@ -253,7 +331,8 @@ The report-library HTTP interface uses typed `{kind, key}` association reference
 Session keys are catalog source keys; Dataset keys are registration IDs; Job keys
 are `managed:<run-id>` or `harbor:<mount-id>/<job-name>`. Missing session references
 retain an opaque key so they can be removed without exposing source paths.
-`GET /api/report-library` accepts `page`, `page_size`, `search`, and repeatable
+`GET /api/report-library` accepts `state=active|archived|all` (default `active`),
+`page`, `page_size`, `search`, and repeatable
 `kind`, `dataset`, and `job` filters (`kind=unassociated` selects reports
 without associations). The default ordering is descending update time, with report
 reference as a stable tie breaker. `GET /api/report-library/targets` accepts a
@@ -262,11 +341,22 @@ clamp the requested page to the available range after filtering. Unknown associa
 kinds are rejected; Dataset and Job IDs may refer to unavailable retained links.
 `PUT /api/report-library/{report_ref}/bindings` replaces the manual `bindings` list;
 canonical report session bindings cannot be edited through this endpoint.
+`PUT /api/report-library/{report_ref}/state` sets the strict boolean `archived`
+and returns updated metadata. Repeating the same state is idempotent.
 `POST /api/reports` imports a server `path` with an optional `bindings` list.
 Its Location points to `GET /api/report-library/{report_ref}`, which returns metadata;
 the `/preview` and `/reader` suffixes provide the sandboxed document and standalone
-reader. `DELETE /api/reports/{id}` deletes an imported package only.
-`GET /api/reports` supplies Home's direct-session package projection.
+reader. `DELETE /api/report-library/{report_ref}` deletes either kind and returns
+204, or 404 for a missing report. Committed deletion failures return a Problem
+with `committed`, `metadata_cleared`, and `catalog_reconciled` flags.
+Deletion responses, including committed failures, declare `X-Peval-Invalidations`:
+`reports` and, for canonical content, `catalog`. The catalog domain also
+invalidates the selected source's cached detail. Clients
+invalidate from this declaration rather than the report reference's spelling.
+For imported packages, `metadata_cleared` means detached from the active report
+library; `catalog_reconciled` is true because no catalog projection requires
+reconciliation. Detached tombstones may still require filesystem cleanup.
+`GET /api/reports` supplies Home's unarchived direct-session package projection.
 
 Report-page Dataset and Job filters include both manual associations and ownership
 derived from associated sessions. Associations retain their origin and are deduplicated

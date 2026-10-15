@@ -6,9 +6,8 @@ import secrets
 import stat
 import tempfile
 import tomllib
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Annotated, Any, Iterator
+from typing import Annotated, Any
 from urllib.parse import quote
 
 from fastapi import (
@@ -37,8 +36,8 @@ from psycheval.config import (
     write_workspace_locale,
     write_workspace_timezone,
 )
+from psycheval.file_access import FileLeaseTimeout
 from psycheval.html import render_serve_html
-from psycheval.report_library import ReportNotFound
 from psycheval.serve.access import (
     ADMIN_ROLE,
     GUEST_ROLE,
@@ -104,8 +103,6 @@ from psycheval.serve.api_models import (
     MountPatchRequest,
     PathSelectionRequest,
     PromptPutRequest,
-    ReportBindingsRequest,
-    ReportImportRequest,
     SessionInspectionRequest,
     SourceImportRequest,
     SourceKeysRequest,
@@ -120,8 +117,6 @@ from psycheval.serve.api_models import (
     ViewPutRequest,
 )
 from psycheval.serve.api_support import (
-    REPORT_PREVIEW_CSP,
-    REPORT_READER_CSP,
     acp_context_items,
     add_source_result_payload,
     catalog_query,
@@ -141,6 +136,8 @@ from psycheval.serve.api_support import (
     source_state_operation,
     update_harbor_mount_config,
     workspace_config_payload,
+    workspace_write,
+    writable_runtime,
 )
 from psycheval.serve.assets import (
     ECHARTS_ASSET_PATH,
@@ -165,6 +162,10 @@ from psycheval.serve.payloads import (
     summary_export_payload,
 )
 from psycheval.serve.prompt_assets import PromptAssetConflict
+from psycheval.serve.reports import (
+    register_report_routes,
+    report_deletion_invalidations,
+)
 from psycheval.serve.runtime import ServeRuntime
 from psycheval.serve.sources import add_source_payload, sessions_payload
 from psycheval.serve.visibility import (
@@ -178,19 +179,9 @@ from psycheval.serve.visibility import (
 from psycheval.state import CatalogBusyError, CatalogSummaryCapacityError
 from psycheval.timezones import resolve_timezone
 from psycheval.workspace_reports import (
-    WorkspaceReportNotFound,
-    render_report_preview,
-    render_report_reader_page,
+    ReportDeletionCommittedError,
 )
 from psycheval.workspace_views import WorkspaceViewConflict, WorkspaceViewNotFound
-
-
-def writable_runtime(request: Request) -> ServeRuntime:
-    runtime: ServeRuntime = request.app.state.runtime
-    runtime.ensure_ready()
-    if runtime.is_loading():
-        raise ProblemException(409, "serve catalog is checking runs")
-    return runtime
 
 
 def _source_rows(runtime: ServeRuntime, source_keys: list[str]) -> list[dict[str, Any]]:
@@ -198,12 +189,6 @@ def _source_rows(runtime: ServeRuntime, source_keys: list[str]) -> list[dict[str
         return [runtime.catalog.row_for_key(key) for key in source_keys]
     except ValueError as exc:
         raise ProblemException(404, str(exc)) from exc
-
-
-@contextmanager
-def workspace_write(runtime: ServeRuntime) -> Iterator[None]:
-    with runtime.catalog.workspace_write_guard():
-        yield
 
 
 def _problem_response(
@@ -214,6 +199,9 @@ def _problem_response(
     slug: str | None = None,
     errors: list[dict[str, str]] | None = None,
     headers: dict[str, str] | None = None,
+    committed: bool | None = None,
+    metadata_cleared: bool | None = None,
+    catalog_reconciled: bool | None = None,
 ) -> JSONResponse:
     safe_detail = project_guest_error(status, detail, role_for(request))
     problem = Problem(
@@ -223,6 +211,9 @@ def _problem_response(
         detail=safe_detail,
         instance=request.url.path,
         errors=errors,
+        committed=committed,
+        metadata_cleared=metadata_cleared,
+        catalog_reconciled=catalog_reconciled,
     )
     return _json(
         problem.model_dump(exclude_none=True),
@@ -457,10 +448,28 @@ def _install_error_handlers(app: FastAPI) -> None:
         return _problem_response(request, harbor_error_status(exc), str(exc))
 
     @app.exception_handler(CatalogBusyError)
+    @app.exception_handler(FileLeaseTimeout)
     async def catalog_busy_handler(
-        request: Request, exc: CatalogBusyError
+        request: Request, exc: CatalogBusyError | FileLeaseTimeout
     ) -> JSONResponse:
         return _problem_response(request, 409, str(exc))
+
+    @app.exception_handler(ReportDeletionCommittedError)
+    async def report_deletion_committed_handler(
+        request: Request, exc: ReportDeletionCommittedError
+    ) -> JSONResponse:
+        return _problem_response(
+            request,
+            500,
+            str(exc),
+            slug="report-deletion-committed",
+            headers={
+                "X-Peval-Invalidations": report_deletion_invalidations(exc.report_ref)
+            },
+            committed=True,
+            metadata_cleared=exc.metadata_cleared,
+            catalog_reconciled=exc.catalog_reconciled,
+        )
 
     @app.exception_handler(Exception)
     async def unexpected_error_handler(
@@ -487,7 +496,8 @@ def create_app(runtime: ServeRuntime, access_control: ServeAccess) -> FastAPI:
     _register_catalog_routes(app)
     _register_source_routes(app)
     _register_config_routes(app)
-    _register_view_report_routes(app)
+    _register_view_routes(app)
+    register_report_routes(app)
     _register_harbor_routes(app)
     _register_acp_routes(app)
     from psycheval.serve.jobs import register_jobs_routes
@@ -1201,7 +1211,7 @@ def _register_config_routes(app: FastAPI) -> None:
         return _json(prompt.to_dict(), headers={"ETag": _etag(prompt.revision)})
 
 
-def _register_view_report_routes(app: FastAPI) -> None:
+def _register_view_routes(app: FastAPI) -> None:
     @app.get("/api/views")
     @access(GUEST_ACCESS)
     def views(request: Request) -> JSONResponse:
@@ -1312,166 +1322,6 @@ def _register_view_report_routes(app: FastAPI) -> None:
         except ValueError as exc:
             raise ProblemException(400, str(exc)) from exc
         return _json(result)
-
-    @app.get("/api/reports")
-    @access(GUEST_ACCESS)
-    def reports(request: Request) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        return _json(runtime.workspace_report_catalog())
-
-    @app.get("/api/report-library")
-    @access(GUEST_ACCESS)
-    def report_library(
-        request: Request, page: int = 1, page_size: int = 50, search: str = ""
-    ) -> JSONResponse:
-        runtime: ServeRuntime = request.app.state.runtime
-        try:
-            return _json(
-                runtime.report_library.query(
-                    page=page,
-                    page_size=page_size,
-                    search=search,
-                    kinds=request.query_params.getlist("kind"),
-                    datasets=request.query_params.getlist("dataset"),
-                    jobs=request.query_params.getlist("job"),
-                )
-            )
-        except ValueError as exc:
-            raise ProblemException(400, str(exc)) from exc
-
-    @app.get("/api/report-library/targets")
-    @access(GUEST_ACCESS)
-    def report_targets(
-        request: Request,
-        kind: str,
-        page: int = 1,
-        page_size: int = 50,
-        search: str = "",
-    ) -> JSONResponse:
-        try:
-            return _json(
-                request.app.state.runtime.report_library.targets(
-                    kind=kind, page=page, page_size=page_size, search=search
-                )
-            )
-        except ValueError as exc:
-            raise ProblemException(400, str(exc)) from exc
-
-    @app.get("/api/report-library/{report_ref}")
-    @access(GUEST_ACCESS)
-    def report_metadata(request: Request, report_ref: str) -> JSONResponse:
-        try:
-            return _json(request.app.state.runtime.report_library.metadata(report_ref))
-        except ReportNotFound as exc:
-            raise ProblemException(404, str(exc)) from exc
-
-    @app.post(
-        "/api/reports",
-        dependencies=[Depends(require_admin), Depends(mutation_guard)],
-    )
-    @access(ADMIN_ACCESS)
-    def import_report(request: Request, body: ReportImportRequest) -> JSONResponse:
-        runtime = writable_runtime(request)
-        try:
-            with workspace_write(runtime):
-                bindings = [binding.model_dump() for binding in body.bindings]
-                state = runtime.report_library.validate_bindings(bindings)
-                report_id = runtime.workspace_reports.import_file(
-                    body.path,
-                    [
-                        binding["key"]
-                        for binding in bindings
-                        if binding["kind"] == "session"
-                    ],
-                    dataset_ids=state["dataset_ids"],
-                    job_refs=state["job_refs"],
-                )
-                report = runtime.report_library.metadata("package:" + report_id)
-        except ValueError as exc:
-            raise ProblemException(400, str(exc)) from exc
-        return _json(
-            report,
-            status=201,
-            headers={
-                "Location": f"/api/report-library/{quote(report['report_ref'], safe='')}"
-            },
-        )
-
-    @app.put(
-        "/api/report-library/{report_ref}/bindings",
-        dependencies=[Depends(require_admin), Depends(mutation_guard)],
-    )
-    @access(ADMIN_ACCESS)
-    def replace_report_bindings(
-        request: Request, report_ref: str, body: ReportBindingsRequest
-    ) -> JSONResponse:
-        runtime = writable_runtime(request)
-        try:
-            with workspace_write(runtime):
-                state = runtime.report_library.validate_bindings(
-                    [binding.model_dump() for binding in body.bindings],
-                    report_ref=report_ref,
-                )
-                runtime.workspace_reports.replace_bindings(report_ref, **state)
-                report = runtime.report_library.metadata(report_ref)
-        except (ReportNotFound, WorkspaceReportNotFound) as exc:
-            raise ProblemException(404, str(exc)) from exc
-        except ValueError as exc:
-            raise ProblemException(400, str(exc)) from exc
-        return _json(report)
-
-    @app.delete(
-        "/api/reports/{report_id}",
-        dependencies=[Depends(require_admin), Depends(mutation_guard)],
-        status_code=204,
-    )
-    @access(ADMIN_ACCESS)
-    def delete_report(request: Request, report_id: str) -> Response:
-        runtime = writable_runtime(request)
-        try:
-            with workspace_write(runtime):
-                runtime.workspace_reports.delete(report_id)
-        except WorkspaceReportNotFound as exc:
-            raise ProblemException(404, str(exc)) from exc
-        return Response(status_code=204)
-
-    @app.get("/api/report-library/{report_ref}/preview")
-    @access(GUEST_ACCESS)
-    def report_preview(request: Request, report_ref: str) -> Response:
-        runtime: ServeRuntime = request.app.state.runtime
-        try:
-            report = runtime.report_library.read(report_ref)
-        except ReportNotFound as exc:
-            raise ProblemException(404, str(exc)) from exc
-        return Response(
-            render_report_preview(report),
-            media_type="text/html",
-            headers={
-                "Content-Security-Policy": REPORT_PREVIEW_CSP,
-                "Referrer-Policy": "no-referrer",
-                "X-Content-Type-Options": "nosniff",
-                "Cache-Control": "no-store",
-            },
-        )
-
-    @app.get("/api/report-library/{report_ref}/reader")
-    @access(GUEST_ACCESS)
-    def report_reader(request: Request, report_ref: str) -> Response:
-        runtime: ServeRuntime = request.app.state.runtime
-        try:
-            report = runtime.report_library.read(report_ref)
-        except ReportNotFound as exc:
-            raise ProblemException(404, str(exc)) from exc
-        return Response(
-            render_report_reader_page(report),
-            media_type="text/html",
-            headers={
-                "Content-Security-Policy": REPORT_READER_CSP,
-                "Referrer-Policy": "no-referrer",
-                "X-Content-Type-Options": "nosniff",
-                "Cache-Control": "no-store",
-            },
-        )
 
 
 def _register_harbor_routes(app: FastAPI) -> None:

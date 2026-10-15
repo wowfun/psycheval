@@ -83,6 +83,18 @@ class StateArtifactMixin:
             target_path = target_cell_dir / filename
             if source_path.resolve() == target_path.resolve():
                 continue
+            if filename == "analysis.md":
+                from psycheval.evaluation_reports import evaluation_report_writer
+
+                content = source_path.read_text(encoding="utf-8")
+                with evaluation_report_writer(
+                    self.paths.root,
+                    target_cell_dir.relative_to(self.paths.root).as_posix(),
+                    target_cell_dir,
+                    blocking=False,
+                ) as write_report:
+                    write_report(content)
+                continue
             target_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, target_path)
 
