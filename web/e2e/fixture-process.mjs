@@ -50,8 +50,9 @@ async function stopFixture(fixture) {
     try {
       await promisify(execFile)("taskkill", ["/PID", String(fixture.pid), "/T", "/F"], { windowsHide: true });
     } catch (error) {
-      if (fixture.exitCode === null) throw error;
+      if (!await waitForExit(fixture)) throw error;
     }
+    if (!await waitForExit(fixture)) throw new Error("Windows fixture did not exit after tree termination");
     return;
   }
   fixture.kill("SIGINT");
@@ -60,6 +61,20 @@ async function stopFixture(fixture) {
     new Promise(resolve => setTimeout(resolve, 3000)),
   ]);
   if (fixture.exitCode === null) fixture.kill("SIGKILL");
+}
+
+async function waitForExit(fixture) {
+  if (fixture.exitCode !== null || fixture.signalCode !== null) return true;
+  return new Promise(resolve => {
+    const onExit = () => finish(true);
+    const timer = setTimeout(() => finish(false), 3000);
+    function finish(exited) {
+      clearTimeout(timer);
+      fixture.removeListener("exit", onExit);
+      resolve(exited);
+    }
+    fixture.once("exit", onExit);
+  });
 }
 
 export { startFixture, stopFixture };
