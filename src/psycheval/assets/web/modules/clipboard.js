@@ -23,17 +23,19 @@ async function copyText(text) {
 function bindCopyButton(button, getText, label) {
   button.addEventListener("click", async () => {
     if (button.getAttribute("aria-busy") === "true") return;
-    const text = getText();
-    if (!text?.trim()) return;
     button.setAttribute("aria-busy", "true");
     try {
+      const text = getText();
+      if (!text?.trim()) return;
       await copyText(text);
       button.textContent = t("copied", "Copied");
-    } catch {
+      button.removeAttribute("title");
+    } catch (error) {
       button.textContent = t("copy_failed", "Copy failed");
+      button.title = error.message || String(error);
     } finally {
       button.removeAttribute("aria-busy");
-      button.setAttribute("aria-label", `${button.textContent}: ${label}`);
+      button.setAttribute("aria-label", button.textContent === label ? label : `${button.textContent}: ${label}`);
     }
   });
 }
