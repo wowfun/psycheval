@@ -26,6 +26,29 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());
 
+test("approximate Last Turn End keeps its source hint and timezone-aware timestamp", async () => {
+  const dates = await import("../../src/psycheval/assets/web/modules/date-time.js");
+  const column = tables.leaderboardColumns().find(column => column.key === "finished_at_ms");
+  const root = document.getElementById("table-root");
+  dates.setDisplayTimezone("UTC");
+  try {
+    for (const source of ["harbor_agent_execution", "harbor_trial"]) {
+      const row = { finished_at_ms: 0, last_turn_finished_at_source: source };
+      root.innerHTML = `<table><tbody><tr>${tables.renderDataCell(row, column)}</tr></tbody></table>`;
+      assert.match(root.querySelector("td").textContent, /≈/);
+      assert.match(root.querySelector("td").title, /Approximate/);
+      assert.match(root.querySelector("time").getAttribute("datetime"), /^1970-01-01T00:00:00/);
+      dates.setDisplayTimezone("Asia/Shanghai");
+      assert.match(root.querySelector("td").textContent, /≈/);
+      assert.match(root.querySelector("td").textContent, /Approximate/);
+      assert.match(root.querySelector("time").textContent, /08:00:00/);
+    }
+    const exact = { finished_at_ms: 0, last_turn_finished_at_source: "trajectory" };
+    root.innerHTML = `<table><tbody><tr>${tables.renderDataCell(exact, column)}</tr></tbody></table>`;
+    assert.doesNotMatch(root.textContent, /≈|Approximate/);
+  } finally { dates.setDisplayTimezone("UTC"); }
+});
+
 test("Notes cells use their catalog row independently of the selected detail", () => {
   const previousView = runtime.state.view;
   try {

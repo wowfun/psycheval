@@ -15,6 +15,7 @@ from typing import Any, Callable, Iterable, Iterator, Sequence
 from psycheval._harbor_datasets import resolve_harbor_datasets_for_mount
 from psycheval._state.annotations import optional_int, optional_str
 from psycheval.analysis import cached_note_report_for_cell
+from psycheval.atif import iso_timestamp_ms
 from psycheval.config import ToolConfig
 from psycheval.file_access import FileLeaseTimeout, blocking_file_lease
 from psycheval.report.inference import inference_row_metrics
@@ -31,7 +32,7 @@ from psycheval.state.workspace_sources import (
 )
 
 CATALOG_SCHEMA_VERSION = 18
-CATALOG_PROJECTION_VERSION = 3
+CATALOG_PROJECTION_VERSION = 6
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 SUMMARY_CACHE_ENTRY_LIMIT = 128
@@ -980,7 +981,9 @@ class WorkspaceCatalog:
             )
             if not document.readable:
                 summary.pop("step_outline", None)
-                summary["last_turn_finished_at_ms"] = None
+                if summary.get("last_turn_finished_at_source") == "trajectory":
+                    summary["last_turn_finished_at_ms"] = None
+                    summary["last_turn_finished_at_source"] = None
             if summary.get("model") is None:
                 summary["model"] = document.source.get("model")
         else:
@@ -1600,6 +1603,31 @@ def _live_task_ref(
     return {"dataset_id": matches[0], "task": task_name}
 
 
+def _last_turn_end(meta: dict[str, Any]) -> dict[str, Any]:
+    finished = optional_int(meta.get("finished_at_ms"))
+    source = "trajectory" if finished is not None else None
+    if finished is None and meta.get("adapter") == "harbor":
+        evaluation = meta.get("evaluation")
+        phases = (
+            evaluation.get("phase_timing") if isinstance(evaluation, dict) else None
+        )
+        if isinstance(phases, dict):
+            for phase, origin in (
+                ("agent_execution", "harbor_agent_execution"),
+                ("overall", "harbor_trial"),
+            ):
+                timing = phases.get(phase)
+                if isinstance(timing, dict):
+                    finished = iso_timestamp_ms(timing.get("finished_at"))
+                    if finished is not None:
+                        source = origin
+                        break
+    return {
+        "last_turn_finished_at_ms": finished,
+        "last_turn_finished_at_source": source,
+    }
+
+
 def _catalog_summary(
     trajectory: dict[str, Any], meta: dict[str, Any], analysis_count: int
 ) -> dict[str, Any]:
@@ -1614,7 +1642,7 @@ def _catalog_summary(
         ),
         "trial_session_id": optional_str(trajectory.get("session_id")),
         "step_outline": _step_outline(trajectory, meta),
-        "last_turn_finished_at_ms": optional_int(meta.get("finished_at_ms")),
+        **_last_turn_end(meta),
         "status": optional_str(meta.get("status")) or "unknown",
         "score": _optional_number(meta.get("score")),
         "score_message": optional_str(meta.get("score_message")),

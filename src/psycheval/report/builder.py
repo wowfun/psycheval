@@ -168,7 +168,7 @@ def prepare_session_report(
         conversion.started_at_ms,
         conversion.finished_at_ms,
     )
-    wall_duration = max(0, finished - started)
+    wall_duration = _wall_duration_ms(started, finished)
     steps = step_meta_reports(
         conversion.steps_meta,
         started,
@@ -226,7 +226,7 @@ def canonical_time_bounds(
     trajectory: dict[str, Any],
     fallback_started_at_ms: int | None,
     fallback_finished_at_ms: int | None,
-) -> tuple[int, int]:
+) -> tuple[int | None, int | None]:
     timestamps: list[int] = []
     for step in trajectory.get("steps") or []:
         if not isinstance(step, dict):
@@ -259,19 +259,20 @@ def canonical_time_bounds(
             finished = iso_timestamp_ms(result["extra"].get("finished_at"))
             if finished is not None:
                 timestamps.append(finished)
-    started = int(
-        min(timestamps)
-        if timestamps
-        else (fallback_started_at_ms if fallback_started_at_ms is not None else 0)
+    if timestamps:
+        return min(timestamps), max(timestamps)
+    started, finished = fallback_started_at_ms, fallback_finished_at_ms
+    if started is not None and finished is not None:
+        finished = max(started, finished)
+    return started, finished
+
+
+def _wall_duration_ms(started: int | None, finished: int | None) -> int | None:
+    return (
+        max(0, finished - started)
+        if started is not None and finished is not None
+        else None
     )
-    finished = int(
-        max(timestamps)
-        if timestamps
-        else (
-            fallback_finished_at_ms if fallback_finished_at_ms is not None else started
-        )
-    )
-    return started, max(started, finished)
 
 
 def project_meta_from_atif(
@@ -287,7 +288,7 @@ def project_meta_from_atif(
     )
     projected["started_at_ms"] = started
     projected["finished_at_ms"] = finished
-    projected["wall_duration_ms"] = max(0, finished - started)
+    projected["wall_duration_ms"] = _wall_duration_ms(started, finished)
     root_extra = trajectory.get("extra")
     usage = root_extra.get("workbuddy_usage") if isinstance(root_extra, dict) else None
     if isinstance(usage, dict) and usage.get("status") in {"partial", "unavailable"}:
@@ -512,7 +513,7 @@ def _tool_execution_timing(extras: list[dict[str, Any]]) -> dict[str, Any] | Non
 def project_canonical_step_facts(
     trajectory: dict[str, Any],
     step_reports: list[dict[str, Any]],
-    started_at_ms: int,
+    started_at_ms: int | None,
 ) -> None:
     for step, report in zip(trajectory.get("steps") or [], step_reports, strict=True):
         if not isinstance(step, dict):
@@ -520,7 +521,9 @@ def project_canonical_step_facts(
         timestamp = iso_timestamp_ms(step.get("timestamp"))
         if timestamp is not None:
             report["timestamp_ms"] = timestamp
-            report["elapsed_ms"] = timestamp - started_at_ms if started_at_ms else None
+            report["elapsed_ms"] = (
+                timestamp - started_at_ms if started_at_ms is not None else None
+            )
         extra = step.get("extra") if isinstance(step.get("extra"), dict) else {}
         for key in ("duration_ms", "duration_source", "truncated"):
             if key in extra:

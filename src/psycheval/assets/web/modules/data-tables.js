@@ -97,7 +97,7 @@ function leaderboardColumns() {
     { key: "model_provider", label: t("provider", "Provider"), valueType: "identity", defaultVisible: false, filterable: true, sortable: true, value: row => row?.model_provider || "-" },
     { key: "reward", label: t("reward", "Reward"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row?.score, presence: row => hasMetricValue(row?.score) ? row.score : Object.keys(row?.rewards || {}), format: (_value, row) => rewardValue(row) },
     { key: "status", label: t("result", "Result"), valueType: "status", filterable: true, value: row => row.status || "-", filterLabel: value => statusLabel(value), html: row => `<span class="stamp ${lower(row.status || "passed")}">${esc(statusLabel(row.status))}</span>` },
-    { key: "finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.finished_at_ms, format: fmtDate },
+    { key: "finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.finished_at_ms, format: (value, row) => `${lastTurnEndHint(row) ? "≈ " : ""}${fmtDate(value)}`, html: renderLastTurnEnd, cellTitle: row => lastTurnEndHint(row) ? `${fmtDate(row.finished_at_ms)} · ${lastTurnEndHint(row)}` : "" },
     { key: "duration_ms", label: t("duration", "Active Duration"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.duration_ms, format: fmtMs },
     { key: "ttft_ms", label: t("avg_ttft", "Avg TTFT"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.ttft_ms, format: fmtTtft },
     { key: "tps", label: t("decode_tps", "Decode TPS"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.tps, format: fmtTps },
@@ -125,6 +125,17 @@ function leaderboardColumns() {
     workspaceReportLeaderboardColumn(),
     ...serveColumns.slice(2)
   ];
+}
+function lastTurnEndHint(row) {
+  if (!hasMetricValue(row?.finished_at_ms)) return "";
+  if (row?.last_turn_finished_at_source === "harbor_agent_execution") return t("last_turn_end_from_agent_execution", "Approximate: Agent execution finished");
+  if (row?.last_turn_finished_at_source === "harbor_trial") return t("last_turn_end_from_trial", "Approximate: Trial finished");
+  return "";
+}
+function renderLastTurnEnd(row) {
+  const time = renderDateTime(row.finished_at_ms);
+  const hint = lastTurnEndHint(row);
+  return hint ? `<span title="${esc(hint)}">≈ <span class="sr-only">${esc(hint)}: </span>${time}</span>` : time;
 }
 function notesText(row) {
   return String(row?.notes_markdown || "").trim();

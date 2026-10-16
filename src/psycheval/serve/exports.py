@@ -159,6 +159,7 @@ def xlsx_summary(rows: list[dict[str, Any]]) -> bytes:
         ),
         ("Result", lambda row: row.get("status")),
         ("Last Turn End", lambda row: row.get("last_turn_finished_at_ms")),
+        ("Last Turn End Source", lambda row: row.get("last_turn_finished_at_source")),
         ("Active Duration", lambda row: row.get("duration_ms")),
         ("Avg TTFT (ms)", lambda row: row.get("ttft_ms")),
         ("Decode TPS", lambda row: row.get("tps")),

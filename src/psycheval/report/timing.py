@@ -33,13 +33,17 @@ def trial_active_duration_ms(
 
 def step_meta_reports(
     steps: list[StepMeta],
-    started: int,
+    started: int | None,
     timestamp_semantics: str | None,
 ) -> list[dict[str, Any]]:
     reports = []
     for index, step in enumerate(steps):
         timestamp = step.timestamp_ms
-        elapsed = timestamp - started if timestamp is not None and started else None
+        elapsed = (
+            timestamp - started
+            if timestamp is not None and started is not None
+            else None
+        )
         next_timestamp = next(
             (
                 candidate.timestamp_ms

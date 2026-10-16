@@ -135,6 +135,23 @@ the workspace note remains authoritative.
 
 ## Telemetry
 
+Trajectory time bounds and elapsed wall duration remain unknown when neither
+canonical timestamps nor recorded source bounds exist. A single recorded source
+bound does not invent the other bound or a duration. Numeric zero is a valid
+timestamp; elapsed offsets can be measured from it. Retained Harbor lifecycle
+duration may be displayed independently of unknown trajectory timestamps.
+
+For the Leaderboard's Last Turn End, a known trajectory bound takes precedence.
+When it is missing, Harbor rows use the recorded Agent execution finish, then
+the Trial finish, as an approximation for display and sorting. The catalog's
+Last Turn End column-availability counts include these approximations even when
+the canonical trajectory finish remains unknown. The catalog
+retains the selected source, the browser marks approximations with `≈` and a
+source hint, and spreadsheet exports include that source. Missing or invalid
+finish records remain unknown; file modification and import times are not
+execution-time substitutes. This projection never fills canonical trajectory
+timestamps or changes their duration calculations.
+
 Inference aggregates retain sufficient statistics for weighted recomputation.
 TTFT needs exact request-dispatch and first-token boundaries; decode throughput
 also needs an exact terminal boundary and output usage. Cache rate uses explicit

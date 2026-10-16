@@ -32,11 +32,111 @@ from psycheval.state.catalog import (
     _count_matching_source_refs,
     _summary_rows,
 )
+from psycheval.state.workspace_source_models import SourceDocument
 from tests.peval.cli_inputs_support import write_trial_cell_artifacts
 from tests.peval.test_atif_contract import valid_trajectory
 
 
 class WorkspaceCatalogTests(unittest.TestCase):
+    def test_unreadable_rows_keep_only_independent_harbor_finish_approximations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store, catalog = self.catalog(Path(tmp))
+            try:
+                for meta, timestamp, source in (
+                    (
+                        {
+                            "evaluation": {
+                                "phase_timing": {
+                                    "agent_execution": {
+                                        "finished_at": "1970-01-01T00:00:01Z"
+                                    }
+                                }
+                            }
+                        },
+                        1000,
+                        "harbor_agent_execution",
+                    ),
+                    (
+                        {
+                            "evaluation": {
+                                "phase_timing": {
+                                    "overall": {"finished_at": "1970-01-01T00:00:02Z"}
+                                }
+                            }
+                        },
+                        2000,
+                        "harbor_trial",
+                    ),
+                    ({"finished_at_ms": 7}, None, None),
+                ):
+                    document = SourceDocument(
+                        source_ref="harbor/mount/job/trial",
+                        source_key="cell-unreadable",
+                        source={"kind": "harbor-trial"},
+                        trajectory=None,
+                        meta={"adapter": "harbor", **meta},
+                        fingerprint="revision",
+                        updated_at_ms=999999,
+                        input_bytes=0,
+                        readable=False,
+                        refreshable=False,
+                        snapshot=False,
+                        active=True,
+                        last_status="unreadable",
+                        last_error="invalid trajectory",
+                    )
+                    row, readable, _search = catalog._row_for_document(document)
+                    self.assertFalse(readable)
+                    self.assertEqual(row["last_turn_finished_at_ms"], timestamp)
+                    self.assertEqual(row["last_turn_finished_at_source"], source)
+                    self.assertNotIn("step_outline", row)
+            finally:
+                store.close()
+
+    def test_projection_refresh_removes_synthetic_epoch_without_changing_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cell = self.write_cell(root, 1)
+            trajectory_path = cell / "agent/trajectory.json"
+            trajectory_path.write_text(json.dumps(valid_trajectory()), encoding="utf-8")
+            meta_path = cell / "agent/trajectory_meta.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            for key in ("started_at_ms", "finished_at_ms", "wall_duration_ms"):
+                meta[key] = None
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+            before = {
+                path: path.read_bytes() for path in cell.rglob("*") if path.is_file()
+            }
+            store, catalog = self.catalog(root)
+            self.addCleanup(store.close)
+            catalog.reconcile()
+            with catalog._connect() as connection:
+                row = json.loads(
+                    connection.execute("SELECT row_json FROM cells").fetchone()[0]
+                )
+                row["last_turn_finished_at_ms"] = 0
+                connection.execute(
+                    "UPDATE cells SET last_turn_end = 0, row_json = ?",
+                    (json.dumps(row),),
+                )
+                catalog._set_meta(
+                    connection,
+                    "projection_version",
+                    str(CATALOG_PROJECTION_VERSION - 1),
+                )
+                connection.commit()
+            rebuilt = WorkspaceCatalog(store, catalog.config)
+            self.assertFalse(rebuilt.has_generation)
+            rebuilt.reconcile()
+            fresh = rebuilt.query(CatalogQuery()).items[0].to_dict()
+            self.assertIsNone(fresh["last_turn_finished_at_ms"])
+            detail = rebuilt.load_detail(fresh["source_key"]).report["trajectory_meta"][
+                0
+            ]
+            self.assertIsNone(detail["started_at_ms"])
+            self.assertIsNone(detail["finished_at_ms"])
+            self.assertEqual({path: path.read_bytes() for path in before}, before)
+
     def test_notes_projection_tracks_local_content_and_reuses_unchanged_rows(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

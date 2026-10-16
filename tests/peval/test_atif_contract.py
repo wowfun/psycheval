@@ -113,6 +113,59 @@ class PevalAtifContractTests(unittest.TestCase):
         )
         self.assertEqual(trajectory, before)
 
+    def test_missing_time_bounds_remain_unknown_and_partial_bounds_stay_partial(self):
+        from psycheval.report.builder import canonical_time_bounds
+
+        trajectory = valid_trajectory()
+        for started, finished, wall in (
+            (None, None, None),
+            (0, None, None),
+            (None, 100, None),
+            (0, 100, 100),
+            (100, 50, 0),
+        ):
+            with self.subTest(started=started, finished=finished):
+                bounds = canonical_time_bounds(trajectory, started, finished)
+                self.assertEqual(
+                    bounds,
+                    (
+                        started,
+                        max(started, finished)
+                        if started is not None and finished is not None
+                        else finished,
+                    ),
+                )
+                meta = project_meta_from_atif(
+                    trajectory, {"started_at_ms": started, "finished_at_ms": finished}
+                )
+                self.assertEqual(meta["started_at_ms"], bounds[0])
+                self.assertEqual(meta["finished_at_ms"], bounds[1])
+                self.assertEqual(meta["wall_duration_ms"], wall)
+
+    def test_epoch_zero_is_a_known_timestamp_and_elapsed_origin(self):
+        trajectory = valid_trajectory()
+        trajectory["steps"][0]["timestamp"] = "1970-01-01T00:00:00Z"
+        meta = project_meta_from_atif(trajectory, {})
+        self.assertEqual(meta["started_at_ms"], 0)
+        self.assertEqual(meta["finished_at_ms"], 0)
+        self.assertEqual(meta["wall_duration_ms"], 0)
+        self.assertEqual(meta["steps"][0]["elapsed_ms"], 0)
+
+    def test_timestamp_free_report_preserves_unknown_bounds_and_source_duration(self):
+        trajectory = valid_trajectory()
+        report = build_report(
+            convert_atif_trajectory(trajectory), ToolConfig(adapter="atif"), "inline"
+        )
+        meta = report["trajectory_meta"][0]
+        for key in ("started_at_ms", "finished_at_ms", "wall_duration_ms"):
+            self.assertIsNone(meta[key])
+        projected = project_meta_from_atif(
+            trajectory, {"import_context": {"source_timing": {"wall_duration_ms": 25}}}
+        )
+        self.assertIsNone(projected["started_at_ms"])
+        self.assertIsNone(projected["finished_at_ms"])
+        self.assertEqual(projected["wall_duration_ms"], 25)
+
     def test_generation_duration_validates_canonical_and_sidecar_measurements(self):
         for value in (
             True,

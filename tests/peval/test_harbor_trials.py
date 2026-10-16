@@ -193,6 +193,122 @@ class HarborTrialTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_last_turn_end_approximation_sorts_harbor_rows_without_changing_times(self):
+        from psycheval.atif import iso_timestamp_ms
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            jobs = base / "jobs"
+            for name, recorded, execution, finished in (
+                (
+                    "older",
+                    "2026-01-01T00:00:00Z",
+                    "2026-01-09T00:00:00Z",
+                    "2026-01-10T00:00:00Z",
+                ),
+                ("newer", None, "2026-01-03T00:00:00Z", "2026-01-10T00:00:00Z"),
+                ("trial-only", None, None, "2026-01-02T00:00:00Z"),
+                ("missing", None, None, "2026-01-04T00:00:00Z"),
+                ("unknown", None, None, None),
+            ):
+                trajectory = atif_trajectory(name)
+                for step in trajectory["steps"]:
+                    step.pop("timestamp", None)
+                if recorded:
+                    trajectory["steps"][-1]["timestamp"] = recorded
+                result = {
+                    **completed_result(),
+                    "trial_name": name,
+                    "finished_at": finished,
+                }
+                if execution:
+                    result["agent_execution"] = {"finished_at": execution}
+                write_trial(jobs / "job-a" / name, trajectory=trajectory, result=result)
+                if name == "missing":
+                    (jobs / "job-a" / name / "agent/trajectory.json").unlink()
+            before = {p: p.read_bytes() for p in jobs.rglob("*") if p.is_file()}
+            store, config, catalog = self.workspace(base / "workspace", jobs)
+            try:
+                catalog.reconcile()
+                expected = ["missing", "newer", "trial-only", "older", "unknown"]
+                self.assertEqual(
+                    catalog.query(CatalogQuery()).column_presence["finished_at_ms"], 4
+                )
+                for direction, names in (
+                    ("desc", expected),
+                    ("asc", ["older", "trial-only", "newer", "missing", "unknown"]),
+                ):
+                    rows = [
+                        catalog.query(
+                            CatalogQuery(
+                                sort="last_turn_end",
+                                direction=direction,
+                                page=page,
+                                page_size=1,
+                            )
+                        )
+                        .items[0]
+                        .to_dict()
+                        for page in range(1, 6)
+                    ]
+                    self.assertEqual([r["trial_name"] for r in rows], names)
+                row = next(row for row in rows if row["trial_name"] == "newer")
+                self.assertEqual(
+                    row["last_turn_finished_at_ms"],
+                    iso_timestamp_ms("2026-01-03T00:00:00Z"),
+                )
+                self.assertEqual(
+                    row["last_turn_finished_at_source"], "harbor_agent_execution"
+                )
+                meta = catalog.load_detail(row["source_key"]).report["trajectory_meta"][
+                    0
+                ]
+                self.assertIsNone(meta["finished_at_ms"])
+                exported = build_serve_export(catalog, store, config, kind="xlsx")
+                import io
+                import zipfile
+
+                with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+                    sheet = archive.read("xl/worksheets/sheet1.xml").decode()
+                self.assertIn("Last Turn End Source", sheet)
+                self.assertIn("harbor_agent_execution", sheet)
+                self.assertIn("harbor_trial", sheet)
+                self.assertEqual({p: p.read_bytes() for p in before}, before)
+            finally:
+                store.close()
+
+    def test_last_turn_projection_prefers_known_zero_and_ignores_invalid_fallbacks(
+        self,
+    ):
+        from psycheval.state.catalog import _catalog_summary
+
+        phases = {
+            "agent_execution": {"finished_at": "invalid"},
+            "overall": {"finished_at": "1970-01-01T00:00:00Z"},
+        }
+        cases = [
+            ({"adapter": "harbor", "finished_at_ms": 0}, 0, "trajectory"),
+            ({"adapter": "harbor"}, 0, "harbor_trial"),
+            ({"adapter": "atif"}, None, None),
+        ]
+        for meta, expected, source in cases:
+            row = _catalog_summary(
+                {}, {**meta, "evaluation": {"phase_timing": phases}}, 0
+            )
+            self.assertEqual(row["last_turn_finished_at_ms"], expected)
+            self.assertEqual(row["last_turn_finished_at_source"], source)
+        for phases in (
+            None,
+            [],
+            {"agent_execution": []},
+            {"overall": {"finished_at": "bad"}},
+            {"overall": {"started_at": "2026-01-01T00:00:00Z"}},
+        ):
+            row = _catalog_summary(
+                {}, {"adapter": "harbor", "evaluation": {"phase_timing": phases}}, 0
+            )
+            self.assertIsNone(row["last_turn_finished_at_ms"])
+
     def test_harbor_tool_call_extra_timing_reaches_catalog_and_detail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
