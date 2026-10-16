@@ -73,13 +73,20 @@ def outcome(state, result_format):
         if isinstance(native, dict):
             code = native.get("exitCode", native.get("exit_code"))
             signal = native.get("signal")
+            tool_error = native.get("tool_error_code")
             extra.update(exit_code=code, signal=signal)
             if (type(code) is int and code != 0) or signal is not None:
                 extra.update(status="failed", is_error=True)
             if (
                 native.get("interrupted") is True
                 or native.get("sandboxDenied") is True
-                or native.get("tool_error_code") is not None
+                or (
+                    tool_error is not None
+                    and not (
+                        (type(tool_error) is int and tool_error == 0)
+                        or tool_error == "0"
+                    )
+                )
             ):
                 extra.update(status="failed", is_error=True)
             output = native.get("output")

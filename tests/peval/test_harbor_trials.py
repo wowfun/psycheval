@@ -309,6 +309,64 @@ class HarborTrialTests(unittest.TestCase):
             )
             self.assertIsNone(row["last_turn_finished_at_ms"])
 
+    def test_workbuddy_bash_outcomes_reach_catalog_error_rate_and_detail(self):
+        from psycheval.harbor.acp_evidence import convert
+        from tests.harbor.test_acp import _current_evidence
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            evidence = base / "evidence"
+            evidence.mkdir()
+            updates = []
+            for index, (code, tool_code) in enumerate(
+                ((0, "0"), (0, 0), (2, "0"), (0, "E_TOOL"))
+            ):
+                updates.append(
+                    {
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": str(index),
+                        "title": "Bash",
+                        "status": "completed",
+                        "rawInput": {},
+                        "_meta": {
+                            "codebuddy.ai/toolName": "Bash",
+                            "codebuddy.ai/rawResponse": {
+                                "exitCode": code,
+                                "signal": None,
+                                "tool_error_code": tool_code,
+                            },
+                        },
+                    }
+                )
+            summary = _current_evidence(evidence, updates)
+            trajectory = convert(
+                evidence,
+                summary,
+                "task",
+                {"name": "workbuddy", "version": "1"},
+                "codebuddy",
+            ).to_json_dict()
+            jobs = base / "jobs"
+            write_trial(
+                jobs / "job-a/trial-a", trajectory=trajectory, result=completed_result()
+            )
+            store, _config, catalog = self.workspace(base / "workspace", jobs)
+            try:
+                catalog.reconcile()
+                row = catalog.query(CatalogQuery()).items[0].to_dict()
+                self.assertEqual(row["total_tool_calls"], 4)
+                self.assertEqual(row["total_tool_errors"], 2)
+                report = catalog.load_detail(row["source_key"]).report
+                tools = report["trajectory_meta"][0]["steps"][1]["tool_calls"]
+                self.assertEqual(
+                    [tool["status"] for tool in tools],
+                    ["completed", "completed", "failed", "failed"],
+                )
+                self.assertEqual(row["last_turn_finished_at_source"], "harbor_trial")
+                self.assertIsNone(report["trajectory_meta"][0]["finished_at_ms"])
+            finally:
+                store.close()
+
     def test_harbor_tool_call_extra_timing_reaches_catalog_and_detail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

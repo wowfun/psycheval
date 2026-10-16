@@ -413,7 +413,14 @@ def test_business_failure_overrides_completed(native):
         ({"exitCode": 3, "signal": None}, "failed"),
         ({"exitCode": 0, "signal": None, "interrupted": True}, "failed"),
         ({"exitCode": 0, "signal": None, "sandboxDenied": True}, "failed"),
-        ({"exitCode": 0, "signal": None, "tool_error_code": 0}, "failed"),
+        ({"exitCode": 0, "signal": None, "tool_error_code": 0}, "completed"),
+        ({"exitCode": 0, "signal": None, "tool_error_code": "0"}, "completed"),
+        ({"exitCode": 0, "signal": None, "tool_error_code": "E_TOOL"}, "failed"),
+        ({"exitCode": 0, "signal": None, "tool_error_code": 1}, "failed"),
+        ({"exitCode": 0, "signal": None, "tool_error_code": False}, "failed"),
+        ({"exitCode": 0, "signal": None, "tool_error_code": True}, "failed"),
+        ({"exitCode": 2, "signal": None, "tool_error_code": "0"}, "failed"),
+        ({"exitCode": 0, "signal": "SIGTERM", "tool_error_code": "0"}, "failed"),
         ({"exitCode": 0, "signal": None, "tool_error_code": ""}, "failed"),
         ({"exitCode": 0, "signal": None, "tool_error_code": None}, "completed"),
         ({"exitCode": 0}, "incomplete"),
@@ -436,6 +443,7 @@ def test_codebuddy_shell_outcome_and_delivered_observation(native, status, ident
     )
     assert content == "observed" or native.get("output") == content
     assert extra["status"] == status
+    assert extra["is_error"] == (status != "completed")
 
 
 def test_model_drift_retains_wire_and_blocks_evidence(tmp_path):

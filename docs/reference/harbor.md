@@ -268,8 +268,10 @@ The `codebuddy` evidence policy validates `codebuddy.ai/toolName` vendor metadat
 as canonical identity, rejects identity changes, and interprets business failure
 and known raw results. Its vendor metadata checks and open configuration category
 labels apply only to this policy. Null optional metadata is treated as absent.
-An explicitly present, non-null native `tool_error_code` marks a failed result,
-including zero or an empty string; truthiness does not decide error presence.
+Native `tool_error_code` values `0` and `"0"` mean no tool error. Other
+non-null values mark failure; booleans and empty strings are not success codes.
+This does not override an ACP failure, nonzero exit code, signal, interruption,
+sandbox denial, or explicit business failure.
 Display titles do not prove identity; incomplete or failed
 commands cannot prove successful execution. Command detection uses the canonical
 shell name, ACP execute kind, or native execution fields; renaming a command does
