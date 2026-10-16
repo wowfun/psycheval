@@ -22,6 +22,8 @@ through native configuration. MCP transport capabilities are negotiated.
 Resume uses the exact saved Session and setup, preferring advertised resume over
 load; load replay is excluded using wire order. Recovery never creates a replacement.
 
+### Permissions and evidence
+
 `permission_mode=allow|deny` prefers the corresponding once option, then always.
 Unavailable policy choices cancel the request and fail the invocation. Decisions
 are retained. `tool_result_format=acp|rsiversi|codebuddy` defaults to ACP status semantics;
@@ -39,19 +41,30 @@ Observation terms inspect delivered content blocks; RSIversi process observation
 use stdout/stderr text, excluding execution metadata. Raw structured results
 remain in observation extras and do not become synthetic observation text.
 
-Raw frames and stderr are streamed to current-call logs before SDK projection.
-Each invocation shares a finite `max_evidence_bytes` budget across raw stdin,
-stdout, decoded events and stderr. Exhaustion fails the invocation, marks protocol
+Raw frames and stderr are streamed to current-call gzip logs before SDK projection:
+`acp.stdin.ndjson.gz`, `acp.stdout.ndjson.gz`, `acp.events.ndjson.gz` and
+`acp.stderr.log.gz`. Compression is lossless, including notification order and
+vendor fields. Each write synchronously flushes compressed data for live readers.
+Each invocation shares a finite `max_evidence_bytes` stored-byte budget across
+these files. `max_decoded_evidence_bytes` separately bounds their combined
+uncompressed size; `None` uses the stored-byte budget. Both limits require positive
+integers. Peer-derived summary metadata consumes both budgets. Admission reserves
+gzip closing space so exhaustion can retain a complete compressed prefix.
+Closing attempts every evidence file even if an earlier close fails, then reports
+the first failure.
+Exhaustion fails the invocation, marks protocol
 evidence incomplete, retains its admitted prefix, and still settles descendants.
 The bounded wire frame admits inline image results. Frame-count admission scales
 with the declared evidence-byte budget up to an independent finite ceiling;
 larger retained-evidence budgets can therefore support longer streamed tool output.
-Peer-derived summary metadata also consumes this budget. The fixed cleanup and
+The fixed cleanup and
 integrity records are retained even when admission is exhausted.
 The strict wire limits and byte-budget default belong to
 [`acp_protocol`](../../src/psycheval/harbor/acp_protocol.py).
 The closed evidence files are bound to an invocation by a summary manifest of
-sizes and digests. Missing, truncated or substituted retained files fail
+stored and decoded sizes and digests. Bounded streaming readers validate gzip
+completion, reject trailing data, and enforce decoded-byte and record limits.
+Missing, truncated or substituted retained files fail
 conversion explicitly. Publication failures cannot admit partial evidence.
 Malformed known protocol data fails explicitly. Context/capacity usage is not
 token accounting; absent token and cost evidence remains unknown. Conversion is
@@ -150,9 +163,10 @@ Missing authentication or unsupported bootstrap capabilities fail before prompti
 the adapter never initiates desktop login or falls back to another CLI or model.
 Custom models still require WorkBuddy authentication in ACP mode.
 
-WorkBuddy's complete streaming tool-argument updates use a vendor-specific,
-finite evidence budget; `max_evidence_bytes` remains explicitly configurable.
-Its default belongs to the WorkBuddy adapter. Exhaustion preserves the prefix,
+WorkBuddy's cumulative streaming tool-argument updates are retained losslessly.
+Its finite stored and decoded evidence budgets are independently configurable;
+their defaults belong to the WorkBuddy adapter. The decoded budget does not
+increase native usage-history read limits. Exhaustion preserves the prefix,
 settles the Job and rejects incomplete tool evidence, as in generic ACP.
 
 The full headless bundle is used, with native session persistence under the

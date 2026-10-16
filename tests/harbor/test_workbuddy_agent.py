@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import io
 import json
 import os
@@ -438,7 +439,12 @@ def test_model_drift_retains_wire_and_blocks_evidence(tmp_path):
             assert summary["model_mismatch"] and not summary["protocol_complete"]
         finally:
             transport.finish()
-        assert "other" in (tmp_path / "acp.stdout.ndjson").read_text()
+        assert (
+            "other"
+            in gzip.decompress(
+                (tmp_path / "acp.stdout.ndjson.gz").read_bytes()
+            ).decode()
+        )
 
     asyncio.run(scenario())
 
@@ -646,7 +652,12 @@ def test_workbuddy_private_profile_boolean_skills_and_exact_resume(tmp_path, mod
                 assert context.metadata["acp_session_id"] == "fixture-session"
                 assert context.metadata["workbuddy_model_id"] == model
                 assert "PRIVATE_FIXTURE_KEY" not in "".join(
-                    p.read_text(encoding="utf-8") for p in agent.logs_dir.glob("acp.*")
+                    (
+                        gzip.decompress(p.read_bytes()).decode("utf-8")
+                        if p.suffix == ".gz"
+                        else p.read_text(encoding="utf-8")
+                    )
+                    for p in agent.logs_dir.glob("acp.*")
                 )
             assert all(p.read_bytes() == value for p, value in before.items())
         finally:

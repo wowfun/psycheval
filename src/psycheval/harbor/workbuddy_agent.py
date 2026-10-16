@@ -20,10 +20,9 @@ from .acp_protocol import config_option_choices, validate_json_structure
 from .environment import HostEnvironment
 from .windows import open_read_descriptor
 
-# Cumulative tool-argument streams are retained in both raw wire and normalized
-# events. Keep a finite ceiling with room for those duplicate representations;
-# callers may set a smaller per-Trial budget explicitly.
+# Cumulative arguments need separate limits for stored bytes and decoding work.
 DEFAULT_WORKBUDDY_MAX_EVIDENCE_BYTES = 512 * 1024 * 1024
+DEFAULT_WORKBUDDY_MAX_DECODED_EVIDENCE_BYTES = 8 * 1024**3
 MAX_WORKBUDDY_CONFIG_BYTES = 16 * 1024 * 1024
 CUSTOM_MODEL_PREFIX = "custom-local:"
 
@@ -216,6 +215,9 @@ class HostWorkBuddyAgent(HostACPAgent):
             }
         )
         kwargs.setdefault("max_evidence_bytes", DEFAULT_WORKBUDDY_MAX_EVIDENCE_BYTES)
+        kwargs.setdefault(
+            "max_decoded_evidence_bytes", DEFAULT_WORKBUDDY_MAX_DECODED_EVIDENCE_BYTES
+        )
         super().__init__(
             *args,
             argv=[

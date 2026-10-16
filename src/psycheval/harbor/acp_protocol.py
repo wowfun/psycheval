@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import math
+import zlib
 from functools import cache
 from pathlib import Path
 
@@ -22,10 +23,10 @@ DEFAULT_MAX_EVIDENCE_BYTES = 64 * 1024 * 1024
 FORCED_CLEANUP_RESERVE_SEC = 5
 KILL_REAP_RESERVE_SEC = 2
 EVIDENCE_FILES = (
-    "acp.stdin.ndjson",
-    "acp.stdout.ndjson",
-    "acp.events.ndjson",
-    "acp.stderr.log",
+    "acp.stdin.ndjson.gz",
+    "acp.stdout.ndjson.gz",
+    "acp.events.ndjson.gz",
+    "acp.stderr.log.gz",
 )
 
 
@@ -223,25 +224,97 @@ def validate_payload(validator, value, result_format="acp"):
                     raise ProtocolError("invalid configuration value")
 
 
-def evidence_manifest(directory: Path, maximum=DEFAULT_MAX_EVIDENCE_BYTES):
-    if type(maximum) is not int or maximum <= 0:
+class EvidenceReader:
+    """Incremental gzip reader shared by live observers and closed-file validation."""
+
+    def __init__(self, path, maximum, decoded_maximum=None):
+        self.maximum = maximum
+        self.decoded_maximum = maximum if decoded_maximum is None else decoded_maximum
+        if any(type(n) is not int or n <= 0 for n in (maximum, self.decoded_maximum)):
+            raise ProtocolError("invalid retained evidence byte budget")
+        self.stream = path.open("rb")
+        self.decoder = zlib.decompressobj(31)
+        self.pending = b""
+        self.bytes = self.decoded_bytes = 0
+        self.digest, self.decoded_digest = hashlib.sha256(), hashlib.sha256()
+
+    def read(self, maximum=64 * 1024):
+        while True:
+            chunk = self.pending
+            if not chunk:
+                chunk = self.stream.read(min(64 * 1024, self.maximum - self.bytes + 1))
+                if not chunk:
+                    return b""  # Live EOF may precede the gzip trailer.
+                self.bytes += len(chunk)
+                if self.bytes > self.maximum:
+                    raise ProtocolError(
+                        "retained ACP evidence exceeds stored byte budget"
+                    )
+                self.digest.update(chunk)
+            if self.decoder.eof:
+                raise ProtocolError("trailing compressed ACP evidence")
+            try:
+                result = self.decoder.decompress(
+                    chunk, min(maximum, self.decoded_maximum - self.decoded_bytes + 1)
+                )
+            except zlib.error as exc:
+                raise ProtocolError("invalid compressed ACP evidence") from exc
+            self.pending = self.decoder.unconsumed_tail
+            if self.decoder.unused_data:
+                raise ProtocolError("trailing compressed ACP evidence")
+            self.decoded_bytes += len(result)
+            if self.decoded_bytes > self.decoded_maximum:
+                raise ProtocolError("retained ACP evidence exceeds decoded byte budget")
+            self.decoded_digest.update(result)
+            if result:
+                return result
+
+    def finish(self):
+        if not self.decoder.eof or self.pending:
+            raise ProtocolError("incomplete compressed ACP evidence")
+
+    def close(self):
+        self.stream.close()
+
+    def manifest(self):
+        return {
+            "encoding": "gzip",
+            "bytes": self.bytes,
+            "sha256": self.digest.hexdigest(),
+            "decoded_bytes": self.decoded_bytes,
+            "decoded_sha256": self.decoded_digest.hexdigest(),
+        }
+
+
+def evidence_manifest(
+    directory: Path, maximum=DEFAULT_MAX_EVIDENCE_BYTES, decoded_maximum=None
+):
+    decoded_maximum = maximum if decoded_maximum is None else decoded_maximum
+    if any(type(n) is not int or n <= 0 for n in (maximum, decoded_maximum)):
         raise ProtocolError("invalid retained evidence byte budget")
-    files, consumed = {}, 0
+    files, consumed, decoded = {}, 0, 0
     for name in EVIDENCE_FILES:
         path = directory / name
         if not path.exists():
             continue
         if path.is_symlink() or not path.is_file():
             raise ProtocolError("invalid retained evidence file")
-        digest, size = hashlib.sha256(), 0
-        with path.open("rb") as stream:
-            while chunk := stream.read(64 * 1024):
-                size += len(chunk)
-                consumed += len(chunk)
-                if consumed > maximum:
+        reader = EvidenceReader(path, maximum, decoded_maximum)
+        try:
+            while reader.read():
+                if (
+                    consumed + reader.bytes > maximum
+                    or decoded + reader.decoded_bytes > decoded_maximum
+                ):
                     raise ProtocolError("retained ACP evidence exceeds byte budget")
-                digest.update(chunk)
-        files[name] = {"bytes": size, "sha256": digest.hexdigest()}
+            reader.finish()
+            consumed += reader.bytes
+            decoded += reader.decoded_bytes
+            if consumed > maximum or decoded > decoded_maximum:
+                raise ProtocolError("retained ACP evidence exceeds byte budget")
+            files[name] = reader.manifest()
+        finally:
+            reader.close()
     return files
 
 
@@ -253,7 +326,9 @@ def verify_evidence(directory: Path, summary: dict):
         or not isinstance(expected, dict)
         or set(expected) != set(EVIDENCE_FILES)
         or evidence_manifest(
-            directory, summary.get("max_evidence_bytes", DEFAULT_MAX_EVIDENCE_BYTES)
+            directory,
+            summary.get("max_evidence_bytes", DEFAULT_MAX_EVIDENCE_BYTES),
+            summary.get("max_decoded_evidence_bytes"),
         )
         != expected
     ):
@@ -261,41 +336,111 @@ def verify_evidence(directory: Path, summary: dict):
 
 
 class EvidenceBudget:
-    """One invocation's shared wire, event and stderr admission budget."""
+    """Shared stored/decoded admission, including metadata and gzip closing space."""
 
-    def __init__(self, summary: dict, maximum: int = DEFAULT_MAX_EVIDENCE_BYTES):
-        if type(maximum) is not int or maximum <= 0:
-            raise ValueError("ACP evidence byte budget must be a positive integer")
-        self.summary, self.maximum = summary, maximum
+    def __init__(
+        self,
+        summary: dict,
+        maximum: int = DEFAULT_MAX_EVIDENCE_BYTES,
+        decoded_maximum=None,
+    ):
+        decoded_maximum = maximum if decoded_maximum is None else decoded_maximum
+        if any(type(n) is not int or n <= 0 for n in (maximum, decoded_maximum)):
+            raise ValueError("ACP evidence byte budgets must be positive integers")
+        self.summary, self.maximum, self.decoded_maximum = (
+            summary,
+            maximum,
+            decoded_maximum,
+        )
         self.summary["max_evidence_bytes"] = maximum
+        self.summary["max_decoded_evidence_bytes"] = decoded_maximum
         self.maximum_frames = evidence_frame_limit(maximum)
         self.summary["max_evidence_frames"] = self.maximum_frames
-        self.bytes = self.frames = 0
+        self.bytes = self.decoded_bytes = self.frames = self.reserved = 0
+        self.writers = []
 
-    def _exhausted(self):
+    def _exhausted(self, kind):
         self.summary.update(protocol_complete=False, evidence_limit_exceeded=True)
+        self.summary.setdefault("evidence_limit_kind", kind)
         raise ProtocolError("ACP evidence admission exceeded")
 
     def admit_frame(self):
         if self.frames >= self.maximum_frames:
-            self._exhausted()
+            self._exhausted("frames")
         self.frames += 1
 
-    def write(self, stream, data: bytes):
-        if len(data) > self.maximum - self.bytes:
-            self._exhausted()
+    def check(self, stored, decoded):
+        if stored > self.maximum - self.bytes - self.reserved:
+            self._exhausted("stored_bytes")
+        if decoded > self.decoded_maximum - self.decoded_bytes:
+            self._exhausted("decoded_bytes")
+
+    def write(self, stream, data: bytes, decoded_size=None):
+        decoded_size = len(data) if decoded_size is None else decoded_size
+        self.check(len(data), decoded_size)
         stream.write(data)
         stream.flush()
         self.bytes += len(data)
+        self.decoded_bytes += decoded_size
 
     def retain(self, value):
         size = (
             len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
             + 1
         )
-        if size > self.maximum - self.bytes:
-            self._exhausted()
+        self.check(size, size)
         self.bytes += size
+        self.decoded_bytes += size
+
+    def close(self):
+        errors = []
+        for writer in self.writers:
+            try:
+                writer.close()
+            except BaseException as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
+
+
+class EvidenceWriter:
+    """Commit each sync-flushed record only after both budgets admit it."""
+
+    _CLOSING_RESERVE = 20  # Empty gzip; nonempty sync-flushed streams need 10 bytes.
+
+    def __init__(self, path, budget):
+        budget.check(self._CLOSING_RESERVE, 0)
+        self.stream = path.open("wb")
+        self.budget = budget
+        self.compressor = zlib.compressobj(1, wbits=31)
+        self.closed = False
+        self.failed = False
+        budget.reserved += self._CLOSING_RESERVE
+        budget.writers.append(self)
+
+    def write(self, data):
+        if self.closed or self.failed:
+            raise OSError("ACP evidence writer is unavailable")
+        self.budget.check(0, len(data))
+        candidate = self.compressor.copy()
+        encoded = candidate.compress(data) + candidate.flush(zlib.Z_SYNC_FLUSH)
+        try:
+            self.budget.write(self.stream, encoded, len(data))
+        except OSError:
+            self.failed = True
+            raise
+        self.compressor = candidate
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        self.budget.reserved -= self._CLOSING_RESERVE
+        try:
+            if not self.failed:
+                self.budget.write(self.stream, self.compressor.flush(zlib.Z_FINISH), 0)
+        finally:
+            self.stream.close()
 
 
 class StrictTransport:
@@ -319,9 +464,9 @@ class StrictTransport:
         self.phase = "setup"
         self.expected_model = None
         self.replay_id = None
-        self.raw_in = (directory / "acp.stdout.ndjson").open("wb")
-        self.raw_out = (directory / "acp.stdin.ndjson").open("wb")
-        self.events = (directory / "acp.events.ndjson").open("wb")
+        self.raw_in = EvidenceWriter(directory / "acp.stdout.ndjson.gz", self.budget)
+        self.raw_out = EvidenceWriter(directory / "acp.stdin.ndjson.gz", self.budget)
+        self.events = EvidenceWriter(directory / "acp.events.ndjson.gz", self.budget)
 
     def record(self, direction, message):
         data = (
@@ -334,7 +479,7 @@ class StrictTransport:
         ).encode("utf-8")
         if len(data) > MAX_EVENT_FRAME:
             raise ProtocolError("oversized retained ACP event")
-        self.budget.write(self.events, data)
+        self.events.write(data)
 
     async def send(self, message):
         _validate_message(message)
@@ -358,7 +503,7 @@ class StrictTransport:
         if method == "session/prompt":
             self.phase = "prompt"
         try:
-            self.budget.write(self.raw_out, line)
+            self.raw_out.write(line)
             self.record("send", message)
             self.writer.write(line)
             await self.writer.drain()
@@ -379,14 +524,14 @@ class StrictTransport:
                 line = exc.partial
             except asyncio.LimitOverrunError as exc:
                 prefix = await self.reader.readexactly(min(exc.consumed, MAX_FRAME + 1))
-                self.budget.write(self.raw_in, prefix)
+                self.raw_in.write(prefix)
                 raise ProtocolError("oversized NDJSON record") from exc
             if not line:
                 if self.pending:
                     self.summary["protocol_complete"] = False
                 return None
             self.budget.admit_frame()
-            self.budget.write(self.raw_in, line)
+            self.raw_in.write(line)
             message = decode(line)
             method = message.get("method")
             if method:

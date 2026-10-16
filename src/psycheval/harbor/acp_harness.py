@@ -16,6 +16,7 @@ from .acp_protocol import (
     KILL_REAP_RESERVE_SEC,
     MAX_FRAME,
     EvidenceBudget,
+    EvidenceWriter,
     ProtocolError,
     StrictTransport,
     config_option_choices,
@@ -208,8 +209,10 @@ async def run(config_path: Path):
         if not key.upper().startswith(excluded)
     }
     environment.update(config["child_env"])
-    stderr = (directory / "acp.stderr.log").open("wb")
-    evidence = EvidenceBudget(summary, config["max_evidence_bytes"])
+    evidence = EvidenceBudget(
+        summary, config["max_evidence_bytes"], config.get("max_decoded_evidence_bytes")
+    )
+    stderr = None
     process = connection = transport = prompt = None
     stderr_task = None
     setup_deadline = loop.time() + config["handshake_timeout_sec"]
@@ -219,7 +222,7 @@ async def run(config_path: Path):
         while chunk := await reader.read(64 * 1024):
             if not discarded:
                 try:
-                    evidence.write(stderr, chunk)
+                    stderr.write(chunk)
                 except ProtocolError:
                     discarded = True
                     stopping.set()
@@ -250,6 +253,16 @@ async def run(config_path: Path):
             await asyncio.gather(task, interrupt, return_exceptions=True)
 
     try:
+        # Reserve every gzip trailer before launching a child.
+        stderr = EvidenceWriter(directory / "acp.stderr.log.gz", evidence)
+        transport = StrictTransport(
+            None,
+            None,
+            directory,
+            summary,
+            evidence,
+            result_format=config.get("tool_result_format", "acp"),
+        )
         kwargs = dict(
             cwd=config["cwd"],
             env=environment,
@@ -265,14 +278,7 @@ async def run(config_path: Path):
                 *config["argv"], start_new_session=True, **kwargs
             )
         stderr_task = asyncio.create_task(drain_stderr(process.stderr))
-        transport = StrictTransport(
-            process.stdout,
-            process.stdin,
-            directory,
-            summary,
-            evidence,
-            result_format=config.get("tool_result_format", "acp"),
-        )
+        transport.reader, transport.writer = process.stdout, process.stdin
         if config.get("tool_result_format") == "codebuddy":
             transport.expected_model = config["config_options"].get("model")
         connection = connect_to_agent(
@@ -489,15 +495,18 @@ async def run(config_path: Path):
                 stderr_task.cancel()
             await asyncio.gather(stderr_task, return_exceptions=True)
         try:
-            stderr.close()
+            evidence.close()
         except OSError as exc:
             cleanup_error(exc)
         if summary.get("evidence_limit_exceeded"):
             summary["error_type"] = "ProtocolError"
         summary["evidence_bytes"] = evidence.bytes
+        summary["decoded_evidence_bytes"] = evidence.decoded_bytes
         summary["evidence_frames"] = evidence.frames
         try:
-            summary["evidence_files"] = evidence_manifest(directory, evidence.maximum)
+            summary["evidence_files"] = evidence_manifest(
+                directory, evidence.maximum, evidence.decoded_maximum
+            )
         except (OSError, ProtocolError) as exc:
             cleanup_error(exc)
         _save(directory / "acp.summary.json", summary)

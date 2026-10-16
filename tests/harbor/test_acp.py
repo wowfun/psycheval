@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
+import gzip
 import io
 import json
 import os
@@ -266,7 +266,7 @@ def test_inline_image_frame_above_one_mib_is_retained_without_truncation(
             transport.finish()
 
     asyncio.run(run())
-    assert (tmp_path / "acp.stdout.ndjson").read_bytes() == wire
+    assert gzip.decompress((tmp_path / "acp.stdout.ndjson.gz").read_bytes()) == wire
 
 
 def test_wire_frame_limit_is_still_enforced():
@@ -288,7 +288,7 @@ def test_long_stream_retention_and_projection_share_the_declared_admission(tmp_p
         json.dumps({"direction": "receive", "phase": "prompt", "message": {}}).encode()
         + b"\n"
     )
-    with path.open("wb") as stream:
+    with gzip.open(path, "wb") as stream:
         for _ in range(65537):
             stream.write(event)
     assert sum(1 for _ in _events(path, 512 * 1024**2)) == 65537
@@ -388,7 +388,7 @@ def test_interrupted_publication_cannot_admit_partial_logs(tmp_path, monkeypatch
     original = shutil.move
 
     def failed_move(source, target):
-        if source.name == "acp.events.ndjson":
+        if source.name == "acp.events.ndjson.gz":
             raise OSError("fixture publication failure")
         return original(source, target)
 
@@ -402,25 +402,22 @@ def test_interrupted_publication_cannot_admit_partial_logs(tmp_path, monkeypatch
 
 
 def _seal_evidence(directory, summary):
-    files = {}
-    for name in (
-        "acp.stdin.ndjson",
-        "acp.stdout.ndjson",
-        "acp.events.ndjson",
-        "acp.stderr.log",
-    ):
+    from psycheval.harbor.acp_protocol import EVIDENCE_FILES, evidence_manifest
+
+    for name in EVIDENCE_FILES:
         path = directory / name
-        if not path.exists():
-            path.touch()
-        data = path.read_bytes()
-        files[name] = {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-    summary.update(invocation_id="fixture-invocation", evidence_files=files)
+        data = path.read_bytes() if path.exists() else b""
+        if not data.startswith(b"\x1f\x8b"):
+            path.write_bytes(gzip.compress(data, mtime=0))
+    summary.update(
+        invocation_id="fixture-invocation", evidence_files=evidence_manifest(directory)
+    )
     (directory / "acp.summary.json").write_text(json.dumps(summary), encoding="utf-8")
     return summary
 
 
 def _current_evidence(directory, updates):
-    (directory / "acp.events.ndjson").write_text(
+    (directory / "acp.events.ndjson.gz").write_text(
         "".join(
             json.dumps(
                 {
@@ -511,7 +508,7 @@ def test_evidence_conversion_streams_retained_records(tmp_path, monkeypatch):
     original = Path.read_text
 
     def bounded_read(path, *args, **kwargs):
-        if path.name == "acp.events.ndjson":
+        if path.name == "acp.events.ndjson.gz":
             raise AssertionError("retained events must not be read as one string")
         return original(path, *args, **kwargs)
 
@@ -562,7 +559,7 @@ def test_evidence_conversion_streams_retained_records(tmp_path, monkeypatch):
 )
 def test_malformed_retained_evidence_is_a_protocol_failure(tmp_path, event):
     summary = _current_evidence(tmp_path, [])
-    (tmp_path / "acp.events.ndjson").write_text(json.dumps(event) + "\n")
+    (tmp_path / "acp.events.ndjson.gz").write_text(json.dumps(event) + "\n")
     _seal_evidence(tmp_path, summary)
     with pytest.raises(ProtocolError):
         convert(tmp_path, summary, "task", {"name": "fixture", "version": "1"}, "acp")
@@ -598,10 +595,10 @@ def test_host_acp_evidence_budget_fails_closed_and_settles(tmp_path, mode):
                 sum(
                     (agent.logs_dir / name).stat().st_size
                     for name in (
-                        "acp.stdin.ndjson",
-                        "acp.stdout.ndjson",
-                        "acp.events.ndjson",
-                        "acp.stderr.log",
+                        "acp.stdin.ndjson.gz",
+                        "acp.stdout.ndjson.gz",
+                        "acp.events.ndjson.gz",
+                        "acp.stderr.log.gz",
                     )
                 )
                 <= 16 * 1024
@@ -796,13 +793,17 @@ def test_retained_event_integrity_fails_closed(tmp_path, damage):
             }
         ],
     )
-    path = tmp_path / "acp.events.ndjson"
+    path = tmp_path / "acp.events.ndjson.gz"
     if damage == "missing":
         path.unlink()
     elif damage == "empty":
         path.write_bytes(b"")
     else:
-        path.write_bytes(path.read_bytes().replace(b"answer", b"forged"))
+        path.write_bytes(
+            gzip.compress(
+                gzip.decompress(path.read_bytes()).replace(b"answer", b"forged")
+            )
+        )
     with pytest.raises(ProtocolError):
         convert(tmp_path, summary, "task", {"name": "fixture", "version": "1"}, "acp")
 
@@ -1128,9 +1129,9 @@ def test_host_acp_resume_and_owned_cleanup(tmp_path, mode):
                 if mode == "resume" and action == agent.resume:
                     events = [
                         json.loads(line)
-                        for line in (agent.logs_dir / "acp.events.ndjson")
-                        .read_text()
-                        .splitlines()
+                        for line in gzip.decompress(
+                            (agent.logs_dir / "acp.events.ndjson.gz").read_bytes()
+                        ).splitlines()
                     ]
                     methods = [
                         event["message"].get("method")
@@ -1555,7 +1556,7 @@ def test_evidence_preserves_nontext_content_and_interleaved_tool_identity(tmp_pa
             "rawOutput": {"value": 3},
         },
     ]
-    (tmp_path / "acp.events.ndjson").write_text(
+    (tmp_path / "acp.events.ndjson.gz").write_text(
         "\n".join(
             json.dumps(
                 {
@@ -1569,6 +1570,7 @@ def test_evidence_preserves_nontext_content_and_interleaved_tool_identity(tmp_pa
             )
             for update in updates
         )
+        + "\n"
     )
     trajectory = convert(
         tmp_path,

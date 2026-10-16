@@ -47,6 +47,7 @@ class HostACPAgent(BaseAgent):
         handshake_timeout_sec=60.0,
         shutdown_timeout_sec=45.0,
         max_evidence_bytes=DEFAULT_MAX_EVIDENCE_BYTES,
+        max_decoded_evidence_bytes=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -103,7 +104,12 @@ class HostACPAgent(BaseAgent):
                 raise ValueError("ACP timeouts must be finite and positive")
         if shutdown_timeout_sec <= FORCED_CLEANUP_RESERVE_SEC:
             raise ValueError("ACP shutdown budget must exceed five seconds")
-        if type(max_evidence_bytes) is not int or max_evidence_bytes <= 0:
+        if max_decoded_evidence_bytes is None:
+            max_decoded_evidence_bytes = max_evidence_bytes
+        if any(
+            type(n) is not int or n <= 0
+            for n in (max_evidence_bytes, max_decoded_evidence_bytes)
+        ):
             raise ValueError("ACP evidence byte budget must be a positive integer")
         if authenticate_method_id is not None and (
             not isinstance(authenticate_method_id, str)
@@ -121,6 +127,7 @@ class HostACPAgent(BaseAgent):
         )
         self.tool_result_format = tool_result_format
         self.max_evidence_bytes = max_evidence_bytes
+        self.max_decoded_evidence_bytes = max_decoded_evidence_bytes
         self.handshake_timeout_sec, self.shutdown_timeout_sec = (
             handshake_timeout_sec,
             shutdown_timeout_sec,
@@ -276,6 +283,7 @@ class HostACPAgent(BaseAgent):
             "handshake_timeout_sec": self.handshake_timeout_sec,
             "shutdown_timeout_sec": self.shutdown_timeout_sec,
             "max_evidence_bytes": self.max_evidence_bytes,
+            "max_decoded_evidence_bytes": self.max_decoded_evidence_bytes,
             "tool_result_format": self.tool_result_format,
         }
         config_path = invocation / "request.json"

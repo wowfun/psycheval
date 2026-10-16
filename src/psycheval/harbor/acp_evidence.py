@@ -11,6 +11,7 @@ from .acp_protocol import (
     DEFAULT_MAX_EVIDENCE_BYTES,
     MAX_EVENT_FRAME,
     MAX_JSON_DEPTH,
+    EvidenceReader,
     ProtocolError,
     evidence_frame_limit,
     verify_evidence,
@@ -196,32 +197,37 @@ def convert(
         raise ProtocolError("invalid retained ACP evidence") from exc
 
 
-def _events(path, maximum):
+def _events(path, maximum, decoded_maximum=None):
     if not path.exists():
         raise ProtocolError("retained ACP events are missing")
-    consumed = 0
     maximum_frames = evidence_frame_limit(maximum)
-    with path.open("rb") as stream:
-        for index in range(maximum_frames + 1):
-            line = stream.readline(MAX_EVENT_FRAME + 1)
-            if not line:
-                return
-            consumed += len(line)
-            if (
-                index == maximum_frames
-                or len(line) > MAX_EVENT_FRAME
-                or consumed > maximum
-            ):
+    reader = EvidenceReader(path, maximum, decoded_maximum)
+    pending = bytearray()
+    count = 0
+    try:
+        while chunk := reader.read():
+            pending.extend(chunk)
+            while (end := pending.find(b"\n")) >= 0:
+                if end + 1 > MAX_EVENT_FRAME or count >= maximum_frames:
+                    raise ProtocolError("retained ACP evidence exceeds limits")
+                event = json.loads(pending[:end])
+                del pending[: end + 1]
+                count += 1
+                if (
+                    not isinstance(event, dict)
+                    or event.get("direction") not in {"send", "receive"}
+                    or event.get("phase") not in {"setup", "replay", "prompt"}
+                    or not isinstance(event.get("message"), dict)
+                ):
+                    raise ProtocolError("invalid retained ACP event")
+                yield event
+            if len(pending) >= MAX_EVENT_FRAME:
                 raise ProtocolError("retained ACP evidence exceeds limits")
-            event = json.loads(line)
-            if (
-                not isinstance(event, dict)
-                or event.get("direction") not in {"send", "receive"}
-                or event.get("phase") not in {"setup", "replay", "prompt"}
-                or not isinstance(event.get("message"), dict)
-            ):
-                raise ProtocolError("invalid retained ACP event")
-            yield event
+        reader.finish()
+        if pending:
+            raise ProtocolError("incomplete retained ACP event")
+    finally:
+        reader.close()
 
 
 def _convert(
@@ -230,14 +236,16 @@ def _convert(
     if not summary.get("prompt_submitted"):
         return None
     verify_evidence(directory, summary)
-    events_path = directory / "acp.events.ndjson"
+    events_path = directory / "acp.events.ndjson.gz"
     steps = [{"step_id": 1, "source": "user", "message": instruction}]
     calls = {}
     tool_ids = {}
     text_chunks = {}
     active = None
     for event in _events(
-        events_path, summary.get("max_evidence_bytes", DEFAULT_MAX_EVIDENCE_BYTES)
+        events_path,
+        summary.get("max_evidence_bytes", DEFAULT_MAX_EVIDENCE_BYTES),
+        summary.get("max_decoded_evidence_bytes"),
     ):
         message = event["message"]
         if (
