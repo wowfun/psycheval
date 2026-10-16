@@ -58,6 +58,14 @@ score/verdict fields and, for administrators, opaque artifact identifiers; it
 never projects raw verifier payloads, host paths, environment maps, process
 output, or LLM responses into that summary. Catalog and export projections retain this safe summary for guests.
 
+Manifest artifact downloads use `verifier_raw_path` under `raw_artifacts/`,
+falling back to `text_path` when no raw path is present. Text previews and that
+fallback accept `text_path` under `artifact_text/` or WorkBuddy's
+`judge_evidence/`. Paths remain relative to the verifier directory, subject to
+the same containment, regular-file, link, byte-budget, and preview-type checks.
+Manifest extraction statuses remain visible, including upstream rejection;
+an admitted path must resolve to a regular file and does not certify its content.
+
 Guests and administrators can inspect retained verification files on demand: `verifier/`,
 `artifacts/`, `result.json`, and `exception.txt` within the selected Trial's
 effective result directory (the selected Harbor Step for multi-step sources).

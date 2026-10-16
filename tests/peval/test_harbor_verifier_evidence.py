@@ -19,6 +19,74 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
+@pytest.mark.parametrize("status", ["ok", "error"])
+def test_curated_judge_evidence_uses_bounded_preview_and_retains_status(
+    tmp_path, status
+):
+    trial = tmp_path / "task__1"
+    verifier = trial / "verifier"
+    (verifier / "judge_evidence").mkdir(parents=True)
+    content = "# Curated evidence\n中文\n".encode()
+    (verifier / "judge_evidence/report.md").write_bytes(content)
+    _write_json(
+        verifier / "artifact_manifest.json",
+        {
+            "curated_evidence_only": True,
+            "artifacts": [
+                {
+                    "id": "report",
+                    "text_path": "judge_evidence/report.md",
+                    "extract_status": status,
+                    "source_path": "/private/source",
+                    "error": "private diagnostic",
+                }
+            ],
+        },
+    )
+    evidence = read_harbor_verifier_evidence(
+        trial,
+        containment_root=tmp_path,
+        dataset_format="workbuddy.v1",
+        harbor_reward=None,
+    )
+    assert not evidence.warnings
+    assert len(evidence.artifacts) == 1
+    row = evidence.artifacts[0]
+    assert row["status"] == status
+    assert row["preview"] == {"kind": "text"}
+    for purpose in ("preview", "download"):
+        artifact = read_harbor_verifier_artifact(
+            trial, containment_root=tmp_path, artifact_id=row["id"], purpose=purpose
+        )
+        assert artifact.content == content
+    assert "/private/source" not in json.dumps(evidence.to_dict(include_artifacts=True))
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "judge_evidence/../secret.md",
+        "judge_evidence\\report.md",
+        "/judge_evidence/report.md",
+        "other/report.md",
+    ],
+)
+def test_curated_evidence_does_not_widen_path_trust(tmp_path, path):
+    trial = tmp_path / "task__1"
+    _write_json(
+        trial / "verifier/artifact_manifest.json",
+        {"artifacts": [{"id": "report", "text_path": path}]},
+    )
+    evidence = read_harbor_verifier_evidence(
+        trial,
+        containment_root=tmp_path,
+        dataset_format="workbuddy.v1",
+        harbor_reward=None,
+    )
+    assert not evidence.artifacts
+    assert evidence.warnings
+
+
 def test_projects_canonical_score_verdicts_and_safe_artifacts(tmp_path: Path) -> None:
     trial = tmp_path / "job" / "task__1"
     verifier = trial / "verifier"
@@ -317,14 +385,17 @@ def test_generic_harbor_evidence_does_not_synthesize_a_missing_score(
     assert evidence.score_source is None
 
 
-def test_manifest_cannot_escape_or_traverse_a_symlink(tmp_path: Path) -> None:
+@pytest.mark.parametrize("directory", ["artifact_text", "judge_evidence"])
+def test_manifest_cannot_escape_or_traverse_a_symlink(
+    tmp_path: Path, directory
+) -> None:
     trial = tmp_path / "task__1"
     verifier = trial / "verifier"
     outside = tmp_path / "outside.txt"
     outside.write_text("private", encoding="utf-8")
-    (verifier / "artifact_text").mkdir(parents=True)
+    (verifier / directory).mkdir(parents=True)
     try:
-        os.symlink(outside, verifier / "artifact_text" / "linked.txt")
+        os.symlink(outside, verifier / directory / "linked.txt")
     except OSError as exc:
         pytest.skip(f"symlink creation unavailable: {exc}")
     _write_json(verifier / "score.json", {"reward": 1})
@@ -333,7 +404,7 @@ def test_manifest_cannot_escape_or_traverse_a_symlink(tmp_path: Path) -> None:
         {
             "artifacts": [
                 {"id": "escape", "text_path": "../outside.txt"},
-                {"id": "link", "text_path": "artifact_text/linked.txt"},
+                {"id": "link", "text_path": f"{directory}/linked.txt"},
             ]
         },
     )

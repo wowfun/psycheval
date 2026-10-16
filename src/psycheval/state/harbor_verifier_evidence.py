@@ -433,7 +433,9 @@ def _artifact_specs(
         try:
             name = _artifact_name(raw.get("id"), index)
             raw_path = _artifact_path(raw.get("verifier_raw_path"), "raw_artifacts")
-            preview_path = _artifact_path(raw.get("text_path"), "artifact_text")
+            preview_path = _artifact_path(
+                raw.get("text_path"), "artifact_text", "judge_evidence"
+            )
             if raw_path is None and preview_path is None:
                 raise ValueError("no allowlisted verifier path")
             for relative in (raw_path, preview_path):
@@ -502,7 +504,7 @@ def _artifact_preview(
     return None
 
 
-def _artifact_path(value: Any, prefix: str) -> PurePosixPath | None:
+def _artifact_path(value: Any, *prefixes: str) -> PurePosixPath | None:
     if value is None or value == "":
         return None
     if not isinstance(value, str) or "\\" in value:
@@ -511,7 +513,7 @@ def _artifact_path(value: Any, prefix: str) -> PurePosixPath | None:
     if (
         path.is_absolute()
         or not path.parts
-        or path.parts[0] != prefix
+        or path.parts[0] not in prefixes
         or any(part in {"", ".", ".."} for part in path.parts)
     ):
         raise ValueError(
