@@ -4,6 +4,10 @@ The Psycheval workspace organizes retained sources, overlays, reports, Saved Vie
 Harbor mounts, and browser presentation without taking ownership of source
 evidence.
 
+The shared header uses the same width, inset, and navigation layout across
+Home, Datasets, Jobs, Reports, and Configuration at a fixed viewport and sidebar
+state. Changes in page height reserve scrollbar space without shifting it.
+
 ## Configuration ownership
 
 An initialized root contains `peval.toml`. The CLI discovers it through explicit

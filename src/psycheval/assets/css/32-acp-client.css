@@ -1,6 +1,9 @@
 :root {
   --acp-sidebar-width:var(--detail-sidebar-width);
 }
+:root:has(body.acp-drawer-open) {
+  scrollbar-gutter:auto;
+}
 body.workspace-sidebar-right-open {
   --acp-sidebar-width:var(--workspace-right-sidebar-width);
 }

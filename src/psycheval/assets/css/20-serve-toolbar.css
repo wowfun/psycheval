@@ -154,10 +154,7 @@
 }
 
 /* Live workspace pages share one restrained, route-aware header. */
-.serve-page-home .workspace,
-.serve-page-datasets .workspace,
-.serve-page-reports .workspace,
-.serve-page-config .workspace {
+.serve-mode .workspace {
   max-width:1500px;
 }
 .serve-page-datasets .workspace,
