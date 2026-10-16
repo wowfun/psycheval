@@ -90,6 +90,13 @@ def test_harness_bootstrap_failure_retains_bounded_diagnostics(
     from harbor.environments.base import ExecResult
     from harbor.models.task.config import TaskOS
 
+    from psycheval.harbor import acp_agent
+
+    def unexpected_observer(*args):
+        raise AssertionError("no callback must not start an observer")
+
+    monkeypatch.setattr(acp_agent, "_SessionUpdateRelay", unexpected_observer)
+
     staging, logs = tmp_path / "staging", tmp_path / "logs"
     staging.mkdir()
     diagnostic = "Traceback: fixture bootstrap failure\n"

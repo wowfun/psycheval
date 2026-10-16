@@ -100,6 +100,75 @@ read-only, while Skills, MCP and restored sessions use the Trial's private state
 See the [WorkBuddy ACP contract](../reference/harbor.md#native-workbuddy-acp) for
 authentication, model selection and evidence semantics.
 
+## Observe live ACP updates
+
+Pass a callback when constructing an ACP-backed Agent in Python:
+
+```python
+from pathlib import Path
+
+from downstream._vendor.psycheval_harbor.acp_agent import HostACPAgent
+
+
+def show_update(update):
+    if update.get("sessionUpdate") == "agent_message_chunk":
+        content = update.get("content", {})
+        if content.get("type") == "text":
+            print(content["text"], end="", flush=True)
+
+
+agent = HostACPAgent(
+    logs_dir=Path("trial/agent"),
+    argv=["my-agent", "acp"],
+    on_session_update=show_update,
+)
+```
+
+An `async def` callback can instead await your application's event sink. Use a
+per-Agent closure or bound method to associate updates with the correct Trial.
+The [live-update contract](../reference/harbor.md#live-session-updates) defines
+ordering, timeouts, cancellation and best-effort failure handling.
+
+For a Harbor Job, bind the callback inside a downstream subclass rather than
+putting a callable in serialized configuration. For example, save the following
+as `downstream/agents.py`, reusing `show_update` above in that module:
+
+```python
+from downstream._vendor.psycheval_harbor.workbuddy_agent import HostWorkBuddyAgent
+
+
+class VerboseWorkBuddyAgent(HostWorkBuddyAgent):
+    def __init__(self, *args, verbose=False, **kwargs):
+        super().__init__(
+            *args,
+            on_session_update=show_update if verbose else None,
+            **kwargs,
+        )
+```
+
+Select your subclass and supply the ordinary WorkBuddy configuration:
+
+```yaml
+agents:
+  - import_path: downstream.agents:VerboseWorkBuddyAgent
+    model_name: exact-advertised-model-id
+    kwargs:
+      verbose: true
+      installation_dir: 'C:\Program Files\WorkBuddy'
+      profile_dir: 'C:\Users\evaluator\.workbuddy'
+      auth_file: 'C:\Users\evaluator\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop.info'
+```
+
+Extend your callback to render tool progress or other ACP update kinds using
+your application's transcript format.
+
+ACP evidence is retained as streaming gzip files; callbacks receive the original
+update dictionaries. For WorkBuddy evaluations with large tool arguments, set
+`max_evidence_bytes` (stored bytes) and `max_decoded_evidence_bytes` (decoded bytes)
+independently in Agent kwargs. The [evidence contract](../reference/harbor.md#permissions-and-evidence)
+defines admission, integrity checks and cleanup. Standard gzip readers can inspect
+closed evidence; keep the original files and manifest together for verification.
+
 ## Configure a host workspace
 
 Configure the copied Host directly in an ordinary Harbor Job:

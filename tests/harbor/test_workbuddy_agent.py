@@ -618,10 +618,12 @@ def test_workbuddy_private_profile_boolean_skills_and_exact_resume(tmp_path, mod
         (skill / "SKILL.md").write_text(
             "---\nname: example\ndescription: fixture\n---\nFixture"
         )
+        received = []
         agent = HostWorkBuddyAgent(
             logs_dir=host.trial_paths.agent_dir,
             model_name=model,
             skills_dir="/app/skills",
+            on_session_update=received.append,
             **config,
         )
         agent.argv = [sys.executable, str(PEER), "codebuddy"]
@@ -641,7 +643,15 @@ def test_workbuddy_private_profile_boolean_skills_and_exact_resume(tmp_path, mod
             assert "UNSELECTED_FIXTURE_KEY" not in json.dumps(seed)
             assert agent._child_env["PEVAL_WORKBUDDY_BOOTSTRAP_TIMEOUT_MS"] == "60000"
             for action in (agent.run, agent.resume):
+                received.clear()
                 await action("fixture", host, AgentContext())
+                assert [u["sessionUpdate"] for u in received] == [
+                    "agent_message_chunk",
+                    "tool_call",
+                    "tool_call_update",
+                    "agent_message_chunk",
+                ]
+                assert received[1]["_meta"]["codebuddy.ai/toolName"] == "Bash"
                 context = AgentContext()
                 agent.populate_context_post_run(context)
                 data = json.loads(

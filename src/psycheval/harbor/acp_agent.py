@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import inspect
 import json
 import math
 import shutil
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from harbor.agents.base import BaseAgent
@@ -23,10 +26,113 @@ from .acp_protocol import (
     MAX_CONFIG_ID_BYTES,
     MAX_CONFIG_OPTIONS,
     MAX_CONFIG_VALUE_BYTES,
+    MAX_EVENT_FRAME,
+    EvidenceReader,
     verify_evidence,
 )
 from .environment import HostEnvironment, _await_owned_task
 from .inference_telemetry import populate_context_from_trajectory
+
+SessionUpdateCallback = Callable[[dict[str, Any]], None | Awaitable[None]]
+_UPDATE_POLL_SEC = 0.05
+# Poll the already-flushed evidence file portably, without watcher dependencies.
+_UPDATE_CALLBACK_TIMEOUT_SEC = 5.0
+_UPDATE_DRAIN_TIMEOUT_SEC = 5.0
+_UPDATE_READ_BYTES = 64 * 1024
+
+
+class _SessionUpdateRelay:
+    """Observe flushed wire records without entering the evidence trust path."""
+
+    def __init__(
+        self,
+        path,
+        callback,
+        logger,
+        maximum=DEFAULT_MAX_EVIDENCE_BYTES,
+        decoded_maximum=None,
+    ):
+        self.path, self.callback, self.logger = path, callback, logger
+        self.maximum, self.decoded_maximum = maximum, decoded_maximum
+        self.finished = asyncio.Event()
+        self.warned = False
+        self.task = asyncio.create_task(self._run())
+
+    def _warn(self, error):
+        if not self.warned:
+            self.warned = True
+            self.logger.warning("ACP session update observer disabled (%s)", error)
+
+    async def _deliver(self, record):
+        if record["direction"] != "receive" or record["phase"] != "prompt":
+            return
+        message = record["message"]
+        if message.get("method") != "session/update":
+            return
+        result = self.callback(message["params"]["update"])
+        if inspect.isawaitable(result):
+            async with asyncio.timeout(_UPDATE_CALLBACK_TIMEOUT_SEC):
+                await result
+        elif result is not None:
+            raise TypeError("session update callback must return None or an awaitable")
+
+    async def _follow(self):
+        stream = None
+        pending = bytearray()
+        try:
+            while True:
+                if stream is None:
+                    try:
+                        stream = EvidenceReader(
+                            self.path, self.maximum, self.decoded_maximum
+                        )
+                    except FileNotFoundError:
+                        pass
+                if stream is not None and (chunk := stream.read(_UPDATE_READ_BYTES)):
+                    pending.extend(chunk)
+                    while (end := pending.find(b"\n")) >= 0:
+                        if end + 1 > MAX_EVENT_FRAME:
+                            raise ValueError("oversized ACP observer record")
+                        record = json.loads(pending[:end])
+                        del pending[: end + 1]
+                        await self._deliver(record)
+                    if len(pending) >= MAX_EVENT_FRAME:
+                        raise ValueError("oversized ACP observer record")
+                    await asyncio.sleep(0)
+                    continue
+                if self.finished.is_set():
+                    if stream is not None:
+                        stream.finish()
+                    if pending:
+                        raise ValueError("incomplete ACP observer record")
+                    return
+                try:
+                    await asyncio.wait_for(self.finished.wait(), _UPDATE_POLL_SEC)
+                except TimeoutError:
+                    pass
+        finally:
+            if stream is not None:
+                stream.close()
+
+    async def _run(self):
+        try:
+            await self._follow()
+        except (Exception, asyncio.CancelledError) as error:
+            # This task is separately owned; callback cancellation stays here.
+            self._warn(type(error).__name__)
+
+    async def finish(self):
+        self.finished.set()
+        if self.task.cancelled():
+            self._warn("CancelledError")
+            return
+        try:
+            async with asyncio.timeout(_UPDATE_DRAIN_TIMEOUT_SEC):
+                await asyncio.shield(self.task)
+        except TimeoutError:
+            self._warn("TimeoutError")
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
 
 
 class HostACPAgent(BaseAgent):
@@ -48,9 +154,13 @@ class HostACPAgent(BaseAgent):
         shutdown_timeout_sec=45.0,
         max_evidence_bytes=DEFAULT_MAX_EVIDENCE_BYTES,
         max_decoded_evidence_bytes=None,
+        on_session_update: SessionUpdateCallback | None = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        if on_session_update is not None and not callable(on_session_update):
+            raise ValueError("ACP on_session_update must be callable or None")
+        self._on_session_update = on_session_update
         if (
             not isinstance(argv, list)
             or not argv
@@ -288,7 +398,25 @@ class HostACPAgent(BaseAgent):
         }
         config_path = invocation / "request.json"
         config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+        relay = (
+            _SessionUpdateRelay(
+                invocation / "acp.events.ndjson.gz",
+                self._on_session_update,
+                self.logger,
+                self.max_evidence_bytes,
+                self.max_decoded_evidence_bytes,
+            )
+            if self._on_session_update is not None
+            else None
+        )
+
+        async def publish():
+            if relay is not None:
+                await relay.finish()
+            await asyncio.to_thread(self._publish_call, invocation)
+
         result = None
+        primary_error = None
         try:
             result = await host.exec_argv(
                 [sys.executable, "-m", f"{__package__}.acp_harness", str(config_path)],
@@ -298,10 +426,18 @@ class HostACPAgent(BaseAgent):
                     else {}
                 ),
             )
+        except BaseException as error:
+            primary_error = error
+            raise
         finally:
-            await _await_owned_task(
-                asyncio.create_task(asyncio.to_thread(self._publish_call, invocation))
-            )
+            try:
+                await _await_owned_task(asyncio.create_task(publish()))
+            except BaseException as error:
+                if primary_error is None:
+                    raise
+                primary_error.add_note(
+                    f"ACP publication cleanup failed: {type(error).__name__}"
+                )
         summary_path = self.logs_dir / "acp.summary.json"
         try:
             summary = (

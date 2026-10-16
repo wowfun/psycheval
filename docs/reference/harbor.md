@@ -22,6 +22,32 @@ through native configuration. MCP transport capabilities are negotiated.
 Resume uses the exact saved Session and setup, preferring advertised resume over
 load; load replay is excluded using wire order. Recovery never creates a replacement.
 
+### Live session updates
+
+`on_session_update` accepts a synchronous or asynchronous callback receiving one
+raw `params.update` dictionary. It runs in the parent event loop, in receive
+order, for the current invocation's prompt-phase `session/update` notifications.
+Setup notifications and restored history are excluded. ACP field names, tool-name
+extensions and vendor metadata are preserved; no token accounting is synthesized.
+`HostWorkBuddyAgent` inherits this interface. With no callback, no observer runs.
+
+The observer incrementally decompresses the flushed `acp.events.ndjson.gz`; it
+does not create another evidence channel. Callback mutations do not alter retained
+evidence. Live notifications are provisional presentation data: final evidence
+integrity, cleanup and grading still use the existing validation boundary.
+
+Delivery is best effort. A callback or observer failure logs one categorical
+warning without notification contents or exception messages, then disables delivery
+for that invocation. The next invocation starts a fresh observer. Asynchronous
+callbacks and final draining have separate internal five-second deadlines; a
+timeout also disables delivery. Synchronous callbacks must return promptly and
+asynchronous callbacks must cooperate with cancellation. Callbacks should only
+observe updates; the caller manages Agent and Host lifecycle outside them.
+Observers close before evidence publication, including after failure or
+cancellation, and no callback runs after the invocation returns.
+See the [downstream callback examples](../user/downstream-vendoring.md#observe-live-acp-updates)
+for direct Python and Harbor configuration integration.
+
 ### Permissions and evidence
 
 `permission_mode=allow|deny` prefers the corresponding once option, then always.

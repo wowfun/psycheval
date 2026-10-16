@@ -550,8 +550,22 @@ def acp(root):
         workspace_baseline="none",
         persistent_env={"PYTHONPATH": str(root)},
     )
+    received = []
+
+    def observe(update):
+        received.append(update)
+        if update["sessionUpdate"] == "tool_call":
+            (root / "live-update-ack").touch()
+
     agent = module("acp_agent").HostACPAgent(
-        logs_dir=paths.agent_dir, argv=[sys.executable, str(root / "acp_peer.py")]
+        logs_dir=paths.agent_dir,
+        argv=[
+            sys.executable,
+            str(root / "acp_peer.py"),
+            "live",
+            str(root / "live-update-ack"),
+        ],
+        on_session_update=observe,
     )
 
     async def scenario():
@@ -559,8 +573,16 @@ def acp(root):
         try:
             await agent.setup(host)
             for action in (agent.run, agent.resume):
+                received.clear()
                 context = AgentContext()
                 await action("copied ACP", host, context)
+                assert [update["sessionUpdate"] for update in received] == [
+                    "agent_message_chunk",
+                    "tool_call",
+                    "tool_call_update",
+                    "agent_message_chunk",
+                ]
+                assert received[1]["name"] == "bash"
                 agent.populate_context_post_run(context)
                 assert context.metadata["acp_stop_reason"] == "end_turn"
         finally:

@@ -122,6 +122,10 @@ for line in sys.stdin:
                 }
             )
         result = {"configOptions": options()}
+        if mode == "live":
+            update(
+                {"sessionUpdate": "config_option_update", "configOptions": options()}
+            )
         if method == "session/new":
             result["sessionId"] = session
         send({"id": identity, "result": result})
@@ -133,6 +137,9 @@ for line in sys.stdin:
             current = params["value"]
         send({"id": identity, "result": {"configOptions": options()}})
     elif method == "session/prompt":
+        live_ack = Path(sys.argv[2]) if mode == "live" else None
+        if mode == "live":
+            live_ack.unlink(missing_ok=True)
         if mode == "codebuddy" and current == "custom-local:b":
             seeded = json.loads(
                 (Path(os.environ["CODEBUDDY_CONFIG_DIR"]) / "models.json").read_text(
@@ -177,6 +184,14 @@ for line in sys.stdin:
             call.pop("name")
             call["_meta"] = {"codebuddy.ai/toolName": "Bash"}
         update(call)
+        if mode == "live":
+            deadline = time.monotonic() + 30
+            while not live_ack.exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"live callback acknowledgement missing: {live_ack}"
+                    )
+                time.sleep(0.01)
         if mode == "malformed":
             print('{"jsonrpc":"2.0","jsonrpc":"2.0"}', flush=True)
             break
