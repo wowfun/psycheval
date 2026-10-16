@@ -1,9 +1,10 @@
-"""Run a preinstalled OpenCode CLI on a native HostEnvironment."""
+"""Run a preinstalled OpenCode 2 CLI on a native HostEnvironment."""
 
 from __future__ import annotations
 
 import copy
 import json
+import math
 import shutil
 import sys
 from typing import override
@@ -13,16 +14,54 @@ from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.agents.installed.opencode import OpenCode
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
-from harbor.models.trajectories import Trajectory
+from harbor.models.trajectories import Metrics, Trajectory
 
 from .environment import HostEnvironment
-from .inference_telemetry import populate_context_from_trajectory
+from .inference_telemetry import (
+    InferenceObservation,
+    finalize_trajectory_metrics,
+    metrics_from_observations,
+    populate_context_from_trajectory,
+)
 
 _STDIN_LAUNCHER = (
     "import subprocess,sys; "
     "f=open(sys.argv[1],'rb'); "
     "sys.exit(subprocess.call(sys.argv[2:],stdin=f))"
 )
+
+
+def _token_count(value: object) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
+def _usage_metrics(tokens: object) -> dict:
+    tokens = tokens if isinstance(tokens, dict) else {}
+    cache = tokens.get("cache")
+    cache = cache if isinstance(cache, dict) else {}
+
+    buckets = [
+        _token_count(tokens.get("input")),
+        _token_count(cache.get("read", 0)),
+        _token_count(cache.get("write", 0)),
+    ]
+    prompt = sum(buckets) if all(value is not None for value in buckets) else None
+    metrics = metrics_from_observations(
+        [
+            InferenceObservation(
+                prompt_tokens=prompt,
+                completion_tokens=_token_count(tokens.get("output")),
+                cached_tokens=_token_count(cache.get("read")),
+                cache_write_tokens=_token_count(cache.get("write")),
+                usage_source="opencode-session",
+            )
+        ]
+    )
+    assert metrics is not None  # One completed message always supplies an observation.
+    reasoning = _token_count(tokens.get("reasoning"))
+    if reasoning is not None:
+        metrics["extra"]["reasoning_tokens"] = reasoning
+    return metrics
 
 
 class HostOpenCodeAgent(OpenCode):
@@ -40,6 +79,7 @@ class HostOpenCodeAgent(OpenCode):
         opencode_config: dict | None = None,
         **kwargs,
     ):
+        self._trajectory = None
         if opencode_config is not None:
             if not isinstance(opencode_config, dict):
                 raise ValueError("opencode_config must be an object")
@@ -169,11 +209,132 @@ class HostOpenCodeAgent(OpenCode):
                     events.append(event)
         return events
 
+    def _session_events(self, streamed: list[dict] | None = None) -> list[dict]:
+        path = self.logs_dir / "opencode-session.json"
+        if not path.is_file():
+            return []
+        exported = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(exported, dict):
+            raise ValueError("Malformed OpenCode Session export")
+        info, messages = exported.get("info"), exported.get("messages")
+        if not isinstance(info, dict) or not isinstance(messages, list):
+            raise ValueError("Malformed OpenCode Session export")
+        session_id = info.get("id")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("OpenCode Session export has no identity")
+        if info.get("outcome") != "succeeded":
+            raise ValueError("OpenCode Session export is not a successful invocation")
+        if streamed is None:
+            streamed = self._parse_stdout()
+        if any(event.get("sessionID") != session_id for event in streamed):
+            raise ValueError("OpenCode Session export does not match streamed evidence")
+        expected_model = self.model_name.split("#", 1)[0]
+        events = []
+        for message in messages:
+            if not isinstance(message, dict):
+                raise ValueError("Malformed OpenCode Session message")
+            if message.get("type") != "assistant":
+                continue
+            model = message.get("model", {})
+            if not isinstance(model, dict):
+                raise ValueError("Malformed OpenCode Session model")
+            if f"{model.get('providerID')}/{model.get('id')}" != expected_model:
+                raise ValueError(
+                    "OpenCode Session message does not match requested model"
+                )
+            timing, content = message.get("time", {}), message.get("content")
+            if not isinstance(timing, dict):
+                raise ValueError("Malformed OpenCode Session time")
+            completed = timing.get("completed")
+            if completed is None or not isinstance(content, list):
+                raise ValueError("OpenCode Session contains an incomplete message")
+            if type(completed) not in {int, float} or (
+                type(completed) is float and not math.isfinite(completed)
+            ):
+                raise ValueError("Malformed OpenCode Session completion time")
+            events.append(
+                {
+                    "type": "step_start",
+                    "sessionID": session_id,
+                    "timestamp": timing.get("created"),
+                }
+            )
+            for part in content:
+                if not isinstance(part, dict):
+                    raise ValueError("Malformed OpenCode Session content")
+                kind = part.get("type")
+                if kind == "tool":
+                    state = part.get("state", {})
+                    if not isinstance(state, dict):
+                        raise ValueError("Malformed OpenCode Session tool state")
+                    output = state.get("content", [])
+                    if not isinstance(output, list) or any(
+                        not isinstance(item, dict)
+                        or (
+                            item.get("type") == "text"
+                            and not isinstance(item.get("text", ""), str)
+                        )
+                        for item in output
+                    ):
+                        raise ValueError("Malformed OpenCode Session tool content")
+                    error = state.get("error")
+                    if error is not None and (
+                        not isinstance(error, dict)
+                        or not isinstance(error.get("message", ""), str)
+                    ):
+                        raise ValueError("Malformed OpenCode Session tool error")
+                    state["output"] = "\n".join(
+                        item.get("text", "")
+                        if item.get("type") == "text"
+                        else json.dumps(item, ensure_ascii=False)
+                        for item in output
+                    ) or (error.get("message", "") if error is not None else "")
+                    part = {
+                        "type": "tool",
+                        "callID": part.get("id"),
+                        "tool": part.get("name"),
+                        "state": state,
+                    }
+                    kind = "tool_use"
+                if kind not in {"text", "reasoning", "tool_use"}:
+                    raise ValueError(f"Unsupported OpenCode Session content: {kind}")
+                events.append({"type": kind, "sessionID": session_id, "part": part})
+            events.append(
+                {
+                    "type": "step_finish",
+                    "sessionID": session_id,
+                    "part": {
+                        "cost": message.get("cost"),
+                        "tokens": message.get("tokens", {}),
+                    },
+                }
+            )
+        native_tools = {
+            (event["part"].get("callID"), event["part"].get("tool"))
+            for event in events
+            if event["type"] == "tool_use"
+        }
+        if any(
+            (
+                event.get("part", {}).get("callID", event.get("part", {}).get("id")),
+                event.get("part", {}).get("tool"),
+            )
+            not in native_tools
+            for event in streamed
+            if event.get("type") == "tool_use"
+        ):
+            raise ValueError(
+                "OpenCode streamed tool is missing from the Session export"
+            )
+        return events
+
     @override
     def _convert_events_to_trajectory(self, events: list[dict]) -> Trajectory | None:
         converted_events = []
         states = {}
         identities = set()
+        finishes = []
+        in_step = False
         for index, event in enumerate(events):
             if not isinstance(event, dict):
                 continue
@@ -203,6 +364,32 @@ class HostOpenCodeAgent(OpenCode):
                         f"Malformed OpenCode step boundary at index {index}"
                     )
                 continue
+            if event.get("type") == "step_start":
+                in_step = True
+            elif event.get("type") == "step_finish" and in_step:
+                finishes.append(part)
+                in_step = False
+                # Harbor handles content and cost; native usage is projected below.
+                tokens = part.get("tokens")
+                tokens = tokens if isinstance(tokens, dict) else {}
+                cache = tokens.get("cache")
+                cache = cache if isinstance(cache, dict) else {}
+                event = {
+                    **event,
+                    "part": {
+                        **part,
+                        "tokens": {
+                            key: _token_count(tokens.get(key)) or 0
+                            for key in ("input", "output", "reasoning")
+                        }
+                        | {
+                            "cache": {
+                                key: _token_count(cache.get(key)) or 0
+                                for key in ("read", "write")
+                            }
+                        },
+                    },
+                }
             converted_events.append(event)
         trajectory = super()._convert_events_to_trajectory(converted_events)
         represented = (
@@ -218,6 +405,24 @@ class HostOpenCodeAgent(OpenCode):
             raise ValueError("OpenCode tool events could not be represented in ATIF")
         if trajectory is None:
             return None
+        agent_steps = [step for step in trajectory.steps if step.source == "agent"]
+        if len(agent_steps) != len(finishes):
+            raise ValueError(
+                "OpenCode completed message usage does not align with ATIF steps"
+            )
+        for step, finish in zip(agent_steps, finishes):
+            projected = _usage_metrics(finish.get("tokens", {}))
+            metrics = step.metrics.model_dump(exclude_none=True) if step.metrics else {}
+            if finish.get("cost") is not None:
+                metrics["cost_usd"] = finish["cost"]
+            for field in ("prompt_tokens", "completion_tokens", "cached_tokens"):
+                metrics.pop(field, None)
+            extra = metrics.pop("extra", {})
+            extra.pop("cache_write_tokens", None)
+            extra.update(projected.pop("extra"))
+            step.metrics = Metrics.model_validate(
+                {**metrics, **projected, "extra": extra}
+            )
         for step in trajectory.steps:
             for observation in step.observation.results if step.observation else []:
                 state = states.get(observation.source_call_id)
@@ -237,12 +442,24 @@ class HostOpenCodeAgent(OpenCode):
                 if type(exit_code) is int:
                     extra["exit_code"] = exit_code
                     extra["is_error"] = bool(extra.get("is_error")) or exit_code != 0
+                if "content" in state:
+                    extra["raw_output"] = state["content"]
                 observation.extra = extra or None
-        return trajectory
+        data = trajectory.to_json_dict()
+        for field in (
+            "total_prompt_tokens",
+            "total_completion_tokens",
+            "total_cached_tokens",
+        ):
+            data["final_metrics"].pop(field, None)
+        return Trajectory.model_validate(finalize_trajectory_metrics(data))
 
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:
-        trajectory = self._convert_events_to_trajectory(self._parse_stdout())
+        context.n_input_tokens = context.n_output_tokens = context.n_cache_tokens = None
+        trajectory = self._trajectory
+        if trajectory is None:
+            trajectory = self._convert_events_to_trajectory(self._session_events())
         if trajectory is None:
             return
         data = trajectory.to_json_dict()
@@ -261,6 +478,7 @@ class HostOpenCodeAgent(OpenCode):
         context: AgentContext,
     ) -> None:
         del context
+        self._trajectory = None
         host = self._host(environment)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self._instruction = self.render_instruction(instruction)
@@ -269,6 +487,10 @@ class HostOpenCodeAgent(OpenCode):
         )
         instruction_path.write_bytes(self._instruction.encode("utf-8"))
         (self.logs_dir / "trajectory.json").unlink(missing_ok=True)
+        (self.logs_dir / "opencode-session.json").unlink(missing_ok=True)
+        model = self.model_name
+        if variant := self._resolved_flags.get("variant"):
+            model = f"{model.split('#', 1)[0]}#{variant}"
         argv = [
             sys.executable,
             "-c",
@@ -276,13 +498,12 @@ class HostOpenCodeAgent(OpenCode):
             str(instruction_path),
             self.executable,
             "run",
+            "--standalone",
             "--format=json",
             "--model",
-            self.model_name,
+            model,
             "--thinking",
         ]
-        if variant := self._resolved_flags.get("variant"):
-            argv.extend(["--variant", str(variant)])
         with (
             (self.logs_dir / "opencode.txt").open("w", encoding="utf-8") as stdout,
             (self.logs_dir / "opencode.stderr.log").open(
@@ -307,8 +528,46 @@ class HostOpenCodeAgent(OpenCode):
             raise NonZeroAgentExitCodeError(
                 "OpenCode emitted error events; see opencode.txt"
             )
-        if not any(event.get("type") == "step_finish" for event in events):
-            raise RuntimeError("OpenCode emitted no completed step; see Agent logs")
+        sessions = {event["sessionID"] for event in events if event.get("sessionID")}
+        if len(sessions) != 1:
+            raise RuntimeError("OpenCode emitted no unique Session; see Agent logs")
+        with (
+            (self.logs_dir / "opencode-session.json").open(
+                "w", encoding="utf-8"
+            ) as output,
+            (self.logs_dir / "opencode-export.stderr.log").open(
+                "w", encoding="utf-8"
+            ) as errors,
+        ):
+
+            async def capture_export(text: str, stream: str) -> None:
+                handle = output if stream == "stdout" else errors
+                handle.write(text)
+                handle.flush()
+
+            with host.scoped_exec_env(env), host.scoped_output_callback(capture_export):
+                exported = await host.exec_argv(
+                    [
+                        self.executable,
+                        "session",
+                        "export",
+                        "--standalone",
+                        sessions.pop(),
+                    ],
+                    env=env,
+                    timeout_sec=30,
+                )
+        if exported.return_code != 0:
+            raise RuntimeError(
+                "OpenCode Session export failed; see opencode-export.stderr.log"
+            )
+        self._trajectory = self._convert_events_to_trajectory(
+            self._session_events(events)
+        )
+        if self._trajectory is None:
+            raise RuntimeError(
+                "OpenCode exported no completed messages; see Agent logs"
+            )
 
     @override
     async def resume(self, *args, **kwargs) -> None:

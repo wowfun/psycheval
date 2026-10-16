@@ -38,6 +38,7 @@ def copied_harbor(tmp_path: Path) -> Path:
         "host",
         "host_filesystem",
         "project",
+        "opencode",
         "acp",
     ],
 )

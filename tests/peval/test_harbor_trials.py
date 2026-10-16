@@ -119,6 +119,80 @@ def completed_result(*, reward: float = 0.75) -> dict[str, object]:
 
 
 class HarborTrialTests(unittest.TestCase):
+    def test_opencode_cache_statistics_reach_catalog_detail_and_export(self):
+        from io import BytesIO
+        from xml.etree import ElementTree
+        from zipfile import ZipFile
+
+        from harbor.models.agent.context import AgentContext
+
+        from psycheval.harbor.opencode import HostOpenCodeAgent
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            jobs = base / "jobs"
+            trial = jobs / "job-a" / "trial-a"
+            write_trial(trial, result=completed_result())
+            export = trial / "agent/opencode-session.json"
+            export.write_text(
+                json.dumps(
+                    {
+                        "info": {"id": "opencode-cache", "outcome": "succeeded"},
+                        "messages": [
+                            {
+                                "id": "assistant-cache",
+                                "type": "assistant",
+                                "model": {"providerID": "fixture", "id": "model"},
+                                "time": {"created": 1, "completed": 2},
+                                "content": [{"type": "text", "text": "完成"}],
+                                "tokens": {
+                                    "input": 70,
+                                    "output": 2,
+                                    "cache": {"read": 20, "write": 10},
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            before = export.read_bytes()
+            agent = HostOpenCodeAgent(
+                logs_dir=trial / "agent", model_name="fixture/model"
+            )
+            agent.populate_context_post_run(AgentContext())
+            store, config, catalog = self.workspace(base / "workspace", jobs)
+            try:
+                catalog.reconcile()
+                row = catalog.query(CatalogQuery()).items[0].to_dict()
+                self.assertEqual(row["tokens"], 102)
+                self.assertEqual(row["cache_read_tokens"], 20)
+                self.assertEqual(row["cache_prompt_tokens"], 100)
+                self.assertEqual(row["cache_sample_count"], 1)
+                self.assertEqual(row["cache_hit_rate"], 0.2)
+                detail = catalog.load_detail(row["source_key"]).report
+                self.assertEqual(
+                    detail["trajectory"][0]["final_metrics"]["extra"][
+                        "model_inference"
+                    ]["cache_read_tokens"],
+                    20,
+                )
+                workbook = build_serve_export(catalog, store, config, kind="xlsx")
+                with ZipFile(BytesIO(workbook.content)) as archive:
+                    sheet = ElementTree.fromstring(
+                        archive.read("xl/worksheets/sheet1.xml")
+                    )
+                rows = sheet.findall("{*}sheetData/{*}row")
+                headers = ["".join(cell.itertext()) for cell in rows[0]]
+                values = ["".join(cell.itertext()) for cell in rows[1]]
+                exported = dict(zip(headers, values, strict=True))
+                self.assertEqual(float(exported["Cache Hit Rate"]), 0.2)
+                self.assertEqual(int(exported["Cache Samples"]), 1)
+                self.assertEqual(int(exported["Cache-read Tokens"]), 20)
+                self.assertEqual(export.read_bytes(), before)
+            finally:
+                store.close()
+
     def test_harbor_tool_call_extra_timing_reaches_catalog_and_detail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

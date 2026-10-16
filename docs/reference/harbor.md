@@ -308,7 +308,7 @@ are checked through required files and native bootstrap capabilities.
 
 ## Native OpenCode
 
-For native OpenCode runs, select `HostOpenCodeAgent` by import path, provide
+For native OpenCode 2 runs, select `HostOpenCodeAgent` by import path, provide
 `model_name` as `provider/model`, and install OpenCode on the host first.
 Its `executable` kwarg defaults to `opencode`; an optional `version` requires an
 exact match. It accepts Harbor's `opencode_config`, `variant`, prompt template,
@@ -324,8 +324,10 @@ Task MCP definitions supply defaults for each named server; caller MCP entries
 merge over them, preserving options such as authentication, timeout, and an
 explicit `enabled=false`. Caller-only servers remain available.
 Each Trial owns separate OpenCode home, config, data, state, and cache directories
-in neutral runtime storage outside its Agent logs. Stdin forwarding also uses a
-neutral runtime path, so the launcher command does not expose a Trial log path.
+in neutral runtime storage outside its Agent logs. Execution uses OpenCode's
+standalone server so it does not connect to or start the user's managed service.
+Stdin forwarding also uses a neutral runtime path, so the launcher command does
+not expose a Trial log path.
 During setup and execution, generated runtime paths
 and OpenCode configuration take precedence over Agent environment overrides,
 including Harbor's surrounding execution scope. Other Agent environment values
@@ -335,9 +337,30 @@ OpenCode's additional Git snapshots (the Environment owns the Task baseline), an
 allows task tools by default; callers can override permissions in
 `opencode_config`. OpenCode chooses its native tool shell, configurable through
 that same object. Instructions arrive on stdin, independent of shell quoting and
-Windows command-line length. Native JSON events and stderr stream to Agent logs,
-including on cancellation, and Harbor's pinned OpenCode converter produces ATIF
-and usage metrics. The adapter writes `trajectory.json` as UTF-8 without a BOM,
+Windows command-line length. The `variant` kwarg is passed as `provider/model#variant`.
+Native JSON events and stderr stream to Agent logs, including on cancellation.
+Execution must emit exactly one Session identity before export. Export failure
+or timeout fails the invocation and retains its logs; a previous invocation's
+converted trajectory is never reused for a new run.
+After a successful run, `opencode session export --standalone` retains the selected
+Session as `opencode-session.json`. Its completed messages, tool results, and usage
+are authoritative for ATIF conversion; streamed events alone need not contain
+step boundaries. Exported Session and model identities must match the invocation,
+and every streamed tool call must occur in the export. Harbor's pinned converter
+consumes the normalized message boundaries and produces ATIF. The adapter projects
+each completed message's native usage into step metrics and the portable
+`model_inference` statistics used by the workbench. OpenCode's `tokens.input`
+excludes cache reads and writes; inclusive prompt tokens sum `input`, `cache.read`,
+and `cache.write`. Cache hit rate divides cache-read tokens by inclusive prompt
+tokens over messages with valid paired measurements. An explicit zero read is a
+measured miss; a missing or invalid read remains unknown and contributes neither
+numerator nor denominator. An omitted cache-write bucket contributes zero;
+an explicitly invalid bucket excludes that message from cache-rate statistics.
+Cache writes are retained separately and never count as hits. These statistics
+cover completed messages in the exported root Session; they do not infer retries,
+child Sessions, TTFT, or decoding speed from message timestamps. Cost and reasoning
+token metadata remain available independently.
+The adapter writes `trajectory.json` as UTF-8 without a BOM,
 preserving non-ASCII characters directly. This adapter supports fresh runs only;
 resume and trajectory loading are not supported.
 Native tool observations retain OpenCode's completion/error state and shell
@@ -347,6 +370,8 @@ Malformed tool envelopes, identities, states, or step boundaries fail trajectory
 conversion explicitly, retaining native logs. Tool calls must not disappear from
 ATIF and thereby bypass required/forbidden-tool checks. Unsupported optional
 metadata is ignored; an unknown completion status remains incomplete.
+Malformed native Session fields raise categorized OpenCode validation errors;
+a recorded completion timestamp of zero remains valid.
 The version probe uses the same isolated Trial configuration as execution and
 retains `opencode-setup.log`. A probe exceeding its 30-second command timeout
 reports that probe failure instead of Harbor's overall Agent setup timeout.

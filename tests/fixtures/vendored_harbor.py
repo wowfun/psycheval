@@ -614,6 +614,44 @@ def project(root: Path) -> None:
     asyncio.run(scenario())
 
 
+def opencode(root):
+    from harbor.models.agent.context import AgentContext
+
+    session = {
+        "info": {"id": "copied-opencode", "outcome": "succeeded"},
+        "messages": [
+            {
+                "id": "copied-message",
+                "type": "assistant",
+                "model": {"providerID": "fixture", "id": "model"},
+                "time": {"created": 1, "completed": 2},
+                "content": [{"type": "text", "text": "copied 完成"}],
+                "tokens": {
+                    "input": 10,
+                    "output": 2,
+                    "cache": {"read": 4, "write": 6},
+                },
+            }
+        ],
+    }
+    (root / "opencode-session.json").write_text(json.dumps(session), encoding="utf-8")
+    agent = module("opencode").HostOpenCodeAgent(
+        logs_dir=root, model_name="fixture/model"
+    )
+    context = AgentContext()
+    agent.populate_context_post_run(context)
+    assert context.n_input_tokens == 20
+    assert context.n_output_tokens == 2
+    assert context.n_cache_tokens == 4
+    data = module("trajectory_validation").load_validated_trajectory(
+        root / "trajectory.json"
+    )
+    inference = data["final_metrics"]["extra"]["model_inference"]
+    assert inference["cache_prompt_tokens"] == 20
+    assert inference["cache_read_tokens"] == 4
+    assert inference["cache_sample_count"] == 1
+
+
 def acp(root):
     from harbor.models.agent.context import AgentContext
     from harbor.models.task.config import EnvironmentConfig
@@ -693,6 +731,7 @@ if __name__ == "__main__":
         "synthetic_harness": synthetic_harness,
         "native_office": native_office,
         "project": project,
+        "opencode": opencode,
         "acp": acp,
     }
     scenarios[sys.argv[2]](root)

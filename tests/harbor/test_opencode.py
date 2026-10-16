@@ -18,7 +18,352 @@ from harbor.models.task.config import MCPServerConfig
 from psycheval.harbor.opencode import HostOpenCodeAgent
 from psycheval.harbor.trajectory_validation import load_validated_trajectory
 from psycheval.harbor.verifier import evaluate
-from tests.harbor.environment_support import make_environment
+from tests.harbor.environment_support import assert_process_exited, make_environment
+
+
+def _exported_session():
+    return {
+        "info": {"id": "session-fixture", "outcome": "succeeded"},
+        "messages": [
+            {
+                "id": "assistant-fixture",
+                "type": "assistant",
+                "model": {"providerID": "fixture", "id": "model"},
+                "time": {"created": 1, "completed": 2},
+                "content": [{"type": "text", "text": "完成 🎉"}],
+                "cost": 0.25,
+                "tokens": {"input": 12, "output": 7, "cache": {"read": 3}},
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "field", ["model", "time", "state", "output", "output_item", "error", "part"]
+)
+def test_malformed_nested_export_fields_have_categorical_errors(tmp_path, field):
+    exported = _exported_session()
+    message = exported["messages"][0]
+    tool = {
+        "type": "tool",
+        "id": "call",
+        "name": "bash",
+        "state": {"status": "error", "input": {}, "content": []},
+    }
+    if field in {"model", "time"}:
+        message[field] = None
+    elif field == "part":
+        message["content"] = [None]
+    else:
+        message["content"] = [tool]
+        if field == "state":
+            tool["state"] = None
+        elif field == "output":
+            tool["state"]["content"] = None
+        elif field == "output_item":
+            tool["state"]["content"] = [None]
+        else:
+            tool["state"]["error"] = "invalid"
+    path = tmp_path / "opencode-session.json"
+    path.write_text(json.dumps(exported), encoding="utf-8")
+    before = path.read_bytes()
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    with pytest.raises(ValueError, match="Malformed OpenCode Session"):
+        agent.populate_context_post_run(AgentContext())
+    assert path.read_bytes() == before
+    assert not (tmp_path / "trajectory.json").exists()
+
+
+def test_epoch_zero_completion_and_null_optional_tool_error_are_valid(tmp_path):
+    exported = _exported_session()
+    exported["messages"][0].update(
+        time={"created": 0, "completed": 0},
+        content=[
+            {
+                "type": "tool",
+                "id": "call",
+                "name": "bash",
+                "state": {
+                    "status": "completed",
+                    "input": {},
+                    "content": [],
+                    "error": None,
+                },
+            }
+        ],
+    )
+    (tmp_path / "opencode-session.json").write_text(
+        json.dumps(exported), encoding="utf-8"
+    )
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    agent.populate_context_post_run(AgentContext())
+    data = load_validated_trajectory(tmp_path / "trajectory.json")
+    assert data["steps"][0]["timestamp"] == "1970-01-01T00:00:00+00:00"
+    assert data["steps"][0]["observation"]["results"][0]["extra"]["is_error"] is False
+
+
+def test_session_export_preserves_tools_and_usage_without_streamed_steps(tmp_path):
+    exported = _exported_session()
+    tool = {
+        "type": "tool",
+        "id": "read-source",
+        "name": "bash",
+        "state": {
+            "status": "completed",
+            "input": {"command": "python source.py"},
+            "content": [{"type": "text", "text": "source data"}],
+            "metadata": {"exit": 1},
+        },
+    }
+    exported["messages"][0]["content"].insert(0, tool)
+    (tmp_path / "opencode-session.json").write_text(
+        json.dumps(exported), encoding="utf-8"
+    )
+    (tmp_path / "opencode.txt").write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "sessionID": "session-fixture",
+                "part": {
+                    "id": "read-source",
+                    "tool": "bash",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    agent._instruction = "Read source"
+    context = AgentContext()
+    agent.populate_context_post_run(context)
+    data = load_validated_trajectory(tmp_path / "trajectory.json")
+    assert data["steps"][0]["message"] == "Read source"
+    assert data["steps"][1]["message"] == "完成 🎉"
+    assert data["steps"][1]["tool_calls"][0]["function_name"] == "bash"
+    observation = data["steps"][1]["observation"]["results"][0]
+    assert observation["content"] == "source data"
+    assert observation["extra"]["is_error"] is True
+    assert observation["extra"]["exit_code"] == 1
+    assert observation["extra"]["raw_output"] == tool["state"]["content"]
+    assert context.n_input_tokens == 15
+    assert context.n_output_tokens == 7
+    assert context.n_cache_tokens == 3
+    assert context.cost_usd == 0.25
+    assert data["final_metrics"]["extra"]["model_inference"] == {
+        "schema_version": 1,
+        "cache_prompt_tokens": 15,
+        "cache_read_tokens": 3,
+        "cache_sample_count": 1,
+        "attempt_count": 1,
+        "successful_attempt_count": 1,
+        "usage_sources": ["opencode-session"],
+    }
+
+
+@pytest.mark.parametrize(
+    "tokens,prompt,cached,rate",
+    [
+        ({"input": 12, "cache": {"read": 3, "write": 5}}, 20, 3, 0.15),
+        ({"input": 12, "cache": {"read": 0, "write": 0}}, 12, 0, 0),
+        ({"input": 0, "cache": {"read": 3}}, 3, 3, 1),
+        ({"input": 0, "cache": {"read": 0, "write": 10}}, 10, 0, 0),
+        ({"input": 12}, 12, None, None),
+        ({"input": 12, "cache": {}}, 12, None, None),
+        ({"input": 12, "cache": {"read": None}}, None, None, None),
+        ({"input": 12, "cache": {"read": True}}, None, None, None),
+        ({"input": 12, "cache": {"read": -1}}, None, None, None),
+        ({"input": 12, "cache": {"read": "3"}}, None, None, None),
+        ({"input": 12, "cache": {"read": 3.5}}, None, None, None),
+        ({"input": 12, "cache": {"read": 3, "write": None}}, None, None, None),
+        ({"input": 12, "cache": {"read": 3, "write": -1}}, None, None, None),
+        ({"input": True, "cache": {"read": 3}}, None, None, None),
+        ({"input": -1, "cache": {"read": 3}}, None, None, None),
+        ({"input": "12", "cache": {"read": 3}}, None, None, None),
+        ({"input": 12, "cache": None}, 12, None, None),
+        ({"cache": {"read": 3}}, None, None, None),
+        ({"input": 0, "cache": {"read": 0}}, 0, None, None),
+        ({}, None, None, None),
+    ],
+)
+def test_session_cache_samples_preserve_buckets_and_unknowns(
+    tmp_path, tokens, prompt, cached, rate
+):
+    from psycheval.report.inference import inference_row_metrics
+
+    exported = _exported_session()
+    exported["messages"][0]["tokens"] = {**tokens, "output": 7, "reasoning": 2}
+    path = tmp_path / "opencode-session.json"
+    path.write_text(json.dumps(exported), encoding="utf-8")
+    before = path.read_bytes()
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    context = AgentContext(n_input_tokens=999, n_output_tokens=999, n_cache_tokens=999)
+    agent.populate_context_post_run(context)
+    data = load_validated_trajectory(tmp_path / "trajectory.json")
+    metrics = data["steps"][0]["metrics"]
+    assert metrics.get("prompt_tokens") == prompt
+    assert metrics.get("cached_tokens") == cached
+    assert metrics["completion_tokens"] == 7
+    assert metrics["cost_usd"] == 0.25
+    assert metrics["extra"]["reasoning_tokens"] == 2
+    assert context.n_input_tokens == prompt
+    assert context.n_output_tokens == 7
+    assert context.n_cache_tokens == cached
+    assert context.cost_usd == 0.25
+    display = inference_row_metrics(data["final_metrics"])
+    assert display["cache_hit_rate"] == rate
+    assert display["ttft_ms"] is None
+    assert display["tps"] is None
+    if rate is None:
+        assert display["cache_sample_count"] is None
+    else:
+        assert display["cache_sample_count"] == 1
+    cache = tokens.get("cache") or {}
+    if type(cache.get("write")) is int and cache["write"] >= 0:
+        assert metrics["extra"]["usage"]["cache_write_tokens"] == cache["write"]
+    assert path.read_bytes() == before
+
+
+def test_write_only_usage_preserves_cost_reasoning_and_measured_zero(tmp_path):
+    exported = _exported_session()
+    exported["messages"][0]["tokens"] = {
+        "input": 0,
+        "output": 0,
+        "reasoning": 2,
+        "cache": {"read": 0, "write": 10},
+    }
+    (tmp_path / "opencode-session.json").write_text(
+        json.dumps(exported), encoding="utf-8"
+    )
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    context = AgentContext()
+    agent.populate_context_post_run(context)
+    data = load_validated_trajectory(tmp_path / "trajectory.json")
+    metrics = data["steps"][0]["metrics"]
+    assert metrics["cost_usd"] == 0.25
+    assert metrics["extra"]["reasoning_tokens"] == 2
+    assert context.n_input_tokens == 10
+    assert context.n_output_tokens == 0
+    assert context.n_cache_tokens == 0
+
+
+def test_cache_rate_uses_paired_message_samples_and_retains_identical_usage(tmp_path):
+    from psycheval.report.inference import inference_row_metrics
+
+    exported = _exported_session()
+    template = exported["messages"][0]
+    for index, tokens in enumerate(
+        [
+            {"input": 80, "output": 1, "cache": {"read": 20}},
+            {"input": 80, "output": 1, "cache": {"read": 20}},
+            {"input": 10, "output": 1, "cache": {"read": 0}},
+            {"input": 1000, "output": 1},
+        ]
+    ):
+        message = copy.deepcopy(template)
+        message.update(id=f"assistant-{index}", tokens=tokens)
+        exported["messages"].append(message)
+    exported["messages"].pop(0)
+    (tmp_path / "opencode-session.json").write_text(
+        json.dumps(exported), encoding="utf-8"
+    )
+    # Streamed usage is not another consumption sample.
+    (tmp_path / "opencode.txt").write_text(
+        json.dumps(
+            {
+                "type": "step_finish",
+                "sessionID": "session-fixture",
+                "part": {"tokens": {"input": 9999, "cache": {"read": 9999}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    agent.populate_context_post_run(AgentContext())
+    data = load_validated_trajectory(tmp_path / "trajectory.json")
+    assert data["final_metrics"]["total_prompt_tokens"] == 1210
+    assert data["final_metrics"]["total_cached_tokens"] == 40
+    inference = inference_row_metrics(data["final_metrics"])
+    assert inference["cache_prompt_tokens"] == 210
+    assert inference["cache_read_tokens"] == 40
+    assert inference["cache_sample_count"] == 3
+    assert inference["cache_hit_rate"] == pytest.approx(40 / 210)
+
+
+def test_empty_export_clears_context_without_reusing_prior_usage(tmp_path):
+    exported = _exported_session()
+    exported["messages"] = []
+    (tmp_path / "opencode-session.json").write_text(
+        json.dumps(exported), encoding="utf-8"
+    )
+    context = AgentContext(n_input_tokens=999, n_output_tokens=999, n_cache_tokens=999)
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    agent.populate_context_post_run(context)
+    assert (
+        context.n_input_tokens
+        is context.n_output_tokens
+        is context.n_cache_tokens
+        is None
+    )
+
+
+def test_usage_alignment_failure_names_opencode(tmp_path, monkeypatch):
+    from harbor.agents.installed.opencode import OpenCode
+    from harbor.models.trajectories import Trajectory
+
+    converted = Trajectory.model_validate(
+        {
+            "schema_version": "ATIF-v1.7",
+            "session_id": "fixture",
+            "agent": {"name": "opencode", "version": "1"},
+            "steps": [{"step_id": 1, "source": "user", "message": "task"}],
+        }
+    )
+    monkeypatch.setattr(
+        OpenCode, "_convert_events_to_trajectory", lambda *args: converted
+    )
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    with pytest.raises(ValueError, match="OpenCode completed message usage"):
+        agent._convert_events_to_trajectory(
+            [
+                {"type": "step_start", "sessionID": "fixture"},
+                {"type": "step_finish", "part": {}},
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    "failure", ["shape", "session", "model", "incomplete", "tool", "failed"]
+)
+def test_session_export_rejects_unbound_or_incomplete_evidence(tmp_path, failure):
+    exported = _exported_session()
+    stream = {"type": "text", "sessionID": "session-fixture"}
+    if failure == "shape":
+        exported = []
+    elif failure == "session":
+        exported["info"]["id"] = "another-session"
+    elif failure == "model":
+        exported["messages"][0]["model"]["id"] = "another-model"
+    elif failure == "incomplete":
+        exported["messages"][0]["time"].pop("completed")
+    elif failure == "failed":
+        exported["info"]["outcome"] = "failed"
+    else:
+        stream = {
+            "type": "tool_use",
+            "sessionID": "session-fixture",
+            "part": {
+                "id": "omitted-call",
+                "tool": "forbidden_tool",
+            },
+        }
+    (tmp_path / "opencode-session.json").write_text(
+        json.dumps(exported), encoding="utf-8"
+    )
+    (tmp_path / "opencode.txt").write_text(json.dumps(stream), encoding="utf-8")
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    with pytest.raises(ValueError, match="OpenCode"):
+        agent.populate_context_post_run(AgentContext())
+    assert not (tmp_path / "trajectory.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -155,7 +500,8 @@ def test_malformed_forbidden_tool_event_cannot_disappear_from_scoring(
     os.environ.get("PEVAL_OPENCODE_CLI_TESTS") != "1",
     reason="opt-in preinstalled OpenCode CLI integration",
 )
-def test_real_cli_reads_unicode_stdin_and_uses_registered_model(tmp_path):
+@pytest.mark.parametrize("variant", [None, "high"])
+def test_real_cli_reads_unicode_stdin_and_uses_registered_model(tmp_path, variant):
     executable = shutil.which("opencode")
     assert executable, "Install OpenCode before enabling the CLI integration test"
     requests = []
@@ -182,6 +528,20 @@ def test_real_cli_reads_unicode_stdin_and_uses_registered_model(tmp_path):
                     "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
                 }
                 self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
+            usage = {
+                "id": "fixture-completion",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": payload["model"],
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 5,
+                    "total_tokens": 105,
+                    "prompt_tokens_details": {"cached_tokens": 60},
+                },
+            }
+            self.wfile.write(f"data: {json.dumps(usage)}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
 
@@ -195,6 +555,7 @@ def test_real_cli_reads_unicode_stdin_and_uses_registered_model(tmp_path):
             logs_dir=tmp_path / "agent logs",
             executable=executable,
             model_name="fixture/unlisted-model",
+            variant=variant,
             extra_env={
                 "TEST_API_KEY": "fixture-key",
                 "OPENCODE_DISABLE_MODELS_FETCH": "true",
@@ -220,8 +581,16 @@ def test_real_cli_reads_unicode_stdin_and_uses_registered_model(tmp_path):
             instruction = '任务 "quoted" & $HOME\n' + "中文" * 18000
             async with asyncio.timeout(60):
                 await agent.run(instruction, host, AgentContext())
-            agent.populate_context_post_run(AgentContext())
-            load_validated_trajectory(agent.logs_dir / "trajectory.json")
+            context = AgentContext()
+            agent.populate_context_post_run(context)
+            data = load_validated_trajectory(agent.logs_dir / "trajectory.json")
+            assert context.n_input_tokens == 100
+            assert context.n_output_tokens == 5
+            assert context.n_cache_tokens == 60
+            inference = data["final_metrics"]["extra"]["model_inference"]
+            assert inference["cache_prompt_tokens"] == 100
+            assert inference["cache_read_tokens"] == 60
+            assert inference["cache_sample_count"] == 1
             contents = []
             for _, _, payload in requests:
                 for message in payload["messages"]:
@@ -241,9 +610,11 @@ def test_real_cli_reads_unicode_stdin_and_uses_registered_model(tmp_path):
                 and payload["model"] == "unlisted-model"
                 for path, key, payload in requests
             )
-            assert any(
-                event.get("type") == "step_finish" for event in agent._parse_stdout()
+            exported = json.loads(
+                (agent.logs_dir / "opencode-session.json").read_text(encoding="utf-8")
             )
+            assert exported["info"]["model"]["id"] == "unlisted-model"
+            assert exported["info"]["model"]["variant"] == (variant or "default")
         finally:
             await host.stop(True)
 
@@ -364,29 +735,51 @@ def test_task_mcp_defaults_preserve_caller_configuration(
     assert server.model_dump() == server_before
 
 
-@pytest.mark.parametrize("outcome", ["success", "error", "exit", "empty", "cancel"])
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "success",
+        "error",
+        "exit",
+        "empty",
+        "cancel",
+        "export_error",
+        "export_timeout",
+        "no_session",
+        "multiple_sessions",
+    ],
+)
 def test_native_opencode_run_retains_evidence_and_isolates_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
 ) -> None:
     script = tmp_path / "fake opencode.py"
+    exported = _exported_session()
+    if outcome == "empty":
+        exported["messages"] = []
     script.write_text(
-        "import json,os,sys,time\n"
+        "import json,os,sys,time,psutil\n"
         "from pathlib import Path\n"
+        f"outcome={outcome!r}\n"
+        "if sys.argv[1:3]==['session','export']:\n"
+        " Path('export-process.tmp').write_text(json.dumps({'pid':os.getpid(),'created_at':psutil.Process().create_time()}))\n"
+        " Path('export-process.tmp').replace('export.pid')\n"
+        " print('export diagnostic',file=sys.stderr,flush=True)\n"
+        " if outcome=='export_error': sys.exit(7)\n"
+        " if outcome=='export_timeout': time.sleep(60)\n"
+        f" print({json.dumps(exported, ensure_ascii=False)!r}); sys.exit()\n"
         "prompt=sys.stdin.buffer.read().decode('utf-8')\n"
         "config=json.loads(os.environ['OPENCODE_CONFIG_CONTENT'])\n"
         "Path('observed.json').write_text(json.dumps({'prompt':prompt,"
         "'config':config,'cwd':os.getcwd(),'argv':sys.argv[1:],"
         "'home':os.environ['HOME'],'data':os.environ['XDG_DATA_HOME'],"
         "'key':os.environ['TEST_API_KEY']}),encoding='utf-8')\n"
-        "print(json.dumps({'type':'step_start','sessionID':'session-fixture'}),flush=True)\n"
-        "print(json.dumps({'type':'text','part':{'type':'text','text':'完成 🎉'}},"
+        "print(json.dumps({'type':'text',**({} if outcome=='no_session' else {'sessionID':'session-fixture'}),'part':{'type':'text','text':'完成 🎉'}},"
         "ensure_ascii=False),flush=True)\n"
         f"outcome={outcome!r}\n"
+        "if outcome=='multiple_sessions': print(json.dumps({'type':'text','sessionID':'other-session'}),flush=True)\n"
         "if outcome=='cancel': time.sleep(60)\n"
         "if outcome=='error': print(json.dumps({'type':'error','error':{'name':'APIError'}}))\n"
-        "if outcome=='exit': sys.exit(2)\n"
-        "if outcome!='empty': print(json.dumps({'type':'step_finish','part':"
-        "{'cost':0.25,'tokens':{'input':12,'output':7,'cache':{'read':3}}}}))\n",
+        "if outcome=='exit': sys.exit(2)\n",
         encoding="utf-8",
     )
 
@@ -410,8 +803,31 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
             await host.ensure_dirs(["/harbor/skills"], chmod=False)
             await agent.setup(host)
             execute = host.exec_argv
+            convert = agent._convert_events_to_trajectory
+            conversions = []
+            parse = agent._parse_stdout
+            parses = []
+
+            def counted_parse():
+                parses.append(1)
+                return parse()
+
+            def counted(events):
+                conversions.append(1)
+                return convert(events)
+
+            monkeypatch.setattr(agent, "_convert_events_to_trajectory", counted)
+            monkeypatch.setattr(agent, "_parse_stdout", counted_parse)
+            agent._trajectory = (
+                object()
+            )  # A previous invocation's cache must be cleared.
 
             async def fake_cli(argv, **kwargs):
+                if argv[1:3] == ["session", "export"]:
+                    assert kwargs["timeout_sec"] == 30
+                    if outcome == "export_timeout":
+                        kwargs["timeout_sec"] = 0.2
+                    return await execute([argv[0], str(script), *argv[1:]], **kwargs)
                 assert not Path(argv[3]).is_relative_to(agent.logs_dir)
                 assert not Path(argv[3]).is_relative_to(host.work_dir)
                 return await execute([*argv[:5], str(script), *argv[5:]], **kwargs)
@@ -433,12 +849,28 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
                 with pytest.raises(NonZeroAgentExitCodeError):
                     await agent.run(instruction, host, AgentContext())
             elif outcome == "empty":
-                with pytest.raises(RuntimeError, match="no completed step"):
+                with pytest.raises(RuntimeError, match="no completed messages"):
+                    await agent.run(instruction, host, AgentContext())
+            elif outcome == "export_error":
+                with pytest.raises(
+                    RuntimeError, match="OpenCode Session export failed"
+                ):
+                    await agent.run(instruction, host, AgentContext())
+            elif outcome == "export_timeout":
+                with pytest.raises(TimeoutError):
+                    await agent.run(instruction, host, AgentContext())
+            elif outcome in {"no_session", "multiple_sessions"}:
+                with pytest.raises(
+                    RuntimeError, match="OpenCode emitted no unique Session"
+                ):
                     await agent.run(instruction, host, AgentContext())
             else:
                 await agent.run(instruction, host, AgentContext())
                 context = AgentContext()
                 agent.populate_context_post_run(context)
+                agent.populate_context_post_run(AgentContext())
+                assert len(conversions) == 1
+                assert len(parses) == 1
                 assert context.n_output_tokens == 7
                 assert context.cost_usd == 0.25
                 trajectory = load_validated_trajectory(logs / "trajectory.json")
@@ -446,6 +878,16 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
                 assert not raw_trajectory.startswith(b"\xef\xbb\xbf")
                 assert "完成 🎉".encode("utf-8") in raw_trajectory
                 assert trajectory["steps"][-1]["message"] == "完成 🎉"
+            if outcome != "success":
+                assert agent._trajectory is None
+            if outcome in {"export_error", "export_timeout"}:
+                pid = host.work_dir / "export.pid"
+                if pid.exists():
+                    assert_process_exited(**json.loads(pid.read_text()))
+                diagnostic = logs / "opencode-export.stderr.log"
+                if outcome == "export_error":
+                    assert "export diagnostic" in diagnostic.read_text(encoding="utf-8")
+                diagnostic.rename(diagnostic.with_suffix(".closed"))
             observed = json.loads(
                 (host.work_dir / "observed.json").read_text(encoding="utf-8")
             )
@@ -461,9 +903,16 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
                 str(host.native_path("/harbor/skills"))
             ]
             assert observed["config"]["mcp"]["fixture"]["command"] == ["python"]
-            assert observed["argv"][-2:] == ["--variant", "high"]
+            assert "--standalone" in observed["argv"]
+            assert (
+                observed["argv"][observed["argv"].index("--model") + 1]
+                == "fixture/model#high"
+            )
             assert observed["key"] == "fixture-key"
-            assert "step_start" in (logs / "opencode.txt").read_text(encoding="utf-8")
+            if outcome != "no_session":
+                assert "session-fixture" in (logs / "opencode.txt").read_text(
+                    encoding="utf-8"
+                )
         finally:
             await host.stop(delete=True)
 
@@ -492,9 +941,14 @@ def test_generated_opencode_environment_wins_inside_harbor_scope(
     keys = (*path_keys, "OPENCODE_CONFIG_CONTENT", "TEST_API_KEY")
     observe = f"json.dumps({{key:os.environ.get(key) for key in {keys!r}}})"
     script = tmp_path / "scoped-opencode.py"
-    output = "fixture-version" if phase == "setup" else '{"type":"step_finish"}'
+    output = (
+        "fixture-version"
+        if phase == "setup"
+        else '{"type":"text","sessionID":"session-fixture"}'
+    )
     script.write_text(
         "import json,os,sys,time\nfrom pathlib import Path\n"
+        f"if sys.argv[1:3]==['session','export']: print({json.dumps(_exported_session())!r}); sys.exit()\n"
         f"Path('observed-env.json').write_text({observe},encoding='utf-8')\n"
         f"print({output!r},flush=True)\n"
         f"if {outcome!r}=='cancel': time.sleep(30)\n"
@@ -520,6 +974,8 @@ def test_generated_opencode_environment_wins_inside_harbor_scope(
             actual = (
                 [argv[0], str(script)]
                 if phase == "setup"
+                else [argv[0], str(script), *argv[1:]]
+                if argv[1:3] == ["session", "export"]
                 else [*argv[:5], str(script), *argv[5:]]
             )
             return await execute(actual, **kwargs)
