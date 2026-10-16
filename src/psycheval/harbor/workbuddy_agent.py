@@ -242,7 +242,7 @@ class HostWorkBuddyAgent(HostACPAgent):
 
     @staticmethod
     def name():
-        return "psycheval-host-workbuddy"
+        return "workbuddy"
 
     @staticmethod
     def _host(environment):

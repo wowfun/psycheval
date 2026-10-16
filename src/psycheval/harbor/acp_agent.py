@@ -252,7 +252,7 @@ class HostACPAgent(BaseAgent):
 
     @staticmethod
     def name():
-        return "psycheval-host-acp"
+        return "acp"
 
     def version(self):
         return __version__

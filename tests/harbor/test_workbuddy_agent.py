@@ -626,6 +626,7 @@ def test_workbuddy_private_profile_boolean_skills_and_exact_resume(tmp_path, mod
             on_session_update=received.append,
             **config,
         )
+        assert agent.name() == "workbuddy"
         agent.argv = [sys.executable, str(PEER), "codebuddy"]
         try:
             await agent.setup(host)
@@ -657,6 +658,7 @@ def test_workbuddy_private_profile_boolean_skills_and_exact_resume(tmp_path, mod
                 data = json.loads(
                     (agent.logs_dir / "trajectory.json").read_text(encoding="utf-8")
                 )
+                assert data["agent"]["name"] == "workbuddy"
                 calls = [c for s in data["steps"] for c in s.get("tool_calls", [])]
                 assert [c["function_name"] for c in calls] == ["Bash"]
                 assert context.metadata["acp_session_id"] == "fixture-session"

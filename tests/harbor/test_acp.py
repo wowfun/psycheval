@@ -462,8 +462,11 @@ def test_context_population_preserves_caller_metadata(tmp_path):
     )
     agent = HostACPAgent(logs_dir=tmp_path, argv=[sys.executable])
     agent._invocation_id = "fixture-invocation"
+    assert agent.name() == "acp"
     context = AgentContext(metadata={"caller": "retained"})
     agent.populate_context_post_run(context)
+    trajectory = json.loads((tmp_path / "trajectory.json").read_text(encoding="utf-8"))
+    assert trajectory["agent"]["name"] == "acp"
     assert context.metadata == {
         "caller": "retained",
         "acp_session_id": "current",

@@ -6,7 +6,8 @@ Psycheval supports the public Harbor `0.21.0` contract through
 ## Host ACP Agent
 
 `psycheval.harbor.acp_agent:HostACPAgent` evaluates a preinstalled ACP v1 Agent
-on a native Linux or Windows Host. `argv` is literal executable/argument input. `config_dir` seeds
+on a native Linux or Windows Host and reports the Agent name `acp`.
+`argv` is literal executable/argument input. `config_dir` seeds
 isolated XDG configuration once; linked entries are rejected. HOME/XDG state
 stays private and stable within a Trial, separately from per-invocation evidence.
 Only explicitly supplied configuration is copied; ambient user configuration is
@@ -167,7 +168,8 @@ unreadable retained member cannot confirm settlement.
 ## Native WorkBuddy ACP
 
 `psycheval.harbor.workbuddy_agent:HostWorkBuddyAgent` runs the desktop-bundled
-CodeBuddy CLI on Windows. Supply explicit absolute `installation_dir`,
+CodeBuddy CLI on Windows and reports the Agent name `workbuddy`.
+Supply explicit absolute `installation_dir`,
 `profile_dir` and `auth_file` paths and an exact advertised `model_name`.
 `inspect_workbuddy` accepts the same paths and returns version and model
 configuration information without submitting a prompt. It creates a temporary,
