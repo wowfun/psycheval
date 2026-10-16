@@ -3,12 +3,36 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 
+import psutil
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
 
 from psycheval.harbor.environment import HostEnvironment
+
+
+def assert_process_exited(pid: int, created_at: float, *, timeout: float = 5) -> None:
+    """Wait for the recorded process to exit, independently of PID/handle lifetime."""
+    try:
+        process = psutil.Process(pid)
+        if process.create_time() != created_at:
+            return  # The PID now belongs to another process.
+        if sys.platform != "win32" and process.status() == psutil.STATUS_ZOMBIE:
+            return
+        try:
+            process.wait(timeout=timeout)
+        except psutil.TimeoutExpired as error:
+            if not process.is_running():
+                return
+            if sys.platform != "win32" and process.status() == psutil.STATUS_ZOMBIE:
+                return
+            raise AssertionError(
+                f"Process {pid} remained active after {timeout} seconds"
+            ) from error
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return
 
 
 def make_environment(

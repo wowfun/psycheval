@@ -341,11 +341,10 @@ Path(sys.argv[4]).write_text('{"checks":[{"id":"valid","passed":true}]}')
 def test_native_judge_cancellation_terminates_verifier_and_keeps_diagnostics(
     tmp_path, mode
 ):
-    import psutil
     from harbor.models.task.task import Task
 
     from psycheval.harbor.verifier.host import HostVerifier
-    from tests.harbor.environment_support import make_environment
+    from tests.harbor.environment_support import assert_process_exited, make_environment
 
     host = make_environment(
         tmp_path / "host",
@@ -362,10 +361,11 @@ def test_native_judge_cancellation_terminates_verifier_and_keeps_diagnostics(
     (tests / "grader.json").write_text('{"custom_checks":["valid"]}')
     (tests / "judge.yaml").write_text(YAML, encoding="utf-8")
     (tests / "test_outputs.py").write_text(
-        """import json,sys,os
+        """import json,sys,os,psutil
 from pathlib import Path
 context=json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
-Path(context['paths']['verifier_logs'],'pid.txt').write_text(str(os.getppid()))
+parent=psutil.Process(os.getppid())
+Path(context['paths']['verifier_logs'],'process.json').write_text(json.dumps({'pid':parent.pid,'created_at':parent.create_time()}))
 Path(sys.argv[4]).write_text('{"checks":[{"id":"valid","passed":true}]}')
 """,
         encoding="utf-8",
@@ -412,11 +412,7 @@ Path(sys.argv[4]).write_text('{"checks":[{"id":"valid","passed":true}]}')
                 else:
                     with pytest.raises(TimeoutError):
                         await asyncio.wait_for(operation, timeout=0.01)
-                pid = int((logs / "pid.txt").read_text())
-                assert (
-                    not psutil.pid_exists(pid)
-                    or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
-                )
+                assert_process_exited(**json.loads((logs / "process.json").read_text()))
                 assert not (logs / "reward.json").exists()
                 assert (logs / "judge/evidence.json").exists()
             finally:
