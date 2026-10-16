@@ -8,10 +8,12 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
 from harbor.models.agent.context import AgentContext
+from harbor.models.trajectories import Trajectory
 
 from psycheval.harbor.acp_agent import HostACPAgent
 from psycheval.harbor.acp_evidence import convert, outcome
@@ -24,6 +26,29 @@ PEER = Path(__file__).resolve().parents[1] / "fixtures/acp_peer.py"
 windows = pytest.mark.skipif(
     sys.platform != "win32", reason="native WorkBuddy Windows adapter"
 )
+
+
+@windows
+@pytest.mark.parametrize("action", ["run", "resume"])
+@pytest.mark.parametrize("state", ["unconfigured", "other_host", "deleted_runtime"])
+def test_invocation_checks_host_setup_before_native_usage_paths(
+    tmp_path, action, state
+):
+    host = make_environment(tmp_path / "host")
+    agent = HostWorkBuddyAgent(
+        logs_dir=host.trial_paths.agent_dir, model_name="b", **installation(tmp_path)
+    )
+    if state == "other_host":
+        agent._setup_host = make_environment(tmp_path / "other")
+    elif state == "deleted_runtime":
+        agent._setup_host = host
+    message = (
+        "deleted or replaced"
+        if state == "deleted_runtime"
+        else "original configured Host"
+    )
+    with pytest.raises(RuntimeError, match=message):
+        asyncio.run(getattr(agent, action)("task", host, AgentContext()))
 
 
 @pytest.mark.parametrize("grouped", [False, True])
@@ -608,6 +633,9 @@ def test_required_product_seed_disappearing_after_construction_is_contextual(tmp
 def test_workbuddy_private_profile_boolean_skills_and_exact_resume(tmp_path, model):
     async def scenario():
         config = installation(tmp_path)
+        desktop_history = config["profile_dir"] / "projects/old/session.jsonl"
+        desktop_history.parent.mkdir(parents=True)
+        desktop_history.write_text('{"message":"PRIVATE_DESKTOP_HISTORY"}\n')
         before = {
             p: p.read_bytes() for p in config["profile_dir"].rglob("*") if p.is_file()
         }
@@ -630,6 +658,9 @@ def test_workbuddy_private_profile_boolean_skills_and_exact_resume(tmp_path, mod
         agent.argv = [sys.executable, str(PEER), "codebuddy"]
         try:
             await agent.setup(host)
+            assert not (
+                Path(agent._child_env["CODEBUDDY_CONFIG_DIR"]) / "projects"
+            ).exists()
             assert agent._child_env["CODEBUDDY_SESSION_SKILL_DIRS"] == str(
                 host.work_dir / "skills"
             )
@@ -707,6 +738,319 @@ def test_generic_windows_boolean_and_background_cleanup(tmp_path):
             await host.stop(True)
 
     asyncio.run(scenario())
+
+
+@windows
+def test_native_usage_pipeline_records_each_invocation_once(tmp_path):
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        await host.start(False)
+        agent = HostWorkBuddyAgent(
+            logs_dir=host.trial_paths.agent_dir,
+            model_name="b",
+            **installation(tmp_path),
+        )
+        agent.argv = [sys.executable, str(PEER), "codebuddy"]
+        try:
+            await agent.setup(host)
+            agent._child_env["PEVAL_FIXTURE_USAGE"] = "1"
+            for action in (agent.run, agent.resume):
+                await action("fixture", host, AgentContext())
+                context = AgentContext()
+                agent.populate_context_post_run(context)
+                assert (
+                    context.n_input_tokens,
+                    context.n_output_tokens,
+                    context.n_cache_tokens,
+                ) == (100, 3, 60)
+                assert context.cost_usd is None
+                assert context.metadata["workbuddy_usage"]["status"] == "complete"
+                data = json.loads(
+                    (agent.logs_dir / "trajectory.json").read_text(encoding="utf-8")
+                )
+                assert (
+                    data["final_metrics"]["extra"]["model_inference"][
+                        "cache_read_tokens"
+                    ]
+                    == 60
+                )
+                assert data["steps"][1]["metrics"]["cached_tokens"] == 60
+                retained = (agent.logs_dir / "workbuddy.usage.json").read_text(
+                    encoding="utf-8"
+                )
+                assert "PRIVATE_FIXTURE_KEY" not in retained
+                assert len(json.loads(retained)["records"]) == 1
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("execution_error", [OSError, asyncio.CancelledError])
+def test_usage_failure_preserves_original_execution_error(
+    tmp_path, monkeypatch, execution_error
+):
+    from psycheval.harbor import workbuddy_agent
+
+    agent = HostWorkBuddyAgent(
+        logs_dir=tmp_path / "logs", model_name="b", **installation(tmp_path)
+    )
+    agent.logs_dir.mkdir(exist_ok=True)
+    (agent.logs_dir / "workbuddy.usage.json").write_text("stale")
+    agent._child_env = {"CODEBUDDY_CONFIG_DIR": str(tmp_path / "private")}
+
+    async def fail(self, action, instruction, environment):
+        self._invocation_id = "current"
+        (self.logs_dir / "acp.summary.json").write_text(
+            json.dumps(
+                {
+                    "invocation_id": "current",
+                    "cleanup_complete": True,
+                    "prompt_submitted": True,
+                }
+            )
+        )
+        raise execution_error("original execution")
+
+    def broken(*args):
+        raise RuntimeError("observer failure")
+
+    monkeypatch.setattr(HostACPAgent, "_run_invocation", fail)
+    monkeypatch.setattr(agent, "_invocation_host", lambda environment: environment)
+    monkeypatch.setattr(workbuddy_agent, "capture_usage", broken)
+    with pytest.raises(execution_error, match="original execution"):
+        asyncio.run(
+            agent._run_invocation(
+                "run", "task", type("Host", (), {"work_dir": tmp_path})()
+            )
+        )
+    assert not (agent.logs_dir / "workbuddy.usage.json").exists()
+
+
+def test_missing_current_usage_does_not_reuse_previous_invocation_context(
+    tmp_path, monkeypatch
+):
+    from psycheval.harbor.inference_telemetry import populate_context_from_trajectory
+
+    def populate(self, context):
+        populate_context_from_trajectory(
+            context,
+            {
+                "final_metrics": {
+                    "total_prompt_tokens": 200,
+                    "total_completion_tokens": 4,
+                }
+            },
+        )
+        context.metadata = {}
+
+    monkeypatch.setattr(HostACPAgent, "populate_context_post_run", populate)
+    agent = HostWorkBuddyAgent(
+        logs_dir=tmp_path / "logs", model_name="b", **installation(tmp_path)
+    )
+    context = AgentContext(n_input_tokens=100, n_output_tokens=3, n_cache_tokens=60)
+    agent.populate_context_post_run(context)
+    assert (
+        context.n_input_tokens,
+        context.n_output_tokens,
+        context.n_cache_tokens,
+    ) == (200, 4, None)
+
+
+@pytest.mark.parametrize(
+    "failure", ["changed", "unrelated", "projection", "validation"]
+)
+def test_usage_enrichment_guards_and_failure_atomicity(tmp_path, monkeypatch, failure):
+    from psycheval.harbor import workbuddy_agent, workbuddy_usage
+
+    agent = HostWorkBuddyAgent(
+        logs_dir=tmp_path / "logs", model_name="b", **installation(tmp_path)
+    )
+    agent.logs_dir.mkdir()
+    original = Trajectory.model_validate(
+        {
+            "schema_version": "ATIF-v1.7",
+            "session_id": "session",
+            "agent": {"name": "fixture", "version": "1"},
+            "steps": [{"step_id": 1, "source": "agent", "message": "ORIGINAL"}],
+            "extra": {},
+        }
+    )
+    before = original.to_json_dict()
+    evidence = {
+        "session_id": "other" if failure == "unrelated" else "session",
+        "invocation_id": "call",
+    }
+    path = agent.logs_dir / workbuddy_usage.USAGE_FILENAME
+    agent._usage_digest = workbuddy_usage.publish_usage(path, evidence)
+    if failure == "changed":
+        path.write_bytes(path.read_bytes() + b" ")
+    projected = []
+
+    def project(data, *args):
+        projected.append(1)
+        data["steps"][0]["message"] = "CORRUPTED"
+        if failure == "validation":
+            data["steps"][0]["step_id"] = 0
+            return data
+        raise ValueError("failed after mutation")
+
+    monkeypatch.setattr(workbuddy_agent, "project_usage", project)
+    result = agent._enrich_trajectory(
+        original, {"session_id": "session", "invocation_id": "call"}
+    ).to_json_dict()
+    assert projected == ([1] if failure in {"projection", "validation"} else [])
+    assert result["steps"] == before["steps"]
+    assert result["extra"]["workbuddy_usage"]["status"] == "unavailable"
+    assert original.to_json_dict() == before
+
+
+@pytest.mark.parametrize("stage", ["baseline", "capture"])
+@pytest.mark.parametrize("primary_failure", [False, True])
+def test_usage_workers_leave_event_loop_free_and_settle_repeated_cancellation(
+    tmp_path, monkeypatch, stage, primary_failure
+):
+    from psycheval.harbor import workbuddy_agent, workbuddy_usage
+
+    agent = HostWorkBuddyAgent(
+        logs_dir=tmp_path / "logs", model_name="b", **installation(tmp_path)
+    )
+    agent.logs_dir.mkdir()
+    agent._child_env = {"CODEBUDDY_CONFIG_DIR": str(tmp_path / "profile")}
+    agent._invocation_id = "previous"
+    (agent.logs_dir / "acp.summary.json").write_text(
+        json.dumps(
+            {
+                "invocation_id": "previous",
+                "cleanup_complete": True,
+                "prompt_submitted": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    entered, release, exited = threading.Event(), threading.Event(), threading.Event()
+    workers = []
+    executed = []
+    primary = OSError("original execution")
+
+    def block(*args, **kwargs):
+        workers.append(threading.get_ident())
+        entered.set()
+        try:
+            assert release.wait(5)
+            return (
+                workbuddy_usage.HistoryBaseline({})
+                if stage == "baseline"
+                else {"diagnostics": []}
+            )
+        finally:
+            exited.set()
+
+    async def execute(self, *args):
+        executed.append(1)
+        self._invocation_id = "current"
+        (self.logs_dir / "acp.summary.json").write_text(
+            json.dumps(
+                {
+                    "invocation_id": "current",
+                    "cleanup_complete": True,
+                    "prompt_submitted": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        if primary_failure:
+            raise primary
+
+    monkeypatch.setattr(HostACPAgent, "_run_invocation", execute)
+    monkeypatch.setattr(agent, "_invocation_host", lambda environment: environment)
+    monkeypatch.setattr(
+        workbuddy_agent,
+        "history_baseline" if stage == "baseline" else "capture_usage",
+        block,
+    )
+
+    async def scenario():
+        before = asyncio.all_tasks()
+        loop_thread = threading.get_ident()
+        task = asyncio.create_task(
+            agent._run_invocation(
+                "run", "task", type("Host", (), {"work_dir": tmp_path})()
+            )
+        )
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            assert workers == [workers[0]] and workers[0] != loop_thread
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done()
+        finally:
+            release.set()
+        if stage == "capture" and primary_failure:
+            with pytest.raises(OSError) as error:
+                await task
+            assert error.value is primary
+        else:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert exited.is_set()
+        assert asyncio.all_tasks() == before
+        assert executed == ([] if stage == "baseline" else [1])
+        if stage == "baseline":
+            assert agent._invocation_id is None
+            with pytest.raises(RuntimeError, match="unsafe to verify"):
+                agent.populate_context_post_run(AgentContext())
+
+    asyncio.run(scenario())
+
+
+def test_evidence_read_errors_name_their_own_artifact(tmp_path):
+    from psycheval.harbor import workbuddy_agent
+
+    path = tmp_path / "invalid.json"
+    path.write_text("invalid", encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid WorkBuddy ACP summary"):
+        workbuddy_agent._json(path, label="ACP summary")
+    with pytest.raises(ValueError, match="WorkBuddy usage evidence"):
+        workbuddy_agent._read_seed(path, label="usage evidence", maximum=1)
+
+
+@pytest.mark.parametrize("kind", ["limit", "untrusted"])
+def test_usage_capture_limit_is_visible_without_changing_execution(
+    tmp_path, monkeypatch, caplog, kind
+):
+    from psycheval.harbor import workbuddy_agent, workbuddy_usage
+
+    agent = HostWorkBuddyAgent(
+        logs_dir=tmp_path / "logs", model_name="b", **installation(tmp_path)
+    )
+    agent.logs_dir.mkdir()
+    agent._invocation_id = "current"
+    (agent.logs_dir / "acp.summary.json").write_text(
+        json.dumps(
+            {
+                "invocation_id": "current",
+                "cleanup_complete": True,
+                "prompt_submitted": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def limited(*args):
+        if kind == "limit":
+            raise workbuddy_usage.UsageLimitError("history_byte_limit")
+        raise ValueError("PRIVATE_EXCEPTION_BODY")
+
+    monkeypatch.setattr(workbuddy_agent, "capture_usage", limited)
+    agent._collect_usage(tmp_path, workbuddy_usage.HistoryBaseline({}))
+    assert agent._usage_digest is None
+    expected = "history_byte_limit" if kind == "limit" else "native_usage_unavailable"
+    assert agent._usage_collection_diagnostic == expected
+    assert expected in caplog.text
+    assert "PRIVATE_EXCEPTION_BODY" not in caplog.text
 
 
 @windows

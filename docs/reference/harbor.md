@@ -213,6 +213,57 @@ and multitask defaults to disabled. Harbor Skills
 use `CODEBUDDY_SESSION_SKILL_DIRS`; MCP uses ACP session setup. Resume restores
 the exact session through advertised resume/load support, excluding replay.
 
+### WorkBuddy usage
+
+New WorkBuddy invocations retain bounded `agent/workbuddy.usage.json` evidence
+from the current root Session's native history after process cleanup. This history
+belongs to the Agent's isolated runtime profile; desktop chat history is not
+copied into it, and a fresh Agent starts with no historical sessions. A pre-call
+baseline and the current conversation request identity exclude restored history
+and other invocations. Only request identities and numeric usage fields are
+retained; message bodies, tool results and credentials are excluded. Source
+digests and invocation identity bind the evidence to the current call. Native
+history reads share the configured evidence-byte ceiling and the existing
+event-line limit. Usage size, history enumeration and line-count ceilings belong
+to `harbor.workbuddy_usage`; reaching a limit retains a categorical diagnostic.
+Enumeration bounds cover project entries, entries within each project, and total
+history files. Exhausting them disables native usage capture for that invocation,
+leaving totals unknown without changing execution or scoring. The baseline
+retains the enumeration-limit reason; a subsequent invocation tries again.
+Unchanged files reuse Agent-local digests bound to file identity, size and
+modification time; capture still verifies the selected file's historical prefix.
+Baseline hashing has a bounded read budget, independent of the total size of
+unchanged history. A file without an admitted baseline digest cannot supply
+usage for that invocation. History observation runs outside the event loop and
+settles its worker before cancellation returns.
+
+Native model request identity, rather than usage values or notification order,
+deduplicates snapshots. Different requests with identical usage count separately.
+ACP usage notifications provide identity-based cross-checks, not additional
+consumption. Missing identity and conflicting measurements remain diagnostic
+evidence without guessed attribution. Repeated snapshots retain known components;
+conflicting components remain unknown. Existing Trials are not backfilled.
+
+Prompt tokens include cached input. Cached tokens and cache hit rate measure
+cache **reads** only; cache creation is a separate usage component. DeepSeek
+`prompt_cache_miss_tokens` does not establish cache creation. Explicit zero is a
+measurement, missing values remain unknown, and reasoning tokens are already a
+subset of completion tokens. Cache hit rate uses the summed explicit cache reads
+over the corresponding inclusive prompt tokens, with measurement coverage.
+The CLI SDK's default cache zero, without a provider cache measurement, does not
+establish a measured cache miss.
+
+Confirmed native requests populate ATIF and Harbor's input/output/cache context.
+Step attribution requires an exact ACP model request identity; confirmed requests
+without a matching step remain in Trial accounting without synthetic steps.
+Each Trial token field requires complete verified coverage of that field;
+uncovered fields remain unknown while verified fields may retain their totals. Usage
+collection errors, unsupported formats, conflicts and limits retain categorical
+diagnostics without changing execution errors, cleanup or verifier admission.
+No collection occurs before cleanup is confirmed. Cost and model timing remain
+unknown without their own evidence. The live callback continues forwarding raw
+notifications, including repeated usage snapshots.
+
 The `codebuddy` evidence policy validates `codebuddy.ai/toolName` vendor metadata
 as canonical identity, rejects identity changes, and interprets business failure
 and known raw results. Its vendor metadata checks and open configuration category

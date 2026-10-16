@@ -289,6 +289,27 @@ def project_meta_from_atif(
     projected["finished_at_ms"] = finished
     projected["wall_duration_ms"] = max(0, finished - started)
     root_extra = trajectory.get("extra")
+    usage = root_extra.get("workbuddy_usage") if isinstance(root_extra, dict) else None
+    if isinstance(usage, dict) and usage.get("status") in {"partial", "unavailable"}:
+        coverage = usage.get("coverage")
+        coverage = coverage if isinstance(coverage, dict) else {}
+        expected = strict_nonnegative_int(usage.get("expected_requests"))
+        samples = [
+            strict_nonnegative_int(coverage.get(field))
+            for field in ("prompt_tokens", "completion_tokens", "cached_tokens")
+        ]
+        warning = "WorkBuddy usage is " + usage["status"] + "."
+        if expected is not None and all(value is not None for value in samples):
+            warning += (
+                " Input/output/cache-read coverage: "
+                + ", ".join(f"{value}/{expected}" for value in samples)
+                + " identified requests."
+            )
+        warning += " Unverified token fields remain unknown."
+        warnings = list(projected.get("warnings") or [])
+        if warning not in warnings:
+            warnings.append(warning)
+        projected["warnings"] = warnings
     if (
         isinstance(root_extra, dict)
         and root_extra.get("timestamp_semantics") is not None

@@ -450,7 +450,15 @@ def _current_evidence(directory, updates):
     return _seal_evidence(directory, summary)
 
 
-def test_context_population_preserves_caller_metadata(tmp_path):
+def test_context_population_preserves_caller_metadata(tmp_path, monkeypatch):
+    validate = Trajectory.model_validate
+    validations = []
+
+    def counted(*args, **kwargs):
+        validations.append(1)
+        return validate(*args, **kwargs)
+
+    monkeypatch.setattr(Trajectory, "model_validate", counted)
     _current_evidence(
         tmp_path,
         [
@@ -465,6 +473,7 @@ def test_context_population_preserves_caller_metadata(tmp_path):
     assert agent.name() == "acp"
     context = AgentContext(metadata={"caller": "retained"})
     agent.populate_context_post_run(context)
+    assert len(validations) == 1  # The converter validates once; the base hook is free.
     trajectory = json.loads((tmp_path / "trajectory.json").read_text(encoding="utf-8"))
     assert trajectory["agent"]["name"] == "acp"
     assert context.metadata == {

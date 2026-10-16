@@ -224,6 +224,17 @@ def test_inspection_model_seed_substitutes_inert_provider_keys(tmp_path):
     )
 
 
+def test_explicit_seed_limit_remains_independent_of_the_module_default(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "seed.json"
+    source.write_bytes(b"123")
+    monkeypatch.setattr(workbuddy_agent, "MAX_WORKBUDDY_CONFIG_BYTES", 1)
+    assert workbuddy_agent._read_seed(source, maximum=3) == b"123"
+    with pytest.raises(ValueError, match="bounded regular file"):
+        workbuddy_agent._read_seed(source)
+
+
 def test_selected_seed_uses_the_native_custom_model_namespace(tmp_path):
     path = tmp_path / "models.json"
     path.write_text(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -17,8 +19,17 @@ from harbor.models.trial.paths import TrialPaths
 
 from .acp_agent import HostACPAgent
 from .acp_protocol import config_option_choices, validate_json_structure
-from .environment import HostEnvironment
+from .environment import HostEnvironment, _await_owned_task
 from .windows import open_read_descriptor
+from .workbuddy_usage import (
+    MAX_USAGE_BYTES,
+    USAGE_FILENAME,
+    UsageLimitError,
+    capture_usage,
+    history_baseline,
+    project_usage,
+    publish_usage,
+)
 
 # Cumulative arguments need separate limits for stored bytes and decoding work.
 DEFAULT_WORKBUDDY_MAX_EVIDENCE_BYTES = 512 * 1024 * 1024
@@ -37,43 +48,45 @@ def _path(value, label):
     return path
 
 
-def _read_seed(path):
-    path = _path(path, "configuration")
+def _read_seed(path, *, label="configuration", maximum=None):
+    if maximum is None:
+        maximum = MAX_WORKBUDDY_CONFIG_BYTES
+    path = _path(path, label)
     before = path.stat(follow_symlinks=False)
-    if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_WORKBUDDY_CONFIG_BYTES:
-        raise ValueError("WorkBuddy configuration is not a bounded regular file")
+    if not stat.S_ISREG(before.st_mode) or before.st_size > maximum:
+        raise ValueError(f"WorkBuddy {label} is not a bounded regular file")
     descriptor = open_read_descriptor(path)
     with os.fdopen(descriptor, "rb") as stream:
         opened = os.fstat(stream.fileno())
-        current = _path(path, "configuration").stat(follow_symlinks=False)
+        current = _path(path, label).stat(follow_symlinks=False)
         if (
             not stat.S_ISREG(opened.st_mode)
             or getattr(opened, "st_file_attributes", 0) & 0x400
             or not os.path.samestat(before, opened)
             or not os.path.samestat(current, opened)
         ):
-            raise ValueError("WorkBuddy configuration changed while opening")
-        if opened.st_size > MAX_WORKBUDDY_CONFIG_BYTES:
-            raise ValueError("WorkBuddy configuration exceeds its byte limit")
-        content = stream.read(MAX_WORKBUDDY_CONFIG_BYTES + 1)
-    if len(content) > MAX_WORKBUDDY_CONFIG_BYTES:
-        raise ValueError("WorkBuddy configuration exceeds its byte limit")
+            raise ValueError(f"WorkBuddy {label} changed while opening")
+        if opened.st_size > maximum:
+            raise ValueError(f"WorkBuddy {label} exceeds its byte limit")
+        content = stream.read(maximum + 1)
+    if len(content) > maximum:
+        raise ValueError(f"WorkBuddy {label} exceeds its byte limit")
     return content
 
 
-def _decode_json(content):
+def _decode_json(content, *, label="configuration"):
     try:
         value = json.loads(content.decode("utf-8"))
         validate_json_structure(value)
     except (ValueError, UnicodeError, RecursionError):
-        raise ValueError("Invalid WorkBuddy configuration") from None
+        raise ValueError(f"Invalid WorkBuddy {label}") from None
     return value
 
 
-def _json(path):
-    value = _decode_json(_read_seed(path))
+def _json(path, *, label="configuration"):
+    value = _decode_json(_read_seed(path, label=label), label=label)
     if not isinstance(value, dict):
-        raise ValueError("Invalid WorkBuddy configuration")
+        raise ValueError(f"Invalid WorkBuddy {label}")
     return value
 
 
@@ -234,6 +247,10 @@ class HostWorkBuddyAgent(HostACPAgent):
             **kwargs,
         )
         self._profile_seeded = False
+        self._usage_digest = None
+        self._usage_evidence = None
+        self._usage_history_cache = {}
+        self._usage_collection_diagnostic = None
         self._agent_metadata = {
             "workbuddy_desktop_version": self.desktop_version,
             "workbuddy_cli_version": self.cli_version,
@@ -316,19 +333,130 @@ class HostWorkBuddyAgent(HostACPAgent):
         self._profile_seeded = True
 
     def populate_context_post_run(self, context):
+        context.n_input_tokens = None
+        context.n_output_tokens = None
+        context.n_cache_tokens = None
         super().populate_context_post_run(context)
         context.metadata.update(
             workbuddy_desktop_version=self.desktop_version,
             workbuddy_cli_version=self.cli_version,
             workbuddy_model_id=self._requested_model,
         )
+        if self._usage_evidence is not None:
+            context.metadata["workbuddy_usage"] = self._usage_evidence
+
+    def _enrich_trajectory(self, trajectory, summary):
+        data = trajectory.to_json_dict()
+        path = self.logs_dir / USAGE_FILENAME
+        if self._usage_digest is None:
+            data.setdefault("extra", {})["workbuddy_usage"] = {
+                "status": "unavailable",
+                "diagnostics": [
+                    self._usage_collection_diagnostic or "native_usage_unavailable"
+                ],
+            }
+            self._usage_evidence = data["extra"]["workbuddy_usage"]
+            return type(trajectory).model_validate(data)
+        try:
+            content = _read_seed(path, label="usage evidence", maximum=MAX_USAGE_BYTES)
+            if (
+                len(content) > MAX_USAGE_BYTES
+                or hashlib.sha256(content).hexdigest() != self._usage_digest
+            ):
+                raise ValueError("changed_usage_evidence")
+            evidence = _decode_json(content, label="usage evidence")
+            if (
+                evidence.get("invocation_id") != summary["invocation_id"]
+                or evidence.get("session_id") != summary["session_id"]
+            ):
+                raise ValueError("unrelated_usage_evidence")
+            data = project_usage(data, evidence, self._usage_digest)
+            enriched = type(trajectory).model_validate(data)
+        except Exception:  # noqa: BLE001 - optional telemetry cannot change execution.
+            data = trajectory.to_json_dict()
+            data.setdefault("extra", {})["workbuddy_usage"] = {
+                "status": "unavailable",
+                "diagnostics": ["invalid_usage_evidence"],
+            }
+            enriched = type(trajectory).model_validate(data)
+        self._usage_evidence = data["extra"]["workbuddy_usage"]
+        return enriched
+
+    def _collect_usage(self, root, baseline):
+        try:
+            summary = _json(self.logs_dir / "acp.summary.json", label="ACP summary")
+            if (
+                summary.get("invocation_id") == self._invocation_id
+                and summary.get("cleanup_complete")
+                and summary.get("prompt_submitted")
+            ):
+                evidence = capture_usage(
+                    root, self.logs_dir, summary, baseline, self.cli_version
+                )
+                self._usage_digest = publish_usage(
+                    self.logs_dir / USAGE_FILENAME, evidence
+                )
+                if evidence["diagnostics"]:
+                    self.logger.warning(
+                        "WorkBuddy usage collection incomplete (%s)",
+                        ",".join(evidence["diagnostics"]),
+                    )
+        except Exception as error:  # noqa: BLE001 - preserve the primary execution error.
+            self._usage_collection_diagnostic = (
+                str(error)
+                if isinstance(error, UsageLimitError)
+                else "native_usage_unavailable"
+            )
+            self.logger.warning(
+                "WorkBuddy usage collection unavailable (%s)",
+                self._usage_collection_diagnostic,
+            )
 
     async def _run_invocation(self, action, instruction, environment):
         if self._inspection and action != "inspect":
             raise ValueError("WorkBuddy inspection cannot submit prompts")
+        self._invocation_id = None
+        self._invocation_host(environment)
         if action != "inspect":
             instruction = f"Workspace root on this native host: {environment.work_dir}. Any /workspace path in the task refers to this directory; use native paths when invoking tools.\n\n{instruction}"
-        return await super()._run_invocation(action, instruction, environment)
+        self._usage_digest = None
+        self._usage_evidence = None
+        self._usage_collection_diagnostic = None
+        usage_path = self.logs_dir / USAGE_FILENAME
+        usage_path.unlink(missing_ok=True)
+        usage_path.with_suffix(".tmp").unlink(missing_ok=True)
+        if action == "inspect":
+            return await super()._run_invocation(action, instruction, environment)
+        root = Path(self._child_env["CODEBUDDY_CONFIG_DIR"]) / "projects"
+        baseline = await _await_owned_task(
+            asyncio.create_task(
+                asyncio.to_thread(
+                    history_baseline,
+                    root,
+                    self.max_evidence_bytes,
+                    cache=self._usage_history_cache,
+                )
+            )
+        )
+        primary_error = None
+        try:
+            return await super()._run_invocation(action, instruction, environment)
+        except BaseException as error:
+            primary_error = error
+            raise
+        finally:
+            try:
+                await _await_owned_task(
+                    asyncio.create_task(
+                        asyncio.to_thread(self._collect_usage, root, baseline)
+                    )
+                )
+            except BaseException as error:
+                if primary_error is None:
+                    raise
+                primary_error.add_note(
+                    f"WorkBuddy usage cleanup failed: {type(error).__name__}"
+                )
 
 
 async def inspect_workbuddy(

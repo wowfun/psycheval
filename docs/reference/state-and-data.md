@@ -142,6 +142,12 @@ cache-read measurements over inclusive prompt tokens. Missing evidence is
 unknown, numeric zero remains a value, and Agent or wall duration is not
 relabelled as model timing.
 
+New native WorkBuddy Trials supply these statistics from their retained
+[usage evidence](harbor.md#workbuddy-usage).
+Recorded partial or unavailable WorkBuddy usage coverage is projected into the
+existing read-only diagnostic display; this does not change execution or
+conversion status and does not fill missing totals.
+
 Active duration sums recorded Agent-step and tool execution contributions. It
 measures aggregate activity rather than the union of elapsed intervals; parallel
 contributions can overlap. Wall duration remains the separate elapsed measure.

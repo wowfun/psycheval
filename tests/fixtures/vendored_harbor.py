@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import importlib
 import importlib.abc
 import io
@@ -348,6 +349,91 @@ def workbuddy(root: Path) -> None:
     assert captured.getvalue() == ""
     assert config.read_bytes() == b"unreadable workspace config\xff"
     assert {p.name for p in output.iterdir()} == {"peval.toml"}
+    usage = module("workbuddy_usage")
+    history = root / "history/project/session.jsonl"
+    history.parent.mkdir(parents=True)
+    history.write_text(
+        json.dumps(
+            {"providerData": {"messageId": "old", "rawUsage": {"prompt_tokens": 999}}}
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    logs = root / "usage-logs"
+    logs.mkdir()
+    summary = {
+        "invocation_id": "copy",
+        "session_id": "session",
+        "max_evidence_bytes": 1024 * 1024,
+    }
+    baseline = usage.history_baseline(root / "history", summary["max_evidence_bytes"])
+    with history.open("a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "providerData": {
+                        "messageId": "r",
+                        "conversationRequestId": "turn",
+                        "rawUsage": {
+                            "prompt_tokens": 10,
+                            "completion_tokens": 2,
+                            "cached_tokens": 4,
+                        },
+                    }
+                }
+            )
+            + "\n"
+        )
+    (logs / "acp.events.ndjson.gz").write_text(
+        json.dumps(
+            {
+                "direction": "receive",
+                "phase": "prompt",
+                "message": {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": "session",
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "_meta": {
+                                "codebuddy.ai/modelRequestId": "r",
+                                "codebuddy.ai/conversationRequestId": "turn",
+                            },
+                        },
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    events = logs / "acp.events.ndjson.gz"
+    events.write_bytes(gzip.compress(events.read_bytes(), mtime=0))
+    evidence = usage.capture_usage(root / "history", logs, summary, baseline, "fixture")
+    assert [record["model_request_id"] for record in evidence["records"]] == ["r"]
+    digest = usage.publish_usage(logs / usage.USAGE_FILENAME, evidence)
+    projected = usage.project_usage(
+        {
+            "steps": [
+                {
+                    "step_id": 1,
+                    "source": "agent",
+                    "message": "copy",
+                    "extra": {"workbuddy_model_request_ids": ["r"]},
+                }
+            ],
+            "extra": {},
+        },
+        evidence,
+        digest,
+    )
+    assert projected["final_metrics"]["total_cached_tokens"] == 4
+    assert (
+        projected["steps"][0]["metrics"]["extra"]["model_inference"][
+            "cache_read_tokens"
+        ]
+        == 4
+    )
 
 
 def synthetic_harness(root: Path) -> None:

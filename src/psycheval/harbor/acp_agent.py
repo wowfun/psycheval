@@ -343,6 +343,13 @@ class HostACPAgent(BaseAgent):
                 "ACP Host runtime was deleted or replaced; create a new Agent"
             )
 
+    def _invocation_host(self, environment):
+        host = self._host(environment)
+        if self._setup_host is not host:
+            raise RuntimeError("ACP invocation requires its original configured Host")
+        self._check_runtime(host)
+        return host
+
     async def run(self, instruction, environment, context):
         await self._invoke("run", instruction, environment)
 
@@ -367,10 +374,7 @@ class HostACPAgent(BaseAgent):
                 path.unlink()
         (self.logs_dir / "trajectory.json").unlink(missing_ok=True)
         (self.logs_dir / "trajectory.tmp").unlink(missing_ok=True)
-        host = self._host(environment)
-        if self._setup_host is not host:
-            raise RuntimeError("ACP invocation requires its original configured Host")
-        self._check_runtime(host)
+        host = self._invocation_host(environment)
         invocation = host.runtime_directory(f"acp-call-{self._runtime_id}")
         for path in invocation.glob("acp.*"):
             if path.is_file():
@@ -524,6 +528,7 @@ class HostACPAgent(BaseAgent):
         )
         if trajectory is None:
             raise RuntimeError("ACP prompt evidence did not yield a trajectory")
+        trajectory = self._enrich_trajectory(trajectory, summary)
         data = trajectory.to_json_dict()
         temporary = trajectory_path.with_suffix(".tmp")
         with temporary.open("w", encoding="utf-8") as stream:
@@ -536,3 +541,6 @@ class HostACPAgent(BaseAgent):
             "acp_session_id": summary.get("session_id"),
             "acp_stop_reason": summary.get("stop_reason"),
         }
+
+    def _enrich_trajectory(self, trajectory, summary):
+        return trajectory

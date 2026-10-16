@@ -59,6 +59,60 @@ def tool_timing_trajectory(call_extra: dict, result_extras: list[dict]) -> dict:
 
 
 class PevalAtifContractTests(unittest.TestCase):
+    def test_workbuddy_usage_coverage_is_a_read_only_diagnostic(self) -> None:
+        trajectory = valid_trajectory()
+        trajectory["extra"] = {
+            "workbuddy_usage": {
+                "status": "partial",
+                "expected_requests": 21,
+                "coverage": {
+                    "prompt_tokens": 19,
+                    "completion_tokens": 19,
+                    "cached_tokens": 19,
+                },
+            }
+        }
+        before = deepcopy(trajectory)
+        projected = project_meta_from_atif(
+            trajectory,
+            {"warnings": ["retained diagnostic"], "conversion_status": "passed"},
+        )
+        self.assertEqual(projected["conversion_status"], "passed")
+        self.assertEqual(projected["warnings"][0], "retained diagnostic")
+        self.assertIn("19/21", projected["warnings"][1])
+        self.assertEqual(
+            project_meta_from_atif(trajectory, projected)["warnings"],
+            projected["warnings"],
+        )
+        self.assertEqual(trajectory, before)
+        trajectory["extra"]["workbuddy_usage"]["status"] = "complete"
+        self.assertNotIn("warnings", project_meta_from_atif(trajectory, {}))
+
+    def test_partial_cache_coverage_does_not_hide_verified_input_output_totals(self):
+        trajectory = valid_trajectory()
+        trajectory["final_metrics"] = {
+            "total_prompt_tokens": 100,
+            "total_completion_tokens": 5,
+        }
+        trajectory["extra"] = {
+            "workbuddy_usage": {
+                "status": "partial",
+                "expected_requests": 1,
+                "coverage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "cached_tokens": 0,
+                },
+            }
+        }
+        before = deepcopy(trajectory)
+        projected = project_meta_from_atif(trajectory, {})
+        self.assertIn("1/1, 1/1, 0/1", projected["warnings"][0])
+        self.assertIn(
+            "Unverified token fields remain unknown.", projected["warnings"][0]
+        )
+        self.assertEqual(trajectory, before)
+
     def test_generation_duration_validates_canonical_and_sidecar_measurements(self):
         for value in (
             True,

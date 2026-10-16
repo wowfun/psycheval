@@ -186,6 +186,18 @@ def _merge_call(state, update, result_format):
         state.update(update)
 
 
+def _model_request(step, update, result_format):
+    if result_format != "codebuddy":
+        return
+    identity = _metadata(update).get("codebuddy.ai/modelRequestId")
+    if isinstance(identity, str) and identity:
+        identities = step.setdefault("extra", {}).setdefault(
+            "workbuddy_model_request_ids", []
+        )
+        if identity not in identities:
+            identities.append(identity)
+
+
 def convert(
     directory: Path, summary: dict, instruction: str, agent: dict, result_format: str
 ) -> Trajectory | None:
@@ -267,6 +279,7 @@ def _convert(
             if active is None or tool_ids.get(active["step_id"]):
                 active = {"step_id": len(steps) + 1, "source": "agent", "message": ""}
                 steps.append(active)
+            _model_request(active, update, result_format)
             field = "message" if kind == "agent_message_chunk" else "reasoning_content"
             text_chunks.setdefault((active["step_id"], field), []).append(
                 _text(update["content"])
@@ -310,6 +323,7 @@ def _convert(
         tool_calls, observations = [], []
         for identity in identities:
             state = calls[identity]
+            _model_request(step, state, result_format)
             canonical = isinstance(state.get("name"), str) and bool(state["name"])
             raw_input = state.get("rawInput")
             tool_calls.append(

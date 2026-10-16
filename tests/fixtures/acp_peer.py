@@ -137,6 +137,27 @@ for line in sys.stdin:
             current = params["value"]
         send({"id": identity, "result": {"configOptions": options()}})
     elif method == "session/prompt":
+        fixture_usage = (
+            mode == "codebuddy" and os.environ.get("PEVAL_FIXTURE_USAGE") == "1"
+        )
+        native_meta = {}
+        if fixture_usage:
+            native_file = (
+                Path(os.environ["CODEBUDDY_CONFIG_DIR"])
+                / "projects/fixture/fixture-session.jsonl"
+            )
+            native_file.parent.mkdir(parents=True, exist_ok=True)
+            prior = (
+                native_file.read_text(encoding="utf-8").count("\n")
+                if native_file.exists()
+                else 0
+            )
+            native_request = f"fixture-request-{prior + 1}"
+            native_conversation = f"fixture-turn-{prior + 1}"
+            native_meta = {
+                "codebuddy.ai/modelRequestId": native_request,
+                "codebuddy.ai/conversationRequestId": native_conversation,
+            }
         live_ack = Path(sys.argv[2]) if mode == "live" else None
         if mode == "live":
             live_ack.unlink(missing_ok=True)
@@ -168,6 +189,7 @@ for line in sys.stdin:
             {
                 "sessionUpdate": "agent_message_chunk",
                 "content": {"type": "text", "text": "中文🙂"},
+                **({"_meta": native_meta} if fixture_usage else {}),
             }
         )
         call = {
@@ -182,7 +204,7 @@ for line in sys.stdin:
             call.pop("name")
         if mode == "codebuddy":
             call.pop("name")
-            call["_meta"] = {"codebuddy.ai/toolName": "Bash"}
+            call["_meta"] = {"codebuddy.ai/toolName": "Bash", **native_meta}
         update(call)
         if mode == "live":
             deadline = time.monotonic() + 30
@@ -268,6 +290,51 @@ for line in sys.stdin:
                 "content": {"type": "text", "text": "完成中文🙂"},
             }
         )
+        if fixture_usage:
+            native_usage = {
+                "prompt_tokens": 100,
+                "completion_tokens": 3,
+                "prompt_tokens_details": {"cached_tokens": 60},
+                "prompt_cache_miss_tokens": 40,
+            }
+            with native_file.open("a", encoding="utf-8") as stream:
+                stream.write(
+                    json.dumps(
+                        {
+                            "id": native_request + "-item",
+                            "type": "message",
+                            "providerData": {
+                                "messageId": native_request,
+                                "conversationRequestId": native_conversation,
+                                "rawUsage": native_usage,
+                            },
+                        }
+                    )
+                    + "\n"
+                )
+            for usage_message, payload in (
+                (
+                    "provider-response",
+                    {
+                        "inputTokens": 100,
+                        "outputTokens": 3,
+                        "inputTokensDetails": {"cached_tokens": 60},
+                    },
+                ),
+                (native_request, native_usage),
+            ):
+                update(
+                    {
+                        "sessionUpdate": "usage_update",
+                        "used": 100,
+                        "size": 1000,
+                        "_meta": {
+                            "codebuddy.ai/requestId": native_conversation,
+                            "codebuddy.ai/messageId": usage_message,
+                            "usage": payload,
+                        },
+                    }
+                )
         send({"id": identity, "result": {"stopReason": "end_turn"}})
     elif method == "session/cancel":
         send({"id": prompt_id, "result": {"stopReason": "cancelled"}})
