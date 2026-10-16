@@ -565,7 +565,6 @@ def test_malformed_retained_evidence_is_a_protocol_failure(tmp_path, event):
         convert(tmp_path, summary, "task", {"name": "fixture", "version": "1"}, "acp")
 
 
-@linux
 @pytest.mark.parametrize("mode", ["stdout-flood", "stderr-flood"])
 def test_host_acp_evidence_budget_fails_closed_and_settles(tmp_path, mode):
     async def run():
@@ -912,6 +911,9 @@ def test_cleanup_cancel_is_bounded(tmp_path, monkeypatch):
     monkeypatch.setattr(acp_harness, "KILL_REAP_RESERVE_SEC", 0.15)
 
     class Connection:
+        async def close(self):
+            pass
+
         async def cancel(self, **kwargs):
             await asyncio.Event().wait()
 
@@ -1034,6 +1036,76 @@ def test_cleanup_stop_interrupts_cooperative_wait():
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("first_stage", ["protocol", "process", "pipes", "tasks"])
+def test_cleanup_task_timeout_preserves_first_failure(first_stage):
+    from types import SimpleNamespace
+
+    from psycheval.harbor import acp_harness
+
+    async def scenario():
+        before = asyncio.all_tasks()
+        primary = OSError("earlier cleanup failure")
+        process = SimpleNamespace(stdin=None, stdout=None, returncode=0)
+        attempted = []
+
+        class Connection:
+            async def close(self):
+                attempted.append("protocol")
+                if first_stage == "protocol":
+                    raise primary
+
+        class Adapter:
+            async def settle(self, process, timeout):
+                attempted.append("process")
+                if first_stage == "process":
+                    raise primary
+
+        async def stderr():
+            if first_stage == "pipes":
+                raise primary
+
+        started = asyncio.Event()
+
+        async def delayed_prompt():
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                # Require the task-settlement deadline to cancel the waiter again.
+                await asyncio.Event().wait()
+
+        prompt = asyncio.create_task(delayed_prompt())
+        draining = asyncio.create_task(stderr())
+        await started.wait()
+        summary = {"protocol_complete": False}
+        try:
+            with pytest.raises(
+                TimeoutError if first_stage == "tasks" else OSError
+            ) as caught:
+                await acp_harness._settle(
+                    process,
+                    Connection(),
+                    prompt,
+                    asyncio.Event(),
+                    0.1,
+                    summary,
+                    Adapter(),
+                    stderr_task=draining,
+                )
+            if first_stage != "tasks":
+                assert caught.value is primary
+            assert summary["cleanup_error_stage"] == first_stage
+            assert summary["cleanup_complete"] is False
+            assert attempted == ["protocol", "process"]
+            assert prompt.done() and draining.done()
+            assert asyncio.all_tasks() == before
+        finally:
+            prompt.cancel()
+            await asyncio.gather(prompt, draining, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
 @linux
 def test_handshake_primary_failure_survives_stop_and_close_error(tmp_path, monkeypatch):
     import acp
@@ -1072,7 +1144,8 @@ def test_handshake_primary_failure_survives_stop_and_close_error(tmp_path, monke
     summary = json.loads((tmp_path / "acp.summary.json").read_text())
     assert summary["error_type"] == "ProtocolError"
     assert summary["cleanup_error_type"] == "OSError"
-    assert summary["cleanup_complete"] is True
+    assert summary["cleanup_complete"] is False
+    assert summary["cleanup_error_stage"] == "protocol"
 
 
 @linux

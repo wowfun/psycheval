@@ -170,3 +170,49 @@ def test_evidence_reader_rejects_corruption_and_expansion(tmp_path, damage):
             reader.finish()
     finally:
         reader.close()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Job pipe settlement")
+def test_failed_protocol_drains_paused_stdout_before_job_settlement(monkeypatch):
+    from psycheval.harbor import acp_harness
+    from psycheval.harbor.windows import WindowsProcessAdapter
+
+    monkeypatch.setattr(acp_harness, "FORCED_CLEANUP_RESERVE_SEC", 0.3)
+
+    async def scenario():
+        adapter = WindowsProcessAdapter()
+        process = await adapter.spawn(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-c",
+                "import os\nwhile True: os.write(1,b'x'*65536)",
+            ],
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            limit=1024,
+        )
+        try:
+            async with asyncio.timeout(5):
+                while not process.stdout._paused:
+                    await asyncio.sleep(0.01)
+            summary = {"protocol_complete": False}
+            await acp_harness._settle(
+                process, None, None, asyncio.Event(), 0.6, summary, adapter
+            )
+            assert summary["cleanup_complete"]
+            assert process.stdout.at_eof()
+            assert not adapter._jobs
+        finally:
+
+            async def drain():
+                while await process.stdout.read(65536):
+                    pass
+
+            draining = asyncio.create_task(drain())
+            if process in adapter._jobs:
+                await adapter.settle(process, 3)
+            await asyncio.wait_for(draining, 3)
+
+    asyncio.run(scenario())

@@ -85,6 +85,13 @@ each RPC consumes the remaining deadline. Defaults belong to
 Cancel delivery and connection teardown are bounded by the cleanup deadline;
 another stop signal interrupts cooperative waits. Cleanup failures still retain
 categorical summary evidence.
+On a fatal protocol or evidence failure, cooperative waiting stops. The harness
+settles the SDK reader before taking over stdout in discard mode; stderr keeps
+draining. Forced termination, pipe EOF and task settlement share the same absolute
+deadline. Cleanup confirmation requires all three, even if the Job is already
+empty. Cleanup diagnostics retain the first failing stage and its error while
+later stages still settle; they do not replace the primary execution error or
+retain discarded payloads.
 If the harness exits before publishing its invocation summary, its captured
 stdout/stderr tails are retained in `acp.harness.stdout.log` and
 `acp.harness.stderr.log`, bounded separately by a combined `max_evidence_bytes`

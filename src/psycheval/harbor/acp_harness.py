@@ -109,31 +109,114 @@ async def _wait_cleanup(work, stopping, deadline):
         await asyncio.gather(task, interrupt, return_exceptions=True)
 
 
-async def _settle(process, connection, prompt, stopping, budget, summary, adapter=None):
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + budget
-    forced_at = deadline - FORCED_CLEANUP_RESERVE_SEC
-    if (
-        prompt is not None
-        and not prompt.done()
-        and connection is not None
-        and summary.get("session_id")
-    ):
-        try:
-            await _wait_cleanup(
-                connection.cancel(session_id=summary["session_id"]), stopping, forced_at
-            )
-            await _wait_cleanup(
-                asyncio.shield(prompt), stopping, min(loop.time() + 30, forced_at)
-            )
-        except Exception:
+async def _discard(reader):
+    if reader is not None:
+        while await reader.read(64 * 1024):
             pass
-    if process.stdin and not process.stdin.is_closing():
-        process.stdin.close()
-    await _wait_cleanup(process.wait(), stopping, forced_at)
-    if adapter is not None:
-        await adapter.settle(process, max(0.01, deadline - loop.time()))
+
+
+async def _settle(
+    process,
+    connection,
+    prompt,
+    stopping,
+    budget,
+    summary,
+    adapter=None,
+    *,
+    deadline=None,
+    stderr_task=None,
+):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + budget if deadline is None else deadline
+    forced_at = deadline - FORCED_CLEANUP_RESERVE_SEC
+    fatal = summary.get("protocol_complete") is False or summary.get("error_type")
+    if not fatal:
+        if (
+            prompt is not None
+            and not prompt.done()
+            and connection is not None
+            and summary.get("session_id")
+        ):
+            try:
+                await _wait_cleanup(
+                    connection.cancel(session_id=summary["session_id"]),
+                    stopping,
+                    forced_at,
+                )
+                await _wait_cleanup(
+                    asyncio.shield(prompt), stopping, min(loop.time() + 30, forced_at)
+                )
+            except Exception:
+                pass
+        if process.stdin and not process.stdin.is_closing():
+            process.stdin.close()
+        await _wait_cleanup(process.wait(), stopping, forced_at)
+
+    first_error = None
+    draining = None
+    summary["cleanup_complete"] = False
+    try:
+        summary["cleanup_stage"] = "protocol"
+        if connection is not None:
+            try:
+                await asyncio.wait_for(
+                    connection.close(), min(1.0, max(0, deadline - loop.time()))
+                )
+            except Exception as exc:
+                first_error = exc
+                summary["cleanup_error_stage"] = "protocol"
+        if first_error is None:
+            # close() has joined the SDK receiver; this is now stdout's sole owner.
+            draining = asyncio.create_task(_discard(getattr(process, "stdout", None)))
+        if process.stdin and not process.stdin.is_closing():
+            process.stdin.close()
+        summary["cleanup_stage"] = "process"
+        try:
+            await _settle_process(process, deadline, summary, adapter)
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+                summary["cleanup_error_stage"] = "process"
+        summary["cleanup_stage"] = "pipes"
+        tasks = [task for task in (draining, stderr_task) if task is not None]
+        if tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks), max(0, deadline - loop.time())
+                )
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+                    summary["cleanup_error_stage"] = "pipes"
+        summary["cleanup_stage"] = "tasks"
+        if prompt is not None:
+            if not prompt.done():
+                prompt.cancel()
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(prompt, return_exceptions=True),
+                    max(0.01, deadline - loop.time()),
+                )
+            except Exception as exc:
+                if first_error is None:
+                    first_error = exc
+                    summary["cleanup_error_stage"] = "tasks"
+        if first_error is not None:
+            raise first_error
         summary["cleanup_complete"] = True
+    finally:
+        tasks = [task for task in (draining, stderr_task) if task is not None]
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _settle_process(process, deadline, summary, adapter):
+    loop = asyncio.get_running_loop()
+    if adapter is not None:
+        await adapter.settle(process, max(0, deadline - loop.time()))
         summary["agent_exit_code"] = process.returncode
         return
     import psutil
@@ -144,7 +227,6 @@ async def _settle(process, connection, prompt, stopping, budget, summary, adapte
     while loop.time() < deadline:
         children = await asyncio.to_thread(parent.children, recursive=True)
         if process.returncode is not None and not children:
-            summary["cleanup_complete"] = True
             summary["agent_exit_code"] = process.returncode
             return
         for child in children:
@@ -167,10 +249,10 @@ async def _settle(process, connection, prompt, stopping, budget, summary, adapte
                 pass
         await asyncio.sleep(min(delay, max(0, deadline - loop.time())))
         delay = min(delay * 2, 0.25)
-    summary["cleanup_complete"] = False
     summary["surviving_descendants"] = [
         child.pid for child in await asyncio.to_thread(parent.children, recursive=True)
     ]
+    raise TimeoutError("ACP descendants did not settle")
 
 
 async def run(config_path: Path):
@@ -449,7 +531,12 @@ async def run(config_path: Path):
 
         def cleanup_error(exc):
             summary.update(
-                protocol_complete=False, cleanup_error_type=type(exc).__name__
+                protocol_complete=False,
+                cleanup_complete=False,
+                cleanup_error_type=type(exc).__name__,
+            )
+            summary.setdefault(
+                "cleanup_error_stage", summary.get("cleanup_stage", "evidence")
             )
             summary.setdefault("error_type", type(exc).__name__)
 
@@ -463,28 +550,13 @@ async def run(config_path: Path):
                     config["shutdown_timeout_sec"],
                     summary,
                     adapter,
+                    deadline=cleanup_deadline,
+                    stderr_task=stderr_task,
                 )
             except Exception as exc:
                 cleanup_error(exc)
         else:
             summary["cleanup_complete"] = True
-        if connection is not None:
-            try:
-                await asyncio.wait_for(
-                    connection.close(), max(0.01, cleanup_deadline - loop.time())
-                )
-            except Exception as exc:
-                cleanup_error(exc)
-        if prompt is not None:
-            if not prompt.done():
-                prompt.cancel()
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(prompt, return_exceptions=True),
-                    max(0.01, cleanup_deadline - loop.time()),
-                )
-            except Exception as exc:
-                cleanup_error(exc)
         if transport is not None:
             try:
                 transport.finish()
@@ -500,6 +572,7 @@ async def run(config_path: Path):
             cleanup_error(exc)
         if summary.get("evidence_limit_exceeded"):
             summary["error_type"] = "ProtocolError"
+        summary.pop("cleanup_stage", None)
         summary["evidence_bytes"] = evidence.bytes
         summary["decoded_evidence_bytes"] = evidence.decoded_bytes
         summary["evidence_frames"] = evidence.frames
