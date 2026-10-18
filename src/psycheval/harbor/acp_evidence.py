@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from harbor.models.trajectories import Trajectory
@@ -257,6 +258,20 @@ def _convert(
     verify_evidence(directory, summary)
     events_path = directory / "acp.events.ndjson.gz"
     steps = [{"step_id": 1, "source": "user", "message": instruction}]
+    if "prompt_submitted_at" in summary:
+        timestamp = summary["prompt_submitted_at"]
+        try:
+            if not isinstance(timestamp, str):
+                raise ValueError
+            parsed = datetime.fromisoformat(timestamp)
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                raise ValueError
+        except ValueError as exc:
+            raise ProtocolError("invalid prompt submission timestamp") from exc
+        steps[0].update(
+            timestamp=timestamp,
+            extra={"timestamp_source": "acp_prompt_submission"},
+        )
     calls = {}
     tool_ids = {}
     text_chunks = {}

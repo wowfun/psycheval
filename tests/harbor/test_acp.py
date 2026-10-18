@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -481,6 +482,72 @@ def test_context_population_preserves_caller_metadata(tmp_path, monkeypatch):
         "acp_session_id": "current",
         "acp_stop_reason": None,
     }
+
+
+@pytest.mark.parametrize("timestamp", [None, "2026-10-17T16:00:00+00:00"])
+def test_current_prompt_submission_time_anchors_only_the_user_step(tmp_path, timestamp):
+    summary = _current_evidence(
+        tmp_path,
+        [
+            {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "answer"},
+            }
+        ],
+    )
+    if timestamp is not None:
+        summary["prompt_submitted_at"] = timestamp
+    trajectory = convert(
+        tmp_path, summary, "task", {"name": "fixture", "version": "1"}, "acp"
+    )
+    assert trajectory.steps[0].timestamp == timestamp
+    if timestamp is not None:
+        assert trajectory.steps[0].extra["timestamp_source"] == "acp_prompt_submission"
+    assert trajectory.steps[1].timestamp is None
+
+
+@pytest.mark.parametrize("timestamp", [True, 123, "bad", "2026-10-18T00:00:00"])
+def test_invalid_prompt_submission_time_is_not_projected(tmp_path, timestamp):
+    summary = _current_evidence(tmp_path, [])
+    summary["prompt_submitted_at"] = timestamp
+    with pytest.raises(ProtocolError, match="submission timestamp"):
+        convert(tmp_path, summary, "task", {"name": "fixture", "version": "1"}, "acp")
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_transport_records_successful_prompt_submission_time(tmp_path, failed):
+    class Writer:
+        def write(self, line):
+            pass
+
+        async def drain(self):
+            if failed:
+                raise OSError("fixture send failed")
+
+    async def scenario():
+        summary = {}
+        transport = StrictTransport(None, Writer(), tmp_path, summary)
+        before = datetime.now(UTC)
+        try:
+            message = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "session/prompt",
+                "params": {},
+            }
+            if failed:
+                with pytest.raises(OSError):
+                    await transport.send(message)
+                assert "prompt_submitted_at" not in summary
+            else:
+                await transport.send(message)
+                timestamp = datetime.fromisoformat(summary["prompt_submitted_at"])
+                assert before <= timestamp <= datetime.now(UTC)
+                assert timestamp.utcoffset().total_seconds() == 0
+        finally:
+            transport.finish()
+
+    asyncio.run(scenario())
 
 
 def test_overlapping_invocation_rejects_and_cancellation_releases_agent(

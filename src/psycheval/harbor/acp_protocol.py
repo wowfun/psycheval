@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import zlib
+from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 
@@ -505,6 +506,7 @@ class StrictTransport:
         try:
             self.raw_out.write(line)
             self.record("send", message)
+            submitted_at = datetime.now(UTC).isoformat()
             self.writer.write(line)
             await self.writer.drain()
         except BaseException:
@@ -515,6 +517,7 @@ class StrictTransport:
             raise
         if method == "session/prompt":
             self.summary["prompt_submitted"] = True
+            self.summary["prompt_submitted_at"] = submitted_at
 
     async def receive(self):
         try:

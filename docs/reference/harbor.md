@@ -72,6 +72,11 @@ Raw frames and stderr are streamed to current-call gzip logs before SDK projecti
 `acp.stdin.ndjson.gz`, `acp.stdout.ndjson.gz`, `acp.events.ndjson.gz` and
 `acp.stderr.log.gz`. Compression is lossless, including notification order and
 vendor fields. Each write synchronously flushes compressed data for live readers.
+The harness records the host UTC time of successful prompt submission in
+`acp.summary.json` as `prompt_submitted_at`. The current user step carries this
+timestamp with `extra.timestamp_source=acp_prompt_submission`, including after
+resume. It supplies a recorded date anchor, not Agent inference or tool timing.
+Evidence without a recorded submission time keeps that timestamp absent.
 Each invocation shares a finite `max_evidence_bytes` stored-byte budget across
 these files. `max_decoded_evidence_bytes` separately bounds their combined
 uncompressed size; `None` uses the stored-byte budget. Both limits require positive
