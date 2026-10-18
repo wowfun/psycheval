@@ -359,6 +359,12 @@ absent from the downstream lockfile. Use the project dependency workflow above
 for an environment managed by `uv sync`.
 The remaining `uv add` and `uv run` examples assume that project workflow.
 
+The Office Judge uses the runtime's HTTPX client and inherits proxy environment
+variables. If that environment uses a SOCKS proxy, include `httpx[socks]` in the
+downstream dependencies; plain HTTPX does not install the required `socksio`
+package. An existing environment can add it with
+`uv pip install --python .venv/Scripts/python.exe socksio` on Windows.
+
 ### Check the installation
 
 Run this with that environment's Python, using your copied module path:
