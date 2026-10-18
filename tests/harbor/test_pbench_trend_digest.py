@@ -170,7 +170,7 @@ def test_trend_digest_task_contract_and_workbook(x_fetch: ModuleType) -> None:
         )
         branch = config["required_calls"][0]["any"][0]
         assert branch == {
-            "tool_names": ["*exec*", "*terminal*", "*shell*", "bash"],
+            "tool_names": ["*exec*", "*terminal*", "*shell*", "bash", "Bash"],
             "argument_terms": [skill_name],
         }
 
@@ -501,6 +501,21 @@ def test_final_answer_failure_preserves_other_rule_credit(platform, tmp_path, ve
     assert rewards["final_answer"] == 0
     assert rewards["reward"] == (len(checks) - 1) / len(checks)
     assert all(item["passed"] for key, item in checks.items() if key != "final_answer")
+
+
+@pytest.mark.parametrize("platform", ["github", "x", "hacker-news"])
+@pytest.mark.parametrize("tool_name", ["bash", "Bash"])
+def test_shell_tool_aliases_preserve_source_gates_and_evidence(
+    platform, tool_name, tmp_path, verifier
+):
+    runtime, config, _, _ = _case(tmp_path, platform)
+    path = Path(runtime.paths.agent_logs) / "trajectory.json"
+    trajectory = json.loads(path.read_text(encoding="utf-8"))
+    trajectory["steps"][1]["tool_calls"][0]["function_name"] = tool_name
+    path.write_text(json.dumps(trajectory), encoding="utf-8")
+    rewards, _ = _grade(verifier, runtime, config)
+    assert rewards["reward"] == 1
+    assert (Path(runtime.paths.verifier_logs) / "artifact_text/sources.md").is_file()
 
 
 def test_github_previous_step_evidence_is_not_accepted(tmp_path, verifier):

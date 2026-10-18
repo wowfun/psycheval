@@ -56,7 +56,7 @@ step's final answer must name that file exactly.
 Every deterministic check declared in each step's `grader.json` has equal
 weight. Built-in checks score source calls, successful observations, artifact
 delivery, and exact final-answer filenames. X and HN require a successful
-`*exec*`, `*terminal*`, `*shell*`, or `bash` call with the skill name in its
+`*exec*`, `*terminal*`, `*shell*`, `bash`, or `Bash` call with the skill name in its
 arguments. Shared `tests/test_outputs.py` adds report structure and freshness,
 ten fixed GitHub repository slots, eleven fixed watchlist accounts (fetch
 status, report status, and complete in-window posts for each), or twelve fixed

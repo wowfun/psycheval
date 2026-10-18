@@ -12,7 +12,8 @@
             "*exec*",
             "*terminal*",
             "*shell*",
-            "bash"
+            "bash",
+            "Bash"
           ],
           "argument_terms": [
             "https://github.com/trending?since=weekly"

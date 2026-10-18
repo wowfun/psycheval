@@ -7,7 +7,8 @@
             "*exec*",
             "*terminal*",
             "*shell*",
-            "bash"
+            "bash",
+            "Bash"
           ],
           "argument_terms": [
             "x-daily"
