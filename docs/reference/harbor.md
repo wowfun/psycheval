@@ -378,6 +378,15 @@ The version probe uses the same isolated Trial configuration as execution and
 retains `opencode-setup.log`. A probe exceeding its 30-second command timeout
 reports that probe failure instead of Harbor's overall Agent setup timeout.
 
+## Task annotations
+
+`difficulty` and `category` are optional nonempty string annotations in
+`task.toml`, read only from `[metadata]` through `config.metadata`. Omitted fields
+remain absent. The `[task]` section follows Harbor's native schema; these labels
+are not read from it or used as fallbacks. The shared Task loader preserves the
+original configuration bytes.
+These labels do not affect execution or scoring and have no fixed enumeration.
+
 ## WorkBuddy Tasks
 
 `prepare_workbuddy_job(config: JobConfig, *, host_settings=None) -> JobConfig`

@@ -6,6 +6,10 @@ name = "pbench-v1.0/trend-digest-01"
 description = "Collect weekly GitHub, rolling 24-hour X, and current Hacker News trends into three step-local Markdown digests."
 keywords = ["web-agent", "multi-step", "trend-research", "skills"]
 
+[metadata]
+difficulty = "medium"
+category = "trend-research"
+
 [environment]
 workdir = "/app"
 network_mode = "public"

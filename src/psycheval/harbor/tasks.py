@@ -78,6 +78,11 @@ def load_harbor_task_config(
     config = TaskConfig.model_validate_toml(
         _decode_task_text(paths, paths.config_path, config_bytes)
     )
+    for field in ("difficulty", "category"):
+        if field in config.metadata:
+            label = config.metadata[field]
+            if not isinstance(label, str) or not label.strip():
+                raise ValueError(f"metadata.{field} must be a nonempty string")
     return LoadedHarborTask(config=config, config_bytes=config_bytes)
 
 

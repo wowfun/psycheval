@@ -4,8 +4,69 @@ import os
 from pathlib import Path
 
 import pytest
+from harbor.models.task.config import TaskConfig
 
-from psycheval.harbor.tasks import load_harbor_task, select_publishable_task_files
+from psycheval.harbor.tasks import (
+    load_harbor_task,
+    load_harbor_task_config,
+    select_publishable_task_files,
+)
+
+
+@pytest.mark.parametrize(
+    ("task_labels", "metadata_labels", "expected"),
+    [
+        ("", "", {}),
+        ('difficulty = "easy"', "", {}),
+        ("difficulty = 3\ncategory = false", "", {}),
+        ("", 'category = "web-search"', {"category": "web-search"}),
+        (
+            'difficulty = "medium"\ncategory = "research"',
+            "",
+            {},
+        ),
+        (
+            "",
+            'difficulty = "custom-level"\ncategory = "custom-category"',
+            {"difficulty": "custom-level", "category": "custom-category"},
+        ),
+        (
+            'difficulty = "medium"',
+            'difficulty = "easy"\ncategory = "research"',
+            {"difficulty": "easy", "category": "research"},
+        ),
+        (
+            'category = "browser-control"',
+            'difficulty = "easy"\ncategory = "research"',
+            {"difficulty": "easy", "category": "research"},
+        ),
+    ],
+)
+def test_optional_task_labels_are_read_only_from_metadata(
+    tmp_path, task_labels, metadata_labels, expected
+):
+    source = (
+        '[task]\nname = "local/test"\n'
+        + task_labels
+        + '\n[metadata]\nsource_case = "preserved"\n'
+        + metadata_labels
+        + "\n"
+    ).encode("utf-8")
+    path = tmp_path / "task.toml"
+    path.write_bytes(source)
+    loaded = load_harbor_task_config(tmp_path, read_bytes=Path.read_bytes)
+    assert loaded.config == TaskConfig.model_validate_toml(source.decode("utf-8"))
+    assert loaded.config.metadata == {"source_case": "preserved", **expected}
+    assert loaded.config_bytes == source == path.read_bytes()
+
+
+@pytest.mark.parametrize("field", ["difficulty", "category"])
+@pytest.mark.parametrize("value", ['""', '"  "', "3", "true", "[]"])
+def test_present_metadata_labels_require_nonempty_strings(tmp_path, field, value):
+    source = '[task]\nname = "local/test"\n[metadata]\n'
+    (tmp_path / "task.toml").write_text(source + f"{field} = {value}\n")
+    with pytest.raises(ValueError, match=field):
+        load_harbor_task_config(tmp_path, read_bytes=Path.read_bytes)
 
 
 @pytest.mark.parametrize("spelling", ["absolute", "relative", "windows_short"])

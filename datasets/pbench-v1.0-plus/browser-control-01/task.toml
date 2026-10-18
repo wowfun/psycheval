@@ -4,5 +4,9 @@ schema_version = "1.4"
 name = "pbench-v1.0-plus/browser-control-01"
 keywords = ["web-agent", "browser-control"]
 
+[metadata]
+difficulty = "easy"
+category = "browser-control"
+
 [environment]
 workdir = "/app"
