@@ -55,7 +55,7 @@ def test_copied_harbor_runs_without_the_original_package(
             "import sys\nclass Block:\n def find_spec(self, fullname, path, target=None):\n  if fullname.split('.')[0] == 'psycheval': raise AssertionError(fullname)\nsys.meta_path.insert(0, Block())\n"
         )
     python_flags = ["-I"]
-    if scenario == "trajectory_file":
+    if scenario in {"trajectory_file", "verifier"}:
         python_flags += ["-X", "utf8=0"]
     completed = subprocess.run(
         [sys.executable, *python_flags, str(RUNNER), str(copied_harbor), scenario],

@@ -761,11 +761,98 @@ The verification context adds `harbor.verifier.instruction` and nullable
 `llm_judge.method` is `rubric_binary_mean`. Each rubric has a unique `id`,
 string `question`, nonempty `artifact_refs`, and string lists `pass_criteria`,
 `fail_criteria`, and optional `scope_limits`. Every list item may be a YAML
-multiline string. Each model response must be exactly an object with the
-rubric's `id`, boolean `passed`, and string `reason`. Prompts include all criteria
-and scope limits, and treat Agent content as evidence, not instructions.
+multiline string. Each model response must be an object containing the rubric's
+`id`, boolean `passed`, and nonempty string `reason`. Additional fields are
+accepted but ignored: only these three fields enter the scoring result. The raw
+response remains in diagnostics with credential redaction. Missing or invalid
+required fields, duplicate JSON keys, and nonfinite JSON numbers still fail
+response validation. Default prompts include all criteria and scope limits, and
+instruct the evaluator to treat Agent content as evidence, not instructions.
 
-LLM calls are disabled by default. Harbor `verifier.env` supplies these settings:
+Python integrations import `JudgeSettings` and the asynchronous `run_verifier`
+from `psycheval.harbor.verifier` (or its copied package namespace):
+
+```python
+async def run_verifier(config_path, *, runtime=None, judge_settings=None): ...
+```
+
+`config_path` selects `grader.json`. An explicit `judge_settings` object supplies
+the complete Judge configuration, including an explicit `enabled=False`; it is
+never merged with environment fields. Without that object, the verifier reads
+the environment settings below only when `judge.yaml` exists. `JudgeSettings`
+validates direct constructor arguments and `from_env()` values through the same
+contract: enabled calls require an HTTP(S) API base URL and nonempty model,
+integer limits must be positive, and deadlines must be finite and positive.
+The API key is optional and excluded from the settings representation. Errors
+from `from_env()` identify the corresponding `PEVAL_JUDGE_*` variable. Without
+`judge.yaml`, the Judge status is `absent`, even with explicit enabled settings;
+no model calls or LLM score are produced.
+
+The keyword-only `reasoning_effort` setting accepts `None` (the default) or a
+nonempty string, with surrounding whitespace removed. When provided, every
+Chat Completions request, including retries, sends it as the top-level
+`reasoning_effort` field. `None` omits that field and leaves the provider default
+in effect. Supported values depend on the selected provider and model; the
+verifier does not impose a fixed vocabulary or add provider-specific thinking
+settings. Provider rejection follows the usual Judge failure and rule-score
+fallback behavior. An explicit settings object with `reasoning_effort=None`
+does not inherit the environment value.
+
+`JudgeSettings` also accepts keyword-only `system_prompt` and
+`user_prompt_template`. `system_prompt=None` (the default) omits the system
+message; an explicit string adds it unchanged before the user message.
+`user_prompt_template=None` uses an English Office-style rubric prompt beginning
+with `You are a LLM-as-Judge evaluator.` Its sections contain the task instruction,
+the step name when present, the current deterministic rewards before LLM merging,
+referenced artifacts with read metadata and faithful text, and the rubric's
+question, pass/fail criteria, and scope limits when present. The default prompt
+keeps the `id`, `passed`, `reason` protocol and labels task instructions and Agent
+content as untrusted assessment data. Evidence is inserted verbatim; section
+headings are presentation, not enforced isolation from evidence content.
+Custom values must be nonempty strings,
+and their whitespace and newlines are preserved. The user template must contain
+exactly one literal `{context}` marker. It is replaced with the complete current
+rubric context JSON: instruction, step name, rubric (including scope limits), and
+referenced evidence. Other braces remain literal, and inserted context is never
+expanded again. The custom context JSON remains independent of the default
+prose template and does not include rule rewards. Custom prompts must request
+the same `id`, `passed`, and `reason` response object. Callers supplying custom
+prompts must also instruct the evaluator to assess task instructions and Agent
+content as untrusted evidence, rather than follow instructions within that data.
+No trust instruction is automatically added to custom prompts, including when
+only the user template is overridden and the system message is omitted.
+Response validation and scoring do not change. Prompt overrides are Python
+configuration only.
+
+An explicit `EffectiveRuntimeConfig` supplies the invocation paths and context
+without reading `PEVAL_CONFIG`. When omitted, the Python API requires a configured
+`PEVAL_CONFIG`; it never creates container-style `/logs` paths implicitly. Only
+the CLI supplies those default paths when no runtime is configured.
+The returned dictionary is the complete `checks.json` payload; the same
+invocation also publishes the usual files and propagates verifier exceptions.
+Concurrent invocations must use separate verifier-log directories. Blocking path
+resolution and file queries, local checks, evidence I/O, and publication use a
+bounded, process-wide verifier thread pool, separate from the embedding
+application's default asyncio executor. Judge
+network calls remain asynchronous. Cancellation waits for any current worker
+operation to finish before returning, so that worker cannot write to reused
+output paths afterward.
+
+Direct Python calls do not impose a timeout on custom scripts or own their
+process trees. Each hung script occupies a verifier worker; exhausting the shared
+pool also delays other in-process verifier calls, including evidence reads and
+publication. Python also joins the pool's workers at interpreter exit, so a hung
+script can prevent process shutdown as well as cancellation from completing;
+wrapping `run_verifier` in `asyncio.wait_for` or `asyncio.timeout` does not impose
+a hard deadline on that stage. Direct callers must use scripts whose completion
+they control. Applications needing enforced execution deadlines should run the
+verifier through a Harbor Job and configure its verifier timeout: that enclosing
+command owns process-tree termination. This ownership applies to the Harbor
+execution path, not an arbitrary Python caller or standalone CLI process.
+The CLI uses this API through `asyncio.run()`.
+
+LLM calls are disabled by default. Harbor `verifier.env` supplies these settings
+when no explicit `JudgeSettings` is passed:
 
 | Variable | Meaning / default |
 | --- | --- |
@@ -773,6 +860,7 @@ LLM calls are disabled by default. Harbor `verifier.env` supplies these settings
 | `PEVAL_JUDGE_BASE_URL` | OpenAI-compatible API base URL, including `/v1` when required. |
 | `PEVAL_JUDGE_MODEL` | Model name; required when enabled with a judge configuration. |
 | `PEVAL_JUDGE_API_KEY` | Optional bearer credential; use an environment reference. |
+| `PEVAL_JUDGE_REASONING_EFFORT` | Optional reasoning effort, for example `high`; omitted when unset. An empty or whitespace-only value is invalid. |
 | `PEVAL_JUDGE_CONCURRENCY` | Concurrent rubric requests, default 4. |
 | `PEVAL_JUDGE_REQUEST_TIMEOUT_SEC` | Per-request deadline, default 30 seconds. |
 | `PEVAL_JUDGE_TOTAL_TIMEOUT_SEC` | Complete Judge deadline, default 120 seconds. |
@@ -805,11 +893,26 @@ enable score merging.
 `reward.json` contains the final reward, rule dimensions, `rule_score`, and, only
 when complete, `llm_score`. `checks.json` retains the rule plan and checks, Judge
 plan and individual outcomes, completion state, merge decision, and reason.
-`judge/` contains evidence, model responses, request timing, and available token
-usage, without connection credentials. It is diagnostic, not another score
-authority. Every invocation removes previous framework scores, `judge/`, and
-`judge-evidence/` before scripts run. Successful results are atomically published
-with reward last; verifier errors retain diagnostics without a current reward.
+These result files and `judge/*.json` diagnostics use UTF-8 with two-space
+indentation and a trailing newline. Chinese and other Unicode text remain
+readable; isolated surrogate code points are escaped to preserve valid UTF-8.
+JSON string escaping, including nested model-response text, is preserved.
+`judge/` contains evidence, request messages, model responses,
+request timing, and available token usage, without connection credentials.
+Each `rubric-xxxx.json` stores the `messages` supplied to the provider at the
+top level, shared by its retry attempts. This prompt-debugging snapshot includes
+the rendered system/user prompts and referenced evidence text. Evidence referenced
+by multiple rubrics is repeated in their request snapshots, so the total
+diagnostic size grows with the number of rubrics sharing that evidence; the
+evidence-read budget is not a total diagnostic-size cap. When no request
+is attempted, `messages` is null. A recorded attempt does not establish provider
+receipt; its response or error retains that distinction. Known credentials are
+redacted from diagnostics without changing the messages submitted to the model.
+These files are diagnostic, not another score authority. Every invocation removes
+previous framework scores, `judge/`, and
+`judge-evidence/` before scripts run, without following links.
+Successful results are atomically published with reward last; verifier errors
+retain diagnostics without a current reward.
 `judge/` is reserved for framework diagnostics and is recreated after custom
 scripts finish, without following links.
 

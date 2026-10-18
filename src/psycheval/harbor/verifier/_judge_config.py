@@ -64,7 +64,13 @@ class JudgeConfig:
             "artifacts": [asdict(item) for item in self.artifacts],
             "llm_judge": {
                 "method": "rubric_binary_mean",
-                "rubrics": [asdict(item) for item in self.rubrics],
+                "rubrics": [
+                    {
+                        key: list(value) if isinstance(value, tuple) else value
+                        for key, value in asdict(item).items()
+                    }
+                    for item in self.rubrics
+                ],
             },
             "score_merge": {
                 "method": "weighted_sum",

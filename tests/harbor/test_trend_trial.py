@@ -116,7 +116,9 @@ def test_three_step_native_trial_with_local_judge(tmp_path, mode):
             assert gh["llm_score"] == 0 and gh["reward"] == pytest.approx(0.8 * 22 / 23)
             assert len(server["requests"]) == 9
             assert {
-                json.loads(request["messages"][1]["content"])["step_name"]
+                request["messages"][-1]["content"]
+                .split("## Step name\n", 1)[1]
+                .split("\n\n", 1)[0]
                 for request in server["requests"]
             } == {"github", "x", "hacker-news"}
         else:

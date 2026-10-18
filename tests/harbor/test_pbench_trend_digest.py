@@ -726,8 +726,8 @@ def test_trend_cli_publishes_current_step_partial_credit(
     monkeypatch.setenv("PEVAL_JUDGE_ENABLED", "false")
     assert verifier_main([str(tests / "grader.json")]) == 0
     logs = Path(runtime.paths.verifier_logs)
-    reward = json.loads((logs / "reward.json").read_text())
-    checks = json.loads((logs / "checks.json").read_text())
+    reward = json.loads((logs / "reward.json").read_text(encoding="utf-8"))
+    checks = json.loads((logs / "checks.json").read_text(encoding="utf-8"))
     assert (
         reward["reward"]
         == reward["rule_score"]

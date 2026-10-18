@@ -147,8 +147,13 @@ def test_custom_only_cli_gt_helpers_and_missing_check_without_trajectory(tmp_pat
         tests / "grader.json", root / "no-trajectory", logs, root / "artifacts"
     )
     assert result.returncode == 0, result.stderr
-    assert json.loads((logs / "reward.json").read_text())["reward"] == 0.75
-    details = json.loads((logs / "checks.json").read_text())
+    assert (
+        json.loads((logs / "reward.json").read_text(encoding="utf-8"))["reward"] == 0.75
+    )
+    raw = (logs / "checks.json").read_text(encoding="utf-8")
+    assert "读取 GT" in raw
+    details = json.loads(raw)
+    assert details["checks"][0]["evidence"] == "读取 GT"
     assert details["checks"][1]["missing"] is True
     assert details["plan"]["total_weight"] == 4
     assert "自定义" in (logs / "custom-stdout.txt").read_text(encoding="utf-8")

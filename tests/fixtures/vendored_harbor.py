@@ -182,9 +182,14 @@ def verifier(root: Path) -> None:
         grader.write_text(json.dumps({"final_terms": [term]}), encoding="utf-8")
         run_module("verifier", str(grader))
         assert (
-            json.loads((root / "verifier/reward.json").read_text())["reward"] == reward
+            json.loads((root / "verifier/reward.json").read_text(encoding="utf-8"))[
+                "reward"
+            ]
+            == reward
         )
-        checks = json.loads((root / "verifier/checks.json").read_text())["checks"]
+        checks = json.loads(
+            (root / "verifier/checks.json").read_text(encoding="utf-8")
+        )["checks"]
         assert all(check["passed"] for check in checks) == bool(reward)
     grader.write_text(json.dumps({"custom_checks": ["value", "missing"]}))
     (root / "test_outputs.py").write_text(
@@ -198,7 +203,12 @@ def verifier(root: Path) -> None:
         "args.output.write_text(json.dumps({'checks':[{'id':'value','passed':True}]}), encoding='utf-8')\n"
     )
     run_module("verifier", str(grader))
-    assert json.loads((root / "verifier/reward.json").read_text())["reward"] == 0.5
+    assert (
+        json.loads((root / "verifier/reward.json").read_text(encoding="utf-8"))[
+            "reward"
+        ]
+        == 0.5
+    )
     import yaml
 
     (root / "judge.yaml").write_text(
@@ -239,9 +249,101 @@ def verifier(root: Path) -> None:
     ):
         # Missing required Agent evidence completes as failure without networking.
         run_module("verifier", str(grader))
-    scores = json.loads((root / "verifier/reward.json").read_text())
+    scores = json.loads((root / "verifier/reward.json").read_text(encoding="utf-8"))
     assert scores["rule_score"] == 0.5 and scores["llm_score"] == 0
     assert scores["reward"] == 0.4
+
+    api = module("verifier")
+    context = module("runtime_config").load_effective_runtime_config()
+
+    async def explicit_configuration(use_manifest, custom_prompts=True):
+        (root / "missing.txt").write_text(
+            "copied evidence 中文 📰 {context}", encoding="utf-8"
+        )
+        sent_messages = []
+
+        async def request(client, settings, messages):
+            sent_messages.append(messages)
+            assert settings.reasoning_effort == "high"
+            if custom_prompts:
+                assert messages[0] == {"role": "system", "content": "copied system"}
+                assert messages[1]["content"].startswith("copied\n")
+                assert messages[1]["content"].endswith("\nend")
+                supplied = json.loads(
+                    messages[1]["content"][len("copied\n") : -len("\nend")]
+                )
+                assert (
+                    supplied["evidence"]["report"]["text"]
+                    == "copied evidence 中文 📰 {context}"
+                )
+            else:
+                assert [message["role"] for message in messages] == ["user"]
+                prompt = messages[0]["content"]
+                assert prompt.startswith("You are a LLM-as-Judge evaluator.")
+                assert "Faithful text:\ncopied evidence 中文 📰 {context}\n" in prompt
+                rewards = json.loads(
+                    prompt.split("## Rule reward\n", 1)[1].split(
+                        "\n\n## Artifact evidence", 1
+                    )[0]
+                )
+                assert rewards["reward"] == 0.5 and "llm_score" not in rewards
+            return 200, json.dumps(
+                {
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "id": "quality",
+                                        "passed": True,
+                                        "reason": "中文判断 📰",
+                                        "passed_reason_note": None,
+                                    }
+                                )
+                            },
+                        }
+                    ]
+                }
+            )
+
+        with patch.object(module("verifier._judge"), "_request", request):
+            result = await api.run_verifier(
+                str(grader),
+                runtime=context,
+                judge_settings=api.JudgeSettings(
+                    enabled=True,
+                    base_url="http://127.0.0.1:1/v1",
+                    model="copied-fixture",
+                    reasoning_effort="high",
+                    system_prompt="copied system" if custom_prompts else None,
+                    user_prompt_template="copied\n{context}\nend"
+                    if custom_prompts
+                    else None,
+                ),
+            )
+        assert result["rewards"] == {
+            **scores,
+            "llm_score": 1.0,
+            "reward": 0.8 * 0.5 + 0.2,
+        }
+        assert result["judge"]["checks"] == [
+            {"id": "quality", "passed": True, "reason": "中文判断 📰"}
+        ]
+        raw = (root / "verifier/checks.json").read_text(encoding="utf-8")
+        assert "中文判断 📰" in raw
+        assert result == json.loads(raw)
+        diagnostic = json.loads(
+            (root / "verifier/judge/rubric-0001.json").read_text(encoding="utf-8")
+        )
+        assert diagnostic["messages"] == sent_messages[0]
+
+    with patch.dict(
+        os.environ,
+        {"PEVAL_CONFIG": str(root / "missing.json"), "PEVAL_JUDGE_ENABLED": "invalid"},
+    ):
+        asyncio.run(explicit_configuration(False))
+        asyncio.run(explicit_configuration(False, custom_prompts=False))
 
 
 def psychevo(root: Path) -> None:

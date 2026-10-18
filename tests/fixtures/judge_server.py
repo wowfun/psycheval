@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 @contextmanager
-def judge_server():
+def judge_server(*, decode_context=None):
     state = {
         "requests": [],
         "counts": Counter(),
@@ -25,7 +25,17 @@ def judge_server():
 
         def do_POST(self):
             request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            context = json.loads(request["messages"][-1]["content"])
+            context = (
+                decode_context(request)
+                if decode_context is not None
+                else {
+                    "rubric": {
+                        "id": request["messages"][-1]["content"]
+                        .rsplit("\n## Rubric\nID: ", 1)[1]
+                        .split("\n", 1)[0]
+                    }
+                }
+            )
             rubric = context["rubric"]["id"]
             with lock:
                 state["requests"].append(request)
