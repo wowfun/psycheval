@@ -2,13 +2,11 @@ version: 1
 
 artifacts:
   - id: report
-    source: verifier_logs
-    path: judge-evidence/report.md
+    path: artifact_text/report.md
     required: true
     type: md
   - id: sources
-    source: verifier_logs
-    path: judge-evidence/sources.md
+    path: artifact_text/sources.md
     required: true
     type: md
 

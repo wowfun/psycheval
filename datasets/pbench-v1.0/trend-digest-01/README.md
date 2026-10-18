@@ -74,7 +74,7 @@ Each step's `tests/judge.yaml` adds three equally weighted rubrics: faithful
 summaries, concrete information value, and clear Chinese with honest statements
 about no updates, fetching failures, and insufficient evidence. The custom
 script writes the current report and validated source evidence under
-`judge-evidence/`; GitHub uses successful tool observations and X/HN use their
+`artifact_text/`; GitHub uses successful tool observations and X/HN use their
 snapshots. The Judge does not browse or repeat counts, links, or timestamp
 checks. Quality expectations are also stated in the step instructions.
 Invalid X time windows are excluded from Judge source evidence even for empty

@@ -7,7 +7,6 @@ import json
 import math
 import os
 import shutil
-import stat
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -18,6 +17,7 @@ import httpx
 from ..runtime_config import EffectiveRuntimeConfig
 from ._blocking import run_blocking
 from ._judge_config import JudgeConfig, Rubric
+from ._judge_evidence import EvidenceUnavailable, read_evidence
 
 
 class _InvalidSetting(ValueError):
@@ -135,7 +135,13 @@ class JudgeSettings:
 
 
 def clear_judge_outputs(logs: Path) -> None:
-    for name in ("judge", "judge-evidence"):
+    for name in (
+        "judge",
+        "artifact_manifest.json",
+        "artifact_text",
+        "judge_evidence",
+        "judge-evidence",
+    ):
         _clear_output(logs / name)
 
 
@@ -192,51 +198,10 @@ def _read_evidence(
     settings: JudgeSettings,
     directory: Path,
 ) -> dict:
-    evidence = {}
-    remaining = settings.max_evidence_bytes
-    for artifact in config.artifacts:
-        root = Path(getattr(runtime.paths, artifact.source))
-        path = root / artifact.path
-        invalid = None
-        try:
-            for part in (
-                root,
-                *(
-                    root / Path(*Path(artifact.path).parts[:n])
-                    for n in range(1, len(Path(artifact.path).parts) + 1)
-                ),
-            ):
-                info = part.lstat()
-                if stat.S_ISLNK(info.st_mode) or getattr(
-                    info, "st_file_attributes", 0
-                ) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
-                    raise ValueError("linked evidence is not supported")
-            if not path.resolve().is_relative_to(root.resolve()) or not stat.S_ISREG(
-                path.stat().st_mode
-            ):
-                raise ValueError("evidence must be a contained regular file")
-            with path.open("rb") as stream:
-                raw = stream.read(remaining + 1)
-            if len(raw) > remaining:
-                raise _Incomplete(
-                    "declared evidence exceeds PEVAL_JUDGE_MAX_EVIDENCE_BYTES"
-                )
-            remaining -= len(raw)
-            text = raw.decode("utf-8")
-        except (OSError, ValueError, UnicodeError) as exc:
-            if artifact.source == "tests":
-                if artifact.required or not isinstance(exc, FileNotFoundError):
-                    raise ValueError(
-                        f"invalid Task judge evidence: {artifact.id}"
-                    ) from exc
-            invalid = type(exc).__name__
-            text = None
-        evidence[artifact.id] = {
-            "text": text,
-            "error": invalid,
-            "required": artifact.required,
-        }
-    _save(directory / "evidence.json", evidence, settings)
+    evidence, diagnostics = read_evidence(
+        config, Path(runtime.paths.verifier_logs), settings.max_evidence_bytes
+    )
+    _save(directory / "evidence.json", diagnostics, settings)
     return evidence
 
 
@@ -370,16 +335,21 @@ async def _assess(
     client: httpx.AsyncClient,
     rule_rewards: dict | None,
 ) -> dict:
+    # Required evidence needs text; read/extraction errors also fail optional refs.
     missing = [
         ref
         for ref in rubric.artifact_refs
-        if evidence[ref]["required"] and evidence[ref]["text"] is None
+        if (
+            evidence[ref]["required"]
+            and (evidence[ref]["extract_status"] != "ok" or not evidence[ref]["text"])
+        )
+        or evidence[ref]["extract_status"] not in {"ok", "missing"}
     ]
     if missing:
         result = {
             "id": rubric.id,
             "passed": False,
-            "reason": "missing or invalid required evidence: " + ", ".join(missing),
+            "reason": "missing or invalid evidence: " + ", ".join(missing),
             "missing": missing,
         }
         await run_blocking(
@@ -508,7 +478,7 @@ async def run_judge(
                         for index, rubric in enumerate(config.rubrics, 1)
                     )
                 )
-    except (TimeoutError, _Incomplete) as exc:
+    except (TimeoutError, EvidenceUnavailable) as exc:
         result["reason"] = (
             "Judge total deadline exceeded"
             if isinstance(exc, TimeoutError)

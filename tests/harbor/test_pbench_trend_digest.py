@@ -444,7 +444,7 @@ def test_trend_verifier_accepts_complete_current_step(platform, tmp_path, verifi
     rewards, checks = _grade(verifier, runtime, config)
     assert set(rewards.values()) == {1.0}
     assert len(checks) == len(config["custom_checks"]) + 5
-    evidence = Path(runtime.paths.verifier_logs) / "judge-evidence"
+    evidence = Path(runtime.paths.verifier_logs) / "artifact_text"
     assert (evidence / "report.md").read_bytes() == report.read_bytes()
     assert (evidence / "sources.md").stat().st_size > 0
 
@@ -517,9 +517,7 @@ def test_github_previous_step_evidence_is_not_accepted(tmp_path, verifier):
     assert all(
         not item["passed"] for key, item in checks.items() if "repository_" in key
     )
-    assert not (
-        Path(runtime.paths.verifier_logs) / "judge-evidence/sources.md"
-    ).exists()
+    assert not (Path(runtime.paths.verifier_logs) / "artifact_text/sources.md").exists()
 
 
 @pytest.mark.parametrize(
@@ -735,7 +733,7 @@ def test_trend_cli_publishes_current_step_partial_credit(
     )
     assert reward["final_answer"] == 0
     assert checks["judge"]["status"] == "disabled"
-    assert (logs / "judge-evidence/report.md").read_bytes() == report.read_bytes()
+    assert (logs / "artifact_text/report.md").read_bytes() == report.read_bytes()
 
 
 @pytest.mark.parametrize("platform", ["x", "hacker-news"])
@@ -766,9 +764,7 @@ def test_invalid_empty_x_window_is_not_judge_evidence(tmp_path, verifier):
     )
     _, checks = _grade(verifier, runtime, config)
     assert not checks["custom:x_window"]["passed"]
-    assert not (
-        Path(runtime.paths.verifier_logs) / "judge-evidence/sources.md"
-    ).exists()
+    assert not (Path(runtime.paths.verifier_logs) / "artifact_text/sources.md").exists()
 
 
 def test_chinese_front_matter_alone_is_not_a_summary(tmp_path, verifier):
@@ -788,7 +784,7 @@ def test_utf8_bom_report_from_windows_keeps_front_matter_and_evidence(
     report.write_bytes(b"\xef\xbb\xbf" + report.read_bytes())
     assert _grade(verifier, runtime, config)[0]["reward"] == 1
     assert (
-        Path(runtime.paths.verifier_logs) / "judge-evidence/report.md"
+        Path(runtime.paths.verifier_logs) / "artifact_text/report.md"
     ).read_bytes() == report.read_bytes()
 
 

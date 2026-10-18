@@ -38,7 +38,6 @@ class JudgeArtifact:
     path: str
     required: bool
     type: str
-    source: str = "workdir"
 
 
 @dataclass(frozen=True)
@@ -102,6 +101,15 @@ def _id(value: Any) -> str:
     return value
 
 
+def relative_evidence_path(value: Any, *, label: str = "judge artifact path") -> str:
+    path = _text(value)
+    if any(part in {"", ".", ".."} for part in path.split("/")) or any(
+        char in path for char in "\\:\x00"
+    ):
+        raise ValueError(f"{label} must be a contained relative POSIX path")
+    return path
+
+
 def _list(value: Any, *, nonempty: bool = True, maximum: int | None = None) -> list:
     if not isinstance(value, list) or (nonempty and not value):
         raise ValueError(
@@ -141,32 +149,13 @@ def parse_judge_config(content: str | bytes) -> JudgeConfig:
     if type(value["version"]) is not int or value["version"] != 1:
         raise ValueError("unsupported judge.yaml version")
     artifacts = []
-    for item in _list(value["artifacts"], maximum=32):
-        item = _object(item, {"id", "path", "required", "type"}, {"source"})
-        path = _text(item["path"])
-        if any(part in {"", ".", ".."} for part in path.split("/")) or any(
-            char in path for char in "\\:\x00"
-        ):
-            raise ValueError(
-                "judge artifact path must be a contained relative POSIX path"
-            )
+    for item in _list(value["artifacts"], maximum=64):
+        item = _object(item, {"id", "path", "required", "type"})
+        path = relative_evidence_path(item["path"])
         if type(item["required"]) is not bool:
             raise ValueError("judge artifact required must be boolean")
-        source = _text(item.get("source", "workdir"))
-        if source not in {
-            "workdir",
-            "tests",
-            "artifacts",
-            "agent_logs",
-            "verifier_logs",
-        }:
-            raise ValueError(f"unknown judge artifact source: {source}")
         kind = _text(item["type"])
-        if kind not in {"txt", "md", "json", "yaml", "csv", "html"}:
-            raise ValueError(f"unsupported judge text type: {kind}")
-        artifacts.append(
-            JudgeArtifact(_id(item["id"]), path, item["required"], kind, source)
-        )
+        artifacts.append(JudgeArtifact(_id(item["id"]), path, item["required"], kind))
     artifact_ids = {item.id for item in artifacts}
     if len(artifact_ids) != len(artifacts):
         raise ValueError("duplicate judge artifact ID")

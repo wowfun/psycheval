@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import hashlib
 import importlib
 import importlib.abc
 import io
@@ -257,9 +258,24 @@ def verifier(root: Path) -> None:
     context = module("runtime_config").load_effective_runtime_config()
 
     async def explicit_configuration(use_manifest, custom_prompts=True):
-        (root / "missing.txt").write_text(
+        (root / "verifier/missing.txt").write_text(
             "copied evidence 中文 📰 {context}", encoding="utf-8"
         )
+        if use_manifest:
+            declaration = yaml.safe_load(
+                (root / "judge.yaml").read_text(encoding="utf-8")
+            )
+            declaration["artifacts"][0].update(path="output/report.xlsx", type="xlsx")
+            (root / "judge.yaml").write_text(yaml.safe_dump(declaration))
+            script = root / "test_outputs.py"
+            with script.open("a", encoding="utf-8") as stream:
+                stream.write(
+                    "logs = Path(context['paths']['verifier_logs'])\n"
+                    "(logs / 'artifact_text').mkdir()\n"
+                    "(logs / 'artifact_text/report.md').write_text('copied evidence 中文 📰 {context}', encoding='utf-8')\n"
+                    "(logs / 'artifact_manifest.json').write_text(json.dumps({'artifacts':[{'id':'report','text_path':'artifact_text/report.md','extract_status':'ok'}]}))\n"
+                )
+
         sent_messages = []
 
         async def request(client, settings, messages):
@@ -333,6 +349,15 @@ def verifier(root: Path) -> None:
         raw = (root / "verifier/checks.json").read_text(encoding="utf-8")
         assert "中文判断 📰" in raw
         assert result == json.loads(raw)
+        index = json.loads(
+            (root / "verifier/judge/evidence.json").read_text(encoding="utf-8")
+        )["report"]
+        relative = "artifact_text/report.md" if use_manifest else "missing.txt"
+        raw = (root / "verifier" / relative).read_bytes()
+        assert index["text_path"] == relative
+        assert index["byte_count"] == len(raw)
+        assert index["sha256"] == hashlib.sha256(raw).hexdigest()
+        assert "text" not in index
         diagnostic = json.loads(
             (root / "verifier/judge/rubric-0001.json").read_text(encoding="utf-8")
         )
@@ -344,6 +369,7 @@ def verifier(root: Path) -> None:
     ):
         asyncio.run(explicit_configuration(False))
         asyncio.run(explicit_configuration(False, custom_prompts=False))
+        asyncio.run(explicit_configuration(True))
 
 
 def psychevo(root: Path) -> None:

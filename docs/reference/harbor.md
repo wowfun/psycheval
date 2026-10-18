@@ -739,19 +739,53 @@ The shared verifier optionally reads `tests/judge.yaml`. Its version-1 schema
 uses `artifacts`, `llm_judge`, and `score_merge`, independently of `grader.json`.
 YAML is safely parsed with strict types, unique mapping keys and IDs, known
 methods, contained relative artifact paths, and resolved artifact references.
-Configuration reads are bounded to 1 MiB, with at most 32 artifacts, 32 rubrics,
+Configuration reads are bounded to 1 MiB, with at most 64 artifacts, 32 rubrics,
 and 8 artifact references per rubric.
 Task discovery and preview never execute preparation, verification, or model
 calls. Shared tests are overlaid by step tests; a step's YAML replaces the whole
 shared file. This contract does not replace WorkBuddy's own judge runtime.
 
-Each artifact declares `id`, `path`, `required`, and a text `type` (`txt`, `md`,
-`json`, `yaml`, `csv`, or `html`). Its optional `source` defaults to `workdir`;
-other roots are `tests`, `artifacts`, `agent_logs`, and `verifier_logs`. Links,
-absolute paths, and traversal are rejected. Only declared UTF-8 files are read;
-there is no workspace scan, URL retrieval, rendering, or silent truncation.
-Current-step ATIF JSON can be referenced from `agent_logs`. Custom scripts can
-extract final answers and source material into `verifier_logs/judge-evidence/`.
+Each artifact declares exactly `id`, `path`, boolean `required`, and nonempty
+`type`, matching WorkBuddy Office declarations. `source` is not accepted.
+The declared type is preserved, including binary types such as `xlsx`.
+Custom scripts own extraction from original files into UTF-8 text; the Judge
+does not convert binary formats or read original files through `source_path`.
+
+Evidence comes from `verifier_logs`. When `artifact_manifest.json` exists, it
+must be a UTF-8 JSON object with an `artifacts` list of records with unique IDs.
+Record IDs match declaration IDs exactly, without trimming whitespace.
+A matching record takes precedence: `extract_status: ok` reads its `text_path`,
+relative to `verifier_logs`; other statuses do not fall back to the declaration.
+Additional Office metadata is accepted, and undeclared records are not read.
+Only when no matching record exists can a text declaration read its `path`
+directly under `verifier_logs`. Text recognition follows Office's text-like
+types, including `text`, `markdown`, `yml`, and source-code types; matching
+ignores case and a leading dot. Other types without a record are missing evidence.
+Types are intentionally open-ended for task-owned extractors: an unrecognized
+type, including a misspelling such as `makrdown`, is not a YAML validation error.
+When evidence loading completes, `judge/evidence.json` records extraction
+requirements and path read errors. A whole-Judge evidence failure, such as an
+invalid manifest or exceeded evidence budget, prevents this index from being
+published; inspect `checks.json`'s `judge.reason` instead. Check the declared type
+and matching manifest record before investigating the model.
+The index maps artifact IDs to read diagnostics, retaining `required`,
+`extract_status`, and `error`, plus the selected `text_path` relative to
+`verifier_logs`, `byte_count`, and `sha256`. It stores no `text` body.
+When no path is selected or its relative-path syntax is invalid, `text_path` is
+null. A syntactically valid path is retained even if its file is missing,
+unreadable, linked, or invalid UTF-8. Size and hash describe the same raw
+bytes that were successfully read and decoded as UTF-8; they are null when no
+valid text was obtained. Empty text has zero bytes and the empty-content hash.
+The source text file remains authoritative; the fingerprint permits checking
+whether retained source content has changed since the Judge read it.
+
+Manifest reads are bounded to 1 MiB; text reads share the configured evidence
+budget. Both use contained regular files, rejecting links, absolute paths,
+traversal and invalid UTF-8. There is no workspace scan, URL retrieval, rendering,
+or silent truncation. Custom scripts can read the current-step ATIF from their
+`agent_logs` runtime path and publish final answers and source material in
+`verifier_logs/artifact_text/`, directly or through a manifest. Scripts own
+refreshing evidence outside the framework-managed directories below.
 `matching_observations(trajectory, rule)` returns successful observation text
 for one required-call rule using the same call/argument/success predicates as
 built-in checks, without assigning another score.
@@ -881,9 +915,12 @@ reward = (rule_weight * rule_score + llm_weight * llm_score)
 
 An incomplete rubric due to API, timeout, evidence-size, or response-protocol
 failure disables the entire LLM merge for that invocation. The rule score is
-retained with a reason, and no `llm_score` is published. Missing or invalid Agent
-evidence fails the referencing rubrics; missing Task-owned evidence under
-`tests`, invalid configuration, or failed custom scripts are verifier errors.
+retained with a reason, and no `llm_score` is published. An unreadable or malformed
+manifest, including duplicate IDs or JSON keys, likewise disables the LLM merge
+without calling the model. Missing, invalid or empty required evidence fails
+the referencing rubrics. Missing optional evidence permits assessment; optional
+evidence with a read or extraction error fails its referencing rubrics.
+Invalid configuration and failed custom scripts remain verifier errors.
 An overall Harbor verifier timeout or cancellation still fails the Trial through
 its normal lifecycle. The Judge never provides an LLM-only scoring mode.
 Results finishing after the Judge total deadline remain incomplete, even when
@@ -897,7 +934,7 @@ These result files and `judge/*.json` diagnostics use UTF-8 with two-space
 indentation and a trailing newline. Chinese and other Unicode text remain
 readable; isolated surrogate code points are escaped to preserve valid UTF-8.
 JSON string escaping, including nested model-response text, is preserved.
-`judge/` contains evidence, request messages, model responses,
+`judge/` contains the evidence read index, request messages, model responses,
 request timing, and available token usage, without connection credentials.
 Each `rubric-xxxx.json` stores the `messages` supplied to the provider at the
 top level, shared by its retry attempts. This prompt-debugging snapshot includes
@@ -909,8 +946,9 @@ is attempted, `messages` is null. A recorded attempt does not establish provider
 receipt; its response or error retains that distinction. Known credentials are
 redacted from diagnostics without changing the messages submitted to the model.
 These files are diagnostic, not another score authority. Every invocation removes
-previous framework scores, `judge/`, and
-`judge-evidence/` before scripts run, without following links.
+previous framework scores, `judge/`,
+`artifact_manifest.json`, `artifact_text/`, `judge_evidence/`, and the legacy
+`judge-evidence/` directory before scripts run, without following links.
 Successful results are atomically published with reward last; verifier errors
 retain diagnostics without a current reward.
 `judge/` is reserved for framework diagnostics and is recreated after custom

@@ -47,7 +47,7 @@ def runtime(tmp_path):
         paths=RuntimePaths(**{name: str(root) for name, root in roots.items()}),
         verifier=VerifierInvocation("评估当前步骤，不读其他步骤。", "中文步骤"),
     )
-    (roots["workdir"] / "中文 报告.md").write_text(
+    (roots["verifier_logs"] / "中文 报告.md").write_text(
         "这里是当前来源支持的摘要。", encoding="utf-8"
     )
     return config

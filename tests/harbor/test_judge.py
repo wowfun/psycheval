@@ -200,7 +200,7 @@ def test_public_api_custom_prompts_preserve_context_and_literal_text(
 ):
     grader, context = api_task(tmp_path)
     submitted = '中文证据\n{"marker":"{context}","untouched":"{other}"}'
-    (Path(context.paths.workdir) / "中文 报告.md").write_text(
+    (Path(context.paths.verifier_logs) / "中文 报告.md").write_text(
         submitted, encoding="utf-8", newline=""
     )
     declaration = yaml.safe_load(YAML)
@@ -246,6 +246,7 @@ def test_public_api_custom_prompts_preserve_context_and_literal_text(
                 "text": submitted,
                 "error": None,
                 "required": True,
+                "extract_status": "ok",
             }
         },
     }
@@ -422,8 +423,8 @@ def test_public_api_publishes_readable_unicode_and_preserves_nested_json(
         assert result["judge"]["status"] == "complete"
         assert result["judge"]["checks"][0]["reason"] == text
         evidence = (logs / "judge/evidence.json").read_text(encoding="utf-8")
-        assert "这里是当前来源支持的摘要。" in evidence
-        assert json.loads(evidence)["report"]["text"] == "这里是当前来源支持的摘要。"
+        assert "中文 报告.md" in evidence
+        assert "text" not in json.loads(evidence)["report"]
         response = json.loads(
             (logs / "judge/rubric-0001.json").read_text(encoding="utf-8")
         )["attempts"][0]["response"]
@@ -577,7 +578,7 @@ def test_public_api_concurrent_invocations_keep_settings_and_evidence_separate(
     first_grader, first = api_task(tmp_path / "first")
     second_grader, second = api_task(tmp_path / "second")
     for context, text in ((first, "first evidence"), (second, "second evidence")):
-        (Path(context.paths.workdir) / "中文 报告.md").write_text(
+        (Path(context.paths.verifier_logs) / "中文 报告.md").write_text(
             text, encoding="utf-8"
         )
     with judge_server(decode_context=prompt_context) as server:
@@ -821,7 +822,7 @@ def test_yaml_multiline_lists_and_runtime_context_roundtrip(tmp_path):
         lambda x: x["artifacts"][0].update(path="/secret"),
         lambda x: x["artifacts"][0].update(path="x\\secret"),
         lambda x: x["artifacts"][0].update(source="other"),
-        lambda x: x["artifacts"][0].update(type="pdf"),
+        lambda x: x["artifacts"][0].update(type=""),
         lambda x: x["artifacts"].append(x["artifacts"][0]),
         lambda x: x["llm_judge"].update(method="another"),
         lambda x: x["llm_judge"].update(rubrics=[]),
@@ -1071,24 +1072,19 @@ def test_retry_and_total_budget(tmp_path):
         assert result["status"] == "incomplete" and "deadline" in result["reason"]
 
 
-@pytest.mark.parametrize(
-    "source", ["workdir", "tests", "artifacts", "agent_logs", "verifier_logs"]
-)
-def test_declared_roots_missing_agent_evidence_vs_task_error(tmp_path, source):
+@pytest.mark.parametrize("source", ["workdir", "tests", "artifacts", "agent_logs"])
+def test_judge_does_not_search_other_runtime_roots(tmp_path, source):
     context = runtime(tmp_path)
     config = parse_judge_config(YAML)
     config = replace(
         config,
-        artifacts=(replace(config.artifacts[0], source=source, path="missing.txt"),),
+        artifacts=(replace(config.artifacts[0], path="missing.txt"),),
     )
+    (Path(getattr(context.paths, source)) / "missing.txt").write_text("not evidence")
     with judge_server() as server:
         settings = JudgeSettings(True, server["url"], "fixture")
-        if source == "tests":
-            with pytest.raises(ValueError, match="Task judge evidence"):
-                asyncio.run(run_judge(config, context, settings))
-        else:
-            result = asyncio.run(run_judge(config, context, settings))
-            assert result["status"] == "complete" and not result["checks"][0]["passed"]
+        result = asyncio.run(run_judge(config, context, settings))
+        assert result["status"] == "complete" and not result["checks"][0]["passed"]
         assert not server["requests"]
 
 
@@ -1119,23 +1115,29 @@ from pathlib import Path
 context = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
 logs = Path(context['paths']['verifier_logs'])
 assert not (logs / 'judge').exists()
+assert not (logs / 'artifact_text').exists()
+assert not (logs / 'judge_evidence').exists()
 assert not (logs / 'judge-evidence').exists()
+assert not (logs / 'artifact_manifest.json').exists()
 assert context['harbor']['verifier']['step_name'] == '中文步骤'
 Path(sys.argv[4]).write_text('{"checks":[{"id":"valid","passed":true}]}')
 """,
         encoding="utf-8",
     )
-    for name in ("judge", "judge-evidence"):
+    for name in ("judge", "artifact_text", "judge_evidence", "judge-evidence"):
         (logs / name).mkdir()
         (logs / name / "old").write_text("old")
-    for name in ("reward.json", "checks.json", "reward.txt"):
+    for name in ("reward.json", "checks.json", "reward.txt", "artifact_manifest.json"):
         (logs / name).write_text("old")
     monkeypatch.setenv(
         "PEVAL_CONFIG",
         str(write_effective_runtime_config(tmp_path / "context.json", context)),
     )
     assert main([str(tests / "grader.json")]) == 0
-    assert json.loads((logs / "reward.json").read_text())["rule_score"] == 1
+    assert (
+        json.loads((logs / "reward.json").read_text(encoding="utf-8"))["rule_score"]
+        == 1
+    )
     assert not (logs / "reward.txt").exists()
     # Static YAML errors abort before any task script and remove last invocation's reward.
     (tests / "judge.yaml").write_text(YAML + "version: 1\n", encoding="utf-8")
@@ -1192,7 +1194,7 @@ Path(sys.argv[4]).write_text('{"checks":[{"id":"valid","passed":true}]}')
             await host.start(False)
             workdir = host.work_dir
             logs = host.trial_paths.verifier_dir
-            (workdir / "中文 报告.md").write_text("当前证据", encoding="utf-8")
+            (logs / "中文 报告.md").write_text("当前证据", encoding="utf-8")
             (logs / "reward.json").write_text('{"reward":1}')
             verifier = HostVerifier(
                 task=Task(task_dir),
@@ -1316,8 +1318,9 @@ def test_judge_rejects_excessive_declarations(field):
     items = (
         value["artifacts"] if field == "artifacts" else value["llm_judge"]["rubrics"]
     )
-    items.extend({**items[0], "id": f"item_{i}"} for i in range(32))
-    with pytest.raises(ValueError, match="32"):
+    limit = 64 if field == "artifacts" else 32
+    items.extend({**items[0], "id": f"item_{i}"} for i in range(limit))
+    with pytest.raises(ValueError, match=str(limit)):
         parse_judge_config(yaml.safe_dump(value))
 
 
@@ -1400,7 +1403,7 @@ def test_optional_missing_evidence_and_explicit_merge_weights(tmp_path):
         metadata = json.loads(
             prompt.split("Metadata:\n", 1)[1].split("\n\nFaithful text:", 1)[0]
         )
-        assert metadata["error"] == "FileNotFoundError"
+        assert metadata["extract_status"] == "missing"
         assert metadata["required"] is False
         assert "Faithful text:\n\n" in prompt
     reward, decision = merge_scores({"reward": 1}, config, result)
@@ -1412,7 +1415,7 @@ def test_evidence_budget_is_shared_across_artifacts(tmp_path):
     config = parse_judge_config(YAML)
     artifact = config.artifacts[0]
     config = replace(config, artifacts=(artifact, replace(artifact, id="second")))
-    size = (Path(context.paths.workdir) / artifact.path).stat().st_size
+    size = (Path(context.paths.verifier_logs) / artifact.path).stat().st_size
     with judge_server() as server:
         result = asyncio.run(
             run_judge(
@@ -1427,31 +1430,35 @@ def test_evidence_budget_is_shared_across_artifacts(tmp_path):
         assert not server["requests"]
 
 
-@pytest.mark.parametrize("source", ["workdir", "tests"])
-def test_non_utf8_evidence_has_agent_vs_task_error_semantics(tmp_path, source):
+@pytest.mark.parametrize("required", [True, False])
+def test_non_utf8_evidence_fails_referencing_rubrics(tmp_path, required):
     context = runtime(tmp_path)
     config = parse_judge_config(YAML)
-    artifact = replace(config.artifacts[0], source=source)
+    artifact = replace(config.artifacts[0], required=required)
     config = replace(config, artifacts=(artifact,))
-    (Path(getattr(context.paths, source)) / artifact.path).write_bytes(b"\xff")
+    (Path(context.paths.verifier_logs) / artifact.path).write_bytes(b"\xff")
     with judge_server() as server:
         operation = run_judge(
             config, context, JudgeSettings(True, server["url"], "fixture")
         )
-        if source == "tests":
-            with pytest.raises(ValueError, match="Task judge evidence"):
-                asyncio.run(operation)
-        else:
-            result = asyncio.run(operation)
-            assert result["status"] == "complete" and not result["checks"][0]["passed"]
-            diagnostic = json.loads(
-                (
-                    Path(context.paths.verifier_logs) / "judge/rubric-0001.json"
-                ).read_text()
+        result = asyncio.run(operation)
+        assert result["status"] == "complete" and not result["checks"][0]["passed"]
+        diagnostic = json.loads(
+            (Path(context.paths.verifier_logs) / "judge/rubric-0001.json").read_text(
+                encoding="utf-8"
             )
-            assert diagnostic["attempts"] == [] and diagnostic["result"]["missing"] == [
-                artifact.id
-            ]
+        )
+        assert diagnostic["attempts"] == [] and diagnostic["result"]["missing"] == [
+            artifact.id
+        ]
+        assert diagnostic["messages"] is None
+        index = json.loads(
+            (Path(context.paths.verifier_logs) / "judge/evidence.json").read_text(
+                encoding="utf-8"
+            )
+        )[artifact.id]
+        assert index["text_path"] == artifact.path
+        assert index["byte_count"] is None and index["sha256"] is None
         assert not server["requests"]
 
 
@@ -1460,7 +1467,7 @@ def test_non_utf8_evidence_has_agent_vs_task_error_semantics(tmp_path, source):
 )
 def test_known_credential_in_evidence_and_response_is_redacted(tmp_path, key):
     context = runtime(tmp_path)
-    (Path(context.paths.workdir) / "中文 报告.md").write_text(
+    (Path(context.paths.verifier_logs) / "中文 报告.md").write_text(
         key, encoding="utf-8"
     )
     with judge_server() as server:
@@ -1495,7 +1502,7 @@ def test_judge_directory_link_is_replaced_and_evidence_link_is_rejected(tmp_path
     sentinel = external / "keep.txt"
     sentinel.write_text("must not be read as evidence or changed")
     directory = Path(context.paths.verifier_logs) / "judge"
-    report = Path(context.paths.workdir) / "中文 报告.md"
+    report = Path(context.paths.verifier_logs) / "中文 报告.md"
     report.unlink()
     try:
         directory.symlink_to(external, target_is_directory=True)

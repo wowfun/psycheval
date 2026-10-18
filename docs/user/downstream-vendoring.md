@@ -145,6 +145,51 @@ read-only, while Skills, MCP and restored sessions use the Trial's private state
 See the [WorkBuddy ACP contract](../reference/harbor.md#native-workbuddy-acp) for
 authentication, model selection and evidence semantics.
 
+## Publish Judge evidence
+
+Task scripts publish Judge evidence under `context["paths"]["verifier_logs"]`.
+For a text file, declare its relative path directly:
+
+```yaml
+artifacts:
+  - id: final_answer
+    path: artifact_text/final_answer.md
+    required: true
+    type: md
+```
+
+For an original binary artifact, keep its original path and type in the YAML
+declaration, for example `path: output/report.xlsx` and `type: xlsx`. The Task's
+custom check extracts the relevant text and publishes this manifest alongside
+it, during each verifier invocation:
+
+```python
+import json
+from pathlib import Path
+
+
+def publish_report_evidence(context, extracted_text):
+    logs = Path(context["paths"]["verifier_logs"])
+    text_path = logs / "artifact_text/report.md"
+    text_path.parent.mkdir(parents=True, exist_ok=True)
+    text_path.write_text(extracted_text, encoding="utf-8")
+    manifest = {"artifacts": [{
+        "id": "report",  # Matches the YAML artifact ID.
+        "source_path": "output/report.xlsx",
+        "type": "xlsx",
+        "text_path": "artifact_text/report.md",
+        "extract_status": "ok",
+    }]}
+    (logs / "artifact_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
+    )
+```
+
+The Judge reads the extracted text. Scripts can use the other runtime paths to
+read workspace files, test-owned references or the current trajectory. The
+[YAML Judge contract](../reference/harbor.md#yaml-llm-judge) defines precedence,
+supported text types, evidence status, limits and cleanup.
+
 ## Observe live ACP updates
 
 Pass a callback when constructing an ACP-backed Agent in Python:

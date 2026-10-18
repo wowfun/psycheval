@@ -417,7 +417,7 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
                 )
             if valid:
                 sources = json.dumps(snapshot, ensure_ascii=False, indent=2)
-    evidence = paths["verifier_logs"] / "judge-evidence"
+    evidence = paths["verifier_logs"] / "artifact_text"
     evidence.mkdir(exist_ok=True)
     if report is not None:
         (evidence / "report.md").write_bytes(content.encode("utf-8"))
