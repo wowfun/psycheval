@@ -8,7 +8,7 @@ harnesses, which own Agent execution and Task scoring; see [Jobs](jobs.md).
 ## Programmatic and command interfaces
 
 `psycheval.cli.main(argv) -> int` is the programmatic interface and
-`psycheval.cli.app` is its Typer application. The editable tool installation
+`psycheval.cli.app` is its Typer application. The tool installation
 exposes the `peval` command with `init`, `view trajectory`, `publish
 evaluation-report`, `export trajectory`, `import analysis`,
 and `serve`; `tr` is the trajectory alias.

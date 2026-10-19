@@ -5,6 +5,10 @@
 `peval` is the short command name for the Psycheval CLI. It works with retained
 evidence rather than running an Agent.
 
+Install the versioned package using the [installation workflow](../../../README.md#install).
+In a uv project, prefix commands below with `uv run`; a tool installation exposes
+`peval` directly. Python 3.12–3.14 is supported.
+
 ## Quick start
 
 ```console

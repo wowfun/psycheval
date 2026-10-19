@@ -1,12 +1,12 @@
 [project]
 name = "psycheval"
-dynamic = ["version"]
+dynamic = ["version", "readme"]
 description = "Agent evaluation, Harbor integration, and trajectory analysis tools"
-readme = "README.md"
-license = "MIT"
-requires-python = ">=3.12"
+license = "MIT AND Apache-2.0 AND BSD-3-Clause"
+license-files = ["LICENSE", "src/psycheval/assets/web/vendor/pretty-aui/LICENSE", "src/psycheval/assets/web/vendor/pretty-aui/THIRD_PARTY_LICENSES.txt"]
+requires-python = ">=3.12,<3.15"
 dependencies = [
-    "agent-client-protocol==0.12.1; python_version < '3.15'",
+    "agent-client-protocol==0.12.1",
     "fastapi>=0.141.1,<0.142",
     "harbor==0.24.0",
     "httpx>=0.28,<1",
@@ -30,11 +30,17 @@ dependencies = [
 [project.scripts]
 peval = "psycheval.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/wowfun/psycheval"
+Documentation = "https://github.com/wowfun/psycheval/tree/main/docs"
+Issues = "https://github.com/wowfun/psycheval/issues"
+
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.32.4", "hatch-fancy-pypi-readme==25.1.0"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
+build = ["hatchling==1.32.4", "hatch-fancy-pypi-readme==25.1.0", "twine==7.0.0"]
 dev = [
     "pytest>=8.4,<9",
     "ruff>=0.12,<1",
@@ -45,6 +51,19 @@ path = "src/psycheval/harbor/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/psycheval"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src/psycheval", "pyproject.toml", "README.md", "LICENSE", ".gitignore"]
+
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+fragments = [{ path = "README.md" }]
+substitutions = [
+    { pattern = '\]\((?![a-zA-Z][a-zA-Z0-9+.-]*:|#|/)([^)]+)\)', replacement = '](https://github.com/wowfun/psycheval/blob/v$HFPR_VERSION/\1)' },
+]
+
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "README.md" }, { file = "src/psycheval/harbor/__init__.py" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

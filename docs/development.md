@@ -37,3 +37,40 @@ Skill checker. Follow
 Build artifacts belong in `.local/` and are not authority. Never develop against
 real profile databases, credentials, provider configuration, or user
 workspaces.
+
+## Source and distribution installation
+
+For source development, expose the editable checkout with
+`uv tool install -e . --force`. Consumers install the versioned package using
+the [README workflow](../README.md#install). Keep the full dependency constraints
+until a broader supported range has been tested; optional Agent executables,
+WorkBuddy runtime and repository Skill remain explicit installations.
+
+Build and inspect a candidate in a separate build environment:
+
+```console
+UV_PROJECT_ENVIRONMENT=.local/build-env uv sync --frozen --only-group build
+UV_PROJECT_ENVIRONMENT=.local/build-env uv build --no-build-isolation --out-dir .local/dist
+UV_PROJECT_ENVIRONMENT=.local/build-env uv run --no-sync twine check --strict .local/dist/*
+UV_PROJECT_ENVIRONMENT=.local/build-env uv run --no-sync python scripts/check_distribution.py .local/dist
+```
+
+On PowerShell set `$env:UV_PROJECT_ENVIRONMENT = '.local/build-env'` before these
+commands instead of using the inline environment assignment. The sdist contains
+only runtime source, build metadata (including Hatch's `.gitignore` input), README
+and required licenses. The wheel is
+built from that sdist. Generated metadata is the only payload beyond tracked
+source and license copies; the artifact checker compares filenames and bytes.
+The project's own code remains MIT. The distribution includes Apache-2.0 and
+BSD-3-Clause components; DOMPurify is distributed under its Apache-2.0 option.
+Keep all bundled license notices intact.
+
+PR installation checks export frozen runtime constraints using
+`uv export --frozen --no-dev --no-hashes --no-emit-project`, then pass that file to
+`scripts/validate_install.py --constraints`. Constraints must not be installed as
+requirements. Release acceptance omits constraints and installs into an empty
+environment. Neither gate relies on the source checkout to import the package.
+CI builds one pure-Python candidate and distributes it to every consumer cell.
+The build job also prepares the ECharts smoke fixture from the package-lock
+archive, verifying its integrity before extracting the single required asset.
+Consumers pass that fixture with `--echarts`; they do not install Node dependencies.

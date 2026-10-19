@@ -63,7 +63,8 @@ def test_distribution_declares_the_repository_license() -> None:
         "project"
     ]
 
-    assert project["license"] == "MIT"
+    assert project["license"] == "MIT AND Apache-2.0 AND BSD-3-Clause"
+    assert len(project["license-files"]) == 3
     assert (ROOT / "LICENSE").read_text(encoding="utf-8").startswith("MIT License\n")
 
 
@@ -102,17 +103,16 @@ def test_ci_uses_least_privilege_and_avoids_duplicate_branch_runs() -> None:
     assert "cancel-in-progress: true" in workflow
 
 
-def test_ci_uses_only_the_editable_source_tool_installation() -> None:
+def test_ci_validates_editable_and_distribution_installations() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     assert "uv tool install -e . --force" in workflow
     assert "scripts/smoke_source_tool.py" in workflow
     assert "scripts/check_skill.py\n          skills/peval" in workflow
-    assert "uv build" not in workflow
-    assert ".whl" not in workflow
-    assert ".tar.gz" not in workflow
-    assert "smoke_distribution" not in workflow
-    assert "check_distribution_assets" not in workflow
+    assert "uv build" in workflow
+    assert "scripts/validate_install.py" in workflow
+    assert "--constraints" in workflow
+    assert "scripts/check_distribution.py" in workflow
     assert "pyinstaller" not in workflow.lower()
 
 
@@ -121,7 +121,7 @@ def test_checkout_installs_the_tool_before_using_bare_peval_commands() -> None:
     install = readme.split("## Install", 1)[1].split("## Quick start", 1)[0]
     quick_start = readme.split("## Quick start", 1)[1].split("## Documentation", 1)[0]
 
-    assert "uv tool install -e ." in install
+    assert "uv tool install --python 3.14 --with-executables-from harbor" in install
     assert "peval init -r .local/evaluation" in quick_start
     assert "peval init\n" not in quick_start
     assert "peval --help" in quick_start
@@ -132,14 +132,13 @@ def test_removed_distribution_smoke_helpers_do_not_survive_as_dead_code() -> Non
     assert not (ROOT / "scripts/_smoke_harbor.py").exists()
 
 
-def test_user_facing_peval_examples_do_not_use_python_or_uv_wrappers() -> None:
+def test_user_facing_examples_use_installed_cli_entrypoints() -> None:
     paths = [ROOT / "README.md"]
     paths.extend((ROOT / "docs").rglob("*.md"))
     paths.extend((ROOT / "skills/peval").rglob("*.md"))
 
     for path in paths:
         text = path.read_text(encoding="utf-8")
-        assert "uv run peval" not in text, path
         assert "python -m psycheval.cli" not in text, path
 
 

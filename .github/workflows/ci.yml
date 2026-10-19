@@ -75,3 +75,55 @@ jobs:
           uv run python scripts/smoke_source_tool.py
           .local/source-tool-bin/peval
           skills/peval
+
+  build-distribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.12.0'
+          python-version: '3.14'
+          enable-cache: true
+      - run: uv sync --frozen --only-group build
+      - run: uv build --no-build-isolation --out-dir .local/distribution-check/dist
+      - run: uv run --no-sync twine check --strict .local/distribution-check/dist/*
+      - run: uv run --no-sync python scripts/check_distribution.py .local/distribution-check/dist
+      - run: uv export --frozen --no-dev --no-hashes --no-emit-project --output-file .local/distribution-check/runtime-constraints.txt
+      - run: python scripts/prepare_smoke_asset.py .local/distribution-check/echarts.min.js
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: distribution-check
+          path: .local/distribution-check/*
+          if-no-files-found: error
+
+  distribution:
+    needs: build-distribution
+    name: Wheel (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.12', '3.13', '3.14']
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.12.0'
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: distribution-check
+          path: .local/distribution-check
+      - run: >-
+          python scripts/validate_install.py .local/distribution-check/dist/*.whl
+          --python '${{ matrix.python }}'
+          --constraints .local/distribution-check/runtime-constraints.txt
+          --echarts .local/distribution-check/echarts.min.js

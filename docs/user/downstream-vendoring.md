@@ -6,7 +6,7 @@ runtime into your downstream environment. Installing Psycheval itself is not
 required. The [Harbor reference](../reference/harbor.md) owns the API and runtime
 contracts.
 
-The examples assume Python 3.12 or newer and an existing, installable `downstream`
+The examples assume Python 3.12–3.14 and an existing, installable `downstream`
 package managed with uv. Run commands from that project's root and replace the
 example package and data paths with your own.
 
@@ -173,13 +173,17 @@ def publish_report_evidence(context, extracted_text):
     text_path = logs / "artifact_text/report.md"
     text_path.parent.mkdir(parents=True, exist_ok=True)
     text_path.write_text(extracted_text, encoding="utf-8")
-    manifest = {"artifacts": [{
-        "id": "report",  # Matches the YAML artifact ID.
-        "source_path": "output/report.xlsx",
-        "type": "xlsx",
-        "text_path": "artifact_text/report.md",
-        "extract_status": "ok",
-    }]}
+    manifest = {
+        "artifacts": [
+            {
+                "id": "report",  # Matches the YAML artifact ID.
+                "source_path": "output/report.xlsx",
+                "type": "xlsx",
+                "text_path": "artifact_text/report.md",
+                "extract_status": "ok",
+            }
+        ]
+    }
     (logs / "artifact_manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
     )
@@ -320,6 +324,15 @@ owns the precedence and path rules. The Python workflow below needs no TOML
 file or Psycheval workspace registration.
 
 ## Install the WorkBuddy runtime
+
+For an installed Psycheval tool, add the runtime to the same tool environment:
+
+```console
+uv tool install --python 3.14 --with-executables-from harbor --with "workbuddy-bench @ git+https://github.com/Tencent/workbuddy-bench.git@625b2233093ae4f23e76be28c1f341d41cc70373" "psycheval==0.1.0rc1"
+```
+
+Use `harbor` directly with that tool installation. The project-environment
+commands below apply to source vendoring or a regular uv project.
 
 WorkBuddy verification and metrics require the external
 `workbuddy-bench` distribution in the same environment as Harbor and the copied

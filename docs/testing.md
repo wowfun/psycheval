@@ -173,8 +173,19 @@ uv run python scripts/smoke_source_tool.py \
 
 The smoke covers `peval --help`, default initialization without a Skill,
 explicit Agent Skill installation and replacement.
-Psycheval does not build or validate wheel, sdist, or frozen executable
-artifacts as project gates.
+
+## Distribution checks
+
+Build an sdist and its wheel with the frozen build group, without build isolation.
+Validate metadata, README links, resources, licenses and tracked payload bytes.
+Install the wheel outside the checkout on Linux and Windows, Python 3.12–3.14.
+PR installs use lock-derived runtime constraints, not preinstalled requirements;
+release acceptance also resolves dependencies without constraints. Both use
+isolated user state and synthetic evidence, with a preseeded ECharts cache.
+All matrix cells install the same build. A separate smoke-fixture artifact carries
+the single ECharts file extracted from its integrity-checked, lock-pinned archive;
+it is not part of the release distribution or its receipt. Local validation can
+pass `--echarts <file>` or use an existing `npm ci` installation.
 
 ## Platform boundaries
 
