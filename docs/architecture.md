@@ -190,7 +190,8 @@ canonical and package adapters. WorkspaceReportLibrary owns imported packages an
 report management overlays, including manual associations and archival state;
 EvaluationReports remains the only canonical report writer and deleter. Report target resolution
 combines the Dataset registry, source catalog, and managed Jobs identities. The catalog
-owns the rebuildable canonical metadata projection. Storage, identity, query, and
+owns the rebuildable canonical metadata projection; `state.catalog_projection`
+derives row summaries from canonical trajectories without storage access. Storage, identity, query, and
 mutation semantics belong to the [report data contract](reference/state-and-data.md#evaluation-reports).
 Single-report metadata resolves only that report's source rows; complete target
 enumeration remains owned by library queries and association pickers.

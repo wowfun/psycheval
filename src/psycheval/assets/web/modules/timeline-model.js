@@ -3,6 +3,7 @@ import { positiveMetric } from "./analysis-metrics.js";
 import { TIMELINE_ESTIMATED_MODEL_CALL_CAP_MS, TIMELINE_INPUT_STAGE_THRESHOLD_MS } from "./timeline-shell.js";
 import { timelineModel } from "./timeline-chart.js";
 import { toolFailed, toolMetaFor } from "./steps.js";
+import { timingSource, timestampFallbackAllowed } from "./timing-source.js";
 
 function timelineTrace(trajectory, meta) {
   const steps = trajectory?.steps || [];
@@ -47,7 +48,8 @@ function timelineTrace(trajectory, meta) {
         });
       }
     } else if (source === "agent" || source === "assistant") {
-      const hasExactModelDuration = positiveMetric(stepDuration);
+      const hasExactModelDuration = hasMetricValue(stepDuration) && Number(stepDuration) >= 0;
+      const timing = timingSource(sm?.duration_source);
       const modelDurationIsBoundaryEstimate = timelineModelDurationIsEstimate(sm);
       const modelEstimate = hasExactModelDuration || !timelineAllowsTimestampEstimates(meta)
         ? {}
@@ -55,13 +57,14 @@ function timelineTrace(trajectory, meta) {
       const modelDuration = hasExactModelDuration ? stepDuration : modelEstimate.duration_ms;
       timelinePushStage(stages, {
         kind: "agent",
-        stage: modelStage,
+        stage: timing.observed ? timing.label : modelStage,
+        timingHint: timing.hint,
         status: step?.source || "agent",
         category: "agent",
         wallStart: hasExactModelDuration ? stepStart : modelEstimate.wall_start_ms,
         wallEnd: hasExactModelDuration ? stepEnd : modelEstimate.wall_end_ms,
         duration: modelDuration,
-        estimated: modelDurationIsBoundaryEstimate || (!hasExactModelDuration && modelEstimate.estimated),
+        estimated: timing.observed || modelDurationIsBoundaryEstimate || (!hasExactModelDuration && modelEstimate.estimated),
         origin,
         trialKey: meta?.trial_key,
         stepId,
@@ -88,9 +91,12 @@ function timelineTrace(trajectory, meta) {
       const toolStart = hasMetricValue(toolMeta?.timestamp_ms) ? Number(toolMeta.timestamp_ms) : stepStart;
       const toolEnd = timelineEndMs(toolStart, toolDuration);
       const category = timelineToolCategory(tool, toolMeta);
+      const timing = timingSource(toolMeta?.execution_duration_source);
       timelinePushStage(stages, {
         kind: "tool",
-        stage: `Tool: ${timelineToolLabel(tool, toolMeta)}`,
+        stage: `${timing.label || "Tool"}: ${timelineToolLabel(tool, toolMeta)}`,
+        timingHint: timing.hint,
+        estimated: timing.observed || timing.estimated,
         status: toolMeta?.status || toolMeta?.title || "tool",
         category,
         wallStart: toolStart,
@@ -123,7 +129,8 @@ function timelineTrace(trajectory, meta) {
     active_total_ms: model.active_total_ms,
     display_offset_ms: timelineMarkerActiveOffset(marker, displayStages),
   }));
-  return { stages: displayStages, markers: displayMarkers, model };
+  const expected = steps.filter(step => ["agent", "assistant"].includes(lower(step?.source))).length + steps.reduce((count, step) => count + (step?.tool_calls || []).length, 0);
+  return { stages: displayStages, markers: displayMarkers, model, partial: stages.filter(stage => stage.kind === "agent" || stage.kind === "tool").length < expected };
 }
 function timelineAssignStepNumbers(items) {
   const counts = {};
@@ -136,10 +143,10 @@ function timelineAssignStepNumbers(items) {
   });
 }
 function timelineAllowsTimestampEstimates(meta) {
-  return meta?.timestamp_semantics !== "order_only";
+  return timestampFallbackAllowed(meta?.timestamp_semantics);
 }
 function timelineModelDurationIsEstimate(stepMeta) {
-  return lower(stepMeta?.duration_source).includes("estimate");
+  return Boolean(timingSource(stepMeta?.duration_source).estimated);
 }
 function timelineAssignActiveOffsets(stages, model) {
   let cursor = 0;
@@ -172,14 +179,14 @@ function timelinePushStage(stages, args) {
 }
 function timelineStageHasMeasuredDuration(stage) {
   if (!stage || !hasMetricValue(stage.duration_ms)) return false;
-  return stage.kind === "tool" ? Number(stage.duration_ms) >= 0 : positiveMetric(stage.duration_ms);
+  return Number(stage.duration_ms) >= 0;
 }
 function timelinePushMarker(markers, args) {
   const marker = timelineMarker(args);
   if (!marker || !hasMetricValue(marker.start_offset_ms)) return;
   markers.push(marker);
 }
-function timelineStage({ kind, stage, status, category, wallStart, wallEnd, duration, estimated, origin, trialKey, stepId, toolCallId, ref }) {
+function timelineStage({ kind, stage, status, category, wallStart, wallEnd, duration, estimated, timingHint, origin, trialKey, stepId, toolCallId, ref }) {
   const startOffset = hasMetricValue(wallStart) && hasMetricValue(origin) ? Math.max(0, Number(wallStart) - Number(origin)) : null;
   const endOffset = hasMetricValue(wallEnd) && hasMetricValue(origin) ? Math.max(startOffset || 0, Number(wallEnd) - Number(origin)) : startOffset;
   return {
@@ -196,6 +203,7 @@ function timelineStage({ kind, stage, status, category, wallStart, wallEnd, dura
     end_offset_ms: endOffset,
     duration_ms: duration,
     estimated: Boolean(estimated),
+    timing_hint: timingHint || "",
     ref,
   };
 }

@@ -217,6 +217,24 @@ class ServeAccessHttpTests(unittest.TestCase):
                     headers["content-type"], "application/json; charset=utf-8"
                 )
                 self.assertIn("sources", json.loads(source_map))
+                status, headers, timing = self.request(
+                    server, "GET", "/assets/peval/timing-sources.json"
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(
+                    headers["content-type"], "application/json; charset=utf-8"
+                )
+                self.assertIn(
+                    "opencode_native_model_call", json.loads(timing)["sources"]
+                )
+                status, cached_headers, body = self.request(
+                    server,
+                    "GET",
+                    "/assets/peval/timing-sources.json",
+                    request_headers={"If-None-Match": headers["etag"]},
+                )
+                self.assertEqual(status, 304)
+                self.assertEqual(body, b"")
                 status, headers, stylesheet = self.request(
                     server, "GET", "/assets/peval/workspace.css"
                 )

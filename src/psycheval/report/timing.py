@@ -9,6 +9,43 @@ from psycheval.adapters.base import (
     timestamp_fallback_allowed,
     timestamp_fallback_duration_ms,
 )
+from psycheval.timing_contract import timing_source
+
+
+def is_model_duration_source(source: Any) -> bool:
+    """Client output spans are measured activity, not model request latency."""
+    return timing_source(source).get("model_duration", True)
+
+
+def node_duration(step: dict, next_timestamp: int | None, semantics: str | None):
+    """Presentation-only contribution; never writes back to canonical timing."""
+    duration = step.get("duration_ms")
+    if type(duration) is int and duration >= 0:
+        return duration, step.get("duration_source")
+    tools = [tool for tool in step.get("tool_calls", []) if isinstance(tool, dict)]
+    durations = [
+        tool["execution_duration_ms"]
+        for tool in tools
+        if type(tool.get("execution_duration_ms")) is int
+        and tool["execution_duration_ms"] >= 0
+    ]
+    if durations:
+        observed = any(
+            timing_source(tool.get("execution_duration_source")).get("observed")
+            for tool in tools
+        )
+        return sum(
+            durations
+        ), "observed_tool_activity_estimate" if observed else "tool_activity_estimate"
+    if timestamp_fallback_allowed(semantics):
+        # A node estimates the whole step, including untimed tools. Unlike
+        # step_duration_ms, it never contributes to model metrics.
+        duration = timestamp_fallback_duration_ms(
+            step.get("timestamp_ms"), next_timestamp
+        )
+        if duration is not None:
+            return duration, "step_boundary_estimate"
+    return None, None
 
 
 def trial_active_duration_ms(

@@ -280,7 +280,7 @@ class HarborTrialTests(unittest.TestCase):
     def test_last_turn_projection_prefers_known_zero_and_ignores_invalid_fallbacks(
         self,
     ):
-        from psycheval.state.catalog import _catalog_summary
+        from psycheval.state.catalog_projection import catalog_summary
 
         phases = {
             "agent_execution": {"finished_at": "invalid"},
@@ -292,7 +292,7 @@ class HarborTrialTests(unittest.TestCase):
             ({"adapter": "atif"}, None, None),
         ]
         for meta, expected, source in cases:
-            row = _catalog_summary(
+            row = catalog_summary(
                 {}, {**meta, "evaluation": {"phase_timing": phases}}, 0
             )
             self.assertEqual(row["last_turn_finished_at_ms"], expected)
@@ -304,7 +304,7 @@ class HarborTrialTests(unittest.TestCase):
             {"overall": {"finished_at": "bad"}},
             {"overall": {"started_at": "2026-01-01T00:00:00Z"}},
         ):
-            row = _catalog_summary(
+            row = catalog_summary(
                 {}, {"adapter": "harbor", "evaluation": {"phase_timing": phases}}, 0
             )
             self.assertIsNone(row["last_turn_finished_at_ms"])

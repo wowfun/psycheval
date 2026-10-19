@@ -5,15 +5,12 @@ from typing import Any, Protocol
 
 from psycheval.config import ToolConfig
 from psycheval.sources import MessageRecord
+from psycheval.timing_contract import (
+    timestamp_fallback_allowed as timestamp_fallback_allowed,
+)
 
 ACTIVE_DURATION_FALLBACK_CAP_MS = 600_000
 TIMESTAMP_SEMANTICS_ORDER_ONLY = "order_only"
-
-
-def timestamp_fallback_allowed(timestamp_semantics: str | None) -> bool:
-    if timestamp_semantics is None:
-        return True
-    return str(timestamp_semantics).lower() != TIMESTAMP_SEMANTICS_ORDER_ONLY
 
 
 def timestamp_fallback_duration_ms(

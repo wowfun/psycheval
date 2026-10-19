@@ -5,10 +5,10 @@ import { fmtTimelineAxis, fmtTimelineDuration, fmtTimelineMaybeEstimated } from 
 import { openDetailSidebar } from "./detail-sidebar.js";
 
 function timelineModel(stages) {
-  const activeTotal = stages.reduce((sum, stage) => sum + Math.max(0, Number(stage.duration_ms || 0)), 0);
+  const activeTotal = stages.length ? stages.reduce((sum, stage) => sum + Math.max(0, Number(stage.duration_ms || 0)), 0) : null;
   return {
     active_total_ms: activeTotal,
-    display_total_ms: Math.max(1, activeTotal),
+    display_total_ms: Math.max(1, activeTotal || 0),
   };
 }
 function timelineChartOption(trace) {
@@ -66,7 +66,7 @@ function timelineChartOption(trace) {
         cursor: "pointer",
         encode: { x: [0, 1], y: 2 },
         data: trace.stages.map((stage, index) => ({
-          value: [stage.display_start_ms, stage.display_end_ms, index, stage.duration_ms, stage.category_meta.color, fmtTimelineDuration(stage.duration_ms)],
+          value: [stage.display_start_ms, stage.display_end_ms, index, stage.duration_ms, stage.category_meta.color, fmtTimelineMaybeEstimated(fmtTimelineDuration(stage.duration_ms), stage)],
           itemStyle: { color: stage.category_meta.color },
           trace_item: stage,
         })),
@@ -189,6 +189,7 @@ function timelineTooltipHtml(item) {
     rows.splice(4, 0, [t("timeline_col_duration", "Duration"), fmtTimelineMaybeEstimated(fmtTimelineDuration(item.duration_ms), item)]);
     rows.splice(5, 0, [t("timeline_col_total_pct", "Active Share"), pct]);
   }
+  if (item.timing_hint) rows.push([t("timing_source", "Timing source"), item.timing_hint]);
   return `<div class="timeline-tooltip"><strong>${esc(title)}</strong>${rows.map(([key, value, html]) => `<br><span>${esc(key)}:</span> ${html ?? esc(value)}`).join("")}</div>`;
 }
 function openTimelineStep(item) {

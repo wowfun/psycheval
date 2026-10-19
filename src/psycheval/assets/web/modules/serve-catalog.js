@@ -44,6 +44,7 @@ function catalogStepOutline(value) {
     const source = rawSource === "assistant" ? "agent" : ["system", "user", "agent"].includes(rawSource) ? rawSource : "unknown";
     const outline = { step_id: item.step_id, source };
     if (hasMetricValue(item.duration_ms)) outline.duration_ms = Number(item.duration_ms);
+    if (typeof item.duration_source === "string") outline.duration_source = item.duration_source;
     return [outline];
   });
 }

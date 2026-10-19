@@ -144,6 +144,62 @@ def main() -> None:
             trajectory["final_metrics"]["extra"].update(
                 total_tool_calls=3, total_tool_errors=0
             )
+            if os.environ.get("PEVAL_E2E_OBSERVED_TIMING") == "1":
+                trajectory["extra"] = {"timestamp_semantics": "event_observed"}
+                trajectory["steps"][1]["extra"] = {
+                    "duration_ms": 0,
+                    "duration_source": "acp_client_observed_output",
+                }
+                trajectory["steps"][1]["observation"]["results"][0]["extra"] = {
+                    "execution_duration_ms": 420,
+                    "execution_duration_source": "acp_client_observed_lifecycle",
+                }
+                trajectory["steps"].extend(
+                    [
+                        {
+                            "step_id": 3,
+                            "source": "agent",
+                            "message": "short",
+                            "timestamp": "2026-01-01T00:00:02Z",
+                            "extra": {
+                                "duration_ms": 100,
+                                "duration_source": "acp_client_observed_output",
+                            },
+                        },
+                        {
+                            "step_id": 4,
+                            "source": "agent",
+                            "message": "long",
+                            "timestamp": "2026-01-01T00:00:03Z",
+                            "extra": {
+                                "duration_ms": 1000,
+                                "duration_source": "acp_client_observed_output",
+                            },
+                        },
+                        {
+                            "step_id": 5,
+                            "source": "agent",
+                            "message": "single chunk",
+                            "timestamp": "2026-01-01T00:00:05Z",
+                        },
+                    ]
+                )
+            if os.environ.get("PEVAL_E2E_NATIVE_TIMING") == "1":
+                for step in trajectory["steps"]:
+                    if "duration_source" in step.get("extra", {}):
+                        step["extra"]["duration_source"] = "opencode_native_model_call"
+                step = trajectory["steps"][1]
+                for call, result in zip(
+                    step["tool_calls"], step["observation"]["results"], strict=True
+                ):
+                    duration = result.get("extra", call["extra"]).get(
+                        "execution_duration_ms"
+                    )
+                    call["extra"] = {"started_at": "2026-01-01T00:00:01.200Z"}
+                    result["extra"] = {
+                        "execution_duration_ms": duration,
+                        "execution_duration_source": "opencode_native_tool_call",
+                    }
             path.write_text(json.dumps(trajectory), encoding="utf-8")
         if os.environ.get("PEVAL_E2E_REPORTS") == "1":
             (root / "library-dataset").mkdir()

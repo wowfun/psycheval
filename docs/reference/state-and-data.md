@@ -170,6 +170,35 @@ measures aggregate activity rather than the union of elapsed intervals; parallel
 contributions can overlap. Wall duration remains the separate elapsed measure.
 Projected durations accept only nonnegative integer milliseconds, excluding
 booleans, numeric strings, fractional values, and non-finite numbers.
+Client-observed Agent output spans are excluded from model-duration aggregates,
+TTFT and decoding speed. Their source labels survive conversion and projection.
+`event_observed` timestamps locate events but never authorize adjacent-timestamp
+duration estimates. Explicit native OpenCode model-call intervals still supply
+Model duration; their sources and boundaries are defined by the
+[native OpenCode contract](harbor.md#native-opencode). They do not supply TTFT or
+decode speed. The timeline labels observed output, tool running and tool
+lifecycle intervals separately, including their boundaries and whether waiting
+may be included. Its total is the sum of recorded contributions, with a coverage
+hint when some intervals are unknown; parallel contributions can overlap.
+No measured interval means an unknown total, displayed as a dash. A measured zero
+remains a visible zero-duration record. Reading older untimed evidence does not
+backfill it from vendor timestamps or Harbor lifecycle totals.
+Trajectory nodes shade their duration relative to the other nodes in that Trial.
+They prefer a measured step duration, then recorded tool contributions, then an
+eligible adjacent-timestamp estimate. Observed and estimated values carry source
+hints; unknown values remain neutral. Node shading never supplies model metrics.
+The presentation fallback may use an eligible step boundary even when untimed
+tools exist: it estimates the whole step, including tools. Canonical model
+duration refuses that fallback for steps with tools. Recorded tool contributions
+may cover only some calls; their sum is never a measured step span.
+
+The core timing classification lives in
+[`timing-sources.json`](../../src/psycheval/assets/web/timing-sources.json), consumed
+by Python projections and browser labels. It defines source families, model
+eligibility, observed/estimated flags and timestamp-estimation admission.
+Harbor producers retain their independent evidence contract and emit wire source
+identifiers; they do not import core report code. Unknown sources have no inferred
+display label. Frontend timeline heuristics remain presentation-only.
 
 Tool execution timing is projected from matching observation results' `extra`,
 falling back to the tool call's `extra` when the results omit timing or contain

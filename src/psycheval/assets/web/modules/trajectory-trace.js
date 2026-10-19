@@ -1,4 +1,5 @@
 import { renderDateTime } from "./date-time.js";
+import { timingSource } from "./timing-source.js";
 import { $, esc, fmtCost, fmtMs, fmtNum, fmtScore, hasMetricValue, listValue, lower, renderComparisonPanels, selectedKey, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, statusLabel, t } from "./runtime.js";
 import { agentNameFor, bindDataTableSelection, renderRowSelection, selectionColumn } from "./data-tables.js";
 import { bindServeSourceStateControls, renderServeSourceStateControls, renderSourceRefreshControl } from "./source-state-controls.js";
@@ -62,7 +63,8 @@ function stepTitle(step, index, stepDuration = null, durationRatio = null) {
   const id = step?.step_id ?? index + 1;
   const role = step?.source || "unknown";
   const preview = stepPreviewText(step);
-  const duration = hasMetricValue(stepDuration) ? timeTitle("step", stepDuration, durationRatio, "slowest step") : "";
+  const timing = timingSource(step?.duration_source);
+  const duration = hasMetricValue(stepDuration) ? `${timing.observed || timing.estimated ? "≈" : ""}${timeTitle(timing.label || "step", stepDuration, durationRatio, "slowest step")}${timing.hint ? `; ${timing.hint}` : ""}` : "";
   const head = duration ? `#${id} ${role}; ${duration}` : `#${id} ${role}`;
   return preview ? `${head}: ${preview}` : head;
 }

@@ -13,13 +13,11 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from psycheval._harbor_datasets import resolve_harbor_datasets_for_mount
-from psycheval._state.annotations import optional_int, optional_str
+from psycheval._state.annotations import optional_int
 from psycheval.analysis import cached_note_report_for_cell
-from psycheval.atif import iso_timestamp_ms
 from psycheval.config import ToolConfig
 from psycheval.file_access import FileLeaseTimeout, blocking_file_lease
-from psycheval.report.inference import inference_row_metrics
-from psycheval.report.metrics import final_metric, token_total
+from psycheval.state.catalog_projection import catalog_summary, optional_number
 from psycheval.state.evaluation_report_catalog import (
     evaluation_report_location,
     replace_evaluation_report_projection,
@@ -32,7 +30,7 @@ from psycheval.state.workspace_sources import (
 )
 
 CATALOG_SCHEMA_VERSION = 18
-CATALOG_PROJECTION_VERSION = 6
+CATALOG_PROJECTION_VERSION = 8
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 SUMMARY_CACHE_ENTRY_LIMIT = 128
@@ -974,7 +972,7 @@ class WorkspaceCatalog:
         )
         notes_markdown = note["markdown"] if note else ""
         if document.readable or document.meta is not None:
-            summary = _catalog_summary(
+            summary = catalog_summary(
                 trajectory,
                 meta,
                 self._analysis_count(document),
@@ -1498,11 +1496,11 @@ def _saved_view_metric_rows(
 
 def _saved_view_metric_value(row: dict[str, Any], key: str) -> float | None:
     if key != "tool_error_rate":
-        return _optional_number(row.get(key))
-    calls = _optional_number(row.get("total_tool_calls"))
+        return optional_number(row.get(key))
+    calls = optional_number(row.get("total_tool_calls"))
     if calls is None or calls == 0:
         return None
-    errors = _optional_number(row.get("total_tool_errors"))
+    errors = optional_number(row.get("total_tool_errors"))
     return (errors or 0) / calls
 
 
@@ -1601,187 +1599,6 @@ def _live_task_ref(
     if len(matches) != 1:
         return None
     return {"dataset_id": matches[0], "task": task_name}
-
-
-def _last_turn_end(meta: dict[str, Any]) -> dict[str, Any]:
-    finished = optional_int(meta.get("finished_at_ms"))
-    source = "trajectory" if finished is not None else None
-    if finished is None and meta.get("adapter") == "harbor":
-        evaluation = meta.get("evaluation")
-        phases = (
-            evaluation.get("phase_timing") if isinstance(evaluation, dict) else None
-        )
-        if isinstance(phases, dict):
-            for phase, origin in (
-                ("agent_execution", "harbor_agent_execution"),
-                ("overall", "harbor_trial"),
-            ):
-                timing = phases.get(phase)
-                if isinstance(timing, dict):
-                    finished = iso_timestamp_ms(timing.get("finished_at"))
-                    if finished is not None:
-                        source = origin
-                        break
-    return {
-        "last_turn_finished_at_ms": finished,
-        "last_turn_finished_at_source": source,
-    }
-
-
-def _catalog_summary(
-    trajectory: dict[str, Any], meta: dict[str, Any], analysis_count: int
-) -> dict[str, Any]:
-    metrics = _summary_metrics(trajectory, meta)
-    agent = trajectory.get("agent")
-    if not isinstance(agent, dict):
-        agent = {}
-    warnings = meta.get("warnings")
-    return {
-        "trial_key": optional_str(
-            meta.get("trial_key") or trajectory.get("trajectory_id")
-        ),
-        "trial_session_id": optional_str(trajectory.get("session_id")),
-        "step_outline": _step_outline(trajectory, meta),
-        **_last_turn_end(meta),
-        "status": optional_str(meta.get("status")) or "unknown",
-        "score": _optional_number(meta.get("score")),
-        "score_message": optional_str(meta.get("score_message")),
-        "duration_ms": optional_int(meta.get("duration_ms")),
-        "wall_duration_ms": _wall_duration_ms(meta),
-        "model_duration_ms": _model_duration_ms(trajectory, meta),
-        "turns": _optional_number(final_metric(metrics, "total_turns")),
-        "total_tool_calls": _optional_number(final_metric(metrics, "total_tool_calls")),
-        "total_tool_errors": _optional_number(
-            final_metric(metrics, "total_tool_errors")
-        ),
-        "tokens": token_total(metrics),
-        "cost_usd": _optional_number(metrics.get("total_cost_usd")),
-        "warnings": len(warnings) if isinstance(warnings, list) else 0,
-        "analysis_count": max(0, min(2, int(analysis_count))),
-        "model": optional_str(agent.get("model_name")),
-        "task_name": optional_str(meta.get("task_name")),
-        "job_name": optional_str(meta.get("job_name")),
-        "trial_name": optional_str(meta.get("trial_name")),
-        "model_provider": optional_str(meta.get("model_provider")),
-        "task_keywords": meta.get("task_keywords") or [],
-        "rewards": meta.get("rewards") or {},
-        "harbor_provenance": meta.get("harbor_provenance") or {},
-        "task_metadata": _catalog_task_metadata(meta.get("task_metadata")),
-        **inference_row_metrics(metrics),
-    }
-
-
-def _catalog_task_metadata(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    fields = {
-        "description",
-        "diagnostic",
-        "digest_comparison",
-        "digest_matches",
-        "keywords",
-        "live",
-        "live_digest",
-        "name",
-        "path",
-        "requested_name",
-        "status",
-        "version",
-    }
-    return {key: item for key, item in value.items() if key in fields}
-
-
-def _summary_metrics(
-    trajectory: dict[str, Any], meta: dict[str, Any]
-) -> dict[str, Any]:
-    source = meta.get("source_metrics")
-    fallback = source if isinstance(source, dict) else {}
-    trajectory_metrics = trajectory.get("final_metrics")
-    explicit = trajectory_metrics if isinstance(trajectory_metrics, dict) else {}
-    metrics = {**fallback, **explicit}
-    fallback_extra = (
-        fallback.get("extra") if isinstance(fallback.get("extra"), dict) else {}
-    )
-    explicit_extra = (
-        explicit.get("extra") if isinstance(explicit.get("extra"), dict) else {}
-    )
-    if fallback_extra or explicit_extra:
-        metrics["extra"] = {**fallback_extra, **explicit_extra}
-    return metrics
-
-
-def _step_outline(
-    trajectory: dict[str, Any], meta: dict[str, Any]
-) -> list[dict[str, Any]]:
-    metadata_by_step_id = {
-        str(step.get("step_id")): step
-        for step in meta.get("steps", [])
-        if isinstance(step, dict) and step.get("step_id") is not None
-    }
-    outline: list[dict[str, Any]] = []
-    for step in trajectory.get("steps", []):
-        if not isinstance(step, dict) or step.get("step_id") is None:
-            continue
-        step_id = step["step_id"]
-        source = str(step.get("source") or "").strip().lower()
-        normalized_source = "agent" if source == "assistant" else source
-        if normalized_source not in {"system", "user", "agent"}:
-            normalized_source = "unknown"
-        item: dict[str, Any] = {"step_id": step_id, "source": normalized_source}
-        duration = _optional_number(
-            metadata_by_step_id.get(str(step_id), {}).get("duration_ms")
-        )
-        if duration is not None:
-            item["duration_ms"] = duration
-        outline.append(item)
-    return outline
-
-
-def _model_duration_ms(
-    trajectory: dict[str, Any], meta: dict[str, Any]
-) -> int | float | None:
-    trajectory_steps = trajectory.get("steps")
-    meta_steps = meta.get("steps")
-    if not isinstance(trajectory_steps, list) or not isinstance(meta_steps, list):
-        return None
-    total: int | float = 0
-    count = 0
-    for index, step_meta in enumerate(meta_steps):
-        if not isinstance(step_meta, dict) or index >= len(trajectory_steps):
-            continue
-        step = trajectory_steps[index]
-        if not isinstance(step, dict):
-            continue
-        if str(step.get("source") or "").lower() not in {"agent", "assistant"}:
-            continue
-        duration = _optional_number(step_meta.get("duration_ms"))
-        if duration is None:
-            continue
-        total += duration
-        count += 1
-    return total if count else None
-
-
-def _wall_duration_ms(meta: dict[str, Any]) -> int | None:
-    explicit = optional_int(meta.get("wall_duration_ms"))
-    if explicit is not None:
-        return explicit
-    started = optional_int(meta.get("started_at_ms"))
-    finished = optional_int(meta.get("finished_at_ms"))
-    if started is None or finished is None:
-        return None
-    return max(0, finished - started)
-
-
-def _optional_number(value: Any) -> int | float | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return value
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _search_document(row: dict[str, Any], trajectory: dict[str, Any]) -> str:

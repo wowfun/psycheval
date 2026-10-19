@@ -1,0 +1,56 @@
+{
+  "non_duration_timestamps": ["order_only", "event_observed"],
+  "families": [
+    {"prefix": "acp_client_observed_", "observed": true, "model_duration": false}
+  ],
+  "sources": {
+    "opencode_model_boundary_estimate": {
+      "estimated": true
+    },
+    "hermes_message_boundary_estimate": {
+      "estimated": true
+    },
+    "boundary_estimate": {
+      "estimated": true
+    },
+    "opencode_native_model_call": {
+      "label": ["timing_native_model", "Model call"],
+      "hint": ["timing_native_model_hint", "OpenCode model attempt start to response-body end, before tool settlement; includes client and network overhead."]
+    },
+    "opencode_native_tool_call": {
+      "model_duration": false,
+      "label": ["timing_native_tool", "Tool call"],
+      "hint": ["timing_native_tool_hint", "OpenCode tool-called to terminal event, independently for each call."]
+    },
+    "acp_client_observed_output": {
+      "label": ["timing_observed_output", "Observed output"],
+      "hint": ["timing_output_hint", "Client receipt of first to last output chunk; not model inference time."]
+    },
+    "acp_client_observed_in_progress": {
+      "label": ["timing_observed_tool", "Observed tool running"],
+      "hint": ["timing_tool_hint", "Client receipt of first in-progress to first terminal notification."]
+    },
+    "acp_client_observed_lifecycle": {
+      "label": ["timing_observed_lifecycle", "Observed tool lifecycle"],
+      "hint": ["timing_lifecycle_hint", "Client receipt of initial call to terminal notification; may include waiting."]
+    },
+    "observed_tool_activity_estimate": {
+      "estimated": true,
+      "model_duration": false,
+      "label": ["timing_tool_estimate", "Estimated from tools"],
+      "hint": ["timing_tool_estimate_hint", "Sum of recorded tool durations; may be partial or overlap. Not a measured step span."]
+    },
+    "tool_activity_estimate": {
+      "estimated": true,
+      "model_duration": false,
+      "label": ["timing_tool_estimate", "Estimated from tools"],
+      "hint": ["timing_tool_estimate_hint", "Sum of recorded tool durations; may be partial or overlap. Not a measured step span."]
+    },
+    "step_boundary_estimate": {
+      "estimated": true,
+      "model_duration": false,
+      "label": ["timing_boundary_estimate", "Estimated step span"],
+      "hint": ["timing_boundary_hint", "Interval between recorded adjacent step timestamps."]
+    }
+  }
+}

@@ -79,7 +79,7 @@ function renderTimelineDetailTable(rows, model) {
 }
 function renderTimelineStageLabel(row) {
   const meta = row.category_meta || timelineCategoryMeta("tool");
-  return `<span class="timeline-stage-label timeline-category-${esc(meta.key)}" aria-label="${esc(`${meta.label}: ${row.stage}`)}">${esc(row.stage)}</span>`;
+  return `<span class="timeline-stage-label timeline-category-${esc(meta.key)}" title="${esc(row.timing_hint || row.stage)}" aria-label="${esc(`${meta.label}: ${row.stage}`)}">${esc(row.stage)}</span>`;
 }
 function fmtTimelineDuration(value) {
   if (!hasMetricValue(value)) return "-";

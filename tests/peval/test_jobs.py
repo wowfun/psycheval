@@ -729,12 +729,12 @@ def test_harbor_corrupt_result_does_not_hide_healthy_sibling(tmp_path):
 
 def test_result_without_trajectory_does_not_invent_usage():
     from psycheval.report.builder import build_report_from_snapshots
-    from psycheval.state.catalog import _catalog_summary
+    from psycheval.state.catalog_projection import catalog_summary
 
     report = build_report_from_snapshots([None], [{"score": 0, "status": "completed"}])
     meta = report["trajectory_meta"][0]
     assert meta["trajectory_available"] is False
-    row = _catalog_summary(report["trajectory"][0], meta, 0)
+    row = catalog_summary(report["trajectory"][0], meta, 0)
     assert row["score"] == 0
     for key in ("turns", "tokens", "cost_usd", "total_tool_calls"):
         assert row[key] is None

@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from .timing import is_model_duration_source
+
 
 def automatic_analysis_metrics(
     trajectory: dict[str, Any],
@@ -115,6 +117,8 @@ def latency_metrics(trajectory: dict[str, Any], meta: dict[str, Any]) -> dict[st
         if index >= len(trajectory_step_sources):
             continue
         if trajectory_step_sources[index] not in {"agent", "assistant"}:
+            continue
+        if not is_model_duration_source(step.get("duration_source")):
             continue
         duration = int_metric(step.get("duration_ms"))
         if duration is not None:

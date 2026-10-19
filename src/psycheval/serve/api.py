@@ -583,7 +583,7 @@ def _register_static_routes(app: FastAPI) -> None:
             data,
             media_type=(
                 "application/json; charset=utf-8"
-                if path.endswith(".js.map")
+                if path.endswith((".js.map", ".json"))
                 else "application/javascript; charset=utf-8"
             ),
             headers=headers,

@@ -2,6 +2,7 @@ import { esc, fmtMs, fmtNum, hasMetricValue, listValue, lower, stepMeta, t } fro
 import { stepPreviewText } from "./trajectory-trace.js";
 import { metricExtra, timeGradientClass, timeGradientStyle, timeTitle, timingRatio } from "./analysis-metrics.js";
 import { bindCopyButton } from "./clipboard.js";
+import { timingSource } from "./timing-source.js";
 
 function renderStepsHeader(trajectory, options = {}) {
   const count = (trajectory?.steps || []).length;
@@ -82,7 +83,10 @@ function fmtRailTokens(value) {
   const number = Number(value);
   return Math.abs(number) >= 1000 ? `${(number / 1000).toFixed(1)}k` : fmtNum(number);
 }
-function toolExecutionText(toolMeta) { return hasMetricValue(toolMeta?.execution_duration_ms) ? fmtMs(toolMeta.execution_duration_ms) : ""; }
+function toolExecutionText(toolMeta) {
+  const timing = timingSource(toolMeta?.execution_duration_source);
+  return hasMetricValue(toolMeta?.execution_duration_ms) ? `${timing.observed || timing.estimated ? "≈" : ""}${fmtMs(toolMeta.execution_duration_ms)}` : "";
+}
 function toolFailed(toolMeta) {
   const status = lower(toolMeta?.status);
   return status === "error" || status === "failed";
@@ -90,7 +94,8 @@ function toolFailed(toolMeta) {
 function renderToolNameChip(tool, toolMeta, extraClass = "", timingFill = null) {
   const name = tool.function_name || toolMeta?.title || "tool";
   const exec = toolExecutionText(toolMeta);
-  const titleText = exec ? timeTitle("tool exec", toolMeta?.execution_duration_ms, timingFill, "slowest tool") : "";
+  const timing = timingSource(toolMeta?.execution_duration_source);
+  const titleText = exec ? `${timeTitle(timing.label || "tool exec", toolMeta?.execution_duration_ms, timingFill, "slowest tool")}${timing.hint ? `; ${timing.hint}` : ""}` : "";
   const title = titleText ? ` title="${esc(titleText)}"` : "";
   const execHtml = exec ? ` <span class="tool-exec-inline">${esc(exec)}</span>` : "";
   const classes = ["chip", "tool-name-chip", extraClass, toolFailed(toolMeta) ? "tool-error-chip" : "", timeGradientClass(timingFill)].filter(Boolean).join(" ");
@@ -126,10 +131,12 @@ function renderStepRail(step, meta, timingStats) {
     summaryItems.push(`<span class="${esc(classes)}" title="${esc(title)}">${esc(`${prefix}${fmtRailTokens(tokenInfo.tokens)} tok`)}</span>`);
   }
   const stepRatio = timingRatio(meta?.duration_ms, timingStats?.maxStepDurationMs);
+  const timing = timingSource(meta?.duration_source);
+  const stepTimeTitle = `${timeTitle(timing.label || "step span", meta?.duration_ms, stepRatio, "slowest step")}${timing.hint ? `; ${timing.hint}` : ""}`;
   const elapsedRatio = timingRatio(meta?.elapsed_ms, timingStats?.elapsedMaxMs);
   const stepClasses = ["rail-chip", "rail-chip-step-time", timeGradientClass(stepRatio)].filter(Boolean).join(" ");
   const elapsedClasses = ["rail-chip", "rail-chip-elapsed-time", timeGradientClass(elapsedRatio)].filter(Boolean).join(" ");
-  const time = `<div class="rail-time"><span class="${esc(stepClasses)}"${timeGradientStyle(stepRatio)} title="${esc(timeTitle("step span", meta?.duration_ms, stepRatio, "slowest step"))}">step ${esc(fmtMs(meta?.duration_ms))}</span><span class="${esc(elapsedClasses)}"${timeGradientStyle(elapsedRatio)} title="${esc(timeTitle("elapsed", meta?.elapsed_ms, elapsedRatio, "trajectory"))}">elapsed ${esc(fmtMs(meta?.elapsed_ms))}</span></div>`;
+  const time = `<div class="rail-time"><span class="${esc(stepClasses)}"${timeGradientStyle(stepRatio)} title="${esc(stepTimeTitle)}">${esc(timing.label || "step")} ${(timing.observed || timing.estimated) && hasMetricValue(meta?.duration_ms) ? "≈" : ""}${esc(fmtMs(meta?.duration_ms))}</span><span class="${esc(elapsedClasses)}"${timeGradientStyle(elapsedRatio)} title="${esc(timeTitle("elapsed", meta?.elapsed_ms, elapsedRatio, "trajectory"))}">elapsed ${esc(fmtMs(meta?.elapsed_ms))}</span></div>`;
   const summary = `<div class="rail-summary">${summaryItems.join("")}${time}</div>`;
   const toolChips = stepToolChips(step, meta, timingStats);
   return `${summary}${toolChips.length ? `<div class="rail-tool-row">${toolChips.join("")}</div>` : ""}`;
