@@ -20,7 +20,9 @@ Node `check` runs type checking, browser-module tests against the authored ESM
 graph, including the checked-in `pretty-aui` distribution, and the Chromium
 visual and browser behavior gate. Deterministic browser
 fixtures bind an ephemeral loopback port and expose that origin to their tests;
-they do not reserve a repository-wide host port. Windows fixture cleanup waits
+they do not reserve a repository-wide host port. Fixture startup uses the
+already-synced project environment; it must not reinstall packages or replace a
+running CLI executable. Windows cleanup waits
 for the child-process exit notification after terminating the tree, including when
 the termination command races a process that has already exited. A fixture that
 does not settle within the cleanup deadline remains a test failure.

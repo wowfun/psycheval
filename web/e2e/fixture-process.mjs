@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 async function startFixture(environment = {}) {
-  const fixture = spawn("uv", ["run", "python", "web/e2e/fixture_server.py"], {
+  const fixture = spawn("uv", ["run", "--no-sync", "python", "web/e2e/fixture_server.py"], {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, ...environment },
     windowsHide: true,
