@@ -66,6 +66,23 @@ def _usage_metrics(tokens: object) -> dict:
     return metrics
 
 
+def _native_duration(
+    timing: object, start: str, end: str
+) -> tuple[int | None, str | None]:
+    if not isinstance(timing, dict):
+        return None, "missing_native_timing"
+    first, last = timing.get(start), timing.get(end)
+    if first is None or last is None:
+        return None, "missing_native_timing_boundary"
+    if any(type(value) is not int or value < 0 for value in (first, last)):
+        return None, "invalid_native_timing_boundary"
+    if any(OpenCode._millis_to_iso(value) is None for value in (first, last)):
+        return None, "invalid_native_timing_boundary"
+    if last < first:
+        return None, "reversed_native_timing_boundary"
+    return last - first, None
+
+
 class HostOpenCodeOptions(OpenCodeOptions):
     executable: str = "opencode"
 
@@ -318,6 +335,7 @@ class HostOpenCodeAgent(OpenCode):
                         "callID": part.get("id"),
                         "tool": part.get("name"),
                         "state": state,
+                        "time": part.get("time"),
                     }
                     kind = "tool_use"
                 if kind not in {"text", "reasoning", "tool_use"}:
@@ -330,6 +348,7 @@ class HostOpenCodeAgent(OpenCode):
                     "part": {
                         "cost": message.get("cost"),
                         "tokens": message.get("tokens", {}),
+                        "time": timing,
                     },
                 }
             )
@@ -356,6 +375,7 @@ class HostOpenCodeAgent(OpenCode):
     def _convert_events_to_trajectory(self, events: list[dict]) -> Trajectory | None:
         converted_events = []
         states = {}
+        tool_times = {}
         identities = set()
         finishes = []
         in_step = False
@@ -382,6 +402,7 @@ class HostOpenCodeAgent(OpenCode):
                     )
                 identities.add((call_id, name))
                 states[call_id] = state
+                tool_times[call_id] = part.get("time")
             elif not isinstance(part, dict):
                 if event.get("type") in {"step_start", "step_finish"}:
                     raise ValueError(
@@ -435,6 +456,20 @@ class HostOpenCodeAgent(OpenCode):
                 "OpenCode completed message usage does not align with ATIF steps"
             )
         for step, finish in zip(agent_steps, finishes):
+            timing = finish.get("time")
+            duration, diagnostic = _native_duration(timing, "created", "streamed")
+            if duration is not None:
+                lifecycle, lifecycle_error = _native_duration(
+                    timing, "created", "completed"
+                )
+                if lifecycle_error or lifecycle < duration:
+                    duration, diagnostic = None, "invalid_native_model_lifecycle"
+            step.extra = {
+                **(step.extra or {}),
+                "duration_ms": duration,
+                "duration_source": "opencode_native_model_call",
+                **({"timing_diagnostic": diagnostic} if diagnostic else {}),
+            }
             projected = _usage_metrics(finish.get("tokens", {}))
             metrics = step.metrics.model_dump(exclude_none=True) if step.metrics else {}
             if finish.get("cost") is not None:
@@ -448,6 +483,13 @@ class HostOpenCodeAgent(OpenCode):
                 {**metrics, **projected, "extra": extra}
             )
         for step in trajectory.steps:
+            for call in step.tool_calls or []:
+                timing = tool_times.get(call.tool_call_id)
+                start = timing.get("ran") if isinstance(timing, dict) else None
+                if type(start) is int and start >= 0:
+                    timestamp = self._millis_to_iso(start)
+                    if timestamp is not None:
+                        call.extra = {**(call.extra or {}), "started_at": timestamp}
             for observation in step.observation.results if step.observation else []:
                 state = states.get(observation.source_call_id)
                 if state is None:
@@ -468,8 +510,26 @@ class HostOpenCodeAgent(OpenCode):
                     extra["is_error"] = bool(extra.get("is_error")) or exit_code != 0
                 if "content" in state:
                     extra["raw_output"] = state["content"]
+                timing = tool_times.get(observation.source_call_id)
+                duration, diagnostic = _native_duration(timing, "ran", "completed")
+                if not isinstance(status, str) or status not in {"completed", "error"}:
+                    duration, diagnostic = None, "nonterminal_native_tool"
+                extra.update(
+                    execution_duration_ms=duration,
+                    execution_duration_source="opencode_native_tool_call",
+                )
+                if diagnostic:
+                    extra["timing_diagnostic"] = diagnostic
+                elif (
+                    timestamp := self._millis_to_iso(timing["completed"])
+                ) is not None:
+                    extra["finished_at"] = timestamp
                 observation.extra = extra or None
         data = trajectory.to_json_dict()
+        data["extra"] = {
+            **(data.get("extra") or {}),
+            "timestamp_semantics": "event_observed",
+        }
         for field in (
             "total_prompt_tokens",
             "total_completion_tokens",

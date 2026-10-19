@@ -289,6 +289,126 @@ def test_cache_rate_uses_paired_message_samples_and_retains_identical_usage(tmp_
     assert inference["cache_hit_rate"] == pytest.approx(40 / 210)
 
 
+def _native_timed_trajectory(tmp_path, model_time, tool_time, status="completed"):
+    exported = _exported_session()
+    message = exported["messages"][0]
+    message["time"] = model_time
+    message["content"].extend(
+        {
+            "type": "tool",
+            "id": identity,
+            "name": "shell",
+            "time": timing,
+            "state": {"status": status, "input": {}, "content": []},
+        }
+        for identity, timing in (
+            ("first", tool_time),
+            ("parallel", {"ran": 120, "completed": 300}),
+        )
+    )
+    path = tmp_path / "opencode-session.json"
+    path.write_text(json.dumps(exported), encoding="utf-8")
+    before = path.read_bytes()
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    agent.populate_context_post_run(AgentContext())
+    assert path.read_bytes() == before
+    return load_validated_trajectory(tmp_path / "trajectory.json")
+
+
+def test_native_timing_preserves_model_boundary_parallel_tools_and_projection(tmp_path):
+    from psycheval.conversion import convert_atif_trajectory, finalize_atif_conversion
+    from psycheval.report.builder import project_meta_from_atif
+    from psycheval.report.inference import inference_row_metrics
+    from psycheval.state.catalog_projection import model_duration_ms, step_outline
+
+    original = _native_timed_trajectory(
+        tmp_path,
+        {"created": 0, "streamed": 150, "completed": 600},
+        {"created": 90, "ran": 100, "completed": 500},
+    )
+    step = original["steps"][0]
+    assert step["extra"]["duration_ms"] == 150
+    assert step["extra"]["duration_source"] == "opencode_native_model_call"
+    assert [
+        r["extra"]["execution_duration_ms"] for r in step["observation"]["results"]
+    ] == [400, 180]
+    assert all(
+        "execution_duration_ms" not in (c.get("extra") or {})
+        for c in step["tool_calls"]
+    )
+    assert (
+        step["tool_calls"][0]["extra"]["started_at"]
+        == "1970-01-01T00:00:00.100000+00:00"
+    )
+    canonical = finalize_atif_conversion(convert_atif_trajectory(original)).trajectory
+    meta = project_meta_from_atif(canonical, {})
+    assert meta["timestamp_semantics"] == "event_observed"
+    assert model_duration_ms(canonical, meta) == 150
+    assert (
+        step_outline(canonical, meta)[0]["duration_source"]
+        == "opencode_native_model_call"
+    )
+    assert (
+        meta["steps"][0]["tool_calls"][0]["execution_duration_source"]
+        == "opencode_native_tool_call"
+    )
+    inference = inference_row_metrics(canonical)
+    assert inference["ttft_ms"] is None and inference["tps"] is None
+
+
+@pytest.mark.parametrize("boundary", [None, True, "150", -1, 1.5, float("inf"), 10**30])
+def test_invalid_native_boundaries_stay_unknown_without_fallback(tmp_path, boundary):
+    from psycheval.report.builder import project_meta_from_atif
+    from psycheval.state.catalog_projection import model_duration_ms
+
+    trajectory = _native_timed_trajectory(
+        tmp_path,
+        {"created": 0, "streamed": boundary, "completed": 600},
+        {"ran": boundary, "completed": 500},
+    )
+    step = trajectory["steps"][0]
+    assert step["extra"]["duration_ms"] is None
+    assert step["extra"]["timing_diagnostic"]
+    assert step["observation"]["results"][0]["extra"]["execution_duration_ms"] is None
+    meta = project_meta_from_atif(trajectory, {})
+    assert meta["steps"][0]["duration_ms"] is None
+    assert model_duration_ms(trajectory, meta) is None
+
+
+@pytest.mark.parametrize("status", ["completed", "error", "running"])
+def test_native_zero_and_terminal_status(tmp_path, status):
+    trajectory = _native_timed_trajectory(
+        tmp_path,
+        {"created": 0, "streamed": 0, "completed": 600},
+        {"ran": 0, "completed": 0},
+        status,
+    )
+    step = trajectory["steps"][0]
+    assert step["extra"]["duration_ms"] == 0
+    extra = step["observation"]["results"][0]["extra"]
+    assert extra["execution_duration_ms"] == (None if status == "running" else 0)
+    assert extra["is_error"] is (status != "completed")
+
+
+@pytest.mark.parametrize(
+    "model_time",
+    [
+        {"created": 200, "streamed": 100, "completed": 600},
+        {"created": 0, "streamed": 700, "completed": 600},
+        {"created": 0, "completed": 600},
+    ],
+)
+def test_reversed_or_absent_native_boundaries_do_not_use_lifecycle(
+    tmp_path, model_time
+):
+    trajectory = _native_timed_trajectory(
+        tmp_path, model_time, {"ran": 500, "completed": 100}
+    )
+    step = trajectory["steps"][0]
+    assert step["extra"]["duration_ms"] is None
+    assert step["observation"]["results"][0]["extra"]["execution_duration_ms"] is None
+
+
 def test_empty_export_clears_context_without_reusing_prior_usage(tmp_path):
     exported = _exported_session()
     exported["messages"] = []

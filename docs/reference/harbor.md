@@ -387,7 +387,21 @@ step boundaries. Exported Session and model identities must match the invocation
 and every streamed tool call must occur in the export. Harbor's pinned converter
 consumes the normalized message boundaries and produces ATIF. The adapter projects
 each completed message's native usage into step metrics and the portable
-`model_inference` statistics used by the workbench. OpenCode's `tokens.input`
+`model_inference` statistics used by the workbench.
+Native model-call duration spans the message's `time.created` to `time.streamed`
+(provider response-body end, before tool settlement). It includes client and
+network overhead; `time.completed` is the message lifecycle end and cannot
+substitute for the model boundary. Tool-call duration spans each call's
+`time.ran` to `time.completed`, independently for parallel calls. These native
+boundaries use integer milliseconds, preserve zero, and carry distinct model
+and tool sources. Missing, invalid, reversed, or nonterminal tool boundaries
+remain explicitly unknown with diagnostics; conversion does not invent an
+interval from neighboring messages. Model duration lives in step extras, tool
+duration only in observation extras, and call extras retain the tool start.
+Native timestamps use `event_observed` semantics to disable adjacent-event
+estimates. Model-call spans contribute to Model duration, but do not supply
+TTFT or decode speed without first-token evidence. Source logs stay unchanged.
+OpenCode's `tokens.input`
 excludes cache reads and writes; inclusive prompt tokens sum `input`, `cache.read`,
 and `cache.write`. Cache hit rate divides cache-read tokens by inclusive prompt
 tokens over messages with valid paired measurements. An explicit zero read is a
