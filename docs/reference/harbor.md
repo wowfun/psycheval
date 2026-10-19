@@ -14,6 +14,8 @@ Hermes retains upstream ATIF, Skills and MCP support, adds exact-session resume,
 and does not support loading native or ATIF trajectories.
 
 Task publication and revision hashing include top-level `trajectory.json`.
+Structural validation uses resolved paths; reader callbacks preserve the caller's
+lexical root, including Windows short paths, without relaxing containment checks.
 
 ## Host ACP Agent
 

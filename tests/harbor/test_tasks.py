@@ -69,9 +69,10 @@ def test_present_metadata_labels_require_nonempty_strings(tmp_path, field, value
         load_harbor_task_config(tmp_path, read_bytes=Path.read_bytes)
 
 
+@pytest.mark.parametrize("multi_step", [False, True])
 @pytest.mark.parametrize("spelling", ["absolute", "relative", "windows_short"])
 def test_task_readers_and_file_selection_preserve_the_callers_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spelling: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spelling: str, multi_step: bool
 ) -> None:
     root = tmp_path / "task-with-a-long-directory-name"
     root.mkdir()
@@ -92,6 +93,14 @@ def test_task_readers_and_file_selection_preserve_the_callers_root(
     lexical_root = root.absolute()
     (root / "task.toml").write_text('[task]\nname = "local/test"\n', encoding="utf-8")
     (root / "instruction.md").write_text("Do the task.\n", encoding="utf-8")
+    if multi_step:
+        (root / "task.toml").write_text(
+            '[task]\nname = "local/test"\n[[steps]]\nname = "first"\n', encoding="utf-8"
+        )
+        (root / "steps/first").mkdir(parents=True)
+        (root / "steps/first/instruction.md").write_text(
+            "First step.", encoding="utf-8"
+        )
     (root / "tests").mkdir()
     (root / "tests/test.sh").write_text("exit 0\n", encoding="utf-8")
     (root / ".gitignore").write_text("tests/ignored.txt\n", encoding="utf-8")
@@ -107,19 +116,26 @@ def test_task_readers_and_file_selection_preserve_the_callers_root(
 
     loaded = load_harbor_task(root, read_bytes=read_bytes)
     assert loaded.config.task.name == "local/test"
-    assert observed == ["task.toml", "instruction.md", ".gitignore"]
+    assert observed == [
+        "task.toml",
+        "steps/first/instruction.md" if multi_step else "instruction.md",
+        ".gitignore",
+    ]
     selected = select_publishable_task_files(
         root,
         files=(path for path in root.rglob("*") if path.is_file()),
         read_bytes=read_bytes,
     )
-    assert [path.relative_to(lexical_root).as_posix() for path in selected] == [
-        "environment/prepare.py",
-        "instruction.md",
-        "task.toml",
-        "tests/test.sh",
-        "tests/test_outputs.py",
-    ]
+    assert [path.relative_to(lexical_root).as_posix() for path in selected] == sorted(
+        [
+            "environment/prepare.py",
+            "instruction.md",
+            "task.toml",
+            "tests/test.sh",
+            "tests/test_outputs.py",
+        ]
+        + (["steps/first/instruction.md"] if multi_step else [])
+    )
     with pytest.raises(ValueError):
         select_publishable_task_files(
             root, files=[tmp_path / "outside"], read_bytes=read_bytes

@@ -43,7 +43,14 @@ def load_harbor_task(
     short names. Callers own link and containment checks at the read boundary.
     """
 
-    paths = _lexical_task_paths(task_dir)
+    # Step validation resolves candidates against this resolved root. Pinning
+    # TaskPaths.task_dir to a lexical alias breaks its containment comparison.
+    paths = TaskPaths(task_dir)
+    lexical_root = Path(os.path.abspath(task_dir))
+
+    def read_resolved(path: Path) -> bytes:
+        return read_bytes(lexical_root / path.relative_to(paths.task_dir))
+
     loaded_task = load_harbor_task_config(task_dir, read_bytes=read_bytes)
     config = loaded_task.config
 
@@ -57,9 +64,9 @@ def load_harbor_task(
         else (paths.instruction_path,)
     )
     for path in instruction_paths:
-        _decode_task_text(paths, path, read_bytes(path))
+        _decode_task_text(paths, path, read_resolved(path))
     try:
-        gitignore_bytes = read_bytes(paths.gitignore_path)
+        gitignore_bytes = read_resolved(paths.gitignore_path)
     except FileNotFoundError:
         pass
     else:
