@@ -186,6 +186,8 @@ All matrix cells install the same build. A separate smoke-fixture artifact carri
 the single ECharts file extracted from its integrity-checked, lock-pinned archive;
 it is not part of the release distribution or its receipt. Local validation can
 pass `--echarts <file>` or use an existing `npm ci` installation.
+Release helpers test tag/CI gates, artifact recovery, partial uploads, conflicting
+digests and bounded index retries without uploading to a live service.
 
 ## Platform boundaries
 

@@ -74,3 +74,42 @@ CI builds one pure-Python candidate and distributes it to every consumer cell.
 The build job also prepares the ECharts smoke fixture from the package-lock
 archive, verifying its integrity before extracting the single required asset.
 Consumers pass that fixture with `--echarts`; they do not install Node dependencies.
+
+## Publishing a release
+
+The version belongs to `psycheval.harbor.__version__`; update it before creating
+the release tag. Build and checking tools are pinned in the build dependency
+group and lockfile. README repository links are converted to the same version's
+tag only in built metadata; source links remain subject to the docs checker.
+
+Configure verified PyPI and TestPyPI accounts with two-factor authentication.
+On each index add a pending Trusted Publisher for project `psycheval`, repository
+`wowfun/psycheval`, workflow `publish.yml`, and respectively environment
+`pypi` or `testpypi`. Pending publishers do not reserve a project name.
+Restrict both GitHub environments to `v*` tags; require maintainer confirmation
+for `pypi`. Use separate tag rules to restrict creation to release maintainers
+and prevent updates/deletion without granting those operations through a
+creation bypass. Configure these controls before pushing the first tag.
+
+Merge the preparation into `main`, wait for its push CI, then push the matching
+`v<version>` tag. The publish workflow checks main ancestry and successful
+push/main CI for that exact commit. It builds once, saves a 90-day artifact and
+SHA-256 receipt, validates Linux/Windows Python 3.12–3.14 consumers, and uploads
+to TestPyPI. It downloads those files, verifies their receipt hashes, and tests
+the downloaded wheel in an empty environment with dependencies from PyPI.
+Review the rendered TestPyPI description before approving the PyPI
+environment. The exact same files then reach PyPI, followed by an index install
+and GitHub release. Candidate versions produce GitHub prereleases.
+The GitHub release deliberately publishes `receipt.json` alongside the wheel and
+sdist so consumers can inspect their commit, tag and SHA-256 provenance.
+
+Rerun failed jobs to reuse the original artifact; a full rerun also recovers
+that workflow run's artifact instead of rebuilding it. Existing index files are
+skipped only when their SHA-256 matches the receipt. Missing files are uploaded;
+unexpected files or different bytes fail the release. An expired/missing artifact
+after upload requires a new version. Index visibility checks and refreshed
+installs have bounded retries. Upload jobs run no project code and only they
+receive OIDC upload permission; GitHub release permission is separate.
+
+If a published candidate is defective, publish an advisory and a new candidate
+version. Yanking is optional and does not protect consumers with an exact pin.

@@ -116,3 +116,12 @@ def test_ci_builds_once_and_consumers_share_prepared_inputs():
         step.get("with", {}).get("name") == "distribution-check"
         for step in consumer["steps"]
     )
+    jobs = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())["jobs"]
+    for name in ("accept", "stage-pypi", "verify-pypi"):
+        commands = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
+        assert "npm" not in commands and "--echarts" in commands
+        assert "--constraints" not in commands
+        assert any(
+            step.get("with", {}).get("name") == "smoke-asset"
+            for step in jobs[name]["steps"]
+        )

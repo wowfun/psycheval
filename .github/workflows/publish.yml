@@ -1,0 +1,226 @@
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.12.0'
+          python-version: '3.14'
+          enable-cache: false
+      - run: python scripts/release.py gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - id: prior
+        run: python scripts/release.py recover
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - if: steps.prior.outputs.artifact_id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ steps.prior.outputs.artifact_id }}
+          path: .local/dist
+          merge-multiple: true
+      - if: steps.prior.outputs.artifact_id == ''
+        run: |
+          uv sync --frozen --only-group build
+          uv build --no-build-isolation --out-dir .local/dist
+          uv run --no-sync twine check --strict .local/dist/*
+          uv run --no-sync python scripts/check_distribution.py .local/dist --tag "$GITHUB_REF_NAME"
+          python scripts/release.py receipt
+      - run: python scripts/release.py verify
+      - if: steps.prior.outputs.artifact_id == ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-dist
+          path: .local/dist/*
+          retention-days: 90
+          if-no-files-found: error
+
+      - run: python scripts/prepare_smoke_asset.py .local/smoke-asset/echarts.min.js
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-asset
+          path: .local/smoke-asset/echarts.min.js
+          overwrite: true
+          retention-days: 90
+          if-no-files-found: error
+
+  accept:
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.12', '3.13', '3.14']
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.12.0'
+          python-version: ${{ matrix.python }}
+          enable-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: .local/dist
+      - run: python scripts/release.py verify
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: smoke-asset
+          path: .local/smoke-asset
+      - run: python scripts/validate_install.py .local/dist/*.whl --python '${{ matrix.python }}' --echarts .local/smoke-asset/echarts.min.js
+
+  stage-testpypi:
+    needs: accept
+    runs-on: ubuntu-latest
+    outputs:
+      needed: ${{ steps.stage.outputs.needed }}
+      artifact_name: ${{ steps.stage.outputs.artifact_name }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: .local/dist
+      - id: stage
+        run: python scripts/release.py stage --index testpypi
+      - if: steps.stage.outputs.needed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.stage.outputs.artifact_name }}
+          path: .local/dist/upload/*
+          if-no-files-found: error
+
+  upload-testpypi:
+    needs: stage-testpypi
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - if: needs.stage-testpypi.outputs.needed == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.stage-testpypi.outputs.artifact_name }}
+          path: dist
+      - if: needs.stage-testpypi.outputs.needed == 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  stage-pypi:
+    needs: upload-testpypi
+    runs-on: ubuntu-latest
+    outputs:
+      needed: ${{ steps.stage.outputs.needed }}
+      artifact_name: ${{ steps.stage.outputs.artifact_name }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.12.0'
+          python-version: '3.14'
+          enable-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: .local/dist
+      - run: python scripts/release.py download --index testpypi
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: smoke-asset
+          path: .local/smoke-asset
+      - run: python scripts/validate_install.py .local/dist/download/*.whl --python 3.14 --echarts .local/smoke-asset/echarts.min.js
+      - id: stage
+        run: python scripts/release.py stage --index pypi
+      - if: steps.stage.outputs.needed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.stage.outputs.artifact_name }}
+          path: .local/dist/upload/*
+          if-no-files-found: error
+
+  upload-pypi:
+    needs: stage-pypi
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - if: needs.stage-pypi.outputs.needed == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.stage-pypi.outputs.artifact_name }}
+          path: dist
+      - if: needs.stage-pypi.outputs.needed == 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+  verify-pypi:
+    needs: upload-pypi
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.12.0'
+          python-version: '3.14'
+          enable-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: .local/dist
+      - run: python scripts/release.py index --index pypi
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: smoke-asset
+          path: .local/smoke-asset
+      - run: |
+          for attempt in 1 2 3 4 5; do
+            python scripts/validate_install.py "psycheval==${GITHUB_REF_NAME#v}" --python 3.14 --echarts .local/smoke-asset/echarts.min.js --refresh && exit 0
+            sleep 15
+          done
+          exit 1
+
+  github-release:
+    needs: verify-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: dist
+      - run: |
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            args=()
+            [[ "$GITHUB_REF_NAME" =~ (a|b|rc)[0-9]+$ ]] && args+=(--prerelease)
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes "${args[@]}"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
