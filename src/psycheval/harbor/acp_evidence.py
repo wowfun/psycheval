@@ -17,6 +17,7 @@ from .acp_protocol import (
     evidence_frame_limit,
     verify_evidence,
 )
+from .acp_timing import ObservedTiming
 
 
 def _text(content, depth=0):
@@ -276,11 +277,13 @@ def _convert(
     tool_ids = {}
     text_chunks = {}
     active = None
+    timing = ObservedTiming(summary)
     for event in _events(
         events_path,
         summary.get("max_evidence_bytes", DEFAULT_MAX_EVIDENCE_BYTES),
         summary.get("max_decoded_evidence_bytes"),
     ):
+        offset = timing.event(event)
         message = event["message"]
         if (
             event["direction"] != "receive"
@@ -302,6 +305,8 @@ def _convert(
                 active = {"step_id": len(steps) + 1, "source": "agent", "message": ""}
                 steps.append(active)
             _model_request(active, update, result_format)
+            if update["content"].get("type") == "text":
+                timing.chunk(active["step_id"], offset)
             field = "message" if kind == "agent_message_chunk" else "reasoning_content"
             text_chunks.setdefault((active["step_id"], field), []).append(
                 _text(update["content"])
@@ -321,6 +326,7 @@ def _convert(
                     and _metadata(update).get("codebuddy.ai/toolName") == state["name"]
                 ):
                     _merge_call(state, update, result_format)
+                    timing.tool(update, offset)
                     continue
                 raise ProtocolError("duplicate Tool call identity")
             if active is None:
@@ -330,12 +336,14 @@ def _convert(
             _merge_call(state, update, result_format)
             calls[identity] = state
             tool_ids.setdefault(active["step_id"], []).append(identity)
+            timing.tool(update, offset)
         elif kind == "tool_call_update":
             identity = update["toolCallId"]
             if identity not in calls:
                 raise ProtocolError("Tool update without initial identity")
             state = calls[identity]
             _merge_call(state, update, result_format)
+            timing.tool(update, offset)
     for (step_id, field), chunks in text_chunks.items():
         steps[step_id - 1][field] = "".join(chunks)
     for step in steps:
@@ -368,6 +376,7 @@ def _convert(
             )
         step["tool_calls"] = tool_calls
         step["observation"] = {"results": observations}
+    timing_extra = timing.project(steps)
     agent = {
         **agent,
         "extra": {
@@ -382,6 +391,7 @@ def _convert(
             "agent": agent,
             "steps": steps,
             "extra": {
+                **timing_extra,
                 "acp_tool_evidence_complete": summary.get("protocol_complete", False)
                 and not (
                     result_format == "codebuddy"

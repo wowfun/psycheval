@@ -6,8 +6,9 @@ import asyncio
 import hashlib
 import json
 import math
+import time
 import zlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
 
@@ -458,6 +459,13 @@ class StrictTransport:
         result_format="acp",
     ):
         self.reader, self.writer, self.summary = reader, writer, summary
+        self.clock_origin = datetime.now(UTC)
+        self.clock_start_ns = time.monotonic_ns()
+        summary["client_clock"] = {
+            "version": 1,
+            "origin_utc": self.clock_origin.isoformat(),
+            "invocation_id": summary.get("invocation_id"),
+        }
         self.budget = budget if budget is not None else EvidenceBudget(summary)
         self.result_format = result_format
         self.validators = sdk_validators(result_format)
@@ -469,10 +477,17 @@ class StrictTransport:
         self.raw_out = EvidenceWriter(directory / "acp.stdin.ndjson.gz", self.budget)
         self.events = EvidenceWriter(directory / "acp.events.ndjson.gz", self.budget)
 
-    def record(self, direction, message):
+    def record(self, direction, message, elapsed_ns=None):
+        if elapsed_ns is None:
+            elapsed_ns = time.monotonic_ns() - self.clock_start_ns
         data = (
             json.dumps(
-                {"direction": direction, "phase": self.phase, "message": message},
+                {
+                    "direction": direction,
+                    "phase": self.phase,
+                    "message": message,
+                    "elapsed_ns": elapsed_ns,
+                },
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
@@ -504,9 +519,12 @@ class StrictTransport:
         if method == "session/prompt":
             self.phase = "prompt"
         try:
+            elapsed_ns = time.monotonic_ns() - self.clock_start_ns
             self.raw_out.write(line)
-            self.record("send", message)
-            submitted_at = datetime.now(UTC).isoformat()
+            self.record("send", message, elapsed_ns)
+            submitted_at = (
+                self.clock_origin + timedelta(microseconds=elapsed_ns // 1000)
+            ).isoformat()
             self.writer.write(line)
             await self.writer.drain()
         except BaseException:
@@ -529,6 +547,7 @@ class StrictTransport:
                 prefix = await self.reader.readexactly(min(exc.consumed, MAX_FRAME + 1))
                 self.raw_in.write(prefix)
                 raise ProtocolError("oversized NDJSON record") from exc
+            elapsed_ns = time.monotonic_ns() - self.clock_start_ns
             if not line:
                 if self.pending:
                     self.summary["protocol_complete"] = False
@@ -560,7 +579,7 @@ class StrictTransport:
                     or not isinstance(message["error"].get("message"), str)
                 ):
                     raise ProtocolError("invalid error response")
-            self.record("receive", message)
+            self.record("receive", message, elapsed_ns)
             if (
                 self.expected_model
                 and self.phase == "prompt"

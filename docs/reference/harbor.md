@@ -89,8 +89,26 @@ vendor fields. Each write synchronously flushes compressed data for live readers
 The harness records the host UTC time of successful prompt submission in
 `acp.summary.json` as `prompt_submitted_at`. The current user step carries this
 timestamp with `extra.timestamp_source=acp_prompt_submission`, including after
-resume. It supplies a recorded date anchor, not Agent inference or tool timing.
+resume. It supplies a recorded date anchor, not Agent inference timing.
 Evidence without a recorded submission time keeps that timestamp absent.
+New invocations also retain a versioned client clock: one UTC origin and
+monotonic nanosecond offsets captured at send/receive boundaries, before evidence
+processing. Each invocation owns its clock; offsets never span resume boundaries.
+Raw peer messages and vendor timestamps remain unchanged. Conversion uses only
+the client clock for observed intervals and marks the trajectory's timestamp
+semantics as `event_observed`, disabling adjacent-timestamp duration estimates.
+Agent output duration spans the first and last text/thought chunks in a canonical
+step; a single chunk supplies a timestamp but no duration. Tool timing spans the
+first `in_progress` notification to the first terminal notification. Without an
+`in_progress` boundary, an independent initial call and terminal notification
+supply a lifecycle observation that can include waiting. Duplicate notifications
+do not reset boundaries. Missing, invalid or conflicting boundaries retain
+unknown timing with diagnostics, without changing execution or grading outcomes.
+Durations are nonnegative integer milliseconds; distinct boundaries can measure
+zero. Tool duration and its source live in observation extras; call extras supply
+the start timestamp. Older evidence without a client clock remains untimed.
+These client-observed intervals are not provider inference, TTFT or decode timing;
+their report presentation follows the [telemetry contract](state-and-data.md#telemetry).
 Each invocation shares a finite `max_evidence_bytes` stored-byte budget across
 these files. `max_decoded_evidence_bytes` separately bounds their combined
 uncompressed size; `None` uses the stored-byte budget. Both limits require positive
