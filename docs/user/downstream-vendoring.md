@@ -55,14 +55,14 @@ environment:
 agents:
   - import_path: downstream._vendor.psycheval_harbor.agent:ExternalHarnessAgent
     kwargs:
-      command: python -m downstream._vendor.psycheval_harbor.psychevo_harness
+      command: python -m downstream.harness
 verifier:
   import_path: downstream._vendor.psycheval_harbor.verifier.host:HostVerifier
 ```
 
 Run the Job through `uv run harbor run -c job.yaml` so the Harbor process and its
-children use the downstream environment. The Psychevo harness also requires a
-working `pevo` executable. Use the environment's Python executable for Task
+children use the downstream environment. Supply your own harness following the
+[external-harness contract](../reference/harbor.md#harness-behavior). Use the environment's Python executable for Task
 verifier scripts. The selected Host verifier supplies the path-mapping protocol
 while those scripts run:
 

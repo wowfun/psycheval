@@ -308,7 +308,6 @@ are checked through required files and native bootstrap capabilities.
   adapter for current Hermes provider and exact-session behavior.
 - `psycheval.harbor.opencode:HostOpenCodeAgent` runs an already installed
   OpenCode CLI through `HostEnvironment` on native Windows or Linux.
-- `psycheval-psychevo-harness` is the external-harness command for Psychevo.
 - `psycheval.harbor.verifier` implements shared evidence and artifact scoring.
 - `psycheval.harbor.datasets` resolves registered flat Harbor Datasets and
   `workbuddy.dataset.v1` bundles without importing Dataset-owned Python code.
@@ -1030,11 +1029,8 @@ process locale or Python UTF-8 mode. The shared trajectory-validation boundary
 reuses Harbor's schema and image-reference checks; relative image paths resolve
 from the original trajectory directory. Validation reads the file without
 rewriting it or normalizing its contents.
-Psychevo's harness also reads instruction bytes and child NDJSON output as UTF-8.
-
-Psychevo state is Trial-owned under Agent logs, so evaluation does not open the
-user's persistent database. Hermes likewise resumes and exports an exact native
-session. Both project only the current invocation for step-local scoring.
+Hermes resumes and exports an exact native session and projects only the current
+invocation for step-local scoring.
 
 ## Copying into a downstream package
 

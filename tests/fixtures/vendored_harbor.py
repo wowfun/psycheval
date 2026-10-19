@@ -14,7 +14,6 @@ import os
 import pkgutil
 import runpy
 import shlex
-import subprocess
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -370,62 +369,6 @@ def verifier(root: Path) -> None:
         asyncio.run(explicit_configuration(False))
         asyncio.run(explicit_configuration(False, custom_prompts=False))
         asyncio.run(explicit_configuration(True))
-
-
-def psychevo(root: Path) -> None:
-    help_output = io.StringIO()
-    with redirect_stdout(help_output):
-        run_module("psychevo_harness", "--help")
-    assert "--pevo" in help_output.getvalue()
-    pevo = root / "fake-pevo"
-    pevo.write_text("test-owned executable", encoding="utf-8")
-    commands: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        if "run" not in command:
-            return subprocess.CompletedProcess(command, 0, "pevo 1\n", "")
-        assert "PEVAL_CONFIG" not in kwargs["env"]
-        commands.append(command)
-        Path(kwargs["env"]["PSYCHEVO_DB"]).write_text(
-            "retained state", encoding="utf-8"
-        )
-        events = [
-            {"type": "thread.started", "threadId": "exact-session"},
-            {
-                "type": "item.completed",
-                "item": {
-                    "id": f"assistant-{len(commands)}",
-                    "role": "assistant",
-                    "source": "runtime.message",
-                    "blocks": [{"kind": "text", "status": "completed", "body": "done"}],
-                },
-            },
-            {
-                "type": "turn.completed",
-                "threadId": "exact-session",
-                "turnId": f"turn-{len(commands)}",
-                "outcome": "completed",
-                "toolFailures": 0,
-                "finalAnswer": "done",
-            },
-        ]
-        return subprocess.CompletedProcess(
-            command, 0, "\n".join(map(json.dumps, events)), ""
-        )
-
-    for action, instruction in (("run", "start"), ("resume", "continue")):
-        write_runtime(root, action=action)
-        with (
-            patch.object(sys, "stdin", io.StringIO(instruction)),
-            patch("subprocess.run", fake_run),
-        ):
-            run_module("psychevo_harness", "--pevo", str(pevo))
-    assert "--session" not in commands[0]
-    assert commands[1][commands[1].index("--session") + 1] == "exact-session"
-    result = json.loads((root / "agent/trajectory.json").read_text())
-    assert result["session_id"] == "exact-session"
-    assert result["steps"][0]["message"] == "continue"
-    assert "start" not in json.dumps(result)
 
 
 def workbuddy(root: Path) -> None:
@@ -852,7 +795,6 @@ if __name__ == "__main__":
         "imports": imports,
         "trajectory_file": trajectory_file,
         "verifier": verifier,
-        "psychevo": psychevo,
         "workbuddy": workbuddy,
         "host": host,
         "host_filesystem": host_filesystem,

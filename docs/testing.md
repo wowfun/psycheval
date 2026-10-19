@@ -164,8 +164,7 @@ uv run python scripts/smoke_source_tool.py \
 ```
 
 The smoke covers `peval --help`, default initialization without a Skill,
-explicit Agent Skill installation and replacement, and the
-`psycheval-psychevo-harness` entry point.
+explicit Agent Skill installation and replacement.
 Psycheval does not build or validate wheel, sdist, or frozen executable
 artifacts as project gates.
 

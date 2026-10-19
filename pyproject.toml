@@ -29,7 +29,6 @@ dependencies = [
 
 [project.scripts]
 peval = "psycheval.cli:main"
-psycheval-psychevo-harness = "psycheval.harbor.psychevo_harness:main"
 
 [build-system]
 requires = ["hatchling"]

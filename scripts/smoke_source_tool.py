@@ -33,9 +33,6 @@ def main() -> int:
     peval = args.peval.resolve()
     if not peval.is_file():
         raise RuntimeError(f"source-tool peval command not found: {peval}")
-    harness = peval.with_name("psycheval-psychevo-harness")
-    if not harness.is_file():
-        raise RuntimeError(f"source-tool Harbor harness not found: {harness}")
     skill = args.skill.resolve()
     if not skill.joinpath("SKILL.md").is_file():
         raise RuntimeError(f"source Agent Skill not found: {skill}")
@@ -47,7 +44,6 @@ def main() -> int:
         env["HOME"] = str(home)
         env["HARBOR_TELEMETRY"] = "0"
         assert "Usage: peval" in run([str(peval), "--help"], cwd=root, env=env)
-        assert "usage:" in run([str(harness), "--help"], cwd=root, env=env).lower()
         workspace = root / "workspace"
         initialized = json.loads(
             run([str(peval), "init", "-r", str(workspace), "--json"], cwd=root, env=env)

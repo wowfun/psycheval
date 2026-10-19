@@ -13,9 +13,6 @@ Install the checkout as an editable source tool before running the examples:
 uv tool install -e .
 ```
 
-The editable tool installation also exposes `psycheval-psychevo-harness` for
-Harbor's Psychevo integration.
-
 ## Quick start
 
 Initialize a workspace and inspect the command tree:

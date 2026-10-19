@@ -33,7 +33,6 @@ def copied_harbor(tmp_path: Path) -> Path:
         "imports",
         "trajectory_file",
         "verifier",
-        "psychevo",
         "workbuddy",
         "host",
         "host_filesystem",
