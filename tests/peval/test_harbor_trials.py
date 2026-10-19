@@ -841,7 +841,7 @@ class HarborTrialTests(unittest.TestCase):
                 self.assertEqual(row["cost_usd"], 0.01)
                 self.assertEqual(row["duration_ms"], 1_500)
                 detail = catalog.load_detail(row["source_key"]).report
-                self.assertEqual(detail["trajectory"][0]["schema_version"], "ATIF-v1.7")
+                self.assertEqual(detail["trajectory"][0]["schema_version"], "ATIF-v1.8")
                 self.assertEqual(
                     detail["trajectory"][0]["final_metrics"]["extra"],
                     {

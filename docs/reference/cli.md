@@ -132,7 +132,7 @@ independent overlay behavior.
 
 `view tr` defaults to a bounded inspection digest. `-m raw` produces a complete
 JSON report. A bare `-o` chooses a timestamped `.json` path. `export tr` produces
-strict ATIF-v1.7. `view tr` has no format option; an explicit `.html` output path
+strict ATIF-v1.8. `view tr` has no format option; an explicit `.html` output path
 is rejected before any file is written.
 Obvious secrets are redacted before serialization unless `--no-redact` is
 explicit. Presentation estimates are not written back as portable ATIF facts.

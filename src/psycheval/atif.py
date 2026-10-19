@@ -1,4 +1,4 @@
-"""Standalone ATIF-v1.7 recognition and strict, non-mutating validation."""
+"""Standalone ATIF 1.7/1.8 recognition and strict, non-mutating validation."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-ATIF_VERSION = "ATIF-v1.7"
+ATIF_VERSION = "ATIF-v1.8"
+ATIF_SUPPORTED_VERSIONS = {"ATIF-v1.7", ATIF_VERSION}
 
 
 ATIF_TRAJECTORY_KEYS = {
@@ -88,6 +89,16 @@ ATIF_IMAGE_SOURCE_KEYS = {"media_type", "path"}
 
 
 ATIF_IMAGE_MEDIA_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+ATIF_AUDIO_MEDIA_TYPES = {
+    "audio/wav",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/aac",
+    "audio/ogg",
+    "audio/flac",
+    "audio/webm",
+    "audio/aiff",
+}
 
 
 ATIF_SUBAGENT_REF_KEYS = {"trajectory_id", "session_id", "trajectory_path", "extra"}
@@ -119,12 +130,14 @@ def is_atif_trajectory(value: Any) -> bool:
 
 
 def validate_atif_trajectory(trajectory: Any, path: str = "trajectory") -> None:
-    """Strictly validate an ATIF-v1.7 trajectory without Harbor/Pydantic."""
+    """Strictly validate an ATIF 1.7/1.8 trajectory without Harbor/Pydantic."""
 
     _validate_json_value(trajectory, path)
     value = _object(trajectory, path)
     reject_unknown_keys(path, value, ATIF_TRAJECTORY_KEYS)
-    _required_literal(value, "schema_version", ATIF_VERSION, path)
+    version = _required_string(value, "schema_version", path)
+    if version not in ATIF_SUPPORTED_VERSIONS:
+        raise ValueError(f"{path}.schema_version must be ATIF-v1.7 or ATIF-v1.8")
     for key in ("session_id", "trajectory_id", "notes", "continued_trajectory_ref"):
         _optional_string(value, key, path)
     _optional_object(value, "extra", path)
@@ -162,7 +175,9 @@ def validate_atif_trajectory(trajectory: Any, path: str = "trajectory") -> None:
     for index, step in enumerate(steps):
         step_path = f"{path}.steps[{index}]"
         step_value = _object(step, step_path)
-        _validate_atif_step(step_value, step_path, index + 1, embedded_ids)
+        _validate_atif_step(
+            step_value, step_path, index + 1, embedded_ids, version == ATIF_VERSION
+        )
 
     final_metrics = value.get("final_metrics")
     if final_metrics is not None:
@@ -177,6 +192,7 @@ def _validate_atif_step(
     path: str,
     expected_step_id: int,
     embedded_ids: set[str],
+    allow_audio: bool,
 ) -> None:
     reject_unknown_keys(path, step, ATIF_STEP_KEYS)
     step_id = _required_integer(step, "step_id", path, minimum=1)
@@ -187,7 +203,7 @@ def _validate_atif_step(
     source = _required_string(step, "source", path)
     if source not in ATIF_SOURCES:
         raise ValueError(f"{path}.source must be one of: agent, system, user")
-    _validate_content(_required(step, "message", path), f"{path}.message")
+    _validate_content(_required(step, "message", path), f"{path}.message", allow_audio)
     _optional_iso_timestamp(step, "timestamp", path)
     _optional_string(step, "model_name", path)
     _optional_string(step, "reasoning_content", path)
@@ -252,7 +268,9 @@ def _validate_atif_step(
             _optional_string(result_value, "source_call_id", result_path)
             _optional_object(result_value, "extra", result_path)
             if result_value.get("content") is not None:
-                _validate_content(result_value["content"], f"{result_path}.content")
+                _validate_content(
+                    result_value["content"], f"{result_path}.content", allow_audio
+                )
             source_call_id = result_value.get("source_call_id")
             if source_call_id is not None and source_call_id not in tool_ids:
                 raise ValueError(
@@ -320,7 +338,7 @@ def _validate_final_metrics(metrics: dict[str, Any], path: str) -> None:
         )
 
 
-def _validate_content(value: Any, path: str) -> None:
+def _validate_content(value: Any, path: str, allow_audio: bool) -> None:
     if isinstance(value, str):
         return
     parts = _list(value, path)
@@ -333,20 +351,35 @@ def _validate_content(value: Any, path: str) -> None:
             _required_string(part_value, "text", part_path)
             if part_value.get("source") is not None:
                 raise ValueError(f"{part_path}.source must be absent for text content")
-        elif part_type == "image":
+        elif part_type == "image" or (part_type == "audio" and allow_audio):
             if part_value.get("text") is not None:
-                raise ValueError(f"{part_path}.text must be absent for image content")
+                raise ValueError(
+                    f"{part_path}.text must be absent for {part_type} content"
+                )
             source_path = f"{part_path}.source"
             source = _object(_required(part_value, "source", part_path), source_path)
-            reject_unknown_keys(source_path, source, ATIF_IMAGE_SOURCE_KEYS)
+            keys = ATIF_IMAGE_SOURCE_KEYS | (
+                {"duration_sec"} if part_type == "audio" else set()
+            )
+            reject_unknown_keys(source_path, source, keys)
             media_type = _required_string(source, "media_type", source_path)
-            if media_type not in ATIF_IMAGE_MEDIA_TYPES:
+            types = (
+                ATIF_AUDIO_MEDIA_TYPES
+                if part_type == "audio"
+                else ATIF_IMAGE_MEDIA_TYPES
+            )
+            if media_type not in types:
                 raise ValueError(
-                    f"{source_path}.media_type is not a supported image MIME type"
+                    f"{source_path}.media_type is not a supported {part_type} MIME type"
                 )
             _required_string(source, "path", source_path)
+            if part_type == "audio" and source.get("duration_sec") is not None:
+                _number(
+                    source["duration_sec"], f"{source_path}.duration_sec", minimum=0
+                )
         else:
-            raise ValueError(f"{part_path}.type must be text or image")
+            types = "text, image or audio" if allow_audio else "text or image"
+            raise ValueError(f"{part_path}.type must be {types}")
 
 
 def _validate_subagent_refs(value: Any, path: str, embedded_ids: set[str]) -> None:
@@ -383,7 +416,7 @@ def is_atif_content(value: Any) -> bool:
     if not isinstance(value, list):
         return False
     try:
-        _validate_content(value, "content")
+        _validate_content(value, "content", allow_audio=True)
     except ValueError:
         return False
     return True

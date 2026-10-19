@@ -405,7 +405,7 @@ class PevalSourceConversionTests(unittest.TestCase):
             ToolConfig(adapter="psychevo"),
         )
         trajectory = result.trajectory
-        self.assertEqual(trajectory["schema_version"], "ATIF-v1.7")
+        self.assertEqual(trajectory["schema_version"], "ATIF-v1.8")
         self.assertEqual(trajectory["trajectory_id"], "psychevo:sess-psychevo")
         self.assertEqual(trajectory["session_id"], "sess-psychevo")
         self.assertEqual([step["step_id"] for step in trajectory["steps"]], [1, 2, 3])

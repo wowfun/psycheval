@@ -121,7 +121,7 @@ def _compatible_harbor_trajectory(
     projected = deepcopy(trajectory)
     if source_schema != ATIF_VERSION:
         match = re.fullmatch(r"ATIF-v1\.(\d+)", source_schema)
-        if match is None or int(match.group(1)) > 7:
+        if match is None or int(match.group(1)) > 8:
             raise ValueError(
                 f"{path}.schema_version is not a supported Harbor ATIF version: "
                 f"{source_schema or '<missing>'}"

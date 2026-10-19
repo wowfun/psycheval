@@ -14,7 +14,7 @@ rebuildable projections.
 
 ## Trajectories and sidecars
 
-Every CLI-exported `trajectory.json` is a complete ATIF-v1.7 document. A
+Every CLI-exported `trajectory.json` is a complete ATIF-v1.8 document. A
 `trajectory_meta.json` sidecar owns import context, source references, adapter
 details, warnings, and presentation-only derivations. Mirrored trajectory facts
 remain projections of ATIF and never become a second authority.
@@ -448,3 +448,8 @@ intersect. Search matches report names and association labels, not report bodies
 All matching metadata is combined before pagination. These broader associations
 do not add reports to a session's Leaderboard Reports column: that column continues
 to show only directly attached imported reports.
+
+Strict imports accept ATIF 1.7 and 1.8 without modification. Audio content is
+valid in 1.8 only; its references and metadata survive projection and export.
+Audio is shown as an identified media reference, without automatic playback or
+transcription. Adapter conversion emits canonical 1.8.

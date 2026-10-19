@@ -53,6 +53,12 @@ with open(sys.argv[2], "w", encoding="utf-8") as stream:
     json.dump(trajectory, stream)
 assert atif.read_atif_json_path(sys.argv[2]) == trajectory
 assert atif.is_atif_json_path(sys.argv[2])
+audio = copy.deepcopy(trajectory)
+audio["schema_version"] = "ATIF-v1.8"
+audio["steps"][0]["message"] = [{"type": "audio", "source": {"media_type": "audio/wav", "path": "voice.wav", "duration_sec": 0}}]
+before_audio = copy.deepcopy(audio)
+atif.validate_atif_trajectory(audio)
+assert audio == before_audio
 invalid = copy.deepcopy(trajectory)
 invalid["steps"][0]["foreign_field"] = 1
 bad_reference = copy.deepcopy(trajectory)

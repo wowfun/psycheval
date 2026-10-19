@@ -59,6 +59,45 @@ def tool_timing_trajectory(call_extra: dict, result_extras: list[dict]) -> dict:
 
 
 class PevalAtifContractTests(unittest.TestCase):
+    def test_audio_is_versioned_preserved_and_strict(self):
+        trajectory = valid_trajectory()
+        trajectory["schema_version"] = "ATIF-v1.8"
+        audio = {
+            "type": "audio",
+            "source": {
+                "media_type": "audio/wav",
+                "path": "speech.wav",
+                "duration_sec": 1.5,
+            },
+        }
+        trajectory["steps"][0]["message"] = [audio]
+        before = deepcopy(trajectory)
+        result = convert_atif_trajectory(trajectory)
+        self.assertEqual(result.trajectory, before)
+        self.assertEqual(trajectory, before)
+        observed = deepcopy(before)
+        observed["steps"][0].update(
+            source="agent",
+            message="Audio result",
+            tool_calls=[
+                {"tool_call_id": "audio", "function_name": "listen", "arguments": {}}
+            ],
+            observation={"results": [{"source_call_id": "audio", "content": [audio]}]},
+        )
+        self.assertEqual(convert_atif_trajectory(observed).trajectory, observed)
+        for version, source in (
+            ("ATIF-v1.7", audio["source"]),
+            ("ATIF-v1.8", {**audio["source"], "media_type": "image/png"}),
+            ("ATIF-v1.8", {**audio["source"], "duration_sec": -1}),
+            ("ATIF-v1.8", {**audio["source"], "duration_sec": float("inf")}),
+        ):
+            with self.subTest(version=version, source=source):
+                candidate = deepcopy(before)
+                candidate["schema_version"] = version
+                candidate["steps"][0]["message"][0]["source"] = source
+                with self.assertRaises(ValueError):
+                    validate_atif_trajectory(candidate)
+
     def test_workbuddy_usage_coverage_is_a_read_only_diagnostic(self) -> None:
         trajectory = valid_trajectory()
         trajectory["extra"] = {

@@ -24,7 +24,8 @@ test("every step block copies only its displayed body and keeps the step open", 
     ] },
   };
   const meta = { steps: [{ step_id: 2, observations: [{ source_call_id: "call-1", tool_error: true, status: "error" }] }] };
-  const multimodal = [{ type: "text", text: "User caption" }, { type: "image", source: { path: "fixture.png" } }];
+  const multimodal = [{ type: "text", text: "User caption" }, { type: "image", source: { path: "fixture.png" } },
+    { type: "audio", source: { media_type: "audio/wav", path: "voice.wav", duration_sec: 1.5 } }];
   target.innerHTML = [
     { step_id: 1, source: "system", message: "System instruction" },
     agent,
@@ -36,6 +37,8 @@ test("every step block copies only its displayed body and keeps the step open", 
     const cards = [...target.querySelectorAll(".block")];
     assert.equal(cards.length, 8);
     assert.equal(target.querySelectorAll("script").length, 0);
+    assert.equal(target.querySelectorAll("audio, source").length, 0);
+    assert.ok(target.textContent.includes("voice.wav"));
     assert.equal(target.querySelectorAll("h4.danger").length, 1);
     for (const card of cards) {
       const button = card.querySelector("[data-block-copy]");

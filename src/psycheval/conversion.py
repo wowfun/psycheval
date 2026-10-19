@@ -71,7 +71,7 @@ def convert_db(
 
 
 def finalize_atif_conversion(result: ConversionResult) -> ConversionResult:
-    """Project adapter output into canonical ATIF-v1.7 and validate it.
+    """Project adapter output into canonical ATIF-v1.8 and validate it.
 
     This function is intentionally the only repair boundary. Imported ATIF uses
     :func:`validate_atif_trajectory` directly and is never normalized here.
@@ -190,7 +190,7 @@ def convert_atif_trajectory(parsed: dict[str, Any]) -> ConversionResult:
         timestamp_semantics=timestamp_semantics,
         subagent_results=[
             convert_atif_trajectory(child)
-            for child in parsed.get("subagent_trajectories", [])
+            for child in parsed.get("subagent_trajectories") or []
         ],
     )
 
