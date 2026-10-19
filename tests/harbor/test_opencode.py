@@ -861,6 +861,7 @@ def test_task_mcp_defaults_preserve_caller_configuration(
         "success",
         "error",
         "exit",
+        "exit_export_error",
         "empty",
         "cancel",
         "export_error",
@@ -884,7 +885,7 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
         " Path('export-process.tmp').write_text(json.dumps({'pid':os.getpid(),'created_at':psutil.Process().create_time()}))\n"
         " Path('export-process.tmp').replace('export.pid')\n"
         " print('export diagnostic',file=sys.stderr,flush=True)\n"
-        " if outcome=='export_error': sys.exit(7)\n"
+        " if outcome in ('export_error','exit_export_error'): sys.exit(7)\n"
         " if outcome=='export_timeout': time.sleep(60)\n"
         f" print({json.dumps(exported, ensure_ascii=False)!r}); sys.exit()\n"
         "prompt=sys.stdin.buffer.read().decode('utf-8')\n"
@@ -899,7 +900,7 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
         "if outcome=='multiple_sessions': print(json.dumps({'type':'text','sessionID':'other-session'}),flush=True)\n"
         "if outcome=='cancel': time.sleep(60)\n"
         "if outcome=='error': print(json.dumps({'type':'error','error':{'name':'APIError'}}))\n"
-        "if outcome=='exit': sys.exit(2)\n",
+        "if outcome in ('exit','exit_export_error'): sys.exit(2)\n",
         encoding="utf-8",
     )
 
@@ -965,9 +966,24 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
                 run.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await run
-            elif outcome in {"error", "exit"}:
-                with pytest.raises(NonZeroAgentExitCodeError):
+            elif outcome in {"error", "exit", "exit_export_error"}:
+                with pytest.raises(NonZeroAgentExitCodeError) as failure:
                     await agent.run(instruction, host, AgentContext())
+                assert not (logs / "opencode-session.json").exists()
+                if outcome == "exit_export_error":
+                    assert "exited with 2" in str(failure.value)
+                    assert isinstance(failure.value.__cause__, RuntimeError)
+                else:
+                    assert (
+                        json.loads(
+                            (logs / "opencode-failed-session.json").read_text(
+                                encoding="utf-8"
+                            )
+                        )
+                        == exported
+                    )
+                agent.populate_context_post_run(AgentContext())
+                assert not (logs / "trajectory.json").exists()
             elif outcome == "empty":
                 with pytest.raises(RuntimeError, match="no completed messages"):
                     await agent.run(instruction, host, AgentContext())

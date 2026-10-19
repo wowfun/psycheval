@@ -376,10 +376,17 @@ allows task tools by default; callers can override permissions in
 `opencode_config`. OpenCode chooses its native tool shell, configurable through
 that same object. Instructions arrive on stdin, independent of shell quoting and
 Windows command-line length. The `variant` kwarg is passed as `provider/model#variant`.
+For web research with OpenCode 2, explicitly select a search provider, for example
+`opencode_config={"websearch": {"provider": "random"}}` to use its available
+providers. An unset provider can request interactive setup; non-interactive
+OpenCode cancels that form and exits nonzero even if it later produces an answer.
 Native JSON events and stderr stream to Agent logs, including on cancellation.
 Execution must emit exactly one Session identity before export. Export failure
 or timeout fails the invocation and retains its logs; a previous invocation's
 converted trajectory is never reused for a new run.
+After a nonzero exit or error event, the adapter attempts the same bounded export
+to `opencode-failed-session.json` for diagnosis. This file cannot supply ATIF or
+grading evidence, and export errors cannot replace the original execution failure.
 After a successful run, `opencode session export --standalone` retains the selected
 Session as `opencode-session.json`. Its completed messages, tool results, and usage
 are authoritative for ATIF conversion; streamed events alone need not contain

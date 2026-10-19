@@ -572,6 +572,7 @@ class HostOpenCodeAgent(OpenCode):
         instruction_path.write_bytes(self._instruction.encode("utf-8"))
         (self.logs_dir / "trajectory.json").unlink(missing_ok=True)
         (self.logs_dir / "opencode-session.json").unlink(missing_ok=True)
+        (self.logs_dir / "opencode-failed-session.json").unlink(missing_ok=True)
         model = self.model_name
         if variant := self._resolved_flags.get("variant"):
             model = f"{model.split('#', 1)[0]}#{variant}"
@@ -603,22 +604,47 @@ class HostOpenCodeAgent(OpenCode):
             env = self._runtime_env(host)
             with host.scoped_exec_env(env), host.scoped_output_callback(capture):
                 result = await host.exec_argv(argv, env=env)
-        if result.return_code != 0:
-            raise NonZeroAgentExitCodeError(
-                f"OpenCode exited with {result.return_code}; see opencode.stderr.log"
+        failure = (
+            NonZeroAgentExitCodeError(
+                f"OpenCode exited with {result.return_code}; see opencode.txt, "
+                "opencode.stderr.log and any opencode-failed-session.json"
             )
-        events = self._parse_stdout()
-        if any(event.get("type") == "error" for event in events):
-            raise NonZeroAgentExitCodeError(
+            if result.return_code != 0
+            else None
+        )
+        try:
+            events = self._parse_stdout()
+        except Exception:
+            if failure is not None:
+                raise failure
+            raise
+        if failure is None and any(event.get("type") == "error" for event in events):
+            failure = NonZeroAgentExitCodeError(
                 "OpenCode emitted error events; see opencode.txt"
             )
+        if failure is not None:
+            try:
+                await self._export_session(
+                    host, env, events, "opencode-failed-session.json"
+                )
+            except Exception as error:
+                raise failure from error
+            raise failure
+        await self._export_session(host, env, events, "opencode-session.json")
+        self._trajectory = self._convert_events_to_trajectory(
+            self._session_events(events)
+        )
+        if self._trajectory is None:
+            raise RuntimeError(
+                "OpenCode exported no completed messages; see Agent logs"
+            )
+
+    async def _export_session(self, host, env, events, filename):
         sessions = {event["sessionID"] for event in events if event.get("sessionID")}
         if len(sessions) != 1:
             raise RuntimeError("OpenCode emitted no unique Session; see Agent logs")
         with (
-            (self.logs_dir / "opencode-session.json").open(
-                "w", encoding="utf-8"
-            ) as output,
+            (self.logs_dir / filename).open("w", encoding="utf-8") as output,
             (self.logs_dir / "opencode-export.stderr.log").open(
                 "w", encoding="utf-8"
             ) as errors,
@@ -644,13 +670,6 @@ class HostOpenCodeAgent(OpenCode):
         if exported.return_code != 0:
             raise RuntimeError(
                 "OpenCode Session export failed; see opencode-export.stderr.log"
-            )
-        self._trajectory = self._convert_events_to_trajectory(
-            self._session_events(events)
-        )
-        if self._trajectory is None:
-            raise RuntimeError(
-                "OpenCode exported no completed messages; see Agent logs"
             )
 
     @override
