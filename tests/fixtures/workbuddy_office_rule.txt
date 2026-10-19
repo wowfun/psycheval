@@ -1,4 +1,7 @@
 # Office v1.0 shared/verifier/rule.py execution contract fixture.
+# Source: https://huggingface.co/datasets/tencent/workbuddy-bench
+# Copyright (C) 2026 Tencent. License: workbuddy_office_LICENSE.txt.
+# Modification: this provenance header only; executable content is unchanged.
 """Rule command construction."""
 
 from __future__ import annotations

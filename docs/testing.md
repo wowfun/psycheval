@@ -146,6 +146,12 @@ This opt-in check requires the Office Python packages and verifies native
 execution plus source immutability. Scores reflect the initial workspace, not
 Agent performance. The normal gate does not require or download that Dataset.
 
+Live Office LLM judging additionally needs the HTTPX transport required by the
+validation environment. If its proxy variables use SOCKS, install `socksio` in
+that environment before running the Judge. A LiteLLM model-cost fallback warning
+does not establish Judge success; inspect `score.json` for Judge errors and
+confirm that provider requests completed.
+
 Standalone ATIF tests copy and rename only `atif.py`, then execute it under
 `python -I -S` without site packages. They cover valid and invalid evidence,
 field-path errors, and non-mutation. Existing conversion tests separately own
