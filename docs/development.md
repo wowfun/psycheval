@@ -22,7 +22,7 @@ assets. Normal installation and validation use those checked-in assets and do
 not require the upstream checkout or a second package archive. Its `LICENSE`
 and `THIRD_PARTY_LICENSES.txt` files must remain present.
 
-Keep Harbor-specific adapters at the pinned public `0.21.0` seams under
+Keep Harbor-specific adapters at the pinned public `0.24.0` seams under
 `psycheval.harbor`; package-wide CLI, trajectory, report, and workspace code
 lives directly under `psycheval`. Update the owning reference and closest
 deterministic test when a stable interface changes.

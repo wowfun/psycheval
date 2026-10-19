@@ -124,3 +124,11 @@ def test_task_readers_and_file_selection_preserve_the_callers_root(
         select_publishable_task_files(
             root, files=[tmp_path / "outside"], read_bytes=read_bytes
         )
+
+
+def test_task_trajectory_participates_in_publication(tmp_path):
+    trajectory = tmp_path / "trajectory.json"
+    trajectory.write_text("{}", encoding="utf-8")
+    assert select_publishable_task_files(
+        tmp_path, files=[trajectory], read_bytes=Path.read_bytes
+    ) == [trajectory]

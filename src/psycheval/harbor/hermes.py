@@ -54,9 +54,13 @@ def _reported_session_id(log_path: Path) -> str:
 class HermesAgent(harbor_hermes.Hermes):
     """Delegate to Harbor's Hermes Agent with its native Xiaomi route enabled."""
 
-    SUPPORTS_RESUME = True
-    SUPPORTS_LOAD_NATIVE_TRAJECTORY = False
-    SUPPORTS_LOAD_ATIF_TRAJECTORY = False
+    capabilities = harbor_hermes.Hermes.capabilities.model_copy(
+        update={
+            "resume": True,
+            "load_native_trajectory": False,
+            "load_atif_trajectory": False,
+        }
+    )
 
     @override
     async def setup(self, environment: BaseEnvironment) -> None:

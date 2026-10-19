@@ -12,7 +12,7 @@ psycheval
 ├── serve, state        -> local evaluation workspace and ACP client runtime
 ├── jobs                -> evaluation configuration, harness plugins and workers
 ├── assets              -> authored Web modules, templates, and styles
-└── harbor              -> Harbor 0.21 adapters, harness, host, verifier
+└── harbor              -> Harbor 0.24 adapters, harness, host, verifier
 ```
 
 ## Module boundaries

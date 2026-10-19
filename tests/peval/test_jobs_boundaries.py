@@ -19,6 +19,14 @@ from tests.peval.test_jobs import jobs as jobs
 from tests.peval.test_jobs import request, retained_run
 
 
+@pytest.mark.parametrize(
+    "settings", [{"extra_instructions": ["extra"]}, {"user_agent": {}}]
+)
+def test_harbor_rejects_unimplemented_settings_before_task_discovery(settings):
+    with pytest.raises(ValueError, match="do not support"):
+        HarborHarness().prepare(SimpleNamespace(settings=settings), SimpleNamespace())
+
+
 def native(**updates):
     return {
         "id": "one",

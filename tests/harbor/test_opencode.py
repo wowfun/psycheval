@@ -1114,3 +1114,40 @@ def test_opencode_probe_timeout_retains_diagnostic_and_isolated_env(
             await host.stop(delete=True)
 
     asyncio.run(scenario())
+
+
+def test_host_options_preflight_matches_constructor(tmp_path):
+    import pytest
+
+    from psycheval.harbor.opencode import HostOpenCodeAgent
+
+    options = HostOpenCodeAgent.parse_options(
+        {"executable": "custom-opencode", "variant": "high"}
+    )
+    agent = HostOpenCodeAgent(
+        logs_dir=tmp_path,
+        model_name="fixture/model",
+        executable="custom-opencode",
+        variant="high",
+    )
+    assert options.executable == agent.executable == "custom-opencode"
+    assert agent.options.variant == "high"
+    assert not agent.capabilities.bridges
+    for config in (
+        {"skills": []},
+        {"mcp": []},
+        {"provider": []},
+        {"skills": {"paths": [1]}},
+    ):
+        with pytest.raises(ValueError, match="opencode_config"):
+            HostOpenCodeAgent.parse_options({"opencode_config": config})
+        with pytest.raises(ValueError, match="opencode_config"):
+            HostOpenCodeAgent(
+                logs_dir=tmp_path, model_name="fixture/model", opencode_config=config
+            )
+    with pytest.raises(ValueError, match="disable_web_search"):
+        HostOpenCodeAgent.parse_options({"disable_web_search": True})
+    with pytest.raises(ValueError, match="disable_web_search"):
+        HostOpenCodeAgent(
+            logs_dir=tmp_path, model_name="fixture/model", disable_web_search=True
+        )

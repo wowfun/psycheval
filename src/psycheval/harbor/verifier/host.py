@@ -14,6 +14,8 @@ class HostVerifier(Verifier):
     async def verify(self) -> VerifierResult:
         if not isinstance(self.environment, HostEnvironment):
             raise TypeError("HostVerifier requires HostEnvironment")
+        if self.task.extra_instructions:
+            raise ValueError("HostVerifier does not support inline extra_instructions")
         if not self._skip_tests_upload:
             await self.environment.empty_dirs(["/tests"], chmod=False)
         instruction_path = (

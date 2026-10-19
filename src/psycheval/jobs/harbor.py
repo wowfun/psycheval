@@ -224,6 +224,10 @@ class HarborHarness:
                 "Task selection, variants and output identity are managed by Jobs"
             )
         check_fields(settings, JobConfig)
+        if settings.get("extra_instructions") or settings.get("user_agent") is not None:
+            raise ValueError(
+                "Psycheval Jobs do not support inline extra_instructions or user_agent"
+            )
         selected, formats = [], set()
         budget, cache = {"entries": 0, "bytes": 0}, {}
         for item in resolve_selection(request.tasks, context.workspace):
@@ -333,6 +337,10 @@ class HarborHarness:
             quiet=True,
         )
         config = JobConfig.model_validate(value)
+        if config.extra_instructions or config.user_agent is not None:
+            raise ValueError(
+                "Psycheval Jobs do not support inline extra_instructions or user_agent"
+            )
         EnvironmentFactory.run_preflight(
             type=config.environment.type, import_path=config.environment.import_path
         )

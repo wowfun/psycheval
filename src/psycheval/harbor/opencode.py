@@ -10,11 +10,13 @@ import sys
 from typing import override
 from uuid import uuid4
 
+from harbor.agents.capabilities import AgentCapabilities
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
-from harbor.agents.installed.opencode import OpenCode
+from harbor.agents.installed.opencode import OpenCode, OpenCodeOptions
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import Metrics, Trajectory
+from pydantic import field_validator
 
 from .environment import HostEnvironment
 from .inference_telemetry import (
@@ -64,13 +66,50 @@ def _usage_metrics(tokens: object) -> dict:
     return metrics
 
 
+class HostOpenCodeOptions(OpenCodeOptions):
+    executable: str = "opencode"
+
+    @field_validator("opencode_config", mode="before")
+    @classmethod
+    def validate_config(cls, value):
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            raise ValueError("opencode_config must be an object")
+        for section in ("skills", "mcp", "provider"):
+            if section in value and not isinstance(value[section], dict):
+                raise ValueError(f"opencode_config.{section} must be an object")
+        paths = value.get("skills", {}).get("paths", [])
+        if not isinstance(paths, list) or any(
+            not isinstance(path, str) for path in paths
+        ):
+            raise ValueError("opencode_config.skills.paths must be a list of strings")
+        return value
+
+    @field_validator("executable")
+    @classmethod
+    def validate_executable(cls, value: str) -> str:
+        if not value or "\x00" in value:
+            raise ValueError("OpenCode executable must be nonempty and NUL-free")
+        return value
+
+    @field_validator("disable_web_search")
+    @classmethod
+    def reject_web_search_override(cls, value: bool) -> bool:
+        if value:
+            raise ValueError(
+                "HostOpenCodeAgent does not support disable_web_search=True"
+            )
+        return value
+
+
 class HostOpenCodeAgent(OpenCode):
     """Reuse Harbor's OpenCode trajectory conversion without its Bash installer."""
 
-    SUPPORTS_WINDOWS = True
-    SUPPORTS_RESUME = False
-    SUPPORTS_LOAD_NATIVE_TRAJECTORY = False
-    SUPPORTS_LOAD_ATIF_TRAJECTORY = False
+    capabilities = AgentCapabilities(
+        atif=True, windows=True, skills=True, mcp_servers=True
+    )
+    options_model = HostOpenCodeOptions
 
     def __init__(
         self,
@@ -80,26 +119,11 @@ class HostOpenCodeAgent(OpenCode):
         **kwargs,
     ):
         self._trajectory = None
-        if opencode_config is not None:
-            if not isinstance(opencode_config, dict):
-                raise ValueError("opencode_config must be an object")
-            for section in ("skills", "mcp", "provider"):
-                if section in opencode_config and not isinstance(
-                    opencode_config[section], dict
-                ):
-                    raise ValueError(f"opencode_config.{section} must be an object")
-            paths = opencode_config.get("skills", {}).get("paths", [])
-            if not isinstance(paths, list) or any(
-                not isinstance(path, str) for path in paths
-            ):
-                raise ValueError(
-                    "opencode_config.skills.paths must be a list of strings"
-                )
-        super().__init__(*args, opencode_config=opencode_config, **kwargs)
+        super().__init__(
+            *args, executable=executable, opencode_config=opencode_config, **kwargs
+        )
         if not self.model_name or "/" not in self.model_name:
             raise ValueError("Model name must be in the format provider/model_name")
-        if not executable or "\x00" in executable:
-            raise ValueError("OpenCode executable must be nonempty and NUL-free")
         self.executable = executable
         self._runtime_id = uuid4().hex
 

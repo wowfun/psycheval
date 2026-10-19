@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from pathlib import PurePosixPath
+from pathlib import PurePosixPath, PureWindowsPath
 from uuid import uuid4
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.capabilities import AgentCapabilities
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import TaskOS
@@ -41,11 +42,7 @@ def _normalize_workdir(value: str, task_os: TaskOS) -> str:
 class ExternalHarnessAgent(BaseAgent):
     """Run a caller-provided harness that writes canonical ATIF output."""
 
-    SUPPORTS_ATIF = True
-    SUPPORTS_RESUME = True
-    SUPPORTS_LOAD_NATIVE_TRAJECTORY = False
-    SUPPORTS_LOAD_ATIF_TRAJECTORY = False
-    SUPPORTS_WINDOWS = True
+    capabilities = AgentCapabilities(atif=True, resume=True, windows=True, skills=True)
 
     def __init__(
         self,
@@ -99,7 +96,6 @@ class ExternalHarnessAgent(BaseAgent):
     ) -> None:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         instruction_path = self.logs_dir / "instruction.txt"
-        instruction_path.write_text(instruction, encoding="utf-8")
         trajectory_path = self.logs_dir / "trajectory.json"
         trajectory_path.unlink(missing_ok=True)
         environment_paths = EnvironmentPaths.for_os(environment.os)
@@ -108,6 +104,25 @@ class ExternalHarnessAgent(BaseAgent):
         workdir = _normalize_workdir(
             configured_workdir or default_workdir.as_posix(), environment.os
         )
+        if self.skills_dir:
+            path_type = (
+                PureWindowsPath if environment.os == TaskOS.WINDOWS else PurePosixPath
+            )
+            skills = path_type(self.skills_dir)
+            if not skills.is_absolute():
+                skills = path_type(workdir) / skills
+            directory = (
+                str(environment.native_path(str(skills)))
+                if isinstance(environment, HostEnvironment)
+                else str(skills)
+            )
+            instruction += (
+                "\n\n<available-skills>\n"
+                f"Skills directory: {directory}\n"
+                "Read relevant SKILL.md files in this directory before performing the task.\n"
+                "</available-skills>"
+            )
+        instruction_path.write_text(instruction, encoding="utf-8")
         prepare_result = await environment.ensure_dirs(
             [workdir],
             chmod=False,

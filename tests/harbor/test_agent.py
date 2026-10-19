@@ -62,7 +62,10 @@ def test_external_agent_virtual_override_uses_prepared_host_workspace(tmp_path):
     asyncio.run(scenario())
 
 
-def test_native_harness_restores_state_in_neutral_invocation_directories(tmp_path):
+@pytest.mark.parametrize("skills", [None, "skills", "/app/skills"])
+def test_native_harness_restores_state_in_neutral_invocation_directories(
+    tmp_path, skills
+):
     from tests.harbor.environment_support import make_environment
 
     async def scenario():
@@ -72,13 +75,22 @@ def test_native_harness_restores_state_in_neutral_invocation_directories(tmp_pat
             for arg in (sys.executable, _SYNTHETIC_HARNESS, "--mode", "multi-step")
         )
         agent = ExternalHarnessAgent(
-            logs_dir=host.trial_paths.agent_dir, command=command
+            logs_dir=host.trial_paths.agent_dir, command=command, skills_dir=skills
         )
         await host.start(False)
         active = []
         try:
             for action, instruction in (("run", "seed"), ("resume", "continue")):
                 await getattr(agent, action)(instruction, host, AgentContext())
+                supplied = (agent.logs_dir / "instruction.txt").read_text(
+                    encoding="utf-8"
+                )
+                if skills:
+                    assert supplied.startswith(instruction + "\n\n<available-skills>")
+                    assert "SKILL.md" in supplied
+                    assert str(host.native_path("/app/skills")) in supplied
+                else:
+                    assert supplied == instruction
                 runtime = load_effective_runtime_config(agent.logs_dir / "peval.json")
                 directory = Path(runtime.paths.agent_logs)
                 assert not directory.is_relative_to(host.trial_paths.trial_dir)

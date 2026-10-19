@@ -22,7 +22,7 @@ commit in your dependency tracking so later updates replace the same source unit
 Add the integration's dependencies to your downstream project:
 
 ```console
-uv add "harbor==0.21.0" "PyYAML>=6.0,<7" "pathspec>=1.0,<2" "httpx>=0.28,<1" "psutil>=7.2.2,<8" "jsonschema>=4.26,<5"
+uv add "harbor==0.24.0" "PyYAML>=6.0,<7" "pathspec>=1.0,<2" "httpx>=0.28,<1" "psutil>=7.2.2,<8" "jsonschema>=4.26,<5"
 ```
 
 Commit the resulting `pyproject.toml` and `uv.lock`; use `uv sync --locked` to
@@ -33,7 +33,7 @@ transitive dependencies. ACP evaluation additionally requires
 when copying the ACP adapter; other integrations do not import the SDK.
 
 ```console
-uv add "agent-client-protocol==0.12.1; python_version < '3.15'"
+uv add "agent-client-protocol==0.12.1"
 ```
 
 Install your downstream package in this environment, including the copied
@@ -334,7 +334,7 @@ installation:
 uv add "workbuddy-bench @ git+https://github.com/Tencent/workbuddy-bench.git@625b2233093ae4f23e76be28c1f341d41cc70373"
 ```
 
-Keep the `harbor==0.21.0` constraint added above. In the supported WorkBuddy
+Keep the `harbor==0.24.0` constraint added above. In the supported WorkBuddy
 [pyproject.toml](https://github.com/Tencent/workbuddy-bench/blob/625b2233093ae4f23e76be28c1f341d41cc70373/pyproject.toml),
 the Harbor `v0.18.0` pin belongs to the upstream development `tool.uv.sources`
 table; its package dependencies declare `harbor` without that pin. Downstream
@@ -344,7 +344,7 @@ the Git source in your project and lockfile; see
 
 ### Add to an existing environment
 
-To augment an environment that already has Harbor 0.21.0 and its complete
+To augment an environment that already has Harbor 0.24.0 and its complete
 dependencies, install the pinned runtime directly:
 
 ```console
@@ -383,7 +383,7 @@ print(validate_workbuddy_runtime())
 For the Git installation above, the result contains version `0.1.0` and commit
 `625b2233093ae4f23e76be28c1f341d41cc70373`. Runtime validation follows the
 [WorkBuddy compatibility contract](../reference/harbor.md#workbuddy-tasks).
-If dependency resolution cannot find Harbor 0.21.0, check the configured package
+If dependency resolution cannot find Harbor 0.24.0, check the configured package
 index or mirror before changing the required version.
 
 ## Prepare and run WorkBuddy

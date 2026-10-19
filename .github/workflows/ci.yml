@@ -42,7 +42,7 @@ jobs:
           PEVAL_WORKBUDDY_RUNTIME_TESTS: "1"
         run: >-
           uv run --no-sync pytest tests/harbor/test_workbuddy_verifier.py
-          tests/harbor/test_vendoring.py -k real_runtime
+          tests/harbor/test_vendoring.py -k 'real_runtime or runtime_writer_redacts or native_prepare_hook'
 
   web-and-source-tool:
     name: Web, docs, and source tool

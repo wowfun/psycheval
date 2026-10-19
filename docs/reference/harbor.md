@@ -1,7 +1,19 @@
 # Harbor Integration
 
-Psycheval supports the public Harbor `0.21.0` contract through
+Psycheval supports the public Harbor `0.24.0` contract through
 `psycheval.harbor`.
+
+Agents declare explicit Harbor capabilities. Unsupported capabilities fail before
+use; native Host OpenCode does not implement simulated-user bridges or
+`disable_web_search=True`. Its options model is shared by preflight and direct
+construction. Jobs reject nonempty inline `extra_instructions` and `user_agent`;
+file-based extra instructions remain supported. HostVerifier also rejects inline
+extra instructions rather than grading a different instruction from the Agent.
+ACP Skill admission uses `capabilities.skills`, including subclass declarations.
+Hermes retains upstream ATIF, Skills and MCP support, adds exact-session resume,
+and does not support loading native or ATIF trajectories.
+
+Task publication and revision hashing include top-level `trajectory.json`.
 
 ## Host ACP Agent
 
@@ -325,7 +337,7 @@ The requested model is registered in the generated provider configuration;
 Harbor's configured base URL applies to its OpenAI and Anthropic providers.
 Caller `opencode_config` values override these defaults. Configuration sections
 that the adapter extends must be objects, and `skills.paths` must be a list of
-strings; invalid shapes fail during Agent construction.
+strings; invalid shapes fail during options preflight and Agent construction.
 Task MCP definitions supply defaults for each named server; caller MCP entries
 merge over them, preserving options such as authentication, timeout, and an
 explicit `enabled=false`. Caller-only servers remain available.
@@ -418,7 +430,7 @@ construction, preparation/custom verification hooks, scoring, and finalization.
 Psycheval owns runtime copies and native path/execution adaptation; source
 Datasets remain unchanged, including during plugin loading. Importing the
 adapter or registering a Dataset does not import the optional runtime or execute
-Dataset Python code. The supported runtime is WorkBuddy 0.1.0 with Harbor 0.21.0;
+Dataset Python code. The supported runtime is WorkBuddy 0.1.0 with Harbor 0.24.0;
 see the [installation workflow](../user/downstream-vendoring.md#install-the-workbuddy-runtime).
 
 Explicit plugin modules bundled in the Dataset load from the runtime copy in a
@@ -1023,6 +1035,12 @@ or mounted workspace cwd, removes stale trajectory output before invocation,
 and fails on invalid commands, timeout, non-zero exit, missing output, or
 malformed ATIF. Resume requires retained native state and cannot silently start
 a fresh session.
+
+When Skills are configured, both run and resume append a delimited instruction
+to inspect relevant `SKILL.md` files in the effective Skills directory. Host paths
+are mapped to native paths; other environments use environment paths. Relative
+Skills paths resolve against the effective Task workdir. Without Skills, stdin is
+unchanged. This does not extend the runtime JSON protocol or copy Skill contents.
 
 Harness trajectory files are decoded strictly as UTF-8, independent of the
 process locale or Python UTF-8 mode. The shared trajectory-validation boundary

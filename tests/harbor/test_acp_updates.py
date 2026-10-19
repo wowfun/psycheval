@@ -245,7 +245,7 @@ def test_update_final_drain_has_its_own_deadline(tmp_path, monkeypatch, caplog):
             await relay.finish()
 
     asyncio.run(scenario())
-    assert len(caplog.records) == 1
+    assert len([r for r in caplog.records if "observer disabled" in r.message]) == 1
     assert "TimeoutError" in caplog.text
 
 
@@ -418,7 +418,9 @@ def test_update_cleanup_preserves_primary_execution_error(
             assert not (staging / "request.json").exists()
 
     asyncio.run(scenario())
-    assert len(caplog.records) == (1 if failure == "observer" else 0)
+    assert len([r for r in caplog.records if "observer disabled" in r.message]) == (
+        1 if failure == "observer" else 0
+    )
     assert "PRIVATE_EXCEPTION" not in caplog.text
 
 
@@ -481,7 +483,7 @@ def test_repeated_cancellation_finishes_update_observer_before_publication(
             await asyncio.gather(running, return_exceptions=True)
 
     asyncio.run(scenario())
-    assert len(caplog.records) == 1
+    assert len([r for r in caplog.records if "observer disabled" in r.message]) == 1
     assert "TimeoutError" in caplog.text
 
 

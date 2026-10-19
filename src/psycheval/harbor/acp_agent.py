@@ -15,6 +15,7 @@ from typing import Any
 from uuid import uuid4
 
 from harbor.agents.base import BaseAgent
+from harbor.agents.capabilities import AgentCapabilities
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.models.task.config import TaskOS
 
@@ -136,10 +137,9 @@ class _SessionUpdateRelay:
 
 
 class HostACPAgent(BaseAgent):
-    SUPPORTS_ATIF = True
-    SUPPORTS_RESUME = True
-    SUPPORTS_WINDOWS = True
-    _supports_skills = False
+    capabilities = AgentCapabilities(
+        atif=True, resume=True, windows=True, mcp_servers=True
+    )
 
     def __init__(
         self,
@@ -170,7 +170,7 @@ class HostACPAgent(BaseAgent):
             raise ValueError(
                 "ACP argv requires an executable and NUL-free string arguments"
             )
-        if self.skills_dir and not self._supports_skills:
+        if self.skills_dir and not self.capabilities.skills:
             raise ValueError("This ACP Agent does not support Skills")
         if self.load_trajectory:
             raise ValueError("ACP Agents do not support trajectory import")

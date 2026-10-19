@@ -26,6 +26,7 @@ def test_host_verifier_protocol_is_scoped_to_verification(
         verifier.task = SimpleNamespace(
             paths=SimpleNamespace(instruction_path=instruction),
             extra_instruction_paths=[],
+            extra_instructions=[],
         )
         verifier.step_name = None
         failure = (
@@ -80,4 +81,12 @@ def test_host_verifier_rejects_other_environments():
     verifier = object.__new__(HostVerifier)
     verifier.environment = object()
     with pytest.raises(TypeError, match="requires HostEnvironment"):
+        asyncio.run(verifier.verify())
+
+
+def test_host_verifier_rejects_inline_instructions_before_execution(tmp_path):
+    verifier = object.__new__(HostVerifier)
+    verifier.environment = make_environment(tmp_path / "host")
+    verifier.task = SimpleNamespace(extra_instructions=["unsupported extra"])
+    with pytest.raises(ValueError, match="inline extra_instructions"):
         asyncio.run(verifier.verify())

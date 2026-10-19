@@ -160,7 +160,7 @@ class WorkBuddyInspection:
 
 
 class HostWorkBuddyAgent(HostACPAgent):
-    _supports_skills = True
+    capabilities = HostACPAgent.capabilities.model_copy(update={"skills": True})
 
     def __init__(
         self,

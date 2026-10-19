@@ -20,7 +20,9 @@ DEFAULT_TASK_IGNORES = (
     "*.swo",
     "*~",
 )
-PUBLISHABLE_TASK_FILES = frozenset(("task.toml", "instruction.md", "README.md"))
+PUBLISHABLE_TASK_FILES = frozenset(
+    ("task.toml", "instruction.md", "README.md", "trajectory.json")
+)
 PUBLISHABLE_TASK_DIRECTORIES = ("environment/", "tests/", "solution/", "steps/")
 
 
