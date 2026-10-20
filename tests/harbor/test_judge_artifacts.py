@@ -127,7 +127,10 @@ def test_manifest_precedes_declared_path_and_uses_only_declared_records(tmp_path
     prompt = requests[0]["messages"][-1]["content"]
     assert "### Artifact report\n" in prompt
     assert "### Artifact undeclared\n" not in prompt
-    assert "Faithful text:\n提取证据\n{context}\n" in prompt
+    assert (
+        "Faithful text:\n<artifact_faithful_text>\n提取证据\n{context}\n"
+        "</artifact_faithful_text>"
+    ) in prompt
     metadata = json.loads(
         prompt.split("Metadata:\n", 1)[1].split("\n\nFaithful text:", 1)[0]
     )

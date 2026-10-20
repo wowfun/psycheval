@@ -59,7 +59,8 @@ def test_copied_harbor_runs_without_the_original_package(
     completed = subprocess.run(
         [sys.executable, *python_flags, str(RUNNER), str(copied_harbor), scenario],
         cwd=copied_harbor,
-        text=True,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        encoding="utf-8",
         capture_output=True,
         timeout=60,
         check=False,

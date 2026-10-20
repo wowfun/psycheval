@@ -912,8 +912,14 @@ the step name when present, the current deterministic rewards before LLM merging
 referenced artifacts with read metadata and faithful text, and the rubric's
 question, pass/fail criteria, and scope limits when present. The default prompt
 keeps the `id`, `passed`, `reason` protocol and labels task instructions and Agent
-content as untrusted assessment data. Evidence is inserted verbatim; section
-headings are presentation, not enforced isolation from evidence content.
+content as untrusted assessment data. Task instruction text is enclosed in
+`<task_instruction>` tags, and each artifact's faithful text is enclosed in
+`<artifact_faithful_text>` tags. Task instruction, artifact metadata JSON, and
+faithful text use XML escaping for `&`, `<`, and `>` while preserving quotes,
+whitespace, newlines, and Unicode; decoding the
+entities once recovers the original text. The prompt identifies this content as
+XML-escaped assessment data. Tags mark data boundaries, not a guarantee that the
+model will ignore instructions within untrusted content.
 Custom values must be nonempty strings,
 and their whitespace and newlines are preserved. The user template must contain
 exactly one literal `{context}` marker. It is replaced with the complete current
@@ -1015,7 +1021,8 @@ diagnostic size grows with the number of rubrics sharing that evidence; the
 evidence-read budget is not a total diagnostic-size cap. When no request
 is attempted, `messages` is null. A recorded attempt does not establish provider
 receipt; its response or error retains that distinction. Known credentials are
-redacted from diagnostics without changing the messages submitted to the model.
+redacted from diagnostics in both original and XML-escaped forms, including
+nested JSON escaping, without changing the messages submitted to the model.
 These files are diagnostic, not another score authority. Every invocation removes
 previous framework scores, `judge/`,
 `artifact_manifest.json`, `artifact_text/`, `judge_evidence/`, and the legacy

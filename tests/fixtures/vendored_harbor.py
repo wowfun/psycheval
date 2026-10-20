@@ -295,7 +295,10 @@ def verifier(root: Path) -> None:
                 assert [message["role"] for message in messages] == ["user"]
                 prompt = messages[0]["content"]
                 assert prompt.startswith("You are a LLM-as-Judge evaluator.")
-                assert "Faithful text:\ncopied evidence 中文 📰 {context}\n" in prompt
+                assert (
+                    "Faithful text:\n<artifact_faithful_text>\n"
+                    "copied evidence 中文 📰 {context}\n</artifact_faithful_text>\n"
+                ) in prompt
                 rewards = json.loads(
                     prompt.split("## Rule reward\n", 1)[1].split(
                         "\n\n## Artifact evidence", 1
