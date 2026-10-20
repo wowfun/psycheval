@@ -17,6 +17,7 @@ from psycheval._state.annotations import optional_int
 from psycheval.analysis import cached_note_report_for_cell
 from psycheval.config import ToolConfig
 from psycheval.file_access import FileLeaseTimeout, blocking_file_lease
+from psycheval.report.metrics import tool_success_rate
 from psycheval.state.catalog_projection import catalog_summary, optional_number
 from psycheval.state.evaluation_report_catalog import (
     evaluation_report_location,
@@ -30,7 +31,7 @@ from psycheval.state.workspace_sources import (
 )
 
 CATALOG_SCHEMA_VERSION = 18
-CATALOG_PROJECTION_VERSION = 8
+CATALOG_PROJECTION_VERSION = 9
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 SUMMARY_CACHE_ENTRY_LIMIT = 128
@@ -1349,7 +1350,7 @@ _SAVED_VIEW_SUMMARY_METRICS = (
     ("turns", "number"),
     ("model_duration_ms", "duration"),
     ("total_tool_calls", "number"),
-    ("tool_error_rate", "percent"),
+    ("tool_success_rate", "percent"),
     ("score", "number"),
 )
 
@@ -1495,13 +1496,9 @@ def _saved_view_metric_rows(
 
 
 def _saved_view_metric_value(row: dict[str, Any], key: str) -> float | None:
-    if key != "tool_error_rate":
+    if key != "tool_success_rate":
         return optional_number(row.get(key))
-    calls = optional_number(row.get("total_tool_calls"))
-    if calls is None or calls == 0:
-        return None
-    errors = optional_number(row.get("total_tool_errors"))
-    return (errors or 0) / calls
+    return tool_success_rate(row.get("total_tool_calls"), row.get("total_tool_errors"))
 
 
 def _saved_view_distribution(values: list[float]) -> dict[str, float] | None:
@@ -1679,7 +1676,7 @@ def _sort_expression(sort: str) -> str:
         "duration_ms": "duration_ms",
         "turns": "turns",
         "total_tool_calls": "tool_calls",
-        "tool_error_rate": "CASE WHEN tool_calls > 0 THEN coalesce(tool_errors, 0) / tool_calls END",
+        "tool_success_rate": "CASE WHEN tool_calls > 0 AND tool_errors BETWEEN 0 AND tool_calls THEN (tool_calls - tool_errors) / tool_calls END",
         "tokens": "tokens",
         "cost_usd": "cost_usd",
         "ttft_ms": "ttft_ms",
@@ -1725,7 +1722,7 @@ _CATALOG_COLUMN_PRESENCE_SQL = {
     "tps": "tps IS NOT NULL",
     "turns": "turns IS NOT NULL",
     "total_tool_calls": "tool_calls IS NOT NULL",
-    "tool_error_rate": "tool_calls > 0 AND tool_errors IS NOT NULL",
+    "tool_success_rate": "tool_calls > 0 AND tool_errors BETWEEN 0 AND tool_calls",
     "tokens": "tokens IS NOT NULL",
     "cache_hit_rate": "cache_hit_rate IS NOT NULL",
     "cost_usd": "cost_usd IS NOT NULL",

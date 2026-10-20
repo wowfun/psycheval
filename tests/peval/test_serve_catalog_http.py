@@ -1856,7 +1856,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertIn("Model call duration", strings)
                 self.assertIn("Turns", strings)
                 self.assertIn("Tool Calls", strings)
-                self.assertIn("Tool Error Rate", strings)
+                self.assertIn("Tool Success Rate", strings)
                 self.assertNotIn("Reward", strings)
                 self.assertNotIn("Avg TTFT", strings)
 

@@ -3,8 +3,10 @@ from __future__ import annotations
 import io
 import unittest
 import zipfile
+from xml.etree import ElementTree
 
 from psycheval.serve.errors import HttpError
+from psycheval.serve.exports import xlsx_summary
 from psycheval.serve.payloads import summary_export_payload
 from psycheval.serve.summary_xlsx import SummaryWorksheet, summary_workbook
 
@@ -44,13 +46,44 @@ def summary_groups() -> list[dict]:
                 metric("turns", "number", None),
                 metric("model_duration_ms", "duration", 500),
                 metric("total_tool_calls", "number", 2),
-                metric("tool_error_rate", "percent", 0),
+                metric("tool_success_rate", "percent", 0),
             ],
         }
     ]
 
 
 class SummaryXlsxTests(unittest.TestCase):
+    def test_detailed_rate_cells_are_numeric_percentages_with_full_precision(self):
+        content = xlsx_summary(
+            [
+                {"total_tool_calls": 15, "total_tool_errors": 1},
+                {"total_tool_calls": 1, "total_tool_errors": 1},
+                {"total_tool_calls": 0, "total_tool_errors": 0},
+                {"total_tool_calls": 3},
+            ]
+        )
+        ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            sheet = ElementTree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+            rows = sheet.findall("s:sheetData/s:row", ns)
+            index = next(
+                i
+                for i, cell in enumerate(rows[0])
+                if cell.findtext("s:is/s:t", namespaces=ns) == "Tool Success Rate"
+            )
+            first, zero, no_calls, unknown = [list(row)[index] for row in rows[1:]]
+            self.assertEqual(first.get("t"), "n")
+            self.assertAlmostEqual(float(first.findtext("s:v", namespaces=ns)), 14 / 15)
+            self.assertEqual(float(zero.findtext("s:v", namespaces=ns)), 0)
+            self.assertIsNone(no_calls.find("s:v", ns))
+            self.assertIsNone(unknown.find("s:v", ns))
+            styles = ElementTree.fromstring(archive.read("xl/styles.xml"))
+            style = styles.find("s:cellXfs", ns)[int(first.get("s"))]
+            number_format = styles.find(
+                f"s:numFmts/s:numFmt[@numFmtId='{style.get('numFmtId')}']", ns
+            )
+            self.assertEqual(number_format.get("formatCode"), "0.0%")
+
     def test_payload_validation_is_strict_and_ordered_deduplicated(self) -> None:
         query = {
             "state": "all",
@@ -173,7 +206,7 @@ class SummaryXlsxTests(unittest.TestCase):
         self.assertIn("Decode TPS", shared_strings)
         self.assertIn("Cache Hit", shared_strings)
         self.assertIn("Tokens", shared_strings)
-        self.assertIn("Tool Error Rate", shared_strings)
+        self.assertIn("Tool Success Rate", shared_strings)
         self.assertNotIn("Reward", shared_strings)
         self.assertNotIn("Turns", shared_strings)
         self.assertNotIn("<f>", first_sheet)

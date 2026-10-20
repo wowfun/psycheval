@@ -93,8 +93,8 @@ function closeOpenSubmenus(except = null) {
 }
 function synthesizedReportRow(trajectory, meta, index = -1) {
   const metrics = trajectory?.final_metrics || {};
-  const totalToolCalls = hasMetricValue(finalMetric(metrics, "total_tool_calls")) ? Number(finalMetric(metrics, "total_tool_calls")) : 0;
-  const totalToolErrors = hasMetricValue(finalMetric(metrics, "total_tool_errors")) ? Number(finalMetric(metrics, "total_tool_errors")) : 0;
+  const totalToolCalls = finalMetric(metrics, "total_tool_calls");
+  const totalToolErrors = finalMetric(metrics, "total_tool_errors");
   const agent = trajectory?.agent || {};
   const source = sourceForTrialIndex(index);
   return {

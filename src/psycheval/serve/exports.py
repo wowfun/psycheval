@@ -8,6 +8,7 @@ from html import escape
 from typing import Any
 
 from psycheval.config import ToolConfig
+from psycheval.report.metrics import tool_success_rate
 from psycheval.serve.summary_xlsx import (
     EXCEL_CONTENT_TYPE,
     SummaryWorksheet,
@@ -18,6 +19,7 @@ from psycheval.state import CatalogQuery, ServeStateStore, WorkspaceCatalog
 
 MAX_REPORT_EXPORT_CELLS = 100
 MAX_REPORT_EXPORT_INPUT_BYTES = 50 * 1024 * 1024
+_TOOL_SUCCESS_RATE_HEADER = "Tool Success Rate"
 
 
 @dataclass(frozen=True)
@@ -166,6 +168,12 @@ def xlsx_summary(rows: list[dict[str, Any]]) -> bytes:
         ("Turns", lambda row: row.get("turns")),
         ("Tool Calls", lambda row: row.get("total_tool_calls")),
         ("Tool Errors", lambda row: row.get("total_tool_errors")),
+        (
+            _TOOL_SUCCESS_RATE_HEADER,
+            lambda row: tool_success_rate(
+                row.get("total_tool_calls"), row.get("total_tool_errors")
+            ),
+        ),
         ("Tokens", lambda row: row.get("tokens")),
         ("Cache Hit Rate", lambda row: row.get("cache_hit_rate")),
         ("TTFT Sum (ms)", lambda row: row.get("ttft_ms_sum")),
@@ -184,14 +192,28 @@ def xlsx_summary(rows: list[dict[str, Any]]) -> bytes:
     values.extend([[value(row) for _label, value in columns] for row in rows])
     files = {
         "[Content_Types].xml": _xml_declaration()
-        + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+        + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>',
         "_rels/.rels": _xml_declaration()
         + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
         "xl/workbook.xml": _xml_declaration()
         + '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Leaderboard" sheetId="1" r:id="rId1"/></sheets></workbook>',
         "xl/_rels/workbook.xml.rels": _xml_declaration()
-        + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
-        "xl/worksheets/sheet1.xml": _worksheet_xml(values),
+        + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+        "xl/styles.xml": _xml_declaration()
+        + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        '<numFmts count="1"><numFmt numFmtId="164" formatCode="0.0%"/></numFmts>'
+        '<fonts count="1"><font/></fonts>'
+        '<fills count="2"><fill><patternFill patternType="none"/></fill>'
+        '<fill><patternFill patternType="gray125"/></fill></fills>'
+        '<borders count="1"><border/></borders>'
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+        '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+        '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>'
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+        "</styleSheet>",
+        "xl/worksheets/sheet1.xml": _worksheet_xml(
+            values, percentage_column=values[0].index(_TOOL_SUCCESS_RATE_HEADER)
+        ),
     }
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -200,12 +222,19 @@ def xlsx_summary(rows: list[dict[str, Any]]) -> bytes:
     return output.getvalue()
 
 
-def _worksheet_xml(rows: list[list[Any]]) -> str:
+def _worksheet_xml(rows: list[list[Any]], *, percentage_column: int) -> str:
     xml_rows: list[str] = []
     for row_index, row in enumerate(rows, start=1):
         cells: list[str] = []
         for column_index, value in enumerate(row):
             reference = f"{_column_name(column_index)}{row_index}"
+            if (
+                row_index > 1
+                and column_index == percentage_column
+                and value is not None
+            ):
+                cells.append(f'<c r="{reference}" t="n" s="1"><v>{value}</v></c>')
+                continue
             text = "" if value is None else str(value)
             cells.append(
                 f'<c r="{reference}" t="inlineStr"><is><t>{escape(text)}</t></is></c>'

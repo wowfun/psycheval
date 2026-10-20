@@ -21,7 +21,7 @@ SUMMARY_METRICS = (
     ("turns", "number", "Turns", "turns"),
     ("model_duration_ms", "duration", "Model call duration", "model_call_duration"),
     ("total_tool_calls", "number", "Tool Calls", "tool_calls"),
-    ("tool_error_rate", "percent", "Tool Error Rate", "tool_error_rate"),
+    ("tool_success_rate", "percent", "Tool Success Rate", "tool_success_rate"),
 )
 _ILLEGAL_SHEET_CHARACTERS = re.compile(r"[\[\]:*?/\\]")
 

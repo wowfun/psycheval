@@ -14,6 +14,12 @@ const browser = installBrowserDom(`
 `);
 
 const tables = await import("../../src/psycheval/assets/web/modules/data-tables.js");
+
+test("tool success rate preserves unknowns and valid zero rates", () => {
+  for (const [calls, errors, expected] of [[4, 0, 1], [4, 1, 0.75], [4, 4, 0], [0, 0, null], [4, undefined, null], [4, -1, null], [4, 5, null]]) {
+    assert.equal(tables.rowToolSuccessRate({ total_tool_calls: calls, total_tool_errors: errors }), expected);
+  }
+});
 const runtime = await import("../../src/psycheval/assets/web/modules/runtime.js");
 const views = await import("../../src/psycheval/assets/web/modules/workspace-views.js");
 const summaries = await import("../../src/psycheval/assets/web/modules/leaderboard-summary.js");
@@ -155,7 +161,7 @@ test("Leaderboard renders the complete-query summary returned by the server", ()
     "turns",
     "model_duration_ms",
     "total_tool_calls",
-    "tool_error_rate",
+    "tool_success_rate",
   ]);
 
   const previousGroupBy = runtime.state.leaderboardSummaryGroupBy;

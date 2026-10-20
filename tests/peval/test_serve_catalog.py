@@ -38,6 +38,41 @@ from tests.peval.test_atif_contract import valid_trajectory
 
 
 class WorkspaceCatalogTests(unittest.TestCase):
+    def test_tool_success_sort_and_presence_use_valid_measurements(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index, (calls, errors) in enumerate(
+                ((4, 0), (4, 1), (4, 4), (4, None), ("4", "1")), start=1
+            ):
+                cell = self.write_cell(root, index)
+                path = cell / "agent" / "trajectory.json"
+                trajectory = json.loads(path.read_text(encoding="utf-8"))
+                trajectory["final_metrics"].setdefault("extra", {}).update(
+                    total_tool_calls=calls, total_tool_errors=errors
+                )
+                path.write_text(json.dumps(trajectory), encoding="utf-8")
+            store, catalog = self.catalog(root)
+            try:
+                catalog.reconcile()
+                for direction, expected in (
+                    ("desc", [1, 2, 3]),
+                    ("asc", [3, 2, 1]),
+                ):
+                    page = catalog.query(
+                        CatalogQuery(sort="tool_success_rate", direction=direction)
+                    )
+                    self.assertEqual(
+                        [row.payload["trial_key"] for row in page.items[:3]],
+                        [f"trial-{index:04d}" for index in expected],
+                    )
+                    self.assertCountEqual(
+                        [row.payload["trial_key"] for row in page.items[3:]],
+                        ["trial-0004", "trial-0005"],
+                    )
+                    self.assertEqual(page.column_presence["tool_success_rate"], 3)
+            finally:
+                store.close()
+
     def test_unreadable_rows_keep_only_independent_harbor_finish_approximations(self):
         with tempfile.TemporaryDirectory() as tmp:
             store, catalog = self.catalog(Path(tmp))

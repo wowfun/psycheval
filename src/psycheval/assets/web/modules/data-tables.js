@@ -103,7 +103,7 @@ function leaderboardColumns() {
     { key: "tps", label: t("decode_tps", "Decode TPS"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.tps, format: fmtTps },
     { key: "turns", label: t("turns", "Turns"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.turns, format: fmtNum },
     { key: "total_tool_calls", label: t("tool_calls", "Tool Calls"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.total_tool_calls, format: value => hasMetricValue(value) ? fmtNum(value) : "-" },
-    { key: "tool_error_rate", label: t("tool_error_rate", "Tool Error Rate"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => rowToolErrorRate(row), format: fmtPct },
+    { key: "tool_success_rate", label: t("tool_success_rate", "Tool Success Rate"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => rowToolSuccessRate(row), format: fmtPct },
     { key: "tokens", label: t("tokens", "Tokens"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.tokens, format: fmtNum },
     { key: "cache_hit_rate", label: t("cache_hit", "Cache Hit"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.cache_hit_rate, format: fmtPct },
     { key: "cost_usd", label: t("cost", "Cost"), valueType: "number", numeric: true, sortable: true, value: row => row.cost_usd, format: fmtCost },
@@ -277,9 +277,11 @@ function bindLeaderboardColumnControls(target) {
 function agentNameFor(row) {
   return row?.agent_name || row?.adapter || "-";
 }
-function rowToolErrorRate(row) {
-  if (!hasMetricValue(row?.total_tool_calls) || Number(row.total_tool_calls) === 0) return null;
-  return Number(row.total_tool_errors || 0) / Number(row.total_tool_calls);
+function rowToolSuccessRate(row) {
+  const calls = row?.total_tool_calls;
+  const errors = row?.total_tool_errors;
+  if (!Number.isFinite(calls) || !Number.isFinite(errors) || calls <= 0 || errors < 0 || errors > calls) return null;
+  return (calls - errors) / calls;
 }
 function renderLeaderboard(rows = leaderboardRows()) {
   const target = $("leaderboard");
@@ -1137,7 +1139,7 @@ export {
   renderTableSuggestions,
   resetDataTableFilterDraft,
   resolveTableCellEdit,
-  rowToolErrorRate,
+  rowToolSuccessRate,
   sameDataTableFilterValues,
   selectedStepExists,
   selectedStepVisible,

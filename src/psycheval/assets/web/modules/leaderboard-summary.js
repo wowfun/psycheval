@@ -105,7 +105,7 @@ function leaderboardSummaryDefinitions() {
     { key: "turns", label: t("turns", "Turns"), type: "number" },
     { key: "model_duration_ms", label: t("model_call_duration", "Model call duration"), type: "duration" },
     { key: "total_tool_calls", label: t("tool_calls", "Tool Calls"), type: "number" },
-    { key: "tool_error_rate", label: t("tool_error_rate", "Tool Error Rate"), type: "percent" },
+    { key: "tool_success_rate", label: t("tool_success_rate", "Tool Success Rate"), type: "percent" },
   ];
 }
 

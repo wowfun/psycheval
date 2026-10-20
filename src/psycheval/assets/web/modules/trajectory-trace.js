@@ -1,7 +1,7 @@
 import { renderDateTime } from "./date-time.js";
 import { timingSource } from "./timing-source.js";
-import { $, esc, fmtCost, fmtMs, fmtNum, fmtScore, hasMetricValue, listValue, lower, renderComparisonPanels, selectedKey, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, statusLabel, t } from "./runtime.js";
-import { agentNameFor, bindDataTableSelection, renderRowSelection, selectionColumn } from "./data-tables.js";
+import { $, esc, fmtCost, fmtMs, fmtNum, fmtPct, fmtScore, hasMetricValue, listValue, lower, renderComparisonPanels, selectedKey, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, statusLabel, t } from "./runtime.js";
+import { agentNameFor, bindDataTableSelection, renderRowSelection, rowToolSuccessRate, selectionColumn } from "./data-tables.js";
 import { bindServeSourceStateControls, renderServeSourceStateControls, renderSourceRefreshControl } from "./source-state-controls.js";
 import { catalogStepOutline, leaderboardRows, metaFor, selectServeDetail, trajectoryFor } from "./serve-catalog.js";
 import { finalMetric, infoGrid, maxPositiveMetric, reasoningExposed, systemExposed, timeTitle, timingRatio, tokenTotal, trajectoryDurationHeatClass, trialWallDurationMs } from "./analysis-metrics.js";
@@ -133,6 +133,8 @@ function renderTrace() {
   const root = trajectoryFor(rootMeta.trial_key);
   const { trajectory, meta: trial, depth } = selectedTrajectoryDetail(root, rootMeta);
   const metrics = trajectory?.final_metrics || {};
+  const toolCalls = finalMetric(metrics, "total_tool_calls");
+  const toolErrors = finalMetric(metrics, "total_tool_errors");
   const status = lower(trial.status || "passed");
   const agentName = trajectory?.agent?.name || "-";
   const model = trajectory?.agent?.model_name || "-";
@@ -164,7 +166,8 @@ function renderTrace() {
       [t("evaluator", "Evaluator"), trial.score_message || "-"],
       [t("tokens", "Tokens"), fmtNum(tokenTotal(metrics))],
       [t("turns", "Turns"), finalMetric(metrics, "total_turns") ?? "-"],
-      [t("tool_success_total", "Tool success / total"), toolCallRatio(finalMetric(metrics, "total_tool_calls") ?? 0, finalMetric(metrics, "total_tool_errors") ?? 0)],
+      [t("tool_success_rate", "Tool Success Rate"), fmtPct(rowToolSuccessRate({ total_tool_calls: toolCalls, total_tool_errors: toolErrors }))],
+      [t("tool_success_total", "Tool success / total"), toolCallRatio(toolCalls, toolErrors)],
       [t("cost", "Cost"), fmtCost(metrics.total_cost_usd)]
     ])}
     ${renderHarborEvidence(trial)}

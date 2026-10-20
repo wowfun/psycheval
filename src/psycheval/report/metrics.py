@@ -12,15 +12,16 @@ def automatic_analysis_metrics(
 ) -> dict[str, Any]:
     final_metrics = trajectory.get("final_metrics")
     metrics = final_metrics if isinstance(final_metrics, dict) else {}
-    total_tool_calls = int_metric(final_metric(metrics, "total_tool_calls")) or 0
-    total_tool_errors = int_metric(final_metric(metrics, "total_tool_errors")) or 0
     tokens = token_total(metrics)
     tool_rows = tool_metric_rows(trajectory, meta)
     return compact_dict(
         {
             "tooling": compact_dict(
                 {
-                    "tool_error_rate": rate(total_tool_errors, total_tool_calls),
+                    "tool_success_rate": tool_success_rate(
+                        final_metric(metrics, "total_tool_calls"),
+                        final_metric(metrics, "total_tool_errors"),
+                    ),
                     "distinct_tools": len({row["name"] for row in tool_rows}),
                 }
             ),
@@ -36,6 +37,14 @@ def automatic_analysis_metrics(
             "latency": latency_metrics(trajectory, meta),
         }
     )
+
+
+def tool_success_rate(calls: Any, errors: Any) -> float | None:
+    calls = number_metric(calls)
+    errors = number_metric(errors)
+    if calls is None or errors is None or calls <= 0 or not 0 <= errors <= calls:
+        return None
+    return (calls - errors) / calls
 
 
 def tool_metric_rows(

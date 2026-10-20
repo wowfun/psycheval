@@ -228,6 +228,19 @@ every group. Grouped summaries remain exact and are never truncated or
 approximated; a query whose distinct group count exceeds the service capacity is
 rejected so the user can refine the scope or select an overall summary.
 
+Tool success rate is the fraction of tool calls without a recorded error:
+`(total_tool_calls - total_tool_errors) /
+total_tool_calls`. Both counts must be known and valid; zero calls have no rate.
+Counts must be finite numeric values; strings and booleans remain unknown in
+catalog projections as well as direct trajectory views. The detailed spreadsheet
+stores the rate as a numeric cell with a one-decimal percentage display, retaining
+the underlying precision.
+This is an execution-outcome metric, not a judgment of task correctness. Each
+Trial's rate is computed before grouped means and percentiles; raw error evidence
+and counts remain unchanged.
+The Trial's success/total display follows the same validity rule and does not
+infer zero errors from an absent count.
+
 An explicit trajectory value wins over aligned supplemental Trial telemetry.
 Optional telemetry failure does not invalidate a readable trajectory. Multiple
 reward dimensions without an explicit or unambiguous scalar are not averaged

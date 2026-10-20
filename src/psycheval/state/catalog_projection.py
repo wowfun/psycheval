@@ -7,7 +7,7 @@ from typing import Any
 from psycheval._state.annotations import optional_int, optional_str
 from psycheval.atif import iso_timestamp_ms
 from psycheval.report.inference import inference_row_metrics
-from psycheval.report.metrics import final_metric, token_total
+from psycheval.report.metrics import final_metric, number_metric, token_total
 from psycheval.report.timing import is_model_duration_source, node_duration
 
 
@@ -58,10 +58,8 @@ def catalog_summary(
         "wall_duration_ms": _wall_duration_ms(meta),
         "model_duration_ms": model_duration_ms(trajectory, meta),
         "turns": optional_number(final_metric(metrics, "total_turns")),
-        "total_tool_calls": optional_number(final_metric(metrics, "total_tool_calls")),
-        "total_tool_errors": optional_number(
-            final_metric(metrics, "total_tool_errors")
-        ),
+        "total_tool_calls": number_metric(final_metric(metrics, "total_tool_calls")),
+        "total_tool_errors": number_metric(final_metric(metrics, "total_tool_errors")),
         "tokens": token_total(metrics),
         "cost_usd": optional_number(metrics.get("total_cost_usd")),
         "warnings": len(warnings) if isinstance(warnings, list) else 0,

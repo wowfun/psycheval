@@ -133,7 +133,7 @@ function analysisMetricGroupLabel(key) {
 }
 function analysisMetricLabel(key) {
   const labels = {
-    tool_error_rate: t("metric_tool_error_rate", "Tool error rate"),
+    tool_success_rate: t("metric_tool_success_rate", "Tool success rate"),
     distinct_tools: t("metric_distinct_tools", "Distinct tools"),
     cost_per_1k_tokens: t("metric_cost_per_1k_tokens", "Cost / 1k tokens"),
     model_duration_ms: t("metric_model_duration_ms", "Model duration"),
@@ -257,7 +257,7 @@ function isMetricScalar(value) {
 }
 function metricValueText(key, value) {
   if (value === null || value === undefined || value === "") return "-";
-  if (key === "tool_error_rate") return fmtPct(value);
+  if (key === "tool_success_rate") return fmtPct(value);
   if (String(key).endsWith("_ms") || key === "duration_ms") return fmtMs(value);
   if (typeof value === "number") return fmtNum(value);
   return String(value);

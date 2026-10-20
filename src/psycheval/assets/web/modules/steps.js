@@ -3,6 +3,7 @@ import { stepPreviewText } from "./trajectory-trace.js";
 import { metricExtra, timeGradientClass, timeGradientStyle, timeTitle, timingRatio } from "./analysis-metrics.js";
 import { bindCopyButton } from "./clipboard.js";
 import { timingSource } from "./timing-source.js";
+import { rowToolSuccessRate } from "./data-tables.js";
 
 function renderStepsHeader(trajectory, options = {}) {
   const count = (trajectory?.steps || []).length;
@@ -142,9 +143,8 @@ function renderStepRail(step, meta, timingStats) {
   return `${summary}${toolChips.length ? `<div class="rail-tool-row">${toolChips.join("")}</div>` : ""}`;
 }
 function toolCallRatio(total, errors) {
-  const callTotal = Math.max(0, Number(total || 0));
-  const errorTotal = Math.max(0, Number(errors || 0));
-  return `${Math.max(0, callTotal - errorTotal)}/${callTotal}`;
+  return rowToolSuccessRate({ total_tool_calls: total, total_tool_errors: errors }) === null
+    ? "-" : `${total - errors}/${total}`;
 }
 function toolErrorCount(meta) {
   return listValue(meta?.tool_calls).filter(tool => lower(tool?.status) === "error").length;
