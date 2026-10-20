@@ -75,7 +75,20 @@
 .verification-notice { margin:0; padding:10px; font-size:12px; overflow-wrap:anywhere; }
 .verification-content { grid-row:3; min-height:0; min-width:0; overflow:auto; }
 .verification-content>img { display:block; max-width:100%; height:auto; }
-.verification-raw { margin:0; padding:12px; font:12px/1.5 var(--mono); white-space:pre-wrap; overflow-wrap:anywhere; }
+.verification-raw { margin:0; max-height:none; overflow:visible; padding:12px; font:12px/1.5 var(--mono); white-space:pre-wrap; overflow-wrap:anywhere; }
+.json-view { padding:12px; font:12px/1.6 var(--mono); overflow-wrap:anywhere; }
+.json-view summary { cursor:pointer; padding:3px 0; }
+.json-view summary:hover { background:var(--surface-2); }
+.json-view summary:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.json-children { margin-left:14px; padding-left:10px; border-left:1px solid var(--rule); }
+.json-leaf { padding:3px 0; white-space:pre-wrap; }
+.json-key { color:var(--ink); font-weight:600; }
+.json-collection { color:var(--muted); }
+.json-string,.json-string-text { color:var(--pass); }
+.json-number { color:var(--focus); }
+.json-boolean,.json-null { color:var(--muted); font-style:italic; }
+.json-string-text { padding:5px 0; white-space:pre-wrap; }
+.json-more { margin:6px 0; }
 .verification-document { font-size:12px; }
 .verification-metrics { margin:0; }
 .verification-metrics>div { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; border-bottom:1px solid var(--rule); padding:10px 12px; overflow-wrap:anywhere; }

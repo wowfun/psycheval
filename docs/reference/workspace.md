@@ -296,6 +296,15 @@ Dataset and Job associations follow the [report data contract](state-and-data.md
 The Home Trial sidebar keeps run status, score, and score source visible above
 Verification, Task, and Trajectory tabs. Verification uses a searchable file
 tree and on-demand previews under the [evaluation evidence contract](evaluation.md).
+The preview content pane fills the remaining sidebar height and owns scrolling;
+raw file text has no separate height cap or nested scroll area.
+Complete JSON files offer a key-based collapsible view for nonempty objects,
+arrays, and long strings. Small trees open initially; larger or deeply nested
+trees defer branches until expanded, with collections loaded in batches and
+bounded work per expansion. Existing score summaries remain available alongside
+the JSON view, which is built only when selected. Switching to raw text preserves
+expansion state, and copying uses the original file text. Malformed or truncated
+JSON remains raw text.
 Its initial tab is Verification; later Trial selections retain the active tab,
 while selecting a trajectory step opens Trajectory. Subagent navigation changes
 the trajectory only, not the Trial or Harbor Step that owns verification.

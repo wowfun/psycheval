@@ -98,3 +98,77 @@ test("a retained Trial remains inspectable after its registered Task disappears"
     await expect(sidebar.locator(".verification-metrics")).toBeVisible();
   } finally { await stopFixture(fixture); }
 });
+
+test("raw verification files use the full preview height with one scroll area", async ({ page }) => {
+  const fixture = await startFixture({ PEVAL_E2E_VERIFICATION: "1", PYTHONPATH: process.cwd() });
+  try {
+    await page.goto(fixture.origin);
+    const catalog = await (await page.request.get(`${fixture.origin}/api/catalog`)).json();
+    const trial = catalog.items.find(row => row.task_name === "workbuddy/office-one");
+    await page.locator(`.trajectory-row[data-source-key="${trial.source_key}"]`).click();
+    const verification = page.locator('#detail-sidebar [data-trial-panel="verification"]');
+    await verification.locator('.harbor-file-row[title="verifier/judge/rubric-0001.json"]').click();
+    await expect(verification.locator(".json-view")).toBeVisible();
+    await verification.getByRole("button", { name: "Raw", exact: true }).click();
+    await expect(verification.locator(".verification-raw")).toContainText("Retained scoring context.");
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 1440, height: 650 }, { width: 390, height: 900 }]) {
+      await page.setViewportSize(viewport);
+      const content = verification.locator(".verification-content");
+      const geometry = await content.evaluate(pane => {
+        const raw = pane.querySelector(".verification-raw");
+        const preview = pane.closest(".verification-preview");
+        return {
+          paneHeight: pane.clientHeight,
+          paneScrollHeight: pane.scrollHeight,
+          rawHeight: raw.clientHeight,
+          rawScrollHeight: raw.scrollHeight,
+          unusedHeight: preview.getBoundingClientRect().bottom - pane.getBoundingClientRect().bottom,
+        };
+      });
+      expect(geometry.paneHeight).toBeGreaterThan(0);
+      expect(geometry.rawHeight).toBeGreaterThan(geometry.paneHeight);
+      expect(geometry.rawScrollHeight - geometry.rawHeight).toBeLessThanOrEqual(3);
+      expect(geometry.paneScrollHeight).toBeGreaterThan(geometry.paneHeight);
+      expect(Math.abs(geometry.unusedHeight)).toBeLessThanOrEqual(3);
+      await content.hover();
+      await page.mouse.wheel(0, geometry.paneScrollHeight);
+      await expect.poll(() => content.evaluate(pane => Math.abs(pane.scrollHeight - pane.clientHeight - pane.scrollTop))).toBeLessThanOrEqual(3);
+    }
+  } finally { await stopFixture(fixture); }
+});
+
+test("JSON starts fully expanded, supports keyboard folding, and raw copy preserves the source", async ({ page, context }) => {
+  const fixture = await startFixture({ PEVAL_E2E_VERIFICATION: "1", PYTHONPATH: process.cwd() });
+  try {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.goto(fixture.origin);
+    const catalog = await (await page.request.get(`${fixture.origin}/api/catalog`)).json();
+    const trial = catalog.items.find(row => row.task_name === "workbuddy/office-one");
+    await page.locator(`.trajectory-row[data-source-key="${trial.source_key}"]`).click();
+    const verification = page.locator('#detail-sidebar [data-trial-panel="verification"]');
+    await verification.locator('.harbor-file-row[title="verifier/judge/rubric-0001.json"]').click();
+    const messages = verification.locator('.json-view [data-json-key="messages"]');
+    await expect(verification.locator(".json-view details:not([open])")).toHaveCount(0);
+    await expect(messages).toHaveAttribute("open", "");
+    await messages.locator(":scope > summary").press("Enter");
+    await expect(messages).not.toHaveAttribute("open", "");
+    await messages.locator(":scope > summary").press("Enter");
+    const content = messages.locator('[data-json-key="content"]');
+    await expect(content.locator(".json-string-text")).toBeVisible();
+    await content.locator(":scope > summary").press("Enter");
+    await expect(content.locator(".json-string-text")).toBeHidden();
+    await content.locator(":scope > summary").press("Enter");
+    await expect(content.locator(".json-string-text")).toBeVisible();
+    await content.locator(":scope > summary").press("Enter");
+    await expect(content.locator(".json-string-text")).toBeHidden();
+    await verification.getByRole("button", { name: "Raw", exact: true }).click();
+    const original = await verification.locator(".verification-raw").textContent();
+    await verification.getByRole("button", { name: "Copy", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(original);
+    await verification.getByRole("button", { name: "JSON", exact: true }).click();
+    await expect(messages).toHaveAttribute("open", "");
+    await expect(content).not.toHaveAttribute("open", "");
+    await page.setViewportSize({ width: 390, height: 900 });
+    expect(await verification.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(false);
+  } finally { await stopFixture(fixture); }
+});

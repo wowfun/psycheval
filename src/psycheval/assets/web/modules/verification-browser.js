@@ -3,6 +3,7 @@ import { serveApi } from "./serve-effects.js";
 import { bindCopyButton } from "./clipboard.js";
 import { bindFilePreviewToggle, createFileMarkdown, createFileRead, formatBytes, renderFileTree, selectFile, showFileText } from "./file-browser.js";
 import { interpretVerificationFile, renderVerificationDocument } from "./verification-formats.js";
+import { createJsonView } from "./json-view.js";
 
 function createVerificationBrowser({ request = serveApi } = {}) {
   const element = document.createElement("div"); element.className = "verification-browser";
@@ -56,22 +57,35 @@ function createVerificationBrowser({ request = serveApi } = {}) {
     bindCopyButton(copy, () => payload?.content || "", selected.path); actions.append(copy);
     const model = interpretVerificationFile(selected.path, payload.content, payload.truncated);
     const markdown = createFileMarkdown(selected.path, payload.content, payload.truncated);
+    const documentView = markdown || (model ? renderVerificationDocument(model, evidence) : null);
+    const hasJson = !payload.truncated && /\.json$/i.test(selected.path);
+    let json = null;
     if (payload.truncated) notice(t("verification_truncated", "Preview truncated at 2 MiB."));
-    if (!model && !markdown) {
-      if (!payload.truncated && selected.path.endsWith(".json")) {
-        try { showFileText(raw, JSON.stringify(JSON.parse(payload.content), null, 2)); }
-        catch { notice(t("verification_malformed_preview", "Invalid structured data; showing raw text.")); }
-      }
-      body.append(raw); return;
+    else if (hasJson && !documentView) {
+      try { json = createJsonView(payload.content); }
+      catch { notice(t("verification_malformed_preview", "Invalid structured data; showing raw text.")); }
     }
-    const formatted = markdown || renderVerificationDocument(model, evidence);
-    body.append(formatted);
+    let formatted = documentView || json;
+    if (!formatted) { body.append(raw); return; }
     const toggle = document.createElement("button"); toggle.className = "action-button compact";
     toggle.dataset.verificationRaw = "";
     const changeMode = showRaw => {
       body.replaceChildren(showRaw ? raw : formatted);
-      bindFilePreviewToggle(toggle, showRaw, changeMode, markdown ? t("preview", "Preview") : t("verification_details", "Details"));
+      bindFilePreviewToggle(toggle, showRaw, changeMode, markdown ? t("preview", "Preview") : formatted === json ? "JSON" : t("verification_details", "Details"));
     };
+    if (hasJson && documentView) {
+      const jsonToggle = document.createElement("button"); jsonToggle.className = "action-button compact"; jsonToggle.textContent = "JSON";
+      jsonToggle.onclick = () => {
+        if (!json) {
+          try { json = createJsonView(payload.content); }
+          catch { notice(t("verification_malformed_preview", "Invalid structured data; showing raw text.")); changeMode(true); return; }
+        }
+        formatted = formatted === json ? documentView : json;
+        jsonToggle.textContent = formatted === json ? t("verification_details", "Details") : "JSON";
+        changeMode(false);
+      };
+      actions.prepend(jsonToggle);
+    }
     changeMode(false);
     actions.prepend(toggle);
   }

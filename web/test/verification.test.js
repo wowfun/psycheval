@@ -181,3 +181,41 @@ test("Verification Markdown renders tables safely and leaves truncated Markdown 
   assert.equal(browser.element.querySelector(".file-markdown"), null);
   assert.equal(browser.element.querySelector("[data-verification-raw]"), null);
 });
+
+test("JSON previews start expanded, preserve user folds through raw mode, and retain original text", async () => {
+  const content = '{ "checks": [ {"id":"answer","passed":true} ], "score": 1.2300 }';
+  const browser = createVerificationBrowser({ request: async () => ({ content }) });
+  browser.setSource("trial");
+  await browser.open(entry("verifier/checks.json"));
+  assert.ok(browser.element.querySelector(".json-view"));
+  const checks = browser.element.querySelector('[data-json-key="checks"]');
+  assert.equal(checks.open, true);
+  checks.querySelector("summary").click(); await tick();
+  assert.equal(checks.open, false);
+  browser.element.querySelector("[data-verification-raw]").click();
+  assert.equal(browser.element.querySelector(".verification-raw").textContent, content);
+  assert.equal(browser.element.querySelector(".json-view"), null);
+  browser.element.querySelector("[data-verification-raw]").click();
+  assert.equal(browser.element.querySelector('[data-json-key="checks"]'), checks);
+  assert.equal(checks.open, false);
+  assert.equal(browser.element.querySelector(".json-number").textContent, "1.2300");
+});
+
+test("structured scores expose JSON without replacing their recorded metrics", async () => {
+  const browser = createVerificationBrowser({ request: async () => ({ content: '{"reward":0,"tests_total":5}' }) });
+  browser.setSource("trial");
+  const created = [];
+  const create = document.createElement.bind(document);
+  document.createElement = (...args) => { const node = create(...args); created.push(node); return node; };
+  try { await browser.open(entry("verifier/score.json")); }
+  finally { document.createElement = create; }
+  assert.equal(created.filter(node => node.classList.contains("json-view")).length, 0);
+  assert.ok(browser.element.querySelector(".verification-metrics"));
+  const jsonButton = [...browser.element.querySelectorAll("[data-verification-actions] button")].find(node => node.textContent === "JSON");
+  jsonButton.click();
+  assert.ok(browser.element.querySelector(".json-view"));
+  assert.equal(browser.element.querySelector(".verification-metrics"), null);
+  jsonButton.click();
+  assert.ok(browser.element.querySelector(".verification-metrics"));
+  assert.equal(browser.element.querySelector(".json-view"), null);
+});

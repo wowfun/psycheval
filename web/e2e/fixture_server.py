@@ -345,6 +345,18 @@ def write_verification_trial(root: Path) -> None:
     )
     (verifier / "raw_artifacts/report.xlsx").write_bytes(b"fixture workbook")
     (verifier / "reward.json").write_text('{"reward":0.676}', encoding="utf-8")
+    (verifier / "judge").mkdir()
+    (verifier / "judge/rubric-0001.json").write_text(
+        json.dumps(
+            {
+                "id": "readability",
+                "messages": [
+                    {"role": "user", "content": "Retained scoring context.\n" * 200}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     verdict = {
         "item_id": "position-match",
         "status": "fail",
