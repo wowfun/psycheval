@@ -17,6 +17,34 @@ const { restoreHomeLocation } = await import("../../src/psycheval/assets/web/mod
 const locationCodec = await import("../../src/psycheval/assets/web/app/workspace-location.js");
 const report = { report_id: "20261012-000000-123456", report_ref: "package:20261012-000000-123456", filename: "report.md", format: "markdown", source_keys: [] };
 
+test("clearing query conditions preserves summary presentation, including noncanonical axis order", async () => {
+  const { tableControls } = await import("../../src/psycheval/assets/web/modules/data-tables.js");
+  const location = locationCodec.decodeWorkspaceLocation("home", new URL("http://localhost"));
+  restoreHomeLocation(location);
+  state.leaderboardSummaryChartType = "radar";
+  state.leaderboardSummaryRadarMetrics = ["tool_success_rate", "tps", "score", "duration_ms", "cache_hit_rate", "ttft_ms"];
+  state.leaderboardSummaryRadarGroups = ["chosen-model"];
+  state.leaderboardSummaryGroupBy = "model";
+  state.leaderboardSummaryStatistic = "p95";
+  state.leaderboardSummaryTableOpen = true;
+  assert.equal(catalog.leaderboardConditionsAreDefault(), true);
+  state.catalogQuery.search = "filtered";
+  state.search.query = "filtered";
+  tableControls("leaderboard").filters.model = ["chosen-model"];
+  assert.equal(catalog.leaderboardConditionsAreDefault(), false);
+  const presentation = { chart: state.leaderboardSummaryChartType, metrics: [...state.leaderboardSummaryRadarMetrics], groups: [...state.leaderboardSummaryRadarGroups], groupBy: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table: state.leaderboardSummaryTableOpen };
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => response({ generation: 1, items: [], total: 0, page: 1, page_size: 100, facets: {} });
+  state.workspaceViewsLoaded = true;
+  try {
+    await views.clearWorkspaceViewConditions();
+    assert.equal(state.catalogQuery.search, "");
+    assert.deepEqual(tableControls("leaderboard").filters.model, []);
+    assert.equal(catalog.leaderboardConditionsAreDefault(), true);
+    assert.deepEqual({ chart: state.leaderboardSummaryChartType, metrics: state.leaderboardSummaryRadarMetrics, groups: state.leaderboardSummaryRadarGroups, groupBy: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table: state.leaderboardSummaryTableOpen }, presentation);
+  } finally { globalThis.fetch = previousFetch; restoreHomeLocation(location); }
+});
+
 test("leaderboard search publishes one debounced location with the final input", async t => {
   const { setWorkspaceApp } = await import("../../src/psycheval/assets/web/app/workspace-runtime.js");
   const commits = [];

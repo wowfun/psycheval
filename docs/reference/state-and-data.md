@@ -223,7 +223,7 @@ Pagination, sorting, and row selection do not change that scope. Leaderboard and
 Saved View grouped summaries treat each measured Trial as one observation for
 Count, Mean, and percentile statistics. Unknown Trial values are excluded while
 an explicit numeric zero remains part of the distribution. Summary tables,
-charts, and spreadsheet exports omit a metric only when its Count is zero in
+bar charts, and spreadsheet exports omit a metric only when its Count is zero in
 every group. Grouped summaries remain exact and are never truncated or
 approximated; a query whose distinct group count exceeds the service capacity is
 rejected so the user can refine the scope or select an overall summary.
@@ -240,6 +240,32 @@ Trial's rate is computed before grouped means and percentiles; raw error evidenc
 and counts remain unchanged.
 The Trial's success/total display follows the same validity rule and does not
 infer zero errors from an absent count.
+
+The Home summary offers bar and radar views of the same complete-query data.
+Radar axes use a shared statistic and independently normalize against all groups
+in the current query, including unselected groups. Min–max scaling maps each axis
+to 0–100, reversed for durations so that larger radii mean better performance.
+Equal measured values map to 50 and are identified as having no group difference.
+Changing comparison groups does not change these bounds. Tokens, turns, and tool
+call counts have no performance direction and are excluded from radar axes.
+Radar uses solid outlines whose colors remain visible during hover and keyboard
+focus. A group's measured relative values may all be zero; its outline then
+collapses to the origin and the comparison list and detail explicitly identify
+that condition without changing the query-wide scale. Radar preserves selected
+axes even when entirely unmeasured. Missing values are drawn at the origin with a
+cross annotation offset by axis and group for legibility, with explicit
+missing-data labels; these offsets do not encode a measured radius. They remain
+unknown in the data and never
+enter scaling, statistics, or exports. Ordinary
+markers identify measured values, including those normalized to the origin.
+Selected groups use distinct colors with a minimum hue separation. Their search
+filter stays in page memory through presentation changes and navigation, but is
+not part of a shared location. Chart interactions preserve an open summary table.
+Radar selections affect presentation only; Saved View and spreadsheet charts
+remain bar charts.
+Home's Clear conditions action resets query conditions, ordering, and applied View selection;
+it preserves summary grouping, statistic, table disclosure, and radar settings.
+Presentation changes alone do not enable that action.
 
 An explicit trajectory value wins over aligned supplemental Trial telemetry.
 Optional telemetry failure does not invalidate a readable trajectory. Multiple
@@ -265,7 +291,11 @@ or list positions. A closed detail leaves the page's list location.
 `#view=<base64url>` contains a versioned UTF-8 JSON snapshot of that page's
 query and presentation state. It preserves search, facets, ordering, pagination
 and page size, plus Home's applied View conditions and aggregate grouping,
-statistic and table disclosure. Defaults are omitted deterministically. Applied
+statistic, table disclosure, chart type, radar axes, and comparison group keys.
+Radar defaults select the first five groups in summary order; explicit selections
+are limited to five and may be empty. Changing the grouping resets group selection;
+query changes retain surviving explicit keys without filling vacated positions,
+and identify unavailable selections. Defaults are omitted deterministically. Applied
 server and browser Views become transient snapshots with labels and actual
 conditions; opening a link never saves them or resolves them by name. They use
 the query, summary and export interfaces' optional `inline_views` filter array:

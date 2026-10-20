@@ -1,12 +1,12 @@
 // @ts-check
 import { SORT_KEYS as SORTS } from "./catalog-sort.js";
-import { BROWSER_VIEW_LIMIT, VIEW_NAME_MAX_CHARS, VIEW_GROUPS as GROUPS } from "./workspace-view-contract.js";
+import { BROWSER_VIEW_LIMIT, VIEW_NAME_MAX_CHARS, VIEW_GROUPS as GROUPS, SUMMARY_DEFAULTS, RADAR_METRICS, RADAR_GROUP_LIMIT } from "./workspace-view-contract.js";
 
 const MAX_LOCATION_BYTES = 64 * 1024;
 const FACETS = ["categories", "tags", "agents", "models", "tasks", "jobs", "providers", "datasets", "results"];
 const HOME_QUERY = Object.freeze({ state: "active", search: "", page: 1, page_size: 100, sort: "last_turn_end", direction: "desc", ...Object.fromEntries(FACETS.map(key => [key, []])) });
 const REPORT_QUERY = Object.freeze({ state: "active", search: "", page: 1, page_size: 50, kinds: [], datasets: [], jobs: [] });
-const SUMMARY = Object.freeze({ group_by: "agent", statistic: "mean", table_open: false });
+const SUMMARY = SUMMARY_DEFAULTS;
 const STATS = new Set(["mean", "min", "q1", "p50", "q3", "p95", "max"]);
 
 class WorkspaceLocationError extends Error {
@@ -41,6 +41,13 @@ function summaryState(value = {}) {
   object(value, Object.keys(SUMMARY));
   const result = { ...SUMMARY, ...value };
   if (!GROUPS.has(result.group_by) || !STATS.has(result.statistic) || typeof result.table_open !== "boolean") invalid();
+  if (!["bar", "radar"].includes(result.chart_type)) invalid();
+  if (!Array.isArray(result.radar_metrics) || result.radar_metrics.length < 3 || result.radar_metrics.some(key => !RADAR_METRICS.includes(key)) || new Set(result.radar_metrics).size !== result.radar_metrics.length) invalid();
+  result.radar_metrics = RADAR_METRICS.filter(key => result.radar_metrics.includes(key));
+  if (result.radar_groups !== null) {
+    if (!Array.isArray(result.radar_groups) || result.radar_groups.length > RADAR_GROUP_LIMIT || result.radar_groups.some(key => key !== null && (typeof key !== "string" || !key || key.includes("\0")))) invalid();
+    result.radar_groups = [...new Set(result.radar_groups)].sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0);
+  }
   return result;
 }
 function viewSnapshots(values = []) {

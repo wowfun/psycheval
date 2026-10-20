@@ -11,6 +11,7 @@ import { closeWorkspaceReportReader, openWorkspaceReportRef, refreshWorkspaceRep
 import { captureHomeLocation, restoreHomeLocation } from "../modules/home-location.js";
 import { setServeStatus } from "../modules/serve-effects.js";
 import { notesDraftChanged } from "../modules/analysis-notes.js";
+import { disposeLeaderboardRadar } from "../modules/leaderboard-radar.js";
 
 const EMPTY_REPORT = Object.freeze({
   schema_version: 19,
@@ -97,7 +98,7 @@ function createHomePage(_context) {
         dirty: notesDraftChanged(),
       };
     },
-    destroy() {},
+    destroy() { disposeLeaderboardRadar(); },
   };
 }
 

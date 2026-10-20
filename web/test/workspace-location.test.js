@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { encodeWorkspaceLocation, decodeWorkspaceLocation, MAX_LOCATION_BYTES } from "../../src/psycheval/assets/web/app/workspace-location.js";
+import { encodeWorkspaceLocation, decodeWorkspaceLocation, MAX_LOCATION_BYTES, SUMMARY } from "../../src/psycheval/assets/web/app/workspace-location.js";
 import { normalizeBrowserView } from "../../src/psycheval/assets/web/modules/workspace-view-repository.js";
 
 test("Saved View names use the server's Unicode character count through storage and links", () => {
@@ -22,7 +22,7 @@ test("locations round trip identities, Unicode, duplicate predicates and display
   assert.deepEqual(decoded.state.query.models, ["mimo", "model/中文"]);
   assert.equal(decoded.state.query.search, "中文 + &");
   assert.equal(decoded.state.query.page, 3);
-  assert.deepEqual(decoded.state.summary, value.state.summary);
+  assert.deepEqual(decoded.state.summary, { ...SUMMARY, ...value.state.summary });
   assert.equal(encodeWorkspaceLocation("home", decoded, "http://localhost"), href);
 });
 test("defaults are omitted and both report origins retain their opaque references", () => {

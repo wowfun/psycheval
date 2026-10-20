@@ -210,10 +210,7 @@ function leaderboardConditionsAreDefault() {
     && !listValue(query.results).length
     && catalogSortKey(query.sort) === "last_turn_end"
     && String(query.direction || "desc") === "desc"
-    && !Object.values(filters).some(value => listValue(value).length)
-    && state.leaderboardSummaryGroupBy === "agent"
-    && state.leaderboardSummaryStatistic === "mean"
-    && !state.leaderboardSummaryTableOpen;
+    && !Object.values(filters).some(value => listValue(value).length);
 }
 
 function requestCatalogSort(key) {

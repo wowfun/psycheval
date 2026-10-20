@@ -13,7 +13,7 @@ function captureHomeLocation() {
   return { object, state: {
     query: { ...Object.fromEntries(Object.keys(HOME_QUERY).map(key => [key, state.catalogQuery[key]])), sort: catalogSortKey(state.catalogQuery.sort) },
     views: captureAppliedViewSnapshots(),
-    summary: { group_by: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table_open: state.leaderboardSummaryTableOpen },
+    summary: { group_by: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table_open: state.leaderboardSummaryTableOpen, chart_type: state.leaderboardSummaryChartType, radar_metrics: [...state.leaderboardSummaryRadarMetrics], radar_groups: state.leaderboardSummaryRadarGroups === null ? null : [...state.leaderboardSummaryRadarGroups] },
   } };
 }
 function restoreHomeLocation(location) {
@@ -32,6 +32,9 @@ function restoreHomeLocation(location) {
   state.leaderboardSummaryGroupBy = location.state.summary.group_by;
   state.leaderboardSummaryStatistic = location.state.summary.statistic;
   state.leaderboardSummaryTableOpen = location.state.summary.table_open;
+  state.leaderboardSummaryChartType = location.state.summary.chart_type;
+  state.leaderboardSummaryRadarMetrics = [...location.state.summary.radar_metrics];
+  state.leaderboardSummaryRadarGroups = location.state.summary.radar_groups === null ? null : [...location.state.summary.radar_groups];
   const controls = tableControls("leaderboard");
   controls.filters = Object.fromEntries(Object.entries(FILTER_KEYS).map(([key, field]) => [key, [...query[field]]]));
   controls.sort = tableSortKey(query.sort);

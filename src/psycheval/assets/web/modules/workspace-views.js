@@ -1129,9 +1129,6 @@ async function clearWorkspaceViewConditions() {
   state.sharedViewSnapshots = [];
   state.workspaceViewSelection.clear();
   state.workspaceViewTableOpen.clear();
-  state.leaderboardSummaryGroupBy = "agent";
-  state.leaderboardSummaryTableOpen = false;
-  state.leaderboardSummaryStatistic = "mean";
   state.search.query = "";
   state.search.scope = "visible";
   state.search.normalSourceMode = "active";

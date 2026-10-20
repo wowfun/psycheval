@@ -142,7 +142,9 @@ predicates belong to the existing serve query, summary and export boundary and
 do not enter Saved View storage. See the
 [location contract](reference/state-and-data.md#shareable-workspace-locations).
 The initial browser kernel includes the pure location codec and shared query
-vocabulary. It never imports page implementations or storage repositories.
+and presentation-state vocabulary. Chart normalization, colors and rendering
+belong to the Home modules and load with that page. The kernel never imports
+page implementations or storage repositories.
 Page activation receives the navigation layer's cancellation signal.
 Home's detail coordinator owns the active Trial/report identity, excludes the
 other reader, validates identity before changing reader state, and commits each

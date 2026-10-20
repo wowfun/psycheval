@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SUMMARY_DEFAULTS } from "../../src/psycheval/assets/web/app/workspace-view-contract.js";
 
 import { installBrowserDom } from "./support/browser.js";
 
@@ -11,6 +12,7 @@ const browser = installBrowserDom(`
 const runtime = await import("../../src/psycheval/assets/web/modules/runtime.js");
 const catalog = await import("../../src/psycheval/assets/web/modules/serve-catalog.js");
 const summaryUi = await import("../../src/psycheval/assets/web/modules/leaderboard-summary.js");
+const radarUi = await import("../../src/psycheval/assets/web/modules/leaderboard-radar.js");
 
 test.after(() => browser.cleanup());
 
@@ -66,7 +68,12 @@ function resetSummaryState() {
   runtime.state.workspaceViews = [];
   runtime.state.workspaceAppliedViewNames = new Set();
   runtime.state.leaderboardSummaryGroupBy = "overall";
-  runtime.state.leaderboardSummaryStatistic = "mean";
+  runtime.state.leaderboardSummaryStatistic = SUMMARY_DEFAULTS.statistic;
+  runtime.state.leaderboardSummaryChartType = SUMMARY_DEFAULTS.chart_type;
+  runtime.state.leaderboardSummaryRadarGroups = SUMMARY_DEFAULTS.radar_groups;
+  runtime.state.leaderboardSummaryRadarMetrics = [...SUMMARY_DEFAULTS.radar_metrics];
+  runtime.state.leaderboardSummaryRadarSearch = "";
+  runtime.state.leaderboardSummaryTableOpen = SUMMARY_DEFAULTS.table_open;
   runtime.state.leaderboardSummary = null;
   runtime.state.leaderboardSummaryLoading = false;
   runtime.state.leaderboardSummaryError = null;
@@ -435,4 +442,186 @@ test("an oversized summary remains visible but is not retained in the browser ca
   } finally {
     globalThis.fetch = previousFetch;
   }
+});
+
+test("radar controls enforce limits, preserve search and missing axes, and do not fetch data", () => {
+  resetSummaryState();
+  const target = document.createElement("section");
+  target.id = "leaderboard-summary";
+  document.body.append(target);
+  runtime.state.leaderboardSummaryGroupBy = "model";
+  runtime.state.leaderboardSummary = envelope(7, 7);
+  runtime.state.leaderboardSummary.summary.groups = Array.from({ length: 7 }, (_, index) => ({ key: `model-${index}`, label: `model-${index}`, count: 1, metrics: [{ key: "score", count: 1, mean: index }] }));
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = () => { throw new Error("Presentation must not fetch"); };
+  try {
+    summaryUi.renderLeaderboardSummary();
+    target.querySelector("[data-summary-chart-type=radar]").click();
+    assert.equal(target.querySelectorAll("[data-radar-group]:checked").length, 5);
+    assert.equal(target.querySelectorAll("[data-radar-group]:disabled").length, 2);
+    assert.match(target.textContent, /No data:.*TTFT/);
+    assert.equal(target.querySelectorAll("[data-radar-metric]:checked").length, 6);
+    const context = radarUi.radarContext(runtime.state.leaderboardSummary.summary.groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+    const option = radarUi.radarOption(context, 600, 440);
+    assert.ok(option.series.every(series => series.lineStyle.type === "solid"));
+    assert.ok(option.graphic.some(marker => marker.type === "group"));
+    assert.equal(context.series[0].points.find(point => point.key === "ttft_ms").value, null);
+    assert.equal(target.querySelector("[data-radar-fallback]").hidden, false);
+    const search = target.querySelector("[data-radar-search]");
+    search.value = "model-1";
+    search.dispatchEvent(new Event("input"));
+    target.querySelector("[data-radar-group='1']").click();
+    assert.equal(target.querySelector("[data-radar-search]").value, "model-1");
+    assert.equal(target.querySelectorAll("[data-radar-group-row]:not([hidden])").length, 1);
+    assert.equal(target.querySelectorAll("[data-radar-group]:checked").length, 4);
+    for (const key of ["cache_hit_rate", "tool_success_rate", "ttft_ms"]) target.querySelector(`[data-radar-metric=${key}]`).click();
+    assert.equal(target.querySelector("[data-radar-search]").value, "model-1");
+    assert.equal(target.querySelectorAll("[data-radar-metric]:checked").length, 3);
+    assert.equal(target.querySelectorAll("[data-radar-metric]:disabled").length, 3);
+    target.querySelector("[data-summary-chart-type=bar]").click();
+    assert.equal(target.querySelector("[data-summary-radar]"), null);
+    target.querySelector("[data-summary-chart-type=radar]").click();
+    assert.equal(target.querySelector("[data-radar-search]").value, "model-1");
+    assert.equal(target.querySelectorAll("[data-radar-group]:checked").length, 4);
+  } finally {
+    globalThis.fetch = previousFetch;
+    target.remove();
+  }
+});
+
+test("radar presentation changes preserve the open table and search at 1000 groups", () => {
+  resetSummaryState();
+  const target = document.createElement("section"); target.id = "leaderboard-summary"; document.body.append(target);
+  runtime.state.leaderboardSummary = envelope(7, 1000);
+  runtime.state.leaderboardSummary.summary.groups = Array.from({ length: 1000 }, (_, i) => ({ key: `group-${i}`, label: `group-${i}`, count: 1, metrics: [{ key: "score", count: 1, mean: i }] }));
+  runtime.state.leaderboardSummaryChartType = "radar";
+  runtime.state.leaderboardSummaryGroupBy = "model";
+  runtime.state.leaderboardSummaryRadarGroups = ["group-0"];
+  runtime.state.leaderboardSummaryTableOpen = true;
+  try {
+    summaryUi.renderLeaderboardSummary();
+    const table = target.querySelector(".leaderboard-summary-table");
+    assert.equal(table.tBodies[0].rows.length, 1000);
+    const search = target.querySelector("[data-radar-search]"); search.value = "group-999"; search.dispatchEvent(new Event("input"));
+    for (const selector of ["[data-radar-group='999']", "[data-radar-metric=model_duration_ms]", "[data-summary-statistic=p95]"]) {
+      target.querySelector(selector).click();
+      assert.equal(target.querySelector(".leaderboard-summary-table"), table);
+      assert.equal(target.querySelector("[data-radar-search]").value, "group-999");
+      assert.equal(target.querySelectorAll("[data-radar-group-row]:not([hidden])").length, 1);
+    }
+    assert.ok([...table.querySelectorAll("[data-summary-stat='p95']")].every(cell => cell.classList.contains("summary-selected-stat")));
+  } finally { radarUi.disposeLeaderboardRadar(); target.remove(); }
+});
+
+test("detached radar controls cannot dispatch into disposed or replacement charts", () => {
+  resetSummaryState();
+  const target = document.createElement("section");
+  target.id = "leaderboard-summary";
+  document.body.append(target);
+  runtime.state.leaderboardSummaryGroupBy = "model";
+  runtime.state.leaderboardSummaryChartType = "radar";
+  runtime.state.leaderboardSummary = envelope(7, 1);
+  runtime.state.leaderboardSummary.summary.groups = [{ key: "a", label: "a", count: 1, metrics: [] }];
+  const instances = [];
+  window.echarts = { init: () => {
+    const instance = { disposed: false, actions: 0, resize() {}, setOption() {}, on() {}, dispose() { this.disposed = true; }, dispatchAction() { assert.equal(this.disposed, false); this.actions += 1; } };
+    instances.push(instance);
+    return instance;
+  } };
+  try {
+    summaryUi.renderLeaderboardSummary();
+    const old = target.querySelector("[data-radar-group-row]");
+    old.querySelector("input").focus();
+    summaryUi.renderLeaderboardSummary();
+    assert.equal(instances[0].disposed, true);
+    const actions = instances[1].actions;
+    old.dispatchEvent(new Event("pointerleave"));
+    old.dispatchEvent(new Event("focusin"));
+    assert.equal(instances[1].actions, actions);
+    target.querySelector("[data-summary-chart-type=bar]").click();
+    assert.equal(instances[1].disposed, true);
+  } finally { delete window.echarts; target.remove(); }
+});
+
+test("radar resize skips unchanged sizes, coalesces notifications and cancels pending work", () => {
+  resetSummaryState();
+  const target = document.createElement("section");
+  target.innerHTML = '<div data-summary-radar></div><p data-radar-fallback hidden></p>';
+  document.body.append(target);
+  const node = target.querySelector("[data-summary-radar]");
+  let width = 600;
+  Object.defineProperties(node, { clientWidth: { get: () => width }, clientHeight: { value: 440 } });
+  const groups = [{ key: "a", label: "a", count: 1, metrics: [] }];
+  const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  const previous = { ResizeObserver: globalThis.ResizeObserver, requestAnimationFrame: globalThis.requestAnimationFrame, cancelAnimationFrame: globalThis.cancelAnimationFrame };
+  const frames = new Map();
+  let notify, sequence = 0, updates = 0;
+  globalThis.ResizeObserver = class { constructor(callback) { notify = callback; } observe() {} disconnect() {} };
+  globalThis.requestAnimationFrame = callback => { frames.set(++sequence, callback); return sequence; };
+  globalThis.cancelAnimationFrame = id => frames.delete(id);
+  const flush = () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback()); };
+  window.echarts = { init: () => ({ resize() {}, setOption() { updates += 1; }, on() {}, dispose() {} }) };
+  try {
+    radarUi.bindLeaderboardRadar(target, context, () => {});
+    assert.equal(updates, 1);
+    notify(); flush();
+    assert.equal(updates, 1);
+    width = 620; notify(); width = 640; notify();
+    assert.equal(frames.size, 1);
+    flush();
+    assert.equal(updates, 2);
+    width = 660; notify();
+    radarUi.disposeLeaderboardRadar();
+    assert.equal(frames.size, 0);
+    flush();
+    assert.equal(updates, 2);
+  } finally { radarUi.disposeLeaderboardRadar(); Object.assign(globalThis, previous); delete window.echarts; target.remove(); }
+});
+
+test("selected group colors avoid identity-hash collisions and remain well separated", () => {
+  resetSummaryState();
+  const groups = ["group-0", "group-4", "group-8", "group-12", "group-16"].map(key => ({ key, label: key, count: 1, metrics: [] }));
+  const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  const hues = context.series.map(item => Number(item.color.match(/hsl\((\d+)/)[1]));
+  for (let i = 0; i < hues.length; i += 1) for (let j = 0; j < i; j += 1) {
+    const distance = Math.abs(hues[i] - hues[j]);
+    assert.ok(Math.min(distance, 360 - distance) >= 40);
+  }
+  const html = radarUi.renderLeaderboardRadar(context);
+  for (const item of context.series) assert.ok(html.includes(`--radar-color:${item.color}`));
+});
+
+test("missing annotations identify individual axes and groups without covering measured zero", () => {
+  resetSummaryState();
+  const groups = [{ key: "a", label: "a", count: 1, metrics: [{ key: "score", count: 1, mean: 0 }] }, { key: "b", label: "b", count: 1, metrics: [{ key: "score", count: 1, mean: 1 }] }];
+  const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  const option = radarUi.radarOption(context, 600, 440);
+  const missing = option.graphic.filter(marker => marker.type === "group");
+  assert.equal(new Set(missing.map(marker => `${marker.x},${marker.y}`)).size, missing.length);
+  assert.ok(missing.every(marker => Math.hypot(marker.x - 300, marker.y - 220) > 11.5));
+  assert.ok(option.graphic.some(marker => marker.type === "circle" && marker.shape.cx === 300 && marker.shape.cy === 220));
+  assert.equal(context.series[0].points[1].value, null);
+  assert.equal(option.series[0].data[0].value[1], 0);
+});
+
+test("an unavailable metric definition retains a readable key rather than breaking the radar", () => {
+  resetSummaryState();
+  const groups = [{ key: "a", label: "a", count: 1, metrics: [] }];
+  const context = radarUi.radarContext(groups, [], summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  assert.doesNotThrow(() => radarUi.renderLeaderboardRadar(context));
+  assert.doesNotThrow(() => radarUi.radarOption(context, 600, 440));
+});
+
+test("a measured polygon collapsed to the origin is identified separately from wholly missing data", () => {
+  resetSummaryState();
+  const groups = [{ key: "a", label: "a", count: 1, metrics: [{ key: "score", count: 1, mean: 0 }] }, { key: "b", label: "b", count: 1, metrics: [{ key: "score", count: 1, mean: 1 }] }];
+  runtime.state.leaderboardSummaryRadarGroups = ["a"];
+  const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  const html = radarUi.renderLeaderboardRadar(context);
+  assert.match(html, /Measured relative values are all 0; the outline is at the origin/);
+  assert.ok(context.series[0].points.some(point => point.value === 0));
+  assert.ok(context.series[0].points.some(point => point.value === null));
+  assert.ok(context.series[0].points.every(point => point.coordinate === 0));
+  groups[0].metrics = [];
+  assert.doesNotMatch(radarUi.renderLeaderboardRadar(radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue)), /Measured relative values are all 0/);
 });

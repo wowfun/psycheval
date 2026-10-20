@@ -3,8 +3,10 @@ import { tableCellContent, tableValueAttributes } from "./data-tables.js";
 import { exportLeaderboardSummary, loadLeaderboardSummary } from "./serve-catalog.js";
 import { bindWorkspaceViewControls, renderWorkspaceViewControls } from "./workspace-views.js";
 import { workspaceLocationChanged } from "../app/workspace-runtime.js";
+import { radarContext, renderLeaderboardRadar, bindLeaderboardRadar, disposeLeaderboardRadar } from "./leaderboard-radar.js";
 
 function renderLeaderboardSummary() {
+  disposeLeaderboardRadar();
   const target = $("leaderboard-summary");
   if (!target) return;
   const summary = state.leaderboardSummary?.summary || null;
@@ -47,18 +49,23 @@ function renderLeaderboardSummary() {
     return;
   }
 
-  const groups = listValue(summary.groups).map(group => ({
+  const groups = leaderboardSummaryGroups();
+  const radar = leaderboardRadarContext(groups);
+  target.innerHTML = `
+    ${heading}
+    ${renderLeaderboardSummaryTableDisclosure(groups)}
+    ${state.leaderboardSummaryGroupBy === "overall" ? "" : renderLeaderboardSummaryCharts(groups, radar)}
+  `;
+  bindLeaderboardSummaryControls(target, radar);
+}
+
+function leaderboardSummaryGroups() {
+  return listValue(state.leaderboardSummary?.summary?.groups).map(group => ({
     ...group,
     label: state.leaderboardSummaryGroupBy === "overall" && group?.key === "overall"
       ? t("summary_overall", "Overall")
       : String(group?.label ?? "-"),
   }));
-  target.innerHTML = `
-    ${heading}
-    ${renderLeaderboardSummaryTableDisclosure(groups)}
-    ${state.leaderboardSummaryGroupBy === "overall" ? "" : renderLeaderboardSummaryCharts(groups)}
-  `;
-  bindLeaderboardSummaryControls(target);
 }
 
 function leaderboardSummaryScopeText(count) {
@@ -168,21 +175,47 @@ function leaderboardSummaryStatistics() {
   ];
 }
 
-function renderLeaderboardSummaryCharts(groups) {
+function leaderboardRadarContext(groups) {
+  return state.leaderboardSummaryChartType === "radar"
+    ? radarContext(groups, leaderboardSummaryDefinitions(), selectedLeaderboardSummaryStatistic(), leaderboardSummaryValue) : null;
+}
+
+function renderLeaderboardSummaryCharts(groups, radar = leaderboardRadarContext(groups)) {
   const statistic = selectedLeaderboardSummaryStatistic();
   const groupHeading = leaderboardSummaryGroupHeading(state.leaderboardSummaryGroupBy);
+  const isRadar = state.leaderboardSummaryChartType === "radar";
   return `<section class="leaderboard-summary-chart-panel" aria-labelledby="leaderboard-summary-chart-title">
     <div class="leaderboard-summary-chart-head">
       <div>
         <h3 id="leaderboard-summary-chart-title">${esc(statistic.label)} · ${esc(groupHeading)}</h3>
-        <p>${esc(t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p>
+        <p>${esc(isRadar ? t("summary_radar_scale", "Relative to all groups in the current query · farther out is better. × = no data (offset near the origin for readability).") : t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p>
       </div>
-      ${renderLeaderboardSummaryStatisticControl()}
+      <div class="summary-chart-controls">${renderLeaderboardSummaryChartTypeControl()}${renderLeaderboardSummaryStatisticControl()}</div>
     </div>
-    <div class="leaderboard-summary-chart-grid">
+    ${isRadar ? renderLeaderboardRadar(radar) : `<div class="leaderboard-summary-chart-grid">
       ${visibleLeaderboardSummaryDefinitions(groups).map(definition => renderLeaderboardSummaryChart(definition, groups, statistic)).join("")}
-    </div>
+    </div>`}
   </section>`;
+}
+
+function renderLeaderboardSummaryChartTypeControl() {
+  return `<div class="leaderboard-summary-control"><span>${esc(t("summary_chart_type", "Chart"))}</span><div class="leaderboard-summary-segments" role="group" aria-label="${esc(t("summary_chart_type", "Chart"))}">${["bar", "radar"].map(type => `<button type="button" class="leaderboard-summary-segment${state.leaderboardSummaryChartType === type ? " active" : ""}" data-summary-chart-type="${type}" aria-pressed="${state.leaderboardSummaryChartType === type}">${esc(type === "bar" ? t("summary_bar", "Bar chart") : t("summary_radar", "Radar chart"))}</button>`).join("")}</div></div>`;
+}
+
+function summaryPresentationChanged(selector) {
+  workspaceLocationChanged("home");
+  const target = $("leaderboard-summary");
+  const panel = target?.querySelector(".leaderboard-summary-chart-panel");
+  if (!panel) { renderLeaderboardSummary(); return; }
+  const groups = leaderboardSummaryGroups();
+  const radar = leaderboardRadarContext(groups);
+  disposeLeaderboardRadar();
+  panel.outerHTML = renderLeaderboardSummaryCharts(groups, radar);
+  bindLeaderboardSummaryChartControls(target, radar);
+  target.querySelectorAll("[data-summary-stat-heading],[data-summary-stat]").forEach(cell => {
+    cell.classList.toggle("summary-selected-stat", (cell.dataset.summaryStatHeading || cell.dataset.summaryStat) === state.leaderboardSummaryStatistic);
+  });
+  target.querySelector(selector)?.focus({ preventScroll: true });
 }
 
 function renderLeaderboardSummaryStatisticControl() {
@@ -224,16 +257,25 @@ function renderLeaderboardSummaryChart(definition, groups, statistic) {
   </section>`;
 }
 
-function bindLeaderboardSummaryControls(target) {
+function bindLeaderboardSummaryChartControls(target, radar) {
+  target.querySelectorAll("[data-summary-chart-type]").forEach(button => button.addEventListener("click", () => {
+    state.leaderboardSummaryChartType = button.dataset.summaryChartType;
+    summaryPresentationChanged(`[data-summary-chart-type='${button.dataset.summaryChartType}']`);
+  }));
+  if (radar) bindLeaderboardRadar(target, radar, summaryPresentationChanged);
+  target.querySelectorAll("[data-summary-statistic]").forEach(button => {
+    button.addEventListener("click", () => setLeaderboardSummaryStatistic(button.dataset.summaryStatistic));
+  });
+}
+
+function bindLeaderboardSummaryControls(target, radar = null) {
   if (!target?.querySelectorAll) return;
+  bindLeaderboardSummaryChartControls(target, radar);
   target.querySelectorAll("[data-summary-group-by]").forEach(button => {
     button.addEventListener("click", () => setLeaderboardSummaryGroupBy(button.dataset.summaryGroupBy));
   });
   target.querySelectorAll("[data-summary-table-toggle]").forEach(button => {
     button.addEventListener("click", toggleLeaderboardSummaryTable);
-  });
-  target.querySelectorAll("[data-summary-statistic]").forEach(button => {
-    button.addEventListener("click", () => setLeaderboardSummaryStatistic(button.dataset.summaryStatistic));
   });
   target.querySelectorAll("[data-summary-export-xlsx]").forEach(button => {
     button.addEventListener("click", event => {
@@ -247,6 +289,7 @@ function bindLeaderboardSummaryControls(target) {
 async function setLeaderboardSummaryGroupBy(value) {
   if (!["overall", "agent", "model", "category", "task", "job", "provider"].includes(value)) return;
   state.leaderboardSummaryGroupBy = value;
+  state.leaderboardSummaryRadarGroups = null;
   workspaceLocationChanged("home");
   const request = loadLeaderboardSummary();
   renderLeaderboardSummary();
@@ -283,8 +326,7 @@ function toggleLeaderboardSummaryTable() {
 function setLeaderboardSummaryStatistic(value) {
   if (!leaderboardSummaryStatistics().some(statistic => statistic.key === value)) return;
   state.leaderboardSummaryStatistic = value;
-  workspaceLocationChanged("home");
-  renderLeaderboardSummary();
+  summaryPresentationChanged(`[data-summary-statistic='${value}']`);
 }
 
 function leaderboardSummaryValue(row, value) {

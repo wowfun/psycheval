@@ -1,3 +1,4 @@
+import { SUMMARY_DEFAULTS } from "../app/workspace-view-contract.js";
 import { configureLeaderboardDataTables, renderLeaderboard } from "./data-tables.js";
 import { bindServeExportControls, bindTrialSelection } from "./export.js";
 import { renderLeaderboardSummary } from "./leaderboard-summary.js";
@@ -66,9 +67,13 @@ configureLeaderboardDataTables({
   bindWorkspaceReportLeaderboardControls: (...args) => bindWorkspaceReportLeaderboardControls(...args),
   workspaceReportLeaderboardColumn: (...args) => workspaceReportLeaderboardColumn(...args),
 });
-state.leaderboardSummaryGroupBy = "agent";
-state.leaderboardSummaryTableOpen = false;
-state.leaderboardSummaryStatistic = "mean";
+state.leaderboardSummaryChartType = SUMMARY_DEFAULTS.chart_type;
+state.leaderboardSummaryRadarMetrics = [...SUMMARY_DEFAULTS.radar_metrics];
+state.leaderboardSummaryRadarGroups = SUMMARY_DEFAULTS.radar_groups;
+state.leaderboardSummaryRadarSearch = "";
+state.leaderboardSummaryGroupBy = SUMMARY_DEFAULTS.group_by;
+state.leaderboardSummaryTableOpen = SUMMARY_DEFAULTS.table_open;
+state.leaderboardSummaryStatistic = SUMMARY_DEFAULTS.statistic;
 state.leaderboardSummary = null;
 state.leaderboardSummaryLoading = false;
 state.leaderboardSummaryError = null;
