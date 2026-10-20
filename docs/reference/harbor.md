@@ -797,8 +797,9 @@ the complete plan. Dimension scores use the same rule; empty dimensions score
 one. `evaluate` only evaluates built-in checks and never executes Task code.
 Dataset-owned scorers and WorkBuddy scoring retain their own policies.
 
-`reward.json` contains numeric results. `checks.json` retains the plan, weights,
-normalized checks (including missing results), and calculated scores. A fresh
+`reward.json` contains numeric results. `checks.json` retains normalized checks
+(including missing results), each with its declared ID, dimension, and weight,
+alongside calculated scores. Total rule weight is the sum of check weights. A fresh
 temporary output is used for each script invocation. Prior framework reward and
 check outputs are removed before evaluation; successful outputs are atomically
 replaced, with reward published last. Errors retain diagnostics and publish no
@@ -1005,7 +1006,7 @@ all rubric responses are available after synchronous diagnostic I/O; they do not
 enable score merging.
 
 `reward.json` contains the final reward, rule dimensions, `rule_score`, and, only
-when complete, `llm_score`. `checks.json` retains the rule plan and checks, Judge
+when complete, `llm_score`. `checks.json` retains rule checks, Judge
 plan and individual outcomes, completion state, merge decision, and reason.
 These result files and `judge/*.json` diagnostics use UTF-8 with two-space
 indentation and a trailing newline. Chinese and other Unicode text remain

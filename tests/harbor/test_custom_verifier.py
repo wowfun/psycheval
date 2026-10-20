@@ -155,7 +155,15 @@ def test_custom_only_cli_gt_helpers_and_missing_check_without_trajectory(tmp_pat
     details = json.loads(raw)
     assert details["checks"][0]["evidence"] == "读取 GT"
     assert details["checks"][1]["missing"] is True
-    assert details["plan"]["total_weight"] == 4
+    assert "plan" not in details
+    assert [
+        (check["id"], check["dimension"], check["weight"])
+        for check in details["checks"]
+    ] == [
+        ("custom:values", "custom_outputs", 3),
+        ("custom:format", "custom_outputs", 1),
+    ]
+    assert sum(check["weight"] for check in details["checks"]) == 4
     assert "自定义" in (logs / "custom-stdout.txt").read_text(encoding="utf-8")
 
 

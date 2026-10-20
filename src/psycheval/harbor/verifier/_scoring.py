@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 
 from ._calls import _required_branches, _validate_tool_patterns, string_list
@@ -44,12 +44,6 @@ class ScoringPlan:
     @property
     def requires_trajectory(self) -> bool:
         return any(item.dimension != "custom_outputs" for item in self.items)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "items": [asdict(item) for item in self.items],
-            "total_weight": math.fsum(item.weight for item in self.items),
-        }
 
 
 def build_scoring_plan(config: dict[str, Any]) -> ScoringPlan:

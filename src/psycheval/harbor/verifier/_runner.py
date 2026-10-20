@@ -185,7 +185,6 @@ async def run_verifier(
         judge = await run_judge(judge_config, runtime, settings, rule_rewards=rewards)
         rewards, merge = merge_scores(rewards, judge_config, judge)
         result = {
-            "plan": plan.to_dict(),
             "checks": await run_blocking(normalize_checks, checks, plan=plan),
             "rewards": rewards,
             "judge": judge,
