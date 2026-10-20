@@ -376,10 +376,29 @@ allows task tools by default; callers can override permissions in
 `opencode_config`. OpenCode chooses its native tool shell, configurable through
 that same object. Instructions arrive on stdin, independent of shell quoting and
 Windows command-line length. The `variant` kwarg is passed as `provider/model#variant`.
-For web research with OpenCode 2, explicitly select a search provider, for example
-`opencode_config={"websearch": {"provider": "random"}}` to use its available
-providers. An unset provider can request interactive setup; non-interactive
-OpenCode cancels that form and exits nonzero even if it later produces an answer.
+`HostOpenCodeOptions.websearch_provider` defaults to `"random"`, supplying
+`websearch.provider` in the generated configuration to avoid interactive search
+setup. Set it to another nonempty provider name or `None` to omit this default;
+`opencode_config.websearch.provider` takes precedence.
+If the version probe fails or an execution exits nonzero or emits an error event,
+the adapter removes `websearch.provider` and retries once, without inspecting the
+error text. An empty `websearch` section is removed; other settings are preserved.
+The removed setting may come from the adapter default or the caller's
+`opencode_config`; caller precedence applies before this fallback.
+No retry occurs if that field is already absent, or for cancellation, timeout,
+version mismatch, or export/conversion failure following a successful execution.
+A failed execution's diagnostic export is best-effort: its failure does not
+prevent an already eligible execution retry or trigger a retry by itself.
+The fallback applies to
+that Agent instance, including later execution and export, without changing caller
+options or other Agents. Execution retries reuse the instruction and workspace;
+effects of the first attempt are not rolled back.
+`opencode-setup.log` retains both probe attempts. On an execution retry,
+`opencode-first-attempt.txt`, `opencode-first-attempt.stderr.log`, and any
+`opencode-first-attempt-session.json` and
+`opencode-first-attempt-export.stderr.log` retain the failed attempt;
+`opencode-retry.json` records the fallback. The normal execution logs and exported
+Session describe the final attempt; only that successful attempt supplies ATIF.
 Native JSON events and stderr stream to Agent logs, including on cancellation.
 Execution must emit exactly one Session identity before export. Export failure
 or timeout fails the invocation and retains its logs; a previous invocation's

@@ -85,6 +85,16 @@ def _native_duration(
 
 class HostOpenCodeOptions(OpenCodeOptions):
     executable: str = "opencode"
+    websearch_provider: str | None = "random"
+
+    @field_validator("websearch_provider", mode="before")
+    @classmethod
+    def validate_websearch_provider(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip() or "\x00" in value:
+            raise ValueError("websearch_provider must be nonempty and NUL-free")
+        return value.strip()
 
     @field_validator("opencode_config", mode="before")
     @classmethod
@@ -93,7 +103,7 @@ class HostOpenCodeOptions(OpenCodeOptions):
             return value
         if not isinstance(value, dict):
             raise ValueError("opencode_config must be an object")
-        for section in ("skills", "mcp", "provider"):
+        for section in ("skills", "mcp", "provider", "websearch"):
             if section in value and not isinstance(value[section], dict):
                 raise ValueError(f"opencode_config.{section} must be an object")
         paths = value.get("skills", {}).get("paths", [])
@@ -127,6 +137,7 @@ class HostOpenCodeAgent(OpenCode):
         atif=True, windows=True, skills=True, mcp_servers=True
     )
     options_model = HostOpenCodeOptions
+    options: HostOpenCodeOptions
 
     def __init__(
         self,
@@ -143,6 +154,7 @@ class HostOpenCodeAgent(OpenCode):
             raise ValueError("Model name must be in the format provider/model_name")
         self.executable = executable
         self._runtime_id = uuid4().hex
+        self._websearch_provider_disabled = False
 
     @staticmethod
     def _host(environment: BaseEnvironment) -> HostEnvironment:
@@ -166,20 +178,29 @@ class HostOpenCodeAgent(OpenCode):
                 log.flush()
 
             try:
-                with (
-                    host.scoped_exec_env(env),
-                    host.scoped_output_callback(capture),
-                ):
-                    result = await host.exec_argv(
-                        [executable, "--version"], env=env, timeout_sec=30
+                for attempt in range(2):
+                    with (
+                        host.scoped_exec_env(env),
+                        host.scoped_output_callback(capture),
+                    ):
+                        result = await host.exec_argv(
+                            [executable, "--version"], env=env, timeout_sec=30
+                        )
+                    if result.return_code == 0 and (result.stdout or "").strip():
+                        break
+                    fallback = self._fallback_env(env) if attempt == 0 else None
+                    if fallback is None:
+                        raise RuntimeError("OpenCode version probe failed")
+                    log.write(
+                        "\nRetrying OpenCode version probe without websearch.provider.\n"
                     )
+                    log.flush()
+                    env = fallback
             except TimeoutError as exc:
                 raise RuntimeError(
                     "OpenCode version probe exceeded its 30-second timeout; "
                     "see opencode-setup.log"
                 ) from exc
-        if result.return_code != 0 or not (result.stdout or "").strip():
-            raise RuntimeError("OpenCode version probe failed")
         installed = (result.stdout or "").strip()
         if self._version is not None and self._version != installed:
             raise RuntimeError(
@@ -217,6 +238,8 @@ class HostOpenCodeAgent(OpenCode):
             "permission": "allow",
             "provider": {provider: provider_config},
         }
+        if self.options.websearch_provider is not None:
+            config["websearch"] = {"provider": self.options.websearch_provider}
         for server in self.mcp_servers:
             if server.transport == "stdio":
                 value = {
@@ -231,8 +254,30 @@ class HostOpenCodeAgent(OpenCode):
             config.setdefault("skills", {}).setdefault("paths", []).append(
                 str(host.native_path(self.skills_dir))
             )
+        if self._websearch_provider_disabled:
+            self._remove_websearch_provider(config)
         env["OPENCODE_CONFIG_CONTENT"] = json.dumps(config, ensure_ascii=False)
         return env
+
+    @staticmethod
+    def _remove_websearch_provider(config: dict) -> bool:
+        websearch = config.get("websearch", {})
+        if "provider" not in websearch:
+            return False
+        del websearch["provider"]
+        if not websearch:
+            del config["websearch"]
+        return True
+
+    def _fallback_env(self, env: dict[str, str]) -> dict[str, str] | None:
+        config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        if not self._remove_websearch_provider(config):
+            return None
+        self._websearch_provider_disabled = True
+        return {
+            **env,
+            "OPENCODE_CONFIG_CONTENT": json.dumps(config, ensure_ascii=False),
+        }
 
     @override
     def _parse_stdout(self) -> list[dict]:
@@ -570,9 +615,18 @@ class HostOpenCodeAgent(OpenCode):
             host.runtime_directory(f"opencode-{self._runtime_id}") / "instruction.txt"
         )
         instruction_path.write_bytes(self._instruction.encode("utf-8"))
-        (self.logs_dir / "trajectory.json").unlink(missing_ok=True)
-        (self.logs_dir / "opencode-session.json").unlink(missing_ok=True)
-        (self.logs_dir / "opencode-failed-session.json").unlink(missing_ok=True)
+        for name in (
+            "trajectory.json",
+            "opencode-session.json",
+            "opencode-failed-session.json",
+            "opencode-export.stderr.log",
+            "opencode-first-attempt.txt",
+            "opencode-first-attempt.stderr.log",
+            "opencode-first-attempt-session.json",
+            "opencode-first-attempt-export.stderr.log",
+            "opencode-retry.json",
+        ):
+            (self.logs_dir / name).unlink(missing_ok=True)
         model = self.model_name
         if variant := self._resolved_flags.get("variant"):
             model = f"{model.split('#', 1)[0]}#{variant}"
@@ -589,47 +643,88 @@ class HostOpenCodeAgent(OpenCode):
             model,
             "--thinking",
         ]
-        with (
-            (self.logs_dir / "opencode.txt").open("w", encoding="utf-8") as stdout,
-            (self.logs_dir / "opencode.stderr.log").open(
-                "w", encoding="utf-8"
-            ) as stderr,
-        ):
+        env = self._runtime_env(host)
+        for attempt in range(2):
+            with (
+                (self.logs_dir / "opencode.txt").open("w", encoding="utf-8") as stdout,
+                (self.logs_dir / "opencode.stderr.log").open(
+                    "w", encoding="utf-8"
+                ) as stderr,
+            ):
 
-            async def capture(text: str, stream: str) -> None:
-                handle = stdout if stream == "stdout" else stderr
-                handle.write(text)
-                handle.flush()
+                async def capture(text: str, stream: str) -> None:
+                    handle = stdout if stream == "stdout" else stderr
+                    handle.write(text)
+                    handle.flush()
 
-            env = self._runtime_env(host)
-            with host.scoped_exec_env(env), host.scoped_output_callback(capture):
-                result = await host.exec_argv(argv, env=env)
-        failure = (
-            NonZeroAgentExitCodeError(
-                f"OpenCode exited with {result.return_code}; see opencode.txt, "
-                "opencode.stderr.log and any opencode-failed-session.json"
+                with host.scoped_exec_env(env), host.scoped_output_callback(capture):
+                    result = await host.exec_argv(argv, env=env)
+            failure = (
+                NonZeroAgentExitCodeError(
+                    f"OpenCode exited with {result.return_code}; see opencode.txt, "
+                    "opencode.stderr.log and any opencode-failed-session.json"
+                )
+                if result.return_code != 0
+                else None
             )
-            if result.return_code != 0
-            else None
-        )
-        try:
-            events = self._parse_stdout()
-        except Exception:
-            if failure is not None:
-                raise failure
-            raise
-        if failure is None and any(event.get("type") == "error" for event in events):
-            failure = NonZeroAgentExitCodeError(
-                "OpenCode emitted error events; see opencode.txt"
-            )
-        if failure is not None:
+            try:
+                events = self._parse_stdout()
+            except Exception:
+                if failure is not None:
+                    raise failure
+                raise
+            if failure is None and any(
+                event.get("type") == "error" for event in events
+            ):
+                failure = NonZeroAgentExitCodeError(
+                    "OpenCode emitted error events; see opencode.txt"
+                )
+            if failure is None:
+                break
+            fallback = self._fallback_env(env) if attempt == 0 else None
+            export_error = None
             try:
                 await self._export_session(
-                    host, env, events, "opencode-failed-session.json"
+                    host,
+                    env,
+                    events,
+                    "opencode-first-attempt-session.json"
+                    if fallback is not None
+                    else "opencode-failed-session.json",
                 )
             except Exception as error:
-                raise failure from error
-            raise failure
+                if fallback is None:
+                    raise failure from error
+                export_error = type(error).__name__
+            if fallback is None:
+                raise failure
+            for source, target in (
+                ("opencode.txt", "opencode-first-attempt.txt"),
+                ("opencode.stderr.log", "opencode-first-attempt.stderr.log"),
+                (
+                    "opencode-export.stderr.log",
+                    "opencode-first-attempt-export.stderr.log",
+                ),
+            ):
+                path = self.logs_dir / source
+                if path.exists():
+                    path.replace(self.logs_dir / target)
+            (self.logs_dir / "opencode-retry.json").write_text(
+                json.dumps(
+                    {
+                        "removed_setting": "websearch.provider",
+                        "return_code": result.return_code,
+                        "error_event": any(
+                            event.get("type") == "error" for event in events
+                        ),
+                        "failed_session_export_error": export_error,
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            env = fallback
         await self._export_session(host, env, events, "opencode-session.json")
         self._trajectory = self._convert_events_to_trajectory(
             self._session_events(events)

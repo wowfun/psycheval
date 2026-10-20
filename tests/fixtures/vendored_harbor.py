@@ -709,6 +709,12 @@ def opencode(root):
     agent = module("opencode").HostOpenCodeAgent(
         logs_dir=root, model_name="fixture/model"
     )
+    assert agent.options.websearch_provider == "random"
+    assert module("opencode").HostOpenCodeOptions().websearch_provider == "random"
+    assert (
+        type(agent).parse_options({"websearch_provider": None}).websearch_provider
+        is None
+    )
     context = AgentContext()
     agent.populate_context_post_run(context)
     assert context.n_input_tokens == 20

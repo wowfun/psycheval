@@ -12,10 +12,11 @@ from pathlib import Path
 
 import pytest
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
+from harbor.environments.base import ExecResult
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import MCPServerConfig
 
-from psycheval.harbor.opencode import HostOpenCodeAgent
+from psycheval.harbor.opencode import HostOpenCodeAgent, HostOpenCodeOptions
 from psycheval.harbor.trajectory_validation import load_validated_trajectory
 from psycheval.harbor.verifier import evaluate
 from tests.harbor.environment_support import assert_process_exited, make_environment
@@ -783,6 +784,260 @@ def test_opencode_registers_model_and_explicit_connection(tmp_path, provider, ov
 
 
 @pytest.mark.parametrize(
+    ("provider", "overlay", "expected"),
+    [
+        ("random", {}, {"provider": "random"}),
+        (" custom ", {}, {"provider": "custom"}),
+        (None, {}, None),
+        ("random", {"websearch": {"provider": "caller"}}, {"provider": "caller"}),
+        (
+            "random",
+            {"websearch": {"timeout": 123}},
+            {"provider": "random", "timeout": 123},
+        ),
+    ],
+)
+def test_websearch_provider_default_and_overrides(
+    tmp_path, provider, overlay, expected
+):
+    assert HostOpenCodeOptions().websearch_provider == "random"
+    before = copy.deepcopy(overlay)
+    agent = HostOpenCodeAgent(
+        logs_dir=tmp_path / "logs",
+        model_name="fixture/model",
+        websearch_provider=provider,
+        opencode_config=overlay,
+    )
+    options = HostOpenCodeAgent.parse_options(
+        {"websearch_provider": provider, "opencode_config": overlay}
+    )
+    assert options.websearch_provider == agent.options.websearch_provider
+
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        await host.start(False)
+        try:
+            config = json.loads(agent._runtime_env(host)["OPENCODE_CONFIG_CONTENT"])
+            assert config.get("websearch") == expected
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
+    assert overlay == before
+
+
+@pytest.mark.parametrize("provider", ["", " \n", "bad\x00", 123])
+def test_websearch_provider_validation_matches_preflight(tmp_path, provider):
+    with pytest.raises(ValueError, match="websearch_provider"):
+        HostOpenCodeAgent.parse_options({"websearch_provider": provider})
+    with pytest.raises(ValueError, match="websearch_provider"):
+        HostOpenCodeAgent(
+            logs_dir=tmp_path, model_name="fixture/model", websearch_provider=provider
+        )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "exit",
+        "error_event",
+        "no_session",
+        "export_error",
+        "twice",
+        "disabled",
+        "no_provider",
+    ],
+)
+def test_websearch_failure_retries_once_without_other_configuration_changes(
+    tmp_path, monkeypatch, failure
+):
+    overlay = {"permission": {"webfetch": "deny"}}
+    no_retry = failure in {"disabled", "no_provider"}
+    if failure == "no_provider":
+        overlay["websearch"] = {"timeout": 123}
+    elif not no_retry:
+        overlay["websearch"] = {"provider": "caller", "timeout": 123}
+    before = copy.deepcopy(overlay)
+
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        agent = HostOpenCodeAgent(
+            logs_dir=tmp_path / "logs",
+            model_name="fixture/model",
+            variant="high",
+            websearch_provider=None if no_retry else "random",
+            opencode_config=overlay,
+            extra_env={"TEST_API_KEY": "fixture-key"},
+        )
+        calls, exports = [], []
+
+        async def execute(argv, *, env, **kwargs):
+            config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+            capture = host._output_callback()
+            if argv[1:3] == ["session", "export"]:
+                exports.append((argv[-1], config))
+                assert kwargs["timeout_sec"] == 30
+                if failure == "export_error" and len(calls) == 1:
+                    await capture("first export failed\n", "stderr")
+                    return ExecResult(return_code=3)
+                session = _exported_session()
+                session["info"]["id"] = argv[-1]
+                await capture(json.dumps(session), "stdout")
+                return ExecResult(return_code=0)
+            calls.append(copy.deepcopy(env))
+            assert Path(argv[3]).read_text(encoding="utf-8") == "fixture instruction"
+            assert argv[argv.index("--model") + 1] == "fixture/model#high"
+            failed = len(calls) == 1 or failure == "twice"
+            session_id = "first-session" if len(calls) == 1 else "session-fixture"
+            event = {
+                "type": "text",
+                "sessionID": session_id,
+                "part": {"type": "text", "text": session_id},
+            }
+            if failed and failure == "error_event":
+                event["type"] = "error"
+            if failed and failure == "no_session":
+                event.pop("sessionID")
+            await capture(json.dumps(event) + "\n", "stdout")
+            await capture(f"attempt {len(calls)} stderr\n", "stderr")
+            return ExecResult(
+                return_code=7 if failed and failure != "error_event" else 0
+            )
+
+        await host.start(False)
+        monkeypatch.setattr(host, "exec_argv", execute)
+        try:
+            if failure == "twice" or no_retry:
+                with pytest.raises(NonZeroAgentExitCodeError):
+                    await agent.run("fixture instruction", host, AgentContext())
+                assert agent._trajectory is None
+                assert not (agent.logs_dir / "opencode-session.json").exists()
+            else:
+                await agent.run("fixture instruction", host, AgentContext())
+                agent.populate_context_post_run(AgentContext())
+                assert agent._trajectory.session_id == "session-fixture"
+            assert len(calls) == (1 if no_retry else 2)
+            if no_retry:
+                assert not (agent.logs_dir / "opencode-retry.json").exists()
+                if failure == "no_provider":
+                    assert json.loads(calls[0]["OPENCODE_CONFIG_CONTENT"])[
+                        "websearch"
+                    ] == {"timeout": 123}
+                return
+            first = json.loads(calls[0]["OPENCODE_CONFIG_CONTENT"])
+            second = json.loads(calls[1]["OPENCODE_CONFIG_CONTENT"])
+            del first["websearch"]["provider"]
+            assert first == second
+            assert {
+                k: v for k, v in calls[0].items() if k != "OPENCODE_CONFIG_CONTENT"
+            } == {k: v for k, v in calls[1].items() if k != "OPENCODE_CONFIG_CONTENT"}
+            logs = agent.logs_dir
+            assert "first-session" in (logs / "opencode-first-attempt.txt").read_text(
+                encoding="utf-8"
+            )
+            assert (logs / "opencode-first-attempt.stderr.log").read_text(
+                encoding="utf-8"
+            ) == "attempt 1 stderr\n"
+            assert "first-session" not in (logs / "opencode.txt").read_text(
+                encoding="utf-8"
+            )
+            retry = json.loads(
+                (logs / "opencode-retry.json").read_text(encoding="utf-8")
+            )
+            assert retry["removed_setting"] == "websearch.provider"
+            assert retry["error_event"] is (failure == "error_event")
+            assert retry["failed_session_export_error"] == (
+                "RuntimeError" if failure in {"no_session", "export_error"} else None
+            )
+            assert "provider" not in exports[-1][1]["websearch"]
+            assert (
+                json.loads(agent._runtime_env(host)["OPENCODE_CONFIG_CONTENT"])
+                == second
+            )
+            other = HostOpenCodeAgent(
+                logs_dir=tmp_path / "other", model_name="fixture/model"
+            )
+            assert json.loads(other._runtime_env(host)["OPENCODE_CONFIG_CONTENT"])[
+                "websearch"
+            ] == {"provider": "random"}
+            assert agent.options.opencode_config == before
+            if failure != "twice":
+                # Reusing the Agent neither restores the rejected setting nor leaves stale retry files.
+                await agent.run("fixture instruction", host, AgentContext())
+                assert len(calls) == 3
+                assert not list(logs.glob("opencode-first-attempt*"))
+                assert not (logs / "opencode-retry.json").exists()
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
+    assert overlay == before
+
+
+@pytest.mark.parametrize(
+    "outcome", ["success", "twice", "empty", "disabled", "no_provider"]
+)
+def test_websearch_version_probe_fallback_is_bounded(tmp_path, monkeypatch, outcome):
+    async def scenario():
+        host = make_environment(tmp_path / "host")
+        agent = HostOpenCodeAgent(
+            logs_dir=tmp_path / "logs",
+            executable=sys.executable,
+            model_name="fixture/model",
+            websearch_provider=None
+            if outcome in {"disabled", "no_provider"}
+            else "random",
+            opencode_config={"websearch": {"timeout": 123}}
+            if outcome == "no_provider"
+            else {},
+        )
+        configs = []
+
+        async def execute(argv, *, env, timeout_sec):
+            assert argv[-1] == "--version" and timeout_sec == 30
+            configs.append(json.loads(env["OPENCODE_CONFIG_CONTENT"]))
+            failed = len(configs) == 1 or outcome == "twice"
+            text = (
+                ""
+                if failed and outcome == "empty"
+                else "generic failure\n"
+                if failed
+                else "2.fixture\n"
+            )
+            await host._output_callback()(text, "stderr" if failed else "stdout")
+            return ExecResult(
+                return_code=1 if failed and outcome != "empty" else 0,
+                stdout="" if failed else text,
+            )
+
+        await host.start(False)
+        monkeypatch.setattr(host, "exec_argv", execute)
+        try:
+            if outcome in {"twice", "disabled", "no_provider"}:
+                with pytest.raises(RuntimeError, match="version probe failed"):
+                    await agent.setup(host)
+            else:
+                await agent.setup(host)
+                assert agent._version == "2.fixture"
+            assert len(configs) == (1 if outcome in {"disabled", "no_provider"} else 2)
+            if outcome == "no_provider":
+                assert configs[0]["websearch"] == {"timeout": 123}
+            if len(configs) == 2:
+                del configs[0]["websearch"]
+                assert configs[0] == configs[1]
+                assert "websearch" not in json.loads(
+                    agent._runtime_env(host)["OPENCODE_CONFIG_CONTENT"]
+                )
+                assert "Retrying OpenCode version probe without websearch.provider" in (
+                    agent.logs_dir / "opencode-setup.log"
+                ).read_text(encoding="utf-8")
+        finally:
+            await host.stop(True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
     "config",
     [
         [],
@@ -792,6 +1047,8 @@ def test_opencode_registers_model_and_explicit_connection(tmp_path, provider, ov
         {"skills": {"paths": [1]}},
         {"mcp": []},
         {"provider": None},
+        {"websearch": None},
+        {"websearch": []},
     ],
 )
 def test_opencode_rejects_invalid_extended_configuration(tmp_path, config):
