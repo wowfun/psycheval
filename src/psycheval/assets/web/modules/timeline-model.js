@@ -57,7 +57,7 @@ function timelineTrace(trajectory, meta) {
       const modelDuration = hasExactModelDuration ? stepDuration : modelEstimate.duration_ms;
       timelinePushStage(stages, {
         kind: "agent",
-        stage: timing.observed ? timing.label : modelStage,
+        stage: modelStage,
         timingHint: timing.hint,
         status: step?.source || "agent",
         category: "agent",
@@ -94,7 +94,7 @@ function timelineTrace(trajectory, meta) {
       const timing = timingSource(toolMeta?.execution_duration_source);
       timelinePushStage(stages, {
         kind: "tool",
-        stage: `${timing.label || "Tool"}: ${timelineToolLabel(tool, toolMeta)}`,
+        stage: `${t("timeline_stage_tool_call", "Tool call")}: ${timelineToolLabel(tool, toolMeta)}`,
         timingHint: timing.hint,
         estimated: timing.observed || timing.estimated,
         status: toolMeta?.status || toolMeta?.title || "tool",

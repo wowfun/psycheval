@@ -26,9 +26,9 @@ test("canonical tool timing reaches the catalog, waterfall and detail table", as
   const timeline = page.locator(".timeline-diagnostics");
   await expect(timeline).toBeVisible();
   await expect(timeline.locator("tbody tr")).toHaveCount(3);
-  await expect(timeline).toContainText("Tool: read_file");
-  await expect(timeline).toContainText("Tool: cached_read");
-  await expect(timeline).not.toContainText("Tool: unknown_read");
+  await expect(timeline).toContainText("Tool call: read_file");
+  await expect(timeline).toContainText("Tool call: cached_read");
+  await expect(timeline).not.toContainText("Tool call: unknown_read");
   await expect(timeline.locator("[data-timeline-chart] canvas")).toBeVisible();
   const trace = await page.evaluate(async () => {
     const { selectedKey } = await import("/assets/peval/modules/runtime.js");

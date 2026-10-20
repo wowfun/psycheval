@@ -176,9 +176,11 @@ TTFT and decoding speed. Their source labels survive conversion and projection.
 duration estimates. Explicit native OpenCode model-call intervals still supply
 Model duration; their sources and boundaries are defined by the
 [native OpenCode contract](harbor.md#native-opencode). They do not supply TTFT or
-decode speed. The timeline labels observed output, tool running and tool
-lifecycle intervals separately, including their boundaries and whether waiting
-may be included. Its total is the sum of recorded contributions, with a coverage
+decode speed. Timeline Waterfall and Timeline Detail Table use the same stage
+labels regardless of timing source: `Model: <model name>` and
+`Tool call: <tool name>`. Timing-source hover hints describe interval boundaries
+and whether waiting may be included; observed and estimated timing values retain
+their approximation marker. Its total is the sum of recorded contributions, with a coverage
 hint when some intervals are unknown; parallel contributions can overlap.
 No measured interval means an unknown total, displayed as a dash. A measured zero
 remains a visible zero-duration record. Reading older untimed evidence does not

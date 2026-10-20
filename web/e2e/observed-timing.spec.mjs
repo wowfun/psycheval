@@ -22,11 +22,19 @@ test("observed durations shade nodes, show provenance and preserve step navigati
   await expect(page.locator('#detail-sidebar details[data-step="4"]')).toHaveAttribute("open", "");
   await page.locator('#detail-sidebar [data-sidebar-close]').click();
   const timeline = page.locator(".timeline-diagnostics");
-  await expect(timeline).toContainText("Observed output");
+  const stageLabels = timeline.locator(".timeline-stage-label");
+  await expect(stageLabels).toHaveCount(5);
+  const labels = await stageLabels.allTextContents();
+  expect([...labels].sort()).toEqual(["Model", "Model", "Model", "Tool call: cached_read", "Tool call: read_file"]);
   await expect(timeline).toContainText("Partial coverage");
   await expect(timeline).toContainText("≈0.000s");
   await expect(timeline.locator('span[title*="may include waiting"]')).toBeVisible();
   await expect(timeline.locator("[data-timeline-chart] canvas")).toBeVisible();
+  const axisLabels = await page.evaluate(async () => {
+    const { state } = await import("/assets/peval/modules/runtime.js");
+    return state.timelineChart.getOption().yAxis[0].data;
+  });
+  expect(axisLabels.map(label => label.replace(/^#[\d.]+ /, ""))).toEqual(labels);
   await nodes.screenshot({ path: testInfo.outputPath("duration-nodes-desktop.png") });
   await timeline.screenshot({ path: testInfo.outputPath("observed-timing-desktop.png") });
   await page.setViewportSize({ width: 390, height: 844 });

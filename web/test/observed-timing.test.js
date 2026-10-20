@@ -5,7 +5,8 @@ import { installBrowserDom } from "./support/browser.js";
 const browser = installBrowserDom('<script type="application/json" id="peval-i18n">{}</script>');
 const { timelineTrace } = await import("../../src/psycheval/assets/web/modules/timeline-model.js");
 const { renderTimelineDiagnostics } = await import("../../src/psycheval/assets/web/modules/timeline-shell.js");
-const { timelineTooltipHtml } = await import("../../src/psycheval/assets/web/modules/timeline-chart.js");
+const { timelineChartOption, timelineTooltipHtml } = await import("../../src/psycheval/assets/web/modules/timeline-chart.js");
+const { renderTimelineDetailTable } = await import("../../src/psycheval/assets/web/modules/timeline-table.js");
 const { renderTrajectoryNode, trajectoryOverviewTimingModel } = await import("../../src/psycheval/assets/web/modules/trajectory-trace.js");
 const { catalogStepOutline } = await import("../../src/psycheval/assets/web/modules/serve-catalog.js");
 const { renderStep } = await import("../../src/psycheval/assets/web/modules/steps.js");
@@ -35,6 +36,29 @@ const trajectory = { agent: { model_name: "fixture" }, steps: [
   { step_id: 3, source: "agent", message: "done" },
 ] };
 
+test("waterfall and detail table stage names are independent of timing source", () => {
+  const labels = ["Model: fixture", "Tool call: Read"];
+  for (const [modelSource, toolSource] of [
+    ["acp_client_observed_output", "acp_client_observed_lifecycle"],
+    ["acp_client_observed_output", "acp_client_observed_in_progress"],
+    ["acp_client_observed_future", "acp_client_observed_future"],
+    ["opencode_native_model_call", "opencode_native_tool_call"],
+    [undefined, undefined],
+  ]) {
+    const trace = timelineTrace(trajectory, { timestamp_semantics: "event_observed", steps: [
+      { step_id: 2, timestamp_ms: 1000, duration_ms: 100, duration_source: modelSource, tool_calls: [
+        { tool_call_id: "a", timestamp_ms: 1100, execution_duration_ms: 300, execution_duration_source: toolSource },
+      ] },
+    ] });
+    assert.deepEqual(trace.stages.map(stage => stage.stage), labels);
+    assert.deepEqual(timelineChartOption(trace).yAxis.data, ["#2.1 Model: fixture", "#2.2 Tool call: Read"]);
+    const table = document.createElement("div");
+    table.innerHTML = renderTimelineDetailTable(trace.stages, trace.model);
+    assert.deepEqual([...table.querySelectorAll(".timeline-stage-label")].map(node => node.textContent), labels);
+    assert.deepEqual([...table.querySelectorAll(".timeline-stage-label")].map(node => node.title), trace.stages.map(stage => stage.timing_hint || stage.stage));
+  }
+});
+
 test("observed timing keeps zero, distinguishes unknown, and does not infer model intervals", () => {
   const meta = { timestamp_semantics: "event_observed", started_at_ms: 1000, steps: [
     { step_id: 1, timestamp_ms: 1000 },
@@ -47,7 +71,7 @@ test("observed timing keeps zero, distinguishes unknown, and does not infer mode
   assert.equal(trace.stages[0].duration_ms, 0);
   assert.equal(trace.model.active_total_ms, 300);
   assert.equal(trace.partial, true);
-  assert.match(trace.stages[0].stage, /Observed output/);
+  assert.equal(trace.stages[0].stage, "Model: fixture");
   assert.match(timelineTooltipHtml(trace.stages[1]), /may include waiting/);
   const html = renderTimelineDiagnostics(trajectory, meta);
   assert.match(html, /Partial coverage/);
