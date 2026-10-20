@@ -546,7 +546,9 @@ The native Host Python/pytest execution-format adapter recognizes
 `workbuddy.office.verifier.v1`, independently of Dataset ID. It executes the
 source profile's score/reward snippets and supported pipeline using native argv,
 with copied tests as the collection root. Other plugins use their own commands
-and platform requirements. Registry prepare, custom verification, and score
+and platform requirements. Office path and environment adaptation maps
+`/logs/artifacts` to the Host's dedicated artifact root, independently of the
+parent `/logs` directory. Registry prepare, custom verification, and score
 finalization remain available. Unknown rewrite expressions remain unchanged and
 produce adaptation diagnostics. Only recognized file-access paths, interpreter
 launches, and snapshot ordering are changed; instructions, gold data, and scoring

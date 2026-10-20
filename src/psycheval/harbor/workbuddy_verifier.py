@@ -406,6 +406,7 @@ class NativeOfficeExecutor:
             "/tests": task_dir / "tests",
             "/logs": environment.native_path("/logs"),
             "/logs/verifier": environment.native_path("/logs/verifier"),
+            "/logs/artifacts": environment.native_path("/logs/artifacts"),
         }
         self.logs = self.mappings["/logs/verifier"]
         self.logs.mkdir(parents=True, exist_ok=True)

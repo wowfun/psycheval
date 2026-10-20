@@ -1012,6 +1012,40 @@ def test_native_prepare_does_not_publish_a_patch_after_git_failure(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("suffix", ["", "/output.pptx"])
+def test_native_office_artifacts_use_the_dedicated_host_root(
+    native_task, tmp_path, suffix
+):
+    from types import SimpleNamespace
+
+    roots = {
+        "/workspace": tmp_path / "workspace",
+        "/logs": tmp_path / "runtime/logs",
+        "/logs/verifier": tmp_path / "trial/verifier",
+        "/logs/artifacts": tmp_path / "trial/artifacts/logs/artifacts",
+    }
+    executor = NativeOfficeExecutor(
+        SimpleNamespace(native_path=roots.__getitem__),
+        native_task,
+        _load_rule(native_task.parents[1]),
+        _load_command(native_task),
+    )
+    logical = "/logs/artifacts" + suffix
+    expected = roots["/logs/artifacts"] / suffix.lstrip("/")
+    assert Path(executor.path(logical)) == expected
+    assert (
+        Path(executor.env({"WB_BENCH_ARTIFACTS": logical})["WB_BENCH_ARTIFACTS"])
+        == expected
+    )
+    adapted, _ = _adapt_python(
+        "from pathlib import Path\nresult = Path(" + repr(logical) + ")\n",
+        executor.mappings,
+    )
+    namespace = {}
+    exec(adapted, namespace)
+    assert namespace["result"] == expected
+
+
 @pytest.mark.parametrize("separator", [":", ";"])
 def test_native_environment_maps_path_entries_and_preserves_native_drives(
     native_task, tmp_path, monkeypatch, separator
