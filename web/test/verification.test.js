@@ -42,6 +42,17 @@ test("score and judge previews show explicit reasons and formula without inventi
   assert.equal(interpretVerificationFile("score.json", JSON.stringify(payload), true), null);
 });
 
+test("recorded formula normalizes raw weights and omits unapplied merges", () => {
+  const merge = { method: "weighted_sum", applied: true, rule_weight: 2, rule_score: 0.75, llm_weight: 1, llm_score: 0.5, overall: 2 / 3 };
+  const formulas = () => interpretVerificationFile("score.json", JSON.stringify({ reward: 2 / 3, metadata: { score_merge: merge } })).metrics.filter(([key]) => key === "Recorded formula");
+  assert.match(formulas()[0][1], /^\(2 × 0.75 \+ 1 × 0.5\) \/ 3 = /);
+  merge.applied = false;
+  assert.deepEqual(formulas(), []);
+  merge.applied = true;
+  merge.rule_weight = merge.llm_weight = 0;
+  assert.deepEqual(formulas(), []);
+});
+
 test("JUnit preserves failure, error and skip separately and paginates filtered cases", () => {
   const cases = Array.from({ length: 55 }, (_, index) => `<testcase classname="suite" name="case-${index}" time="0.1">${index === 52 ? '<failure message="assertion">trace</failure>' : index === 53 ? '<error message="setup"/>' : index === 54 ? '<skipped message="optional"/>' : ""}</testcase>`).join("");
   const model = interpretVerificationFile("results.xml", `<testsuites><testsuite>${cases}</testsuite></testsuites>`);
@@ -103,6 +114,107 @@ test("file browser loads lazily, remembers preview state, and resolves retained 
   assert.equal(browser.element.querySelector(".verification-raw").textContent, "Retained report");
 });
 
+test("score evidence resolves declared text without a manifest and rejects unsafe or absent paths", async () => {
+  for (const uri of ["artifact_text/report.md", "../private.md", "D:/private.md", "/private.md", "artifact_text/missing.md"]) {
+    const calls = [];
+    const score = { reward: 1, verdicts: [{ item_id: "llm:check", status: "pass", evidence_ids: ["report"] }],
+      diagnostics: { evidence: { records: [{ id: "report", uri }] } } };
+    const browser = createVerificationBrowser({ request: async path => {
+      calls.push(path);
+      if (path.endsWith("/trial")) return { tree: [entry("verifier/score.json", "score"), entry("verifier/artifact_text/report.md", "text")] };
+      return { content: path.endsWith("/score") ? JSON.stringify(score) : "# Retained evidence" };
+    } });
+    browser.setSource("trial"); await browser.load({});
+    browser.element.querySelector("details button").click(); await tick();
+    if (uri === "artifact_text/report.md") {
+      assert.equal(calls.at(-1), "/api/verification-files/trial/text");
+      assert.equal(browser.element.querySelector(".file-markdown").textContent, "Retained evidence");
+    } else {
+      assert.equal(calls.length, 2);
+      assert.match(browser.element.querySelector(".verification-notice").textContent, /unavailable/);
+    }
+  }
+});
+
+test("manifest raw captures resolve independently of extracted text records", async () => {
+  const manifest = { artifacts: [
+    { id: "presentation", type: "raw_pptx", source_path: "D:/private/input.pptx", verifier_raw_path: "raw_artifacts/presentation.pptx", extract_status: "ok" },
+    { id: "presentation_text", type: "md", source_path: "artifact_text/presentation_text.md", text_path: "artifact_text/presentation_text.md", source_artifact_id: "presentation", extract_status: "ok" },
+  ] };
+  const requests = [];
+  const browser = createVerificationBrowser({ request: async path => {
+    requests.push(path);
+    if (path.endsWith("/trial")) return { tree: [
+      entry("verifier/score.json", "score"), entry("verifier/artifact_manifest.json", "manifest"),
+      entry("verifier/raw_artifacts/presentation.pptx", "raw"), entry("verifier/artifact_text/presentation_text.md", "text"),
+    ] };
+    if (path.endsWith("/score")) return { content: JSON.stringify({ reward: 1, verdicts: [
+      { item_id: "title", status: "pass", evidence_ids: ["presentation"] },
+    ] }) };
+    if (path.endsWith("/manifest")) return { content: JSON.stringify(manifest) };
+    return { content: "Retained original" };
+  } });
+  browser.setSource("trial"); await browser.load({});
+  browser.element.querySelector("details button").click(); await tick();
+  assert.equal(requests.at(-1), "/api/verification-files/trial/raw");
+  assert.doesNotMatch(browser.element.textContent, /private/);
+});
+
+test("failed, malformed and truncated manifests still allow safe score evidence", async () => {
+  for (const failure of ["network", "malformed", "truncated"]) {
+    for (const uri of ["artifact_text/report.md", "../private.md"]) {
+      const calls = [];
+      const score = { reward: 1, verdicts: [{ item_id: "quality", status: "pass", evidence_ids: ["report"] }],
+        diagnostics: { evidence: { records: [{ id: "report", uri }] } } };
+      const browser = createVerificationBrowser({ request: async path => {
+        calls.push(path);
+        if (path.endsWith("/trial")) return { tree: [
+          entry("verifier/score.json", "score"), entry("verifier/artifact_manifest.json", "manifest"),
+          entry("verifier/artifact_text/report.md", "text"),
+        ] };
+        if (path.endsWith("/score")) return { content: JSON.stringify(score) };
+        if (path.endsWith("/manifest")) {
+          if (failure === "network") throw new Error("fixture manifest unavailable");
+          return { content: "{broken", truncated: failure === "truncated" };
+        }
+        return { content: "Safe fallback" };
+      } });
+      browser.setSource("trial"); await browser.load({});
+      browser.element.querySelector("details button").click(); await tick();
+      if (uri.startsWith("artifact_text/")) {
+        assert.equal(calls.at(-1), "/api/verification-files/trial/text");
+        assert.match(browser.element.textContent, /Safe fallback/);
+      } else {
+        assert.equal(calls.length, 3);
+        assert.match(browser.element.querySelector(".verification-notice").textContent, /unavailable|JSON/);
+      }
+    }
+  }
+});
+
+test("a rejected stale manifest cannot open fallback evidence in the new selection", async () => {
+  let rejectManifest;
+  const score = { reward: 1, verdicts: [{ item_id: "quality", status: "pass", evidence_ids: ["report"] }],
+    diagnostics: { evidence: { records: [{ id: "report", uri: "artifact_text/report.md" }] } } };
+  const requests = [];
+  const browser = createVerificationBrowser({ request: async path => {
+    requests.push(path);
+    if (path.endsWith("/trial")) return { tree: [
+      entry("verifier/score.json", "score"), entry("verifier/artifact_manifest.json", "manifest"),
+      entry("verifier/artifact_text/report.md", "text"), entry("verifier/log.txt", "log"),
+    ] };
+    if (path.endsWith("/score")) return { content: JSON.stringify(score) };
+    if (path.endsWith("/manifest")) return new Promise((_, reject) => { rejectManifest = reject; });
+    return { content: "New selection" };
+  } });
+  browser.setSource("trial"); await browser.load({});
+  browser.element.querySelector("details button").click(); await tick();
+  await browser.open(entry("verifier/log.txt", "log"));
+  rejectManifest(new Error("Old failure")); await tick();
+  assert.match(browser.element.textContent, /New selection/);
+  assert.equal(requests.at(-1), "/api/verification-files/trial/log");
+});
+
 test("obsolete file and Trial responses cannot overwrite a new selection", async () => {
   const pending = new Map();
   const browser = createVerificationBrowser({ request: path => new Promise(resolve => pending.set(path, resolve)) });
@@ -128,15 +240,17 @@ test("the canonical summary separates execution, missing evidence and valid zero
   assert.doesNotMatch(text, /<dd>1<\/dd>|failed/);
 });
 
-test("default file follows canonical score authority instead of a stray score file", async () => {
-  for (const [score_message, expected] of [["Harbor verifier reward", "reward"], ["WorkBuddy verifier score.json: reward", "score"]]) {
+test("default file prefers score details independently of canonical score authority", async () => {
+  for (const score_message of ["Harbor verifier reward", "WorkBuddy verifier score.json: reward"]) {
+    for (const hasScore of [false, true]) {
     const calls = [];
     const browser = createVerificationBrowser({ request: async path => {
       calls.push(path);
-      return path.endsWith("/trial") ? { tree: [entry("verifier/score.json", "score"), entry("verifier/reward.json", "reward")] } : { content: '{"reward":0}' };
+      return path.endsWith("/trial") ? { tree: [...(hasScore ? [entry("verifier/score.json", "score")] : []), entry("verifier/reward.json", "reward")] } : { content: '{"reward":0}' };
     } });
     browser.setSource("trial"); await browser.load({ score_message });
-    assert.equal(calls.at(-1), `/api/verification-files/trial/${expected}`);
+    assert.equal(calls.at(-1), `/api/verification-files/trial/${hasScore ? "score" : "reward"}`);
+    }
   }
 });
 
@@ -186,7 +300,7 @@ test("JSON previews start expanded, preserve user folds through raw mode, and re
   const content = '{ "checks": [ {"id":"answer","passed":true} ], "score": 1.2300 }';
   const browser = createVerificationBrowser({ request: async () => ({ content }) });
   browser.setSource("trial");
-  await browser.open(entry("verifier/checks.json"));
+  await browser.open(entry("verifier/details.json"));
   assert.ok(browser.element.querySelector(".json-view"));
   const checks = browser.element.querySelector('[data-json-key="checks"]');
   assert.equal(checks.open, true);

@@ -91,8 +91,10 @@ function interpretVerificationFile(path, content, truncated = false) {
     const rows = Array.isArray(verdicts) ? verdicts.map(verdictRow).filter(Boolean) : [];
     if (!metrics.length && !rows.length) return null;
     const merge = data.metadata?.score_merge || data.score_merge;
-    if (merge?.method === "weighted_sum" && ["rule_weight", "rule_score", "llm_weight", "llm_score", "overall"].every(key => number(merge[key]))) {
-      metrics.push([t("verification_formula", "Recorded formula"), `${merge.rule_weight} × ${merge.rule_score} + ${merge.llm_weight} × ${merge.llm_score} = ${merge.overall}`]);
+    if (merge?.method === "weighted_sum" && merge.applied !== false && ["rule_weight", "rule_score", "llm_weight", "llm_score", "overall"].every(key => number(merge[key]))) {
+      const sum = merge.rule_weight + merge.llm_weight;
+      const terms = `${merge.rule_weight} × ${merge.rule_score} + ${merge.llm_weight} × ${merge.llm_score}`;
+      if (Number.isFinite(sum) && sum > 0) metrics.push([t("verification_formula", "Recorded formula"), `${sum === 1 ? terms : `(${terms}) / ${sum}`} = ${merge.overall}`]);
     }
     return { metrics, rows };
   } catch { return null; }

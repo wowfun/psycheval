@@ -302,7 +302,15 @@ Complete JSON files offer a key-based collapsible view for nonempty objects,
 arrays, and long strings. Small trees open initially; larger or deeply nested
 trees defer branches until expanded, with collections loaded in batches and
 bounded work per expansion. Existing score summaries remain available alongside
-the JSON view, which is built only when selected. Switching to raw text preserves
+the JSON view, which is built only when selected. The verification browser opens
+`verifier/score.json` first when available, then falls back to reward files and
+the Trial result. This selection does not change the authoritative Trial score.
+Recorded weighted formulas include normalization when weights do not sum to one.
+Evidence links use retained manifest mappings, or the score's declared
+verifier-relative evidence URI when no usable mapping exists, including when the
+manifest cannot be fetched or parsed. Only safe paths already
+present in the current Trial's retained file tree can be opened.
+Switching to raw text preserves
 expansion state, and copying uses the original file text. Malformed or truncated
 JSON remains raw text.
 Its initial tab is Verification; later Trial selections retain the active tab,

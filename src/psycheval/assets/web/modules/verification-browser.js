@@ -26,17 +26,23 @@ function createVerificationBrowser({ request = serveApi } = {}) {
   async function evidence(id) {
     const current = sourceKey; const currentSelection = selected;
     const manifest = tree.find(item => item.path === "verifier/artifact_manifest.json");
-    if (!manifest) { notice(t("verification_evidence_missing", "Linked evidence is unavailable")); return; }
     try {
-      const raw = await request(url(manifest));
-      if (current !== sourceKey || currentSelection !== selected) return;
-      const data = raw.truncated ? null : JSON.parse(raw.content);
-      const artifact = data?.artifacts?.find(item => item?.id === id);
+      const score = selected?.path === "verifier/score.json" && !payload?.truncated ? JSON.parse(payload.content) : null;
+      let artifact, manifestError;
+      if (manifest) {
+        try {
+          const raw = await request(url(manifest));
+          const data = raw.truncated ? null : JSON.parse(raw.content);
+          artifact = Array.isArray(data?.artifacts) ? data.artifacts.find(item => item?.id === id) : null;
+        } catch (error) { manifestError = error; }
+        if (current !== sourceKey || currentSelection !== selected) return;
+      }
       const safe = path => typeof path === "string" && !/[\\:]/.test(path) && path.split("/").every(part => part && part !== "." && part !== "..");
       const linked = path => safe(path) ? tree.find(item => item.kind === "file" && item.path === `verifier/${path}`) : null;
       const retainedOriginal = linked(artifact?.verifier_raw_path);
-      const item = linked(artifact?.text_path) || retainedOriginal;
-      if (!item) notice(t("verification_evidence_missing", "Linked evidence is unavailable"));
+      const declared = score?.diagnostics?.evidence?.records?.find(item => item?.id === id);
+      const item = linked(artifact?.text_path) || retainedOriginal || linked(declared?.uri);
+      if (!item) notice(manifestError?.message || t("verification_evidence_missing", "Linked evidence is unavailable"));
       else await open(item);
     } catch (error) { if (current === sourceKey && currentSelection === selected) notice(error.message); }
   }
@@ -119,9 +125,7 @@ function createVerificationBrowser({ request = serveApi } = {}) {
         const result = await request(`/api/verification-files/${encodeURIComponent(sourceKey)}`);
         if (!isCurrent()) return;
         tree = Array.isArray(result.tree) ? result.tree : []; loaded = tree.some(item => item.kind === "file"); notice(""); renderTree();
-        const preferred = String(meta?.score_message || "").includes("score.json")
-          ? ["verifier/score.json", "verifier/reward.json", "verifier/reward.txt"]
-          : ["verifier/reward.json", "verifier/reward.txt", "result.json"];
+        const preferred = ["verifier/score.json", "verifier/reward.json", "verifier/reward.txt", "result.json"];
         const path = preferred.find(path => tree.some(item => item.path === path && item.previewable))
           || tree.find(item => item.kind === "file" && item.previewable)?.path
           || tree.find(item => item.kind === "file")?.path;
