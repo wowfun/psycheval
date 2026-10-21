@@ -863,6 +863,12 @@ refreshing evidence outside the framework-managed directories below.
 `matching_observations(trajectory, rule)` returns successful observation text
 for one required-call rule using the same call/argument/success predicates as
 built-in checks, without assigning another score.
+For multiple queries over the same retained trajectory, `ObservationIndex`
+indexes call/result pairing once. Its `calls` tuple preserves call order;
+`matching(rule)` returns `(ToolCall, tuple[str, ...])` pairs with successful
+observation text. Callers choose their step/context scope before indexing and
+must not mutate the trajectory while reusing the index. No source files or
+networks are accessed.
 The verification context adds `harbor.verifier.instruction` and nullable
 `harbor.verifier.step_name` alongside the native runtime paths.
 

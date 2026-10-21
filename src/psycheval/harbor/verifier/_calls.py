@@ -56,25 +56,46 @@ def _canonical(trajectory: Trajectory, call: ToolCall) -> bool:
 
 def matching_observations(trajectory: Trajectory, rule: dict[str, Any]) -> list[str]:
     """Extract evidence for a required-call rule, without adding scoring items."""
-    branches = _required_branches(rule, 1)
-    matches = []
-    for candidate in _indexed_calls(trajectory):
-        accepted = [
-            branch
-            for branch in branches
-            if _canonical(trajectory, candidate.call)
-            and _tool_name_matches(candidate.call.function_name, branch["tool_names"])
-            and _arguments_match(candidate, branch)
-        ]
-        matches.extend(
-            content_text(observation.content)
-            for observation in candidate.observations
-            if any(
-                _has_successful_observation([observation], branch)
-                for branch in accepted
+    return [
+        text
+        for _, observations in ObservationIndex(trajectory).matching(rule)
+        for text in observations
+    ]
+
+
+class ObservationIndex:
+    """Reuse pairing and argument serialization across queries of retained ATIF."""
+
+    def __init__(self, trajectory: Trajectory):
+        self._trajectory = trajectory
+        self._candidates = _indexed_calls(trajectory)
+        self.calls = tuple(candidate.call for candidate in self._candidates)
+
+    def matching(self, rule: dict[str, Any]) -> list[tuple[ToolCall, tuple[str, ...]]]:
+        branches = _required_branches(rule, 1)
+        matches = []
+        for candidate in self._candidates:
+            if not _canonical(self._trajectory, candidate.call):
+                continue
+            accepted = [
+                branch
+                for branch in branches
+                if _tool_name_matches(
+                    candidate.call.function_name, branch["tool_names"]
+                )
+                and _arguments_match(candidate, branch)
+            ]
+            observations = tuple(
+                content_text(observation.content)
+                for observation in candidate.observations
+                if any(
+                    _has_successful_observation([observation], branch)
+                    for branch in accepted
+                )
             )
-        )
-    return matches
+            if observations:
+                matches.append((candidate.call, observations))
+        return matches
 
 
 def required_call_checks(

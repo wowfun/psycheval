@@ -15,6 +15,7 @@ from psycheval.harbor.runtime_config import (
     write_effective_runtime_config,
 )
 from psycheval.harbor.verifier import (
+    ObservationIndex,
     aggregate,
     build_scoring_plan,
     evaluate,
@@ -92,7 +93,7 @@ def test_acp_missing_arguments_cannot_pass_argument_rules(constraint):
     assert matching_observations(trajectory, rule) == []
 
 
-@pytest.mark.parametrize("operation", ["checks", "evidence"])
+@pytest.mark.parametrize("operation", ["checks", "evidence", "indexed"])
 def test_repeated_call_matching_serializes_each_arguments_object_once(
     tmp_path, monkeypatch, operation
 ):
@@ -135,8 +136,17 @@ def test_repeated_call_matching_serializes_each_arguments_object_once(
     if operation == "checks":
         checks = evaluate(trajectory, {"required_calls": [rule] * 8}, tmp_path)
         assert all(check["passed"] for check in checks)
-    else:
+    elif operation == "evidence":
         assert matching_observations(trajectory, rule) == ["matched"] * 36
+    else:
+        index = ObservationIndex(trajectory)
+        assert len(index.calls) == 12
+        for _ in range(8):
+            matched = index.matching(rule)
+            assert [call.tool_call_id for call, _ in matched] == [
+                f"call-{i}" for i in range(12)
+            ]
+            assert [text for _, texts in matched for text in texts] == ["matched"] * 36
     assert len(serialized) == len(set(serialized)) == 12
     trajectory.steps[1].tool_calls[0].arguments["command"] = "changed"
     assert matching_observations(trajectory, rule) == ["matched"] * 33
