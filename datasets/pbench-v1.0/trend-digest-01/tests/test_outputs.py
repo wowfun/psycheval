@@ -5,18 +5,286 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import posixpath
 import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
+from itertools import chain
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from harbor.models.trajectories import Trajectory
 
-from psycheval.harbor.verifier import matching_observations
+from psycheval.harbor.evidence import EvidenceLimitError, EvidenceWriter
+from psycheval.harbor.verifier import ObservationIndex
 
 GITHUB_URL = "https://github.com/trending?since=weekly"
 HN_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
+_LITERAL = r"""(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s;&|<>]+))"""
+_READ_TOOLS = ["*read*", "*Read*", "*exec*", "*terminal*", "*shell*", "bash", "Bash"]
+_EVIDENCE_BYTES = 1024 * 1024
+
+
+def _source_evidence(observations, max_bytes):
+    """Retain complete distinct bodies and every provenance within one budget."""
+    prefix = f"Source: {GITHUB_URL}"
+    size = len(prefix.encode("utf-8"))
+    bodies = {}
+    for provenance, text in observations:
+        if len(text) > max_bytes:
+            raise EvidenceLimitError(f"Complete sources exceed {max_bytes} byte budget")
+        if text not in bodies:
+            added = 4 + len(provenance.encode("utf-8")) + len(text.encode("utf-8"))
+        elif provenance not in bodies[text]:
+            added = 1 + len(provenance.encode("utf-8"))
+        else:
+            continue
+        size += added
+        if size > max_bytes:
+            raise EvidenceLimitError(f"Complete sources exceed {max_bytes} byte budget")
+        bodies.setdefault(text, {})[provenance] = None
+    return prefix + "".join(
+        "\n\n" + "\n".join(provenance) + "\n\n" + text
+        for text, provenance in bodies.items()
+    )
+
+
+def _command(arguments):
+    return next(
+        (
+            arguments[key]
+            for key in ("command", "cmd", "code")
+            if isinstance(arguments.get(key), str)
+        ),
+        "",
+    )
+
+
+def _literal(match):
+    return next(value for value in match.groups() if value is not None)
+
+
+def _path(value, cwd):
+    """Compare lexical Agent paths without touching or resolving host files."""
+    symbolic = re.fullmatch(
+        r"\$env:([A-Za-z_]\w*)([/\\].*)?", value or "", re.IGNORECASE
+    )
+    if symbolic:
+        suffix = (symbolic[2] or "").replace("\\", "/").lstrip("/")
+        return posixpath.normpath(f"/@env/{symbolic[1]}/{suffix}").casefold()
+    if not value or any(char in value for char in "$`%"):
+        return None
+    value, cwd = value.replace("\\", "/"), cwd.replace("\\", "/")
+    result = posixpath.normpath(
+        value
+        if value.startswith("/") or re.match(r"^[A-Za-z]:/", value)
+        else posixpath.join(cwd, value)
+    )
+    return result.casefold() if re.match(r"^[A-Za-z]:/", result) else result
+
+
+def _call_cwd(arguments, default):
+    cwd = arguments.get("workdir", arguments.get("cwd", default))
+    cwd = _path(cwd, default) if isinstance(cwd, str) else None
+    change = re.match(
+        rf"^\s*(?:cd|Set-Location)\s+(?:(?:-LiteralPath|-Path)\s+)?{_LITERAL}",
+        _command(arguments),
+        re.IGNORECASE,
+    )
+    return _path(_literal(change), cwd) if change and cwd else cwd
+
+
+def _download_paths(arguments, cwd):
+    command = _command(arguments)
+    if not cwd:
+        return set()
+    if re.search(r"\bcurl(?:\.exe)?\b", command, re.IGNORECASE):
+        option = r"(?:\s-o\s+|\s--output(?:=|\s+))"
+    elif re.search(r"\bwget\b", command, re.IGNORECASE):
+        option = r"\s-O\s+"
+    elif re.search(r"\b(?:Invoke-WebRequest|iwr)\b", command, re.IGNORECASE):
+        option = (
+            r"(?i:\s-OutFile\s+|\|\s*Out-File\s+"
+            r"(?:-Encoding\s+\w+\s+)?(?:-FilePath\s+)?)"
+        )
+    else:
+        return set()
+    return {
+        path
+        for match in re.finditer(option + _LITERAL, command)
+        if (path := _path(_literal(match), cwd))
+    }
+
+
+def _read_paths(call, cwd):
+    if not cwd:
+        return set()
+    arguments, paths = call.arguments, set()
+    if "read" in call.function_name.casefold():
+        for key in ("file_path", "path", "filePath"):
+            if isinstance(arguments.get(key), str):
+                paths.add(_path(arguments[key], cwd))
+    command = _command(arguments)
+    patterns = [
+        rf"""\bopen\s*\(\s*{_LITERAL}(?=\s*(?:\)|,\s*(?:encoding\s*=|(?:mode\s*=\s*)?['"]r[bt]?['"])))""",
+        rf"\bPath\s*\(\s*{_LITERAL}\s*\)\.read_(?:text|bytes)\s*\(",
+        rf"\breadFileSync\s*\(\s*{_LITERAL}",
+        rf"\b(?:cat|Get-Content|type)\s+(?:(?:-LiteralPath|-Path)\s+)?{_LITERAL}",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, command):
+            paths.add(_path(_literal(match), cwd))
+    for match in re.finditer(
+        rf"\breadFileSync\s*\(\s*process\.env\.([A-Za-z_]\w*)\s*\+\s*{_LITERAL}",
+        command,
+    ):
+        suffix = next(value for value in match.groups()[1:] if value is not None)
+        paths.add(_path(f"$env:{match[1]}{suffix}", cwd))
+    return paths - {None}
+
+
+def _observation_body(text):
+    # WorkBuddy's shell observation includes an echoed command before stdout.
+    if text.startswith("Command: "):
+        if "\nStdout: " not in text:
+            return ""
+        return text.split("\nStdout: ", 1)[1].split("\nStderr:", 1)[0].rstrip("\r\n")
+    return text
+
+
+def github_sources(index, rule, workdir, *, fetch_ids=None):
+    """Yield direct fetches or later linked reads, with call provenance."""
+    ids = Counter(call.tool_call_id for call in index.calls)
+    fetches = {
+        call.tool_call_id: observations
+        for call, observations in index.matching(rule)
+        if fetch_ids is None or call.tool_call_id in fetch_ids
+    }
+    reads = {
+        call.tool_call_id: observations
+        for call, observations in index.matching({"any": [{"tool_names": _READ_TOOLS}]})
+    }
+    downloaded = {}
+    for call in index.calls:
+        if ids[call.tool_call_id] != 1:
+            continue
+        direct = fetches.get(call.tool_call_id, ())
+        if not direct and (not downloaded or call.tool_call_id not in reads):
+            continue
+        cwd = _call_cwd(call.arguments, str(workdir))
+        if direct:
+            for observation in direct:
+                yield (
+                    call.tool_call_id,
+                    call.tool_call_id,
+                    _observation_body(observation),
+                )
+            for path in _download_paths(call.arguments, cwd):
+                downloaded[path] = call.tool_call_id
+        else:
+            linked = _read_paths(call, cwd) & downloaded.keys()
+            if linked:
+                fetch_id = ", ".join(sorted({downloaded[path] for path in linked}))
+                for observation in reads[call.tool_call_id]:
+                    yield fetch_id, call.tool_call_id, _observation_body(observation)
+
+
+def github_supporting_sources(index, rule, workdir, repositories):
+    seen = set()
+    selected = {
+        repository.removeprefix("https://github.com/").casefold(): repository
+        for repository in repositories
+    }
+    by_fetch = {}
+    for call in index.calls:
+        identities = {
+            match[1].casefold()
+            for match in re.finditer(
+                r"https://(?:github\.com|raw\.githubusercontent\.com)/"
+                r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)",
+                json.dumps(call.arguments, ensure_ascii=False),
+            )
+        } & selected.keys()
+        if identities:
+            by_fetch[call.tool_call_id] = identities
+    prefixes = []
+    for repository in repositories:
+        identity = repository.removeprefix("https://github.com/")
+        prefixes.extend(
+            [
+                f"https://github.com/{identity}",
+                f"https://raw.githubusercontent.com/{identity}",
+            ]
+        )
+    supporting_rule = {
+        "any": [
+            {"tool_names": branch["tool_names"], "argument_terms": [prefix]}
+            for branch in rule["any"]
+            for prefix in prefixes
+        ]
+    }
+    if not by_fetch:
+        return
+    for fetch_id, read_id, text in github_sources(
+        index, supporting_rule, workdir, fetch_ids=by_fetch
+    ):
+        if (fetch_id, read_id, text) not in seen:
+            seen.add((fetch_id, read_id, text))
+            identities = set().union(
+                *(by_fetch.get(item, set()) for item in fetch_id.split(", "))
+            )
+            names = ", ".join(selected[item] for item in selected if item in identities)
+            yield (
+                f"Repository: {names}\nFetch call: {fetch_id}\n"
+                f"Evidence call: {read_id}",
+                text,
+            )
+
+
+def _ranked_repositories(text):
+    try:
+        rows = json.loads(text)
+    except ValueError:
+        try:
+            rows = [
+                json.loads(line)
+                for line in text.splitlines()
+                if line.lstrip().startswith("{")
+            ]
+        except ValueError:
+            return []
+    if not isinstance(rows, list) or not rows:
+        return []
+    names, seen = [], set()
+    for rank, row in enumerate(rows, 1):
+        if not isinstance(row, dict):
+            return []
+        identities = set()
+        name = None
+        for field in ("path", "url", "html_url", "full_name", "repo", "name"):
+            value = row.get(field)
+            match = (
+                re.fullmatch(
+                    r"(?:https://github\.com/|/)?([A-Za-z0-9_.-]+)\s*/\s*([A-Za-z0-9_.-]+)/?",
+                    value.strip(),
+                )
+                if isinstance(value, str)
+                else None
+            )
+            if match:
+                name = f"{match[1]}/{match[2]}"
+                identities.add(name.casefold())
+        if (
+            type(row.get("rank")) is not int
+            or row["rank"] != rank
+            or len(identities) != 1
+            or name.casefold() in seen
+        ):
+            return []
+        names.append("/" + name)
+        seen.add(name.casefold())
+    return names
 
 
 def github_repositories(observation: str) -> list[str]:
@@ -43,9 +311,14 @@ def github_repositories(observation: str) -> list[str]:
     headings = parser.links or re.findall(
         r"(?m)^#{1,3}\s+.*?\[[^\]]+\]\(([^)]+)\)", observation
     )
-    links = headings or re.findall(
-        r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", observation
-    )
+    if headings:
+        links = headings
+    elif re.search(r'"rank"\s*:', observation):
+        links = _ranked_repositories(observation)
+    else:
+        links = re.findall(
+            r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", observation
+        )
     repositories = []
     seen = set()
     for link in links:
@@ -213,7 +486,7 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
         _current(report_time, now),
         "report time within one hour, with five-minute future tolerance",
     )
-    sources = None
+    sources = sources_problem = None
     if platform == "github":
         trajectory = Trajectory(
             **json.loads(
@@ -224,14 +497,49 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
                 )
             )
         )
-        observations = matching_observations(trajectory, config["required_calls"][0])
+        index = ObservationIndex(
+            trajectory.model_copy(
+                update={
+                    "steps": [
+                        step
+                        for step in trajectory.steps
+                        if step.source == "agent" and not step.is_copied_context
+                    ]
+                }
+            )
+        )
         repositories = []
-        for observation in observations:
+        observations = list(
+            github_sources(index, config["required_calls"][0], paths["workdir"])
+        )
+        for _fetch_id, _read_id, observation in observations:
             candidates = github_repositories(observation)
             if len(candidates) >= 10:
                 repositories = candidates[:10]
-                sources = observation
                 break
+        if repositories:
+            report_bytes = len(content.encode("utf-8")) if report is not None else 0
+            available = _EVIDENCE_BYTES - (
+                report_bytes if report_bytes <= _EVIDENCE_BYTES else 0
+            )
+            try:
+                sources = _source_evidence(
+                    chain(
+                        (
+                            (f"Fetch call: {fetch_id}\nEvidence call: {read_id}", text)
+                            for fetch_id, read_id, text in observations
+                        ),
+                        github_supporting_sources(
+                            index,
+                            config["required_calls"][0],
+                            paths["workdir"],
+                            repositories,
+                        ),
+                    ),
+                    available,
+                )
+            except EvidenceLimitError as error:
+                sources_problem = str(error)
         check(
             "github_weekly",
             meta.get("source") == GITHUB_URL and meta.get("window") == "weekly",
@@ -417,16 +725,31 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
                 )
             if valid:
                 sources = json.dumps(snapshot, ensure_ascii=False, indent=2)
-    evidence = paths["verifier_logs"] / "artifact_text"
-    evidence.mkdir(exist_ok=True)
-    if report is not None:
-        (evidence / "report.md").write_bytes(content.encode("utf-8"))
-    if sources is not None:
-        (evidence / "sources.md").write_text(sources, encoding="utf-8")
     if len(checks) != len(declared) or {check["id"] for check in checks} != set(
         declared
     ):
         raise ValueError("Trend Digest check declarations do not match implementation")
+    remaining = _EVIDENCE_BYTES
+    with EvidenceWriter(
+        paths["verifier_logs"], max_text_bytes=_EVIDENCE_BYTES
+    ) as evidence:
+        for name, text in (
+            ("report", content if report is not None else None),
+            ("sources", sources),
+        ):
+            if name == "sources" and sources_problem:
+                evidence.unavailable(name, sources_problem, status="error")
+            elif text is None:
+                evidence.unavailable(name, "No validated current-step evidence")
+            elif len(text.encode("utf-8")) > remaining:
+                evidence.unavailable(
+                    name,
+                    f"Complete {name} exceeds remaining {remaining} byte evidence budget",
+                    status="error",
+                )
+            else:
+                evidence.add_text(name, text)
+                remaining -= len(text.encode("utf-8"))
     return checks
 
 

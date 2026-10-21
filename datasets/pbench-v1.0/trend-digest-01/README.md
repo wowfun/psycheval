@@ -64,6 +64,49 @@ HN story slots. Missing output cannot shrink the scoring denominator.
 GitHub accepts web/fetch tools or shell execution; local read tools alone do not
 establish a source fetch.
 
+GitHub source evidence starts with successful, current-step fetch observations.
+When a shell fetch saves the weekly page with `curl -o/--output`, `wget -O`, or
+PowerShell `-OutFile`/`Content | Out-File`, later successful reads of that same path may supply the
+page evidence. Literal paths are resolved against the recorded working directory
+and an explicit leading `cd`/`Set-Location`; basename-only matches are not enough.
+Supported readers are file-read tools, `cat`/`Get-Content`/`type`, Python
+`open`/`Path` reads, and Node `readFileSync`. PowerShell `$env:NAME/path` and
+Node `process.env.NAME + '/path'` can be matched symbolically by the same variable
+name and suffix, without reading the verifier's environment or host files.
+Other shell expressions are not evaluated. Copied context,
+failed calls, unrelated files and final answers are excluded. WorkBuddy shell
+observations have their structured command-echo wrapper removed; other observation
+formats are retained as recorded tool output.
+The collector indexes retained calls and their observations once per grading
+attempt, then links weekly and repository evidence in call order. It uses
+retained observations, not files left on the host.
+
+Ranked JSON arrays or JSON lines with contiguous `rank` values starting at 1 and
+a repository identifier in `name`, `repo`, `full_name`, `path`, `url`, or `html_url`
+are accepted alongside HTML/Markdown headings and URLs. Identifiers can be
+`owner/repo`, `/owner/repo` or full GitHub URLs; whitespace around the slash is
+allowed. Multiple valid identifiers in one record must agree. Non-JSON log lines
+around JSON-line records do not supply repository slots.
+The first complete observation with at least ten distinct repositories
+establishes the first ten slots; partial lists are not stitched together.
+Successful fetches of that weekly URL and their linked reads retain distinct bodies verbatim
+with fetch/read call identifiers for Judge evidence, including subsequent
+extraction of descriptions.
+Successful fetches of the selected ten repositories on `github.com` or
+`raw.githubusercontent.com`, and reads linked to those downloads, are also
+included as supporting evidence (for example README text). Repository identity
+must match the owner/name exactly, not a longer prefix. These supporting sources
+never determine or add ranking slots.
+Identical bodies are published once with all associated fetch/read provenance.
+Report and source text share a 1 MiB publication budget, matching the default
+Judge evidence budget. The complete report has priority. If complete source
+evidence cannot fit, it is marked unavailable with an explicit budget reason;
+no body is silently shortened. Required unavailable evidence produces local
+rubric failures under the shared Judge contract, rather than an accidental
+oversized-input fallback. The original observations remain in the trajectory.
+These provenance links identify recorded tool
+results; they do not make agent-authored parsing code or source content trusted.
+
 GitHub and X continue only when `required_tool`, `required_arguments`,
 `required_observation`, `required_artifacts`, and `final_answer` each score 1.
 Other checks award partial credit without independently blocking continuation.
@@ -73,8 +116,9 @@ continuation gate; it does not multiply all other scores by zero.
 Each step's `tests/judge.yaml` adds three equally weighted rubrics: faithful
 summaries, concrete information value, and clear Chinese with honest statements
 about no updates, fetching failures, and insufficient evidence. The custom
-script writes the current report and validated source evidence under
-`artifact_text/`; GitHub uses successful tool observations and X/HN use their
+script publishes the current report and validated source evidence through
+[`EvidenceWriter`](../../../docs/reference/document-evidence.md#evidence-publication),
+including its manifest and per-attempt cleanup. GitHub uses successful tool observations and X/HN use their
 snapshots. The Judge does not browse or repeat counts, links, or timestamp
 checks. Quality expectations are also stated in the step instructions.
 Invalid X time windows are excluded from Judge source evidence even for empty
