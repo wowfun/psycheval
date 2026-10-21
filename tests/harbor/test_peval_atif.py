@@ -58,6 +58,7 @@ def test_representative_peval_export_conforms_to_public_harbor_validator(
 
     converted = convert_records(records, ToolConfig(adapter=adapter, redact=False))
 
+    assert converted.trajectory["schema_version"] == "ATIF-v1.8"
     validated = Trajectory.model_validate(converted.trajectory)
-    assert validated.schema_version == "ATIF-v1.7"
+    assert validated.schema_version == "ATIF-v1.8"
     assert validated.trajectory_id == f"{adapter}:sess-common"
