@@ -150,20 +150,20 @@ def test_custom_only_cli_gt_helpers_and_missing_check_without_trajectory(tmp_pat
     assert (
         json.loads((logs / "reward.json").read_text(encoding="utf-8"))["reward"] == 0.75
     )
-    raw = (logs / "checks.json").read_text(encoding="utf-8")
+    raw = (logs / "score.json").read_text(encoding="utf-8")
     assert "读取 GT" in raw
     details = json.loads(raw)
-    assert details["checks"][0]["evidence"] == "读取 GT"
-    assert details["checks"][1]["missing"] is True
+    assert details["verdicts"][0]["reason"] == "读取 GT"
+    assert details["verdicts"][1]["metadata"]["missing"] is True
     assert "plan" not in details
     assert [
-        (check["id"], check["dimension"], check["weight"])
-        for check in details["checks"]
+        (check["item_id"], check["metadata"]["dimension"], check["metadata"]["weight"])
+        for check in details["verdicts"]
     ] == [
         ("custom:values", "custom_outputs", 3),
         ("custom:format", "custom_outputs", 1),
     ]
-    assert sum(check["weight"] for check in details["checks"]) == 4
+    assert sum(check["metadata"]["weight"] for check in details["verdicts"]) == 4
     assert "自定义" in (logs / "custom-stdout.txt").read_text(encoding="utf-8")
 
 
@@ -209,6 +209,7 @@ def test_custom_verifier_errors_never_reuse_old_reward(tmp_path, failure):
     logs.mkdir()
     (logs / "reward.json").write_text('{"reward":1}')
     (logs / "reward.txt").write_text("1")
+    (logs / "score.json").write_text("{}")
     (logs / "checks.json").write_text("{}")
     result = _run_cli(
         tmp_path / "grader.json", tmp_path / "agent", logs, tmp_path / "artifacts"
@@ -216,6 +217,8 @@ def test_custom_verifier_errors_never_reuse_old_reward(tmp_path, failure):
     assert result.returncode != 0
     assert not (logs / "reward.json").exists()
     assert not (logs / "reward.txt").exists()
+    assert not (logs / "score.json").exists()
+    assert not (logs / "checks.json").exists()
     assert (logs / "verifier-error.txt").is_file()
 
 

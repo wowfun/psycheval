@@ -215,10 +215,10 @@ def verifier(root: Path) -> None:
             ]
             == reward
         )
-        checks = json.loads(
-            (root / "verifier/checks.json").read_text(encoding="utf-8")
-        )["checks"]
-        assert all(check["passed"] for check in checks) == bool(reward)
+        checks = json.loads((root / "verifier/score.json").read_text(encoding="utf-8"))[
+            "verdicts"
+        ]
+        assert all(check["status"] == "pass" for check in checks) == bool(reward)
     grader.write_text(json.dumps({"custom_checks": ["value", "missing"]}))
     (root / "test_outputs.py").write_text(
         "import argparse, json; from pathlib import Path\n"
@@ -368,15 +368,18 @@ def verifier(root: Path) -> None:
                     else None,
                 ),
             )
-        assert result["rewards"] == {
+        assert json.loads(
+            (root / "verifier/reward.json").read_text(encoding="utf-8")
+        ) == {
             **scores,
             "llm_score": 1.0,
             "reward": 0.8 * 0.5 + 0.2,
         }
-        assert result["judge"]["checks"] == [
-            {"id": "quality", "passed": True, "reason": "中文判断 📰"}
-        ]
-        raw = (root / "verifier/checks.json").read_text(encoding="utf-8")
+        (verdict,) = result["judges"][1]["verdicts"]
+        assert verdict["item_id"] == "llm:quality"
+        assert verdict["status"] == "pass" and verdict["score"] == 1
+        assert verdict["reason"] == "中文判断 📰"
+        raw = (root / "verifier/score.json").read_text(encoding="utf-8")
         assert "中文判断 📰" in raw
         assert result == json.loads(raw)
         index = json.loads(

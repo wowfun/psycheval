@@ -740,14 +740,14 @@ def test_trend_cli_publishes_current_step_partial_credit(
     assert verifier_main([str(tests / "grader.json")]) == 0
     logs = Path(runtime.paths.verifier_logs)
     reward = json.loads((logs / "reward.json").read_text(encoding="utf-8"))
-    checks = json.loads((logs / "checks.json").read_text(encoding="utf-8"))
+    checks = json.loads((logs / "score.json").read_text(encoding="utf-8"))
     assert (
         reward["reward"]
         == reward["rule_score"]
-        == (len(checks["checks"]) - 1) / len(checks["checks"])
+        == (checks["tests_total"] - 1) / checks["tests_total"]
     )
     assert reward["final_answer"] == 0
-    assert checks["judge"]["status"] == "disabled"
+    assert checks["judges"][1]["metadata"]["judge_status"] == "disabled"
     assert (logs / "artifact_text/report.md").read_bytes() == report.read_bytes()
 
 

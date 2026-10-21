@@ -313,7 +313,7 @@ Path(args.output).write_text(json.dumps({'checks': [{'id': 'step', 'passed': tra
     ).is_file()
     for name in ("seed", "continue", "finish"):
         step_dir = trial_dir / "steps" / name
-        assert (step_dir / "verifier" / "checks.json").is_file()
+        assert (step_dir / "verifier" / "score.json").is_file()
         assert (step_dir / "verifier" / "reward.json").is_file()
         assert (step_dir / "artifacts" / "logs" / "artifacts" / f"{name}.txt").is_file()
 

@@ -799,12 +799,31 @@ the complete plan. Dimension scores use the same rule; empty dimensions score
 one. `evaluate` only evaluates built-in checks and never executes Task code.
 Dataset-owned scorers and WorkBuddy scoring retain their own policies.
 
-`reward.json` contains numeric results. `checks.json` retains normalized checks
-(including missing results), each with its declared ID, dimension, and weight,
-alongside calculated scores. Total rule weight is the sum of check weights. A fresh
-temporary output is used for each script invocation. Prior framework reward and
-check outputs are removed before evaluation; successful outputs are atomically
-replaced, with reward published last. Errors retain diagnostics and publish no
+`reward.json` contains numeric results. `score.json` uses the Office score
+envelope: final `reward` and `overall`, `test_status`, unweighted
+`test_pass_rate`, `tests_passed`, `tests_total`, `verdicts`, `judges`,
+`diagnostics`, and `metadata`. Counts include all declared deterministic checks;
+`test_pass_rate` is `tests_passed / tests_total` (zero for no checks). The rule
+group's `scores.pass_rate` has the same meaning; its `scores.overall` and
+`metadata.score_merge.rule_score` retain the weighted rule score used in reward.
+Status follows Office's finalizer: `full_pass` for
+reward one, `partial_pass` for a positive reward below one, and `no_pass` for zero.
+Values retain their full precision.
+
+Each deterministic check has an Office-shaped verdict with its existing
+`item_id`, binary `status` and `score`, `reason` from check evidence,
+`judge_name`, `judge_type`, `evidence_ids`, nullable `confidence`, and `metadata`.
+Metadata retains dimension, weight, and missing-result state. Missing checks
+fail. The `rule` judge (`rule_script`, family `rule`) groups those verdicts and
+retains dimension scores. Top-level verdicts flatten judge groups in declaration
+order. No separate plan or legacy checks payload is published.
+Group `ok` means execution was nonfatal, not that all verdicts passed. The
+Office status-count vocabulary includes zero-valued categories without local
+producers (`review`, `build_error`, `judge_error`).
+Total rule weight is the sum of check weights. A fresh
+temporary output is used for each script invocation. Prior reward, score, and
+legacy check outputs are removed before evaluation; successful outputs are
+atomically replaced, with reward published last. Errors retain diagnostics and publish no
 reward for the invocation.
 
 ## YAML LLM Judge
@@ -840,7 +859,7 @@ type, including a misspelling such as `makrdown`, is not a YAML validation error
 When evidence loading completes, `judge/evidence.json` records extraction
 requirements and path read errors. A whole-Judge evidence failure, such as an
 invalid manifest or exceeded evidence budget, prevents this index from being
-published; inspect `checks.json`'s `judge.reason` instead. Check the declared type
+published; inspect the LLM group's metadata reason in `score.json` instead. Check the declared type
 and matching manifest record before investigating the model.
 The index maps artifact IDs to read diagnostics, retaining `required`,
 `extract_status`, and `error`, plus the selected `text_path` relative to
@@ -948,7 +967,7 @@ An explicit `EffectiveRuntimeConfig` supplies the invocation paths and context
 without reading `PEVAL_CONFIG`. When omitted, the Python API requires a configured
 `PEVAL_CONFIG`; it never creates container-style `/logs` paths implicitly. Only
 the CLI supplies those default paths when no runtime is configured.
-The returned dictionary is the complete `checks.json` payload; the same
+The returned dictionary is the complete `score.json` payload; the same
 invocation also publishes the usual files and propagates verifier exceptions.
 Concurrent invocations must use separate verifier-log directories. Blocking path
 resolution and file queries, local checks, evidence I/O, and publication use a
@@ -1014,8 +1033,19 @@ all rubric responses are available after synchronous diagnostic I/O; they do not
 enable score merging.
 
 `reward.json` contains the final reward, rule dimensions, `rule_score`, and, only
-when complete, `llm_score`. `checks.json` retains rule checks, Judge
-plan and individual outcomes, completion state, merge decision, and reason.
+when complete, `llm_score`. `score.json` adds `llm_judge_component_score` only
+when the Judge completes. Its `llm_judge` group (type `llm_judge`, family `llm`)
+contains one verdict per rubric with `llm:<id>`, evidence references, and rubric
+criteria in metadata. Unassessed rubrics use `abstain` with a null score;
+completed verdicts remain visible even when the group is incomplete. Disabled
+and incomplete groups have no component scores. Group metadata records
+completion state, reason, and elapsed time; errors use the Office errors array.
+Without `judge.yaml`, the LLM group is absent.
+
+`metadata.score_merge` records the method, configured weights, available component
+scores, final score, applied flag, and reason. Diagnostics contain status counts
+and declared evidence metadata, without repeating a plan. This serialization
+does not import the WorkBuddy runtime or adopt its rounding or error policy.
 These result files and `judge/*.json` diagnostics use UTF-8 with two-space
 indentation and a trailing newline. Chinese and other Unicode text remain
 readable; isolated surrogate code points are escaped to preserve valid UTF-8.

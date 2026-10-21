@@ -109,7 +109,7 @@ async def grade_task(grader_path, runtime, judge_options):
         runtime=runtime,
         judge_settings=settings,
     )
-    return result["rewards"]
+    return result  # Office-shaped score.json payload
 ```
 
 For example, `judge_options` can contain `enabled=True`, `base_url`, `model`,

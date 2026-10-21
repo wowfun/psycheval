@@ -489,8 +489,8 @@ Path(sys.argv[4]).write_text('{"checks":[{"id":"valid","passed":true}]}')
         )
         assert len(server["requests"]) == 1
         assert "current evidence" in server["requests"][0]["messages"][-1]["content"]
-    assert first["rewards"]["reward"] == 1
-    assert second["rewards"]["reward"] == 0.8
+    assert first["reward"] == 1
+    assert second["reward"] == 0.8
     logs = Path(context.paths.verifier_logs)
     assert not (logs / "artifact_manifest.json").exists()
-    assert json.loads((logs / "checks.json").read_text(encoding="utf-8")) == second
+    assert json.loads((logs / "score.json").read_text(encoding="utf-8")) == second

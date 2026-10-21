@@ -21,6 +21,7 @@ from ._blocking import run_blocking
 from ._evaluation import evaluate
 from ._judge import JudgeSettings, clear_judge_outputs, merge_scores, run_judge
 from ._judge_config import load_judge_config
+from ._score import score_payload
 from ._scoring import ScoringPlan, aggregate, build_scoring_plan, normalize_checks
 
 
@@ -132,6 +133,7 @@ def _prepare_logs(logs: Path) -> None:
         "reward.json",
         "reward.txt",
         "checks.json",
+        "score.json",
         "custom-stdout.txt",
         "custom-stderr.txt",
         "verifier-error.txt",
@@ -145,7 +147,7 @@ async def run_verifier(
     runtime: EffectiveRuntimeConfig | None = None,
     judge_settings: JudgeSettings | None = None,
 ) -> dict[str, Any]:
-    """Run scoring and publish its files, returning the complete checks payload.
+    """Run scoring and publish its files, returning the complete score payload.
 
     Explicit runtime and Judge settings replace their environment-derived values.
     Blocking work runs in threads that settle before cancellation returns.
@@ -184,13 +186,14 @@ async def run_verifier(
         rewards = await run_blocking(aggregate, checks, plan=plan)
         judge = await run_judge(judge_config, runtime, settings, rule_rewards=rewards)
         rewards, merge = merge_scores(rewards, judge_config, judge)
-        result = {
-            "checks": await run_blocking(normalize_checks, checks, plan=plan),
-            "rewards": rewards,
-            "judge": judge,
-            "score_merge": merge,
-        }
-        await run_blocking(_write_json, verifier_logs / "checks.json", result)
+        result = score_payload(
+            await run_blocking(normalize_checks, checks, plan=plan),
+            rewards,
+            judge_config,
+            judge,
+            merge,
+        )
+        await run_blocking(_write_json, verifier_logs / "score.json", result)
         await run_blocking(_write_json, verifier_logs / "reward.json", rewards)
     except Exception:
         await run_blocking(

@@ -26,6 +26,7 @@ from psycheval.harbor.verifier._judge import (
     run_judge,
 )
 from psycheval.harbor.verifier._judge_config import parse_judge_config
+from psycheval.harbor.verifier._scoring import REWARD_DIMENSIONS
 from tests.fixtures.judge_server import judge_server
 from tests.fixtures.judge_task import YAML, api_task, runtime
 
@@ -64,7 +65,7 @@ def test_public_api_path_queries_run_off_caller_loop(
     result = asyncio.run(
         run_verifier(grader, runtime=context, judge_settings=JudgeSettings())
     )
-    assert result["rewards"]["reward"] == 1
+    assert result["reward"] == 1
     assert callers and loop_thread not in callers
 
 
@@ -80,7 +81,7 @@ def pause_verifier_stage(monkeypatch, stage):
     started, release, settled = (threading.Event() for _ in range(3))
 
     def paused(*args, **kwargs):
-        if stage == "publication" and args[0].name != "checks.json":
+        if stage == "publication" and args[0].name != "score.json":
             return original(*args, **kwargs)
         started.set()
         try:
@@ -116,7 +117,7 @@ def test_public_api_local_work_does_not_block_caller_loop(tmp_path, monkeypatch,
             assert responsive, (
                 f"{stage} blocked the caller loop until the worker finished"
             )
-            assert result["rewards"]["reward"] == 1
+            assert result["reward"] == 1
 
         asyncio.run(scenario())
 
@@ -243,8 +244,8 @@ def test_public_api_custom_prompts_preserve_context_and_literal_text(
             )
         )
         request = server["requests"][0]
-    assert result["judge"]["status"] == "complete"
-    assert result["score_merge"]["applied"]
+    assert result["judges"][1]["metadata"]["judge_status"] == "complete"
+    assert result["metadata"]["score_merge"]["applied"]
     assert [message["role"] for message in request["messages"]] == (
         ["system", "user"] if custom_system else ["user"]
     )
@@ -444,10 +445,12 @@ def test_custom_prompts_keep_response_validation_and_retry(
         assert diagnostic["messages"] == server["requests"][0]["messages"]
         assert len(diagnostic["attempts"]) == attempts
         assert all("messages" not in item for item in diagnostic["attempts"])
-    assert result["score_merge"]["applied"] is complete
-    assert ("llm_score" in result["rewards"]) is complete
-    assert result["judge"]["status"] == ("complete" if complete else "incomplete")
-    assert result["rewards"]["rule_score"] == 1
+    assert result["metadata"]["score_merge"]["applied"] is complete
+    assert ("llm_judge_component_score" in result) is complete
+    assert result["judges"][1]["metadata"]["judge_status"] == (
+        "complete" if complete else "incomplete"
+    )
+    assert result["test_pass_rate"] == 1
 
 
 @pytest.mark.parametrize(
@@ -494,17 +497,19 @@ def test_public_api_explicit_settings_replace_environment_and_return_outputs(
         assert server["requests"][0]["model"] == "explicit-model"
         assert "reasoning_effort" not in server["requests"][0]
     assert dict(os.environ) == before
-    assert result["judge"]["status"] == "complete"
-    assert result["score_merge"]["applied"]
-    assert result["rewards"]["reward"] == 1
-    assert result["rewards"]["rule_score"] == 1
-    assert result["rewards"]["llm_score"] == 1
+    assert result["judges"][1]["metadata"]["judge_status"] == "complete"
+    assert result["metadata"]["score_merge"]["applied"]
+    assert result["reward"] == 1
+    assert result["test_pass_rate"] == 1
+    assert result["llm_judge_component_score"] == 1
     logs = Path(context.paths.verifier_logs)
-    assert json.loads((logs / "checks.json").read_text(encoding="utf-8")) == result
-    assert (
-        json.loads((logs / "reward.json").read_text(encoding="utf-8"))
-        == result["rewards"]
-    )
+    assert json.loads((logs / "score.json").read_text(encoding="utf-8")) == result
+    assert json.loads((logs / "reward.json").read_text(encoding="utf-8")) == {
+        **{key: result["judges"][0]["scores"][key] for key in REWARD_DIMENSIONS},
+        "reward": result["reward"],
+        "rule_score": result["test_pass_rate"],
+        "llm_score": result["llm_judge_component_score"],
+    }
 
 
 @pytest.mark.parametrize("judge_enabled", [False, True])
@@ -535,18 +540,20 @@ def test_public_api_publishes_readable_unicode_and_preserves_nested_json(
         )
         assert len(server["requests"]) == int(judge_enabled)
     logs = Path(context.paths.verifier_logs)
-    raw = (logs / "checks.json").read_text(encoding="utf-8")
+    raw = (logs / "score.json").read_text(encoding="utf-8")
     assert "中文证据 📰" in raw
     assert r"\ud800" in raw
     assert json.loads(raw) == result
-    assert result["checks"][0]["evidence"] == text
-    assert (
-        json.loads((logs / "reward.json").read_text(encoding="utf-8"))
-        == result["rewards"]
-    )
+    assert result["verdicts"][0]["reason"] == text
+    assert json.loads((logs / "reward.json").read_text(encoding="utf-8")) == {
+        **{key: result["judges"][0]["scores"][key] for key in REWARD_DIMENSIONS},
+        "reward": result["reward"],
+        "rule_score": result["test_pass_rate"],
+        **({"llm_score": result["llm_judge_component_score"]} if judge_enabled else {}),
+    }
     if judge_enabled:
-        assert result["judge"]["status"] == "complete"
-        assert result["judge"]["checks"][0]["reason"] == text
+        assert result["judges"][1]["metadata"]["judge_status"] == "complete"
+        assert result["judges"][1]["verdicts"][0]["reason"] == text
         evidence = (logs / "judge/evidence.json").read_text(encoding="utf-8")
         assert "中文 报告.md" in evidence
         assert "text" not in json.loads(evidence)["report"]
@@ -555,7 +562,7 @@ def test_public_api_publishes_readable_unicode_and_preserves_nested_json(
         )["attempts"][0]["response"]
         assert json.loads(response)["choices"][0]["message"]["content"] == content
     else:
-        assert result["judge"]["status"] == "disabled"
+        assert result["judges"][1]["metadata"]["judge_status"] == "disabled"
 
 
 @pytest.mark.parametrize("diagnostic", [False, True])
@@ -584,7 +591,7 @@ def test_result_publication_rejects_nan_without_replacing_previous_file(tmp_path
 
     directory = tmp_path / "publication"
     directory.mkdir()
-    path = directory / "checks.json"
+    path = directory / "score.json"
     before = b'{"previous": true}\n'
     path.write_bytes(before)
     with pytest.raises(ValueError):
@@ -606,9 +613,9 @@ def test_public_api_explicit_disable_overrides_enabled_environment(
             run_verifier(grader, runtime=context, judge_settings=JudgeSettings())
         )
         assert not server["requests"]
-    assert result["judge"]["status"] == "disabled"
-    assert not result["score_merge"]["applied"]
-    assert "llm_score" not in result["rewards"]
+    assert result["judges"][1]["metadata"]["judge_status"] == "disabled"
+    assert not result["metadata"]["score_merge"]["applied"]
+    assert "llm_judge_component_score" not in result
 
 
 def test_public_api_omitted_parameters_use_environment(tmp_path, monkeypatch):
@@ -625,7 +632,7 @@ def test_public_api_omitted_parameters_use_environment(tmp_path, monkeypatch):
         result = asyncio.run(run_verifier(str(grader)))
         assert server["requests"][0]["model"] == "environment-model"
         assert server["requests"][0]["reasoning_effort"] == "high"
-    assert result["judge"]["status"] == "complete"
+    assert result["judges"][1]["metadata"]["judge_status"] == "complete"
 
 
 @pytest.mark.parametrize("effort", [" high ", "none", "provider-specific"])
@@ -653,8 +660,8 @@ def test_reasoning_effort_reaches_provider_on_every_attempt(
             request["reasoning_effort"] == effort.strip()
             for request in server["requests"]
         )
-    assert result["judge"]["status"] == "complete"
-    assert result["rewards"]["llm_score"] == 1
+    assert result["judges"][1]["metadata"]["judge_status"] == "complete"
+    assert result["llm_judge_component_score"] == 1
 
 
 def test_provider_rejecting_reasoning_effort_preserves_rule_score(tmp_path):
@@ -672,9 +679,9 @@ def test_provider_rejecting_reasoning_effort_preserves_rule_score(tmp_path):
         )
         assert len(server["requests"]) == 1
         assert server["requests"][0]["reasoning_effort"] == "high"
-    assert not result["score_merge"]["applied"]
-    assert result["rewards"]["reward"] == result["rewards"]["rule_score"] == 1
-    assert "llm_score" not in result["rewards"]
+    assert not result["metadata"]["score_merge"]["applied"]
+    assert result["reward"] == result["test_pass_rate"] == 1
+    assert "llm_judge_component_score" not in result
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -693,8 +700,9 @@ def test_public_api_without_yaml_does_not_read_judge_settings(
             else None,
         )
     )
-    assert result["judge"]["status"] == "absent"
-    assert result["rewards"]["reward"] == 1
+    assert len(result["judges"]) == 1
+    assert result["metadata"]["score_merge"]["reason"] == "no judge.yaml"
+    assert result["reward"] == 1
 
 
 def test_public_api_concurrent_invocations_keep_settings_and_evidence_separate(
@@ -760,7 +768,7 @@ def test_public_api_concurrent_invocations_keep_settings_and_evidence_separate(
             )
             assert diagnostic["messages"] == request["messages"]
     for context, result in zip((first, second), results, strict=True):
-        path = Path(context.paths.verifier_logs) / "checks.json"
+        path = Path(context.paths.verifier_logs) / "score.json"
         assert json.loads(path.read_text(encoding="utf-8")) == result
 
 
@@ -808,14 +816,12 @@ def test_default_prompts_use_each_calls_current_rule_rewards(tmp_path):
             result = results[0 if request["model"] == "first" else 1]
             assert rewards == {
                 **{
-                    k: v
-                    for k, v in result["rewards"].items()
-                    if k not in {"rule_score", "llm_score"}
+                    key: result["judges"][0]["scores"][key] for key in REWARD_DIMENSIONS
                 },
-                "reward": result["rewards"]["rule_score"],
+                "reward": result["test_pass_rate"],
             }
-    assert results[0]["rewards"]["reward"] == 0.8
-    assert results[1]["rewards"]["reward"] == 0
+    assert results[0]["reward"] == 0.8
+    assert results[1]["reward"] == 0
 
 
 def test_default_prompt_without_optional_runtime_or_scope(tmp_path):
@@ -1098,14 +1104,16 @@ def test_extra_response_fields_are_ignored_in_scores_and_retained_in_diagnostics
             )
         )
         assert server["counts"]["fidelity"] == 1
-    assert result["judge"]["status"] == "complete"
-    assert result["judge"]["checks"] == [
-        {"id": "fidelity", "passed": False, "reason": "本地证据判定"}
-    ]
-    assert result["score_merge"]["applied"]
-    assert result["rewards"]["reward"] == 0.8
+    assert result["judges"][1]["metadata"]["judge_status"] == "complete"
+    (verdict,) = result["judges"][1]["verdicts"]
+    assert verdict["item_id"] == "llm:fidelity"
+    assert verdict["status"] == "fail" and verdict["score"] == 0
+    assert verdict["reason"] == "本地证据判定"
+    assert "passed_reason_note" not in verdict
+    assert result["metadata"]["score_merge"]["applied"]
+    assert result["reward"] == 0.8
     logs = Path(context.paths.verifier_logs)
-    assert json.loads((logs / "checks.json").read_text(encoding="utf-8")) == result
+    assert json.loads((logs / "score.json").read_text(encoding="utf-8")) == result
     diagnostic = json.loads(
         (logs / "judge/rubric-0001.json").read_text(encoding="utf-8")
     )
@@ -1259,7 +1267,13 @@ Path(sys.argv[4]).write_text('{"checks":[{"id":"valid","passed":true}]}')
     for name in ("judge", "artifact_text", "judge_evidence", "judge-evidence"):
         (logs / name).mkdir()
         (logs / name / "old").write_text("old")
-    for name in ("reward.json", "checks.json", "reward.txt", "artifact_manifest.json"):
+    for name in (
+        "reward.json",
+        "score.json",
+        "checks.json",
+        "reward.txt",
+        "artifact_manifest.json",
+    ):
         (logs / name).write_text("old")
     monkeypatch.setenv(
         "PEVAL_CONFIG",
@@ -1271,6 +1285,7 @@ Path(sys.argv[4]).write_text('{"checks":[{"id":"valid","passed":true}]}')
         == 1
     )
     assert not (logs / "reward.txt").exists()
+    assert not (logs / "checks.json").exists()
     # Static YAML errors abort before any task script and remove last invocation's reward.
     (tests / "judge.yaml").write_text(YAML + "version: 1\n", encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate"):
