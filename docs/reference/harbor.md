@@ -1028,7 +1028,7 @@ redacted from diagnostics in both original and XML-escaped forms, including
 nested JSON escaping, without changing the messages submitted to the model.
 These files are diagnostic, not another score authority. Every invocation removes
 previous framework scores, `judge/`,
-`artifact_manifest.json`, `artifact_text/`, `judge_evidence/`, and the legacy
+`artifact_manifest.json`, `artifact_text/`, `raw_artifacts/`, `judge_evidence/`, and the legacy
 `judge-evidence/` directory before scripts run, without following links.
 Successful results are atomically published with reward last; verifier errors
 retain diagnostics without a current reward.

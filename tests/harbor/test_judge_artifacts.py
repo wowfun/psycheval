@@ -401,7 +401,13 @@ def test_managed_output_cleanup_unlinks_without_touching_targets(tmp_path):
     logs.mkdir()
     try:
         (logs / "artifact_manifest.json").symlink_to(sentinel)
-        for name in ("judge", "artifact_text", "judge_evidence", "judge-evidence"):
+        for name in (
+            "judge",
+            "artifact_text",
+            "raw_artifacts",
+            "judge_evidence",
+            "judge-evidence",
+        ):
             (logs / name).symlink_to(external, target_is_directory=True)
     except OSError as exc:
         pytest.skip(f"native symlink creation unavailable: {exc}")
@@ -412,24 +418,34 @@ def test_managed_output_cleanup_unlinks_without_touching_targets(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="native Windows junction")
-def test_junction_evidence_is_rejected_and_cleanup_preserves_target(tmp_path):
+@pytest.mark.parametrize("directory", ["artifact_text", "raw_artifacts"])
+@pytest.mark.parametrize("owner", ["judge", "writer"])
+def test_junction_evidence_is_rejected_and_cleanup_preserves_target(
+    tmp_path, directory, owner
+):
     context = runtime(tmp_path)
     logs = Path(context.paths.verifier_logs)
     external = tmp_path / "external"
     external.mkdir()
     sentinel = external / "report.md"
     sentinel.write_text("must remain private")
-    link = logs / "artifact_text"
+    link = logs / directory
     subprocess.run(
         ["cmd", "/c", "mklink", "/J", str(link), str(external)],
         capture_output=True,
         check=True,
     )
     try:
-        manifest(logs, extracted_record(text_path="artifact_text/report.md"))
+        manifest(logs, extracted_record(text_path=f"{directory}/report.md"))
         result, requests = assess(context)
         assert not requests and not result["checks"][0]["passed"]
-        clear_judge_outputs(logs)
+        if owner == "judge":
+            clear_judge_outputs(logs)
+        else:
+            from psycheval.harbor.evidence import EvidenceWriter
+
+            with EvidenceWriter(logs):
+                pass
         assert not link.exists() and not link.is_junction()
         assert sentinel.read_text() == "must remain private"
     finally:

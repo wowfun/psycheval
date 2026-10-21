@@ -35,6 +35,18 @@ remains an explicit opt-in:
 PEVAL_LIVE_OPENCODE=1 npm run test:e2e -- web/e2e/acp-live.spec.mjs
 ```
 
+Optional document inspection uses synthetic files and local Judge fixtures:
+
+```console
+uv sync --extra documents
+uv run --no-sync pytest tests/harbor/test_documents.py tests/harbor/test_evidence.py tests/harbor/test_vendoring.py
+```
+
+The base suite skips parser-dependent tests when extras are absent. The Windows
+and Linux CI jobs also run the target with all four extras installed; source-copy
+imports are checked with optional parser imports blocked. Format and publication
+contracts live in [Document inspection and evidence](reference/document-evidence.md).
+
 Tests isolate HOME/XDG state, config, sockets, timers, and environment secrets.
 Focused success is not a release claim unless the expected test inventory is
 visible.

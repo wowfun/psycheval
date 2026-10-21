@@ -52,6 +52,40 @@ Description.
         distribution.metadata(raw, project)
 
 
+@pytest.mark.parametrize("extra", ["pdf", "pptx", "xlsx", "docx", "documents"])
+def test_wheel_metadata_validates_optional_dependencies(extra):
+    import tomllib
+
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
+    rows = [
+        "Metadata-Version: 2.5",
+        "Name: psycheval",
+        "Version: 0.1.0rc1",
+        f"Requires-Python: {project['requires-python']}",
+        f"License-Expression: {project['license']}",
+        *(f"License-File: {name}" for name in project["license-files"]),
+    ]
+    rows += [f"Requires-Dist: {item}" for item in project["dependencies"]]
+    for name, dependencies in project["optional-dependencies"].items():
+        rows.append(f"Provides-Extra: {name}")
+        rows += [f'Requires-Dist: {item}; extra == "{name}"' for item in dependencies]
+    raw = ("\n".join(rows) + "\n\nDescription.\n").encode()
+    distribution.metadata(raw, project)
+    broken = [
+        row
+        for row in rows
+        if not (
+            row.startswith("Requires-Dist:") and row.endswith(f'extra == "{extra}"')
+        )
+    ]
+    with pytest.raises(AssertionError):
+        distribution.metadata(
+            ("\n".join(broken) + "\n\nDescription.").encode(), project
+        )
+
+
 def archive_fixture(kind=tarfile.REGTYPE):
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:

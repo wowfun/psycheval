@@ -78,6 +78,10 @@ ordinary verifier compiles a fixed scoring plan, executes built-in and script
 checks, and aggregates their results independently of execution.
 Its optional YAML Judge reads declared text evidence and merges complete rubric
 assessments with the rule score; it does not depend on the WorkBuddy runtime.
+`harbor.documents` owns optional document inspection and format-specific facts;
+`harbor.evidence` owns immutable source snapshots and verifier evidence publication.
+Task graders own requirements and score decisions. Their interfaces and output
+ownership are defined in [Document inspection and evidence](reference/document-evidence.md).
 External Dataset sources remain read-only, including during plugin loading.
 For native WorkBuddy execution, the Host adapter records the host OS in Harbor's
 in-memory Task environment configuration; Harbor uses it when injecting Skills.

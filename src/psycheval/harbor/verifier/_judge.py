@@ -6,7 +6,6 @@ import asyncio
 import json
 import math
 import os
-import shutil
 import time
 from dataclasses import asdict, dataclass, field
 from html import escape
@@ -15,6 +14,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from ..evidence import _clear_output
 from ..runtime_config import EffectiveRuntimeConfig
 from ._blocking import run_blocking
 from ._judge_config import JudgeConfig, Rubric
@@ -140,21 +140,11 @@ def clear_judge_outputs(logs: Path) -> None:
         "judge",
         "artifact_manifest.json",
         "artifact_text",
+        "raw_artifacts",
         "judge_evidence",
         "judge-evidence",
     ):
         _clear_output(logs / name)
-
-
-def _clear_output(path: Path) -> None:
-    if path.is_symlink():
-        path.unlink()
-    elif path.is_junction():
-        path.rmdir()
-    elif path.is_dir():
-        shutil.rmtree(path)
-    elif path.exists():
-        path.unlink()
 
 
 class _Incomplete(Exception):

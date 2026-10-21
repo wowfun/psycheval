@@ -31,6 +31,7 @@ def copied_harbor(tmp_path: Path) -> Path:
     "scenario",
     [
         "imports",
+        "documents",
         "trajectory_file",
         "verifier",
         "workbuddy",
@@ -44,6 +45,9 @@ def copied_harbor(tmp_path: Path) -> Path:
 def test_copied_harbor_runs_without_the_original_package(
     copied_harbor: Path, scenario: str
 ) -> None:
+    if scenario == "documents":
+        for dependency in ("pypdf", "pptx", "openpyxl", "docx"):
+            pytest.importorskip(dependency)
     if scenario == "host" and sys.platform != "linux":
         pytest.skip("synthetic host command uses Linux shell quoting")
     if scenario == "workbuddy":

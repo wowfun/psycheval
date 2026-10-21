@@ -42,9 +42,20 @@ def metadata(raw: bytes, project: dict, version: str | None = None):
     )
     assert value["License-Expression"] == project["license"]
     assert set(value.get_all("License-File")) == set(project["license-files"])
-    assert {Requirement(item) for item in value.get_all("Requires-Dist", [])} == {
-        Requirement(item) for item in project["dependencies"]
-    }
+    expected = {Requirement(item) for item in project["dependencies"]}
+    extras = project.get("optional-dependencies", {})
+    for extra, dependencies in extras.items():
+        for item in dependencies:
+            requirement = Requirement(item)
+            marker = f"({requirement.marker}) and " if requirement.marker else ""
+            requirement.marker = Requirement(
+                f'placeholder; {marker}extra == "{extra}"'
+            ).marker
+            expected.add(requirement)
+    assert set(value.get_all("Provides-Extra", [])) == set(extras)
+    assert {
+        Requirement(item) for item in value.get_all("Requires-Dist", [])
+    } == expected
     if version:
         assert value["Version"] == version
     description = value.get_payload()

@@ -45,8 +45,14 @@ def run_module(name: str, *args: str) -> None:
 def imports(root: Path) -> None:
     class BlockOptionalRuntime(importlib.abc.MetaPathFinder):
         def find_spec(self, fullname, path, target=None):
-            if fullname.split(".")[0] == "workbuddy_bench":
-                raise ModuleNotFoundError("optional WorkBuddy runtime is unavailable")
+            if fullname.split(".")[0] in {
+                "workbuddy_bench",
+                "pypdf",
+                "pptx",
+                "openpyxl",
+                "docx",
+            }:
+                raise ModuleNotFoundError("optional runtime is unavailable")
             return None
 
     sys.meta_path.insert(0, BlockOptionalRuntime())
@@ -62,6 +68,28 @@ def imports(root: Path) -> None:
     runtime = module("runtime_config")
     assert runtime.HARNESS_PROTOCOL_VERSION == 2
     assert runtime.PEVAL_CONFIG_ENV == "PEVAL_CONFIG"
+
+
+def documents(root: Path) -> None:
+    import docx
+    import openpyxl
+    import pptx
+    import pypdf
+
+    pdf = pypdf.PdfWriter()
+    pdf.add_blank_page(width=100, height=200)
+    pdf.write(root / "input.pdf")
+    pptx.Presentation().save(root / "input.pptx")
+    openpyxl.Workbook().save(root / "input.xlsx")
+    docx.Document().save(root / "input.docx")
+    api, evidence = module("documents"), module("evidence")
+    with evidence.EvidenceWriter(root / "evidence") as writer:
+        for kind in ("pdf", "pptx", "xlsx", "docx"):
+            selected = api.select_document([root], format=kind).selected
+            source = writer.capture(f"source_{kind}", selected)
+            report = api.inspect_document(source)
+            writer.add_text(kind, report.to_markdown(), source_id=f"source_{kind}")
+    assert (root / "evidence/artifact_manifest.json").is_file()
 
 
 def native_office(root: Path) -> None:
@@ -802,6 +830,7 @@ if __name__ == "__main__":
     sys.meta_path.insert(0, BlockPsycheval())
     scenarios = {
         "imports": imports,
+        "documents": documents,
         "trajectory_file": trajectory_file,
         "verifier": verifier,
         "workbuddy": workbuddy,
