@@ -65,6 +65,10 @@ fallback accept `text_path` under `artifact_text/` or WorkBuddy's
 the same containment, regular-file, link, byte-budget, and preview-type checks.
 Manifest extraction statuses remain visible, including upstream rejection;
 an admitted path must resolve to a regular file and does not certify its content.
+Explicit `missing` or `error` records without either path remain visible as
+metadata-only artifacts, with no preview or download. Their free-form reasons
+remain in the retained manifest, outside the safe summary. Other pathless records
+are invalid; an unavailable status never bypasses validation of a supplied path.
 
 Guests and administrators can inspect retained verification files on demand: `verifier/`,
 `artifacts/`, `result.json`, and `exception.txt` within the selected Trial's

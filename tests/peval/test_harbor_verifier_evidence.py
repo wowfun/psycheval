@@ -19,6 +19,104 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
+def test_evidence_writer_manifest_projects_raw_and_text(tmp_path):
+    from psycheval.harbor.evidence import EvidenceWriter
+
+    trial = tmp_path / "trial"
+    source = tmp_path / "input.pptx"
+    source.write_bytes(b"retained original")
+    with EvidenceWriter(trial / "verifier") as writer:
+        writer.capture("presentation", source)
+        writer.add_text(
+            "presentation_text", "# Slide 1\n正文", source_id="presentation"
+        )
+    evidence = read_harbor_verifier_evidence(
+        trial, containment_root=tmp_path, dataset_format="harbor", harbor_reward=None
+    )
+    assert not evidence.warnings
+    artifacts = {row["name"]: row for row in evidence.artifacts}
+    assert set(artifacts) == {"presentation", "presentation_text"}
+    raw = read_harbor_verifier_artifact(
+        trial,
+        containment_root=tmp_path,
+        artifact_id=artifacts["presentation"]["id"],
+        purpose="download",
+    )
+    assert raw.content == b"retained original"
+    text = read_harbor_verifier_artifact(
+        trial,
+        containment_root=tmp_path,
+        artifact_id=artifacts["presentation_text"]["id"],
+        purpose="preview",
+    )
+    assert text.content.decode() == "# Slide 1\n正文"
+    assert str(source) not in json.dumps(evidence.to_dict(include_artifacts=True))
+
+
+@pytest.mark.parametrize("status", ["missing", "error"])
+def test_evidence_writer_unavailable_round_trips_without_file_access(tmp_path, status):
+    from psycheval.harbor.evidence import EvidenceWriter
+
+    trial = tmp_path / "trial"
+    with EvidenceWriter(trial / "verifier") as writer:
+        writer.unavailable(
+            "presentation_text", "/private/source: extraction failed", status=status
+        )
+    evidence = read_harbor_verifier_evidence(
+        trial, containment_root=tmp_path, dataset_format="harbor", harbor_reward=None
+    )
+    assert not evidence.warnings
+    (row,) = evidence.artifacts
+    assert row == {
+        "id": row["id"],
+        "name": "presentation_text",
+        "type": "md",
+        "status": status,
+        "download_available": False,
+    }
+    assert len(row["id"]) == 24
+    assert "/private/source" not in json.dumps(evidence.to_dict(include_artifacts=True))
+    for purpose in ("preview", "download"):
+        with pytest.raises(ValueError, match=f"no {purpose} representation"):
+            read_harbor_verifier_artifact(
+                trial,
+                containment_root=tmp_path,
+                artifact_id=row["id"],
+                purpose=purpose,
+            )
+    with pytest.raises(ValueError, match="no download representation"):
+        open_harbor_verifier_artifact_download(
+            trial, containment_root=tmp_path, artifact_id=row["id"]
+        )
+
+    # A changed extraction status must invalidate the workspace projection.
+    with EvidenceWriter(trial / "verifier") as writer:
+        writer.unavailable(
+            "presentation_text",
+            "updated",
+            status="error" if status == "missing" else "missing",
+        )
+    updated = read_harbor_verifier_evidence(
+        trial, containment_root=tmp_path, dataset_format="harbor", harbor_reward=None
+    )
+    assert updated.revision != evidence.revision
+    assert updated.artifacts[0]["id"] == row["id"]
+
+
+@pytest.mark.parametrize("status", [None, "ok", "unknown", [], {}])
+def test_pathless_artifacts_require_an_explicit_unavailable_status(tmp_path, status):
+    trial = tmp_path / "trial"
+    _write_json(
+        trial / "verifier/artifact_manifest.json",
+        {"artifacts": [{"id": "report", "extract_status": status}]},
+    )
+    evidence = read_harbor_verifier_evidence(
+        trial, containment_root=tmp_path, dataset_format="harbor", harbor_reward=None
+    )
+    assert not evidence.artifacts
+    assert evidence.warnings == ("artifact 1 ignored: no allowlisted verifier path",)
+
+
 @pytest.mark.parametrize("status", ["ok", "error"])
 def test_curated_judge_evidence_uses_bounded_preview_and_retains_status(
     tmp_path, status
@@ -71,11 +169,12 @@ def test_curated_judge_evidence_uses_bounded_preview_and_retains_status(
         "other/report.md",
     ],
 )
-def test_curated_evidence_does_not_widen_path_trust(tmp_path, path):
+@pytest.mark.parametrize("status", ["ok", "missing", "error"])
+def test_curated_evidence_does_not_widen_path_trust(tmp_path, path, status):
     trial = tmp_path / "task__1"
     _write_json(
         trial / "verifier/artifact_manifest.json",
-        {"artifacts": [{"id": "report", "text_path": path}]},
+        {"artifacts": [{"id": "report", "text_path": path, "extract_status": status}]},
     )
     evidence = read_harbor_verifier_evidence(
         trial,

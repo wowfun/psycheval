@@ -436,7 +436,12 @@ def _artifact_specs(
             preview_path = _artifact_path(
                 raw.get("text_path"), "artifact_text", "judge_evidence"
             )
-            if raw_path is None and preview_path is None:
+            extract_status = raw.get("extract_status")
+            if (
+                raw_path is None
+                and preview_path is None
+                and extract_status not in ("missing", "error")
+            ):
                 raise ValueError("no allowlisted verifier path")
             for relative in (raw_path, preview_path):
                 if relative is not None and relative not in inspected:
@@ -462,7 +467,6 @@ def _artifact_specs(
                 row["type"] = artifact_type
             if isinstance(raw.get("required"), bool):
                 row["required"] = raw["required"]
-            extract_status = raw.get("extract_status")
             if isinstance(extract_status, str) and _PUBLIC_NAME.fullmatch(
                 extract_status
             ):

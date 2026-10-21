@@ -869,7 +869,13 @@ class HarborEvidenceTests(unittest.TestCase):
                 trial / "verifier" / "artifact_manifest.json",
                 {
                     "artifacts": [
-                        {"id": "report", "text_path": "artifact_text/report.md"}
+                        {"id": "report", "text_path": "artifact_text/report.md"},
+                        {
+                            "id": "missing_text",
+                            "type": "md",
+                            "extract_status": "missing",
+                            "reason": "/private/source: not found",
+                        },
                     ]
                 },
             )
@@ -909,6 +915,16 @@ class HarborEvidenceTests(unittest.TestCase):
                 )
                 self.assertEqual(meta["evaluation"]["harbor_score"], 0.9)
                 self.assertEqual(meta["verifier_evidence"]["tests"]["total"], 5)
+                missing = meta["verifier_evidence"]["artifacts"][1]
+                self.assertEqual(missing["name"], "missing_text")
+                self.assertEqual(missing["status"], "missing")
+                self.assertFalse(missing["download_available"])
+                self.assertNotIn("preview", missing)
+                self.assertNotIn("/private/source", json.dumps(meta))
+                with self.assertRaisesRegex(ValueError, "no preview representation"):
+                    catalog.sources.read_harbor_verifier_artifact(
+                        row["source_ref"], missing["id"], purpose="preview"
+                    )
                 artifact_id = meta["verifier_evidence"]["artifacts"][0]["id"]
                 with patch(
                     "psycheval.state.workspace_sources.read_harbor_task_index",
