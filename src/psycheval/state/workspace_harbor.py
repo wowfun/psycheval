@@ -940,7 +940,7 @@ def _effective_evaluation(
     verifier_evidence: HarborVerifierEvidence | None,
 ) -> dict[str, Any]:
     evaluation = _evaluation(result)
-    if verifier_evidence is None:
+    if verifier_evidence is None or not verifier_evidence.primary_score:
         return evaluation
     evaluation["harbor_score"] = evaluation.get("score")
     evaluation["harbor_score_message"] = evaluation.get("score_message")

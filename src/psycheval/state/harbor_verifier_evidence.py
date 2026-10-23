@@ -1,4 +1,4 @@
-"""Bounded projection of WorkBuddy-owned Harbor verifier evidence."""
+"""Bounded projection of Harbor scoring and WorkBuddy verifier evidence."""
 
 from __future__ import annotations
 
@@ -45,6 +45,7 @@ _TEXT_TYPES = {
 
 @dataclass(frozen=True, slots=True)
 class HarborVerifierEvidence:
+    primary_score: bool
     status: Literal["present", "missing", "malformed"]
     score: float | None
     score_source: str | None
@@ -215,6 +216,7 @@ def read_harbor_verifier_evidence(
     for warning in warnings:
         digest.update(warning.encode("utf-8") + b"\0")
     return HarborVerifierEvidence(
+        primary_score=dataset_format == "workbuddy.v1",
         status=score_status,
         score=score,
         score_source=score_source,

@@ -969,6 +969,11 @@ class HarborTrialTests(unittest.TestCase):
                 self.assertEqual(row["total_tool_calls"], 1)
                 self.assertEqual(row["total_tool_errors"], 0)
                 self.assertEqual(row["model_duration_ms"], 100)
+                with patch.object(
+                    catalog.sources, "load", wraps=catalog.sources.load
+                ) as load:
+                    catalog.reconcile()
+                    load.assert_not_called()
             finally:
                 store.close()
 

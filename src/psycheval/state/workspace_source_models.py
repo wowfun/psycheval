@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from psycheval.state.harbor_evidence import HarborEvidence
+from psycheval.state.harbor_verifier_evidence import HarborVerifierEvidence
 
 HARBOR_SOURCE_KIND = "harbor-trial"
 HARBOR_ADAPTER = "harbor"
@@ -77,6 +78,7 @@ class SourceCandidate:
     containment_root: Path | None = None
     task_paths: tuple[str, ...] = ()
     harbor_evidence: HarborEvidence | None = None
+    verifier_evidence: HarborVerifierEvidence | None = None
     harbor_analysis_relative_path: str | None = None
     data_path: Path | None = None
     step_name: str | None = None

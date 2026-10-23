@@ -651,10 +651,29 @@ class WorkspaceSources:
             if include_evaluation_report
             else source_files
         )
+        revision = bundle.evidence.revision
+        verifier_evidence = None
+        diagnostic = None
+        config = bundle.evidence.trial_values.get("config.json") or {}
+        try:
+            verifier = config.get("verifier", {})
+            if not isinstance(verifier, dict):
+                raise ValueError("Harbor verifier configuration must be an object")
+            if not verifier.get("disable"):
+                verifier_evidence = read_harbor_verifier_evidence(
+                    entry.data_dir,
+                    containment_root=bundle.jobs_root,
+                    dataset_format=bundle.evidence.dataset_format,
+                    harbor_reward=_evaluation(entry.result).get("score"),
+                )
+                revision = _combined_revision(revision, verifier_evidence.revision)
+        except (ValueError, OverflowError) as exc:
+            diagnostic = f"Harbor verifier evidence invalid: {exc}"
         return SourceCandidate(
             source_ref=entry.source_ref,
             kind=HARBOR_SOURCE_KIND,
             path=bundle.trial_dir,
+            diagnostic=diagnostic,
             data_path=entry.data_dir,
             fingerprint=_combined_revision(
                 _fingerprint(
@@ -663,7 +682,7 @@ class WorkspaceSources:
                     extra_root=overlay_dir,
                     extra_files=HARBOR_OVERLAY_FILES,
                 ),
-                bundle.evidence.revision,
+                revision,
             ),
             source_key=_harbor_trial_key(
                 entry.mount_id or "direct",
@@ -678,6 +697,7 @@ class WorkspaceSources:
             containment_root=bundle.jobs_root,
             task_paths=entry.task_paths,
             harbor_evidence=bundle.evidence,
+            verifier_evidence=verifier_evidence,
             harbor_analysis_relative_path=analysis_relative_path,
             step_name=entry.step_name,
             step_index=entry.step_index,
@@ -983,19 +1003,21 @@ class WorkspaceSources:
                 else trial_result_json
             )
             verifier_evidence = None
-            if evidence.dataset_format == "workbuddy.v1" and not (
-                config_json or {}
-            ).get("verifier", {}).get("disable"):
-                verifier_evidence = read_harbor_verifier_evidence(
-                    candidate.data_path or candidate.path,
-                    containment_root=candidate.containment_root or candidate.path,
-                    dataset_format=evidence.dataset_format,
-                    harbor_reward=_evaluation(result_json).get("score"),
+            if not (config_json or {}).get("verifier", {}).get("disable"):
+                verifier_evidence = (
+                    candidate.verifier_evidence
+                    or read_harbor_verifier_evidence(
+                        candidate.data_path or candidate.path,
+                        containment_root=candidate.containment_root or candidate.path,
+                        dataset_format=evidence.dataset_format,
+                        harbor_reward=_evaluation(result_json).get("score"),
+                    )
                 )
                 revision = _combined_revision(revision, verifier_evidence.revision)
                 evidence_revision = _combined_revision(
                     evidence_revision, verifier_evidence.revision
                 )
+            fingerprint_revision = revision
             raw_trajectory = (
                 _read_harbor_entry_trajectory(candidate)
                 if candidate.step_name is not None
@@ -1102,7 +1124,7 @@ class WorkspaceSources:
                 source=source,
                 trajectory=trajectory,
                 meta=meta,
-                fingerprint=current_fingerprint(revision=revision),
+                fingerprint=current_fingerprint(revision=fingerprint_revision),
                 updated_at_ms=_updated_at_ms(candidate.path, presentation_files),
                 input_bytes=_input_bytes(candidate.path, presentation_files),
                 readable=True,

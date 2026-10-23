@@ -900,6 +900,11 @@ class HarborEvidenceTests(unittest.TestCase):
                 catalog.reconcile()
                 row = catalog.query(CatalogQuery()).items[0].to_dict()
                 self.assertEqual(row["score"], 0.4)
+                with patch.object(
+                    catalog.sources, "load", wraps=catalog.sources.load
+                ) as load:
+                    catalog.reconcile()
+                    load.assert_not_called()
                 self.assertEqual(row["dataset_id"], "tasks")
                 self.assertEqual(row["rewards"], {"reward": 0.9})
                 self.assertEqual(
