@@ -128,6 +128,17 @@ async def _settle(
     stderr_task=None,
 ):
     loop = asyncio.get_running_loop()
+    started = loop.time()
+    stage_started = started
+    stage_times = {}
+
+    def stage(name):
+        nonlocal stage_started
+        previous = summary.get("cleanup_stage", "cooperative")
+        stage_times[previous] = round(loop.time() - stage_started, 3)
+        stage_started = loop.time()
+        summary["cleanup_stage"] = name
+
     deadline = loop.time() + budget if deadline is None else deadline
     forced_at = deadline - FORCED_CLEANUP_RESERVE_SEC
     fatal = summary.get("protocol_complete") is False or summary.get("error_type")
@@ -157,7 +168,7 @@ async def _settle(
     draining = None
     summary["cleanup_complete"] = False
     try:
-        summary["cleanup_stage"] = "protocol"
+        stage("protocol")
         if connection is not None:
             try:
                 await asyncio.wait_for(
@@ -171,14 +182,14 @@ async def _settle(
             draining = asyncio.create_task(_discard(getattr(process, "stdout", None)))
         if process.stdin and not process.stdin.is_closing():
             process.stdin.close()
-        summary["cleanup_stage"] = "process"
+        stage("process")
         try:
             await _settle_process(process, deadline, summary, adapter)
         except Exception as exc:
             if first_error is None:
                 first_error = exc
                 summary["cleanup_error_stage"] = "process"
-        summary["cleanup_stage"] = "pipes"
+        stage("pipes")
         tasks = [task for task in (draining, stderr_task) if task is not None]
         if tasks:
             try:
@@ -189,7 +200,7 @@ async def _settle(
                 if first_error is None:
                     first_error = exc
                     summary["cleanup_error_stage"] = "pipes"
-        summary["cleanup_stage"] = "tasks"
+        stage("tasks")
         if prompt is not None:
             if not prompt.done():
                 prompt.cancel()
@@ -206,6 +217,23 @@ async def _settle(
             raise first_error
         summary["cleanup_complete"] = True
     finally:
+        stage_times[summary.get("cleanup_stage", "cooperative")] = round(
+            loop.time() - stage_started, 3
+        )
+        summary["cleanup_diagnostics"] = {
+            "stage_elapsed_sec": stage_times,
+            "elapsed_sec": round(loop.time() - started, 3),
+            "remaining_sec": round(max(0, deadline - loop.time()), 3),
+            "agent_exit_code": process.returncode,
+            "stdout_eof": process.stdout.at_eof()
+            if getattr(process, "stdout", None) is not None
+            else None,
+            "stderr_eof": process.stderr.at_eof()
+            if getattr(process, "stderr", None) is not None
+            else None,
+        }
+        if adapter is not None and hasattr(adapter, "diagnostics"):
+            summary["cleanup_diagnostics"].update(adapter.diagnostics(process))
         tasks = [task for task in (draining, stderr_task) if task is not None]
         for task in tasks:
             if not task.done():
@@ -266,6 +294,7 @@ async def run(config_path: Path):
         "protocol_complete": True,
         "cleanup_complete": False,
         "stage": "launch",
+        "host_os": "windows" if sys.platform == "win32" else "linux",
     }
     stopping = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -529,16 +558,29 @@ async def run(config_path: Path):
     finally:
         cleanup_deadline = loop.time() + config["shutdown_timeout_sec"]
 
-        def cleanup_error(exc):
+        def cleanup_error(exc, *, evidence_error=False):
+            if evidence_error:
+                summary.setdefault("evidence_error_type", type(exc).__name__)
             summary.update(
-                protocol_complete=False,
-                cleanup_complete=False,
-                cleanup_error_type=type(exc).__name__,
+                cleanup_complete=False, cleanup_error_type=type(exc).__name__
             )
             summary.setdefault(
                 "cleanup_error_stage", summary.get("cleanup_stage", "evidence")
             )
-            summary.setdefault("error_type", type(exc).__name__)
+            if summary["host_os"] == "windows" and not evidence_error:
+                from .diagnostics import cleanup_warning
+
+                summary.setdefault("cleanup_warnings", []).append(
+                    cleanup_warning(
+                        summary["cleanup_error_stage"],
+                        exc,
+                        [config["cwd"], directory, state],
+                        **summary.get("cleanup_diagnostics", {}),
+                    )
+                )
+            else:
+                summary["protocol_complete"] = False
+                summary.setdefault("error_type", type(exc).__name__)
 
         if process is not None:
             try:
@@ -561,7 +603,7 @@ async def run(config_path: Path):
             try:
                 transport.finish()
             except OSError as exc:
-                cleanup_error(exc)
+                cleanup_error(exc, evidence_error=True)
         if stderr_task is not None:
             if not stderr_task.done():
                 stderr_task.cancel()
@@ -569,7 +611,7 @@ async def run(config_path: Path):
         try:
             evidence.close()
         except OSError as exc:
-            cleanup_error(exc)
+            cleanup_error(exc, evidence_error=True)
         if summary.get("evidence_limit_exceeded"):
             summary["error_type"] = "ProtocolError"
         summary.pop("cleanup_stage", None)
@@ -581,12 +623,12 @@ async def run(config_path: Path):
                 directory, evidence.maximum, evidence.decoded_maximum
             )
         except (OSError, ProtocolError) as exc:
-            cleanup_error(exc)
+            cleanup_error(exc, evidence_error=True)
         _save(directory / "acp.summary.json", summary)
     return (
         0
         if summary.get("stop_reason") == "end_turn"
-        and summary["cleanup_complete"]
+        and (summary["cleanup_complete"] or summary["host_os"] == "windows")
         and not summary.get("error_type")
         else 1
     )

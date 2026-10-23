@@ -472,6 +472,18 @@ class WindowsProcessAdapter:
         )
         self.release(process)
 
+    def diagnostics(self, process):
+        job = self._jobs.get(process)
+        if job is None:
+            return {"active_processes": 0}
+        try:
+            return {"active_processes": job.active_processes()}
+        except OSError as error:
+            return {
+                "active_processes": None,
+                "process_query_error": type(error).__name__,
+            }
+
     def translate_command(self, command: str, mappings: dict[str, Path]) -> str:
         return translate_command(command, mappings)
 

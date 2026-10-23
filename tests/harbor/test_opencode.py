@@ -1151,6 +1151,7 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
         "'config':config,'cwd':os.getcwd(),'argv':sys.argv[1:],"
         "'home':os.environ['HOME'],'data':os.environ['XDG_DATA_HOME'],"
         "'key':os.environ['TEST_API_KEY']}),encoding='utf-8')\n"
+        "print(json.dumps({'type':'step_start',**({} if outcome=='no_session' else {'sessionID':'session-fixture'}),'timestamp':1}),flush=True)\n"
         "print(json.dumps({'type':'text',**({} if outcome=='no_session' else {'sessionID':'session-fixture'}),'part':{'type':'text','text':'完成 🎉'}},"
         "ensure_ascii=False),flush=True)\n"
         f"outcome={outcome!r}\n"
@@ -1186,9 +1187,9 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
             parse = agent._parse_stdout
             parses = []
 
-            def counted_parse():
+            def counted_parse(**kwargs):
                 parses.append(1)
-                return parse()
+                return parse(**kwargs)
 
             def counted(events):
                 conversions.append(1)
@@ -1273,6 +1274,11 @@ def test_native_opencode_run_retains_evidence_and_isolates_state(
                 assert trajectory["steps"][-1]["message"] == "完成 🎉"
             if outcome != "success":
                 assert agent._trajectory is None
+            if outcome not in {"success", "empty", "no_session"}:
+                partial = load_validated_trajectory(logs / "trajectory.partial.json")
+                assert partial["extra"]["diagnostic_only"]
+                assert partial["steps"][-1]["message"] == "完成 🎉"
+                assert not (logs / "trajectory.json").exists()
             if outcome in {"export_error", "export_timeout"}:
                 pid = host.work_dir / "export.pid"
                 if pid.exists():
@@ -1395,6 +1401,14 @@ def test_generated_opencode_environment_wins_inside_harbor_scope(
                         task.cancel()
                         with pytest.raises(asyncio.CancelledError):
                             await task
+                    if phase == "run":
+                        partial = json.loads(
+                            (logs / "trajectory.partial.json").read_text(
+                                encoding="utf-8"
+                            )
+                        )
+                        assert partial["extra"]["diagnostic_only"]
+                        assert not (logs / "trajectory.json").exists()
                 elif outcome == "error":
                     expected = (
                         RuntimeError if phase == "setup" else NonZeroAgentExitCodeError

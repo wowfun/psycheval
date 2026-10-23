@@ -307,8 +307,12 @@ def test_failed_launcher_cleanup_remains_owned_by_host(tmp_path, monkeypatch):
                 await host.exec_argv([sys.executable, "-c", "pass"])
             assert "launcher cleanup failed" in "\n".join(error.value.__notes__)
             assert process in host._process_adapter.pending_spawns
-            with pytest.raises(TimeoutError):
-                await host.stop(True)
+            await host.stop(True)
+            warning = json.loads(
+                (host.trial_paths.agent_dir / "cleanup.json").read_text()
+            )[0]
+            assert str(workspace) in warning["paths"]
+            assert warning["error_type"] == "TimeoutError"
             assert workspace.is_dir()
             exited.set()
             await host.stop(True)

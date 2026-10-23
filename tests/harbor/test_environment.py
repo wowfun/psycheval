@@ -557,8 +557,15 @@ def test_owned_runtime_cleanup_attempts_every_root_after_one_failure(
 
         with monkeypatch.context() as patch:
             patch.setattr("psycheval.harbor.environment.shutil.rmtree", fake_rmtree)
-            with pytest.raises(OSError, match="workspace is busy"):
+            if environment.os == TaskOS.WINDOWS:
                 await environment.stop(delete=True)
+                warning = json.loads(
+                    (environment.trial_paths.agent_dir / "cleanup.json").read_text()
+                )[0]
+                assert str(workspace) in warning["paths"]
+            else:
+                with pytest.raises(OSError, match="workspace is busy"):
+                    await environment.stop(delete=True)
         assert attempted == [workspace, runtime_root]
         await environment.stop(delete=True)
 

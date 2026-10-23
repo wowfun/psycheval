@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import math
@@ -18,7 +19,8 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import Metrics, Trajectory
 from pydantic import field_validator
 
-from .environment import HostEnvironment
+from .diagnostics import PARTIAL_TRAJECTORY, write_partial
+from .environment import HostEnvironment, _await_owned_task
 from .inference_telemetry import (
     InferenceObservation,
     finalize_trajectory_metrics,
@@ -280,7 +282,7 @@ class HostOpenCodeAgent(OpenCode):
         }
 
     @override
-    def _parse_stdout(self) -> list[dict]:
+    def _parse_stdout(self, *, diagnostic=False) -> list[dict]:
         path = self.logs_dir / "opencode.txt"
         if not path.is_file():
             return []
@@ -290,13 +292,21 @@ class HostOpenCodeAgent(OpenCode):
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
+                    if diagnostic and line.lstrip().startswith("{"):
+                        break
                     continue
                 if isinstance(event, dict):
                     events.append(event)
         return events
 
-    def _session_events(self, streamed: list[dict] | None = None) -> list[dict]:
-        path = self.logs_dir / "opencode-session.json"
+    def _session_events(
+        self,
+        streamed: list[dict] | None = None,
+        *,
+        filename="opencode-session.json",
+        diagnostic=False,
+    ) -> list[dict]:
+        path = self.logs_dir / filename
         if not path.is_file():
             return []
         exported = json.loads(path.read_text(encoding="utf-8"))
@@ -308,7 +318,7 @@ class HostOpenCodeAgent(OpenCode):
         session_id = info.get("id")
         if not isinstance(session_id, str) or not session_id:
             raise ValueError("OpenCode Session export has no identity")
-        if info.get("outcome") != "succeeded":
+        if not diagnostic and info.get("outcome") != "succeeded":
             raise ValueError("OpenCode Session export is not a successful invocation")
         if streamed is None:
             streamed = self._parse_stdout()
@@ -332,10 +342,11 @@ class HostOpenCodeAgent(OpenCode):
             if not isinstance(timing, dict):
                 raise ValueError("Malformed OpenCode Session time")
             completed = timing.get("completed")
-            if completed is None or not isinstance(content, list):
+            if (completed is None and not diagnostic) or not isinstance(content, list):
                 raise ValueError("OpenCode Session contains an incomplete message")
-            if type(completed) not in {int, float} or (
-                type(completed) is float and not math.isfinite(completed)
+            if completed is not None and (
+                type(completed) not in {int, float}
+                or (type(completed) is float and not math.isfinite(completed))
             ):
                 raise ValueError("Malformed OpenCode Session completion time")
             events.append(
@@ -386,6 +397,8 @@ class HostOpenCodeAgent(OpenCode):
                 if kind not in {"text", "reasoning", "tool_use"}:
                     raise ValueError(f"Unsupported OpenCode Session content: {kind}")
                 events.append({"type": kind, "sessionID": session_id, "part": part})
+            if completed is None:
+                break
             events.append(
                 {
                     "type": "step_finish",
@@ -586,6 +599,8 @@ class HostOpenCodeAgent(OpenCode):
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:
         context.n_input_tokens = context.n_output_tokens = context.n_cache_tokens = None
+        if getattr(self, "_invocation_failed", False):
+            return
         trajectory = self._trajectory
         if trajectory is None:
             trajectory = self._convert_events_to_trajectory(self._session_events())
@@ -602,6 +617,189 @@ class HostOpenCodeAgent(OpenCode):
     @override
     async def run(
         self,
+        instruction,
+        environment,
+        context,
+    ):
+        self._trajectory = None
+        self._invocation_failed = True
+        self._diagnostic_env = None
+        try:
+            self.logs_dir.mkdir(parents=True, exist_ok=True)
+            for name in (
+                "trajectory.json",
+                PARTIAL_TRAJECTORY,
+                "opencode-session.json",
+                "opencode-failed-session.json",
+                "opencode-export.stderr.log",
+                "opencode.txt",
+                "opencode.stderr.log",
+                "opencode-first-attempt.txt",
+                "opencode-first-attempt.stderr.log",
+                "opencode-first-attempt-session.json",
+                "opencode-first-attempt-export.stderr.log",
+                "opencode-retry.json",
+            ):
+                (self.logs_dir / name).unlink(missing_ok=True)
+            await self._run(instruction, environment, context)
+            self._invocation_failed = False
+        except BaseException as primary:
+            try:
+                await _await_owned_task(
+                    asyncio.create_task(self._retain_failure(environment))
+                )
+            except BaseException as error:
+                primary.add_note(
+                    f"OpenCode diagnostic retention failed: {type(error).__name__}"
+                )
+            raise
+
+    async def _retain_failure(self, environment):
+        if self._diagnostic_env is None:
+            return
+        events = self._parse_stdout(diagnostic=True)
+        filename = (
+            "opencode-session.json"
+            if (self.logs_dir / "opencode-session.json").exists()
+            else "opencode-failed-session.json"
+        )
+        if not (self.logs_dir / filename).exists():
+            try:
+                await self._export_session(
+                    self._host(environment), self._diagnostic_env, events, filename
+                )
+            except Exception as error:
+                self.logger.warning(
+                    "OpenCode failed Session export unavailable (%s): %s",
+                    type(error).__name__,
+                    self.logs_dir,
+                )
+        source = "opencode.txt"
+        try:
+            native = self._session_events(events, filename=filename, diagnostic=True)
+            if native:
+                events, source = native, filename
+        except Exception as error:
+            self.logger.warning(
+                "OpenCode diagnostic export unreadable (%s): %s",
+                type(error).__name__,
+                self.logs_dir,
+            )
+        write_partial(self.logs_dir, self._diagnostic_trajectory(events), source)
+
+    def _diagnostic_trajectory(self, events):
+        """Project complete turns plus observed content of the unfinished turn."""
+        admitted, pending = [], []
+        session = None
+        for event in events:
+            if not isinstance(event, dict):
+                break
+            identity = event.get("sessionID")
+            if (
+                not isinstance(identity, str)
+                or not identity
+                or (session and identity != session)
+            ):
+                break
+            part = event.get("part", {})
+            if not isinstance(part, dict):
+                break
+            if event.get("type") in {"text", "reasoning"} and not isinstance(
+                part.get("text"), str
+            ):
+                break
+            if event.get("type") == "tool_use" and (
+                not isinstance(part.get("state"), dict)
+                or not isinstance(part.get("callID", part.get("id")), str)
+                or not isinstance(part.get("tool"), str)
+            ):
+                break
+            session = identity
+            if event.get("type") == "step_start":
+                if pending:
+                    break
+                pending = [event]
+            elif event.get("type") == "step_finish":
+                if pending:
+                    admitted.extend([*pending, event])
+                    pending = []
+            elif pending:
+                pending.append(event)
+        trajectory = self._convert_events_to_trajectory(admitted) if admitted else None
+        data = (
+            trajectory.to_json_dict()
+            if trajectory
+            else {
+                "session_id": session,
+                "agent": {
+                    "name": self.name(),
+                    "version": self.version() or "unknown",
+                    "model_name": self.model_name,
+                },
+                "steps": [
+                    {"step_id": 1, "source": "user", "message": self._instruction}
+                ],
+            }
+        )
+        step = {
+            "step_id": len(data["steps"]) + 1,
+            "source": "agent",
+            "message": "",
+            "extra": {"incomplete": True},
+        }
+        text, reasoning, calls, observations = [], [], [], []
+        for event in pending[1:]:
+            part = event.get("part", {})
+            if event.get("type") in {"text", "reasoning"} and isinstance(
+                part.get("text"), str
+            ):
+                (text if event["type"] == "text" else reasoning).append(part["text"])
+            elif event.get("type") == "tool_use":
+                identity, name, state = (
+                    part.get("callID", part.get("id")),
+                    part.get("tool"),
+                    part.get("state"),
+                )
+                if (
+                    not isinstance(identity, str)
+                    or not isinstance(name, str)
+                    or not isinstance(state, dict)
+                ):
+                    break
+                calls.append(
+                    {
+                        "tool_call_id": identity,
+                        "function_name": name,
+                        "arguments": state.get("input")
+                        if isinstance(state.get("input"), dict)
+                        else {},
+                    }
+                )
+                observations.append(
+                    {
+                        "source_call_id": identity,
+                        "content": str(state.get("output", state.get("content", ""))),
+                        "extra": {
+                            "status": state.get("status", "incomplete"),
+                            "is_error": state.get("status") != "completed",
+                        },
+                    }
+                )
+        if text or reasoning or calls:
+            step["message"] = "\n".join(text)
+            if reasoning:
+                step["reasoning_content"] = "\n".join(reasoning)
+            if calls:
+                step.update(tool_calls=calls, observation={"results": observations})
+            data["steps"].append(step)
+        if len(data["steps"]) <= 1:
+            return None
+        # Completed-request metrics stay on their steps; the invocation total is unknown.
+        data.pop("final_metrics", None)
+        return Trajectory.model_validate(data)
+
+    async def _run(
+        self,
         instruction: str,
         environment: BaseEnvironment,
         context: AgentContext,
@@ -615,18 +813,6 @@ class HostOpenCodeAgent(OpenCode):
             host.runtime_directory(f"opencode-{self._runtime_id}") / "instruction.txt"
         )
         instruction_path.write_bytes(self._instruction.encode("utf-8"))
-        for name in (
-            "trajectory.json",
-            "opencode-session.json",
-            "opencode-failed-session.json",
-            "opencode-export.stderr.log",
-            "opencode-first-attempt.txt",
-            "opencode-first-attempt.stderr.log",
-            "opencode-first-attempt-session.json",
-            "opencode-first-attempt-export.stderr.log",
-            "opencode-retry.json",
-        ):
-            (self.logs_dir / name).unlink(missing_ok=True)
         model = self.model_name
         if variant := self._resolved_flags.get("variant"):
             model = f"{model.split('#', 1)[0]}#{variant}"
@@ -645,6 +831,7 @@ class HostOpenCodeAgent(OpenCode):
         ]
         env = self._runtime_env(host)
         for attempt in range(2):
+            self._diagnostic_env = env
             with (
                 (self.logs_dir / "opencode.txt").open("w", encoding="utf-8") as stdout,
                 (self.logs_dir / "opencode.stderr.log").open(

@@ -218,7 +218,36 @@ def convert(
         raise ProtocolError("invalid retained ACP evidence") from exc
 
 
-def _events(path, maximum, decoded_maximum=None):
+def recover(directory, summary, instruction, agent, result_format):
+    """Recover a diagnostic prefix; never establish canonical evidence."""
+    summary = dict(summary)
+    maximum = summary.get("max_evidence_bytes", DEFAULT_MAX_EVIDENCE_BYTES)
+    decoded = summary.get("max_decoded_evidence_bytes", maximum)
+    if not summary.get("prompt_submitted"):
+        for event in _events(
+            directory / "acp.events.ndjson.gz", maximum, decoded, diagnostic=True
+        ):
+            message = event["message"]
+            if (
+                event["direction"] == "send"
+                and message.get("method") == "session/prompt"
+            ):
+                params = message.get("params", {})
+                session = params.get("sessionId")
+                if not isinstance(session, str) or not session:
+                    return None
+                summary.update(prompt_submitted=True, session_id=session)
+                instruction = "\n".join(
+                    _text(block) for block in params.get("prompt", [])
+                )
+                break
+    summary["protocol_complete"] = False
+    return _convert(
+        directory, summary, instruction, agent, result_format, diagnostic=True
+    )
+
+
+def _events(path, maximum, decoded_maximum=None, *, diagnostic=False):
     if not path.exists():
         raise ProtocolError("retained ACP events are missing")
     maximum_frames = evidence_frame_limit(maximum)
@@ -247,16 +276,26 @@ def _events(path, maximum, decoded_maximum=None):
         reader.finish()
         if pending:
             raise ProtocolError("incomplete retained ACP event")
+    except (ProtocolError, ValueError, OSError):
+        if not diagnostic:
+            raise
     finally:
         reader.close()
 
 
 def _convert(
-    directory: Path, summary: dict, instruction: str, agent: dict, result_format: str
+    directory: Path,
+    summary: dict,
+    instruction: str,
+    agent: dict,
+    result_format: str,
+    *,
+    diagnostic=False,
 ) -> Trajectory | None:
     if not summary.get("prompt_submitted"):
         return None
-    verify_evidence(directory, summary)
+    if not diagnostic:
+        verify_evidence(directory, summary)
     events_path = directory / "acp.events.ndjson.gz"
     steps = [{"step_id": 1, "source": "user", "message": instruction}]
     if "prompt_submitted_at" in summary:
@@ -278,72 +317,88 @@ def _convert(
     text_chunks = {}
     active = None
     timing = ObservedTiming(summary)
-    for event in _events(
-        events_path,
-        summary.get("max_evidence_bytes", DEFAULT_MAX_EVIDENCE_BYTES),
-        summary.get("max_decoded_evidence_bytes"),
-    ):
-        offset = timing.event(event)
-        message = event["message"]
-        if (
-            event["direction"] != "receive"
-            or event["phase"] != "prompt"
-            or message.get("method") != "session/update"
+    try:
+        for event in _events(
+            events_path,
+            summary.get("max_evidence_bytes", DEFAULT_MAX_EVIDENCE_BYTES),
+            summary.get("max_decoded_evidence_bytes"),
+            diagnostic=diagnostic,
         ):
-            continue
-        params = message["params"]
-        if params["sessionId"] != summary.get("session_id"):
-            raise ProtocolError("update for an unrelated Session")
-        update = params["update"]
-        if not isinstance(update, dict):
-            raise ProtocolError("invalid retained Session update")
-        kind = update["sessionUpdate"]
-        if kind in {"agent_message_chunk", "agent_thought_chunk"}:
-            if not isinstance(update["content"], dict):
-                raise ProtocolError("invalid retained content block")
-            if active is None or tool_ids.get(active["step_id"]):
-                active = {"step_id": len(steps) + 1, "source": "agent", "message": ""}
-                steps.append(active)
-            _model_request(active, update, result_format)
-            if update["content"].get("type") == "text":
-                timing.chunk(active["step_id"], offset)
-            field = "message" if kind == "agent_message_chunk" else "reasoning_content"
-            text_chunks.setdefault((active["step_id"], field), []).append(
-                _text(update["content"])
-            )
-            if update["content"].get("type") != "text":
-                active.setdefault("extra", {}).setdefault("acp_content", []).append(
-                    update
+            offset = timing.event(event)
+            message = event["message"]
+            if (
+                event["direction"] != "receive"
+                or event["phase"] != "prompt"
+                or message.get("method") != "session/update"
+            ):
+                continue
+            params = message["params"]
+            if params["sessionId"] != summary.get("session_id"):
+                raise ProtocolError("update for an unrelated Session")
+            update = params["update"]
+            if not isinstance(update, dict):
+                raise ProtocolError("invalid retained Session update")
+            kind = update["sessionUpdate"]
+            if kind in {"agent_message_chunk", "agent_thought_chunk"}:
+                if not isinstance(update["content"], dict):
+                    raise ProtocolError("invalid retained content block")
+                if active is None or tool_ids.get(active["step_id"]):
+                    active = {
+                        "step_id": len(steps) + 1,
+                        "source": "agent",
+                        "message": "",
+                    }
+                    steps.append(active)
+                _model_request(active, update, result_format)
+                if update["content"].get("type") == "text":
+                    timing.chunk(active["step_id"], offset)
+                field = (
+                    "message" if kind == "agent_message_chunk" else "reasoning_content"
                 )
-        elif kind == "tool_call":
-            identity = update["toolCallId"]
-            if identity in calls:
+                text_chunks.setdefault((active["step_id"], field), []).append(
+                    _text(update["content"])
+                )
+                if update["content"].get("type") != "text":
+                    active.setdefault("extra", {}).setdefault("acp_content", []).append(
+                        update
+                    )
+            elif kind == "tool_call":
+                identity = update["toolCallId"]
+                if identity in calls:
+                    state = calls[identity]
+                    if (
+                        result_format == "codebuddy"
+                        and state.get("status") in {"pending", "in_progress"}
+                        and state.get("name")
+                        and _metadata(update).get("codebuddy.ai/toolName")
+                        == state["name"]
+                    ):
+                        _merge_call(state, update, result_format)
+                        timing.tool(update, offset)
+                        continue
+                    raise ProtocolError("duplicate Tool call identity")
+                if active is None:
+                    active = {
+                        "step_id": len(steps) + 1,
+                        "source": "agent",
+                        "message": "",
+                    }
+                    steps.append(active)
+                state = {}
+                _merge_call(state, update, result_format)
+                calls[identity] = state
+                tool_ids.setdefault(active["step_id"], []).append(identity)
+                timing.tool(update, offset)
+            elif kind == "tool_call_update":
+                identity = update["toolCallId"]
+                if identity not in calls:
+                    raise ProtocolError("Tool update without initial identity")
                 state = calls[identity]
-                if (
-                    result_format == "codebuddy"
-                    and state.get("status") in {"pending", "in_progress"}
-                    and state.get("name")
-                    and _metadata(update).get("codebuddy.ai/toolName") == state["name"]
-                ):
-                    _merge_call(state, update, result_format)
-                    timing.tool(update, offset)
-                    continue
-                raise ProtocolError("duplicate Tool call identity")
-            if active is None:
-                active = {"step_id": len(steps) + 1, "source": "agent", "message": ""}
-                steps.append(active)
-            state = {}
-            _merge_call(state, update, result_format)
-            calls[identity] = state
-            tool_ids.setdefault(active["step_id"], []).append(identity)
-            timing.tool(update, offset)
-        elif kind == "tool_call_update":
-            identity = update["toolCallId"]
-            if identity not in calls:
-                raise ProtocolError("Tool update without initial identity")
-            state = calls[identity]
-            _merge_call(state, update, result_format)
-            timing.tool(update, offset)
+                _merge_call(state, update, result_format)
+                timing.tool(update, offset)
+    except (ProtocolError, KeyError, TypeError, ValueError, RecursionError, OSError):
+        if not diagnostic:
+            raise
     for (step_id, field), chunks in text_chunks.items():
         steps[step_id - 1][field] = "".join(chunks)
     for step in steps:
@@ -402,6 +457,11 @@ def _convert(
                 ),
                 "acp_stop_reason": summary.get("stop_reason"),
                 "cleanup_complete": summary.get("cleanup_complete", False),
+                **(
+                    {"cleanup_warnings": summary["cleanup_warnings"]}
+                    if summary.get("cleanup_warnings")
+                    else {}
+                ),
             },
         }
     )

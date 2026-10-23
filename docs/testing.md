@@ -103,6 +103,10 @@ cleanup during preparation, custom Python checks with private GT, and weighted
 partial scores. Real Harbor Trials exercise shared/step test overlays and access
 to the current step's trajectory. These tests use synthetic Agents and no live
 model services; Windows fixtures include UTF-8 files under legacy Python encoding.
+`tests/harbor/test_partial_trajectory.py` verifies truncated diagnostic prefixes,
+Session isolation, repeated cancellation and Windows cleanup warnings with actual
+rule scoring and a local Judge. Host lifecycle tests preserve the primary error
+when cleanup also fails.
 The YAML Judge tests use a local Chat Completions server, including partial API
 failures, deadlines, evidence limits, and strict response validation. A real
 three-step Trend Digest Trial verifies fixed partial credit and continuation

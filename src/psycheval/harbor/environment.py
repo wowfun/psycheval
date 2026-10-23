@@ -29,6 +29,7 @@ from harbor.models.task.config import TaskOS
 from harbor.utils.scripts import quote_windows_shell_arg
 
 from . import host_files, windows
+from .diagnostics import cleanup_warning, warning_text
 from .paths import HostPathMapper, split_virtual_path, trial_short_uuid
 from .runtime_config import (
     DEFAULT_WORKDIR_ROOT,
@@ -928,8 +929,48 @@ class HostEnvironment(BaseEnvironment):
             self._cancel_initialization()
         async with self._lifecycle_lock:
             self._stopping = True
-            await _await_owned_task(asyncio.create_task(self._stop_commands(delete)))
+            try:
+                await _await_owned_task(
+                    asyncio.create_task(self._stop_commands(delete))
+                )
+            except Exception as error:
+                if self.os != TaskOS.WINDOWS:
+                    raise
+                self._record_cleanup_warning("stop", error)
+                return
             self._stopping = False
+
+    def _record_cleanup_warning(self, stage, error, process=None):
+        import json
+
+        paths = [
+            self._workspace.path if self._workspace and self._workspace.owned else None,
+            self._runtime_root,
+            *self._short_runtime_dirs.values(),
+            self.trial_paths.agent_dir,
+        ]
+        state = {}
+        if process is not None:
+            state.update(pid=process.pid, agent_exit_code=process.returncode)
+            diagnostics = getattr(self._process_adapter, "diagnostics", None)
+            if diagnostics is not None:
+                state.update(diagnostics(process))
+        warning = cleanup_warning(stage, error, paths, **state)
+        self.logger.warning(warning_text(warning))
+        path = self.trial_paths.agent_dir / "cleanup.json"
+        try:
+            warnings = (
+                json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+            )
+            if not isinstance(warnings, list):
+                warnings = []
+            warnings.append(warning)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(warnings, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except (OSError, ValueError, TypeError):
+            self.logger.warning("Cleanup warning metadata unavailable: %s", path)
 
     def _require_lifecycle_caller(self) -> None:
         command = self._callback_command.get()
@@ -1739,8 +1780,12 @@ class HostEnvironment(BaseEnvironment):
                     ),
                     return_exceptions=True,
                 )
-                for outcome in outcomes:
+                for stage, outcome in zip(
+                    ("process_terminate", "process_pipes"), outcomes
+                ):
                     if isinstance(outcome, BaseException):
+                        if self.os == TaskOS.WINDOWS:
+                            self._record_cleanup_warning(stage, outcome, process)
                         primary_error.add_note(
                             f"command cleanup failed: {type(outcome).__name__}: {outcome}"
                         )
@@ -1763,12 +1808,17 @@ class HostEnvironment(BaseEnvironment):
                 ):
                     self._process_adapter.release(process)
             except BaseException as release_error:
-                if command_error is None:
+                if isinstance(release_error, Exception) and self.os == TaskOS.WINDOWS:
+                    self._record_cleanup_warning(
+                        "process_release", release_error, process
+                    )
+                elif command_error is None:
                     raise
-                command_error.add_note(
-                    "process release failed: "
-                    f"{type(release_error).__name__}: {release_error}"
-                )
+                elif command_error is not None:
+                    command_error.add_note(
+                        "process release failed: "
+                        f"{type(release_error).__name__}: {release_error}"
+                    )
             finally:
                 self._active_processes.pop(process, None)
                 termination = self._termination_tasks.get(process)

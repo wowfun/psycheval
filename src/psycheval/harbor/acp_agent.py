@@ -20,7 +20,7 @@ from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.models.task.config import TaskOS
 
 from . import __version__
-from .acp_evidence import convert
+from .acp_evidence import convert, recover
 from .acp_protocol import (
     DEFAULT_MAX_EVIDENCE_BYTES,
     FORCED_CLEANUP_RESERVE_SEC,
@@ -31,6 +31,7 @@ from .acp_protocol import (
     EvidenceReader,
     verify_evidence,
 )
+from .diagnostics import PARTIAL_TRAJECTORY, warning_text, write_partial
 from .environment import HostEnvironment, _await_owned_task
 from .inference_telemetry import populate_context_from_trajectory
 
@@ -360,8 +361,16 @@ class HostACPAgent(BaseAgent):
         if self._invoking:
             raise RuntimeError("ACP invocation is already active")
         self._invoking = True
+        self._execution_error = None
+        self._invocation_id = None
         try:
+            for filename in ("trajectory.json", PARTIAL_TRAJECTORY):
+                (self.logs_dir / filename).unlink(missing_ok=True)
             return await self._run_invocation(action, instruction, environment)
+        except BaseException as error:
+            self._execution_error = error
+            self._retain_partial()
+            raise
         finally:
             self._invoking = False
 
@@ -374,6 +383,7 @@ class HostACPAgent(BaseAgent):
                 path.unlink()
         (self.logs_dir / "trajectory.json").unlink(missing_ok=True)
         (self.logs_dir / "trajectory.tmp").unlink(missing_ok=True)
+        (self.logs_dir / PARTIAL_TRAJECTORY).unlink(missing_ok=True)
         host = self._invocation_host(environment)
         invocation = host.runtime_directory(f"acp-call-{self._runtime_id}")
         for path in invocation.glob("acp.*"):
@@ -442,6 +452,8 @@ class HostACPAgent(BaseAgent):
                 primary_error.add_note(
                     f"ACP publication cleanup failed: {type(error).__name__}"
                 )
+            if primary_error is not None:
+                self._retain_partial()
         summary_path = self.logs_dir / "acp.summary.json"
         try:
             summary = (
@@ -462,14 +474,14 @@ class HostACPAgent(BaseAgent):
             )
         if action == "inspect":
             if (
-                not summary.get("cleanup_complete")
+                not self._cleanup_admitted(summary)
                 or not summary.get("inspection_complete")
                 or summary.get("error_type")
             ):
                 raise RuntimeError("ACP inspection failed; see current Agent evidence")
             verify_evidence(self.logs_dir, summary)
             return summary
-        if not summary.get("cleanup_complete") or not summary.get("prompt_submitted"):
+        if not self._cleanup_admitted(summary) or not summary.get("prompt_submitted"):
             raise RuntimeError(
                 "ACP setup or cleanup failed; see current Agent evidence"
             )
@@ -500,6 +512,69 @@ class HostACPAgent(BaseAgent):
             (invocation / name).unlink(missing_ok=True)
 
     def populate_context_post_run(self, context):
+        try:
+            self._populate_context(context)
+        except Exception as error:
+            self._retain_partial()
+            primary = getattr(self, "_execution_error", None)
+            if (
+                primary is not None
+                and getattr(self._setup_host, "os", None) == TaskOS.WINDOWS
+            ):
+                primary.add_note(
+                    f"ACP post-run evidence unavailable: {type(error).__name__}"
+                )
+                context.metadata = {
+                    **(context.metadata or {}),
+                    "trajectory_error": type(error).__name__,
+                }
+                self.logger.warning(
+                    "ACP post-run evidence unavailable (%s): %s",
+                    type(error).__name__,
+                    self.logs_dir,
+                )
+                return
+            raise
+
+    @staticmethod
+    def _cleanup_admitted(summary):
+        return summary.get("cleanup_complete") or summary.get("host_os") == "windows"
+
+    def _retain_partial(self):
+        if not self._invocation_id or (self.logs_dir / PARTIAL_TRAJECTORY).exists():
+            return
+        try:
+            path = self.logs_dir / "acp.summary.json"
+            summary = (
+                json.loads(path.read_text(encoding="utf-8"))
+                if path.exists()
+                else {
+                    "max_evidence_bytes": self.max_evidence_bytes,
+                    "max_decoded_evidence_bytes": self.max_decoded_evidence_bytes,
+                }
+            )
+            if summary.get("invocation_id", self._invocation_id) != self._invocation_id:
+                return
+            trajectory = recover(
+                self.logs_dir,
+                summary,
+                self._instruction,
+                {
+                    "name": self.name(),
+                    "version": self.version(),
+                    "model_name": self.model_name,
+                },
+                self.tool_result_format,
+            )
+            write_partial(self.logs_dir, trajectory, "acp.events.ndjson.gz")
+        except Exception as error:
+            self.logger.warning(
+                "ACP diagnostic trajectory unavailable (%s): %s",
+                type(error).__name__,
+                self.logs_dir,
+            )
+
+    def _populate_context(self, context):
         trajectory_path = self.logs_dir / "trajectory.json"
         trajectory_path.unlink(missing_ok=True)
         path = self.logs_dir / "acp.summary.json"
@@ -507,9 +582,10 @@ class HostACPAgent(BaseAgent):
         if (
             not self._invocation_id
             or summary.get("invocation_id") != self._invocation_id
-            or not summary.get("cleanup_complete")
+            or not self._cleanup_admitted(summary)
             or not summary.get("prompt_submitted")
             or summary.get("model_mismatch")
+            or summary.get("evidence_error_type")
         ):
             raise RuntimeError(
                 "ACP invocation is unsafe to verify; see current Agent evidence"
@@ -541,6 +617,10 @@ class HostACPAgent(BaseAgent):
             "acp_session_id": summary.get("session_id"),
             "acp_stop_reason": summary.get("stop_reason"),
         }
+        if warnings := summary.get("cleanup_warnings"):
+            context.metadata["cleanup_warnings"] = warnings
+            for warning in warnings:
+                self.logger.warning(warning_text(warning))
 
     def _enrich_trajectory(self, trajectory, summary):
         return trajectory

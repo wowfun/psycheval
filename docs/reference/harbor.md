@@ -136,7 +136,7 @@ performed once by Harbor post-run context population, including partial prompts.
 Configuration failures do not fabricate a user turn.
 
 The harness owns a Linux subreaper or a Windows Job and all Agent descendants, including separate
-tool process groups. Every outcome settles cleanup before verifier admission.
+tool process groups. Every outcome attempts bounded cleanup before verification.
 Linux cleanup deduplicates each signal by stable process identity, including
 kernel start time, so wall-clock adjustments cannot signal the same descendant twice.
 `shutdown_timeout_sec` is a shared cleanup deadline with a reserved forced-cleanup
@@ -161,18 +161,40 @@ stdout/stderr tails are retained in `acp.harness.stdout.log` and
 `acp.harness.stderr.log`, bounded separately by a combined `max_evidence_bytes`
 cap with stderr taking priority. These diagnostics cannot establish protocol
 evidence.
-Missing cleanup confirmation raises from post-run population and aborts both
-single- and multi-step Trials before verification. Ordinary prompt failures may
-still be verified after confirmed cleanup. Arbitrary external hard-kill recovery
-and restoration across rebuilt Hosts are outside this adapter's guarantee.
+On Linux, missing cleanup confirmation raises from post-run population before
+verification. On Windows, process, pipe and directory cleanup failures are
+warnings, independent of execution and evidence integrity. They retain the
+failed stage, error category, available process state and absolute owned paths
+in Agent logs and metadata, and do not prevent scoring valid evidence. ACP records
+them in its summary and Agent context; Host teardown records them in
+`agent/cleanup.json`, which CLI and workspace readers project as Trial warnings.
+Evidence
+write, sealing and manifest failures remain evidence errors. Ordinary prompt
+failures may still be verified; cleanup warnings never replace their error.
+If Windows execution already failed, post-run evidence recovery records its own
+failure in Agent metadata without replacing the original execution exception or
+publishing an invalid canonical trajectory.
+Unconfirmed native usage is unavailable rather than inferred. Arbitrary external
+hard-kill recovery and restoration across rebuilt Hosts are not guaranteed.
 One Agent retains a stable private Session state and reuses one call staging
 directory. Closed evidence is moved to the current Agent logs before staging
 reuse, including on cancellation. Concurrent invocations of that Agent reject
 before modifying evidence. Context population preserves caller metadata.
 Each accepted invocation clears prior published evidence before validating its
 Host. Post-run population admits only that invocation and writes a trajectory
-after cleanup confirmation. A deleted or replaced Host runtime requires a new
+after evidence validation and the platform's cleanup policy. A deleted or replaced Host runtime requires a new
 Agent, even when the same Host object is reused.
+
+Failed invocations best-effort retain `agent/trajectory.partial.json`, an atomic,
+diagnostic-only ATIF document marked incomplete. ACP recovers the bounded valid
+event prefix, including an interrupted gzip stream or final record; malformed
+records stop recovery and unrelated Sessions are not joined. It does not fabricate
+completion, missing output, usage or timing. Retention failure cannot replace the
+execution error, and a new invocation clears previous diagnostics. Verifiers
+read only `trajectory.json`; diagnostic recovery never establishes grading evidence.
+CLI and workspace readers use the diagnostic trajectory only when the canonical
+file is absent, label it incomplete and retain the Trial's native result status.
+A corrupt canonical trajectory remains an error rather than triggering fallback.
 
 `HostEnvironment.runtime_directory(name, short_path=True)` allocates a private
 short Linux directory independently of TMPDIR, owned and reused by this Host.
@@ -312,8 +334,9 @@ sandbox denial, or explicit business failure.
 Display titles do not prove identity; incomplete or failed
 commands cannot prove successful execution. Command detection uses the canonical
 shell name, ACP execute kind, or native execution fields; renaming a command does
-not remove terminal-result checks. Windows cleanup queries an owned Job
-until empty before evidence admission; missing cleanup confirmation aborts verification.
+not remove terminal-result checks. Windows cleanup queries an owned Job until
+empty within its deadline; missing confirmation produces a warning with owned
+paths and does not block valid evidence or verification.
 The bundled CLI may announce an active tool again when its arguments resolve.
 The WorkBuddy policy merges that snapshot only for the same canonical identity
 while the existing call is nonterminal. Reusing a terminal call ID is rejected;
@@ -403,9 +426,12 @@ Native JSON events and stderr stream to Agent logs, including on cancellation.
 Execution must emit exactly one Session identity before export. Export failure
 or timeout fails the invocation and retains its logs; a previous invocation's
 converted trajectory is never reused for a new run.
-After a nonzero exit or error event, the adapter attempts the same bounded export
-to `opencode-failed-session.json` for diagnosis. This file cannot supply ATIF or
-grading evidence, and export errors cannot replace the original execution failure.
+After a nonzero exit, error event, timeout or cancellation, the adapter attempts
+the same bounded export to `opencode-failed-session.json` for diagnosis. Failed
+exports fall back to the valid stdout prefix. These sources can supply only
+`trajectory.partial.json`, never grading evidence; export errors cannot replace
+the original execution failure. Incomplete messages retain their observed content
+without synthetic completion or final usage.
 After a successful run, `opencode session export --standalone` retains the selected
 Session as `opencode-session.json`. Its completed messages, tool results, and usage
 are authoritative for ATIF conversion; streamed events alone need not contain

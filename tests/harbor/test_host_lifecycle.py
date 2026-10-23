@@ -34,10 +34,15 @@ def test_failed_command_termination_remains_owned_until_stop_retry(
                     timeout_sec=0.05,
                 )
             assert not host._active_processes
-            with pytest.raises(RuntimeError, match="remains unsettled") as failure:
+            if sys.platform == "win32":
                 await host.stop(True)
+                notes = (host.trial_paths.agent_dir / "cleanup.json").read_text()
+                notes = "\n".join(json.loads(notes)[0]["paths"])
+            else:
+                with pytest.raises(RuntimeError, match="remains unsettled") as failure:
+                    await host.stop(True)
+                notes = "\n".join(failure.value.__notes__)
             assert workspace.is_dir()
-            notes = "\n".join(failure.value.__notes__)
             assert str(workspace) in notes
             assert str(host._runtime_root) in notes
             with pytest.raises(RuntimeError, match="stopping"):
@@ -684,6 +689,15 @@ def test_command_preserves_primary_error_and_drains_failing_cleanup(
                 for note in getattr(caught.value, "__notes__", [])
             )
             assert not host._active_processes
+            if sys.platform == "win32":
+                warnings = json.loads(
+                    (host.trial_paths.agent_dir / "cleanup.json").read_text()
+                )
+                assert warnings
+                assert all(
+                    str(host.trial_paths.agent_dir) in w["paths"] for w in warnings
+                )
+                assert any(w.get("pid") for w in warnings)
         finally:
             release.set()
             await asyncio.gather(command, return_exceptions=True)
