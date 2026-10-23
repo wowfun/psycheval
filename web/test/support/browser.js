@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+const fixtureMetrics = JSON.parse(readFileSync(new URL("./metrics.json", import.meta.url), "utf8"));
 import { JSDOM } from "jsdom";
 
 const GLOBAL_NAMES = [
@@ -30,6 +32,12 @@ function installBrowserDom(body, options = {}) {
     url: options.url || "http://127.0.0.1:8765/",
     pretendToBeVisual: true,
   });
+  const renderOptions = dom.window.document.getElementById("peval-render-options");
+  if (renderOptions) {
+    const value = JSON.parse(renderOptions.textContent || "{}");
+    value.metric_descriptions ??= fixtureMetrics;
+    renderOptions.textContent = JSON.stringify(value);
+  }
   const previous = new Map(GLOBAL_NAMES.map(name => [name, globalThis[name]]));
   for (const name of GLOBAL_NAMES) {
     const value = name === "fetch" && options.fetch

@@ -6,8 +6,14 @@ from typing import Any
 
 from psycheval._state.annotations import optional_int, optional_str
 from psycheval.atif import iso_timestamp_ms
+from psycheval.metric_contract import (
+    BUILTIN_IDS,
+    RESERVED_EXTRA_KEYS,
+    custom_metric_id,
+    finite_number,
+)
 from psycheval.report.inference import inference_row_metrics
-from psycheval.report.metrics import final_metric, number_metric, token_total
+from psycheval.report.metrics import final_metric, number_metric, tool_success_rate
 from psycheval.report.timing import is_model_duration_source, node_duration
 
 
@@ -44,7 +50,7 @@ def catalog_summary(
     if not isinstance(agent, dict):
         agent = {}
     warnings = meta.get("warnings")
-    return {
+    row = {
         "trial_key": optional_str(
             meta.get("trial_key") or trajectory.get("trajectory_id")
         ),
@@ -52,16 +58,16 @@ def catalog_summary(
         "step_outline": step_outline(trajectory, meta),
         **_last_turn_end(meta),
         "status": optional_str(meta.get("status")) or "unknown",
-        "score": optional_number(meta.get("score")),
+        "score": finite_number(meta.get("score")),
         "score_message": optional_str(meta.get("score_message")),
-        "duration_ms": optional_int(meta.get("duration_ms")),
+        "duration_ms": finite_number(meta.get("duration_ms")),
         "wall_duration_ms": _wall_duration_ms(meta),
         "model_duration_ms": model_duration_ms(trajectory, meta),
-        "turns": optional_number(final_metric(metrics, "total_turns")),
+        "turns": finite_number(final_metric(metrics, "total_turns")),
         "total_tool_calls": number_metric(final_metric(metrics, "total_tool_calls")),
         "total_tool_errors": number_metric(final_metric(metrics, "total_tool_errors")),
-        "tokens": token_total(metrics),
-        "cost_usd": optional_number(metrics.get("total_cost_usd")),
+        "tokens": _token_total(metrics),
+        "cost_usd": finite_number(metrics.get("total_cost_usd")),
         "warnings": len(warnings) if isinstance(warnings, list) else 0,
         "analysis_count": max(0, min(2, int(analysis_count))),
         "model": optional_str(agent.get("model_name")),
@@ -70,11 +76,98 @@ def catalog_summary(
         "trial_name": optional_str(meta.get("trial_name")),
         "model_provider": optional_str(meta.get("model_provider")),
         "task_keywords": meta.get("task_keywords") or [],
-        "rewards": meta.get("rewards") or {},
+        "rewards": {
+            key: value
+            for key, value in (meta.get("rewards") or {}).items()
+            if finite_number(value) is not None
+        },
         "harbor_provenance": meta.get("harbor_provenance") or {},
         "task_metadata": _catalog_task_metadata(meta.get("task_metadata")),
         **inference_row_metrics(metrics),
     }
+    row.update(_additional_metrics(trajectory, meta, metrics))
+    row["tool_success_rate"] = tool_success_rate(
+        row.get("total_tool_calls"), row.get("total_tool_errors")
+    )
+    values = {
+        key: value
+        for key in BUILTIN_IDS
+        if (value := finite_number(row.get(key))) is not None
+    }
+    diagnostics = []
+    extra = metrics.get("extra") if isinstance(metrics.get("extra"), dict) else {}
+    for namespace, source in (("atif.extra", extra), ("reward", row["rewards"])):
+        for key, value in source.items():
+            if namespace == "atif.extra" and key in RESERVED_EXTRA_KEYS:
+                continue
+            number = finite_number(value)
+            if number is None:
+                continue
+            try:
+                metric_id = custom_metric_id(namespace, key)
+            except ValueError as exc:
+                diagnostics.append(f"{namespace} metric {key!r}: {exc}")
+                continue
+            values[metric_id] = number
+    row["metric_values"] = values
+    row["metric_diagnostics"] = diagnostics
+    return row
+
+
+def _additional_metrics(
+    trajectory: dict[str, Any], meta: dict[str, Any], metrics: dict[str, Any]
+) -> dict[str, Any]:
+    result = {
+        key: finite_number(final_metric(metrics, key))
+        for key in (
+            "total_prompt_tokens",
+            "total_completion_tokens",
+            "total_cached_tokens",
+            "total_steps",
+        )
+    }
+    tools, other = [], []
+    for step, step_meta in zip(trajectory.get("steps") or [], meta.get("steps") or []):
+        if not isinstance(step, dict) or not isinstance(step_meta, dict):
+            continue
+        duration = finite_number(step_meta.get("duration_ms"))
+        if (
+            step.get("source") in {"agent", "assistant"}
+            and not is_model_duration_source(step_meta.get("duration_source"))
+            and duration is not None
+            and duration >= 0
+        ):
+            other.append(duration)
+        for tool in step_meta.get("tool_calls") or []:
+            duration = (
+                finite_number(tool.get("execution_duration_ms"))
+                if isinstance(tool, dict)
+                else None
+            )
+            if duration is not None and duration >= 0:
+                tools.append(duration)
+    result.update(
+        tool_duration_ms=finite_number(sum(tools)) if tools else None,
+        other_duration_ms=finite_number(sum(other)) if other else None,
+    )
+    tests = (meta.get("verifier_evidence") or {}).get("tests") or {}
+    passed, total = (
+        finite_number(tests.get("passed")),
+        finite_number(tests.get("total")),
+    )
+    if (
+        passed is not None
+        and total is not None
+        and passed == int(passed)
+        and total == int(total)
+        and 0 <= passed <= total
+    ):
+        result.update(
+            tests_passed=passed,
+            tests_total=total,
+            test_pass_rate=passed / total if total else None,
+        )
+    return result
 
 
 def _catalog_task_metadata(value: Any) -> dict[str, Any]:
@@ -180,12 +273,12 @@ def model_duration_ms(
             continue
         if not is_model_duration_source(step_meta.get("duration_source")):
             continue
-        duration = optional_number(step_meta.get("duration_ms"))
-        if duration is None:
+        duration = finite_number(step_meta.get("duration_ms"))
+        if duration is None or duration < 0:
             continue
         total += duration
         count += 1
-    return total if count else None
+    return finite_number(total) if count else None
 
 
 def _wall_duration_ms(meta: dict[str, Any]) -> int | None:
@@ -199,12 +292,13 @@ def _wall_duration_ms(meta: dict[str, Any]) -> int | None:
     return max(0, finished - started)
 
 
-def optional_number(value: Any) -> int | float | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return value
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+def _token_total(metrics: dict[str, Any]) -> int | float | None:
+    values = [
+        finite_number(metrics.get(key))
+        for key in ("total_prompt_tokens", "total_completion_tokens")
+    ]
+    present = [value for value in values if value is not None]
+    if present:
+        return finite_number(sum(present))
+    usage = (metrics.get("extra") or {}).get("usage")
+    return finite_number(usage.get("total_tokens")) if isinstance(usage, dict) else None

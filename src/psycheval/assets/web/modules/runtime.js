@@ -68,7 +68,9 @@ configureLeaderboardDataTables({
   workspaceReportLeaderboardColumn: (...args) => workspaceReportLeaderboardColumn(...args),
 });
 state.leaderboardSummaryChartType = SUMMARY_DEFAULTS.chart_type;
-state.leaderboardSummaryRadarMetrics = [...SUMMARY_DEFAULTS.radar_metrics];
+state.leaderboardSummaryMetrics = null;
+state.leaderboardMetricDraft = null;
+state.leaderboardMetricSearch = "";
 state.leaderboardSummaryRadarGroups = SUMMARY_DEFAULTS.radar_groups;
 state.leaderboardSummaryRadarSearch = "";
 state.leaderboardSummaryGroupBy = SUMMARY_DEFAULTS.group_by;

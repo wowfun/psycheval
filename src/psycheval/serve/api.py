@@ -808,6 +808,7 @@ def _register_catalog_routes(app: FastAPI) -> None:
                             inline_views=summary_request.inline_views,
                             group_by=summary_request.group_by,
                             statistic=summary_request.statistic,
+                            metrics=summary_request.metrics,
                         )
                     ]
                 else:

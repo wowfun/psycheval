@@ -186,7 +186,7 @@ class HarborTrialTests(unittest.TestCase):
                 headers = ["".join(cell.itertext()) for cell in rows[0]]
                 values = ["".join(cell.itertext()) for cell in rows[1]]
                 exported = dict(zip(headers, values, strict=True))
-                self.assertEqual(float(exported["Cache Hit Rate"]), 0.2)
+                self.assertEqual(float(exported["Cache Hit"]), 0.2)
                 self.assertEqual(int(exported["Cache Samples"]), 1)
                 self.assertEqual(int(exported["Cache-read Tokens"]), 20)
                 self.assertEqual(export.read_bytes(), before)

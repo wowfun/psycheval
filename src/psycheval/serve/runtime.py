@@ -336,6 +336,7 @@ class ServeRuntime:
         inline_views: Sequence[CatalogQuery] = (),
         group_by: str,
         statistic: str,
+        metrics: Sequence[str],
     ) -> SummaryWorksheet:
         payload = self.leaderboard_summary(
             query,
@@ -347,8 +348,13 @@ class ServeRuntime:
         if not int(payload["generation"]):
             raise ValueError("serve catalog has no valid generation")
         summary = payload["summary"]
+        descriptions = {item["key"]: item for item in payload["metric_descriptions"]}
+        selected = [descriptions[key] for key in metrics if key in descriptions]
+        if not selected:
+            raise ValueError("Select at least one available metric")
         return SummaryWorksheet(
             name="Leaderboard Summary",
+            metric_descriptions=selected,
             group_by=group_by,
             matched_count=int(summary["matched_count"]),
             groups=summary["groups"],
@@ -373,6 +379,11 @@ class ServeRuntime:
         return [
             SummaryWorksheet(
                 name=view.name,
+                metric_descriptions=[
+                    item
+                    for item in payload["metric_descriptions"]
+                    if item["saved_view"]
+                ],
                 group_by=view.group_by,
                 matched_count=int(summary["matched_count"]),
                 groups=summary["groups"],

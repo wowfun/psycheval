@@ -11,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 from psycheval.config import HarborMount, ToolConfig
+from psycheval.metric_contract import DEFAULT_METRIC_IDS
 from psycheval.serve import (
     ServeAccess,
     ServeRuntime,
@@ -666,6 +667,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                         "kind": "summary_xlsx",
                         "summary": {
                             "scope": "leaderboard",
+                            "metrics": list(DEFAULT_METRIC_IDS),
                             "query": {
                                 key: value
                                 for key, value in summary_query.items()

@@ -1,4 +1,5 @@
-const COLUMN_LAYOUT_VERSION = 1;
+import { validMetricId } from "../app/metric-contract.js";
+const COLUMN_LAYOUT_VERSION = 2;
 
 function normalizeColumnLayout(columnKeys, value) {
   const canonical = Array.from(new Set(columnKeys.map(String)));
@@ -7,7 +8,7 @@ function normalizeColumnLayout(columnKeys, value) {
   const order = [];
   rawOrder.forEach(raw => {
     const key = String(raw || "");
-    if (known.has(key) && !order.includes(key)) order.push(key);
+    if ((known.has(key) || key.includes(":") && validMetricId(key)) && !order.includes(key)) order.push(key);
   });
   const canonicalIndexes = new Map(canonical.map((key, index) => [key, index]));
   canonical.forEach(key => {
@@ -20,7 +21,7 @@ function normalizeColumnLayout(columnKeys, value) {
   const visibility = {};
   if (value?.visibility && typeof value.visibility === "object") {
     Object.entries(value.visibility).forEach(([key, mode]) => {
-      if (known.has(key) && ["show", "hide"].includes(mode)) visibility[key] = mode;
+      if ((known.has(key) || key.includes(":") && validMetricId(key)) && ["show", "hide"].includes(mode)) visibility[key] = mode;
     });
   }
   return { version: COLUMN_LAYOUT_VERSION, order, visibility };

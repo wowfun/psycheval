@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sqlite3
@@ -17,8 +18,16 @@ from psycheval._state.annotations import optional_int
 from psycheval.analysis import cached_note_report_for_cell
 from psycheval.config import ToolConfig
 from psycheval.file_access import FileLeaseTimeout, blocking_file_lease
+from psycheval.metric_contract import (
+    BUILTIN_IDS,
+    METRIC_LIMIT,
+    SAVED_VIEW_METRIC_IDS,
+    finite_number,
+    metric_descriptions,
+    validate_metric_id_syntax,
+)
 from psycheval.report.metrics import tool_success_rate
-from psycheval.state.catalog_projection import catalog_summary, optional_number
+from psycheval.state.catalog_projection import catalog_summary
 from psycheval.state.evaluation_report_catalog import (
     evaluation_report_location,
     replace_evaluation_report_projection,
@@ -30,8 +39,8 @@ from psycheval.state.workspace_sources import (
     WorkspaceSources,
 )
 
-CATALOG_SCHEMA_VERSION = 18
-CATALOG_PROJECTION_VERSION = 9
+CATALOG_SCHEMA_VERSION = 19
+CATALOG_PROJECTION_VERSION = 10
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 SUMMARY_CACHE_ENTRY_LIMIT = 128
@@ -82,7 +91,7 @@ class CatalogQuery:
             page=page,
             page_size=page_size,
             search=str(self.search or "").strip(),
-            sort=str(self.sort or "last_turn_end").strip().lower(),
+            sort=str(self.sort or "last_turn_end").strip(),
             direction=direction,
             categories=_normalized_values(self.categories),
             tags=_normalized_values(self.tags),
@@ -122,6 +131,7 @@ class CatalogPage:
     items: tuple[CatalogRow, ...]
     facets: dict[str, list[dict[str, Any]]]
     column_presence: dict[str, int]
+    metric_metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -134,6 +144,7 @@ class CatalogPage:
             "items": [item.to_dict() for item in self.items],
             "facets": self.facets,
             "column_presence": self.column_presence,
+            **self.metric_metadata,
         }
 
 
@@ -193,6 +204,9 @@ class WorkspaceCatalog:
             tuple[Any, ...], tuple[dict[str, Any], int]
         ] = OrderedDict()
         self._query_summary_cache_bytes = 0
+        self._metric_metadata_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = (
+            None
+        )
         self._prepare_database()
 
     @property
@@ -249,6 +263,7 @@ class WorkspaceCatalog:
                     items=(),
                     facets=_empty_facets(),
                     column_presence=_empty_column_presence(),
+                    metric_metadata=self.metric_metadata(connection),
                 )
             where, parameters = self._combined_query_where(
                 query, normalized_any_queries
@@ -264,19 +279,31 @@ class WorkspaceCatalog:
                 parameters,
                 workspace_report_source_refs,
             )
-            sort_expression = _sort_expression(query.sort)
-            direction = "ASC" if query.direction == "asc" else "DESC"
+            sort_join, sort_expression, sort_parameters, effective_sort = _catalog_sort(
+                connection, query.sort
+            )
+            metric_metadata = self.metric_metadata(connection)
+            metric_metadata["effective_sort"] = effective_sort
+            direction = (
+                "ASC"
+                if query.direction == "asc"
+                and not (
+                    query.sort.startswith("metric:")
+                    and effective_sort == "last_turn_end"
+                )
+                else "DESC"
+            )
             offset = (query.page - 1) * query.page_size
             records = connection.execute(
                 f"""
                 SELECT source_key, artifact_revision, row_json
-                FROM cells
+                FROM cells {sort_join}
                 WHERE {where}
                 ORDER BY ({sort_expression} IS NULL) ASC,
                          {sort_expression} {direction}, source_key ASC
                 LIMIT ? OFFSET ?
                 """,
-                [*parameters, query.page_size, offset],
+                [*sort_parameters, *parameters, query.page_size, offset],
             ).fetchall()
             items = tuple(
                 CatalogRow(
@@ -304,6 +331,7 @@ class WorkspaceCatalog:
             items=items,
             facets=facets,
             column_presence=column_presence,
+            metric_metadata=metric_metadata,
         )
 
     @contextmanager
@@ -351,16 +379,26 @@ class WorkspaceCatalog:
                 where, parameters = self._combined_query_where(
                     normalized, normalized_any
                 )
-                sort_expression = _sort_expression(normalized.sort)
-                direction = "ASC" if normalized.direction == "asc" else "DESC"
+                sort_join, sort_expression, sort_parameters, _effective = _catalog_sort(
+                    connection, normalized.sort
+                )
+                direction = (
+                    "ASC"
+                    if normalized.direction == "asc"
+                    and not (
+                        normalized.sort.startswith("metric:")
+                        and _effective == "last_turn_end"
+                    )
+                    else "DESC"
+                )
                 records = connection.execute(
                     f"""
-                    SELECT source_key, row_json FROM cells
+                    SELECT source_key, row_json FROM cells {sort_join}
                     WHERE {where}
                     ORDER BY ({sort_expression} IS NULL) ASC,
                              {sort_expression} {direction}, source_key ASC
                     """,
-                    parameters,
+                    [*sort_parameters, *parameters],
                 ).fetchall()
                 selected_set = set(selected)
                 rows = [
@@ -412,6 +450,7 @@ class WorkspaceCatalog:
                         for name, _query, group_by in normalized
                     ],
                 }
+            metadata = self.metric_metadata(connection)
             summaries: list[dict[str, Any]] = []
             for name, query, group_by in normalized:
                 where, parameters = self._query_where(query)
@@ -422,7 +461,42 @@ class WorkspaceCatalog:
             "checking": self.checking,
             "stale": self.checking,
             "views": summaries,
+            **metadata,
         }
+
+    def metric_metadata(
+        self, connection: sqlite3.Connection | None = None
+    ) -> dict[str, Any]:
+        if connection is None:
+            with self._connect(readonly=True) as current:
+                return self.metric_metadata(current)
+        overrides = dict(self.config.metrics)
+        key = (
+            self._meta_int(connection, "generation", 0),
+            tuple(
+                (key, value.label, value.unit, value.direction)
+                for key, value in sorted(overrides.items())
+            ),
+        )
+        with self._state_lock:
+            cached = self._metric_metadata_cache
+            if cached is None or cached[0] != key:
+                custom = [
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT metric_id FROM metric_registry ORDER BY metric_id"
+                    )
+                    if row[0] not in BUILTIN_IDS
+                ]
+                cached = (key, metric_descriptions([*BUILTIN_IDS, *custom], overrides))
+                self._metric_metadata_cache = cached
+            return {
+                **cached[1],
+                "metric_descriptions": [
+                    dict(item) for item in cached[1]["metric_descriptions"]
+                ],
+                "metric_diagnostics": list(cached[1]["metric_diagnostics"]),
+            }
 
     def summarize_query(
         self,
@@ -462,16 +536,24 @@ class WorkspaceCatalog:
                     "checking": self.checking,
                     "stale": self.checking,
                     "summary": cached_entry[0],
+                    **self.metric_metadata(connection),
                 }
             where, parameters = self._combined_query_where(normalized, normalized_any)
             rows = _summary_rows(connection, where, parameters)
-            summary = _saved_view_summary(name, group_by, rows)
+            metadata = self.metric_metadata(connection)
+            summary = _saved_view_summary(
+                name,
+                group_by,
+                rows,
+                [item["key"] for item in metadata["metric_descriptions"]],
+            )
         self._cache_query_summary(cache_key, summary)
         return {
             "generation": generation,
             "checking": self.checking,
             "stale": self.checking,
             "summary": summary,
+            **metadata,
         }
 
     def _cache_query_summary(
@@ -930,6 +1012,16 @@ class WorkspaceCatalog:
                     ),
                 )
                 connection.execute(
+                    "DELETE FROM metric_values WHERE source_key = ?", (source_key,)
+                )
+                connection.executemany(
+                    "INSERT INTO metric_values(source_key, metric_id, value) VALUES (?, ?, ?)",
+                    [
+                        (source_key, key, float(value))
+                        for key, value in row.get("metric_values", {}).items()
+                    ],
+                )
+                connection.execute(
                     "INSERT INTO cell_search(source_key, search_doc) VALUES (?, ?)",
                     (source_key, search_doc),
                 )
@@ -951,6 +1043,24 @@ class WorkspaceCatalog:
                     connection.execute(
                         "DELETE FROM cell_search WHERE source_key = ?", (source_key,)
                     )
+            connection.execute(
+                "DELETE FROM metric_values WHERE source_key NOT IN (SELECT source_key FROM cells)"
+            )
+            ids = set(BUILTIN_IDS) | {
+                row[0]
+                for row in connection.execute(
+                    "SELECT DISTINCT metric_id FROM metric_values"
+                )
+            }
+            if len(ids) > METRIC_LIMIT:
+                raise CatalogSummaryCapacityError(
+                    "Workspace exceeds 128 numeric metrics; reduce source metric keys and rescan. Previous catalog retained."
+                )
+            connection.execute("DELETE FROM metric_registry")
+            connection.executemany(
+                "INSERT INTO metric_registry(metric_id) VALUES (?)",
+                [(key,) for key in sorted(ids)],
+            )
             replace_evaluation_report_projection(connection)
             generation = self._meta_int(connection, "generation", 0) + 1
             self._set_meta(connection, "generation", str(generation))
@@ -1233,6 +1343,12 @@ class WorkspaceCatalog:
             CREATE INDEX IF NOT EXISTS cells_job ON cells(job);
             CREATE INDEX IF NOT EXISTS cells_provider ON cells(provider);
             CREATE INDEX IF NOT EXISTS cells_dataset ON cells(dataset);
+            CREATE TABLE IF NOT EXISTS metric_registry (metric_id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS metric_values (
+                source_key TEXT NOT NULL, metric_id TEXT NOT NULL, value REAL NOT NULL,
+                PRIMARY KEY (source_key, metric_id)
+            );
+            CREATE INDEX IF NOT EXISTS metric_values_order ON metric_values(metric_id, value, source_key);
             CREATE TABLE IF NOT EXISTS evaluation_reports (
                 report_ref TEXT PRIMARY KEY,
                 source_ref TEXT NOT NULL UNIQUE,
@@ -1341,20 +1457,6 @@ class WorkspaceCatalog:
         )
 
 
-_SAVED_VIEW_SUMMARY_METRICS = (
-    ("duration_ms", "duration"),
-    ("ttft_ms", "duration"),
-    ("tps", "number"),
-    ("tokens", "number"),
-    ("cache_hit_rate", "percent"),
-    ("turns", "number"),
-    ("model_duration_ms", "duration"),
-    ("total_tool_calls", "number"),
-    ("tool_success_rate", "percent"),
-    ("score", "number"),
-)
-
-
 def _summary_query_scope(query: CatalogQuery) -> tuple[Any, ...]:
     return (
         query.state,
@@ -1378,44 +1480,37 @@ def _summary_rows(
     parameters: Sequence[Any],
 ) -> Iterator[dict[str, Any]]:
     records = connection.execute(
-        f"""
-        SELECT category AS source_category,
-               agent AS agent_name,
-               model,
-               task AS task_name,
-               job AS job_name,
-               provider AS model_provider,
-               reward AS score,
-               duration_ms,
-               ttft_ms,
-               tps,
-               tokens,
-               cache_hit_rate,
-               turns,
-               json_extract(row_json, '$.model_duration_ms') AS model_duration_ms,
-               tool_calls AS total_tool_calls,
-               tool_errors AS total_tool_errors
-        FROM cells
-        WHERE {where}
-        """,
+        f"""SELECT cells.source_key, category AS source_category, agent AS agent_name,
+                   model, task AS task_name, job AS job_name, provider AS model_provider,
+                   metric_id, value
+            FROM cells LEFT JOIN metric_values USING(source_key)
+            WHERE {where} ORDER BY cells.source_key""",
         parameters,
     )
+    current = None
     for record in records:
-        yield dict(record)
+        if current is None or current["source_key"] != record["source_key"]:
+            if current is not None:
+                yield current
+            current = dict(record)
+            current["metric_values"] = {}
+        if record["metric_id"] is not None:
+            current["metric_values"][record["metric_id"]] = record["value"]
+    if current is not None:
+        yield current
 
 
 @dataclass
 class _SummaryGroupValues:
     count: int = 0
-    metrics: list[list[float]] = field(
-        default_factory=lambda: [[] for _item in _SAVED_VIEW_SUMMARY_METRICS]
-    )
+    metrics: dict[str, list[float]] = field(default_factory=dict)
 
 
 def _saved_view_summary(
     name: str,
     group_by: str,
     rows: Iterable[dict[str, Any]],
+    metric_ids: Sequence[str] = SAVED_VIEW_METRIC_IDS,
 ) -> dict[str, Any]:
     grouped: dict[str | None, _SummaryGroupValues] = {}
     if group_by == "overall":
@@ -1434,16 +1529,16 @@ def _saved_view_summary(
             values = _SummaryGroupValues()
             grouped[key] = values
         values.count += 1
-        for index, (metric_key, _value_type) in enumerate(_SAVED_VIEW_SUMMARY_METRICS):
+        for metric_key in metric_ids:
             metric_value = _saved_view_metric_value(row, metric_key)
             if metric_value is not None:
-                values.metrics[index].append(metric_value)
+                values.metrics.setdefault(metric_key, []).append(metric_value)
     groups = [
         {
             "key": key,
             "label": "-" if key is None else key,
             "count": group_values.count,
-            "metrics": _saved_view_metric_rows(group_values.metrics),
+            "metrics": _saved_view_metric_rows(group_values.metrics, metric_ids),
         }
         for key, group_values in sorted(
             grouped.items(),
@@ -1479,16 +1574,19 @@ def _saved_view_group_key(row: dict[str, Any], group_by: str) -> str | None:
 
 
 def _saved_view_metric_rows(
-    metric_values: list[list[float]],
+    metric_values: dict[str, list[float]],
+    metric_ids: Sequence[str],
 ) -> list[dict[str, Any]]:
     metrics: list[dict[str, Any]] = []
-    for (key, value_type), values in zip(_SAVED_VIEW_SUMMARY_METRICS, metric_values):
+    for key in metric_ids:
+        values = metric_values.get(key, [])
         metrics.append(
             {
                 "key": key,
-                "type": value_type,
                 "count": len(values),
-                "mean": sum(values) / len(values) if values else None,
+                "mean": math.fsum(value / len(values) for value in values)
+                if values
+                else None,
                 "distribution": _saved_view_distribution(values),
             }
         )
@@ -1496,8 +1594,10 @@ def _saved_view_metric_rows(
 
 
 def _saved_view_metric_value(row: dict[str, Any], key: str) -> float | None:
+    if "metric_values" in row:
+        return finite_number(row["metric_values"].get(key))
     if key != "tool_success_rate":
-        return optional_number(row.get(key))
+        return finite_number(row.get(key))
     return tool_success_rate(row.get("total_tool_calls"), row.get("total_tool_errors"))
 
 
@@ -1523,7 +1623,8 @@ def _saved_view_percentile(ordered: list[float], percentile: int) -> float:
     upper = min(len(ordered) - 1, lower + 1)
     if lower == upper:
         return ordered[lower]
-    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+    fraction = position - lower
+    return ordered[lower] * (1 - fraction) + ordered[upper] * fraction
 
 
 def _report_with_live_task_ref(
@@ -1661,6 +1762,24 @@ def _fts_literal(value: str) -> str:
     return '"' + value.casefold().replace('"', '""') + '"'
 
 
+def _catalog_sort(
+    connection: sqlite3.Connection, sort: str
+) -> tuple[str, str, list[Any], str]:
+    if not sort.startswith("metric:"):
+        return "", _sort_expression(sort), [], sort
+    key = sort.removeprefix("metric:")
+    validate_metric_id_syntax(key)
+    if (
+        connection.execute(
+            "SELECT 1 FROM metric_registry WHERE metric_id = ?", (key,)
+        ).fetchone()
+        is None
+    ):
+        return "", "last_turn_end", [], "last_turn_end"
+    join = "LEFT JOIN (SELECT source_key AS metric_source, value AS metric_sort_value FROM metric_values WHERE metric_id = ?) AS metric_sort ON metric_sort.metric_source = cells.source_key"
+    return join, "metric_sort_value", [key], sort
+
+
 def _sort_expression(sort: str) -> str:
     mapping = {
         "last_turn_end": "last_turn_end",
@@ -1672,16 +1791,6 @@ def _sort_expression(sort: str) -> str:
         "job": "job COLLATE NOCASE",
         "provider": "provider COLLATE NOCASE",
         "dataset": "dataset COLLATE NOCASE",
-        "reward": "reward",
-        "duration_ms": "duration_ms",
-        "turns": "turns",
-        "total_tool_calls": "tool_calls",
-        "tool_success_rate": "CASE WHEN tool_calls > 0 AND tool_errors BETWEEN 0 AND tool_calls THEN (tool_calls - tool_errors) / tool_calls END",
-        "tokens": "tokens",
-        "cost_usd": "cost_usd",
-        "ttft_ms": "ttft_ms",
-        "tps": "tps",
-        "cache_hit_rate": "cache_hit_rate",
         "created": "created_at_ms",
         "updated": "updated_at_ms",
         "source_key": "source_key",
@@ -1705,6 +1814,7 @@ def _json_value_present(path: str) -> str:
 
 
 _CATALOG_COLUMN_PRESENCE_SQL = {
+    "score": f"reward IS NOT NULL OR ({_json_value_present('$.rewards')})",
     "dataset_id": "dataset IS NOT NULL AND trim(dataset) <> ''",
     "source_category": "trim(category) <> ''",
     "source_tags": "json_array_length(tags_json) > 0",
@@ -1714,25 +1824,19 @@ _CATALOG_COLUMN_PRESENCE_SQL = {
     "model": "trim(model) <> ''",
     "job_name": "trim(job) <> ''",
     "model_provider": "trim(provider) <> ''",
-    "reward": f"reward IS NOT NULL OR ({_json_value_present('$.rewards')})",
     "status": "trim(last_status) <> ''",
     "finished_at_ms": "last_turn_end IS NOT NULL",
-    "duration_ms": "duration_ms IS NOT NULL",
-    "ttft_ms": "ttft_ms IS NOT NULL",
-    "tps": "tps IS NOT NULL",
-    "turns": "turns IS NOT NULL",
-    "total_tool_calls": "tool_calls IS NOT NULL",
-    "tool_success_rate": "tool_calls > 0 AND tool_errors BETWEEN 0 AND tool_calls",
-    "tokens": "tokens IS NOT NULL",
-    "cache_hit_rate": "cache_hit_rate IS NOT NULL",
-    "cost_usd": "cost_usd IS NOT NULL",
     "analysis_count": _json_value_present("$.analysis_count"),
     "notes": "json_extract(row_json, '$.notes_present') = 1",
 }
 
 
 def _empty_column_presence() -> dict[str, int]:
-    return {**dict.fromkeys(_CATALOG_COLUMN_PRESENCE_SQL, 0), "workspace_reports": 0}
+    return {
+        **dict.fromkeys(_CATALOG_COLUMN_PRESENCE_SQL, 0),
+        **dict.fromkeys(BUILTIN_IDS, 0),
+        "workspace_reports": 0,
+    }
 
 
 def _catalog_query_presence(
@@ -1756,6 +1860,23 @@ def _catalog_query_presence(
     presence = {
         key: int(record[f"presence_{key}"] or 0) for key in _CATALOG_COLUMN_PRESENCE_SQL
     }
+    ids = [
+        *BUILTIN_IDS,
+        *(
+            record[0]
+            for record in connection.execute("SELECT metric_id FROM metric_registry")
+            if record[0] not in BUILTIN_IDS
+        ),
+    ]
+    counts = dict(
+        connection.execute(
+            f"SELECT metric_id, count(*) FROM metric_values WHERE source_key IN (SELECT source_key FROM cells WHERE {where}) GROUP BY metric_id",
+            parameters,
+        )
+    )
+    for key in ids:
+        if key != "score":
+            presence[key] = counts.get(key, 0)
     return matched, presence
 
 

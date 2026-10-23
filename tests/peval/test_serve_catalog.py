@@ -59,7 +59,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
                     ("asc", [3, 2, 1]),
                 ):
                     page = catalog.query(
-                        CatalogQuery(sort="tool_success_rate", direction=direction)
+                        CatalogQuery(
+                            sort="metric:tool_success_rate", direction=direction
+                        )
                     )
                     self.assertEqual(
                         [row.payload["trial_key"] for row in page.items[:3]],
@@ -396,7 +398,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
             self.assertEqual(linked.column_presence["workspace_reports"], 1)
 
             sorted_page = catalog.query(
-                CatalogQuery(sort="tps", direction="desc", page_size=3)
+                CatalogQuery(sort="metric:tps", direction="desc", page_size=3)
             )
             self.assertEqual(sorted_page.items[0].payload["trial_key"], "trial-0001")
             self.assertIsNone(sorted_page.items[-1].payload["tps"])
@@ -1154,7 +1156,11 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 all_view, even_view, category_view = payload["views"]
                 self.assertEqual(all_view["matched_count"], 125)
                 self.assertEqual(all_view["groups"][0]["count"], 125)
-                duration = all_view["groups"][0]["metrics"][0]
+                duration = next(
+                    item
+                    for item in all_view["groups"][0]["metrics"]
+                    if item["key"] == "duration_ms"
+                )
                 self.assertEqual(duration["count"], 125)
                 self.assertEqual(duration["mean"], 62)
                 self.assertEqual(duration["distribution"]["p50"], 62)

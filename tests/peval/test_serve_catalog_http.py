@@ -15,6 +15,7 @@ from unittest.mock import patch
 from urllib.parse import quote
 
 from psycheval.config import HarborDataset, HarborMount, ToolConfig
+from psycheval.metric_contract import DEFAULT_METRIC_IDS
 from psycheval.serve import (
     ServeAccess,
     ServeRuntime,
@@ -51,6 +52,16 @@ def leaderboard_summary_query(**changes) -> dict:
     }
     payload.update(changes)
     return payload
+
+
+def summary_request(query, group_by="overall", statistic="mean"):
+    return {
+        "scope": "leaderboard",
+        "metrics": list(DEFAULT_METRIC_IDS),
+        "query": query,
+        "group_by": group_by,
+        "statistic": statistic,
+    }
 
 
 class ServeCatalogHttpTests(unittest.TestCase):
@@ -102,12 +113,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                             "/api/exports",
                             {
                                 "kind": "summary_xlsx",
-                                "summary": {
-                                    "scope": "leaderboard",
-                                    "query": query,
-                                    "group_by": "overall",
-                                    "statistic": "mean",
-                                },
+                                "summary": summary_request(query, "overall", "mean"),
                             },
                         ),
                     ):
@@ -222,12 +228,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     {"kind": "xlsx", "query": table_query},
                     {
                         "kind": "summary_xlsx",
-                        "summary": {
-                            "scope": "leaderboard",
-                            "query": table_query,
-                            "group_by": "overall",
-                            "statistic": "mean",
-                        },
+                        "summary": summary_request(table_query, "overall", "mean"),
                     },
                 ):
                     status, _, body = self.request(
@@ -459,7 +460,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 with zipfile.ZipFile(BytesIO(body)) as archive:
                     sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
                 self.assertEqual(sheet.count("<row "), 106)
-                self.assertIn('<c r="A1" t="inlineStr"><is><t>Dataset</t>', sheet)
+                self.assertIn('<c r="A1" s="1" t="inlineStr"><is><t>Dataset</t>', sheet)
                 self.assertIn('<c r="A2" t="inlineStr"><is><t>alpha</t>', sheet)
                 query = leaderboard_summary_query(datasets=["beta"])
                 query.pop("group_by")
@@ -469,12 +470,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     "/api/exports",
                     {
                         "kind": "summary_xlsx",
-                        "summary": {
-                            "scope": "leaderboard",
-                            "query": query,
-                            "group_by": "overall",
-                            "statistic": "mean",
-                        },
+                        "summary": summary_request(query, "overall", "mean"),
                     },
                 )
                 self.assertEqual(status, 200, body[:200])
@@ -1655,7 +1651,11 @@ class ServeCatalogHttpTests(unittest.TestCase):
                 self.assertEqual(payload["generation"], page["generation"])
                 self.assertEqual(payload["summary"]["matched_count"], 125)
                 self.assertEqual(payload["summary"]["groups"][0]["count"], 125)
-                duration = payload["summary"]["groups"][0]["metrics"][0]
+                duration = next(
+                    item
+                    for item in payload["summary"]["groups"][0]["metrics"]
+                    if item["key"] == "duration_ms"
+                )
                 self.assertEqual(duration["count"], 125)
                 self.assertEqual(duration["mean"], 62)
 
@@ -1710,12 +1710,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     "/api/exports",
                     {
                         "kind": "summary_xlsx",
-                        "summary": {
-                            "scope": "leaderboard",
-                            "query": export_query,
-                            "group_by": "overall",
-                            "statistic": "mean",
-                        },
+                        "summary": summary_request(export_query, "overall", "mean"),
                     },
                 )
                 self.assertEqual(status, 200, body[:200])
@@ -1762,12 +1757,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                         "/api/exports",
                         {
                             "kind": "summary_xlsx",
-                            "summary": {
-                                "scope": "leaderboard",
-                                "query": query,
-                                "group_by": "job",
-                                "statistic": "mean",
-                            },
+                            "summary": summary_request(query, "job", "mean"),
                         },
                     )
                     self.assertEqual(status, 413, body)
@@ -1819,16 +1809,15 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     "/api/exports",
                     {
                         "kind": "summary_xlsx",
-                        "summary": {
-                            "scope": "leaderboard",
-                            "query": {
+                        "summary": summary_request(
+                            {
                                 key: value
                                 for key, value in leaderboard_summary_query().items()
                                 if key != "group_by"
                             },
-                            "group_by": "category",
-                            "statistic": "max",
-                        },
+                            "category",
+                            "max",
+                        ),
                     },
                 )
                 self.assertEqual(status, 200)
@@ -1866,16 +1855,15 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     "/api/exports",
                     {
                         "kind": "summary_xlsx",
-                        "summary": {
-                            "scope": "leaderboard",
-                            "query": {
+                        "summary": summary_request(
+                            {
                                 key: value
                                 for key, value in leaderboard_summary_query().items()
                                 if key != "group_by"
                             },
-                            "group_by": "agent",
-                            "statistic": "mean",
-                        },
+                            "agent",
+                            "mean",
+                        ),
                     },
                 )
                 self.assertEqual(status, 200)
@@ -1925,9 +1913,8 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     "/api/exports",
                     {
                         "kind": "summary_xlsx",
-                        "summary": {
-                            "scope": "leaderboard",
-                            "query": {
+                        "summary": summary_request(
+                            {
                                 **{
                                     key: value
                                     for key, value in leaderboard_summary_query().items()
@@ -1935,9 +1922,9 @@ class ServeCatalogHttpTests(unittest.TestCase):
                                 },
                                 "views": ["Missing"],
                             },
-                            "group_by": "agent",
-                            "statistic": "mean",
-                        },
+                            "agent",
+                            "mean",
+                        ),
                     },
                 )
                 self.assertEqual(status, 400)
@@ -1976,12 +1963,7 @@ class ServeCatalogHttpTests(unittest.TestCase):
                     "/api/exports",
                     {
                         "kind": "summary_xlsx",
-                        "summary": {
-                            "scope": "leaderboard",
-                            "query": query,
-                            "group_by": "overall",
-                            "statistic": "mean",
-                        },
+                        "summary": summary_request(query, "overall", "mean"),
                     },
                 )
 

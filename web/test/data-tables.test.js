@@ -151,7 +151,7 @@ test("absolute timestamps share the configured timezone across Leaderboard, Harb
 
 test("Leaderboard renders the complete-query summary returned by the server", () => {
   const definitions = summaries.leaderboardSummaryDefinitions();
-  assert.deepEqual(definitions.map(definition => definition.key), [
+  assert.deepEqual(definitions.filter(definition => definition.default).map(definition => definition.key), [
     "score",
     "duration_ms",
     "ttft_ms",
@@ -202,7 +202,7 @@ test("Leaderboard renders the complete-query summary returned by the server", ()
     summaries.renderLeaderboardSummary();
     const target = document.querySelector("#leaderboard-summary");
     assert.match(target.textContent, /125 matching Trials across all pages/);
-    assert.match(target.querySelector('[data-summary-metric="ttft_ms"]').textContent, /0\.5s/);
+    assert.match(target.querySelector('[data-summary-metric="ttft_ms"]').textContent, /500 ms/);
     assert.match(target.querySelector('[data-summary-metric="tokens"]').textContent, /0/);
     assert.equal(target.querySelector(".inference-overview"), null);
     assert.match(target.querySelector("[data-summary-table-toggle]").textContent, /2 metrics/);
@@ -324,12 +324,12 @@ test("Harbor Task display merges derived evidence without changing editable over
   const taskIndex = columns.findIndex(column => column.key === "task_name");
   assert.equal(jobIndex + 1, taskIndex);
   assert.deepEqual(
-    ["task_name", "job_name", "model_provider", "reward"].map(key => columns.find(column => column.key === key)?.key),
-    ["task_name", "job_name", "model_provider", "reward"],
+    ["task_name", "job_name", "model_provider", "score"].map(key => columns.find(column => column.key === key)?.key),
+    ["task_name", "job_name", "model_provider", "score"],
   );
-  assert.equal(tables.tableText(row, columns.find(column => column.key === "reward")), "0");
+  assert.equal(tables.tableText(row, columns.find(column => column.key === "score")), "0");
   assert.equal(
-    tables.tableText({ ...row, score: null, rewards: { accuracy: 1, safety: 0 } }, columns.find(column => column.key === "reward")),
+    tables.tableText({ ...row, score: null, rewards: { accuracy: 1, safety: 0 } }, columns.find(column => column.key === "score")),
     "2 dims",
   );
   assert.equal(

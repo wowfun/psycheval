@@ -13,7 +13,7 @@ test("Saved View names use the server's Unicode character count through storage 
 
 test("locations round trip identities, Unicode, duplicate predicates and display state deterministically", () => {
   const value = { object: { source: "stable-key", trajectory: "child/中文", step: "2", tab: "trajectory" }, state: {
-    query: { search: "中文 + &", page: 3, models: ["mimo", "mimo", "model/中文"], sort: "reward", direction: "asc" },
+    query: { search: "中文 + &", page: 3, models: ["mimo", "mimo", "model/中文"], sort: "metric:score", direction: "asc" },
     views: [{ name: "当地条件", filters: { results: ["failed"] } }], summary: { group_by: "model", statistic: "p95", table_open: true },
   } };
   const href = encodeWorkspaceLocation("home", value, "http://localhost");
@@ -39,7 +39,7 @@ test("invalid and oversized states cannot silently widen a shared query", () => 
   for (const state of [{ query: { page: -1 } }, { query: { models: "wrong" } }, { query: { models: [" "] } }, { summary: { statistic: "invalid" } }, { extra: true }]) {
     assert.throws(() => encodeWorkspaceLocation("home", { state }));
   }
-  for (const hash of ["#view=broken", "#anything", "#source=old", "#view=" + btoa('{"v":2}'), "#view=" + btoa('{"v":1,"views":[{}]}')]) {
+  for (const hash of ["#view=broken", "#anything", "#source=old", "#view=" + btoa('{"v":99}'), "#view=" + btoa('{"v":2,"views":[{}]}')]) {
     assert.throws(() => decodeWorkspaceLocation("home", new URL("http://localhost/" + hash)));
   }
   assert.throws(() => encodeWorkspaceLocation("home", { object: { source: "a", report: "b" } }));
@@ -52,7 +52,7 @@ test("shared snapshots enforce the View count limit without truncation", () => {
   const href = encodeWorkspaceLocation("home", { state: { views } });
   assert.equal(decodeWorkspaceLocation("home", new URL(href, "http://localhost")).state.views.length, 100);
   assert.throws(() => encodeWorkspaceLocation("home", { state: { views: [...views, views[0]] } }));
-  const payload = btoa(JSON.stringify({ v: 1, views: [...views, views[0]] })).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+  const payload = btoa(JSON.stringify({ v: 2, views: [...views, views[0]] })).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
   assert.throws(() => decodeWorkspaceLocation("home", new URL("http://localhost/#view=" + payload)));
 });
 

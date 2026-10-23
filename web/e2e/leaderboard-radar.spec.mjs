@@ -73,13 +73,15 @@ test("radar selection, missing values, links, resize and chart cleanup", async (
     await expect(page.locator("[data-radar-group-row]:visible")).toHaveCount(1);
     await page.locator("[data-radar-group='5']").focus();
     await expect(page.locator("[data-radar-detail]")).toContainText("model-5");
-    await page.locator("[data-radar-metric=model_duration_ms]").check();
+    await page.locator(".summary-metric-control > summary").click();
+    await page.locator("[data-metric-id=model_duration_ms]").check();
+    await page.locator("[data-metric-apply]").click();
     await expect(page.locator("[data-radar-search]")).toHaveValue("model-5");
     const href = page.url();
     const saved = decodeWorkspaceLocation("home", new URL(href)).state.summary;
     expect(saved.chart_type).toBe("radar");
     expect(saved.radar_groups).toEqual(["model-1", "model-2", "model-3", "model-4", "model-5"]);
-    expect(saved.radar_metrics).toContain("model_duration_ms");
+    expect(saved.metrics).toContain("model_duration_ms");
     expect(requests).toBe(requestCount);
     expect(await page.evaluate(id => window.echarts.getInstanceById(id), oldInstance)).toBeUndefined();
     for (const width of [1440, 850, 390]) {
@@ -99,7 +101,7 @@ test("radar selection, missing values, links, resize and chart cleanup", async (
       await expect(recipient.locator("[data-summary-radar] canvas")).toHaveCount(1);
       await expect(recipient.locator("[data-radar-group]:checked")).toHaveCount(5);
       await recipient.reload();
-      await expect(recipient.locator("[data-radar-metric=model_duration_ms]")).toBeChecked();
+      await expect(recipient.locator("[data-metric-id=model_duration_ms]")).toBeChecked();
       await expect(recipient.locator("[data-catalog-clear-conditions]")).toBeDisabled();
       await recipient.locator("[data-leaderboard-search-input]").fill("e2e");
       await expect(recipient.locator("[data-catalog-clear-conditions]")).toBeEnabled();

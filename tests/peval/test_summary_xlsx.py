@@ -72,7 +72,7 @@ class SummaryXlsxTests(unittest.TestCase):
                 if cell.findtext("s:is/s:t", namespaces=ns) == "Tool Success Rate"
             )
             first, zero, no_calls, unknown = [list(row)[index] for row in rows[1:]]
-            self.assertEqual(first.get("t"), "n")
+            self.assertIsNone(first.get("t"))
             self.assertAlmostEqual(float(first.findtext("s:v", namespaces=ns)), 14 / 15)
             self.assertEqual(float(zero.findtext("s:v", namespaces=ns)), 0)
             self.assertIsNone(no_calls.find("s:v", ns))
@@ -82,7 +82,7 @@ class SummaryXlsxTests(unittest.TestCase):
             number_format = styles.find(
                 f"s:numFmts/s:numFmt[@numFmtId='{style.get('numFmtId')}']", ns
             )
-            self.assertEqual(number_format.get("formatCode"), "0.0%")
+            self.assertEqual(number_format.get("formatCode"), "0.00%")
 
     def test_payload_validation_is_strict_and_ordered_deduplicated(self) -> None:
         query = {
@@ -103,6 +103,7 @@ class SummaryXlsxTests(unittest.TestCase):
         request = summary_export_payload(
             {
                 "scope": "leaderboard",
+                "metrics": ["score", "duration_ms"],
                 "query": query,
                 "group_by": "model",
                 "statistic": "p95",
@@ -115,6 +116,7 @@ class SummaryXlsxTests(unittest.TestCase):
         category_request = summary_export_payload(
             {
                 "scope": "leaderboard",
+                "metrics": ["score", "duration_ms"],
                 "query": query,
                 "group_by": "category",
                 "statistic": "mean",
@@ -128,30 +130,35 @@ class SummaryXlsxTests(unittest.TestCase):
         for invalid in (
             {
                 "scope": "leaderboard",
+                "metrics": ["score", "duration_ms"],
                 "query": {**query, "page": 1},
                 "group_by": "agent",
                 "statistic": "mean",
             },
             {
                 "scope": "leaderboard",
+                "metrics": ["score", "duration_ms"],
                 "query": query,
                 "group_by": "agent",
                 "statistic": "median",
             },
             {
                 "scope": "leaderboard",
+                "metrics": ["score", "duration_ms"],
                 "query": query,
                 "group_by": ["agent"],
                 "statistic": "mean",
             },
             {
                 "scope": "leaderboard",
+                "metrics": ["score", "duration_ms"],
                 "query": query,
                 "group_by": "agent",
                 "statistic": ["mean"],
             },
             {
                 "scope": "leaderboard",
+                "metrics": ["score", "duration_ms"],
                 "query": {key: value for key, value in query.items() if key != "tags"},
                 "group_by": "agent",
                 "statistic": "mean",

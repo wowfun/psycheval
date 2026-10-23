@@ -353,8 +353,8 @@ def _project_tests(payload: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
     result: dict[str, Any] = {}
-    passed = _nonnegative_int(payload.get("tests_passed"))
-    total = _nonnegative_int(payload.get("tests_total"))
+    passed = _measurement_count(payload.get("tests_passed"))
+    total = _measurement_count(payload.get("tests_total"))
     status = payload.get("test_status")
     if passed is not None:
         result["passed"] = passed
@@ -680,11 +680,18 @@ def _unit_number(value: Any) -> float | None:
     return number if math.isfinite(number) and 0 <= number <= 1 else None
 
 
+def _measurement_count(value: Any) -> int | None:
+    number = _finite_number(value)
+    if number is None or number < 0 or not number.is_integer():
+        return None
+    return int(number)
+
+
 def _nonnegative_int(value: Any) -> int | None:
     if value is None or isinstance(value, bool):
         return None
     try:
         number = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return number if number >= 0 else None

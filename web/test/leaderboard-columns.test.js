@@ -27,7 +27,7 @@ test("normalizes stale layouts and inserts new columns canonically", () => {
   );
 
   assert.deepEqual(layout, {
-    version: 1,
+    version: 2,
     order: ["ttft", "cache", "session"],
     visibility: { cache: "hide", ttft: "show" },
   });

@@ -1,6 +1,6 @@
 import { esc, fmtNum, state, t } from "./runtime.js";
 import { RADAR_GROUP_LIMIT } from "../app/workspace-view-contract.js";
-import { RADAR_DIRECTIONS, radarAxes, radarPoints, radarSelection, radarColor, radarColors } from "./summary-chart.js";
+import { radarAxes, radarPoints, radarSelection, radarColor, radarColors } from "./summary-chart.js";
 
 let chart = null;
 let observer = null;
@@ -16,7 +16,7 @@ function disposeLeaderboardRadar() {
 }
 
 function radarContext(groups, definitions, statistic, format) {
-  const axes = radarAxes(groups, state.leaderboardSummaryRadarMetrics, statistic.value);
+  const axes = radarAxes(groups, definitions, statistic.value);
   const selected = radarSelection(groups, state.leaderboardSummaryRadarGroups);
   const colors = radarColors(selected.map(group => group.key));
   const series = selected.map((group, index) => ({ group, points: radarPoints(group, axes, statistic.value), color: colors[index] }));
@@ -48,15 +48,9 @@ function renderLeaderboardRadar(context) {
   const { groups, definitions, axes, selected, series } = context;
   const chosen = new Set(selected.map(group => group.key));
   const unavailable = state.leaderboardSummaryRadarGroups?.filter(key => !groups.some(group => group.key === key)) || [];
-  return `<fieldset class="summary-radar-metrics"><legend>${esc(t("summary_radar_axes", "Radar axes · at least 3"))}</legend>
-      ${definitions.filter(definition => Object.hasOwn(RADAR_DIRECTIONS, definition.key)).map(definition => {
-        const checked = axes.some(axis => axis.key === definition.key);
-        return `<label><input type="checkbox" data-radar-metric="${esc(definition.key)}" ${checked ? "checked" : ""} ${checked && axes.length === 3 ? "disabled" : ""}>${esc(definition.label)} <small>${RADAR_DIRECTIONS[definition.key] > 0 ? "↑" : "↓"}</small></label>`;
-      }).join("")}
-    </fieldset>
-  <div class="summary-radar-layout">
+  return `  <div class="summary-radar-layout">
     <div class="summary-radar-plot">
-      ${selected.length ? `<div data-summary-radar role="img" aria-label="${esc(t("summary_radar", "Radar chart"))}"></div>` : `<p class="leaderboard-summary-empty">${esc(t("summary_radar_select", "Select up to five groups to compare."))}</p>`}
+      ${selected.length && axes.length >= 3 ? `<div data-summary-radar role="img" aria-label="${esc(t("summary_radar", "Radar chart"))}"></div>` : `<p class="leaderboard-summary-empty">${esc((axes.length < 3 ? t("metric_radar_min", "Select at least three metrics with a direction.") : t("summary_radar_select", "Select up to five groups to compare.")))}</p>`}
       <p data-radar-fallback hidden role="alert">${esc(t("summary_radar_unavailable", "Radar chart is unavailable. Switch to the bar chart or use the summary table."))}</p>
       <div class="summary-radar-detail" data-radar-detail aria-live="polite">${series.length ? groupDetails(series[0], context) : ""}</div>
     </div>
@@ -126,10 +120,6 @@ function bindLeaderboardRadar(target, context, change) {
   };
   search?.addEventListener("input", () => { state.leaderboardSummaryRadarSearch = search.value; filterGroups(); });
   if (search) filterGroups();
-  target.querySelectorAll("[data-radar-metric]").forEach(input => input.addEventListener("change", () => {
-    state.leaderboardSummaryRadarMetrics = Object.keys(RADAR_DIRECTIONS).filter(key => key === input.dataset.radarMetric ? input.checked : state.leaderboardSummaryRadarMetrics.includes(key));
-    change("[data-radar-metric='" + input.dataset.radarMetric + "']");
-  }));
   target.querySelectorAll("[data-radar-group]").forEach(input => {
     const group = context.groups[Number(input.dataset.radarGroup)];
     input.addEventListener("change", () => {

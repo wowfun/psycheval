@@ -88,6 +88,8 @@ def main() -> None:
             root / "runs/default/psychevo/e2e-session/e2e-trial-2",
             "e2e-trial-2",
         )
+        if os.environ.get("PEVAL_E2E_METRICS") == "1":
+            write_metric_trials(root)
         if os.environ.get("PEVAL_E2E_LINKS") == "1":
             path = (
                 root
@@ -510,6 +512,28 @@ def write_verification_trial(root: Path) -> None:
             '\n[[harbor.datasets]]\nid = "office"\nformat = "workbuddy.v1"\npath = "dataset"\n'
             '\n[[harbor.mounts]]\nid = "jobs"\npath = "jobs"\ndataset_ids = ["office"]\n'
         )
+
+
+def write_metric_trials(root: Path) -> None:
+    from psycheval.metric_contract import custom_metric_id
+
+    raw = "自定义能耗/大小写 %." + "中文" * 10
+    metric_id = custom_metric_id("atif.extra", raw)
+    with (root / "peval.toml").open("a", encoding="utf-8") as handle:
+        handle.write(
+            f'\n[metrics."{metric_id}"]\nlabel = "长中文名称能耗指标——包含空格和特殊符号的下游测量值"\nunit = "Wh"\ndirection = "lower"\n'
+        )
+    for index, name in enumerate(
+        ["e2e-trial", "e2e-trial-2", "metric-2", "metric-3", "metric-4"]
+    ):
+        cell = root / "runs/default/psychevo/e2e-session" / name
+        if not cell.exists():
+            write_e2e_trial(cell, name)
+        path = cell / "agent/trajectory.json"
+        trajectory = json.loads(path.read_text(encoding="utf-8"))
+        trajectory["agent"]["model_name"] = f"模型-{index}——用于比较的完整中文模型名称"
+        trajectory["final_metrics"]["extra"][raw] = [-3, 0, 2, 6, 9][index]
+        path.write_text(json.dumps(trajectory), encoding="utf-8")
 
 
 def write_e2e_trial(cell: Path, trial_id: str) -> None:

@@ -1,6 +1,7 @@
+import { validMetricId, validMetricSelection } from "./metric-contract.js";
 // @ts-check
 import { SORT_KEYS as SORTS } from "./catalog-sort.js";
-import { BROWSER_VIEW_LIMIT, VIEW_NAME_MAX_CHARS, VIEW_GROUPS as GROUPS, SUMMARY_DEFAULTS, RADAR_METRICS, RADAR_GROUP_LIMIT } from "./workspace-view-contract.js";
+import { BROWSER_VIEW_LIMIT, VIEW_NAME_MAX_CHARS, VIEW_GROUPS as GROUPS, SUMMARY_DEFAULTS, RADAR_GROUP_LIMIT } from "./workspace-view-contract.js";
 
 const MAX_LOCATION_BYTES = 64 * 1024;
 const FACETS = ["categories", "tags", "agents", "models", "tasks", "jobs", "providers", "datasets", "results"];
@@ -33,7 +34,7 @@ function queryState(page, value = {}) {
   }
   if (!["active", "archived", "all"].includes(result.state) || typeof result.search !== "string" || result.search.includes("\0")) invalid();
   if (!Number.isSafeInteger(result.page) || result.page < 1 || !Number.isSafeInteger(result.page_size) || result.page_size < 1 || result.page_size > 100) invalid();
-  if (page === "home" && (!SORTS.has(result.sort) || !["asc", "desc"].includes(result.direction))) invalid();
+  if (page === "home" && (!(SORTS.has(result.sort) || result.sort.startsWith("metric:") && validMetricId(result.sort.slice(7))) || !["asc", "desc"].includes(result.direction))) invalid();
   if (page === "reports" && result.kinds.some(key => !["session", "dataset", "job", "unassociated"].includes(key))) invalid();
   return result;
 }
@@ -42,8 +43,8 @@ function summaryState(value = {}) {
   const result = { ...SUMMARY, ...value };
   if (!GROUPS.has(result.group_by) || !STATS.has(result.statistic) || typeof result.table_open !== "boolean") invalid();
   if (!["bar", "radar"].includes(result.chart_type)) invalid();
-  if (!Array.isArray(result.radar_metrics) || result.radar_metrics.length < 3 || result.radar_metrics.some(key => !RADAR_METRICS.includes(key)) || new Set(result.radar_metrics).size !== result.radar_metrics.length) invalid();
-  result.radar_metrics = RADAR_METRICS.filter(key => result.radar_metrics.includes(key));
+  if (result.metrics !== null && !validMetricSelection(result.metrics)) invalid();
+  if (result.metrics !== null) result.metrics = [...result.metrics];
   if (result.radar_groups !== null) {
     if (!Array.isArray(result.radar_groups) || result.radar_groups.length > RADAR_GROUP_LIMIT || result.radar_groups.some(key => key !== null && (typeof key !== "string" || !key || key.includes("\0")))) invalid();
     result.radar_groups = [...new Set(result.radar_groups)].sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0);
@@ -81,7 +82,7 @@ function normalizeLocationState(page, value = {}) {
 function encodePayload(page, value) {
   const state = normalizeLocationState(page, value);
   const query = differences(state.query, page === "home" ? HOME_QUERY : REPORT_QUERY);
-  const payload = { v: 1 };
+  const payload = { v: 2 };
   if (Object.keys(query).length) payload.query = query;
   if (page === "home") {
     if (state.views.length) payload.views = state.views.map(view => ({ ...view, filters: differences(view.filters, HOME_QUERY) }));
@@ -133,7 +134,7 @@ function decodeWorkspaceLocation(page, location) {
       payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     } catch { invalid(); }
     object(payload, ["v", "query", "views", "summary"]);
-    if (payload.v !== 1) invalid();
+    if (payload.v !== 2) invalid();
   }
   const { v: _version, ...state } = payload;
   return { object: normalizeLocationObject(page, target), state: normalizeLocationState(page, state) };

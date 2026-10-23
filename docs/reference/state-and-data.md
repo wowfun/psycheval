@@ -217,14 +217,59 @@ unavailable and refreshes cached rows in the next reconciliation transaction,
 even when source fingerprints are unchanged. A schema mismatch rebuilds the
 derived SQLite index. Neither operation changes source artifacts.
 
+### Numeric metrics
+
+The catalog registers numeric metrics during reconciliation and indexes values
+by source and metric ID. Built-ins retain their registered ASCII names. Custom
+top-level `final_metrics.extra` scalars use `atif.extra:<key>`; verifier rewards
+use `reward:<key>`. Keys are case-sensitive canonical RFC 3986 UTF-8 percent
+encodings, without trimming or Unicode normalization. Raw keys must be nonblank,
+contain no control characters and fit in 128 UTF-8 bytes; invalid keys produce
+source diagnostics. Objects and arrays are not traversed. `model_inference`,
+`usage`, and aliases consumed by built-ins are excluded from custom discovery.
+Only finite numbers count; booleans and numeric strings are unknown. Existing
+source-metric fallback and explicit ATIF precedence apply.
+
+Rewards originate in `reward.json` and are read from Harbor's
+`result.json.verifier_result.rewards`. `score` retains the effective primary-score
+contract; `reward:reward` is the independent raw reward. Rule and Judge scores
+come from `reward:rule_score` and `reward:llm_score`; missing Judge results stay
+unknown. Generic Harbor `score.json` supplies rule passed/total counts; its safe
+content revision joins the evidence revision at the next reconciliation, without
+file watching. Discovery and loading use the same evidence fingerprint; unchanged
+Trials reuse their projection, including when verifier evidence is absent.
+WorkBuddy's score precedence remains unchanged. Valid rule counts
+satisfy `0 <= passed <= total`; zero total has no rate. The passed/total cell
+sorts by per-Trial rate, with counts separately available. Job-level Harbor
+MetricConfig aggregations are outside this Trial metric scope.
+
+Model, tool and other recorded duration use the shared timing classification.
+Other duration sums recorded non-model Agent contributions; it is not inspection
+idle duration or a wall-clock subtraction. Missing contributions stay unknown;
+recorded contributions can overlap and have incomplete coverage.
+
+At most 128 metrics, including built-ins, may be registered. A capacity failure
+rejects the new projection atomically and retains the previous valid generation,
+never a truncated set. Query presence and ordering use the numeric index across
+the complete filter scope, not artifact JSON discovery per page. Metric sorting
+uses `metric:<ID>`, validates registry membership and binds IDs as SQL values;
+unknown values sort last. All admitted metrics are summarized together. Selection
+and statistic do not change the numeric summary cache key; descriptions have a
+separate revision and are attached outside that cache. Configuration belongs to
+the [workspace reference](workspace.md#metric-descriptions).
+The primary Reward column remains present when raw reward dimensions exist even
+without a primary score; its dimension-count fallback is display-only and never
+becomes a numeric observation. Column layouts use the metric-ID vocabulary and
+their own versioned storage.
+
 Leaderboard summaries cover every Trial matched by the current source state,
 search, facets, and applied Saved Views, including browser-local Saved Views.
 Pagination, sorting, and row selection do not change that scope. Leaderboard and
 Saved View grouped summaries treat each measured Trial as one observation for
 Count, Mean, and percentile statistics. Unknown Trial values are excluded while
 an explicit numeric zero remains part of the distribution. Summary tables,
-bar charts, and spreadsheet exports omit a metric only when its Count is zero in
-every group. Grouped summaries remain exact and are never truncated or
+bar charts, and spreadsheet exports omit unselected metrics and metrics whose
+Count is zero in every group. Grouped summaries remain exact and are never truncated or
 approximated; a query whose distinct group count exceeds the service capacity is
 rejected so the user can refine the scope or select an overall summary.
 
@@ -233,7 +278,7 @@ Tool success rate is the fraction of tool calls without a recorded error:
 total_tool_calls`. Both counts must be known and valid; zero calls have no rate.
 Counts must be finite numeric values; strings and booleans remain unknown in
 catalog projections as well as direct trajectory views. The detailed spreadsheet
-stores the rate as a numeric cell with a one-decimal percentage display, retaining
+stores the rate as a numeric cell with a two-decimal percentage display, retaining
 the underlying precision.
 This is an execution-outcome metric, not a judgment of task correctness. Each
 Trial's rate is computed before grouped means and percentiles; raw error evidence
@@ -242,12 +287,26 @@ The Trial's success/total display follows the same validity rule and does not
 infer zero errors from an absent count.
 
 The Home summary offers bar and radar views of the same complete-query data.
+Its ordered selection controls tables, both charts and all summary exports, with
+at most 32 IDs. The default selection retains the original ten metrics: Reward,
+Active Duration, Avg TTFT, Decode TPS, Tokens, Cache Hit, Turns, Model Call Duration,
+Tool Calls and Tool Success Rate. Restore defaults restores this selection.
+Custom metrics and new leaderboard columns are hidden by default.
+Saved Views keep their original ten built-in metrics with data and Mean, without
+inheriting Home selection or adding custom metrics. Both controls offer search;
+search does not limit selection scope. Unavailable IDs retain selection/order
+until explicitly removed, including across registry disappearance/reappearance.
+Selecting all beyond the limit reports an error without truncation.
+Selected metrics can be moved earlier or later in the control; search never
+changes their order.
 Radar axes use a shared statistic and independently normalize against all groups
 in the current query, including unselected groups. Min–max scaling maps each axis
-to 0–100, reversed for durations so that larger radii mean better performance.
+to 0–100, reversed for metrics configured as lower-is-better so that larger radii
+mean better performance.
 Equal measured values map to 50 and are identified as having no group difference.
 Changing comparison groups does not change these bounds. Tokens, turns, and tool
-call counts have no performance direction and are excluded from radar axes.
+call counts default to neutral direction; configuring a direction admits them
+to radar axes. Directions come from the shared metric descriptions.
 Radar uses solid outlines whose colors remain visible during hover and keyboard
 focus. A group's measured relative values may all be zero; its outline then
 collapses to the origin and the comparison list and detail explicitly identify
@@ -255,14 +314,26 @@ that condition without changing the query-wide scale. Radar preserves selected
 axes even when entirely unmeasured. Missing values are drawn at the origin with a
 cross annotation offset by axis and group for legibility, with explicit
 missing-data labels; these offsets do not encode a measured radius. They remain
-unknown in the data and never
-enter scaling, statistics, or exports. Ordinary
+unknown in the data and never contribute numeric values to scaling, statistics,
+or spreadsheet exports. Ordinary
 markers identify measured values, including those normalized to the origin.
 Selected groups use distinct colors with a minimum hue separation. Their search
 filter stays in page memory through presentation changes and navigation, but is
 not part of a shared location. Chart interactions preserve an open summary table.
 Radar selections affect presentation only; Saved View and spreadsheet charts
 remain bar charts.
+Summary Excel requests require the ordered metric selection. Malformed IDs,
+duplicates and capacity violations are request errors. Syntactically valid but
+unavailable IDs remain gaps; requests require at least one registered metric.
+An empty query can produce a workbook with no metric rows; the UI disables export
+when no selected metric has data. The browser obtains descriptions from catalog/summary responses, rather
+than embedding workspace metric metadata in the HTML shell.
+The detailed leaderboard workbook places identity and evidence columns first,
+then all registered metrics with data in registry order. Metric headings use the
+shared descriptions, with custom units in the heading. Values remain numeric;
+durations use Excel time formatting, ratios use percentages and USD uses currency
+formatting. Missing values are blank and entirely unmeasured metric columns are
+omitted. Both workbook types share metric formats and labels.
 Home's Clear conditions action resets query conditions, ordering, and applied View selection;
 it preserves summary grouping, statistic, table disclosure, and radar settings.
 Presentation changes alone do not enable that action.
@@ -291,7 +362,15 @@ or list positions. A closed detail leaves the page's list location.
 `#view=<base64url>` contains a versioned UTF-8 JSON snapshot of that page's
 query and presentation state. It preserves search, facets, ordering, pagination
 and page size, plus Home's applied View conditions and aggregate grouping,
-statistic, table disclosure, chart type, radar axes, and comparison group keys.
+statistic, table disclosure, chart type, ordered metric IDs, and comparison group keys.
+Locations use version 2 without a version-1 conversion. The pure codec validates
+ID syntax and selection bounds (zero to 32), not registry membership. Unavailable
+selected metrics remain in the location. A removed sort metric falls back to the
+default ordering with a notice and normalized location; no values in the current
+filter does not remove a registered sort.
+Registry-based fallback waits for a valid projection. Invalid metric syntax and
+unsupported non-metric sort names are request errors, rather than unavailable
+registered identities.
 Radar defaults select the first five groups in summary order; explicit selections
 are limited to five and may be empty. Changing the grouping resets group selection;
 query changes retain surviving explicit keys without filling vacated positions,
@@ -316,7 +395,11 @@ unknown-version locations report an error rather than dropping conditions.
 On Home and Reports, the fragment is reserved for `#view=` snapshots; plain
 anchors and legacy `#source=` fragments are unsupported and show the same explicit
 link error. Trial identity belongs in the `source` query parameter.
-Complete links are limited to 64 KiB. Missing details retain their requested
+Complete links are limited to 64 KiB after encoding. Metric application, sorting
+and sharing preflight that budget; failure preserves previous state and URL.
+Long catalog queries use the existing POST query endpoint so percent-encoded
+Unicode conditions do not exceed HTTP request-line limits.
+Missing details retain their requested
 identity and report unavailability instead of selecting another object.
 Opening/closing details and switching pages add history entries; condition and
 detail-position changes replace the current entry. Restoration suppresses URL

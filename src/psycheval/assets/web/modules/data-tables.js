@@ -1,3 +1,4 @@
+import { metricDefinitions, formatMetric, metricSortKey, metricSearchText } from "./metric-presentation.js";
 import { renderDateTime } from "./date-time.js";
 import { $, RENDER_OPTIONS, adminMode, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, statusLabel, t } from "./shared.js";
 import { columnVisibleForLayout, loadColumnLayout, moveColumn, normalizeColumnLayout, presenceForColumns, resolveColumns, saveColumnLayout } from "./leaderboard-columns.js";
@@ -88,6 +89,21 @@ function selectionColumn(options = {}) {
     ...options,
   };
 }
+function metricColumn(key) {
+  const definition = metricDefinitions(state).find(item => item.key === key);
+  if (!definition) return null;
+  return {
+    key: definition.column_key, label: definition.label, valueType: "number",
+    numeric: true, sortable: true, metric: true, defaultVisible: definition.column_default,
+    value: row => row.metric_values?.[key] ?? row[key],
+    ...(key === "score" ? { presence: row => row.metric_values?.score ?? row.score ?? Object.keys(row.rewards || {}) } : {}),
+    format: (value, row) => {
+      if (key === "score" && value == null) return rewardValue(row);
+      if (key === "test_pass_rate" && value != null) return `${fmtNum(row.metric_values?.tests_passed)} / ${fmtNum(row.metric_values?.tests_total)} (${fmtPct(value)})`;
+      return formatMetric(definition, value);
+    },
+  };
+}
 function leaderboardColumns() {
   const columns = [
     { key: "job_name", label: t("job", "Job"), valueType: "identity", filterable: true, sortable: true, value: row => row?.job_name || "-" },
@@ -95,18 +111,18 @@ function leaderboardColumns() {
     { key: "agent", label: t("agent", "Agent"), valueType: "identity", filterable: true, value: row => agentNameFor(row) },
     { key: "model", label: t("model", "Model"), valueType: "identity", filterable: true, value: row => row.model || "-" },
     { key: "model_provider", label: t("provider", "Provider"), valueType: "identity", defaultVisible: false, filterable: true, sortable: true, value: row => row?.model_provider || "-" },
-    { key: "reward", label: t("reward", "Reward"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row?.score, presence: row => hasMetricValue(row?.score) ? row.score : Object.keys(row?.rewards || {}), format: (_value, row) => rewardValue(row) },
+    metricColumn("score"),
     { key: "status", label: t("result", "Result"), valueType: "status", filterable: true, value: row => row.status || "-", filterLabel: value => statusLabel(value), html: row => `<span class="stamp ${lower(row.status || "passed")}">${esc(statusLabel(row.status))}</span>` },
     { key: "finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.finished_at_ms, format: (value, row) => `${lastTurnEndHint(row) ? "≈ " : ""}${fmtDate(value)}`, html: renderLastTurnEnd, cellTitle: row => lastTurnEndHint(row) ? `${fmtDate(row.finished_at_ms)} · ${lastTurnEndHint(row)}` : "" },
-    { key: "duration_ms", label: t("duration", "Active Duration"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.duration_ms, format: fmtMs },
-    { key: "ttft_ms", label: t("avg_ttft", "Avg TTFT"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.ttft_ms, format: fmtTtft },
-    { key: "tps", label: t("decode_tps", "Decode TPS"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.tps, format: fmtTps },
-    { key: "turns", label: t("turns", "Turns"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.turns, format: fmtNum },
-    { key: "total_tool_calls", label: t("tool_calls", "Tool Calls"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.total_tool_calls, format: value => hasMetricValue(value) ? fmtNum(value) : "-" },
-    { key: "tool_success_rate", label: t("tool_success_rate", "Tool Success Rate"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => rowToolSuccessRate(row), format: fmtPct },
-    { key: "tokens", label: t("tokens", "Tokens"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.tokens, format: fmtNum },
-    { key: "cache_hit_rate", label: t("cache_hit", "Cache Hit"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => row.cache_hit_rate, format: fmtPct },
-    { key: "cost_usd", label: t("cost", "Cost"), valueType: "number", numeric: true, sortable: true, value: row => row.cost_usd, format: fmtCost },
+    metricColumn("duration_ms"),
+    metricColumn("ttft_ms"),
+    metricColumn("tps"),
+    metricColumn("turns"),
+    metricColumn("total_tool_calls"),
+    metricColumn("tool_success_rate"),
+    metricColumn("tokens"),
+    metricColumn("cache_hit_rate"),
+    metricColumn("cost_usd"),
     { key: "analysis_count", label: t("analysis_count", "#Analysis"), valueType: "number", numeric: true, filterable: true, value: row => rowAnalysisCount(row) },
     { key: "notes", label: t("notes", "Notes"), valueType: "markdown", value: noteSnippetFor, html: renderNotesCell, cellTitle: row => {
       const text = notesText(row);
@@ -114,7 +130,10 @@ function leaderboardColumns() {
     } },
     { key: "session_id", label: t("session", "Session"), valueType: "identity", filterable: true, value: row => sourceIdentityFor(row), cellTitle: row => row.trial_key && row.trial_key !== sourceIdentityFor(row) ? row.trial_key : "" }
   ];
-  const serveColumns = columns.map(column => ["session_id", "analysis_count"].includes(column.key)
+  const availableColumns = columns.filter(Boolean);
+  availableColumns.splice(availableColumns.findIndex(item => item.key === "analysis_count"), 0,
+    ...metricDefinitions(state).filter(item => !item.column_default).map(item => metricColumn(item.key)));
+  const serveColumns = availableColumns.map(column => ["session_id", "analysis_count"].includes(column.key)
     ? { ...column, filterable: false }
     : column);
   return [
@@ -188,18 +207,18 @@ function renderLeaderboardColumnControls(rows = leaderboardRows()) {
   const draft = state.leaderboardColumnDraft
     ? normalizeColumnLayout(columns.map(column => column.key), state.leaderboardColumnDraft)
     : layout;
-  const ordered = draft.order.map(key => columns.find(column => column.key === key)).filter(Boolean);
+  const ordered = draft.order.map(key => columns.find(column => column.key === key) || { key, label: key, defaultVisible: false, unavailable: true });
   const checked = column => columnVisibleForLayout(column, draft, presence);
   const visibleCount = ordered.filter(checked).length;
   const rowsHtml = ordered.map((column, index) => {
     const isChecked = checked(column);
-    const activeSort = catalogSortKey(state.catalogQuery?.sort) === catalogSortKey(column.key);
+    const activeSort = catalogSortKey(metricSortKey(state, state.catalogQuery?.sort)) === catalogSortKey(metricSortKey(state, column.key));
     const filtered = activeFilterValues("leaderboard", column.key).length > 0;
     const condition = [activeSort ? state.catalogQuery?.direction : "", filtered ? t("filtered", "Filtered") : ""].filter(Boolean).join(" · ");
-    return `<li class="column-control-row${isChecked ? "" : " hidden-column"}" data-column-row="${esc(column.key)}">
+    return `<li class="column-control-row${isChecked ? "" : " hidden-column"}" data-column-row="${esc(column.key)}" data-column-match="${esc(metricSearchText(column.label, column.key))}" ${metricSearchText(column.label, column.key).includes((state.leaderboardColumnSearch || "").toLocaleLowerCase()) ? "" : "hidden"}>
       <span class="column-control-index">${String(index + 1).padStart(2, "0")}</span>
       <label><input type="checkbox" data-column-visible="${esc(column.key)}" ${isChecked ? "checked" : ""}><span>${esc(column.label)}</span></label>
-      <span class="column-control-state">${presence[column.key] ? "" : esc(t("no_data", "No data"))}${condition ? `<small>${esc(condition)}</small>` : ""}</span>
+      <span class="column-control-state">${column.unavailable ? esc(t("metric_unavailable", "Currently unavailable")) : presence[column.key] ? "" : esc(t("no_data", "No data"))}${condition ? `<small>${esc(condition)}</small>` : ""}</span>
       <span class="column-control-moves"><button type="button" data-column-move="${esc(column.key)}" data-column-direction="-1" aria-label="${esc(`${t("move_earlier", "Move earlier")}: ${column.label}`)}" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-column-move="${esc(column.key)}" data-column-direction="1" aria-label="${esc(`${t("move_later", "Move later")}: ${column.label}`)}" ${index === ordered.length - 1 ? "disabled" : ""}>↓</button></span>
     </li>`;
   }).join("");
@@ -207,6 +226,7 @@ function renderLeaderboardColumnControls(rows = leaderboardRows()) {
     <summary class="action-button column-control-button">${esc(t("columns", "Columns"))} ${visibleCount}/${ordered.length}</summary>
     <div class="column-control-panel">
       <div class="column-control-head"><strong>${esc(t("columns", "Columns"))}</strong><button type="button" data-column-reset>${esc(t("reset_auto", "Reset to auto"))}</button></div>
+      <label>${esc(t("search", "Search"))}<input type="search" data-column-search value="${esc(state.leaderboardColumnSearch || "")}"></label>
       <ol class="column-control-list">${rowsHtml}</ol>
       <div class="column-control-foot"><span aria-live="polite">${esc(`${visibleCount} / ${ordered.length}`)}</span><button type="button" class="action-button primary" data-column-apply>${esc(t("apply", "Apply"))}</button></div>
     </div>
@@ -226,6 +246,10 @@ function renderLeaderboardAndRestoreColumnFocus(findControl) {
 function bindLeaderboardColumnControls(target) {
   const details = target?.querySelector?.(".column-control");
   if (!details) return;
+  details.querySelector("[data-column-search]").addEventListener("input", event => {
+    state.leaderboardColumnSearch = event.target.value;
+    details.querySelectorAll("[data-column-match]").forEach(row => { row.hidden = !row.dataset.columnMatch.includes(event.target.value.toLocaleLowerCase()); });
+  });
   details.addEventListener("toggle", () => {
     if (details.open && !state.leaderboardColumnDraft) {
       state.leaderboardColumnDraft = cloneColumnLayout(leaderboardColumnLayout());
@@ -464,7 +488,7 @@ function renderTableHeader(tableId, column, controls, rows = [], filterOptionsRo
   if (column.select) return renderSelectionHeader(rows, column);
   const catalogSort = tableId === "leaderboard";
   const active = catalogSort
-    ? catalogSortKey(state.catalogQuery?.sort) === catalogSortKey(column.key)
+    ? catalogSortKey(metricSortKey(state, state.catalogQuery?.sort)) === catalogSortKey(metricSortKey(state, column.key))
     : controls.sort === column.key;
   const direction = catalogSort ? state.catalogQuery?.direction : controls.direction;
   const mark = active ? (direction === "desc" ? "&#9660;" : "&#9650;") : "&#8597;";

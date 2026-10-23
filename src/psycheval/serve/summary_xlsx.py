@@ -2,27 +2,22 @@ from __future__ import annotations
 
 import io
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 import xlsxwriter
 
 from psycheval.i18n import messages_for
+from psycheval.metric_contract import SAVED_VIEW_METRIC_IDS, metric_descriptor
 
 EXCEL_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 SUMMARY_STATISTICS = ("mean", "min", "q1", "p50", "q3", "p95", "max")
-SUMMARY_METRICS = (
-    ("score", "number", "Reward", "reward"),
-    ("duration_ms", "duration", "Active Duration", "duration"),
-    ("ttft_ms", "duration", "Avg TTFT", "avg_ttft"),
-    ("tps", "number", "Decode TPS", "decode_tps"),
-    ("tokens", "number", "Tokens", "tokens"),
-    ("cache_hit_rate", "percent", "Cache Hit", "cache_hit"),
-    ("turns", "number", "Turns", "turns"),
-    ("model_duration_ms", "duration", "Model call duration", "model_call_duration"),
-    ("total_tool_calls", "number", "Tool Calls", "tool_calls"),
-    ("tool_success_rate", "percent", "Tool Success Rate", "tool_success_rate"),
-)
+METRIC_NUMBER_FORMATS = {
+    "number": "#,##0.00",
+    "duration": "[h]:mm:ss.000",
+    "percent": "0.00%",
+    "currency": "$#,##0.00",
+}
 _ILLEGAL_SHEET_CHARACTERS = re.compile(r"[\[\]:*?/\\]")
 
 
@@ -34,6 +29,11 @@ class SummaryWorksheet:
     groups: Sequence[Mapping[str, Any]]
     statistic: str = "mean"
     metadata: Sequence[tuple[str, str | int]] = ()
+    metric_descriptions: Sequence[Mapping[str, Any]] = field(
+        default_factory=lambda: [
+            metric_descriptor(key) for key in SAVED_VIEW_METRIC_IDS
+        ]
+    )
 
 
 def summary_workbook(
@@ -191,26 +191,17 @@ def _write_summary_sheet(
     if not rows:
         return
     statistic_column = 3 + SUMMARY_STATISTICS.index(sheet.statistic)
-    chart_positions = (
-        (1, 11),
-        (1, 20),
-        (17, 11),
-        (17, 20),
-        (33, 11),
-        (33, 20),
-        (49, 11),
-        (49, 20),
-        (65, 11),
-        (65, 20),
-    )
+    chart_positions = [
+        (1 + (index // 2) * 16, 11 + (index % 2) * 9)
+        for index in range(len(sheet.metric_descriptions))
+    ]
     visible_metrics = tuple(
-        metric for metric in SUMMARY_METRICS if metric[0] in metric_ranges
+        metric
+        for metric in _metric_tuples(sheet, messages)
+        if metric[0] in metric_ranges
     )
-    metric_labels = {
-        key: _metric_label(key, fallback, message_key, messages)
-        for key, _kind, fallback, message_key in visible_metrics
-    }
-    for (metric_key, _metric_type, _fallback, _message_key), position in zip(
+    metric_labels = {key: label for key, _kind, label in visible_metrics}
+    for (metric_key, _metric_type, _label), position in zip(
         visible_metrics,
         chart_positions,
     ):
@@ -280,7 +271,7 @@ def _summary_rows(
         return rows, ranges
     visible_metrics = tuple(
         metric
-        for metric in SUMMARY_METRICS
+        for metric in _metric_tuples(sheet, messages)
         if any(
             any(
                 item.get("key") == metric[0] and int(item.get("count") or 0) > 0
@@ -289,7 +280,7 @@ def _summary_rows(
             for group in sheet.groups
         )
     )
-    for metric_key, metric_type, fallback, message_key in visible_metrics:
+    for metric_key, metric_type, label in visible_metrics:
         first = len(rows)
         for group in sheet.groups:
             metric = next(
@@ -303,7 +294,7 @@ def _summary_rows(
             distribution = metric.get("distribution") or {}
             rows.append(
                 (
-                    _metric_label(metric_key, fallback, message_key, messages),
+                    label,
                     (
                         messages.get("summary_overall", "Overall")
                         if (
@@ -327,13 +318,23 @@ def _summary_rows(
     return rows, ranges
 
 
-def _metric_label(
-    _key: str,
-    fallback: str,
-    message_key: str,
-    messages: Mapping[str, str],
-) -> str:
-    return messages.get(message_key, fallback)
+def _metric_tuples(
+    sheet: SummaryWorksheet, messages: Mapping[str, str]
+) -> list[tuple[str, str, str]]:
+    return [
+        (
+            str(item["key"]),
+            str(item["type"]),
+            metric_heading(item, messages),
+        )
+        for item in sheet.metric_descriptions
+    ]
+
+
+def metric_heading(definition: Mapping[str, Any], messages: Mapping[str, str]) -> str:
+    label = messages.get(definition.get("message_key"), definition["label"])
+    unit = definition.get("unit")
+    return label + (f" ({unit})" if unit and unit not in {"ms", "ratio", "USD"} else "")
 
 
 def _write_statistic_cell(
@@ -387,15 +388,10 @@ def _workbook_formats(workbook: xlsxwriter.Workbook) -> dict[str, Any]:
         "integer": workbook.add_format(
             {"num_format": "#,##0", "font_color": "#322B20"}
         ),
-        "number": workbook.add_format(
-            {"num_format": "#,##0.00", "font_color": "#322B20"}
-        ),
-        "duration": workbook.add_format(
-            {"num_format": "[h]:mm:ss.000", "font_color": "#322B20"}
-        ),
-        "percent": workbook.add_format(
-            {"num_format": "0.00%", "font_color": "#322B20"}
-        ),
+        **{
+            key: workbook.add_format({"num_format": value, "font_color": "#322B20"})
+            for key, value in METRIC_NUMBER_FORMATS.items()
+        },
         "empty": workbook.add_format(
             {"italic": True, "font_color": "#766D60", "align": "center"}
         ),

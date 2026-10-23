@@ -68,6 +68,25 @@ Task files. See [Judge inspection and runs](../../reference/judge-runs.md)
 for input, lifetime and permission semantics. CLI runs print results directly;
 Ctrl+C cancels. Only explicit exports write files.
 
+### Show custom metrics
+
+Publish numeric Trial measurements in ATIF `final_metrics.extra`, or scores in
+the verifier's `reward.json` (Harbor records these in the Trial result). For
+example, `{"energy_wh": 2.5}` becomes `atif.extra:energy_wh`. In `peval.toml`:
+
+```toml
+[metrics."atif.extra:energy_wh"]
+label = "Energy"
+unit = "Wh"
+direction = "lower"
+```
+
+After reloading configuration and rescanning, use **Columns** on the leaderboard
+or **Metrics** on Summary to search and enable it. Summary starts with the original ten
+metrics; its selection also controls exports. Neutral metrics work in tables
+and bars; a direction admits them to radar. Configuration is optional. See
+[metric descriptions](../../reference/workspace.md#metric-descriptions).
+
 ### Other workspace settings
 
 One file may configure both the CLI and Harbor host execution:

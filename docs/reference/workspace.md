@@ -123,6 +123,30 @@ mutations and do not modify evaluation evidence.
 Configuration controls accept interaction after their event handlers are bound.
 Copilot's Connect button stays disabled until the Agent catalog is available.
 
+### Metric descriptions
+
+Optional `[metrics."<ID>"]` entries describe values without changing them. IDs
+and discovery belong to the [metric contract](state-and-data.md#numeric-metrics).
+At most 128 entries are accepted. Each supports `label`, `unit`, and `direction`
+(`higher`, `lower`, `neutral`). Built-in labels and directions may be overridden;
+their units cannot be reinterpreted. Custom metrics default to ordinary numbers
+and neutral direction. `ms`, `ratio`, and `USD` select duration, percentage and
+currency formatting; other units are literal suffixes. No values are converted.
+Invalid IDs, unknown built-in IDs, invalid fields and incompatible built-in units
+fail validation. Valid custom IDs not observed yet remain pending with a diagnostic.
+
+```toml
+[metrics."atif.extra:energy_wh"]
+label = "Energy"
+unit = "Wh"
+direction = "lower"
+
+[metrics."reward:llm_score"]
+label = "LLM Judge"
+unit = "ratio"
+direction = "higher"
+```
+
 ### Display timezone
 
 The optional top-level `timezone` in `peval.toml` accepts an IANA timezone name

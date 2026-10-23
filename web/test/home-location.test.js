@@ -22,7 +22,7 @@ test("clearing query conditions preserves summary presentation, including noncan
   const location = locationCodec.decodeWorkspaceLocation("home", new URL("http://localhost"));
   restoreHomeLocation(location);
   state.leaderboardSummaryChartType = "radar";
-  state.leaderboardSummaryRadarMetrics = ["tool_success_rate", "tps", "score", "duration_ms", "cache_hit_rate", "ttft_ms"];
+  state.leaderboardSummaryMetrics = ["tool_success_rate", "tps", "score", "duration_ms", "cache_hit_rate", "ttft_ms"];
   state.leaderboardSummaryRadarGroups = ["chosen-model"];
   state.leaderboardSummaryGroupBy = "model";
   state.leaderboardSummaryStatistic = "p95";
@@ -32,7 +32,7 @@ test("clearing query conditions preserves summary presentation, including noncan
   state.search.query = "filtered";
   tableControls("leaderboard").filters.model = ["chosen-model"];
   assert.equal(catalog.leaderboardConditionsAreDefault(), false);
-  const presentation = { chart: state.leaderboardSummaryChartType, metrics: [...state.leaderboardSummaryRadarMetrics], groups: [...state.leaderboardSummaryRadarGroups], groupBy: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table: state.leaderboardSummaryTableOpen };
+  const presentation = { chart: state.leaderboardSummaryChartType, metrics: [...state.leaderboardSummaryMetrics], groups: [...state.leaderboardSummaryRadarGroups], groupBy: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table: state.leaderboardSummaryTableOpen };
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async () => response({ generation: 1, items: [], total: 0, page: 1, page_size: 100, facets: {} });
   state.workspaceViewsLoaded = true;
@@ -41,7 +41,7 @@ test("clearing query conditions preserves summary presentation, including noncan
     assert.equal(state.catalogQuery.search, "");
     assert.deepEqual(tableControls("leaderboard").filters.model, []);
     assert.equal(catalog.leaderboardConditionsAreDefault(), true);
-    assert.deepEqual({ chart: state.leaderboardSummaryChartType, metrics: state.leaderboardSummaryRadarMetrics, groups: state.leaderboardSummaryRadarGroups, groupBy: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table: state.leaderboardSummaryTableOpen }, presentation);
+    assert.deepEqual({ chart: state.leaderboardSummaryChartType, metrics: state.leaderboardSummaryMetrics, groups: state.leaderboardSummaryRadarGroups, groupBy: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table: state.leaderboardSummaryTableOpen }, presentation);
   } finally { globalThis.fetch = previousFetch; restoreHomeLocation(location); }
 });
 

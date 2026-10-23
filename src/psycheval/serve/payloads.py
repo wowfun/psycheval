@@ -12,6 +12,7 @@ from urllib.parse import unquote
 
 from psycheval.adapters import adapter_for, available_adapter_ids, normalize_adapter_id
 from psycheval.inputs import infer_adapter_from_path, validate_selected_adapter
+from psycheval.metric_contract import selected_metric_ids
 from psycheval.serve.constants import (
     WINDOWS_DRIVE_MOUNT_ROOT,
     WINDOWS_DRIVE_PATH_RE,
@@ -38,6 +39,7 @@ SUMMARY_STATISTIC_VALUES = frozenset({"mean", "min", "q1", "p50", "q3", "p95", "
 @dataclass(frozen=True)
 class SummaryExportPayload:
     scope: str
+    metrics: tuple[str, ...] = ()
     query: CatalogQuery | None = None
     query_views: tuple[str, ...] = ()
     views: tuple[str, ...] = ()
@@ -254,11 +256,11 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
         raise HttpError(400, "summary must be an object")
     scope = value.get("scope")
     if scope == "leaderboard":
-        expected = {"scope", "query", "group_by", "statistic"}
+        expected = {"scope", "query", "group_by", "statistic", "metrics"}
         if set(value) != expected:
             raise HttpError(
                 400,
-                "leaderboard summary fields must be scope, query, group_by, and statistic",
+                "leaderboard summary fields must be scope, query, group_by, statistic, and metrics",
             )
         group_by = value.get("group_by")
         statistic = value.get("statistic")
@@ -271,12 +273,17 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
         query, query_views, browser_views, inline_views = (
             _strict_catalog_summary_query_payload(value.get("query"))
         )
+        try:
+            metrics = tuple(selected_metric_ids(value.get("metrics")))
+        except ValueError as exc:
+            raise HttpError(400, str(exc)) from exc
         return SummaryExportPayload(
             scope=scope,
             query=query,
             query_views=query_views,
             group_by=group_by,
             statistic=statistic,
+            metrics=metrics,
             browser_views=browser_views,
             inline_views=inline_views,
         )

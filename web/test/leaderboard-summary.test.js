@@ -71,7 +71,7 @@ function resetSummaryState() {
   runtime.state.leaderboardSummaryStatistic = SUMMARY_DEFAULTS.statistic;
   runtime.state.leaderboardSummaryChartType = SUMMARY_DEFAULTS.chart_type;
   runtime.state.leaderboardSummaryRadarGroups = SUMMARY_DEFAULTS.radar_groups;
-  runtime.state.leaderboardSummaryRadarMetrics = [...SUMMARY_DEFAULTS.radar_metrics];
+  runtime.state.leaderboardSummaryMetrics = null;
   runtime.state.leaderboardSummaryRadarSearch = "";
   runtime.state.leaderboardSummaryTableOpen = SUMMARY_DEFAULTS.table_open;
   runtime.state.leaderboardSummary = null;
@@ -83,6 +83,28 @@ function resetSummaryState() {
   runtime.state.leaderboardSummaryRequestPromise = null;
   runtime.state.leaderboardSummaryCache.clear();
 }
+
+test("descriptor changes refresh cached statistics without a new summary request", async () => {
+  resetSummaryState();
+  const previousFetch = globalThis.fetch;
+  const first = { key: "atif.extra:energy", label: "Old", unit: "Wh", direction: "neutral" };
+  runtime.state.catalogPage.metric_descriptions = [first];
+  runtime.state.catalogPage.metric_revision = "one";
+  globalThis.fetch = async () => response({ ...envelope(7, 125), metric_descriptions: [first], metric_revision: "one" });
+  try {
+    await catalog.loadLeaderboardSummary();
+    const statistics = runtime.state.leaderboardSummary.summary;
+    runtime.state.catalogPage.metric_descriptions = [{ ...first, label: "New", direction: "lower" }];
+    runtime.state.catalogPage.metric_revision = "two";
+    runtime.state.leaderboardSummaryMetrics = [first.key];
+    globalThis.fetch = () => { throw new Error("must reuse numeric cache"); };
+    await catalog.loadLeaderboardSummary();
+    assert.equal(runtime.state.leaderboardSummary.summary, statistics);
+    assert.equal(runtime.state.leaderboardSummary.metric_descriptions[0].label, "New");
+    assert.equal(runtime.state.leaderboardSummary.metric_revision, "two");
+    assert.equal([...runtime.state.leaderboardSummaryCache.values()][0].response.metric_descriptions, undefined);
+  } finally { globalThis.fetch = previousFetch; resetSummaryState(); }
+});
 
 test("detailed XLSX exports normalize table sort keys and preserve the complete filter scope", async () => {
   resetSummaryState();
@@ -460,7 +482,7 @@ test("radar controls enforce limits, preserve search and missing axes, and do no
     assert.equal(target.querySelectorAll("[data-radar-group]:checked").length, 5);
     assert.equal(target.querySelectorAll("[data-radar-group]:disabled").length, 2);
     assert.match(target.textContent, /No data:.*TTFT/);
-    assert.equal(target.querySelectorAll("[data-radar-metric]:checked").length, 6);
+    assert.equal(target.querySelectorAll("[data-metric-id]:checked").length, 10);
     const context = radarUi.radarContext(runtime.state.leaderboardSummary.summary.groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
     const option = radarUi.radarOption(context, 600, 440);
     assert.ok(option.series.every(series => series.lineStyle.type === "solid"));
@@ -474,10 +496,11 @@ test("radar controls enforce limits, preserve search and missing axes, and do no
     assert.equal(target.querySelector("[data-radar-search]").value, "model-1");
     assert.equal(target.querySelectorAll("[data-radar-group-row]:not([hidden])").length, 1);
     assert.equal(target.querySelectorAll("[data-radar-group]:checked").length, 4);
-    for (const key of ["cache_hit_rate", "tool_success_rate", "ttft_ms"]) target.querySelector(`[data-radar-metric=${key}]`).click();
+    for (const key of ["cache_hit_rate", "tool_success_rate", "ttft_ms"]) target.querySelector(`[data-metric-id=${key}]`).click();
+    target.querySelector("[data-metric-apply]").click();
     assert.equal(target.querySelector("[data-radar-search]").value, "model-1");
-    assert.equal(target.querySelectorAll("[data-radar-metric]:checked").length, 3);
-    assert.equal(target.querySelectorAll("[data-radar-metric]:disabled").length, 3);
+    assert.equal(target.querySelectorAll("[data-metric-id]:checked").length, 7);
+    assert.equal(target.querySelectorAll("[data-metric-id]:disabled").length, 0);
     target.querySelector("[data-summary-chart-type=bar]").click();
     assert.equal(target.querySelector("[data-summary-radar]"), null);
     target.querySelector("[data-summary-chart-type=radar]").click();
@@ -503,7 +526,7 @@ test("radar presentation changes preserve the open table and search at 1000 grou
     const table = target.querySelector(".leaderboard-summary-table");
     assert.equal(table.tBodies[0].rows.length, 1000);
     const search = target.querySelector("[data-radar-search]"); search.value = "group-999"; search.dispatchEvent(new Event("input"));
-    for (const selector of ["[data-radar-group='999']", "[data-radar-metric=model_duration_ms]", "[data-summary-statistic=p95]"]) {
+    for (const selector of ["[data-radar-group='999']", "[data-summary-statistic=p95]"]) {
       target.querySelector(selector).click();
       assert.equal(target.querySelector(".leaderboard-summary-table"), table);
       assert.equal(target.querySelector("[data-radar-search]").value, "group-999");
@@ -624,4 +647,31 @@ test("a measured polygon collapsed to the origin is identified separately from w
   assert.ok(context.series[0].points.every(point => point.coordinate === 0));
   groups[0].metrics = [];
   assert.doesNotMatch(radarUi.renderLeaderboardRadar(radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue)), /Measured relative values are all 0/);
+});
+
+test("long Unicode catalog conditions use a POST body without changing the query", async () => {
+  resetSummaryState();
+  const previousFetch = globalThis.fetch;
+  const previousLoaded = runtime.state.workspaceViewsLoaded;
+  runtime.state.workspaceViewsLoaded = true;
+  runtime.state.catalogLoading = false;
+  runtime.state.catalogQuery.search = "中".repeat(15000);
+  const originalQuery = structuredClone(runtime.state.catalogQuery);
+  const requests = [];
+  globalThis.fetch = async (path, options) => {
+    requests.push({ path, options });
+    return response({ generation: 7, total: 0, items: [], facets: {} });
+  };
+  try {
+    await catalog.loadCatalogPage({}, { skipDetail: true, throwOnError: true });
+    const request = requests.find(item => item.path === "/api/catalog-queries");
+    assert.ok(request);
+    assert.equal(request.options.method, "POST");
+    assert.equal(JSON.parse(request.options.body).search, originalQuery.search);
+    assert.deepEqual(runtime.state.catalogQuery, originalQuery);
+    assert.equal(requests.some(item => item.path.startsWith("/api/catalog?")), false);
+  } finally {
+    globalThis.fetch = previousFetch;
+    runtime.state.workspaceViewsLoaded = previousLoaded;
+  }
 });

@@ -4,7 +4,7 @@ import { captureAppliedViewSnapshots } from "./workspace-views.js";
 import { cancelHomeLocationRequests, catalogSortKey } from "./serve-catalog.js";
 import { cancelWorkspaceReportRequest, closeWorkspaceReportReader } from "./workspace-reports.js";
 import { closeDetailSidebar } from "./detail-sidebar.js";
-import { HOME_QUERY } from "../app/workspace-location.js";
+import { HOME_QUERY, encodeWorkspaceLocation } from "../app/workspace-location.js";
 import { tableSortKey } from "../app/catalog-sort.js";
 
 const FILTER_KEYS = { source_category: "categories", source_tags: "tags", agent: "agents", model: "models", task_name: "tasks", job_name: "jobs", model_provider: "providers", dataset_id: "datasets", status: "results" };
@@ -13,7 +13,7 @@ function captureHomeLocation() {
   return { object, state: {
     query: { ...Object.fromEntries(Object.keys(HOME_QUERY).map(key => [key, state.catalogQuery[key]])), sort: catalogSortKey(state.catalogQuery.sort) },
     views: captureAppliedViewSnapshots(),
-    summary: { group_by: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table_open: state.leaderboardSummaryTableOpen, chart_type: state.leaderboardSummaryChartType, radar_metrics: [...state.leaderboardSummaryRadarMetrics], radar_groups: state.leaderboardSummaryRadarGroups === null ? null : [...state.leaderboardSummaryRadarGroups] },
+    summary: { group_by: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table_open: state.leaderboardSummaryTableOpen, chart_type: state.leaderboardSummaryChartType, metrics: state.leaderboardSummaryMetrics === null ? null : [...state.leaderboardSummaryMetrics], radar_groups: state.leaderboardSummaryRadarGroups === null ? null : [...state.leaderboardSummaryRadarGroups] },
   } };
 }
 function restoreHomeLocation(location) {
@@ -33,7 +33,7 @@ function restoreHomeLocation(location) {
   state.leaderboardSummaryStatistic = location.state.summary.statistic;
   state.leaderboardSummaryTableOpen = location.state.summary.table_open;
   state.leaderboardSummaryChartType = location.state.summary.chart_type;
-  state.leaderboardSummaryRadarMetrics = [...location.state.summary.radar_metrics];
+  state.leaderboardSummaryMetrics = location.state.summary.metrics === null ? null : [...location.state.summary.metrics];
   state.leaderboardSummaryRadarGroups = location.state.summary.radar_groups === null ? null : [...location.state.summary.radar_groups];
   const controls = tableControls("leaderboard");
   controls.filters = Object.fromEntries(Object.entries(FILTER_KEYS).map(([key, field]) => [key, [...query[field]]]));
@@ -43,4 +43,9 @@ function restoreHomeLocation(location) {
   state.homeLocationTarget = { ...location.object };
   if (state.view) render({ ...state.view, trajectory: [], trajectory_meta: [], annotations: { notes: [], analysis: [], report_notes: [] } });
 }
-export { captureHomeLocation, restoreHomeLocation };
+function preflightHomeChange(patch) {
+  const location = captureHomeLocation();
+  for (const key of ["query", "summary"]) if (patch[key]) location.state[key] = { ...location.state[key], ...patch[key] };
+  return encodeWorkspaceLocation("home", location, window.location.origin);
+}
+export { captureHomeLocation, restoreHomeLocation, preflightHomeChange };

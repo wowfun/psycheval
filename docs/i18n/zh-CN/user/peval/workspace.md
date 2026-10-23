@@ -61,6 +61,24 @@ peval judge run -r .local/evaluation --source-ref harbor/nightly/job/trial --rub
 输入、生命周期和权限语义见 [Judge inspection and runs](../../../../reference/judge-runs.md)。
 CLI 直接输出结果，Ctrl+C 取消；只有显式导出才写文件。
 
+### 显示自定义指标
+
+将 Trial 数值指标写入 ATIF 的 `final_metrics.extra`，或将分数写入 verifier 的
+`reward.json`（Harbor 会将其收录到 Trial 结果）。例如 `{"energy_wh": 2.5}`
+对应 `atif.extra:energy_wh`。在 `peval.toml` 中可补充：
+
+```toml
+[metrics."atif.extra:energy_wh"]
+label = "Energy"
+unit = "Wh"
+direction = "lower"
+```
+
+重新加载配置并扫描后，在 leaderboard 的“列”或 Summary 的“指标”控件中搜索并
+启用。Summary 默认选择原有十项，选择同时控制导出。中性指标可用于表格和条形图，
+声明方向后可用于雷达图。配置为可选项，详见
+[指标说明](../../../../reference/workspace.md#metric-descriptions)。
+
 ### 其他工作区配置
 
 同一份文件可以配置 Psycheval CLI 与 Harbor host execution：

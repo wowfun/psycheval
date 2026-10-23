@@ -26,6 +26,7 @@ test("the static entry graph contains only the Workspace kernel", () => {
   assert.deepEqual([...staticGraph("main.js")].sort(), [
     "app/browser-platform.js",
     "app/catalog-sort.js",
+    "app/metric-contract.js",
     "app/render-options.js",
     "app/workspace-app.js",
     "app/workspace-location.js",

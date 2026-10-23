@@ -24,6 +24,12 @@ from psycheval.harbor.identifiers import HARBOR_ID_RE, validate_harbor_id
 from psycheval.i18n import normalize_locale
 from psycheval.jobs.configuration import HarnessId, JobsDocument
 from psycheval.judge_runs.configuration import JudgeProfiles
+from psycheval.metric_contract import (
+    BUILTIN_IDS,
+    METRIC_LIMIT,
+    metric_descriptor,
+    validate_metric_id,
+)
 from psycheval.timezones import validate_timezone
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -153,6 +159,28 @@ class AcpAgent(_FrozenConfigModel):
         return stripped
 
 
+class MetricDescription(_FrozenConfigModel):
+    label: str | None = Field(default=None, min_length=1, max_length=160)
+    unit: str | None = Field(default=None, max_length=32)
+    direction: Literal["higher", "lower", "neutral"] | None = None
+
+
+def validate_metric_config(
+    value: dict[str, MetricDescription],
+) -> dict[str, MetricDescription]:
+    if len(value) > METRIC_LIMIT:
+        raise ValueError("at most 128 metric descriptions are supported")
+    for key, description in value.items():
+        validate_metric_id(key)
+        if (
+            key in BUILTIN_IDS
+            and description.unit is not None
+            and description.unit != metric_descriptor(key)["unit"]
+        ):
+            raise ValueError(f"built-in metric unit cannot be changed: {key}")
+    return value
+
+
 class ToolConfig(_FrozenConfigModel):
     adapter: str = "psychevo"
     locale: str = "en"
@@ -179,6 +207,8 @@ class ToolConfig(_FrozenConfigModel):
     harbor_mounts: tuple[HarborMount, ...] = ()
     acp_agents: tuple[AcpAgent, ...] = ()
     judge: JudgeProfiles = Field(default_factory=JudgeProfiles)
+    metrics: dict[str, MetricDescription] = Field(default_factory=dict)
+    _metrics_valid = field_validator("metrics")(validate_metric_config)
 
     @property
     def adapter_options(self) -> dict[str, Any]:
@@ -323,6 +353,8 @@ class _WorkspaceDocument(_RawConfigModel):
     harbor: _HarborDocument | None = None
     jobs: JobsDocument = Field(default_factory=JobsDocument)
     judge: JudgeProfiles = Field(default_factory=JudgeProfiles)
+    metrics: dict[str, MetricDescription] = Field(default_factory=dict)
+    _metrics_valid = field_validator("metrics")(validate_metric_config)
     harnesses: dict[HarnessId, dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -403,6 +435,8 @@ def apply_toml_config(
     base_dir: Path | None = None,
 ) -> ToolConfig:
     _validate_workspace_document(data)
+    if "metrics" in data:
+        config = config.validated_update(metrics=data["metrics"])
     if "judge" in data:
         config = config.validated_update(
             judge=JudgeProfiles.model_validate(data["judge"])

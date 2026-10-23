@@ -1,20 +1,23 @@
 // @ts-check
 import { RADAR_GROUP_LIMIT } from "../app/workspace-view-contract.js";
 
-const RADAR_DIRECTIONS = Object.freeze({
-  score: 1, duration_ms: -1, ttft_ms: -1, tps: 1,
-  cache_hit_rate: 1, model_duration_ms: -1, tool_success_rate: 1,
-});
 const measured = value => typeof value === "number" && Number.isFinite(value) ? value : null;
 
-/** @param {any[]} groups @param {string[]} keys @param {(row: any) => any} statistic */
-function radarAxes(groups, keys, statistic) {
-  return Object.keys(RADAR_DIRECTIONS).filter(key => keys.includes(key)).map(key => {
+function relativePosition(value, minimum, maximum) {
+  if (maximum === minimum) return 50;
+  const scale = Math.max(Math.abs(minimum), Math.abs(maximum));
+  return 100 * ((value / scale - minimum / scale) / (maximum / scale - minimum / scale));
+}
+
+/** @param {any[]} groups @param {any[]} definitions @param {(row: any) => any} statistic */
+function radarAxes(groups, definitions, statistic) {
+  return definitions.filter(item => ["higher", "lower"].includes(item.direction)).map(definition => {
+    const key = definition.key;
     const values = groups.flatMap(group => {
       const value = radarValue(group, key, statistic).value;
       return value === null ? [] : [value];
     });
-    return { key, direction: RADAR_DIRECTIONS[key], min: values.length ? Math.min(...values) : null, max: values.length ? Math.max(...values) : null };
+    return { key, direction: definition.direction === "higher" ? 1 : -1, min: values.length ? Math.min(...values) : null, max: values.length ? Math.max(...values) : null };
   });
 }
 
@@ -31,7 +34,7 @@ function radarPoints(group, axes, statistic) {
     const metric = radarValue(group, axis.key, statistic);
     let normalized = null;
     if (metric.value !== null && axis.min !== null && axis.max !== null) {
-      normalized = axis.max === axis.min ? 50 : 100 * (metric.value - axis.min) / (axis.max - axis.min);
+      normalized = relativePosition(metric.value, axis.min, axis.max);
       if (axis.direction < 0) normalized = 100 - normalized;
     }
     return { ...metric, key: axis.key, normalized, coordinate: normalized ?? 0, equal: axis.min !== null && axis.min === axis.max };
@@ -72,4 +75,4 @@ function radarColors(keys) {
   });
 }
 
-export { RADAR_DIRECTIONS, radarAxes, radarPoints, radarSelection, radarColor, radarColors };
+export { radarAxes, radarPoints, radarSelection, radarColor, radarColors, relativePosition };

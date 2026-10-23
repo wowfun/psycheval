@@ -1,3 +1,5 @@
+import { metricDefinitions, selectedMetricIds } from "./metric-presentation.js";
+import { preflightHomeChange } from "./home-location.js";
 import { beginFeedback } from "./action-feedback.js";
 import { watchOperation } from "./operation-feedback.js";
 import { adminMode, esc, hasMetricValue, homeDetail, isAnalysisArtifactPath, listValue, lower, normalizeServeSourceMode, render, renderComparison, renderComparisonPanels, selectedIndex, selectedKey, state, synthesizedReportRow, t } from "./runtime.js";
@@ -214,8 +216,10 @@ function leaderboardConditionsAreDefault() {
 }
 
 function requestCatalogSort(key) {
-  const query = state.catalogQuery;
-  const sort = catalogSortKey(key);
+  const previous = state.catalogQuery;
+  const query = { ...previous };
+  const definition = metricDefinitions(state).find(item => item.column_key === key || item.key === key || `metric:${item.key}` === key);
+  const sort = definition ? `metric:${definition.key}` : catalogSortKey(key);
   if (catalogSortKey(query.sort) !== sort) {
     query.sort = sort;
     query.direction = "asc";
@@ -225,6 +229,9 @@ function requestCatalogSort(key) {
     query.sort = "last_turn_end";
     query.direction = "desc";
   }
+  try { preflightHomeChange({ query: { sort: query.sort, direction: query.direction, page: 1 } }); }
+  catch { setServeStatus(t("metric_link_limit", "The link is too large. Reduce selected metrics or view conditions."), true); return; }
+  state.catalogQuery = query;
   tableControls("leaderboard").sort = tableSortKey(query.sort);
   tableControls("leaderboard").direction = query.direction;
   loadCatalogPage({ page: 1 });
@@ -338,7 +345,8 @@ const LEADERBOARD_SUMMARY_CACHE_ENTRY_LIMIT = 50;
 const LEADERBOARD_SUMMARY_CACHE_BYTE_LIMIT = 8 * 1024 * 1024;
 
 function cacheLeaderboardSummary(key, response) {
-  const text = JSON.stringify(response);
+  const { metric_descriptions, metric_revision, metric_diagnostics, ...numericResponse } = response;
+  const text = JSON.stringify(numericResponse);
   const byteSize = typeof TextEncoder === "function"
     ? new TextEncoder().encode(text).byteLength
     : text.length * 2;
@@ -355,7 +363,7 @@ function cacheLeaderboardSummary(key, response) {
     cachedBytes -= Number(oldest?.byteSize || 0);
     state.leaderboardSummaryCache.delete(oldestKey);
   }
-  state.leaderboardSummaryCache.set(key, { response, byteSize });
+  state.leaderboardSummaryCache.set(key, { response: numericResponse, byteSize });
 }
 
 function prepareLeaderboardSummaryScope(payload = leaderboardSummaryQueryPayload()) {
@@ -384,10 +392,10 @@ async function loadLeaderboardSummary() {
   if (cached) {
     state.leaderboardSummaryCache.delete(key);
     state.leaderboardSummaryCache.set(key, cached);
-    state.leaderboardSummary = cached.response;
+    state.leaderboardSummary = { ...cached.response, metric_descriptions: state.catalogPage.metric_descriptions, metric_revision: state.catalogPage.metric_revision, metric_diagnostics: state.catalogPage.metric_diagnostics };
     state.leaderboardSummaryError = null;
     state.leaderboardSummaryLoading = false;
-    return cached.response;
+    return state.leaderboardSummary;
   }
   if (
     state.leaderboardSummaryLoading
@@ -476,7 +484,8 @@ async function loadCatalogPage(changes = {}, options = {}) {
     const applied = workspaceViewQueryPayload();
     state.catalogQuery.views = applied.views;
     if (prepareLeaderboardSummaryScope()) renderCatalogComparison();
-    const page = applied.browser_views.length || listValue(applied.inline_views).length
+    const queryString = catalogQueryString(options.surface || "leaderboard");
+    const page = applied.browser_views.length || listValue(applied.inline_views).length || queryString.length > 7000
       ? await serveApi("/api/catalog-queries", {
         method: "POST",
         signal: controller.signal,
@@ -499,9 +508,15 @@ async function loadCatalogPage(changes = {}, options = {}) {
           ...applied,
         },
       })
-      : await serveApi(`/api/catalog?${catalogQueryString(options.surface || "leaderboard")}`, { signal: controller.signal });
+      : await serveApi(`/api/catalog?${queryString}`, { signal: controller.signal });
     if (isStale()) return;
     state.catalogPage = page;
+    if (page.effective_sort && page.effective_sort !== state.catalogQuery.sort) {
+      state.catalogQuery.sort = page.effective_sort; state.catalogQuery.direction = "desc";
+      tableControls("leaderboard").sort = tableSortKey(page.effective_sort);
+      workspaceLocationChanged("home");
+      beginFeedback("#leaderboard .leaderboard-action-row", { key: "home:sort", page: "home" }).error(t("metric_sort_unavailable", "The sorting metric is unavailable; restored the default sort."));
+    }
     state.serveSourceMode = normalizeServeSourceMode(state.catalogQuery.state);
     state.serveSources = listValue(page.items);
     state.catalogRows = listValue(page.items).filter(row => row?.readable !== false).map(normalizeCatalogRow);
@@ -827,7 +842,8 @@ function exportLeaderboardSummary() {
       scope: "leaderboard",
       query,
       group_by: state.leaderboardSummaryGroupBy,
-      statistic: state.leaderboardSummaryStatistic
+      statistic: state.leaderboardSummaryStatistic,
+      metrics: selectedMetricIds(state)
     }
   }, "peval-leaderboard-summary.xlsx");
 }

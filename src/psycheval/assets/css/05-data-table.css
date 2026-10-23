@@ -239,6 +239,7 @@ td.num,th.num {
 }
 .table-head-cell {
   display:grid;
+  grid-template-columns:minmax(0,1fr);
   gap:6px;
   align-items:start;
   position:relative;

@@ -50,7 +50,7 @@ test("history restores query before activation and preserves unsaved page DOM", 
   try {
     await app.start();
     document.querySelector("[data-report-draft]").checked = true;
-    await app.navigate("home", { search: "?source=outside-page", hash: "#view=" + btoa('{"v":1,"query":{"search":"old conditions"}}').replace(/=+$/, ""), restore: true });
+    await app.navigate("home", { search: "?source=outside-page", hash: "#view=" + btoa('{"v":2,"query":{"search":"old conditions"}}').replace(/=+$/, ""), restore: true });
     const shared = window.location.href;
     await app.navigate("reports");
     window.history.replaceState({}, "", shared); window.dispatchEvent(new window.PopStateEvent("popstate"));
