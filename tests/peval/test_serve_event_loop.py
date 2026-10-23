@@ -40,6 +40,30 @@ def test_serve_loop_supports_subprocess_pipes() -> None:
         loop.close()
 
 
+def test_serve_loop_preserves_outbound_connections() -> None:
+    async def exercise():
+        async def echo(reader, writer):
+            writer.write(await reader.readexactly(4))
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        async with await asyncio.start_server(echo, "127.0.0.1", 0) as server:
+            reader, writer = await asyncio.open_connection(
+                *server.sockets[0].getsockname()
+            )
+            try:
+                writer.write(b"ping")
+                await writer.drain()
+                assert await asyncio.wait_for(reader.readexactly(4), 3) == b"ping"
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+    with asyncio.Runner(loop_factory=serve_loop) as runner:
+        runner.run(exercise())
+
+
 @pytest.mark.parametrize(
     "error",
     [

@@ -115,6 +115,9 @@ UI. `run_serve_command` owns listener selection, the single-process runtime, and
 shutdown through Uvicorn; the application borrows that runtime and does not own
 its lifecycle. The `/api` interface is not a public integration API and does not
 publish interactive API documentation or a generated client contract.
+Request execution uses the serve event loop; its Windows socket cleanup wrapper
+applies only to accepted server connections, leaving outbound model connections
+under asyncio ownership.
 Report HTTP routes own report lookup, management, and reader responses in
 `serve.reports`, borrowing the shared request readiness and workspace write
 guards. Report storage and publication remain with their domain owners.

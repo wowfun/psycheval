@@ -28,6 +28,12 @@ if sys.platform == "win32":
         def _make_socket_transport(
             self, sock, protocol, waiter=None, extra=None, server=None
         ):
+            if server is None:
+                # Outbound sockets already participate in Proactor connect IO.
+                # Replacing their identity invalidates that operation's socket.
+                return super()._make_socket_transport(
+                    sock, protocol, waiter, extra, server
+                )
             # Proactor closes and detaches the transport only after shutdown().
             # Adopt the socket without changing stdlib transports or subprocess pipes.
             wrapped = _ServeSocket(
