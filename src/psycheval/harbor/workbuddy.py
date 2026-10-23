@@ -90,7 +90,7 @@ def validate_workbuddy_runtime() -> dict[str, str]:
     except importlib.metadata.PackageNotFoundError as exc:
         raise WorkBuddyError(
             "workbuddy-bench 0.1.0 is required; install the reference runtime "
-            "without replacing Harbor 0.21.0"
+            "without replacing Harbor 0.24.0"
         ) from exc
     version = distribution.version
     if version != WORKBUDDY_VERSION:
