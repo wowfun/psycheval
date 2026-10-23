@@ -18,7 +18,7 @@ class PevalTyperCliTests(unittest.TestCase):
         root = get_command(app)
         self.assertEqual(
             set(root.commands),
-            {"init", "view", "export", "import", "publish", "serve"},
+            {"init", "view", "export", "import", "publish", "judge", "serve"},
         )
         root_options = {
             option
@@ -36,6 +36,10 @@ class PevalTyperCliTests(unittest.TestCase):
             set(root.commands["publish"].commands),
             {"evaluation-report"},
         )
+        self.assertEqual(
+            set(root.commands["judge"].commands),
+            {"inspect", "prompt", "preview", "run"},
+        )
         view_options = {
             option
             for parameter in view.commands["trajectory"].params
@@ -46,19 +50,24 @@ class PevalTyperCliTests(unittest.TestCase):
 
     def test_help_and_usage_errors_are_plain_text(self) -> None:
         runner = CliRunner()
-        for arguments in (
-            ["--help"],
-            ["view", "--help"],
-            ["view", "trajectory", "--help"],
-            ["view", "tr", "--help"],
-            ["view", "tr", "--unknown"],
+        for arguments, exit_code in (
+            (["--help"], 0),
+            (["view", "--help"], 0),
+            (["view", "trajectory", "--help"], 0),
+            (["view", "tr", "--help"], 0),
+            (["view", "tr", "--unknown"], 2),
+            (["judge", "--help"], 0),
+            (["judge", "inspect", "--help"], 0),
+            (["judge", "prompt", "--help"], 0),
+            (["judge", "preview", "--help"], 0),
+            (["judge", "run", "--help"], 0),
+            (["judge", "run", "--unknown"], 2),
         ):
             with self.subTest(arguments=arguments):
                 result = runner.invoke(app, arguments, color=True)
+                self.assertEqual(result.exit_code, exit_code, msg=result.output)
                 self.assertNotIn("\x1b[", result.output)
                 self.assertNotRegex(result.output, "[╭╰│]")
-        self.assertEqual(runner.invoke(app, ["--help"]).exit_code, 0)
-        self.assertEqual(runner.invoke(app, ["view", "tr", "--unknown"]).exit_code, 2)
 
         import_help = runner.invoke(app, ["import", "analysis", "--help"])
         self.assertEqual(import_help.exit_code, 0)
