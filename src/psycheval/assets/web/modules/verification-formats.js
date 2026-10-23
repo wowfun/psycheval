@@ -28,7 +28,8 @@ function verdictRow(value, index) {
   if (typeof name !== "string" || typeof status !== "string") return null;
   return { name, status, score: number(value.score) ? value.score : null,
     reason: typeof value.reason === "string" ? value.reason : "",
-    evidence: Array.isArray(value.evidence_ids) ? value.evidence_ids.filter(id => typeof id === "string") : [], key: index };
+    evidence: Array.isArray(value.evidence_ids) ? value.evidence_ids.filter(id => typeof id === "string") : [], key: index,
+    rubricId: value.judge_name === "llm_judge" && typeof value.metadata?.rubric?.id === "string" ? value.metadata.rubric.id : null };
 }
 
 function rewardDetails(data) {
@@ -100,7 +101,7 @@ function interpretVerificationFile(path, content, truncated = false) {
   } catch { return null; }
 }
 
-function renderVerificationDocument(model, onEvidence) {
+function renderVerificationDocument(model, onEvidence, judge = {}) {
   const root = document.createElement("div");
   root.className = "verification-document";
   const metrics = document.createElement("dl");
@@ -114,6 +115,17 @@ function renderVerificationDocument(model, onEvidence) {
   root.append(metrics);
   if (!model.rows.length) return root;
   const controls = document.createElement("div"); controls.className = "verification-filters";
+  const selectedRubrics = new Set();
+  let trySelected;
+  if (judge.onTry && model.rows.some(row => row.rubricId)) {
+    trySelected = document.createElement("button"); trySelected.className = "action-button";
+    trySelected.textContent = t("judge_try_selected", "Try selected"); trySelected.disabled = true;
+    trySelected.onclick = () => judge.onTry([...selectedRubrics]); controls.append(trySelected);
+  }
+  if (judge.onResume && model.rows.some(row => row.rubricId)) {
+    const resume = document.createElement("button"); resume.className = "action-button";
+    resume.textContent = t("judge_try_rubrics", "Try rubrics"); resume.onclick = () => judge.onResume(); controls.append(resume);
+  }
   const search = document.createElement("input"); search.type = "search";
   search.placeholder = t("verification_search_results", "Search results"); search.setAttribute("aria-label", search.placeholder);
   const status = document.createElement("select"); status.setAttribute("aria-label", t("test_status", "Test status"));
@@ -135,11 +147,27 @@ function renderVerificationDocument(model, onEvidence) {
     for (const row of filtered.slice(page * 50, (page + 1) * 50)) {
       const detail = document.createElement("details"); detail.className = "verification-verdict"; detail.dataset.status = row.status;
       const summary = document.createElement("summary");
-      const name = document.createElement("span"); name.textContent = row.name;
+      const name = document.createElement("span"); name.className = "verification-verdict-name";
+      const title = document.createElement("span"); title.textContent = row.name; name.append(title);
       const result = document.createElement("span"); result.className = "verification-verdict-result";
       result.textContent = [label(row.status), row.score !== null && row.score !== undefined ? literal(row.score) : null, row.duration ? `${row.duration}s` : null].filter(Boolean).join(" · ");
       summary.append(name, result); detail.append(summary);
       const reason = document.createElement("pre"); reason.textContent = row.reason || t("verification_no_reason", "No reason recorded"); detail.append(reason);
+      if (row.rubricId && judge.onPrompt) {
+        const actions = document.createElement("div"); actions.className = "judge-actions";
+        const prompt = document.createElement("button"); prompt.className = "action-button compact";
+        prompt.textContent = t("judge_actual_prompt", "Actual prompt"); prompt.onclick = () => judge.onPrompt(row.rubricId); actions.append(prompt);
+        if (judge.onTry) {
+          const checkbox = document.createElement("input"); checkbox.type = "checkbox";
+          checkbox.checked = selectedRubrics.has(row.rubricId); checkbox.setAttribute("aria-label", `${t("select", "Select")} ${row.rubricId}`);
+          checkbox.onclick = event => event.stopPropagation();
+          checkbox.onchange = () => { if (checkbox.checked) selectedRubrics.add(row.rubricId); else selectedRubrics.delete(row.rubricId); trySelected.disabled = selectedRubrics.size === 0; };
+          name.prepend(checkbox);
+          const run = document.createElement("button"); run.className = "action-button compact"; run.textContent = t("judge_try", "Try rubric");
+          run.onclick = () => judge.onTry([row.rubricId]); actions.append(run);
+        }
+        detail.append(actions);
+      }
       for (const id of row.evidence || []) {
         const button = document.createElement("button"); button.className = "action-button compact"; button.textContent = id;
         button.addEventListener("click", () => onEvidence?.(id)); detail.append(button);

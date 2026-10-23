@@ -93,6 +93,7 @@ function requestInvalidations(path, method, body) {
     const keys = new Set(Object.keys(body && typeof body === "object" ? body : {}));
     if (keys.has("datasets") || keys.has("mounts")) changes.add("dataset-registry");
     if (keys.has("acp_agents")) changes.add("assistant-config");
+    if (keys.has("judge")) changes.add("judge-config");
   }
   return changes;
 }

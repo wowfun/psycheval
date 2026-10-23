@@ -21,6 +21,7 @@ function createConfigPage(_context) {
       if (
         changes.has("dataset-registry") ||
         changes.has("assistant-config") ||
+        changes.has("judge-config") ||
         changes.has("prompt-assets")
       ) {
         const loaded = await refreshHarborConfig();

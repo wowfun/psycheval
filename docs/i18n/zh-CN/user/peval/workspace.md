@@ -19,6 +19,50 @@ peval serve -r .local/evaluation
 
 ## 统一配置
 
+### 查看与试跑 Judge Rubric
+
+在 Trial 的 **Verification** 面板中展开 Rubric，点击 **实际 Prompt**
+可查看已留存的请求、复制消息或下载快照，此操作不调用模型。
+点击 **试跑此项**（或勾选多项）可编辑草稿、选择模型预设、预览未发送的
+Prompt 并运行。面板直接展示原判定与本次判定及理由，并可展开实际消息。
+每个 Trial 只在页面内存中保留最近一次尝试。关闭弹窗、切换 Trial 或站内
+页面后仍可查看草稿和结果；刷新或关闭页面后清空。每个页面同时执行一次
+试跑，关闭面板不会中止运行；需要停止并丢弃本次结果时请使用 **取消**。
+多阶段 Trial 请在工作台中选择对应阶段的行。
+
+在 **配置 → Judge 配置** 中添加试跑配置，或编辑 `peval.toml`：
+
+```toml
+[judge]
+default_profile = "review"
+
+[judge.profiles.review]
+title = "Rubric review"
+base_url = "https://api.example.com/v1"
+model = "judge-model"
+api_key = "${JUDGE_API_KEY}"
+reasoning_effort = "high"
+```
+
+在启动 `peval` 的 shell 中设置所引用的环境变量。预览不需要密钥，
+执行时才需要。CLI 支持相同流程（来源引用和 Rubric ID 请替换为实际值）：
+
+```console
+peval judge inspect -r .local/evaluation --source-ref harbor/nightly/job/trial --export-config draft.yaml
+peval judge prompt -r .local/evaluation --source-ref harbor/nightly/job/trial --rubric fidelity
+peval judge preview -r .local/evaluation --source-ref harbor/nightly/job/trial --rubric fidelity --judge-config draft.yaml --profile review
+peval judge run -r .local/evaluation --source-ref harbor/nightly/job/trial --rubric fidelity --rubric completeness --judge-config draft.yaml --profile review
+```
+
+可使用 `-p PATH_TO_TRIAL` 代替 `--source-ref`；多阶段 Trial 需添加
+`--step NAME`。历史 Trial 缺少任务指令快照时，需要显式提供
+`--instruction instruction.md` 或 `--task TASK_DIRECTORY`。
+试跑支持通用 YAML Judge，并保留原分数与 Task 文件。
+输入、生命周期和权限语义见 [Judge inspection and runs](../../../../reference/judge-runs.md)。
+CLI 直接输出结果，Ctrl+C 取消；只有显式导出才写文件。
+
+### 其他工作区配置
+
 同一份文件可以配置 Psycheval CLI 与 Harbor host execution：
 
 ```toml

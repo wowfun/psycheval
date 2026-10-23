@@ -456,3 +456,27 @@
     border-bottom:0;
   }
 }
+.judge-dialog { width:min(1080px,100%); min-width:0; max-height:92vh; display:flex; flex-direction:column; padding:20px; }
+.judge-heading,.judge-message>header,.judge-actions,.judge-profile-row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.judge-heading { justify-content:space-between; }
+.judge-status { color:var(--muted); margin:10px 0; overflow-wrap:anywhere; }
+.judge-body { overflow:auto; min-height:0; padding:2px 4px 8px; }
+.judge-body pre { white-space:pre-wrap; overflow-wrap:anywhere; font:13px/1.6 var(--mono); margin:10px 0; padding:12px; background:var(--surface-2); border-radius:6px; }
+.judge-message,.judge-result { border:1px solid var(--rule); border-radius:var(--radius); padding:14px; margin:14px 0; }
+.judge-message>header { justify-content:space-between; }
+.judge-editor { display:grid; gap:14px; }
+.judge-editor label { display:grid; gap:6px; font-size:13px; }
+.judge-editor fieldset { min-width:0; display:grid; gap:12px; padding:14px; border:1px solid var(--rule); border-radius:var(--radius); }
+.judge-editor legend { font:600 13px var(--mono); padding:0 6px; }
+.judge-editor input,.judge-editor select,.judge-editor textarea,.judge-actions select { width:100%; min-width:0; padding:8px; border:1px solid var(--rule); border-radius:5px; color:var(--ink); background:var(--surface); font:13px/1.5 var(--sans); }
+.judge-editor textarea { resize:vertical; min-height:76px; }
+.judge-criterion { display:flex; gap:8px; align-items:end; margin:8px 0; }
+.judge-criterion>label { flex:1; min-width:0; }
+.judge-body summary { cursor:pointer; font-weight:600; margin:12px 0; }
+.judge-actions { margin:14px 0; }
+.judge-actions>[hidden] { display:none; }
+.judge-actions select { flex:1 1 260px; }
+.judge-profile-row { padding:12px 0; border-top:1px solid var(--rule); }
+.judge-profile-row>div { flex:1 1 300px; min-width:0; }
+.judge-profile-row code { display:block; color:var(--muted); overflow-wrap:anywhere; margin-top:4px; font-size:12px; }
+@media(max-width:600px) { .judge-overlay { padding:12px; } .judge-dialog { padding:12px; max-height:calc(100dvh - 24px); } .judge-criterion { flex-wrap:wrap; } .judge-actions>.action-button { flex:1 1 auto; } }

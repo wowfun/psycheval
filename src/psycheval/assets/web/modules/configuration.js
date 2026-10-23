@@ -8,6 +8,7 @@ import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
 import { applyDefaultDbToForm, formPayload, selectedAdapterValue, setAdapterChoice, syncAdapterDefaultDbControls, updateAdapterDefaults } from "./form-controls.js";
 import { serveApi } from "./http.js";
 import { refreshWorkspace } from "../app/workspace-runtime.js";
+import { renderJudgeProfiles } from "./judge-profiles.js";
 
 const harborConfigState = {
   snapshot: null,
@@ -256,6 +257,12 @@ async function choosePathSourceFiles(button) {
   }
 }
 function renderHarborConfiguration() {
+  renderJudgeProfiles({ configuration: harborConfigState.snapshot?.judge, async save(judge) {
+    try {
+      harborConfigState.snapshot = await serveApi("/api/config", { method: "PATCH", body: { judge }, ifMatch: true, etagKey: "/api/config" });
+      renderHarborConfiguration();
+    } catch (error) { await refreshConfigurationAfterConflict(error); throw error; }
+  } });
   renderTimezoneConfiguration();
   renderAcpAgentConfiguration();
   renderPromptConfiguration();

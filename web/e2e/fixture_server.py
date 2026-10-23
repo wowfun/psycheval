@@ -6,6 +6,7 @@ import shutil
 import socket
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,7 +22,10 @@ from psycheval.state import open_workspace_state
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="peval-acp-e2e-") as temporary:
+    with (
+        tempfile.TemporaryDirectory(prefix="peval-acp-e2e-") as temporary,
+        ExitStack() as resources,
+    ):
         root = Path(temporary)
         if os.environ.get("PEVAL_E2E_JOBS") == "1":
             from tests.peval.test_jobs import install_fixture_plugin
@@ -62,6 +66,11 @@ def main() -> None:
         )
         if os.environ.get("PEVAL_E2E_VERIFICATION") == "1":
             write_verification_trial(root)
+        if os.environ.get("PEVAL_E2E_JUDGE") == "1":
+            from tests.fixtures.judge_server import judge_server
+
+            provider = resources.enter_context(judge_server())
+            write_judge_trial(root, provider["url"])
         if os.environ.get("PEVAL_E2E_TABLES") == "1":
             from tests.peval.test_harbor_evidence import write_task
 
@@ -313,6 +322,54 @@ def main() -> None:
         finally:
             runtime.close()
             store.close()
+
+
+def write_judge_trial(root: Path, provider_url: str) -> None:
+    import asyncio
+    from dataclasses import replace
+
+    import tomlkit
+
+    from psycheval.harbor.verifier import JudgeSettings, run_verifier
+    from tests.fixtures.judge_task import api_task
+    from tests.peval.test_harbor_evidence import write_evidence_trial
+
+    trial = root / "jobs/judge/rubric-trial"
+    grader, context = api_task(root / "judge-task")
+    write_evidence_trial(
+        trial,
+        config_task={"path": str(grader.parent.parent)},
+        result={
+            "task_name": "judge-fixture",
+            "finished_at": "2026-01-01T00:00:00Z",
+            "verifier_result": {"rewards": {"reward": 1}},
+        },
+    )
+    logs = trial / "verifier"
+    logs.mkdir(exist_ok=True)
+    (logs / "中文 报告.md").write_text("Faithful evidence.\n", encoding="utf-8")
+    context = replace(context, paths=replace(context.paths, verifier_logs=str(logs)))
+    asyncio.run(
+        run_verifier(
+            grader,
+            runtime=context,
+            judge_settings=JudgeSettings(True, provider_url, "fixture"),
+        )
+    )
+    other = trial.with_name("another-trial")
+    shutil.copytree(trial, other)
+    result_path = other / "result.json"
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result.update(task_name="judge-other", trial_name="another-trial")
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    path = root / "peval.toml"
+    config = tomlkit.parse(path.read_text(encoding="utf-8"))
+    config["harbor"] = {"mounts": [{"id": "judge", "path": "jobs"}]}
+    config["judge"] = {
+        "default_profile": "fixture",
+        "profiles": {"fixture": {"base_url": provider_url, "model": "fixture"}},
+    }
+    path.write_text(tomlkit.dumps(config), encoding="utf-8")
 
 
 def write_verification_trial(root: Path) -> None:

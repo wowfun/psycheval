@@ -17,6 +17,7 @@ const INVALIDATION_PAGES = Object.freeze({
   tasks: ["home", "datasets", "jobs"],
   jobs: ["jobs", "home", "reports"],
   "assistant-config": ["config"],
+  "judge-config": ["config"],
   "prompt-assets": ["config"],
 });
 

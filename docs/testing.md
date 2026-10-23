@@ -113,7 +113,10 @@ failures, deadlines, evidence limits, and strict response validation. The
 independent-run fixture in `tests/peval/test_judge_runs.py` verifies zero-call
 previews, fingerprint conflicts, prompt lookup, deadlines, cancellation and
 disconnect cleanup, absence of file writes, and CLI/HTTP permissions against a
-local provider. A real
+local provider. `web/e2e/judge.spec.mjs` exercises prompt viewing, draft execution,
+latest-result replacement and page-memory lifetime across navigation and refresh,
+retaining desktop and mobile screenshots.
+A real
 three-step Trend Digest Trial verifies fixed partial credit and continuation
 gates. Its upstream Harbor CLI uses `-X utf8` for Harbor's locale-dependent Task
 reader, as documented in the native installation workflow. Preparation sets

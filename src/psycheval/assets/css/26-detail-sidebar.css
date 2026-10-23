@@ -99,6 +99,9 @@
 .verification-verdict { border-bottom:1px solid var(--rule); }
 .verification-verdict>summary { display:flex; gap:8px; padding:10px 12px; cursor:pointer; align-items:start; }
 .verification-verdict>summary>span:first-child { min-width:0; flex:1; overflow-wrap:anywhere; }
+.verification-verdict-name { display:flex; align-items:baseline; gap:8px; }
+.verification-verdict-name>span { min-width:0; overflow-wrap:anywhere; }
+.verification-verdict-name>input { flex:none; margin:0; }
 .verification-verdict-result { font-family:var(--mono); flex-shrink:0; }
 .verification-verdict[data-status=fail], .verification-verdict[data-status=error], .verification-verdict[data-status=failed] { border-left:3px solid var(--fail); }
 .verification-verdict pre { margin:0; padding:4px 12px 12px; white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.5 var(--mono); }

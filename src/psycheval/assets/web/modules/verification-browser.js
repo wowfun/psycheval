@@ -1,4 +1,5 @@
-import { t } from "./shared.js";
+import { adminMode, t } from "./shared.js";
+import { createJudgeWorkbench } from "./judge-workbench.js";
 import { serveApi } from "./serve-effects.js";
 import { bindCopyButton } from "./clipboard.js";
 import { bindFilePreviewToggle, createFileMarkdown, createFileRead, formatBytes, renderFileTree, selectFile, showFileText } from "./file-browser.js";
@@ -6,6 +7,7 @@ import { interpretVerificationFile, renderVerificationDocument } from "./verific
 import { createJsonView } from "./json-view.js";
 
 function createVerificationBrowser({ request = serveApi } = {}) {
+  const judge = createJudgeWorkbench({ request });
   const element = document.createElement("div"); element.className = "verification-browser";
   element.innerHTML = `<section class="verification-files"><input type="search" data-verification-search><div class="harbor-file-tree" data-verification-tree></div></section>
     <section class="verification-preview"><header class="verification-file-head"><strong data-verification-path></strong><span data-verification-size></span><div data-verification-actions></div></header><p class="verification-notice" data-verification-notice hidden></p><div class="verification-content" data-verification-content></div></section>`;
@@ -63,7 +65,9 @@ function createVerificationBrowser({ request = serveApi } = {}) {
     bindCopyButton(copy, () => payload?.content || "", selected.path); actions.append(copy);
     const model = interpretVerificationFile(selected.path, payload.content, payload.truncated);
     const markdown = createFileMarkdown(selected.path, payload.content, payload.truncated);
-    const documentView = markdown || (model ? renderVerificationDocument(model, evidence) : null);
+    const documentView = markdown || (model ? renderVerificationDocument(model, evidence, {
+      onPrompt: judge.prompt, onTry: adminMode() ? judge.draft : null, onResume: adminMode() ? judge.draft : null,
+    }) : null);
     const hasJson = !payload.truncated && /\.json$/i.test(selected.path);
     let json = null;
     if (payload.truncated) notice(t("verification_truncated", "Preview truncated at 2 MiB."));
@@ -111,6 +115,7 @@ function createVerificationBrowser({ request = serveApi } = {}) {
     const nextContext = `${key || ""}\0${revision || ""}`;
     if (nextContext === contextKey) return;
     contextKey = nextContext; sourceKey = key; loaded = false; loading = null;
+    judge.setSource(key);
     treeRead.invalidate(); fileRead.invalidate(); tree = []; selected = null; payload = null;
     collapsed.clear(); search.value = ""; notice(""); renderTree(); renderPreview();
   }

@@ -21,6 +21,55 @@ trajectories are not grading inputs. See the [Host ACP contract](../../reference
 
 ## Unified configuration
 
+### Inspect and try Judge rubrics
+
+In a Trial's **Verification** panel, open a rubric and choose **Actual prompt**
+to read its retained request, copy messages, or download the snapshot. This
+does not call a model. Choose **Try rubric** (or select several rubrics) to edit
+a draft, choose a model profile, preview the unsent prompt, and run it. The panel
+shows the original and current verdicts and reasons, with expandable actual
+messages. Each Trial keeps only its latest attempt in page memory. Closing the
+panel, changing Trials or navigating within the application preserves drafts and
+results; refreshing or closing the page clears them. Only one run executes per
+page. Closing the panel leaves it active; use **Cancel** to stop and discard it.
+For multi-step Trials, select the desired step's row in the workspace.
+
+Add experiment profiles under **Configuration → Judge profiles**, or in
+`peval.toml`:
+
+```toml
+[judge]
+default_profile = "review"
+
+[judge.profiles.review]
+title = "Rubric review"
+base_url = "https://api.example.com/v1"
+model = "judge-model"
+api_key = "${JUDGE_API_KEY}"
+reasoning_effort = "high"
+```
+
+Export the referenced environment variable in the shell that starts `peval`.
+Preview does not need the credential; execution does. The CLI offers the same
+workflow (replace the source reference and rubric IDs with your Trial's values):
+
+```console
+peval judge inspect -r .local/evaluation --source-ref harbor/nightly/job/trial --export-config draft.yaml
+peval judge prompt -r .local/evaluation --source-ref harbor/nightly/job/trial --rubric fidelity
+peval judge preview -r .local/evaluation --source-ref harbor/nightly/job/trial --rubric fidelity --judge-config draft.yaml --profile review
+peval judge run -r .local/evaluation --source-ref harbor/nightly/job/trial --rubric fidelity --rubric completeness --judge-config draft.yaml --profile review
+```
+
+Use `-p PATH_TO_TRIAL` instead of `--source-ref`; add `--step NAME` for a
+multi-step Trial. Historical trials without an instruction snapshot require
+`--instruction instruction.md` or an explicit `--task TASK_DIRECTORY`.
+Experiments support the generic YAML Judge and preserve original scores and
+Task files. See [Judge inspection and runs](../../reference/judge-runs.md)
+for input, lifetime and permission semantics. CLI runs print results directly;
+Ctrl+C cancels. Only explicit exports write files.
+
+### Other workspace settings
+
 One file may configure both the CLI and Harbor host execution:
 
 ```toml
