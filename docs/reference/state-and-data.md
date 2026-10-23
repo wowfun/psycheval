@@ -344,7 +344,9 @@ and retain full group labels. Overall summaries offer Excel only. Image export
 is unavailable while the summary is loading, failed or empty; radar also requires
 a selected group and at least three registered selected directional axes.
 No effective selected metrics disables all summary exports. Images exceeding the canvas capacity fail explicitly without
-truncating groups or metrics.
+truncating groups or metrics. Successful catalog and detail loads clear their
+loading status instead of displaying a persistent source-state message; operation
+errors and scan progress remain separate feedback.
 Home's Clear conditions action resets query conditions, ordering, and applied View selection;
 it preserves summary grouping, statistic, table disclosure, and radar settings.
 Presentation changes alone do not enable that action.

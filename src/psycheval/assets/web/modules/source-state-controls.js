@@ -1,5 +1,5 @@
 import { beginFeedback } from "./action-feedback.js";
-import { adminMode, currentServeSourceMode, esc, listValue, normalizeServeSourceMode, readableServeSourcesFrom, state, t } from "./runtime.js";
+import { adminMode, currentServeSourceMode, esc, listValue, readableServeSourcesFrom, state, t } from "./runtime.js";
 import { serveApi } from "./serve-effects.js";
 import { applyServeMutationPayload, applyServeSourceStateMutationPayload, leaderboardRows, setWorkspaceWriteControlsDisabled, sourceForTrialKey, switchServeSourceMode, visibleSelectedSourceKeys } from "./serve-catalog.js";
 
@@ -122,14 +122,6 @@ function firstReadableSourceKeyFrom(sourceKeys, sources, mode) {
   return readableServeSourcesFrom(sources, mode).find(source => requested.has(source.source_key))?.source_key || null;
 }
 
-function serveSourceModeStatusText(mode = currentServeSourceMode()) {
-  if (normalizeServeSourceMode(mode) === "all") {
-    return t("serve_all_sessions", "All sessions");
-  }
-  return normalizeServeSourceMode(mode) === "archived"
-    ? t("serve_archived_snapshots", "Archived snapshots")
-    : t("serve_active_snapshots", "Active snapshots");
-}
 export {
   bindServeSourceStateControls,
   firstReadableSourceKeyFrom,
@@ -137,5 +129,4 @@ export {
   mutateVisibleServeSourceState,
   renderServeSourceStateControls,
   renderSourceRefreshControl,
-  serveSourceModeStatusText,
 };

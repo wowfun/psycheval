@@ -6,7 +6,7 @@ import { adminMode, esc, hasMetricValue, homeDetail, isAnalysisArtifactPath, lis
 import { filterValues, renderLeaderboardColumnControls, renderLeaderboardExportControls, tableControls } from "./data-tables.js";
 import { downloadBlob, firstUserStepSelection } from "./export.js";
 import { closeDetailSidebar, openDetailSidebar, requestDetailSidebarLocation } from "./detail-sidebar.js";
-import { renderServeSourceStateControls, serveSourceModeStatusText } from "./source-state-controls.js";
+import { renderServeSourceStateControls } from "./source-state-controls.js";
 import { emptyServeReport, reloadExpiredAdminSession, serveApi, setServeStatus } from "./serve-effects.js";
 import { refreshWorkspaceReports, renderAttachWorkspaceReportAction } from "./workspace-reports.js";
 import { clearWorkspaceViewConditions, refreshWorkspaceViews, workspaceViewQueryPayload, workspaceViews } from "./workspace-views.js";
@@ -533,7 +533,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
       setServeStatus(t("serve_scanning_runs", "Checking runs"));
       setTimeout(() => loadCatalogPage({}, { force: true }), 200);
     } else {
-      setServeStatus(serveSourceModeStatusText());
+      setServeStatus("");
       if (wasChecking || (previousGeneration && previousGeneration !== Number(page.generation || 0))) {
         await refreshSourceCategoryOptions();
       }
@@ -691,7 +691,7 @@ function selectServeDetail(sourceKey, selection = {}) {
     detailRequestId += 1;
     try {
       applyServeDetailSelection(sourceKey, state.view, state.selectedArtifactRevision, selection);
-      setServeStatus(serveSourceModeStatusText());
+      setServeStatus("");
     } catch (error) {
       setServeStatus(error.message || String(error), true);
       if (selection.throwOnError) return Promise.reject(error);
@@ -713,7 +713,7 @@ async function loadServeSourceReport(sourceKey, selection = {}) {
     if (selection.signal?.aborted) return;
     if (requestId !== detailRequestId) return;
     applyServeDetailSelection(sourceKey, envelope.report || emptyServeReport(), envelope.artifact_revision, selection);
-    setServeStatus(serveSourceModeStatusText());
+    setServeStatus("");
   } catch (error) {
     if (selection.signal?.aborted || requestId !== detailRequestId) return;
     const row = catalogRowForSourceKey(sourceKey);

@@ -675,3 +675,62 @@ test("long Unicode catalog conditions use a POST body without changing the query
     runtime.state.workspaceViewsLoaded = previousLoaded;
   }
 });
+
+test("successful catalog and fresh or cached detail loads clear scan status without clearing action errors", async () => {
+  resetSummaryState();
+  const { beginFeedback } = await import("../../src/psycheval/assets/web/modules/action-feedback.js");
+  const { setServeStatus } = await import("../../src/psycheval/assets/web/modules/serve-effects.js");
+  const target = document.createElement("div");
+  target.innerHTML = '<section id="leaderboard-region"><section id="leaderboard"><div class="leaderboard-action-row"></div></section></section>'; document.body.append(target);
+  const previousFetch = globalThis.fetch, previousTimeout = globalThis.setTimeout;
+  const previous = { view: runtime.state.view, selectedSourceKey: runtime.state.selectedSourceKey, workspaceViewsLoaded: runtime.state.workspaceViewsLoaded };
+  runtime.state.workspaceViewsLoaded = true;
+  runtime.state.catalogLoading = false;
+  let checking = true, detailRequests = 0;
+  const scheduled = [];
+  const action = beginFeedback("#leaderboard .leaderboard-action-row", { key: "test:preserved-export" });
+  const assertSettled = () => {
+    assert.equal(target.querySelectorAll('[data-action-feedback="test:preserved-export"]').length, 1);
+    assert.equal(target.querySelector('[data-action-feedback$=":load"]'), null);
+    assert.match(target.textContent, /Export failed/);
+  };
+  globalThis.setTimeout = (callback, delay) => {
+    if (delay === 200) { scheduled.push(callback); return 0; }
+    return previousTimeout(callback, delay);
+  };
+  globalThis.fetch = async path => {
+    if (String(path).startsWith("/api/sources/")) {
+      detailRequests += 1;
+      return response({ report: { trajectory: [{ steps: [] }], trajectory_meta: [{ trial_key: "status-trial" }] }, artifact_revision: "r1" });
+    }
+    return response({ generation: 7, checking, total: 0, items: [], facets: {}, page: 1, page_size: 100 });
+  };
+  try {
+    action.error("Export failed");
+    await catalog.loadCatalogPage({}, { skipDetail: true });
+    assert.match(target.textContent, /Checking runs/);
+    assert.equal(scheduled.length, 1);
+    checking = false;
+    for (const mode of ["active", "archived", "all"]) {
+      runtime.state.catalogQuery.state = mode;
+      await catalog.loadCatalogPage({}, { skipDetail: true });
+      assertSettled();
+    }
+    target.insertAdjacentHTML("beforeend", '<section id="report-notes"></section><section id="comparison"></section><section id="trace"></section><aside id="detail-sidebar" hidden></aside>');
+    setServeStatus("Checking runs");
+    await catalog.loadServeSourceReport("status-source", { throwOnError: true });
+    await new Promise(resolve => window.requestAnimationFrame(resolve));
+    assert.equal(detailRequests, 1);
+    assertSettled();
+    setServeStatus("Checking runs");
+    await catalog.selectServeDetail("status-source", { throwOnError: true });
+    await new Promise(resolve => window.requestAnimationFrame(resolve));
+    assert.equal(detailRequests, 1);
+    assertSettled();
+    assert.doesNotMatch(target.textContent, /snapshots|All sessions|Checking runs/);
+  } finally {
+    setServeStatus(""); action.dispose(); target.remove();
+    globalThis.fetch = previousFetch; globalThis.setTimeout = previousTimeout;
+    Object.assign(runtime.state, previous);
+  }
+});

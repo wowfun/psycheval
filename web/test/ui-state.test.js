@@ -102,7 +102,7 @@ test("Notes save finishes and removes its local pending feedback", async () => {
     panel.remove();
   }
 });
-test("Home scan and source-mode status stays inline without clearing action errors", async () => {
+test("Home loading status stays inline without clearing action errors", async () => {
   const { beginFeedback } = await import("../../src/psycheval/assets/web/modules/action-feedback.js");
   const { setServeStatus } = await import("../../src/psycheval/assets/web/modules/serve-effects.js");
   const existing = document.querySelector("#leaderboard .leaderboard-action-row");
@@ -114,7 +114,7 @@ test("Home scan and source-mode status stays inline without clearing action erro
   const action = beginFeedback("#leaderboard .leaderboard-action-row", { key: "test-home-action" });
   try {
     action.error("Export failed");
-    for (const text of ["Checking runs", "Archived snapshots"]) {
+    for (const text of ["Checking runs", "Loading sources"]) {
       setServeStatus(text);
       assert.ok(row.textContent.includes(text));
       assert.match(row.textContent, /Export failed/);
@@ -123,7 +123,7 @@ test("Home scan and source-mode status stays inline without clearing action erro
     }
     setServeStatus("");
     assert.match(row.textContent, /Export failed/);
-    assert.doesNotMatch(row.textContent, /Archived snapshots/);
+    assert.doesNotMatch(row.textContent, /Loading sources/);
   } finally { action.dispose(); if (!existing) row.remove(); }
 });
 function addFeedbackRegions(root) {
