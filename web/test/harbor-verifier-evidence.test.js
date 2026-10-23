@@ -11,6 +11,13 @@ const selected = await import("../../src/psycheval/assets/web/modules/analysis-s
 
 test.after(() => browser.cleanup());
 
+test("diagnostic trajectory notice and cleanup paths remain visible and escaped", () => {
+  assert.match(selected.renderIncompleteTrajectory({ extra: { diagnostic_only: true } }), /Incomplete trajectory/);
+  assert.equal(selected.renderIncompleteTrajectory({}), "");
+  const html = selected.renderSelectedWarnings({ warnings: ["Windows cleanup warning; paths: C:/owned/<runtime>"] });
+  assert.match(html, /C:\/owned\/&lt;runtime&gt;/);
+});
+
 test("WorkBuddy evidence renders score consistency and safe artifact controls", () => {
   const html = selected.renderHarborEvidence({
     harbor_provenance: { result_id: "result-1" },

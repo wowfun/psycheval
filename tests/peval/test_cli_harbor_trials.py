@@ -26,6 +26,28 @@ def run_cli(argv: list[str]) -> tuple[int, str, str]:
 
 
 class PevalCliHarborTrialTests(unittest.TestCase):
+    def test_partial_trajectory_is_readable_without_changing_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trial = Path(tmp) / "jobs/job-a/trial-a"
+            result = completed_result()
+            result["exception_info"] = {
+                "exception_type": "AgentTimeoutError",
+                "exception_message": "deadline",
+            }
+            write_trial(trial, result=result)
+            canonical = trial / "agent/trajectory.json"
+            partial = trial / "agent/trajectory.partial.json"
+            canonical.rename(partial)
+            code, out, error = run_cli(["view", "tr", "-p", str(trial)])
+            self.assertEqual((code, error), (0, ""))
+            row = json.loads(out)["sources"][0]
+            self.assertTrue(row["harbor"]["trajectory_available"])
+            self.assertEqual(row["status"], "errored")
+            canonical.write_text("invalid", encoding="utf8")
+            code, _, error = run_cli(["view", "tr", "-p", str(trial)])
+            self.assertNotEqual(code, 0)
+            self.assertIn("trajectory.json", error)
+
     def test_single_step_trial_root_preserves_harbor_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             trial = Path(tmp) / "jobs" / "job-a" / "trial-a"

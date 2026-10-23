@@ -336,6 +336,31 @@ def write_verification_trial(root: Path) -> None:
         },
     )
     verifier = trial / "verifier"
+    if os.environ.get("PEVAL_E2E_PARTIAL") == "1":
+        agent = trial / "agent"
+        (agent / "trajectory.json").rename(agent / "trajectory.partial.json")
+        (agent / "cleanup.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "stage": "process_pipes",
+                        "error_type": "TimeoutError",
+                        "paths": [str(trial / "retained-runtime")],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        result_path = trial / "result.json"
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        result.update(
+            finished_at="2026-01-01T00:00:00Z",
+            exception_info={
+                "exception_type": "AgentTimeoutError",
+                "exception_message": "original timeout",
+            },
+        )
+        result_path.write_text(json.dumps(result), encoding="utf-8")
     (verifier / "artifact_text").mkdir(parents=True)
     (verifier / "raw_artifacts").mkdir()
     (verifier / "artifact_text/report.md").write_text(

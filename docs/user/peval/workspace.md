@@ -13,6 +13,12 @@ peval serve -r .local/evaluation
 Workspace discovery and initialization semantics live in the
 [workspace reference](../../reference/workspace.md).
 
+Failed Trials can retain an **incomplete diagnostic trajectory**. Open the usual
+trajectory view to inspect the messages and tool activity received before the
+failure; the Trial keeps its original error status. Windows cleanup warnings
+include retained paths and do not prevent scoring valid evidence. Diagnostic
+trajectories are not grading inputs. See the [Host ACP contract](../../reference/harbor.md#host-acp-agent).
+
 ## Unified configuration
 
 One file may configure both the CLI and Harbor host execution:

@@ -111,6 +111,11 @@ function renderSelectedWarnings(meta) {
   if (!warnings.length) return "";
   return `<article class="selected-evidence-card"><h4>${esc(t("warnings", "Warnings"))}</h4><ul class="evidence-list">${warnings.map(warning => `<li>${esc(warning)}</li>`).join("")}</ul></article>`;
 }
+function renderIncompleteTrajectory(trajectory) {
+  return trajectory?.extra?.diagnostic_only
+    ? `<p class="copy danger" role="note">${esc(t("incomplete_trajectory", "Incomplete trajectory — retained for diagnosis, not grading."))}</p>`
+    : "";
+}
 function renderSelectedSource(meta) {
   const path = meta.data_ref?.relative_path;
   return path ? `<article class="selected-evidence-card"><h4>${esc(t("input_source", "Input Source"))}</h4><code>${esc(path)}</code></article>` : "";
@@ -123,4 +128,5 @@ export {
   renderSelectedSource,
   renderSelectedUsage,
   renderSelectedWarnings,
+  renderIncompleteTrajectory,
 };

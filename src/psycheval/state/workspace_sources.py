@@ -999,6 +999,7 @@ class WorkspaceSources:
             raw_trajectory = (
                 _read_harbor_entry_trajectory(candidate)
                 if candidate.step_name is not None
+                or values.get("agent/trajectory.json") is None
                 else values.get("agent/trajectory.json")
             )
             if raw_trajectory is None:

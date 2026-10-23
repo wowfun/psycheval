@@ -264,6 +264,7 @@
 }
 .evidence-list {
   display:grid;
+  overflow-wrap:anywhere;
   gap:7px;
   margin:8px 0 0;
   padding-left:18px;

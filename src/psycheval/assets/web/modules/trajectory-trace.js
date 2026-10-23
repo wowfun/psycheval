@@ -7,7 +7,7 @@ import { catalogStepOutline, leaderboardRows, metaFor, selectServeDetail, trajec
 import { finalMetric, infoGrid, maxPositiveMetric, reasoningExposed, systemExposed, timeTitle, timingRatio, tokenTotal, trajectoryDurationHeatClass, trialWallDurationMs } from "./analysis-metrics.js";
 import { renderSelectedNotes } from "./analysis-notes.js";
 import { renderSelectedAnalysis } from "./analysis-rendering.js";
-import { renderHarborEvidence, renderSelectedEvidence } from "./analysis-selected.js";
+import { renderHarborEvidence, renderSelectedEvidence, renderIncompleteTrajectory } from "./analysis-selected.js";
 import { disposeTimelineChart, initTimelineDiagnostics, renderTimelineDiagnostics } from "./timeline-shell.js";
 import { bindTimelineControls } from "./timeline-table.js";
 import { toolCallRatio, valuePreview } from "./steps.js";
@@ -156,6 +156,7 @@ function renderTrace() {
   target.innerHTML = `
     <div class="trace-head"><div><p class="eyebrow">${esc(t("selected_trial_trajectory", "selected trial trajectory"))}</p><h2 id="trace-title" class="trace-title"><span>${esc(t("selected_session_label", "session"))}</span><code>${esc(trial.trial_key || "-")}</code></h2></div><span class="status ${status}">${esc(statusLabel(status))}</span></div>
     ${renderTrajectoryNavigation(root, rootMeta)}
+    ${renderIncompleteTrajectory(trajectory)}
     ${renderSourceRefreshControl(rootMeta.trial_key)}
     <h3>${esc(t("run", "Run"))}</h3>
     ${infoGrid(runItems)}

@@ -517,6 +517,7 @@ def _result_only_meta(
             *candidate.entry_warnings,
             *(verifier_evidence.warnings if verifier_evidence else ()),
             "Harbor Trial has no agent/trajectory.json",
+            *_trajectory_warnings(candidate, {}),
         ],
         "data_ref": data_ref,
         "total_events": 0,
@@ -734,6 +735,7 @@ def _trajectory_meta(
             *candidate.entry_warnings,
             *([telemetry_warning] if telemetry_warning else []),
             *(verifier_evidence.warnings if verifier_evidence else ()),
+            *_trajectory_warnings(candidate, trajectory),
         ],
         "data_ref": data_ref,
         "total_events": len(trajectory.get("steps") or []),
@@ -1053,13 +1055,14 @@ def _assert_safe_descendant(root: Path, path: Path, *, label: str) -> None:
 
 
 def _looks_like_trial(path: Path) -> bool:
-    try:
-        (path / "agent" / "trajectory.json").stat(follow_symlinks=False)
-        return True
-    except FileNotFoundError:
-        pass
-    except OSError:
-        return True
+    for filename in ("trajectory.json", "trajectory.partial.json"):
+        try:
+            (path / "agent" / filename).stat(follow_symlinks=False)
+            return True
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return True
     config_path = path / "config.json"
     if _regular_file(config_path):
         try:
@@ -1087,7 +1090,9 @@ def _looks_like_trial(path: Path) -> bool:
     steps = path / "steps"
     return (
         any(
-            (step / "agent" / "trajectory.json").exists() for step in _child_dirs(steps)
+            (step / "agent" / filename).exists()
+            for step in _child_dirs(steps)
+            for filename in ("trajectory.json", "trajectory.partial.json")
         )
         if steps.is_dir() and not steps.is_symlink()
         else False
@@ -1241,25 +1246,69 @@ def _read_harbor_entry_trajectory(
     candidate: SourceCandidate,
 ) -> dict[str, Any] | None:
     data_path = candidate.data_path or candidate.path
-    path = data_path / "agent" / "trajectory.json"
-    try:
-        content = _read_bytes_no_follow(
-            candidate.containment_root or candidate.path,
-            path,
-        )
-    except FileNotFoundError:
+    for filename in ("trajectory.json", "trajectory.partial.json"):
+        path = data_path / "agent" / filename
+        try:
+            content = _read_bytes_no_follow(
+                candidate.containment_root or candidate.path, path
+            )
+            break
+        except ValueError as exc:
+            if isinstance(exc.__cause__, FileNotFoundError):
+                continue
+            raise
+    else:
         return None
-    except ValueError as exc:
-        if not path.exists():
-            return None
-        raise exc
     try:
         value = json.loads(content.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"failed to parse {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise ValueError(f"{path} must contain a JSON object")
+    if path.name == "trajectory.partial.json":
+        if value.get("extra") is not None and not isinstance(value["extra"], dict):
+            raise ValueError(f"{path} extra must be a JSON object")
+        value["extra"] = {
+            **(value.get("extra") or {}),
+            "diagnostic_only": True,
+            "incomplete": True,
+        }
     return value
+
+
+def _trajectory_warnings(candidate, trajectory):
+    from psycheval.harbor.diagnostics import warning_text
+
+    extra = trajectory.get("extra") or {}
+    messages = (
+        [
+            "Incomplete diagnostic trajectory; execution may have stopped before completion."
+        ]
+        if extra.get("diagnostic_only")
+        else []
+    )
+    warnings = list(extra.get("cleanup_warnings") or [])
+    path = (candidate.data_path or candidate.path) / "agent" / "cleanup.json"
+    try:
+        value = json.loads(
+            _read_bytes_no_follow(
+                candidate.containment_root or candidate.path, path
+            ).decode("utf-8")
+        )
+        if isinstance(value, list):
+            warnings.extend(value)
+    except (OSError, ValueError):
+        pass
+    for warning in warnings:
+        if (
+            isinstance(warning, dict)
+            and isinstance(warning.get("paths"), list)
+            and all(isinstance(p, str) for p in warning["paths"])
+            and "stage" in warning
+            and "error_type" in warning
+        ):
+            messages.append(warning_text(warning))
+    return list(dict.fromkeys(messages))
 
 
 def _fingerprint(

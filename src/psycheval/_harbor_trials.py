@@ -244,9 +244,8 @@ def _trial_entries(
     entries: list[HarborTrialEntry] = []
     for index, (name, result, warnings) in enumerate(ordered, start=1):
         data_dir = step_dirs.get(name, steps_dir / name)
-        if not (data_dir / "agent" / "trajectory.json").is_file():
-            root_trajectory = trial_dir / "agent" / "trajectory.json"
-            if index == count and root_trajectory.is_file():
+        if not _has_trajectory(data_dir):
+            if index == count and _has_trajectory(trial_dir):
                 data_dir = trial_dir
                 warnings = (
                     *warnings,
@@ -270,6 +269,13 @@ def _trial_entries(
             )
         )
     return tuple(entries)
+
+
+def _has_trajectory(directory):
+    return any(
+        (directory / "agent" / name).is_file()
+        for name in ("trajectory.json", "trajectory.partial.json")
+    )
 
 
 def _matching_mount(path: Path, mounts: tuple[HarborMount, ...]) -> HarborMount | None:

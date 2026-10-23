@@ -1,5 +1,6 @@
 import { $, RENDER_OPTIONS, esc, homeDetail, listValue, renderComparisonPanels, state, t } from "./runtime.js";
 import { stepTimingStats } from "./analysis-metrics.js";
+import { renderIncompleteTrajectory, renderSelectedWarnings } from "./analysis-selected.js";
 import { bindBlockCopyControls, bindStepToggle, renderStep, renderStepsHeader } from "./steps.js";
 import { cancelTrialDetailRequest, sourceKeyForTrialKey } from "./serve-catalog.js";
 import { createVerificationBrowser } from "./verification-browser.js";
@@ -146,7 +147,7 @@ function renderDetailSidebar() {
         <section id="trial-panel-trajectory" role="tabpanel" aria-labelledby="trial-tab-trajectory" data-trial-panel="trajectory" class="detail-sidebar-steps" data-detail-sidebar-steps ${sidebar.tab !== "trajectory" ? "hidden" : ""}>
           ${renderTrajectoryNavigation(root, rootMeta)}
           ${trial.detail_unavailable ? `<p class="copy">${esc(t("verification_trajectory_unavailable", "Trajectory unavailable; retained verification files remain accessible."))}</p>` : renderStepsHeader(trajectory, { headingId: "detail-sidebar-steps-title" })}
-          <div class="detail-sidebar-step-list" data-detail-sidebar-step-list>${steps.map(step => renderStep(step, trial, timingStats, { open: String(step?.step_id) === selectedStepId, childIds })).join("")}</div>
+          <div class="detail-sidebar-step-list" data-detail-sidebar-step-list>${renderIncompleteTrajectory(trajectory)}${renderSelectedWarnings(trial)}${steps.map(step => renderStep(step, trial, timingStats, { open: String(step?.step_id) === selectedStepId, childIds })).join("")}</div>
         </section>
       </div>
     </div>

@@ -13,6 +13,10 @@ peval serve -r .local/evaluation
 工作区发现与初始化语义由
 [workspace reference](../../../../reference/workspace.md) 负责。
 
+失败的 Trial 可以保留**不完整的诊断轨迹**。打开通常的轨迹视图，即可查看异常前收到的
+消息和工具活动；Trial 仍保留原始错误状态。Windows 清理告警包含保留路径，不会阻止
+有效证据的评分。诊断轨迹不作为评分输入，详见 [Host ACP 契约](../../../../reference/harbor.md#host-acp-agent)。
+
 ## 统一配置
 
 同一份文件可以配置 Psycheval CLI 与 Harbor host execution：

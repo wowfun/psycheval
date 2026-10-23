@@ -12,6 +12,8 @@ HARBOR_OVERLAY_SCHEMA_VERSION = 1
 HARBOR_OVERLAY_ROOT = "harbor"
 HARBOR_JSON_SOURCE_FILES = (
     "agent/trajectory.json",
+    "agent/trajectory.partial.json",
+    "agent/cleanup.json",
     "config.json",
     "lock.json",
     "result.json",

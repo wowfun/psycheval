@@ -188,6 +188,7 @@
 }
 .detail-sidebar-step-list {
   grid-row:3;
+  min-width:0;
   min-height:0;
   display:grid;
   align-content:start;
@@ -195,6 +196,9 @@
   overflow:auto;
   overscroll-behavior:contain;
   padding-right:3px;
+}
+.detail-sidebar-step-list>.selected-evidence-card {
+  min-width:0;
 }
 .detail-sidebar .step {
   margin:0;

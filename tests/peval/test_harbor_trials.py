@@ -1200,6 +1200,68 @@ class HarborTrialTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_partial_refresh_priority_warnings_and_multi_step(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            jobs = base / "jobs"
+            trial = jobs / "job" / "trial"
+            result = completed_result()
+            result["exception_info"] = {
+                "exception_type": "TimeoutError",
+                "exception_message": "original",
+            }
+            write_trial(trial, result=result)
+            agent = trial / "agent"
+            canonical = agent / "trajectory.json"
+            partial = agent / "trajectory.partial.json"
+            canonical.unlink()
+            store, _, catalog = self.workspace(base / "workspace", jobs)
+            try:
+                catalog.reconcile()
+                row = catalog.query(CatalogQuery(state="all")).items[0].to_dict()
+                key = row["source_key"]
+                partial.write_text(json.dumps(atif_trajectory("partial")))
+                (agent / "cleanup.json").write_text(
+                    json.dumps(
+                        [
+                            {
+                                "stage": "stop",
+                                "error_type": "PermissionError",
+                                "paths": [str(agent)],
+                            }
+                        ]
+                    )
+                )
+                catalog.reconcile()
+                detail = catalog.load_detail(key).report
+                self.assertEqual(detail["trajectory"][0]["session_id"], "partial")
+                meta = detail["trajectory_meta"][0]
+                self.assertEqual(meta["status"], "errored")
+                self.assertTrue(any("Incomplete" in w for w in meta["warnings"]))
+                self.assertTrue(any(str(agent) in w for w in meta["warnings"]))
+                canonical.write_text(json.dumps(atif_trajectory("canonical")))
+                catalog.reconcile()
+                self.assertEqual(
+                    catalog.load_detail(key).report["trajectory"][0]["session_id"],
+                    "canonical",
+                )
+                canonical.write_text("{")
+                catalog.reconcile()
+                self.assertFalse(catalog.row_for_key(key)["readable"])
+            finally:
+                store.close()
+
+            canonical.unlink()
+            step = trial / "steps" / "first"
+            write_trial(step, result=result)
+            (step / "agent/trajectory.json").rename(
+                step / "agent/trajectory.partial.json"
+            )
+            result["step_results"] = [{"step_name": "first", **result}]
+            (trial / "result.json").write_text(json.dumps(result))
+            bundle = load_harbor_trial_bundle(trial)
+            self.assertEqual(bundle.entries[0].data_dir, step)
+
     def test_overlay_is_lazy_minimal_and_removed_when_defaults_are_restored(
         self,
     ) -> None:
