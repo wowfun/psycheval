@@ -6,7 +6,11 @@ import { exportLeaderboardSummary, loadLeaderboardSummary } from "./serve-catalo
 import { bindWorkspaceViewControls, renderWorkspaceViewControls } from "./workspace-views.js";
 import { workspaceLocationChanged } from "../app/workspace-runtime.js";
 import { radarContext, renderLeaderboardRadar, bindLeaderboardRadar, disposeLeaderboardRadar } from "./leaderboard-radar.js";
-import { relativePosition } from "./summary-chart.js";
+import { radarSelection, relativePosition } from "./summary-chart.js";
+import { downloadSummaryImage } from "./leaderboard-summary-export.js";
+import { beginFeedback } from "./action-feedback.js";
+
+let imageExportBusy = false;
 
 function renderLeaderboardSummary() {
   disposeLeaderboardRadar();
@@ -82,7 +86,15 @@ function leaderboardSummaryScopeText(count) {
 
 function renderLeaderboardSummaryActions() {
   const workspaceControls = renderWorkspaceViewControls();
-  const exportControl = `<button type="button" class="action-button leaderboard-summary-export" data-summary-export-xlsx ${Number(state.catalogPage?.total || 0) ? "" : "disabled"}>${esc(t("export_excel", "Export Excel"))}</button>`;
+  const exportControl = `<details class="export-menu leaderboard-summary-export">
+    <summary class="export-menu-button" aria-label="${esc(t("export_options", "Export options"))}">${esc(t("export", "Export"))}</summary>
+    <div class="export-menu-panel">
+      <button type="button" data-summary-export="xlsx" aria-describedby="summary-export-help">${esc(t("export_excel", "Export Excel"))}</button>
+      <button type="button" data-summary-export="bar" aria-describedby="summary-export-help">${esc(t("summary_export_bar", "Bar chart (.png)"))}</button>
+      <button type="button" data-summary-export="radar" aria-describedby="summary-export-help">${esc(t("summary_export_radar", "Radar chart (.png)"))}</button>
+      <small id="summary-export-help" hidden></small>
+    </div>
+  </details>`;
   return `<div class="leaderboard-summary-actions">${renderLeaderboardSummaryGroupControl()}${workspaceControls}${renderSummaryMetricControl(state)}${exportControl}</div>`;
 }
 
@@ -204,6 +216,7 @@ function summaryPresentationChanged(selector) {
   disposeLeaderboardRadar();
   panel.outerHTML = renderLeaderboardSummaryCharts(groups, radar);
   bindLeaderboardSummaryChartControls(target, radar);
+  updateSummaryExportControls(target);
   target.querySelectorAll("[data-summary-stat-heading],[data-summary-stat]").forEach(cell => {
     cell.classList.toggle("summary-selected-stat", (cell.dataset.summaryStatHeading || cell.dataset.summaryStat) === state.leaderboardSummaryStatistic);
   });
@@ -283,13 +296,82 @@ function bindLeaderboardSummaryControls(target, radar = null) {
   target.querySelectorAll("[data-summary-table-toggle]").forEach(button => {
     button.addEventListener("click", toggleLeaderboardSummaryTable);
   });
-  target.querySelectorAll("[data-summary-export-xlsx]").forEach(button => {
+  updateSummaryExportControls(target);
+  target.querySelector(".leaderboard-summary-export")?.addEventListener("keydown", event => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.open = false;
+    event.currentTarget.querySelector("summary").focus();
+  });
+  target.querySelectorAll("[data-summary-export]").forEach(button => {
     button.addEventListener("click", event => {
       event.preventDefault();
-      exportLeaderboardSummary();
+      const kind = button.dataset.summaryExport;
+      if (imageExportBusy || summaryExportDisabledReason(kind)) return;
+      const menu = button.closest("details");
+      menu.open = false;
+      menu.querySelector("summary").focus({ preventScroll: true });
+      if (kind === "xlsx") exportLeaderboardSummary();
+      else exportLeaderboardImage(kind);
     });
   });
   bindWorkspaceViewControls(target);
+}
+
+function summaryExportDisabledReason(kind) {
+  if (!visibleLeaderboardSummaryDefinitions(leaderboardSummaryGroups()).length) return t("metric_select", "Select at least one available metric with data.");
+  if (kind === "radar" && selectedMetricDefinitions(state).filter(item => ["higher", "lower"].includes(item.direction)).length < 3) return t("metric_radar_min", "Select at least three metrics with a direction.");
+  if (kind === "xlsx") return Number(state.catalogPage?.total || 0) ? "" : t("leaderboard_summary_empty", "No Trials match the current conditions.");
+  const summary = state.leaderboardSummary?.summary;
+  if (state.leaderboardSummaryLoading || state.leaderboardSummary?.checking || state.leaderboardSummaryError || !summary?.matched_count || !summary.groups?.length) {
+    return t("summary_export_not_ready", "Chart export requires a completed, nonempty summary.");
+  }
+  if (state.leaderboardSummaryGroupBy === "overall") return t("summary_export_group_required", "Select a grouping to export charts.");
+  if (kind === "radar" && !radarSelection(summary.groups, state.leaderboardSummaryRadarGroups).length) return t("summary_radar_select", "Select up to five groups to compare.");
+  if (kind === "bar" && !visibleLeaderboardSummaryDefinitions(summary.groups).length) return t("summary_no_data", "No data");
+  return "";
+}
+
+function updateSummaryExportControls(target) {
+  const hints = new Set();
+  target?.querySelectorAll("[data-summary-export]").forEach(button => {
+    const reason = summaryExportDisabledReason(button.dataset.summaryExport);
+    button.disabled = imageExportBusy || Boolean(reason);
+    button.title = reason;
+    if (reason) hints.add(reason);
+  });
+  const help = target?.querySelector("#summary-export-help");
+  if (help) { help.textContent = [...hints].join(" "); help.hidden = !hints.size; }
+}
+
+function leaderboardSummaryImageSnapshot() {
+  const groups = structuredClone(leaderboardSummaryGroups());
+  const statistic = selectedLeaderboardSummaryStatistic();
+  return {
+    title: t("leaderboard_summary", "Leaderboard Summary"),
+    subtitle: `${statistic.label} · ${leaderboardSummaryGroupHeading()}`,
+    scope: leaderboardSummaryScopeText(state.leaderboardSummary.summary.matched_count),
+    bars: visibleLeaderboardSummaryDefinitions(groups).map(definition => leaderboardSummaryChartData(definition, groups, statistic)),
+    radar: radarContext(groups, selectedMetricDefinitions(state), statistic, leaderboardSummaryValue),
+  };
+}
+
+async function exportLeaderboardImage(kind) {
+  const feedback = beginFeedback("#leaderboard-summary .leaderboard-summary-head", { key: "home:summary-image", page: "home" });
+  imageExportBusy = true;
+  updateSummaryExportControls($("leaderboard-summary"));
+  feedback.pending(t("summary_export_generating", "Generating image…"));
+  try {
+    const snapshot = leaderboardSummaryImageSnapshot();
+    await downloadSummaryImage(kind, snapshot);
+    feedback.clear();
+  } catch (error) {
+    feedback.error(`${t("summary_export_failed", "Could not export the chart.")} ${error.message || error}`);
+  } finally {
+    imageExportBusy = false;
+    updateSummaryExportControls($("leaderboard-summary"));
+  }
 }
 
 async function setLeaderboardSummaryGroupBy(value) {
@@ -348,6 +430,7 @@ export {
   bindLeaderboardSummaryControls,
   leaderboardSummaryDefinitions,
   leaderboardSummaryChartData,
+  leaderboardSummaryImageSnapshot,
   leaderboardSummaryGroupButton,
   leaderboardSummaryGroupHeading,
   leaderboardSummaryGroupUnit,

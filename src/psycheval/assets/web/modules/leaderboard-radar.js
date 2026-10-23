@@ -71,12 +71,12 @@ function renderLeaderboardRadar(context) {
   </div>`;
 }
 
-function radarOption(context, width, height) {
+function radarOption(context, width, height, palette = null) {
   const { axes, series } = context;
-  const root = document.querySelector("[data-summary-radar]");
+  const root = palette ? null : document.querySelector("[data-summary-radar]");
   const style = root ? window.getComputedStyle(root) : null;
-  const ink = style?.getPropertyValue("--ink").trim() || "#292c36";
-  const rule = style?.getPropertyValue("--rule").trim() || "#dadce2";
+  const ink = palette?.ink || style?.getPropertyValue("--ink").trim() || "#292c36";
+  const rule = palette?.rule || style?.getPropertyValue("--rule").trim() || "#dadce2";
   const radius = Math.min(width, height) * 0.29;
   // Match the pinned ECharts 6.1.0 layout below: centered, 90° start, counterclockwise.
   const markers = series.flatMap((item, seriesIndex) => item.points.map((point, index) => {
@@ -92,7 +92,7 @@ function radarOption(context, width, height) {
     animation: false,
     tooltip: { trigger: "item", confine: true, formatter: params => groupDetails(series[params.seriesIndex], context) },
     radar: { center: ["50%", "50%"], radius, startAngle: 90, splitNumber: 4,
-      indicator: axes.map(axis => ({ name: `${radarMetricLabel(context, axis.key)}\n${axis.direction > 0 ? "↑" : "↓"}`, min: 0, max: 100 })),
+      indicator: axes.map((axis, index) => ({ name: `${palette?.numberedAxes ? `#${index + 1}` : radarMetricLabel(context, axis.key)}\n${axis.direction > 0 ? "↑" : "↓"}`, min: 0, max: 100 })),
       axisName: { color: ink, fontSize: 11, width: Math.max(75, Math.min(140, width * 0.23)), overflow: "break" },
       splitArea: { show: false }, axisLine: { lineStyle: { color: rule } }, splitLine: { lineStyle: { color: rule } },
     },
@@ -180,4 +180,4 @@ function bindLeaderboardRadar(target, context, change) {
   }
 }
 
-export { radarContext, renderLeaderboardRadar, bindLeaderboardRadar, disposeLeaderboardRadar, radarOption };
+export { radarContext, renderLeaderboardRadar, bindLeaderboardRadar, disposeLeaderboardRadar, radarOption, radarMetricLabel, originNote };

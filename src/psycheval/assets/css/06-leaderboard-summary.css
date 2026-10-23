@@ -1,5 +1,25 @@
 .leaderboard-summary {
-  overflow:hidden;
+  overflow:visible;
+}
+.leaderboard-summary-export .export-menu-panel {
+  width:230px;
+  max-width:calc(100vw - 48px);
+}
+.leaderboard-summary-export button:disabled {
+  opacity:.55;
+  cursor:not-allowed;
+}
+.leaderboard-summary-export small {
+  display:block;
+  padding:4px 9px;
+  color:var(--muted);
+  font:12px/1.5 var(--sans);
+}
+@media (max-width:720px) {
+  .leaderboard-summary-export .export-menu-panel {
+    left:0;
+    right:auto;
+  }
 }
 .leaderboard-summary-empty {
   margin:0;

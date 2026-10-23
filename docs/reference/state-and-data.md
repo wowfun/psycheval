@@ -298,7 +298,7 @@ search does not limit selection scope. Unavailable IDs retain selection/order
 until explicitly removed, including across registry disappearance/reappearance.
 Selecting all beyond the limit reports an error without truncation.
 Selected metrics can be moved earlier or later in the control; search never
-changes their order.
+changes their order. Export availability reasons remain visible in the menu.
 Radar axes use a shared statistic and independently normalize against all groups
 in the current query, including unselected groups. Min–max scaling maps each axis
 to 0–100, reversed for metrics configured as lower-is-better so that larger radii
@@ -322,6 +322,11 @@ filter stays in page memory through presentation changes and navigation, but is
 not part of a shared location. Chart interactions preserve an open summary table.
 Radar selections affect presentation only; Saved View and spreadsheet charts
 remain bar charts.
+The Home summary export menu offers its existing Excel workbook, one PNG combining
+all bar-chart metrics in two columns, and a radar PNG with a complete color legend.
+Images use the current complete-query summary, grouping and statistic; radar
+images also use the selected axes and groups, independently of the visible chart
+type or comparison-list search. Exporting does not change presentation or the URL.
 Summary Excel requests require the ordered metric selection. Malformed IDs,
 duplicates and capacity violations are request errors. Syntactically valid but
 unavailable IDs remain gaps; requests require at least one registered metric.
@@ -334,6 +339,12 @@ shared descriptions, with custom units in the heading. Values remain numeric;
 durations use Excel time formatting, ratios use percentages and USD uses currency
 formatting. Missing values are blank and entirely unmeasured metric columns are
 omitted. Both workbook types share metric formats and labels.
+Images include the matching Trial count, scale and missing-data explanations,
+and retain full group labels. Overall summaries offer Excel only. Image export
+is unavailable while the summary is loading, failed or empty; radar also requires
+a selected group and at least three registered selected directional axes.
+No effective selected metrics disables all summary exports. Images exceeding the canvas capacity fail explicitly without
+truncating groups or metrics.
 Home's Clear conditions action resets query conditions, ordering, and applied View selection;
 it preserves summary grouping, statistic, table disclosure, and radar settings.
 Presentation changes alone do not enable that action.
