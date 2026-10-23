@@ -78,6 +78,13 @@ ordinary verifier compiles a fixed scoring plan, executes built-in and script
 checks, and aggregates their results independently of execution.
 Its optional YAML Judge reads declared text evidence and merges complete rubric
 assessments with the rule score; it does not depend on the WorkBuddy runtime.
+The verifier also owns preparation of immutable rubric inputs and execution of
+those prepared inputs. `psycheval.judge_runs` owns workspace Judge profiles,
+retained-prompt lookup and independent diagnostic runs; CLI and serve use this
+stateless service. Diagnostic runs execute within the caller's request and never
+write files, publish canonical scores or execute Task scripts. The browser owns
+session-only drafts and latest results. Normal verification owns diagnostic
+retention through the verifier's callback. See [Judge inspection and runs](reference/judge-runs.md).
 `harbor.documents` owns optional document inspection and format-specific facts;
 `harbor.evidence` owns immutable source snapshots and verifier evidence publication.
 Task graders own requirements and score decisions. Their interfaces and output
@@ -273,7 +280,8 @@ remains owned by `pretty-aui`.
 
 Core CLI implementation may consume pinned Harbor interfaces and the explicit
 `psycheval.harbor.datasets`, `psycheval.harbor.tasks`, and
-`psycheval.harbor.workbuddy` services, the explicit host-settings parser in
+`psycheval.harbor.workbuddy` services, the public preparation/execution interfaces
+in `psycheval.harbor.verifier`, the explicit host-settings parser in
 `psycheval.harbor.runtime_config`, shared identifier rules, and the
 `psycheval.harbor.windows` helpers for rendering Windows shell commands, but not
 Agent, Environment, or harness internals. The implementations exchange only

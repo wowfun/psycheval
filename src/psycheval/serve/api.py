@@ -33,6 +33,7 @@ from psycheval.config import (
     load_config,
     write_workspace_acp_agents,
     write_workspace_adapter_default_db,
+    write_workspace_judge,
     write_workspace_locale,
     write_workspace_timezone,
 )
@@ -331,6 +332,8 @@ def _patch_workspace_config(
                 for agent in body.acp_agents
             )
             write_workspace_acp_agents(temporary, agents)
+        if body.judge is not None:
+            write_workspace_judge(temporary, body.judge)
         rendered = temporary.read_bytes()
         if rendered == source:
             raise ProblemException(400, "configuration patch made no change")
@@ -502,10 +505,12 @@ def create_app(runtime: ServeRuntime, access_control: ServeAccess) -> FastAPI:
     _register_harbor_routes(app)
     _register_acp_routes(app)
     from psycheval.serve.jobs import register_jobs_routes
+    from psycheval.serve.judge import register_judge_routes
     from psycheval.serve.verification import register_verification_routes
 
     register_jobs_routes(app)
     register_verification_routes(app)
+    register_judge_routes(app)
     _verify_route_access(app)
     return app
 

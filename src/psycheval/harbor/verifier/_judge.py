@@ -7,7 +7,7 @@ import json
 import math
 import os
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from html import escape
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -15,9 +15,9 @@ from urllib.parse import urlsplit
 import httpx
 
 from ..evidence import _clear_output
-from ..runtime_config import EffectiveRuntimeConfig
+from ..runtime_config import EffectiveRuntimeConfig, RuntimePaths, VerifierInvocation
 from ._blocking import run_blocking
-from ._judge_config import JudgeConfig, Rubric
+from ._judge_config import JudgeConfig, Rubric, parse_judge_config
 from ._judge_evidence import EvidenceUnavailable, read_evidence
 
 
@@ -173,7 +173,7 @@ def _redact(text: str, key: str, *, variants: tuple[str, ...] | None = None) -> 
     return text
 
 
-def _save(path: Path, value: object, settings: JudgeSettings) -> None:
+def _retained(value: object, settings: JudgeSettings):
     def strings(item):
         if isinstance(item, str):
             yield item
@@ -198,23 +198,12 @@ def _save(path: Path, value: object, settings: JudgeSettings) -> None:
             return [scrub(value) for value in item]
         return item
 
-    text = (
-        json.dumps(scrub(value), ensure_ascii=False, indent=2, allow_nan=False) + "\n"
-    )
+    return scrub(value)
+
+
+def _write_diagnostic(path: Path, retained: object) -> None:
+    text = json.dumps(retained, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
     path.write_text(text, encoding="utf-8", errors="backslashreplace")
-
-
-def _read_evidence(
-    config: JudgeConfig,
-    runtime: EffectiveRuntimeConfig,
-    settings: JudgeSettings,
-    directory: Path,
-) -> dict:
-    evidence, diagnostics = read_evidence(
-        config, Path(runtime.paths.verifier_logs), settings.max_evidence_bytes
-    )
-    _save(directory / "evidence.json", diagnostics, settings)
-    return evidence
 
 
 def _strict_json(text: str):
@@ -351,9 +340,10 @@ async def _assess(
     runtime: EffectiveRuntimeConfig,
     evidence: dict,
     settings: JudgeSettings,
-    diagnostic_path: Path,
+    diagnostic,
     client: httpx.AsyncClient,
     rule_rewards: dict | None,
+    prepared_messages: list[dict] | None = None,
 ) -> dict:
     # Required evidence needs text; read/extraction errors also fail optional refs.
     missing = [
@@ -372,18 +362,20 @@ async def _assess(
             "reason": "missing or invalid evidence: " + ", ".join(missing),
             "missing": missing,
         }
-        await run_blocking(
-            _save,
-            diagnostic_path,
-            {"id": rubric.id, "messages": None, "attempts": [], "result": result},
-            settings,
+        await diagnostic(
+            {"id": rubric.id, "messages": None, "attempts": [], "result": result}
         )
         return result
     attempts = []
     messages = None
+    outcome = None
     try:
-        messages = await run_blocking(
-            _messages, rubric, runtime, evidence, settings, rule_rewards
+        messages = (
+            prepared_messages
+            if prepared_messages is not None
+            else await run_blocking(
+                _messages, rubric, runtime, evidence, settings, rule_rewards
+            )
         )
         for attempt in range(2):
             started = time.monotonic()
@@ -415,6 +407,7 @@ async def _assess(
                 result = {key: result[key] for key in ("id", "passed", "reason")}
                 if settings.api_key:
                     result["reason"] = _redact(result["reason"], settings.api_key)
+                outcome = result
                 return result
             except (httpx.TransportError, TimeoutError) as exc:
                 record["error"] = type(exc).__name__
@@ -427,24 +420,24 @@ async def _assess(
                 record["elapsed_sec"] = time.monotonic() - started
         raise AssertionError("request attempts exhausted")
     finally:
-        await run_blocking(
-            _save,
-            diagnostic_path,
+        await diagnostic(
             {
                 "id": rubric.id,
                 "messages": messages if attempts else None,
                 "attempts": attempts,
-            },
-            settings,
+                "result": outcome,
+            }
         )
 
 
-async def run_judge(
+async def _execute_judge(
     config: JudgeConfig | None,
     runtime: EffectiveRuntimeConfig,
     settings: JudgeSettings,
     *,
     rule_rewards: dict | None = None,
+    prepared: dict | None = None,
+    on_diagnostic=None,
 ) -> dict:
     result = {
         "status": "absent" if config is None else "disabled",
@@ -454,19 +447,46 @@ async def run_judge(
     if config is None:
         return result
     result["plan"] = config.to_dict()
+    result.update(
+        _retained(
+            {
+                "context": asdict(runtime.verifier) if runtime.verifier else None,
+                "settings": {
+                    key: value
+                    for key, value in asdict(settings).items()
+                    if key != "api_key"
+                },
+            },
+            settings,
+        )
+    )
+    diagnostics = {}
+
+    async def emit(name, value):
+        retained = await run_blocking(_retained, value, settings)
+        if on_diagnostic is None:
+            diagnostics[name] = retained
+        else:
+            await run_blocking(on_diagnostic, name, retained)
+
     if not settings.enabled:
         return result
-    directory = Path(runtime.paths.verifier_logs) / "judge"
-    await run_blocking(_clear_output, directory)
-    await run_blocking(directory.mkdir)
     started = time.monotonic()
     completed = {}
     errors = {}
     try:
         async with asyncio.timeout(settings.total_timeout):
-            evidence = await run_blocking(
-                _read_evidence, config, runtime, settings, directory
-            )
+            if prepared is None:
+                evidence, evidence_index = await run_blocking(
+                    read_evidence,
+                    config,
+                    Path(runtime.paths.verifier_logs),
+                    settings.max_evidence_bytes,
+                )
+            else:
+                evidence = prepared["evidence"]
+                evidence_index = prepared["diagnostics"]
+            await emit("evidence.json", evidence_index)
             semaphore = asyncio.Semaphore(settings.concurrency)
             headers = (
                 {"Authorization": "Bearer " + settings.api_key}
@@ -478,6 +498,9 @@ async def run_judge(
             ) as client:
 
                 async def assess(index, rubric):
+                    async def diagnostic(value):
+                        await emit(f"rubric-{index:04}.json", value)
+
                     async with semaphore:
                         try:
                             completed[rubric.id] = await _assess(
@@ -485,19 +508,26 @@ async def run_judge(
                                 runtime,
                                 evidence,
                                 settings,
-                                directory / f"rubric-{index:04}.json",
+                                diagnostic,
                                 client,
                                 rule_rewards,
+                                prepared["messages"][rubric.id] if prepared else None,
                             )
                         except _Incomplete as exc:
                             errors[rubric.id] = str(exc)
 
-                await asyncio.gather(
-                    *(
-                        assess(index, rubric)
-                        for index, rubric in enumerate(config.rubrics, 1)
-                    )
-                )
+                tasks = [
+                    asyncio.create_task(assess(index, rubric))
+                    for index, rubric in enumerate(config.rubrics, 1)
+                ]
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+
     except (TimeoutError, EvidenceUnavailable) as exc:
         result["reason"] = (
             "Judge total deadline exceeded"
@@ -513,7 +543,13 @@ async def run_judge(
     result["checks"] = [
         completed[item.id] for item in config.rubrics if item.id in completed
     ]
-    result["errors"] = errors
+    result["errors"] = {
+        item.id: errors.get(item.id, result["reason"])
+        for item in config.rubrics
+        if item.id not in completed
+    }
+    if on_diagnostic is None:
+        result["diagnostics"] = diagnostics
     result["elapsed_sec"] = time.monotonic() - started
     deadline_exceeded = result["elapsed_sec"] >= settings.total_timeout
     if deadline_exceeded:
@@ -524,6 +560,118 @@ async def run_judge(
         else "incomplete"
     )
     return result
+
+
+async def run_verifier_judge(config, runtime, settings, *, rule_rewards=None):
+    """Normal verification owns diagnostic retention, separate from execution."""
+    if config is None:
+        return await _execute_judge(config, runtime, settings)
+    directory = Path(runtime.paths.verifier_logs) / "judge"
+    await run_blocking(_clear_output, directory)
+    await run_blocking(directory.mkdir, parents=True, exist_ok=False)
+
+    def retain(name, value):
+        _write_diagnostic(directory / name, value)
+
+    return await _execute_judge(
+        config, runtime, settings, rule_rewards=rule_rewards, on_diagnostic=retain
+    )
+
+
+def _prepared_input(config, runtime, settings, rule_rewards, evidence, diagnostics):
+    """Freeze prompt inputs without credentials or environment discovery."""
+    return {
+        "version": 1,
+        "engine": "psycheval.yaml",
+        "config": config.to_dict(),
+        "context": asdict(runtime.verifier) if runtime.verifier else None,
+        "rule_rewards": rule_rewards or {},
+        "settings": {
+            key: value for key, value in asdict(settings).items() if key != "api_key"
+        },
+        "evidence": evidence,
+        "diagnostics": diagnostics,
+        "messages": {
+            rubric.id: _messages(rubric, runtime, evidence, settings, rule_rewards)
+            for rubric in config.rubrics
+        },
+    }
+
+
+@dataclass(frozen=True)
+class PreparedJudge:
+    """Immutable JSON snapshot; returned mappings cannot mutate the preparation."""
+
+    _json: str = field(repr=False)
+
+    def to_dict(self) -> dict:
+        return json.loads(self._json)
+
+
+def prepare_judge(
+    config: JudgeConfig,
+    *,
+    evidence_root: Path,
+    settings: JudgeSettings,
+    context: VerifierInvocation | None = None,
+    rubric_ids: tuple[str, ...] | None = None,
+    rule_rewards: dict | None = None,
+) -> PreparedJudge:
+    """Prepare selected rubrics without writes, credentials or model calls.
+
+    This synchronous bounded reader can be called through an application's
+    blocking-work boundary.
+    """
+    if rubric_ids is not None:
+        if not rubric_ids or len(set(rubric_ids)) != len(rubric_ids):
+            raise ValueError("select one or more unique rubric IDs")
+        unknown = set(rubric_ids) - {item.id for item in config.rubrics}
+        if unknown:
+            raise ValueError(f"unknown rubric IDs: {', '.join(sorted(unknown))}")
+        config = replace(
+            config,
+            rubrics=tuple(item for item in config.rubrics if item.id in rubric_ids),
+        )
+    refs = {ref for item in config.rubrics for ref in item.artifact_refs}
+    config = replace(
+        config, artifacts=tuple(item for item in config.artifacts if item.id in refs)
+    )
+    try:
+        evidence, diagnostics = read_evidence(
+            config, evidence_root, settings.max_evidence_bytes
+        )
+    except EvidenceUnavailable as exc:
+        raise ValueError(str(exc)) from exc
+    runtime = EffectiveRuntimeConfig(
+        paths=RuntimePaths("", "", "", "", ""), verifier=context
+    )
+    payload = _prepared_input(
+        config, runtime, settings, rule_rewards, evidence, diagnostics
+    )
+    return PreparedJudge(json.dumps(payload, ensure_ascii=False, allow_nan=False))
+
+
+async def run_judge(
+    prepared: PreparedJudge, *, api_key: str = "", on_diagnostic=None
+) -> dict:
+    """Execute prepared inputs in memory; an optional callback owns retention."""
+    payload = prepared.to_dict()
+    config = parse_judge_config(json.dumps(payload["config"]))
+    settings = JudgeSettings(
+        **{**payload["settings"], "enabled": True, "api_key": api_key}
+    )
+    context = VerifierInvocation(**payload["context"]) if payload["context"] else None
+    runtime = EffectiveRuntimeConfig(
+        paths=RuntimePaths("", "", "", "", ""), verifier=context
+    )
+    return await _execute_judge(
+        config,
+        runtime,
+        settings,
+        rule_rewards=payload["rule_rewards"],
+        prepared=payload,
+        on_diagnostic=on_diagnostic,
+    )
 
 
 def merge_scores(

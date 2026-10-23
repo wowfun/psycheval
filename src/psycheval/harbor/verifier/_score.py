@@ -138,6 +138,8 @@ def score_payload(
                 metadata={
                     "judge_status": judge["status"],
                     "reason": judge["reason"],
+                    "context": judge.get("context"),
+                    "settings": judge.get("settings"),
                     **(
                         {"duration_sec": judge["elapsed_sec"]}
                         if "elapsed_sec" in judge

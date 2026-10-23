@@ -51,6 +51,9 @@ class ServeRuntime:
         from psycheval.jobs.service import JobsService
 
         self.jobs = JobsService(store.paths.root)
+        from psycheval.judge_runs.service import JudgeService
+
+        self.judge = JudgeService(store.paths.root)
         self._jobs_revision = None
         self._jobs_checked_at = 0
         self._jobs_thread = None

@@ -2,12 +2,19 @@
 
 from ._calls import ObservationIndex, matching_observations
 from ._evaluation import evaluate
-from ._judge import JudgeSettings
+from ._judge import JudgeSettings, PreparedJudge, prepare_judge, run_judge
+from ._judge_config import JudgeConfig, load_judge_config, parse_judge_config
 from ._runner import run_verifier
 from ._scoring import ScoringItem, ScoringPlan, aggregate, build_scoring_plan
 
 __all__ = [
     "JudgeSettings",
+    "JudgeConfig",
+    "PreparedJudge",
+    "prepare_judge",
+    "run_judge",
+    "load_judge_config",
+    "parse_judge_config",
     "ObservationIndex",
     "ScoringItem",
     "ScoringPlan",

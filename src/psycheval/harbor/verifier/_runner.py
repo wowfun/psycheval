@@ -19,7 +19,7 @@ from ..runtime_config import (
 )
 from ._blocking import run_blocking
 from ._evaluation import evaluate
-from ._judge import JudgeSettings, clear_judge_outputs, merge_scores, run_judge
+from ._judge import JudgeSettings, clear_judge_outputs, merge_scores, run_verifier_judge
 from ._judge_config import load_judge_config
 from ._score import score_payload
 from ._scoring import ScoringPlan, aggregate, build_scoring_plan, normalize_checks
@@ -184,7 +184,9 @@ async def run_verifier(
         if plan.custom_ids:
             checks.extend(await run_blocking(_custom_checks, script, runtime, plan))
         rewards = await run_blocking(aggregate, checks, plan=plan)
-        judge = await run_judge(judge_config, runtime, settings, rule_rewards=rewards)
+        judge = await run_verifier_judge(
+            judge_config, runtime, settings, rule_rewards=rewards
+        )
         rewards, merge = merge_scores(rewards, judge_config, judge)
         result = score_payload(
             await run_blocking(normalize_checks, checks, plan=plan),

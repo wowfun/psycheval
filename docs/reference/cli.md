@@ -12,6 +12,8 @@ harnesses, which own Agent execution and Task scoring; see [Jobs](jobs.md).
 exposes the `peval` command with `init`, `view trajectory`, `publish
 evaluation-report`, `export trajectory`, `import analysis`,
 and `serve`; `tr` is the trajectory alias.
+The `judge` command group inspects retained prompts, previews rubric drafts and
+runs independent assessments; see [Judge inspection and runs](judge-runs.md).
 
 Help and errors are plain terminal text. `-h` and `--help` are equivalent.
 Root completion options emit or explicitly install shell completion; ordinary

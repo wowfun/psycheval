@@ -4,6 +4,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
+from psycheval.judge_runs.configuration import JudgeProfiles
 from psycheval.serve.path_inputs import required_path_token, source_path_lines
 from psycheval.timezones import validate_timezone
 
@@ -126,6 +127,7 @@ class AcpAgentInput(StrictRequest):
 
 
 class ConfigPatchRequest(StrictRequest):
+    judge: JudgeProfiles | None = None
     locale: str | None = None
     timezone: Annotated[str, AfterValidator(validate_timezone)] | None = None
     adapter_defaults: dict[str, BrowserPath | None] | None = None

@@ -247,6 +247,7 @@ def workspace_config_payload(
     payload["timezone"] = config.timezone
     payload["effective_timezone"] = runtime.effective_timezone
     payload["adapter_defaults"] = dict(config.adapter_default_db_paths)
+    payload["judge"] = config.judge.model_dump()
     payload["acp_agents"] = [
         {
             "id": agent.id,

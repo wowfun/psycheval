@@ -23,6 +23,7 @@ from pydantic import (
 from psycheval.harbor.identifiers import HARBOR_ID_RE, validate_harbor_id
 from psycheval.i18n import normalize_locale
 from psycheval.jobs.configuration import HarnessId, JobsDocument
+from psycheval.judge_runs.configuration import JudgeProfiles
 from psycheval.timezones import validate_timezone
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -177,6 +178,7 @@ class ToolConfig(_FrozenConfigModel):
     harbor_datasets: tuple[HarborDataset, ...] = ()
     harbor_mounts: tuple[HarborMount, ...] = ()
     acp_agents: tuple[AcpAgent, ...] = ()
+    judge: JudgeProfiles = Field(default_factory=JudgeProfiles)
 
     @property
     def adapter_options(self) -> dict[str, Any]:
@@ -320,6 +322,7 @@ class _WorkspaceDocument(_RawConfigModel):
     acp: _AcpDocument | None = None
     harbor: _HarborDocument | None = None
     jobs: JobsDocument = Field(default_factory=JobsDocument)
+    judge: JudgeProfiles = Field(default_factory=JudgeProfiles)
     harnesses: dict[HarnessId, dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -400,6 +403,10 @@ def apply_toml_config(
     base_dir: Path | None = None,
 ) -> ToolConfig:
     _validate_workspace_document(data)
+    if "judge" in data:
+        config = config.validated_update(
+            judge=JudgeProfiles.model_validate(data["judge"])
+        )
     if "timezone" in data:
         config = config.validated_update(timezone=data["timezone"])
     if "locale" in data:
@@ -762,6 +769,16 @@ def write_workspace_acp_agents(
     )
     _atomic_write_text(path, rendered)
     return validated_config.acp_agents
+
+
+def write_workspace_judge(config_path: Path, profiles: JudgeProfiles) -> None:
+    document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+    document["judge"] = profiles.model_dump(exclude_none=True)
+    rendered = tomlkit.dumps(document)
+    apply_toml_config(
+        ToolConfig(), tomllib.loads(rendered), base_dir=config_path.parent
+    )
+    _atomic_write_text(config_path, rendered)
 
 
 def write_workspace_harbor_config(

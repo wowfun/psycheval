@@ -109,7 +109,11 @@ rule scoring and a local Judge. Host lifecycle tests preserve the primary error
 when cleanup also fails. Trial reader tests cover cache refresh, multi-step sources,
 canonical precedence and corrupt canonical files without diagnostic fallback.
 The YAML Judge tests use a local Chat Completions server, including partial API
-failures, deadlines, evidence limits, and strict response validation. A real
+failures, deadlines, evidence limits, and strict response validation. The
+independent-run fixture in `tests/peval/test_judge_runs.py` verifies zero-call
+previews, fingerprint conflicts, prompt lookup, deadlines, cancellation and
+disconnect cleanup, absence of file writes, and CLI/HTTP permissions against a
+local provider. A real
 three-step Trend Digest Trial verifies fixed partial credit and continuation
 gates. Its upstream Harbor CLI uses `-X utf8` for Harbor's locale-dependent Task
 reader, as documented in the native installation workflow. Preparation sets

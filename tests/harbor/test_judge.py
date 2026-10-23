@@ -23,7 +23,7 @@ from psycheval.harbor.verifier.__main__ import main
 from psycheval.harbor.verifier._judge import (
     _default_user_prompt,
     merge_scores,
-    run_judge,
+    run_verifier_judge,
 )
 from psycheval.harbor.verifier._judge_config import parse_judge_config
 from psycheval.harbor.verifier._scoring import REWARD_DIMENSIONS
@@ -74,7 +74,7 @@ def pause_verifier_stage(monkeypatch, stage):
 
     module, name = {
         "checks": (_runner, "_custom_checks"),
-        "evidence": (_judge, "_read_evidence"),
+        "evidence": (_judge, "read_evidence"),
         "publication": (_runner, "_write_json"),
     }[stage]
     original = getattr(module, name)
@@ -318,10 +318,12 @@ def test_diagnostic_redaction_reuses_credential_variants(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_judge.json, "dumps", dumps)
     path = tmp_path / "diagnostic.json"
-    _judge._save(
+    _judge._write_diagnostic(
         path,
-        {"messages": [key] * 100},
-        JudgeSettings(True, "http://unused.invalid", "fixture", key),
+        _judge._retained(
+            {"messages": [key] * 100},
+            JudgeSettings(True, "http://unused.invalid", "fixture", key),
+        ),
     )
     assert (
         json.loads(path.read_text(encoding="utf-8"))["messages"] == ["[REDACTED]"] * 100
@@ -383,7 +385,9 @@ def test_default_prompt_xml_blocks_preserve_text_and_artifact_boundaries(
     )
     with judge_server() as server:
         result = asyncio.run(
-            run_judge(config, context, JudgeSettings(True, server["url"], "fixture"))
+            run_verifier_judge(
+                config, context, JudgeSettings(True, server["url"], "fixture")
+            )
         )
         messages = server["requests"][0]["messages"]
     assert result["status"] == "complete"
@@ -575,7 +579,7 @@ def test_json_publication_preserves_unicode_and_literal_escapes(tmp_path, diagno
         "surrogates": ["\ud800", "\udfff"],
     }
     if diagnostic:
-        _judge._save(path, payload, JudgeSettings())
+        _judge._write_diagnostic(path, payload)
     else:
         _runner._write_json(path, payload)
     raw = path.read_bytes().decode("utf-8")
@@ -831,7 +835,9 @@ def test_default_prompt_without_optional_runtime_or_scope(tmp_path):
     assert JudgeSettings().system_prompt is None
     with judge_server() as server:
         result = asyncio.run(
-            run_judge(config, context, JudgeSettings(True, server["url"], "fixture"))
+            run_verifier_judge(
+                config, context, JudgeSettings(True, server["url"], "fixture")
+            )
         )
         prompt = server["requests"][0]["messages"][0]["content"]
     assert result["status"] == "complete"
@@ -1005,7 +1011,9 @@ def test_disabled_judge_sends_no_requests_and_preserves_rule_score(tmp_path):
     with judge_server() as server:
         config = parse_judge_config(YAML)
         result = asyncio.run(
-            run_judge(config, runtime(tmp_path), JudgeSettings(base_url=server["url"]))
+            run_verifier_judge(
+                config, runtime(tmp_path), JudgeSettings(base_url=server["url"])
+            )
         )
         rewards, merge = merge_scores({"reward": 0.75}, config, result)
         assert rewards == {"reward": 0.75, "rule_score": 0.75}
@@ -1023,7 +1031,7 @@ def test_complete_concurrent_judge_merges_and_retains_diagnostics(tmp_path):
         settings = JudgeSettings(
             True, server["url"], "fixture-model", "private-credential"
         )
-        result = asyncio.run(run_judge(config, context, settings))
+        result = asyncio.run(run_verifier_judge(config, context, settings))
         rewards, merge = merge_scores(
             {"reward": 0.75, "required_tool": 1}, config, result
         )
@@ -1073,7 +1081,7 @@ def test_one_incomplete_rubric_disables_whole_merge(tmp_path, behavior, attempts
         server["behavior"]["quality"] = behavior
         config = config_with_two_rubrics()
         result = asyncio.run(
-            run_judge(
+            run_verifier_judge(
                 config, runtime(tmp_path), JudgeSettings(True, server["url"], "fixture")
             )
         )
@@ -1141,7 +1149,7 @@ def test_extra_fields_do_not_relax_required_field_validation(tmp_path, change):
             "result": {"passed_reason_note": None, **change}
         }
         result = asyncio.run(
-            run_judge(
+            run_verifier_judge(
                 parse_judge_config(YAML),
                 runtime(tmp_path),
                 JudgeSettings(True, server["url"], "fixture"),
@@ -1158,7 +1166,7 @@ def test_extra_fields_do_not_replace_missing_required_fields(tmp_path, field):
     with judge_server() as server:
         server["behavior"]["fidelity"] = {"content": json.dumps(response)}
         result = asyncio.run(
-            run_judge(
+            run_verifier_judge(
                 parse_judge_config(YAML),
                 runtime(tmp_path),
                 JudgeSettings(True, server["url"], "fixture"),
@@ -1182,7 +1190,7 @@ def test_judge_deadline_prevents_merge_even_if_blocking_work_finishes_last_rubri
     monkeypatch.setattr(_judge, "_assess", slow_assess)
     config = parse_judge_config(YAML)
     result = asyncio.run(
-        run_judge(
+        run_verifier_judge(
             config,
             runtime(tmp_path),
             JudgeSettings(True, "http://unused.invalid", "fixture", total_timeout=0.04),
@@ -1199,11 +1207,13 @@ def test_retry_and_total_budget(tmp_path):
         server["behavior"]["fidelity"] = {"retry": 429}
         config = parse_judge_config(YAML)
         settings = JudgeSettings(True, server["url"], "fixture")
-        result = asyncio.run(run_judge(config, runtime(tmp_path / "retry"), settings))
+        result = asyncio.run(
+            run_verifier_judge(config, runtime(tmp_path / "retry"), settings)
+        )
         assert result["status"] == "complete" and server["counts"]["fidelity"] == 2
         server["behavior"]["fidelity"] = {"delay": 1}
         result = asyncio.run(
-            run_judge(
+            run_verifier_judge(
                 config,
                 runtime(tmp_path / "timeout"),
                 replace(settings, total_timeout=0.1),
@@ -1223,7 +1233,7 @@ def test_judge_does_not_search_other_runtime_roots(tmp_path, source):
     (Path(getattr(context.paths, source)) / "missing.txt").write_text("not evidence")
     with judge_server() as server:
         settings = JudgeSettings(True, server["url"], "fixture")
-        result = asyncio.run(run_judge(config, context, settings))
+        result = asyncio.run(run_verifier_judge(config, context, settings))
         assert result["status"] == "complete" and not result["checks"][0]["passed"]
         assert not server["requests"]
 
@@ -1232,7 +1242,7 @@ def test_oversized_evidence_falls_back_without_truncation_or_model_call(tmp_path
     context = runtime(tmp_path)
     with judge_server() as server:
         result = asyncio.run(
-            run_judge(
+            run_verifier_judge(
                 parse_judge_config(YAML),
                 context,
                 JudgeSettings(True, server["url"], "fixture", max_evidence_bytes=2),
@@ -1415,7 +1425,7 @@ def test_judge_reclaims_reserved_directory(tmp_path):
     (directory / "old-response.json").write_text("obsolete")
     with judge_server() as server:
         result = asyncio.run(
-            run_judge(
+            run_verifier_judge(
                 parse_judge_config(YAML),
                 context,
                 JudgeSettings(True, server["url"], "fixture"),
@@ -1429,7 +1439,7 @@ def test_evidence_read_does_not_require_windows_stat_constants(tmp_path, monkeyp
     monkeypatch.delattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", raising=False)
     with judge_server() as server:
         result = asyncio.run(
-            run_judge(
+            run_verifier_judge(
                 parse_judge_config(YAML),
                 runtime(tmp_path),
                 JudgeSettings(True, server["url"], "fixture"),
@@ -1511,7 +1521,7 @@ def test_request_timeout_retries_once_and_can_complete(tmp_path):
     with judge_server() as server:
         server["behavior"]["fidelity"] = {"delay": [1, 0]}
         result = asyncio.run(
-            run_judge(
+            run_verifier_judge(
                 parse_judge_config(YAML),
                 runtime(tmp_path),
                 JudgeSettings(True, server["url"], "fixture", request_timeout=0.2),
@@ -1543,7 +1553,9 @@ def test_optional_missing_evidence_and_explicit_merge_weights(tmp_path):
     with judge_server() as server:
         server["behavior"]["fidelity"] = {"passed": False}
         result = asyncio.run(
-            run_judge(config, context, JudgeSettings(True, server["url"], "fixture"))
+            run_verifier_judge(
+                config, context, JudgeSettings(True, server["url"], "fixture")
+            )
         )
         assert result["status"] == "complete"
         prompt = server["requests"][0]["messages"][-1]["content"]
@@ -1568,7 +1580,7 @@ def test_evidence_budget_is_shared_across_artifacts(tmp_path):
     size = (Path(context.paths.verifier_logs) / artifact.path).stat().st_size
     with judge_server() as server:
         result = asyncio.run(
-            run_judge(
+            run_verifier_judge(
                 config,
                 context,
                 JudgeSettings(
@@ -1588,7 +1600,7 @@ def test_non_utf8_evidence_fails_referencing_rubrics(tmp_path, required):
     config = replace(config, artifacts=(artifact,))
     (Path(context.paths.verifier_logs) / artifact.path).write_bytes(b"\xff")
     with judge_server() as server:
-        operation = run_judge(
+        operation = run_verifier_judge(
             config, context, JudgeSettings(True, server["url"], "fixture")
         )
         result = asyncio.run(operation)
@@ -1636,7 +1648,7 @@ def test_known_credential_in_evidence_and_response_is_redacted(
             }
         }
         result = asyncio.run(
-            run_judge(
+            run_verifier_judge(
                 parse_judge_config(YAML),
                 context,
                 JudgeSettings(True, server["url"], "fixture", key, system_prompt=key),
@@ -1679,7 +1691,7 @@ def test_judge_directory_link_is_replaced_and_evidence_link_is_rejected(tmp_path
         pytest.skip(f"native symlink creation unavailable: {exc}")
     with judge_server() as server:
         result = asyncio.run(
-            run_judge(
+            run_verifier_judge(
                 parse_judge_config(YAML),
                 context,
                 JudgeSettings(True, server["url"], "fixture"),
@@ -1737,3 +1749,37 @@ def test_cli_accepts_atif_larger_than_regular_json_limit(tmp_path, monkeypatch):
         )["reward"]
         == 1
     )
+
+
+def test_normal_judge_redacts_diagnostics_once_and_leaves_retention_to_sink(
+    tmp_path, monkeypatch
+):
+    from psycheval.harbor.verifier import _judge
+
+    _, context = api_task(tmp_path)
+    key = "fixture-private-key"
+    calls = []
+    retained = _judge._retained
+
+    def observe(value, settings):
+        if isinstance(value, dict) and value.get("id") == "fidelity":
+            calls.append(value)
+        return retained(value, settings)
+
+    monkeypatch.setattr(_judge, "_retained", observe)
+    with judge_server() as provider:
+        result = asyncio.run(
+            run_verifier_judge(
+                parse_judge_config(YAML),
+                context,
+                JudgeSettings(True, provider["url"], "fixture", key),
+            )
+        )
+    assert len(calls) == 1
+    assert "diagnostics" not in result
+    diagnostic = json.loads(
+        (Path(context.paths.verifier_logs) / "judge/rubric-0001.json").read_text(
+            encoding="utf8"
+        )
+    )
+    assert diagnostic["id"] == "fidelity" and diagnostic["attempts"]

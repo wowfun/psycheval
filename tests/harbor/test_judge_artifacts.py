@@ -16,7 +16,7 @@ from psycheval.harbor.verifier import JudgeSettings, _judge_evidence, run_verifi
 from psycheval.harbor.verifier._judge import (
     clear_judge_outputs,
     merge_scores,
-    run_judge,
+    run_verifier_judge,
 )
 from psycheval.harbor.verifier._judge_config import parse_judge_config
 from psycheval.harbor.verifier._judge_evidence import TEXT_TYPES, read_evidence
@@ -45,7 +45,7 @@ def extracted_record(**overrides):
 def assess(context, config=None, **settings):
     with judge_server() as server:
         result = asyncio.run(
-            run_judge(
+            run_verifier_judge(
                 config or parse_judge_config(YAML),
                 context,
                 JudgeSettings(True, server["url"], "fixture", **settings),

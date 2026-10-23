@@ -7,6 +7,7 @@ from typing import Annotated, TypeVar
 import typer
 
 from psycheval.cli.arguments import CliArgs
+from psycheval.cli.judge import make_judge_app
 from psycheval.outputs import DEFAULT_OUTPUT
 
 APP_HELP = (
@@ -41,6 +42,7 @@ def make_app(*, help: str, add_completion: bool = False) -> typer.Typer:
 
 
 app = make_app(help=APP_HELP, add_completion=True)
+app.add_typer(make_judge_app(), name="judge")
 view_app = make_app(help="Render a peval-style report for a supported scenario.")
 export_app = make_app(help="Export normalized data for a supported scenario.")
 import_app = make_app(help="Import analysis files into peval workspace artifacts.")

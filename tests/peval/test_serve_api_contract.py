@@ -83,6 +83,7 @@ class ServeApiContractTests(unittest.TestCase):
                 "mounts",
                 "timezone",
                 "effective_timezone",
+                "judge",
             },
         )
         return payload, headers

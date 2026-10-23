@@ -854,6 +854,10 @@ reward for the invocation.
 
 ## YAML LLM Judge
 
+Retained prompt inspection and independent rubric execution are described in
+[Judge inspection and runs](judge-runs.md). The public `prepare_judge` and
+`run_judge` interfaces share the normal verifier's evidence and model-call logic.
+
 The shared verifier optionally reads `tests/judge.yaml`. Its version-1 schema
 uses `artifacts`, `llm_judge`, and `score_merge`, independently of `grader.json`.
 YAML is safely parsed with strict types, unique mapping keys and IDs, known
