@@ -68,6 +68,11 @@ def imports(root: Path) -> None:
     runtime = module("runtime_config")
     assert runtime.HARNESS_PROTOCOL_VERSION == 2
     assert runtime.PEVAL_CONFIG_ENV == "PEVAL_CONFIG"
+    for name in ("one.pptx", "two.pptx"):
+        (root / name).write_bytes(b"identical without parser dependencies")
+    selection = module("documents").select_document([root], format="pptx")
+    assert selection.selected == root / "one.pptx"
+    assert len(selection.candidates) == 2
 
 
 def documents(root: Path) -> None:
@@ -76,17 +81,24 @@ def documents(root: Path) -> None:
     import pptx
     import pypdf
 
+    workdir = root / "workdir"
+    workdir.mkdir()
     pdf = pypdf.PdfWriter()
     pdf.add_blank_page(width=100, height=200)
-    pdf.write(root / "input.pdf")
-    pptx.Presentation().save(root / "input.pptx")
-    openpyxl.Workbook().save(root / "input.xlsx")
-    docx.Document().save(root / "input.docx")
+    pdf.write(workdir / "input.pdf")
+    pptx.Presentation().save(workdir / "input.pptx")
+    openpyxl.Workbook().save(workdir / "input.xlsx")
+    docx.Document().save(workdir / "input.docx")
     api, evidence = module("documents"), module("evidence")
+    mirror = root / "mirror"
+    mirror.mkdir()
+    for kind in ("pdf", "pptx", "xlsx", "docx"):
+        (mirror / f"input.{kind}").write_bytes((workdir / f"input.{kind}").read_bytes())
     with evidence.EvidenceWriter(root / "evidence") as writer:
         for kind in ("pdf", "pptx", "xlsx", "docx"):
-            selected = api.select_document([root], format=kind).selected
-            source = writer.capture(f"source_{kind}", selected)
+            selection = api.select_document([workdir, mirror], format=kind)
+            assert selection.selected is not None and len(selection.candidates) == 2
+            source = writer.capture(f"source_{kind}", selection.selected)
             report = api.inspect_document(source)
             writer.add_text(kind, report.to_markdown(), source_id=f"source_{kind}")
     assert (root / "evidence/artifact_manifest.json").is_file()

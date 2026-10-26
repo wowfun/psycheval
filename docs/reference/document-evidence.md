@@ -18,15 +18,38 @@ OOXML access affect grading facts; upgrades require the style regression target.
 ## Inspection
 
 `select_document(roots, format=..., preferred_stem=..., max_entries=100000,
-max_depth=64)` incrementally discovers
+max_depth=64, max_compare_bytes=256 * 1024 * 1024)` incrementally discovers
 regular files, excludes symbolic links, Windows reparse points and Office lock
-files, and deduplicates overlapping roots. A unique preferred stem wins; otherwise
-a unique candidate is selected. Missing and ambiguous results contain candidate
-paths and a reason and never choose by modification time. Root depth is zero.
+files, and deduplicates overlapping roots. Matching preferred stems form the
+selection pool when present; otherwise all candidates participate. One candidate
+is selected without reading its contents. Multiple candidates are treated as one
+document only when their lengths and bytes match, including copies with different
+filenames. The first path in the existing sorted order represents identical
+copies, with reason `unique after content dedupe`. Different contents remain
+ambiguous, including files with equivalent visible content but different archive
+metadata. Selection does not normalize or parse documents to establish equality.
+`candidates` always retains every discovered physical path, including
+copies outside the preferred-stem pool. Selection never uses modification time
+to choose a version. Root depth is zero.
 Exceeding a scan budget or encountering an unreadable entry returns no selection
 and an explicit incomplete-scan reason, even if a candidate was already found:
 an incomplete scan cannot establish uniqueness. Directory contents are streamed;
 deduplication uses lexical absolute paths without resolving each entry.
+
+Content comparison streams pairs of files and charges every byte read, including
+repeated reads of the representative, against `max_compare_bytes`. This positive
+integer budget is independent of inspection limits. Read failures, detected file
+changes, and exhausted comparison budgets return no selection with an explicit
+incomplete-comparison reason; candidates are never silently discarded. Callers
+must finish writing outputs before selection. Selection returns a path, not an
+immutable snapshot, and does not validate document syntax: identical empty or
+corrupt files still require inspection.
+
+Artifact retention is outside the selection interface; see
+[Harbor artifact collection](harbor.md#artifact-collection).
+Scanning both a workspace and its retained mirror is supported. Tasks own any
+requirements about filenames or the number of physical copies independently of
+content-based document selection.
 
 `inspect_document(path_or_snapshot, format=None, pptx_options=None, limits=...)` reads one
 bounded immutable `SourceSnapshot`. Passing a snapshot reuses its bytes. Reports

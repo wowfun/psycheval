@@ -7,6 +7,50 @@ import pytest
 from psycheval.harbor.evidence import EvidenceWriter, SourceSnapshot
 
 
+def test_mirrored_presentation_produces_raw_and_text_evidence(tmp_path):
+    pptx = pytest.importorskip("pptx")
+    from psycheval.harbor.documents import inspect_document, select_document
+
+    workdir, artifacts = tmp_path / "workdir", tmp_path / "artifacts"
+    workdir.mkdir()
+    original = workdir / "agent-intro.pptx"
+    deck = pptx.Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[1])
+    slide.shapes.title.text = "Agent introduction"
+    slide.placeholders[1].text = "Tools, reasoning, and feedback"
+    deck.save(original)
+    content = original.read_bytes()
+    for path in (
+        workdir / "slides/output" / original.name,
+        artifacts / original.name,
+        artifacts / "slides/output" / original.name,
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    selection = select_document(
+        [workdir, artifacts], format="pptx", preferred_stem="agent-intro"
+    )
+    assert selection.selected is not None and len(selection.candidates) == 4
+    logs = tmp_path / "verifier"
+    with EvidenceWriter(logs) as writer:
+        source = writer.capture("presentation_pptx", selection.selected)
+        report = inspect_document(source)
+        assert len(report.slides) == 1
+        writer.add_text(
+            "presentation_text", report.to_markdown(), source_id="presentation_pptx"
+        )
+    manifest = json.loads((logs / "artifact_manifest.json").read_text())
+    raw, text = manifest["artifacts"]
+    assert raw["sha256"] == hashlib.sha256(content).hexdigest()
+    assert (logs / raw["verifier_raw_path"]).read_bytes() == content
+    assert text["extract_status"] == "ok"
+    assert text["source_artifact_id"] == raw["id"]
+    assert "Agent introduction" in (logs / text["text_path"]).read_text(
+        encoding="utf-8"
+    )
+
+
 @pytest.mark.parametrize("snapshot", [False, True])
 def test_capture_limits_apply_to_paths_and_snapshots(tmp_path, snapshot):
     source = tmp_path / "source.pdf"

@@ -2,10 +2,14 @@
 
 import dataclasses
 import io
+import os
+import shutil
 import subprocess
 import sys
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -541,22 +545,413 @@ def test_selection_is_unique_and_deduplicates_roots(tmp_path, format):
     nested = tmp_path / "nested"
     nested.mkdir()
     first = nested / f"first.{format.upper()}"
-    first.touch()
+    first.write_bytes(b"first")
     (nested / f"~$lock.{format}").touch()
     assert select_document([tmp_path, nested], format=format).selected == first
     second = tmp_path / f"second.{format}"
-    second.touch()
+    second.write_bytes(b"other")
     result = select_document([tmp_path], format=format)
     assert result.selected is None and len(result.candidates) == 2
     assert (
         select_document([tmp_path], format=format, preferred_stem="first").selected
         == first
     )
-    (tmp_path / f"first.{format}").touch()
+    (tmp_path / f"first.{format}").write_bytes(b"third")
     assert (
         select_document([tmp_path], format=format, preferred_stem="first").selected
         is None
     )
+
+
+@pytest.mark.parametrize("format", ["pdf", "pptx", "xlsx", "docx"])
+@pytest.mark.parametrize("copies", [2, 4])
+@pytest.mark.parametrize("same_name", [False, True])
+def test_selection_collapses_identical_workspace_and_mirror_copies(
+    tmp_path, format, copies, same_name
+):
+    workdir, artifacts = tmp_path / "workdir", tmp_path / "artifacts"
+    paths = []
+    for index in range(copies):
+        root = workdir if index % 2 == 0 else artifacts
+        name = "report" if same_name else f"report-{index}"
+        path = root / str(index // 2) / f"{name}.{format}"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"identical document content")
+        paths.append(path)
+    expected = tuple(sorted(paths))
+    for roots in ([workdir, artifacts], [artifacts, workdir]):
+        result = select_document(roots, format=format)
+        assert result.selected == expected[0]
+        assert result.candidates == expected
+        assert result.reason == "unique after content dedupe"
+
+
+@pytest.mark.parametrize("format", ["pdf", "pptx", "xlsx", "docx"])
+@pytest.mark.parametrize("copies", [1, 2])
+def test_selection_preserves_preferred_stem_before_content_comparison(
+    tmp_path, format, copies
+):
+    alias = tmp_path / "aaa" / f"alias.{format}"
+    alias.parent.mkdir()
+    alias.write_bytes(b"preferred document")
+    (tmp_path / f"other.{format}").write_bytes(b"different document")
+    preferred = []
+    for index in range(copies):
+        path = tmp_path / f"preferred-{index}" / f"final.{format}"
+        path.parent.mkdir()
+        path.write_bytes(alias.read_bytes())
+        preferred.append(path)
+    result = select_document([tmp_path], format=format, preferred_stem="final")
+    assert result.candidates[0] == alias
+    assert result.selected == preferred[0]
+    assert len(result.candidates) == copies + 2
+
+
+@pytest.mark.parametrize("other", [b"different size", b"other"])
+def test_selection_rejects_different_contents(tmp_path, other):
+    first, second = tmp_path / "one.pptx", tmp_path / "two.pptx"
+    first.write_bytes(b"first")
+    second.write_bytes(other)
+    result = select_document([tmp_path], format="pptx")
+    assert result.selected is None
+    assert result.reason == "ambiguous PPTX candidates"
+
+
+def test_selection_compares_contents_beyond_first_chunk(tmp_path):
+    first, second = tmp_path / "one.pptx", tmp_path / "two.pptx"
+    prefix = b"x" * (1024 * 1024 + 1)
+    first.write_bytes(prefix + b"a")
+    second.write_bytes(prefix + b"b")
+    assert select_document([tmp_path], format="pptx").selected is None
+    second.write_bytes(first.read_bytes())
+    assert select_document([tmp_path], format="pptx").selected == first
+
+
+@pytest.mark.parametrize(
+    "format,module",
+    [("pdf", "pypdf"), ("pptx", "pptx"), ("xlsx", "openpyxl"), ("docx", "docx")],
+)
+def test_identical_empty_documents_are_selected_but_fail_inspection(
+    tmp_path, format, module
+):
+    pytest.importorskip(module)
+    first, second = tmp_path / f"one.{format}", tmp_path / f"two.{format}"
+    first.touch()
+    second.touch()
+    result = select_document([tmp_path], format=format, max_compare_bytes=1)
+    assert result.selected == first
+    with pytest.raises(DocumentParseError):
+        inspect_document(result.selected)
+
+
+def test_selection_comparison_budget_counts_repeated_reads(tmp_path):
+    paths = [tmp_path / f"{index}.pptx" for index in range(3)]
+    for path in paths:
+        path.write_bytes(b"12345")
+    result = select_document([tmp_path], format="pptx", max_compare_bytes=19)
+    assert result.selected is None and result.candidates == tuple(paths)
+    assert "incomplete document comparison" in result.reason
+    assert "limit" in result.reason
+    assert (
+        select_document([tmp_path], format="pptx", max_compare_bytes=20).selected
+        == paths[0]
+    )
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.5, None])
+def test_selection_rejects_invalid_comparison_budget(tmp_path, limit):
+    with pytest.raises(ValueError, match="max_compare_bytes"):
+        select_document([tmp_path], format="pptx", max_compare_bytes=limit)
+
+
+def test_selection_does_not_read_singletons_or_different_sizes(tmp_path, monkeypatch):
+    import psycheval.harbor.documents as documents
+
+    first, second = tmp_path / "one.pptx", tmp_path / "two.pptx"
+    first.write_bytes(b"a")
+    second.write_bytes(b"bb")
+    monkeypatch.setattr(
+        documents.os, "open", lambda *a, **k: pytest.fail("unnecessary content read")
+    )
+    assert select_document([first], format="pptx").selected == first
+    assert select_document([tmp_path], format="pptx").selected is None
+    assert (
+        select_document([tmp_path], format="pptx", preferred_stem="one").selected
+        == first
+    )
+
+
+@pytest.mark.parametrize("error", [PermissionError, FileNotFoundError])
+def test_selection_cannot_ignore_unreadable_copy(tmp_path, monkeypatch, error):
+    import psycheval.harbor.documents as documents
+
+    paths = [tmp_path / f"{index}.pptx" for index in range(2)]
+    for path in paths:
+        path.write_bytes(b"identical")
+    original = os.open
+
+    def denied(path, *args, **kwargs):
+        if Path(path) == paths[1]:
+            raise error("fixture denial")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(documents.os, "open", denied)
+    result = select_document([tmp_path], format="pptx")
+    assert result.selected is None and result.candidates == tuple(paths)
+    assert "incomplete document comparison" in result.reason
+    assert error.__name__ in result.reason
+
+
+@pytest.mark.parametrize("replacement", [b"short", b"different"])
+def test_selection_detects_changes_between_discovery_and_open(
+    tmp_path, monkeypatch, replacement
+):
+    import psycheval.harbor.documents as documents
+
+    paths = [tmp_path / f"{index}.pptx" for index in range(2)]
+    for path in paths:
+        path.write_bytes(b"identical")
+    original = os.open
+
+    def change(path, *args, **kwargs):
+        if Path(path) == paths[1]:
+            paths[1].write_bytes(replacement)
+            info = paths[1].stat()
+            os.utime(paths[1], ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(documents.os, "open", change)
+    result = select_document([tmp_path], format="pptx")
+    assert result.selected is None
+    assert "incomplete document comparison" in result.reason
+    assert "changed" in result.reason
+
+
+def test_selection_rechecks_earlier_copies_after_later_comparisons(
+    tmp_path, monkeypatch
+):
+    import psycheval.harbor.documents as documents
+
+    paths = [tmp_path / f"{index}.pptx" for index in range(3)]
+    for path in paths:
+        path.write_bytes(b"identical")
+    original = os.open
+
+    def change(path, *args, **kwargs):
+        if Path(path) == paths[2]:
+            paths[1].write_bytes(b"changed after its comparison")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(documents.os, "open", change)
+    result = select_document([tmp_path], format="pptx")
+    assert result.selected is None
+    assert "incomplete document comparison" in result.reason
+    assert "changed" in result.reason
+
+
+@pytest.mark.parametrize("failure", ["write", "read_error"])
+def test_selection_detects_failure_during_content_read(tmp_path, monkeypatch, failure):
+    import psycheval.harbor.documents as documents
+
+    paths = [tmp_path / f"{index}.pptx" for index in range(2)]
+    for path in paths:
+        path.write_bytes(b"identical")
+    original = os.fdopen
+    changed = False
+
+    @contextmanager
+    def wrap(*args, **kwargs):
+        with original(*args, **kwargs) as stream:
+
+            def read(count):
+                nonlocal changed
+                data = stream.read(count)
+                if not changed:
+                    changed = True
+                    if failure == "read_error":
+                        raise OSError("fixture read failure")
+                    paths[0].write_bytes(b"different")
+                    info = paths[0].stat()
+                    os.utime(
+                        paths[0],
+                        ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000),
+                    )
+                return data
+
+            yield SimpleNamespace(read=read, fileno=stream.fileno)
+
+    monkeypatch.setattr(documents.os, "fdopen", wrap)
+    result = select_document([tmp_path], format="pptx")
+    assert result.selected is None and changed
+    assert "incomplete document comparison" in result.reason
+    assert (
+        "changed" if failure == "write" else "fixture read failure"
+    ) in result.reason
+
+
+def test_selection_does_not_compare_path_ctime_with_descriptor_ctime(
+    tmp_path, monkeypatch
+):
+    import psycheval.harbor.documents as documents
+
+    paths = [tmp_path / f"{index}.pptx" for index in range(2)]
+    for path in paths:
+        path.write_bytes(b"identical")
+    original = os.fstat
+
+    def descriptor_info(descriptor):
+        info = original(descriptor)
+        return SimpleNamespace(
+            **{
+                name: getattr(info, name)
+                for name in dir(info)
+                if name.startswith("st_") and name != "st_ctime_ns"
+            },
+            st_ctime_ns=info.st_ctime_ns + 1_000_000_000,
+        )
+
+    monkeypatch.setattr(documents.os, "fstat", descriptor_info)
+    assert select_document(paths, format="pptx").selected == paths[0]
+
+
+def test_selection_rejects_opening_another_file_with_identical_bytes_and_mtime(
+    tmp_path, monkeypatch
+):
+    import psycheval.harbor.documents as documents
+
+    paths = [tmp_path / f"{index}.pptx" for index in range(2)]
+    for path in paths:
+        path.write_bytes(b"identical")
+    replacement = tmp_path / "replacement"
+    shutil.copy2(paths[1], replacement)
+    assert replacement.stat().st_mtime_ns == paths[1].stat().st_mtime_ns
+    assert not os.path.samestat(paths[1].stat(), replacement.stat())
+    original = os.open
+
+    def substitute(path, *args, **kwargs):
+        # Model a path replacement at open, restored before later path checks.
+        return original(
+            replacement if Path(path) == paths[1] else path, *args, **kwargs
+        )
+
+    monkeypatch.setattr(documents.os, "open", substitute)
+    result = select_document(paths, format="pptx")
+    assert result.selected is None and result.candidates == tuple(paths)
+    assert "incomplete document comparison" in result.reason
+    assert "changed" in result.reason
+
+
+def test_selection_rejects_descriptor_change_even_if_path_state_is_restored(
+    tmp_path, monkeypatch
+):
+    import psycheval.harbor.documents as documents
+
+    paths = [tmp_path / f"{index}.pptx" for index in range(2)]
+    for path in paths:
+        path.write_bytes(b"identical")
+    original = os.fstat
+    seen = set()
+
+    def changed_descriptor(descriptor):
+        info = original(descriptor)
+        if descriptor not in seen:
+            seen.add(descriptor)
+            return info
+        return SimpleNamespace(
+            **{
+                name: getattr(info, name)
+                for name in dir(info)
+                if name.startswith("st_") and name != "st_ctime_ns"
+            },
+            st_ctime_ns=info.st_ctime_ns + 1_000_000_000,
+        )
+
+    monkeypatch.setattr(documents.os, "fstat", changed_descriptor)
+    result = select_document(paths, format="pptx")
+    assert result.selected is None
+    assert "incomplete document comparison" in result.reason
+    assert "changed" in result.reason
+
+
+def test_selection_closes_descriptor_when_stream_creation_fails(tmp_path, monkeypatch):
+    import psycheval.harbor.documents as documents
+
+    paths = [tmp_path / f"{index}.pptx" for index in range(2)]
+    for path in paths:
+        path.write_bytes(b"identical")
+    opened = []
+
+    def fail(descriptor, *args, **kwargs):
+        opened.append(descriptor)
+        raise OSError("fixture fdopen failure")
+
+    monkeypatch.setattr(documents.os, "fdopen", fail)
+    try:
+        result = select_document(paths, format="pptx")
+        assert result.selected is None and "fixture fdopen failure" in result.reason
+        assert len(opened) == 1
+        with pytest.raises(OSError):
+            os.fstat(opened[0])
+    finally:
+        for descriptor in opened:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def test_selection_reports_short_read_without_claiming_file_changed(
+    tmp_path, monkeypatch
+):
+    import psycheval.harbor.documents as documents
+
+    paths = [tmp_path / f"{index}.pptx" for index in range(2)]
+    for path in paths:
+        path.write_bytes(b"identical")
+    original = os.fdopen
+
+    @contextmanager
+    def short_read(*args, **kwargs):
+        with original(*args, **kwargs) as stream:
+            yield SimpleNamespace(
+                read=lambda count: stream.read(count)[:1], fileno=stream.fileno
+            )
+
+    monkeypatch.setattr(documents.os, "fdopen", short_read)
+    result = select_document(paths, format="pptx")
+    assert result.selected is None
+    assert "incomplete document comparison" in result.reason
+    assert "short read" in result.reason
+
+
+def test_selection_rejects_candidate_replaced_with_link(tmp_path, monkeypatch):
+    import psycheval.harbor.documents as documents
+
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"identical")
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation unavailable")
+    link.unlink()
+    paths = [tmp_path / f"{index}.pptx" for index in range(2)]
+    for path in paths:
+        path.write_bytes(b"identical")
+    original = os.open
+
+    def replace(path, *args, **kwargs):
+        if Path(path) == paths[0]:
+            paths[1].unlink()
+            paths[1].symlink_to(outside)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(documents.os, "open", replace)
+    result = select_document(paths, format="pptx")
+    assert result.selected is None and result.candidates == tuple(paths)
+    assert "incomplete document comparison" in result.reason
+    assert "Linked" in result.reason
+    assert outside.read_bytes() == b"identical"
 
 
 @pytest.mark.parametrize(

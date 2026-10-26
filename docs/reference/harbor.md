@@ -367,6 +367,25 @@ are checked through required files and native bootstrap capabilities.
 - `psycheval.harbor.datasets` resolves registered flat Harbor Datasets and
   `workbuddy.dataset.v1` bundles without importing Dataset-owned Python code.
 
+## Artifact collection
+
+Harbor owns artifact retention and transfer. The pinned Harbor 0.24 collects
+task-, run-, and step-level `artifacts` together with the automatic convention
+directory (`/logs/artifacts` on POSIX), after the Agent phase and before
+verification. Host maps the convention directory to the Trial's retained
+artifact root. Separate verifiers receive collected files at their source
+locations; an artifact's `destination` changes only its retained host path.
+
+Harbor does not discover arbitrary outputs throughout the workspace.
+Integrations own any output-discovery policy and can declare its results for
+Harbor to collect. Prefer explicit declarations; the convention is still active
+in the pinned version. Collection failures are recorded in
+`artifacts/manifest.json` without automatically failing the Trial; graders own
+required-output checks. Configuration examples belong to
+[Harbor's artifact collection documentation](https://docs.harborframework.com/jobs/artifact-collection).
+Document selection and verifier evidence publication use the separate
+[document evidence contract](document-evidence.md).
+
 ## Native OpenCode
 
 For native OpenCode 2 runs, select `HostOpenCodeAgent` by import path, provide
