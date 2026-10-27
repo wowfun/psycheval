@@ -57,11 +57,41 @@ test("editing invalidates preview and run submits the draft with an optional fin
   assert.equal(previews.length, 2);
   assert.equal(calls.find(item => item.url.endsWith("/run")).options.body.expected_fingerprint, "fingerprint-2");
   assert.equal(JSON.parse(calls.find(item => item.url.endsWith("/run")).options.body.judge_config).llm_judge.rubrics[0].question, "Revised");
-  assert.match(latest().textContent, /fail → pass/);
+  assert.match(latest().querySelector('[data-judge-result="baseline"]').textContent, /Baseline resultFailedOriginal reason/);
+  assert.match(latest().querySelector('[data-judge-result="current"]').textContent, /Current resultPassedLatest reason/);
   assert.match(latest().textContent, /Actual request/);
   workbench.setSource("another"); workbench.setSource("trial"); await workbench.draft();
   assert.equal(question().value, "Revised");
   assert.match(latest().textContent, /Latest reason/);
+  click("Close");
+});
+
+test("result columns pair verdicts and literal reasons by rubric, including missing and unassessed results", async () => {
+  const reason = "First line\n<script>literal evidence</script>\n" + "长理由WithoutSpaces".repeat(40);
+  const run = {
+    ...result(reason), state: "incomplete", selected_ids: ["quality", "new", "unassessed", "timeout"], reason: "Deadline reached",
+    baseline: [{ id: "unassessed", status: "pass", reason: "Retained success" }, { id: "quality", status: "fail", reason: "Retained failure\nDetails" }],
+    checks: [{ id: "new", passed: false, reason: "New failure" }, { id: "quality", passed: true, reason }], errors: { unassessed: "Provider unavailable" },
+  };
+  const workbench = createJudgeWorkbench({ request: async url => url === "/api/config" ? configuration : url.endsWith("/run") ? run : original });
+  workbench.setSource("comparison"); await workbench.draft(["quality"]);
+  click("Run selected rubrics"); await tick();
+  const rows = [...latest().querySelectorAll(".judge-result")];
+  assert.deepEqual(rows.map(row => row.querySelector(".judge-result-title").textContent), run.selected_ids);
+  const columns = rows.map(row => [...row.querySelectorAll(".judge-result-column")]);
+  for (const pair of columns) assert.deepEqual(pair.map(node => node.dataset.judgeResult), ["baseline", "current"]);
+  assert.equal(columns[0][0].querySelector("pre").textContent, "Retained failure\nDetails");
+  assert.equal(columns[0][1].querySelector("pre").textContent, reason);
+  assert.equal(columns[0][1].querySelector("script"), null);
+  assert.equal(columns[0][0].querySelector(".judge-result-verdict").dataset.status, "fail");
+  assert.equal(columns[0][1].querySelector(".judge-result-verdict").dataset.status, "pass");
+  assert.match(columns[1][0].textContent, /No baseline/);
+  assert.equal(columns[1][0].querySelector("pre").textContent, "—");
+  assert.match(columns[1][1].textContent, /FailedNew failure/);
+  assert.match(columns[2][0].textContent, /PassedRetained success/);
+  assert.match(columns[2][1].textContent, /UnassessedProvider unavailable/);
+  assert.match(columns[3][1].textContent, /UnassessedDeadline reached/);
+  assert.equal(rows[0].lastElementChild.tagName, "DETAILS");
   click("Close");
 });
 

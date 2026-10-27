@@ -97,8 +97,11 @@ Multi-step Trials appear as individual step rows in the workspace catalog;
 select the desired row to inspect or try that step's rubrics.
 The Verification panel offers retained prompts directly from each rubric and
 one trial panel for editing rubrics, choosing a profile, previewing, running,
-cancelling and reading results. Results show original to current verdict and
-reason, with expandable actual messages. Missing baselines remain explicit.
+cancelling and reading results. Each rubric compares the retained baseline verdict
+and reason on the left with the latest trial-run verdict and reason on the right.
+On narrow screens these columns stack in baseline-first order. Unassessed runs
+show their error or explanation in the current-result column; missing baselines
+remain explicit. Actual request messages expand below the comparison.
 Drafts and only the latest attempt per Trial live in page memory. Closing the
 panel, changing Trials or navigating within the application preserves them;
 refreshing or closing the page clears them. No browser storage API is used.

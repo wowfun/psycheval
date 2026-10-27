@@ -16,6 +16,22 @@ function details(title, content) {
   const node = document.createElement("details"); const summary = document.createElement("summary");
   summary.textContent = title; node.append(summary, pre(content)); return node;
 }
+function resultColumn(kind, status, reason) {
+  const column = document.createElement("section"); column.className = "judge-result-column"; column.dataset.judgeResult = kind;
+  const title = kind === "baseline" ? label("baseline_result", "Baseline result") : label("current_result", "Current result");
+  column.setAttribute("aria-label", title);
+  const header = document.createElement("header");
+  const heading = document.createElement("h5"); heading.textContent = title;
+  const verdict = document.createElement("span"); verdict.className = "judge-result-verdict"; verdict.dataset.status = status;
+  verdict.textContent = status === "no_baseline" ? label("no_baseline", "No baseline")
+    : status === "unassessed" ? label("unassessed", "Unassessed")
+    : t(`verification_${status}`, { pass: "Passed", fail: "Failed" }[status] || status);
+  header.append(heading, verdict);
+  const explanation = pre(reason || "—");
+  explanation.setAttribute("aria-label", kind === "baseline" ? label("original_reason", "Baseline reason") : label("current_reason", "Current reason"));
+  column.append(header, explanation);
+  return column;
+}
 function download(value) {
   const url = URL.createObjectURL(new Blob([json(value)], { type: "application/json" }));
   const link = document.createElement("a"); link.href = url; link.download = "judge-prompt.json";
@@ -62,8 +78,13 @@ function createJudgeWorkbench({ request }) {
     for (const id of run.selected_ids) {
       const row = document.createElement("section"); row.className = "judge-result";
       const outcome = outcomes.get(id), baseline = old.get(id);
-      const title = document.createElement("strong"); title.textContent = `${id} · ${baseline?.status || label("no_baseline", "No baseline")} → ${outcome ? outcome.passed ? "pass" : "fail" : label("unassessed", "Unassessed")}`;
-      row.append(title, pre(`${label("original_reason", "Original reason")}: ${baseline?.reason || "—"}\n\n${label("current_reason", "Current reason")}: ${outcome?.reason || run.errors?.[id] || run.reason || "—"}`));
+      const title = document.createElement("strong"); title.className = "judge-result-title"; title.textContent = id;
+      const comparison = document.createElement("div"); comparison.className = "judge-result-comparison";
+      comparison.append(
+        resultColumn("baseline", baseline ? baseline.status || "unassessed" : "no_baseline", baseline?.reason),
+        resultColumn("current", outcome ? outcome.passed ? "pass" : "fail" : "unassessed", outcome?.reason || run.errors?.[id] || run.reason),
+      );
+      row.append(title, comparison);
       const diagnostic = Object.values(run.diagnostics).find(item => item.id === id);
       const promptView = document.createElement("details"), summary = document.createElement("summary");
       summary.textContent = label("actual_prompt", "Actual prompt"); promptView.append(summary);
