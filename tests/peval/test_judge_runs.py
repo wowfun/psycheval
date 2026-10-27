@@ -394,7 +394,7 @@ def test_http_prompt_read_and_execution_permissions(experiment, password):
         ).items
         key = rows[0].to_dict()["source_key"]
         url = f"http://127.0.0.1:{server.server_port}"
-        with httpx.Client(base_url=url) as client:
+        with httpx.Client(base_url=url, trust_env=False) as client:
             response = client.get(f"/api/judge/{key}/prompt/fidelity")
             assert response.status_code == 200, response.text
             assert response.json()["status"] == "recorded"
@@ -528,7 +528,7 @@ def test_http_disconnect_cancels_and_releases_execution(experiment, monkeypatch)
         )
 
         async def scenario():
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
                 pending = asyncio.create_task(
                     client.post(
                         f"http://127.0.0.1:{server.server_port}/api/judge/{key}/run",
@@ -714,7 +714,9 @@ def test_catalog_step_rows_support_judge_without_step_result_files(
         assert len(rows) == 2
         first = next(row for row in rows if row["step_name"] == "first")
         assert first["source_ref"].endswith("/steps/first")
-        with httpx.Client(base_url=f"http://127.0.0.1:{server.server_port}") as client:
+        with httpx.Client(
+            base_url=f"http://127.0.0.1:{server.server_port}", trust_env=False
+        ) as client:
             response = client.post(
                 f"/api/judge/{first['source_key']}/preview", json={"all_rubrics": True}
             )
