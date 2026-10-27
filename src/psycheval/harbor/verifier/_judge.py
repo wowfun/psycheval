@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import time
 from dataclasses import asdict, dataclass, field, replace
 from html import escape
@@ -169,7 +170,13 @@ def _redact(text: str, key: str, *, variants: tuple[str, ...] | None = None) -> 
     for variant in (
         _redaction_variants(key, len(text)) if variants is None else variants
     ):
-        text = text.replace(variant, "[REDACTED]")
+        if len(key) < 8:
+            # Short local/test credentials can also occur inside ordinary words.
+            text = re.sub(
+                r"(?<!\w)" + re.escape(variant) + r"(?!\w)", "[REDACTED]", text
+            )
+        else:
+            text = text.replace(variant, "[REDACTED]")
     return text
 
 

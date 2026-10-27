@@ -303,6 +303,46 @@ def test_public_api_custom_prompts_preserve_context_and_literal_text(
     assert diagnostic["messages"] == request["messages"]
 
 
+@pytest.mark.parametrize("key", ["sk", "key", "a+b"])
+def test_short_credentials_preserve_words_in_retained_prompts(key):
+    from psycheval.harbor.verifier import _judge
+
+    ordinary = f"Task instruction: complete the task using skills; prefix{key}suffix."
+    settings = JudgeSettings(True, "http://unused.invalid", "fixture", key)
+    retained = _judge._retained(
+        {"task": ordinary, "credential": f"({key})", "nested": [json.dumps(key)]},
+        settings,
+    )
+    assert retained["task"] == ordinary
+    assert retained["credential"] == "([REDACTED])"
+    assert retained["nested"] == ['"[REDACTED]"']
+
+
+def test_short_credential_keeps_request_and_diagnostic_prompt_readable(tmp_path):
+    context = runtime(tmp_path)
+    instruction = "Complete the task using skills. Credential: sk."
+    with judge_server() as server:
+        server["behavior"]["fidelity"] = {"result": {"reason": instruction}}
+        result = asyncio.run(
+            run_verifier_judge(
+                parse_judge_config(YAML),
+                context,
+                JudgeSettings(
+                    True, server["url"], "fixture", "sk", system_prompt=instruction
+                ),
+            )
+        )
+        assert server["requests"][0]["messages"][0]["content"] == instruction
+    expected = "Complete the task using skills. Credential: [REDACTED]."
+    assert result["checks"][0]["reason"] == expected
+    diagnostic = json.loads(
+        (Path(context.paths.verifier_logs) / "judge/rubric-0001.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert diagnostic["messages"][0]["content"] == expected
+
+
 def test_diagnostic_redaction_reuses_credential_variants(tmp_path, monkeypatch):
     from psycheval.harbor.verifier import _judge
 

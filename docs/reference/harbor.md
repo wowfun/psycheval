@@ -1111,6 +1111,8 @@ is attempted, `messages` is null. A recorded attempt does not establish provider
 receipt; its response or error retains that distinction. Known credentials are
 redacted from diagnostics in both original and XML-escaped forms, including
 nested JSON escaping, without changing the messages submitted to the model.
+Credentials shorter than eight characters match only whole word-delimited
+values in retained text, preserving ordinary words that contain the same fragment.
 These files are diagnostic, not another score authority. Every invocation removes
 previous framework scores, `judge/`,
 `artifact_manifest.json`, `artifact_text/`, `raw_artifacts/`, `judge_evidence/`, and the legacy
