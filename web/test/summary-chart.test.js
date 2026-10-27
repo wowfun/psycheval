@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { radarAxes, radarPoints, radarSelection, radarColor, relativePosition } from "../../src/psycheval/assets/web/modules/summary-chart.js";
+import { radarAxes, radarPoints, radarSelection, radarColors, relativePosition } from "../../src/psycheval/assets/web/modules/summary-chart.js";
 const definitions = JSON.parse(readFileSync(new URL("./support/metrics.json", import.meta.url), "utf8"));
 const axesFor = (groups, keys, statistic) => radarAxes(groups, keys.map(key => definitions.find(item => item.key === key)), statistic);
 import { encodeWorkspaceLocation, decodeWorkspaceLocation } from "../../src/psycheval/assets/web/app/workspace-location.js";
@@ -44,8 +44,13 @@ test("automatic selection uses the first five; explicit empty and nullable group
   assert.equal(radarSelection(groups, null).length, 5);
   assert.deepEqual(radarSelection(groups, []), []);
   assert.deepEqual(radarSelection(groups, [null]), [groups[0]]);
-  assert.notEqual(radarColor(null), radarColor("null"));
-  assert.equal(radarColor("a"), radarColor("a"));
+  for (let count = 1; count <= 5; count++) {
+    const colors = radarColors(count);
+    assert.equal(new Set(colors).size, count);
+    assert.deepEqual(colors, radarColors(5).slice(0, count));
+  }
+  assert.deepEqual(radarColors(0), []);
+  for (const invalid of [-1, 1.5, NaN, Infinity, 6]) assert.throws(() => radarColors(invalid), RangeError);
 });
 
 test("radar configuration shares canonical axes and explicit nullable keys, and rejects invalid selections", () => {
@@ -61,4 +66,17 @@ test("radar configuration shares canonical axes and explicit nullable keys, and 
   const defaults = decodeWorkspaceLocation("home", new URL("http://localhost"));
   assert.equal(defaults.state.summary.metrics, null);
   assert.doesNotThrow(() => encodeWorkspaceLocation("home", { state: { summary: { metrics: [] } } }));
+});
+
+test("radar strokes contrast with the workspace surface and white exports", () => {
+  const css = readFileSync(new URL("../../src/psycheval/assets/css/00-base.css", import.meta.url), "utf8");
+  const surface = css.match(/--surface:\s*(#[a-f\d]{6})/i)[1];
+  const luminance = hex => {
+    const rgb = hex.slice(1).match(/../g).map(value => parseInt(value, 16) / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+  };
+  for (const color of radarColors(5)) for (const background of [surface, "#ffffff"]) {
+    const values = [luminance(color), luminance(background)].sort((a, b) => a - b);
+    assert.ok((values[1] + 0.05) / (values[0] + 0.05) >= 3, `${color} on ${background}`);
+  }
 });

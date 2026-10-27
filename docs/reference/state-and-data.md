@@ -327,7 +327,10 @@ missing-data labels; these offsets do not encode a measured radius. They remain
 unknown in the data and never contribute numeric values to scaling, statistics,
 or spreadsheet exports. Ordinary
 markers identify measured values, including those normalized to the origin.
-Selected groups use distinct colors with a minimum hue separation. Their search
+Selected groups use a distinct five-color palette in summary order; unselected
+groups use a neutral color. Colors are shared by the chart, comparison list and
+export legend. Adding, removing or reordering groups can reassign colors to other
+groups because palette slots follow the selected summary order. Their search
 filter stays in page memory through presentation changes and navigation, but is
 not part of a shared location. Chart interactions preserve an open summary table.
 Radar selections affect presentation only; Saved View and spreadsheet charts

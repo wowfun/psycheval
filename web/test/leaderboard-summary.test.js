@@ -601,17 +601,22 @@ test("radar resize skips unchanged sizes, coalesces notifications and cancels pe
   } finally { radarUi.disposeLeaderboardRadar(); Object.assign(globalThis, previous); delete window.echarts; target.remove(); }
 });
 
-test("selected group colors avoid identity-hash collisions and remain well separated", () => {
+test("selected group colors follow summary order and unselected groups are neutral", () => {
   resetSummaryState();
   const groups = ["group-0", "group-4", "group-8", "group-12", "group-16"].map(key => ({ key, label: key, count: 1, metrics: [] }));
   const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
-  const hues = context.series.map(item => Number(item.color.match(/hsl\((\d+)/)[1]));
-  for (let i = 0; i < hues.length; i += 1) for (let j = 0; j < i; j += 1) {
-    const distance = Math.abs(hues[i] - hues[j]);
-    assert.ok(Math.min(distance, 360 - distance) >= 40);
-  }
+  assert.equal(new Set(context.series.map(item => item.color)).size, 5);
   const html = radarUi.renderLeaderboardRadar(context);
   for (const item of context.series) assert.ok(html.includes(`--radar-color:${item.color}`));
+  runtime.state.leaderboardSummaryRadarGroups = [groups[3].key, groups[1].key];
+  const changed = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  assert.deepEqual(changed.series.map(item => item.group.key), [groups[1].key, groups[3].key]);
+  assert.deepEqual(changed.series.map(item => item.color), context.series.slice(0, 2).map(item => item.color));
+  assert.match(radarUi.renderLeaderboardRadar(changed), /--radar-color:var\(--rule\)/);
+  runtime.state.leaderboardSummaryRadarGroups = groups.filter((_, index) => index !== 2).map(group => group.key);
+  const middleRemoved = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  assert.equal(middleRemoved.series[2].group.key, groups[3].key);
+  assert.equal(middleRemoved.series[2].color, context.series[2].color);
 });
 
 test("missing annotations identify individual axes and groups without covering measured zero", () => {

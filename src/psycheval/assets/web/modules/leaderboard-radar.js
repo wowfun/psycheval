@@ -1,6 +1,6 @@
 import { esc, fmtNum, state, t } from "./runtime.js";
 import { RADAR_GROUP_LIMIT } from "../app/workspace-view-contract.js";
-import { radarAxes, radarPoints, radarSelection, radarColor, radarColors } from "./summary-chart.js";
+import { radarAxes, radarPoints, radarSelection, radarColors } from "./summary-chart.js";
 
 let chart = null;
 let observer = null;
@@ -18,7 +18,7 @@ function disposeLeaderboardRadar() {
 function radarContext(groups, definitions, statistic, format) {
   const axes = radarAxes(groups, definitions, statistic.value);
   const selected = radarSelection(groups, state.leaderboardSummaryRadarGroups);
-  const colors = radarColors(selected.map(group => group.key));
+  const colors = radarColors(selected.length);
   const series = selected.map((group, index) => ({ group, points: radarPoints(group, axes, statistic.value), color: colors[index] }));
   return { groups, definitions, statistic, format, axes, selected, series };
 }
@@ -64,7 +64,7 @@ function renderLeaderboardRadar(context) {
         const missing = points.filter(point => point.value === null).map(point => radarMetricLabel(context, point.key));
         const note = originNote(points);
         const checked = chosen.has(group.key);
-        return `<label class="summary-radar-group" data-radar-group-row="${index}" style="--radar-color:${item?.color || radarColor(group.key)}"><input type="checkbox" data-radar-group="${index}" ${checked ? "checked" : ""} ${!checked && selected.length >= RADAR_GROUP_LIMIT ? "disabled" : ""}><span><strong>${esc(group.label)}</strong><small>n=${fmtNum(group.count)}</small>${note ? `<small>${esc(note)}</small>` : ""}${missing.length ? `<small class="summary-radar-warning">× ${esc(t("summary_no_data", "No data"))}: ${esc(missing.join(", "))}</small>` : ""}</span></label>`;
+        return `<label class="summary-radar-group" data-radar-group-row="${index}" style="--radar-color:${item?.color || "var(--rule)"}"><input type="checkbox" data-radar-group="${index}" ${checked ? "checked" : ""} ${!checked && selected.length >= RADAR_GROUP_LIMIT ? "disabled" : ""}><span><strong>${esc(group.label)}</strong><small>n=${fmtNum(group.count)}</small>${note ? `<small>${esc(note)}</small>` : ""}${missing.length ? `<small class="summary-radar-warning">× ${esc(t("summary_no_data", "No data"))}: ${esc(missing.join(", "))}</small>` : ""}</span></label>`;
       }).join("")}</div>
       <p data-radar-search-empty hidden>${esc(t("summary_radar_no_groups", "No matching groups."))}</p>
     </div>

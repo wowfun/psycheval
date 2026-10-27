@@ -46,33 +46,14 @@ function radarSelection(groups, keys) {
   return keys === null ? groups.slice(0, RADAR_GROUP_LIMIT) : groups.filter(group => keys.includes(group.key));
 }
 
-/** @param {string | null} key */
-function radarHue(key) {
-  const identity = JSON.stringify(key);
-  let hash = 0;
-  for (const char of identity) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) >>> 0;
-  hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b) >>> 0;
-  hash = (hash ^ (hash >>> 16)) >>> 0;
-  return hash % 360;
+// Five categorical slots, with dark enough strokes for the workspace's light
+// surface and white PNGs. Color is reinforced by the comparison labels/details.
+const RADAR_COLORS = Object.freeze(["#0072b2", "#c6344f", "#009e73", "#7b3294", "#ad7a00"]);
+
+/** @param {number} count */
+function radarColors(count) {
+  if (!Number.isInteger(count) || count < 0 || count > RADAR_GROUP_LIMIT || RADAR_COLORS.length !== RADAR_GROUP_LIMIT) throw new RangeError("Radar colors require an integer count between zero and five.");
+  return RADAR_COLORS.slice(0, count);
 }
 
-/** @param {string | null} key */
-function radarColor(key) { return `hsl(${radarHue(key)} 58% 43%)`; }
-
-/** @param {(string | null)[]} keys */
-function radarColors(keys) {
-  const hues = [];
-  return keys.map(key => {
-    const preferred = radarHue(key);
-    for (let offset = 0; offset < 360; offset += 1) {
-      const hue = (preferred + offset) % 360;
-      if (hues.every(used => Math.min(Math.abs(used - hue), 360 - Math.abs(used - hue)) >= 40)) {
-        hues.push(hue);
-        return `hsl(${hue} 58% 43%)`;
-      }
-    }
-    throw new RangeError("Too many radar colors; compare at most five groups.");
-  });
-}
-
-export { radarAxes, radarPoints, radarSelection, radarColor, radarColors, relativePosition };
+export { radarAxes, radarPoints, radarSelection, radarColors, relativePosition };
