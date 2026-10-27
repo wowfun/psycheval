@@ -180,8 +180,18 @@ decode speed. Timeline Waterfall and Timeline Detail Table use the same stage
 labels regardless of timing source: `Model: <model name>` and
 `Tool call: <tool name>`. Timing-source hover hints describe interval boundaries
 and whether waiting may be included; observed and estimated timing values retain
-their approximation marker. Its total is the sum of recorded contributions, with a coverage
-hint when some intervals are unknown; parallel contributions can overlap.
+their approximation marker. The waterfall places each stage on its own row and
+compresses gaps not covered by any displayed stage. It preserves relative starts,
+ends and overlap within the union of those intervals; its displayed span is the
+union's length, not elapsed wall time. Event markers use the same mapping:
+markers inside intervals retain their position, markers in gaps map to the join,
+and markers outside the covered range map to the corresponding endpoint.
+Zero-duration stages remain visible without extending the displayed span.
+Placement uses the existing projected timestamps and estimates; inherited step
+timestamps do not establish exact tool execution boundaries.
+The labelled cumulative active duration and Active Share denominator remain the
+sum of recorded contributions, with a coverage hint when some intervals are
+unknown; parallel contributions can overlap.
 No measured interval means an unknown total, displayed as a dash. A measured zero
 remains a visible zero-duration record. Reading older untimed evidence does not
 backfill it from vendor timestamps or Harbor lifecycle totals.

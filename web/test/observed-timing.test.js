@@ -95,7 +95,7 @@ test("observed timing keeps zero, distinguishes unknown, and does not infer mode
   assert.match(html, /≈0\.000s/);
   assert.match(renderStep(trajectory.steps[1], meta, {}), /Observed output|may include waiting/);
   const unknown = renderTimelineDiagnostics(trajectory, { timestamp_semantics: "event_observed", steps: meta.steps.map(step => ({ step_id: step.step_id, timestamp_ms: step.timestamp_ms })) });
-  assert.match(unknown, /timeline-total">—/);
+  assert.match(unknown, /timeline-total">Cumulative active duration: —/);
   assert.match(unknown, /No timed step/);
   assert.doesNotMatch(unknown, /0\.000s/);
 });

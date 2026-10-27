@@ -13,9 +13,9 @@ function renderTimelineDiagnostics(trajectory, meta) {
   const table = trace.stages.length
     ? renderTimelineDetailTable(trace.stages, trace.model)
     : `<p class="timeline-empty">${esc(t("timeline_empty", "No timed step or tool durations available."))}</p>`;
-  const coverage = trace.stages.length ? `<p class="copy">${esc(t("timing_total_hint", "Recorded duration total; contributions may overlap."))}${trace.partial ? ` ${esc(t("timing_partial", "Partial coverage: some intervals are unknown."))}` : ""}</p>` : "";
+  const coverage = trace.stages.length ? `<p class="copy">${esc(t("timeline_compressed_hint", "Gaps without recorded activity are compressed; overlapping stages retain their relative positions."))} ${esc(t("timing_total_hint", "Recorded duration total; contributions may overlap."))}${trace.partial ? ` ${esc(t("timing_partial", "Partial coverage: some intervals are unknown."))}` : ""}</p>` : "";
   return `<section class="selected-extra timeline-diagnostics">
-    ${renderTimelineSection("timeline-waterfall-section", t("timeline_waterfall", "Timeline Waterfall"), `<span class="timeline-total">${trace.model.active_total_ms === null ? "—" : esc(fmtTimelineDuration(trace.model.active_total_ms))}</span>`, coverage + waterfall)}
+    ${renderTimelineSection("timeline-waterfall-section", t("timeline_waterfall", "Timeline Waterfall"), `<span class="timeline-total">${esc(t("timeline_active_total", "Cumulative active duration"))}: ${trace.model.active_total_ms === null ? "—" : esc(fmtTimelineDuration(trace.model.active_total_ms))}</span>`, coverage + waterfall)}
     ${renderTimelineSection("timeline-table-section", t("timeline_detail_table", "Timeline Detail Table"), "", table)}
   </section>`;
 }

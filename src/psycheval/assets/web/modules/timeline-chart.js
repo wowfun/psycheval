@@ -4,13 +4,6 @@ import { positiveMetric } from "./analysis-metrics.js";
 import { fmtTimelineAxis, fmtTimelineDuration, fmtTimelineMaybeEstimated } from "./timeline-table.js";
 import { openDetailSidebar } from "./detail-sidebar.js";
 
-function timelineModel(stages) {
-  const activeTotal = stages.length ? stages.reduce((sum, stage) => sum + Math.max(0, Number(stage.duration_ms || 0)), 0) : null;
-  return {
-    active_total_ms: activeTotal,
-    display_total_ms: Math.max(1, activeTotal || 0),
-  };
-}
 function timelineChartOption(trace) {
   const labels = trace.stages.map(stage => `#${stage.number} ${stage.stage}`);
   const labelWidth = timelineYAxisLabelWidth(labels);
@@ -111,8 +104,9 @@ function timelineBarRenderItem(params, api) {
   const bandHeight = api.size([0, 1])[1];
   const barHeight = Math.max(7, Math.min(22, bandHeight * 0.62));
   const color = api.value(4) || "#0891b2";
+  const chartRight = params.coordSys.x + params.coordSys.width;
   const shape = window.echarts.graphic.clipRectByRect({
-    x: start[0],
+    x: Math.min(start[0], chartRight - 2),
     y: start[1] - barHeight / 2,
     width: Math.max(2, end[0] - start[0]),
     height: barHeight,
@@ -125,7 +119,6 @@ function timelineBarRenderItem(params, api) {
   if (!shape) return null;
   const label = api.value(5) || fmtTimelineDuration(api.value(3));
   const labelInside = shape.width >= 58;
-  const chartRight = params.coordSys.x + params.coordSys.width;
   const labelOutsideRight = !labelInside && shape.x + shape.width + 58 >= chartRight;
   const labelX = labelInside
     ? shape.x + Math.min(8, Math.max(3, shape.width / 4))
@@ -181,7 +174,7 @@ function timelineTooltipHtml(item) {
   const rows = [
     [t("timeline_col_category", "Category"), item.category_meta?.label || "-"],
     [t("timeline_col_start", "Start"), "", fmtTimelineMaybeEstimated(renderDateTime(item.wall_start_ms, "clock"), item)],
-    [t("timeline_active_offset", "Active offset"), fmtTimelineDuration(item.display_offset_ms ?? item.display_start_ms)],
+    [t("timeline_compressed_offset", "Compressed time offset"), fmtTimelineDuration(item.display_offset_ms ?? item.display_start_ms)],
     [t("timeline_ref", "Ref"), item.ref || "-"],
   ];
   if (!isMarker) {
@@ -211,7 +204,6 @@ export {
   timelineBarRenderItem,
   timelineChartOption,
   timelineMarkerRenderItem,
-  timelineModel,
   timelineNiceIntervalMs,
   timelineTooltipFormatter,
   timelineTooltipHtml,

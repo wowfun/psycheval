@@ -1,7 +1,6 @@
 import { hasMetricValue, lower, stepMeta, t } from "./runtime.js";
 import { positiveMetric } from "./analysis-metrics.js";
 import { TIMELINE_ESTIMATED_MODEL_CALL_CAP_MS, TIMELINE_INPUT_STAGE_THRESHOLD_MS } from "./timeline-shell.js";
-import { timelineModel } from "./timeline-chart.js";
 import { toolFailed, toolMetaFor } from "./steps.js";
 import { timingSource, timestampFallbackAllowed } from "./timing-source.js";
 
@@ -120,14 +119,23 @@ function timelineTrace(trajectory, meta) {
     sequence_index: index + 1,
     category_meta: timelineCategoryMeta(stage.category),
   }));
-  const model = timelineModel(orderedStages, markers);
-  const displayStages = timelineAssignActiveOffsets(orderedStages, model);
+  const scale = timelineDisplayScale(orderedStages);
+  const model = {
+    active_total_ms: orderedStages.length ? orderedStages.reduce((sum, stage) => sum + stage.duration_ms, 0) : null,
+    display_total_ms: scale.total_ms,
+  };
+  const displayStages = orderedStages.map(stage => ({
+    ...stage,
+    active_total_ms: model.active_total_ms,
+    display_start_ms: scale.offset(stage.start_offset_ms),
+    display_end_ms: scale.offset(stage.end_offset_ms),
+  }));
   const displayMarkers = orderedMarkersRaw.map((marker, index) => ({
     ...marker,
     sequence_index: index + 1,
     category_meta: timelineCategoryMeta(marker.category),
     active_total_ms: model.active_total_ms,
-    display_offset_ms: timelineMarkerActiveOffset(marker, displayStages),
+    display_offset_ms: scale.offset(marker.start_offset_ms),
   }));
   const expected = steps.filter(step => ["agent", "assistant"].includes(lower(step?.source))).length + steps.reduce((count, step) => count + (step?.tool_calls || []).length, 0);
   return { stages: displayStages, markers: displayMarkers, model, partial: stages.filter(stage => stage.kind === "agent" || stage.kind === "tool").length < expected };
@@ -148,29 +156,39 @@ function timelineAllowsTimestampEstimates(meta) {
 function timelineModelDurationIsEstimate(stepMeta) {
   return Boolean(timingSource(stepMeta?.duration_source).estimated);
 }
-function timelineAssignActiveOffsets(stages, model) {
-  let cursor = 0;
-  return stages.map(stage => {
-    const duration = Math.max(0, Number(stage.duration_ms || 0));
-    const out = {
-      ...stage,
-      active_total_ms: model.active_total_ms,
-      display_start_ms: cursor,
-      display_end_ms: cursor + duration,
-    };
-    cursor += duration;
-    return out;
-  });
-}
-function timelineMarkerActiveOffset(marker, stages) {
-  const markerStart = Number(marker.start_offset_ms || 0);
-  let cursor = 0;
-  stages.forEach(stage => {
-    if (Number(stage.start_offset_ms || 0) < markerStart) {
-      cursor = Math.max(cursor, Number(stage.display_end_ms || 0));
+function timelineDisplayScale(orderedStages) {
+  const intervals = [];
+  for (const stage of orderedStages) {
+    const start = stage.start_offset_ms;
+    const end = stage.end_offset_ms;
+    if (end <= start) continue;
+    const previous = intervals.at(-1);
+    if (previous && start <= previous.end) {
+      previous.end = Math.max(previous.end, end);
+    } else {
+      intervals.push({ start, end, display_start: 0 });
     }
+  }
+  let total = 0;
+  intervals.forEach(interval => {
+    interval.display_start = total;
+    total += interval.end - interval.start;
   });
-  return cursor;
+  return {
+    total_ms: total,
+    offset(time) {
+      // Find the last interval starting at or before this time, then clamp gaps.
+      let low = 0;
+      let high = intervals.length;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (intervals[middle].start <= time) low = middle + 1;
+        else high = middle;
+      }
+      const interval = intervals[low - 1];
+      return interval ? interval.display_start + Math.min(time, interval.end) - interval.start : 0;
+    },
+  };
 }
 function timelinePushStage(stages, args) {
   const stage = timelineStage(args);
@@ -316,7 +334,6 @@ function timelineStageSort(left, right) {
 }
 export {
   timelineAllowsTimestampEstimates,
-  timelineAssignActiveOffsets,
   timelineAssignStepNumbers,
   timelineCategoryMeta,
   timelineDurationMs,
@@ -324,7 +341,6 @@ export {
   timelineEstimatedDurationMs,
   timelineEstimatedModelCall,
   timelineMarker,
-  timelineMarkerActiveOffset,
   timelineModelDurationIsEstimate,
   timelineModelStageLabel,
   timelineOriginMs,

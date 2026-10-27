@@ -212,6 +212,77 @@ def main() -> None:
                         "execution_duration_source": "opencode_native_tool_call",
                     }
             path.write_text(json.dumps(trajectory), encoding="utf-8")
+        if os.environ.get("PEVAL_E2E_TIMELINE_PARALLEL") == "1":
+            path = (
+                root
+                / "runs/default/psychevo/e2e-session/e2e-trial-2/agent/trajectory.json"
+            )
+            trajectory = json.loads(path.read_text(encoding="utf-8"))
+            trajectory["extra"] = {"timestamp_semantics": "event_observed"}
+            trajectory["steps"] = [
+                {
+                    "step_id": step_id,
+                    "source": "user",
+                    "message": "timeline marker",
+                    "timestamp": timestamp,
+                }
+                for step_id, timestamp in (
+                    (1, "2026-01-01T00:00:00Z"),
+                    (3, "2026-01-01T00:00:01.500Z"),
+                    (4, "2026-01-01T00:00:03Z"),
+                    (6, "2026-01-01T00:00:07Z"),
+                )
+            ]
+            for step_id, timestamp, calls in (
+                (
+                    2,
+                    "2026-01-01T00:00:01Z",
+                    [("inherited-long", 1250, None), ("inherited-short", 1067, None)],
+                ),
+                (
+                    5,
+                    "2026-01-01T00:00:04Z",
+                    [
+                        ("explicit-first", 1000, "2026-01-01T00:00:04Z"),
+                        ("explicit-later", 1000, "2026-01-01T00:00:04.500Z"),
+                        ("explicit-nested", 100, "2026-01-01T00:00:04.750Z"),
+                        ("explicit-zero", 0, "2026-01-01T00:00:06Z"),
+                        ("explicit-unknown", None, "2026-01-01T00:00:06.500Z"),
+                    ],
+                ),
+            ):
+                trajectory["steps"].append(
+                    {
+                        "step_id": step_id,
+                        "source": "agent",
+                        "message": "parallel searches",
+                        "timestamp": timestamp,
+                        "tool_calls": [
+                            {
+                                "tool_call_id": call_id,
+                                "function_name": "web_search",
+                                "arguments": {},
+                                "extra": {
+                                    "execution_duration_ms": duration,
+                                    **({"started_at": started} if started else {}),
+                                },
+                            }
+                            for call_id, duration, started in calls
+                        ],
+                        "observation": {
+                            "results": [
+                                {"source_call_id": call_id, "content": "ok"}
+                                for call_id, _duration, _started in calls
+                            ]
+                        },
+                    }
+                )
+            trajectory["steps"].sort(key=lambda step: step["step_id"])
+            trajectory["final_metrics"]["total_steps"] = 6
+            trajectory["final_metrics"]["extra"].update(
+                total_tool_calls=7, total_tool_errors=0
+            )
+            path.write_text(json.dumps(trajectory), encoding="utf-8")
         if os.environ.get("PEVAL_E2E_REPORTS") == "1":
             (root / "library-dataset").mkdir()
             with (root / "peval.toml").open("a", encoding="utf-8") as config_file:
