@@ -619,6 +619,15 @@ test("selected group colors follow summary order and unselected groups are neutr
   assert.equal(middleRemoved.series[2].color, context.series[2].color);
 });
 
+test("duplicate radar metric labels include metric identities", () => {
+  resetSummaryState();
+  const definitions = ["one", "two", "three"].map((key, index) => ({ key, direction: "higher", label: index < 2 ? "Quality" : "Speed" }));
+  const context = radarUi.radarContext([], definitions, summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  assert.equal(radarUi.radarMetricLabel(context, "one"), "Quality (one)");
+  assert.equal(radarUi.radarMetricLabel(context, "two"), "Quality (two)");
+  assert.equal(radarUi.radarMetricLabel(context, "three"), "Speed");
+});
+
 test("missing annotations identify individual axes and groups without covering measured zero", () => {
   resetSummaryState();
   const groups = [{ key: "a", label: "a", count: 1, metrics: [{ key: "score", count: 1, mean: 0 }] }, { key: "b", label: "b", count: 1, metrics: [{ key: "score", count: 1, mean: 1 }] }];

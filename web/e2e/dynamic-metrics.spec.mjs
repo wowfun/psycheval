@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { startFixture, stopFixture } from "./fixture-process.mjs";
+import { expectSummaryImageSize } from "./summary-image-assertions.mjs";
 import { encodeWorkspaceLocation, decodeWorkspaceLocation } from "../../src/psycheval/assets/web/app/workspace-location.js";
 
 const raw = "自定义能耗/大小写 %." + "中文".repeat(10);
@@ -68,7 +69,7 @@ test("dynamic metrics retain selection, numeric exports and safe links across la
           const bitmap = await createImageBitmap(new Blob([new Uint8Array(data)], { type: "image/png" }));
           const size = [bitmap.width, bitmap.height]; bitmap.close(); return size;
         }, [...bytes]);
-        expect(size[0]).toBe(2000); expect(size[1]).toBeGreaterThan(600);
+        expectSummaryImageSize(size[0], size[1], kind);
       }
       expect(page.url()).toBe(href);
     }

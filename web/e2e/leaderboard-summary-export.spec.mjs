@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { startFixture, stopFixture } from "./fixture-process.mjs";
+import { expectSummaryImageSize } from "./summary-image-assertions.mjs";
 
 test("summary menu downloads Excel and complete PNG charts with legend without changing presentation", async ({ page }, testInfo) => {
   const fixture = await startFixture({ PEVAL_E2E_LOCALE: "zh-CN" });
@@ -39,7 +40,7 @@ test("summary menu downloads Excel and complete PNG charts with legend without c
     if (kind === "xlsx") expect(bytes.subarray(0, 2).toString()).toBe("PK");
     else {
       expect(bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
-      expect(bytes.readUInt32BE(16)).toBe(2000);
+      expectSummaryImageSize(bytes.readUInt32BE(16), bytes.readUInt32BE(20), kind);
       const decoded = await page.evaluate(async data => {
         const bitmap = await createImageBitmap(new Blob([new Uint8Array(data)], { type: "image/png" }));
         const canvas = document.createElement("canvas"); canvas.width = bitmap.width; canvas.height = bitmap.height;
@@ -110,5 +111,75 @@ test("summary menu downloads Excel and complete PNG charts with legend without c
     await expect(page.locator("[data-radar-group]:checked")).toHaveCount(5);
     await expect(page.locator('#leaderboard .action-feedback').filter({ hasText: /活跃快照|已归档快照|全部 sessions/ })).toHaveCount(0);
     expect(errors).toEqual([]);
+  } finally { await stopFixture(fixture); }
+});
+
+test("32 radar axes use real font bounds and stay attached to the exported chart", async ({ page }, testInfo) => {
+  const fixture = await startFixture();
+  try {
+    await page.goto(fixture.origin);
+    await page.locator("[data-summary-group-by=model]").click();
+    await expect(page.locator('[data-summary-export="radar"]')).toBeEnabled();
+    const result = await page.evaluate(async () => {
+      const { state } = await import("/assets/peval/modules/runtime.js");
+      const { leaderboardSummaryImageSnapshot } = await import("/assets/peval/modules/leaderboard-summary.js");
+      const { summaryImageLayout, summaryImageBlob } = await import("/assets/peval/modules/leaderboard-summary-export.js");
+      const definitions = Array.from({ length: 32 }, (_, index) => ({
+        key: `reward:axis-${index}`, type: "number", direction: index % 2 ? "lower" : "higher",
+        label: index === 0 ? "无空格的完整中文指标名称".repeat(3) : index === 16 ? "UnbrokenMetricIdentifier".repeat(3) : index === 8 ? "A long English metric label with multiple lines" : `Metric ${index}`,
+        unit: index === 0 ? "毫秒每条记录" : index === 8 ? "USD" : index === 16 ? "tokens/s" : null,
+      }));
+      state.catalogPage = { total: 2, metric_descriptions: definitions };
+      state.leaderboardSummaryMetrics = definitions.map(item => item.key);
+      state.leaderboardSummaryRadarGroups = null;
+      state.leaderboardSummary = { summary: { matched_count: 2, groups: [0, 1].map(index => ({
+        key: `group-${index}`, label: `Group ${index}`, count: 1,
+        metrics: definitions.map(item => ({ key: item.key, count: 1, mean: index })),
+      })) } };
+      await document.fonts.ready;
+      const measure = document.createElement("canvas").getContext("2d");
+      const snapshot = leaderboardSummaryImageSnapshot();
+      const layout = summaryImageLayout("radar", snapshot, measure);
+      const original = window.echarts.init;
+      let geometry;
+      window.echarts.init = (...args) => {
+        const chart = original(...args);
+        const render = chart.renderToCanvas.bind(chart);
+        chart.renderToCanvas = options => {
+          const radar = chart.getOption().radar[0];
+          const coordinates = chart.getModel().getSeriesByIndex(0).coordinateSystem;
+          geometry = { center: radar.center, radius: radar.radius, vertices: definitions.map((_, index) => coordinates.dataToPoint(100, index)) };
+          return render(options);
+        };
+        return chart;
+      };
+      try {
+        const blob = await summaryImageBlob("radar", snapshot);
+        return { layout, geometry, names: definitions.map(item => item.label + (item.unit ? ` (${item.unit})` : "")), bytes: [...new Uint8Array(await blob.arrayBuffer())] };
+      } finally { window.echarts.init = original; }
+    });
+    const { plot } = result.layout;
+    expectSummaryImageSize(result.layout.width * 2, result.layout.height * 2, "radar");
+    expect(plot.labels).toHaveLength(32);
+    expect(result.geometry.center).toEqual(plot.center);
+    expect(result.geometry.radius).toBe(plot.radius);
+    plot.labels.forEach((label, index) => {
+      expect(label.lines.join("")).toBe(`${result.names[index]} ${index % 2 ? "↓" : "↑"}`);
+      expect(label.x).toBeGreaterThanOrEqual(0);
+      expect(label.y).toBeGreaterThanOrEqual(0);
+      expect(label.x + label.width).toBeLessThanOrEqual(plot.width);
+      expect(label.y + label.height).toBeLessThanOrEqual(plot.height);
+      const angle = Math.PI / 2 + index * 2 * Math.PI / 32;
+      const vertex = result.geometry.vertices[index];
+      expect(Math.hypot(vertex[0] - plot.center[0] - plot.radius * Math.cos(angle), vertex[1] - plot.center[1] + plot.radius * Math.sin(angle))).toBeLessThan(0.01);
+      for (const other of plot.labels.slice(0, index)) {
+        expect(label.x >= other.x + other.width || other.x >= label.x + label.width || label.y >= other.y + other.height || other.y >= label.y + label.height).toBe(true);
+      }
+    });
+    const legend = result.layout.commands.filter(command => command.type === "text" && command.y >= plot.y + plot.height);
+    expect(legend[0].lines).toEqual(["Comparison groups"]);
+    expect(legend[0].y).toBe(plot.y + plot.height + 24);
+    expect(legend.every(command => command.y >= plot.y + plot.height + 24)).toBe(true);
+    await writeFile(testInfo.outputPath("radar-32-axes.png"), Buffer.from(result.bytes));
   } finally { await stopFixture(fixture); }
 });

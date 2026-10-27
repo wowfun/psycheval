@@ -61,6 +61,11 @@ test("image layouts retain every group, current statistic, missing values, and c
     }
     assert.match(text(radar), /No data: Decode TPS/);
     assert.match(text(radar), /No group difference/);
+    const belowPlot = radar.commands.filter(command => command.type === "text" && command.y >= radar.plot.y + radar.plot.height);
+    assert.equal(belowPlot[0].lines.join(""), "Comparison groups");
+    assert.equal(belowPlot[0].y, radar.plot.y + radar.plot.height + 24);
+    assert.ok(!belowPlot.some(command => command.lines.join("") === "Metrics"));
+    for (const axis of radar.plot.labels) assert.equal(radar.commands.filter(command => command.type === "text" && command.lines.join("") === axis.lines.join("")).length, 1);
     state.leaderboardSummary.summary.groups[0].label = "Changed after click";
     assert.ok(!text(bar).includes("Changed after click"));
     state.leaderboardSummaryStatistic = "mean";
@@ -133,15 +138,15 @@ test("Excel menu keeps the complete-query summary export request", async () => {
 function canvasMock() {
   const prototype = window.HTMLCanvasElement.prototype;
   const previous = { getContext: prototype.getContext, toBlob: prototype.toBlob };
-  const canvases = [], charts = [];
-  const context = { ...measure, scale() {}, fillRect() {}, fillText() {}, drawImage() {} };
+  const canvases = [], charts = [], paintedText = [];
+  const context = { ...measure, scale() {}, fillRect() {}, fillText(text, x, y) { paintedText.push({ text, x, y, align: this.textAlign, font: this.font }); }, drawImage() {} };
   prototype.getContext = function () { canvases.push(this); return context; };
   prototype.toBlob = function (callback) { callback(new Blob(["png"], { type: "image/png" })); };
   window.echarts = { init: host => {
     const chart = { host, disposed: false, setOption(option) { this.option = option; }, renderToCanvas() { const canvas = document.createElement("canvas"); canvases.push(canvas); return canvas; }, dispose() { this.disposed = true; } };
     charts.push(chart); return chart;
   } };
-  return { canvases, charts, restore() { Object.assign(prototype, previous); delete window.echarts; } };
+  return { canvases, charts, paintedText, restore() { Object.assign(prototype, previous); delete window.echarts; } };
 }
 
 test("offscreen radar uses current selection without fetching or replacing the page chart, and releases resources", async () => {
@@ -159,6 +164,19 @@ test("offscreen radar uses current selection without fetching or replacing the p
     assert.equal(mock.charts.length, 1);
     assert.equal(mock.charts[0].option.series.length, 5);
     assert.equal(mock.charts[0].option.series[0].lineStyle.color, snapshot.radar.series[0].color);
+    assert.equal(mock.charts[0].option.radar.axisName.show, false);
+    const layout = images.summaryImageLayout("radar", snapshot, measure);
+    assert.deepEqual(mock.charts[0].option.radar.center, layout.plot.center);
+    assert.equal(mock.charts[0].option.radar.radius, layout.plot.radius);
+    for (const label of layout.plot.labels) {
+      const painted = mock.paintedText.filter(item => item.y >= layout.plot.y && item.y < layout.plot.y + layout.plot.height && item.text === label.lines[0]);
+      assert.equal(painted.length, 1);
+      assert.equal(painted[0].align, label.align);
+      assert.match(painted[0].font, /14px/);
+      const offset = label.align === "right" ? label.width : label.align === "center" ? label.width / 2 : 0;
+      assert.equal(painted[0].x, layout.plot.x + label.x + offset);
+      assert.equal(painted[0].y, layout.plot.y + label.y);
+    }
     assert.equal(mock.charts[0].disposed, true);
     assert.equal(mock.charts[0].host.isConnected, false);
     assert.equal(state.leaderboardSummaryChartType, chartType);
@@ -171,12 +189,65 @@ test("offscreen radar uses current selection without fetching or replacing the p
   } finally { globalThis.fetch = previousFetch; mock.restore(); target.remove(); }
 });
 
+test("radar export retains configured units and distinguishes duplicate metric names", () => {
+  const target = setup();
+  try {
+    const definitions = [
+      { key: "reward:latency", label: "Latency", unit: "ms", direction: "lower" },
+      { key: "reward:budget", label: "Budget", unit: "USD", direction: "lower" },
+      { key: "reward:quality-a", label: "Quality", unit: "points", direction: "higher" },
+      { key: "reward:quality-b", label: "Quality", direction: "higher" },
+    ];
+    state.catalogPage.metric_descriptions = definitions.map(item => ({ ...item, type: "number" }));
+    state.leaderboardSummaryMetrics = definitions.map(item => item.key);
+    state.leaderboardSummary.summary.groups.forEach((group, index) => { group.metrics = definitions.map(item => ({ key: item.key, count: 1, mean: index })); });
+    const snapshot = summary.leaderboardSummaryImageSnapshot();
+    const layout = images.summaryImageLayout("radar", snapshot, measure);
+    assert.deepEqual(layout.plot.labels.map(label => label.lines.join("")), [
+      "Latency (ms) ↓", "Budget (USD) ↓", "Quality (reward:quality-a) (points) ↑", "Quality (reward:quality-b) ↑",
+    ]);
+  } finally { target.remove(); }
+});
+
+test("radar export positions full labels and directions without overlap or clipping", () => {
+  const target = setup();
+  try {
+    const definitions = Array.from({ length: 32 }, (_, index) => ({ key: `reward:custom-${index}`, type: "number", direction: index % 2 ? "lower" : "higher", label: index === 0 ? "完整中文指标名称".repeat(4) : index === 8 ? "LongUnbrokenMetricIdentifier".repeat(3) : `Metric ${index}` }));
+    state.catalogPage.metric_descriptions = definitions;
+    state.leaderboardSummaryMetrics = definitions.map(item => item.key);
+    state.leaderboardSummary.summary.groups.forEach((group, index) => { group.metrics = definitions.map(item => ({ key: item.key, count: 1, mean: index })); });
+    const snapshot = summary.leaderboardSummaryImageSnapshot();
+    const layout = images.summaryImageLayout("radar", snapshot, measure);
+    assert.ok(layout.width > 1000 || layout.plot.height > 640);
+    const labels = layout.plot.labels;
+    assert.equal(labels.length, 32);
+    labels.forEach((label, index) => {
+      const expected = `${snapshot.radar.definitions[index].label} ${index % 2 ? "↓" : "↑"}`;
+      assert.equal(label.lines.join(""), expected);
+      const dx = Math.cos(Math.PI / 2 + index * 2 * Math.PI / labels.length);
+      assert.equal(label.align, Math.abs(dx) < 1e-8 ? "center" : dx < 0 ? "right" : "left");
+      assert.ok(label.x >= 0 && label.y >= 0);
+      assert.ok(label.x + label.width <= layout.plot.width && label.y + label.height <= layout.plot.height);
+      for (const other of labels.slice(0, index)) {
+        assert.ok(label.x >= other.x + other.width || other.x >= label.x + label.width || label.y >= other.y + other.height || other.y >= label.y + label.height);
+      }
+    });
+    snapshot.radar.definitions[0].label = "超长".repeat(10000);
+    assert.throws(() => images.summaryImageLayout("radar", snapshot, measure), /fewer metrics/);
+  } finally { target.remove(); }
+});
+
 test("oversized images fail without truncation, and failed exports restore the menu", async () => {
   const target = setup(), mock = canvasMock();
   try {
     const snapshot = summary.leaderboardSummaryImageSnapshot();
     snapshot.bars[0].values = Array.from({ length: 1000 }, () => snapshot.bars[0].values[0]);
     await assert.rejects(images.summaryImageBlob("bar", snapshot), /image is too large/);
+    assert.ok(mock.canvases.every(canvas => canvas.width === 0));
+    const radar = summary.leaderboardSummaryImageSnapshot();
+    radar.radar.definitions[0].label = "超长".repeat(10000);
+    await assert.rejects(images.summaryImageBlob("radar", radar), /fewer metrics/);
+    assert.equal(mock.charts.length, 0);
     assert.ok(mock.canvases.every(canvas => canvas.width === 0));
     window.HTMLCanvasElement.prototype.toBlob = () => { throw new Error("Encoding failed"); };
     summary.renderLeaderboardSummary();

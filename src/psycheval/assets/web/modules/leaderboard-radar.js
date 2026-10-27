@@ -41,7 +41,9 @@ function groupDetails(item, context) {
 }
 
 function radarMetricLabel(context, key) {
-  return context.definitions.find(definition => definition.key === key)?.label || key;
+  const labelFor = id => context.definitions.find(definition => definition.key === id)?.label || id;
+  const label = labelFor(key);
+  return context.axes.some(axis => axis.key !== key && labelFor(axis.key) === label) ? `${label} (${key})` : label;
 }
 
 function renderLeaderboardRadar(context) {
@@ -77,13 +79,14 @@ function radarOption(context, width, height, palette = null) {
   const style = root ? window.getComputedStyle(root) : null;
   const ink = palette?.ink || style?.getPropertyValue("--ink").trim() || "#292c36";
   const rule = palette?.rule || style?.getPropertyValue("--rule").trim() || "#dadce2";
-  const radius = Math.min(width, height) * 0.29;
+  const radius = palette?.radius ?? Math.min(width, height) * 0.29;
+  const center = palette?.center || [width / 2, height / 2];
   // Match the pinned ECharts 6.1.0 layout below: centered, 90° start, counterclockwise.
   const markers = series.flatMap((item, seriesIndex) => item.points.map((point, index) => {
     const angle = Math.PI / 2 + index * 2 * Math.PI / axes.length;
     const distance = point.value === null ? 12 + seriesIndex * 10 : radius * point.coordinate / 100;
-    const x = width / 2 + distance * Math.cos(angle);
-    const y = height / 2 - distance * Math.sin(angle);
+    const x = center[0] + distance * Math.cos(angle);
+    const y = center[1] - distance * Math.sin(angle);
     return point.value === null
       ? { type: "group", x, y, silent: true, children: [{ type: "line", shape: { x1: -4, y1: -4, x2: 4, y2: 4 }, style: { stroke: item.color, lineWidth: 2 } }, { type: "line", shape: { x1: -4, y1: 4, x2: 4, y2: -4 }, style: { stroke: item.color, lineWidth: 2 } }] }
       : { type: "circle", shape: { cx: x, cy: y, r: 3 }, silent: true, style: { fill: item.color, stroke: "#fff", lineWidth: 1 } };
@@ -91,9 +94,9 @@ function radarOption(context, width, height, palette = null) {
   return {
     animation: false,
     tooltip: { trigger: "item", confine: true, formatter: params => groupDetails(series[params.seriesIndex], context) },
-    radar: { center: ["50%", "50%"], radius, startAngle: 90, splitNumber: 4,
-      indicator: axes.map((axis, index) => ({ name: `${palette?.numberedAxes ? `#${index + 1}` : radarMetricLabel(context, axis.key)}\n${axis.direction > 0 ? "↑" : "↓"}`, min: 0, max: 100 })),
-      axisName: { color: ink, fontSize: 11, width: Math.max(75, Math.min(140, width * 0.23)), overflow: "break" },
+    radar: { center, radius, startAngle: 90, splitNumber: 4,
+      indicator: axes.map(axis => ({ name: `${radarMetricLabel(context, axis.key)}\n${axis.direction > 0 ? "↑" : "↓"}`, min: 0, max: 100 })),
+      axisName: { show: !palette?.hideAxisNames, color: ink, fontSize: 11, width: Math.max(75, Math.min(140, width * 0.23)), overflow: "break" },
       splitArea: { show: false }, axisLine: { lineStyle: { color: rule } }, splitLine: { lineStyle: { color: rule } },
     },
     graphic: markers,

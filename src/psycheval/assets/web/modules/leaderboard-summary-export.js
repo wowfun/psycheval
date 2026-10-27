@@ -6,12 +6,14 @@ const WIDTH = 1000, SCALE = 2, MARGIN = 32, GAP = 24;
 const INK = "#292c36", MUTED = "#596171", RULE = "#dadce2";
 const font = (size, bold = false) => `${bold ? "600 " : ""}${size}px "Segoe UI", "Microsoft YaHei", sans-serif`;
 
-function imageTooLarge() {
-  return new Error(t("summary_export_too_large", "The image is too large. Narrow the filters or choose a grouping with fewer groups."));
+function imageTooLarge(kind) {
+  return new Error(kind === "radar"
+    ? t("summary_export_radar_too_large", "The radar image is too large. Select fewer metrics or shorten metric names; fewer comparison groups may also reduce the legend.")
+    : t("summary_export_too_large", "The image is too large. Narrow the filters or choose a grouping with fewer groups."));
 }
 
-function checkImageSize(width, height) {
-  if (width * SCALE > 16384 || height * SCALE > 16384 || width * height * SCALE ** 2 > 32_000_000) throw imageTooLarge();
+function checkImageSize(width, height, kind = "bar") {
+  if (width * SCALE > 16384 || height * SCALE > 16384 || width * height * SCALE ** 2 > 32_000_000) throw imageTooLarge(kind);
 }
 
 // Measure and wrap before allocating the output canvas; no label is truncated.
@@ -30,19 +32,55 @@ function wrappedLines(context, text, width) {
   });
 }
 
+// Place labels just beyond their axis endpoints and expand the plot until their
+// measured rectangles fit without overlap. The same geometry drives ECharts.
+function radarImagePlot(radar, context) {
+  context.font = font(14);
+  const labels = radar.axes.map(axis => {
+    const definition = radar.definitions.find(item => item.key === axis.key);
+    const unit = definition?.unit ? ` (${definition.unit})` : "";
+    const lines = wrappedLines(context, `${radarMetricLabel(radar, axis.key)}${unit} ${axis.direction > 0 ? "↑" : "↓"}`, 180);
+    return { lines, width: Math.max(...lines.map(line => context.measureText(line).width)), height: lines.length * 21 };
+  });
+  for (let radius = 190; ; radius += 32) {
+    const boxes = labels.map((label, index) => {
+      const angle = Math.PI / 2 + index * 2 * Math.PI / labels.length;
+      const dx = Math.cos(angle), dy = -Math.sin(angle);
+      const x = (radius + 14) * dx, y = (radius + 14) * dy;
+      const align = Math.abs(dx) < 1e-8 ? "center" : dx < 0 ? "right" : "left";
+      return { ...label, align, x: x - (dx < -1e-8 ? label.width : Math.abs(dx) < 1e-8 ? label.width / 2 : 0),
+        y: y - (dy < -1e-8 ? label.height : Math.abs(dy) < 1e-8 ? label.height / 2 : 0) };
+    });
+    const left = Math.min(-radius, ...boxes.map(box => box.x)) - 16;
+    const right = Math.max(radius, ...boxes.map(box => box.x + box.width)) + 16;
+    const top = Math.min(-radius, ...boxes.map(box => box.y)) - 16;
+    const bottom = Math.max(radius, ...boxes.map(box => box.y + box.height)) + 16;
+    const width = Math.max(WIDTH - 2 * MARGIN, Math.ceil(right - left));
+    const height = Math.max(640, Math.ceil(bottom - top));
+    checkImageSize(width + 2 * MARGIN, height + 2 * MARGIN, "radar");
+    const overlaps = boxes.some((a, i) => boxes.slice(0, i).some(b =>
+      a.x < b.x + b.width + 4 && b.x < a.x + a.width + 4 && a.y < b.y + b.height + 4 && b.y < a.y + a.height + 4));
+    if (overlaps) continue;
+    const center = [-left + (width - (right - left)) / 2, -top + (height - (bottom - top)) / 2];
+    return { width, height, radius, center, labels: boxes.map(box => ({ ...box, x: box.x + center[0], y: box.y + center[1] })) };
+  }
+}
+
 function summaryImageLayout(kind, snapshot, context) {
   const commands = [];
+  const radarPlot = kind === "radar" ? radarImagePlot(snapshot.radar, context) : null;
+  const imageWidth = radarPlot ? radarPlot.width + 2 * MARGIN : WIDTH;
   const text = (value, x, y, width, size = 14, color = INK, bold = false) => {
     context.font = font(size, bold);
     const lines = wrappedLines(context, value, width);
     const lineHeight = Math.ceil(size * 1.5);
     const height = lines.length * lineHeight;
-    checkImageSize(WIDTH, y + height + MARGIN);
+    checkImageSize(imageWidth, y + height + MARGIN, kind);
     commands.push({ type: "text", lines, x, y, lineHeight, font: context.font, color });
     return height;
   };
   const rect = (x, y, width, height, color) => commands.push({ type: "rect", x, y, width, height, color });
-  const innerWidth = WIDTH - 2 * MARGIN;
+  const innerWidth = imageWidth - 2 * MARGIN;
   let y = MARGIN;
   y += text(snapshot.title, MARGIN, y, innerWidth, 26, INK, true) + 4;
   y += text(snapshot.subtitle, MARGIN, y, innerWidth, 16, INK, true) + 4;
@@ -75,15 +113,12 @@ function summaryImageLayout(kind, snapshot, context) {
       y = bottom + GAP;
     }
   } else {
-    plot = { x: MARGIN, y, width: innerWidth, height: 640 };
+    plot = { ...radarPlot, x: MARGIN, y };
+    for (const label of plot.labels) {
+      const offset = label.align === "right" ? label.width : label.align === "center" ? label.width / 2 : 0;
+      commands.push({ type: "text", lines: label.lines, x: plot.x + label.x + offset, y: plot.y + label.y, align: label.align, lineHeight: 21, font: font(14), color: INK });
+    }
     y += plot.height + GAP;
-    y += text(t("metric_control", "Metrics"), MARGIN, y, innerWidth, 17, INK, true) + 12;
-    snapshot.radar.axes.forEach((axis, index) => {
-      const definition = snapshot.radar.definitions.find(item => item.key === axis.key);
-      const unit = definition?.unit ? ` (${definition.unit})` : "";
-      y += text(`#${index + 1} · ${radarMetricLabel(snapshot.radar, axis.key)}${unit} ${axis.direction > 0 ? "↑" : "↓"}`, MARGIN, y, innerWidth, 14) + 4;
-    });
-    y += 12;
     y += text(t("summary_radar_groups", "Comparison groups"), MARGIN, y, innerWidth, 17, INK, true) + 12;
     for (const item of snapshot.radar.series) {
       rect(MARGIN, y + 8, 26, 4, item.color);
@@ -98,8 +133,8 @@ function summaryImageLayout(kind, snapshot, context) {
     }
   }
   const height = Math.ceil(y + MARGIN);
-  checkImageSize(WIDTH, height);
-  return { width: WIDTH, height, commands, plot };
+  checkImageSize(imageWidth, height, kind);
+  return { width: imageWidth, height, commands, plot };
 }
 
 async function summaryImageBlob(kind, snapshot) {
@@ -118,22 +153,23 @@ async function summaryImageBlob(kind, snapshot) {
     context.scale(SCALE, SCALE);
     context.fillStyle = "#ffffff";
     context.fillRect(0, 0, layout.width, layout.height);
+    if (layout.plot) {
+      if (!window.echarts) throw new Error(t("summary_radar_unavailable", "Radar chart is unavailable. Switch to the bar chart or use the summary table."));
+      const plot = layout.plot;
+      chart = window.echarts.init(chartHost, null, { renderer: "canvas", width: plot.width, height: plot.height, devicePixelRatio: SCALE });
+      chart.setOption(radarOption(snapshot.radar, plot.width, plot.height, { ink: INK, rule: RULE, hideAxisNames: true, radius: plot.radius, center: plot.center }), true);
+      chartCanvas = chart.renderToCanvas({ pixelRatio: SCALE, backgroundColor: "#fff" });
+      context.drawImage(chartCanvas, plot.x, plot.y, plot.width, plot.height);
+    }
     context.textBaseline = "top";
     for (const command of layout.commands) {
       context.fillStyle = command.color;
       if (command.type === "rect") context.fillRect(command.x, command.y, command.width, command.height);
       else {
         context.font = command.font;
+        context.textAlign = command.align || "left";
         command.lines.forEach((line, index) => context.fillText(line, command.x, command.y + index * command.lineHeight));
       }
-    }
-    if (layout.plot) {
-      if (!window.echarts) throw new Error(t("summary_radar_unavailable", "Radar chart is unavailable. Switch to the bar chart or use the summary table."));
-      const plot = layout.plot;
-      chart = window.echarts.init(chartHost, null, { renderer: "canvas", width: plot.width, height: plot.height, devicePixelRatio: SCALE });
-      chart.setOption(radarOption(snapshot.radar, plot.width, plot.height, { ink: INK, rule: RULE, numberedAxes: true }), true);
-      chartCanvas = chart.renderToCanvas({ pixelRatio: SCALE, backgroundColor: "#fff" });
-      context.drawImage(chartCanvas, plot.x, plot.y, plot.width, plot.height);
     }
     return await new Promise((resolve, reject) => canvas.toBlob(blob => {
       if (blob) resolve(blob);

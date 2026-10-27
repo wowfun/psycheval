@@ -336,10 +336,16 @@ not part of a shared location. Chart interactions preserve an open summary table
 Radar selections affect presentation only; Saved View and spreadsheet charts
 remain bar charts.
 The Home summary export menu offers its existing Excel workbook, one PNG combining
-all bar-chart metrics in two columns, and a radar PNG with a complete color legend.
+all bar-chart metrics in two columns, and a radar PNG with a color legend for
+selected groups. The group legend follows the plot without a separate metric list.
 Images use the current complete-query summary, grouping and statistic; radar
 images also use the selected axes and groups, independently of the visible chart
-type or comparison-list search. Exporting does not change presentation or the URL.
+type or comparison-list search. Radar images display complete metric names,
+configured units and directions at the axis vertices, expanding the image to avoid
+overlapping or clipped labels. Duplicate axis names include their metric IDs. Oversized radar
+images advise selecting fewer metrics or shortening their names; images are
+checked against canvas capacity before allocation. Exporting does not change
+presentation or the URL.
 Summary Excel requests require the ordered metric selection. Malformed IDs,
 duplicates and capacity violations are request errors. Syntactically valid but
 unavailable IDs remain gaps; requests require at least one registered metric.
