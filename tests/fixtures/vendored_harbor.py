@@ -466,6 +466,23 @@ def workbuddy(root: Path) -> None:
     assert captured.getvalue() == ""
     assert config.read_bytes() == b"unreadable workspace config\xff"
     assert {p.name for p in output.iterdir()} == {"peval.toml"}
+    route = {
+        "PEVAL_JUDGE_ENABLED": "true",
+        "PEVAL_JUDGE_BASE_URL": "https://fixture.invalid/v1///",
+        "PEVAL_JUDGE_MODEL": " copied-model ",
+        "PEVAL_JUDGE_API_KEY": "fixture-copied-route-key",
+    }
+    with patch.dict(os.environ, route):
+        resolved = module("workbuddy_verifier")._resolve_workbuddy_env(
+            {}, logging.getLogger("copied-workbuddy")
+        )
+        settings = module("verifier").JudgeSettings.from_env()
+        assert resolved == {
+            "WORKBUDDY_VERIFIER_LLM_" + field: getattr(settings, field.lower())
+            for field in ("BASE_URL", "MODEL", "API_KEY")
+        }
+        assert settings.base_url == "https://fixture.invalid/v1"
+        assert settings.model == "copied-model"
     usage = module("workbuddy_usage")
     history = root / "history/project/session.jsonl"
     history.parent.mkdir(parents=True)

@@ -19,8 +19,9 @@ from ..runtime_config import (
 )
 from ._blocking import run_blocking
 from ._evaluation import evaluate
-from ._judge import JudgeSettings, clear_judge_outputs, merge_scores, run_verifier_judge
+from ._judge import clear_judge_outputs, merge_scores, run_verifier_judge
 from ._judge_config import load_judge_config
+from ._judge_settings import JudgeSettings
 from ._score import score_payload
 from ._scoring import ScoringPlan, aggregate, build_scoring_plan, normalize_checks
 

@@ -542,14 +542,52 @@ Explicit plugin modules bundled in the Dataset load from the runtime copy in a
 private package namespace; relative imports resolve within that copy. Installed
 plugin modules use the caller's Python environment.
 
+At verification time, both WorkBuddy execution paths read
+`WORKBUDDY_VERIFIER_LLM_BASE_URL`, `WORKBUDDY_VERIFIER_LLM_API_KEY`,
+`WORKBUDDY_VERIFIER_LLM_MODEL`, and `WORKBUDDY_VERIFIER_LLM_MAX_OUTPUT_TOKENS`
+from the process environment as defaults. Precedence is process environment <
+Task verifier environment < step verifier environment < Job verifier environment.
+Explicit values, including empty strings and environment references, win.
+Preparation does not inject these defaults into the Job or resolve references.
+
+Any declaration of those four WorkBuddy variables selects the WorkBuddy route,
+even if incomplete or empty. Only when none is declared does the adapter use
+the overlapping `PEVAL_JUDGE_BASE_URL`, `PEVAL_JUDGE_API_KEY`, and
+`PEVAL_JUDGE_MODEL` settings, with the same precedence, as a fallback. This
+fallback respects `PEVAL_JUDGE_ENABLED` and its [native parsing rules](#yaml-llm-judge);
+an unset or disabled flag leaves it off. Invalid flags raise the native
+configuration error. Native settings never fill gaps in a selected WorkBuddy
+route, and other native Judge options are not mapped.
+
+The fallback consumes the same connection settings parser as `JudgeSettings`.
+It removes trailing `/` characters from the base URL and surrounding whitespace
+from the model, preserving the API key verbatim. Missing connection fields stay
+absent in the mapped WorkBuddy environment; explicitly empty values remain
+declared. Direct WorkBuddy settings retain their original strings. Full native
+Judge validation, including URL validity and non-connection options, does not
+apply to this fallback.
+
+WorkBuddy requires a nonempty base URL, API key, and model, including when using
+the native fallback; the native Judge's support for unauthenticated endpoints
+does not extend to WorkBuddy. A selected route with missing or whitespace-only
+required values emits a Trial log warning listing its source and missing
+variable names, then continues with the plugin's own scoring behavior. A
+complete route logs its source without values. No route and a disabled native
+fallback is a normal configuration and emits no warning. Plugins own Judge
+activation, plans, and results; the adapter does not infer an error from
+`judge.yaml` or missing LLM result files.
+
 Verifier environment references resolve at execution through Harbor's environment
-helpers. The runtime artifact writer applies Harbor's sensitive-environment
+helpers. Task, step, and Job environment references expand once; process
+environment values are concrete, so a process value that looks like `${VAR}`
+stays literal rather than being expanded again.
+The runtime artifact writer applies Harbor's sensitive-environment
 serialization rules to canonical score diagnostics before persistence, without
 mutating the plugin's score or rereading score files during cleanup. Plugins own
 the contents of files they write directly outside this writer.
 In-memory adaptation preserves environment values without applying persistence
-redaction. Use environment references in exported Jobs; route completeness is
-validated by the selected upstream plugin rather than an Office-only planner.
+redaction. Use environment references in exported Jobs. Runtime defaults do not
+change child-process credential isolation or the selected plugin's validation.
 
 The Dataset services accept explicit `dataset_id`, `path`, `format`, and
 `allow_partial`, returning `ResolvedHarborDataset`. WorkBuddy registration is

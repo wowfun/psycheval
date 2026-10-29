@@ -78,6 +78,9 @@ ordinary verifier compiles a fixed scoring plan, executes built-in and script
 checks, and aggregates their results independently of execution.
 Its optional YAML Judge reads declared text evidence and merges complete rubric
 assessments with the rule score; it does not depend on the WorkBuddy runtime.
+The verifier's settings module owns native Judge connection parsing and
+normalization, shared with WorkBuddy's native-configuration fallback; each
+consumer owns its completeness and execution validation.
 The verifier also owns preparation of immutable rubric inputs and execution of
 those prepared inputs. `psycheval.judge_runs` owns workspace Judge profiles,
 retained-prompt lookup and independent diagnostic runs; CLI and serve use this

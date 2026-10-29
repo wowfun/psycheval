@@ -435,6 +435,133 @@ def native_task(tmp_path):
     )
 
 
+@pytest.mark.skipif(
+    os.environ.get("PEVAL_WORKBUDDY_RUNTIME_TESTS") != "1",
+    reason="opt-in pinned WorkBuddy runtime integration",
+)
+@pytest.mark.parametrize("native", [False, True], ids=["generic", "office"])
+@pytest.mark.parametrize(
+    "mode", ["workbuddy", "native", "partial", "failure", "invalid"]
+)
+def test_real_runtime_judge_route_reaches_plugin_plan(
+    native_task, tmp_path, monkeypatch, caplog, native, mode
+):
+    from harbor.models.task.task import Task
+
+    from psycheval.harbor.workbuddy_verifier import WorkBuddyVerifier
+
+    wb = "WORKBUDDY_VERIFIER_LLM_"
+    prefix = wb if mode == "workbuddy" else "PEVAL_JUDGE_"
+    secret = "fixture-private-runtime-route-key"
+    route = {
+        "BASE_URL": "https://fixture.invalid/v1///",
+        "MODEL": "process-model" if prefix == wb else " process-model \t",
+    }
+    if mode != "partial":
+        route["API_KEY"] = secret
+    for field, value in route.items():
+        monkeypatch.setenv(prefix + field, value)
+    if prefix != wb:
+        monkeypatch.setenv(
+            prefix + "ENABLED", "invalid" if mode == "invalid" else "true"
+        )
+    if not native:
+        (native_task / "tests/verifier.toml").unlink()
+    (native_task.parents[1] / "shared/verifier/plugin.py").write_text(
+        """from dataclasses import replace
+from workbuddy_bench.judge import EvaluationItem, EvaluationPlan, PassRateScoringPolicy, VerifierRegistry
+from workbuddy_bench.judge.core import JudgeResult, JudgeSpec, JudgeVerdict
+from workbuddy_bench.judge.core.routing import verifier_llm_route_from_mapping
+
+class RouteProbe:
+    def run(self, context, plan, evidence, judge):
+        assert verifier_llm_route_from_mapping(context.env).configured
+        return JudgeResult(judge_name="llm", judge_type="llm_judge", verdicts=[
+            JudgeVerdict(item_id="llm", status="pass", judge_name="llm", judge_type="llm_judge")])
+
+def build_registry(build):
+    def plan(context):
+        if context.env.get("FIXTURE_PLAN_FAILURE"):
+            raise RuntimeError("fixture route plan failure")
+        enabled = verifier_llm_route_from_mapping(context.env).configured
+        return EvaluationPlan(dataset_id=context.dataset_id, task_id=context.task_id,
+            items=[EvaluationItem(id="llm", type="llm")] if enabled else [],
+            judges=[JudgeSpec(name="llm", type="llm_judge", item_ids=["llm"])] if enabled else [])
+    def finalize(score, context, plan):
+        return replace(score, diagnostics={**score.diagnostics, "context": {"env": dict(context.env)}})
+    return VerifierRegistry(plan_builder=plan, scoring_policy=PassRateScoringPolicy(),
+        judge_runners={"llm_judge": RouteProbe(), "rule_script": object()}, finalize_score=finalize)
+""",
+        encoding="utf-8",
+    )
+    before = _digests(native_task.parents[1])
+    process_before = dict(os.environ)
+
+    async def scenario():
+        host = make_office_environment(native_task, tmp_path / "host")
+        await host.start(False)
+        source = Task(native_task)
+        verifier = WorkBuddyVerifier(
+            task=source,
+            environment=host,
+            trial_paths=host.trial_paths,
+            logger=logging.getLogger("route-probe"),
+            override_env={"FIXTURE_PLAN_FAILURE": "1"} if mode == "failure" else {},
+        )
+        original_override = verifier.override_env
+        try:
+            if mode in {"failure", "invalid"}:
+                error, message = (
+                    (RuntimeError, "fixture route plan failure")
+                    if mode == "failure"
+                    else (ValueError, "PEVAL_JUDGE_ENABLED must be true or false")
+                )
+                with pytest.raises(error, match=message):
+                    await verifier.verify()
+                assert not (host.trial_paths.verifier_dir / "score.json").exists()
+                return
+
+            for owner in ("process", "task", "step", "job"):
+                await verifier.verify()
+                score_text = (host.trial_paths.verifier_dir / "score.json").read_text(
+                    encoding="utf-8"
+                )
+                score = json.loads(score_text)
+                assert bool(score["judges"]) == (mode != "partial")
+                assert "llm_score" not in score
+                assert secret not in score_text
+                context_env = score["diagnostics"]["context"]["env"]
+                assert context_env[wb + "MODEL"] == owner + "-model"
+                assert context_env[wb + "BASE_URL"] == (
+                    route["BASE_URL"] if prefix == wb else "https://fixture.invalid/v1"
+                )
+                assert verifier.task is source
+                assert verifier.override_env is original_override
+                assert verifier.environment is host
+                if owner == "process":
+                    source.config.verifier.env[prefix + "MODEL"] = "task-model"
+                elif owner == "task":
+                    verifier.verifier_env = {prefix + "MODEL": "step-model"}
+                elif owner == "step":
+                    original_override[prefix + "MODEL"] = "job-model"
+            if mode == "partial":
+                assert "missing required variables: PEVAL_JUDGE_API_KEY" in caplog.text
+                assert not (host.trial_paths.verifier_dir / "llm_judge.json").exists()
+        finally:
+            try:
+                assert verifier.task is source
+                assert verifier.override_env is original_override
+                assert verifier.environment is host
+            finally:
+                await host.stop(True)
+
+    with caplog.at_level(logging.INFO):
+        asyncio.run(scenario())
+    assert secret not in caplog.text
+    assert _digests(native_task.parents[1]) == before
+    assert dict(os.environ) == process_before
+
+
 def test_prepare_command_docstring_is_not_executable_profile(native_task):
     root = native_task.parents[1]
     rule = root / "shared/verifier/rule.py"

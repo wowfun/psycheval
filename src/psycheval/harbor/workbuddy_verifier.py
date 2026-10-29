@@ -21,6 +21,7 @@ import sys
 import tempfile
 import time
 import tomllib
+from collections import ChainMap
 from collections.abc import Mapping
 from contextlib import contextmanager
 from copy import deepcopy
@@ -822,6 +823,53 @@ class NativePythonVerifier(BaseVerifier):
             return VerifierResult(rewards=score.reward_payload())
 
 
+def _resolve_workbuddy_env(
+    env: Mapping[str, str], logger: logging.Logger
+) -> dict[str, str]:
+    """Supply invocation-local route defaults without overriding declarations."""
+    prefix = "WORKBUDDY_VERIFIER_LLM_"
+    required = ("BASE_URL", "API_KEY", "MODEL")
+    keys = tuple(prefix + field for field in (*required, "MAX_OUTPUT_TOKENS"))
+    defaults = {key: f"${{{key}}}" for key in keys if key in os.environ}
+    resolved = resolve_env_vars({**defaults, **env})
+    source = prefix
+    if not any(key in resolved for key in keys):
+        from .verifier._judge_settings import _JudgeConnection
+
+        source = "PEVAL_JUDGE_"
+        native = ChainMap(resolved, os.environ)
+        connection = _JudgeConnection.from_mapping(native)
+        if not connection.enabled:
+            return resolved
+        values = {
+            "BASE_URL": connection.base_url,
+            "API_KEY": connection.api_key,
+            "MODEL": connection.model,
+        }
+        resolved.update(
+            {
+                prefix + field: value
+                for field, value in values.items()
+                if source + field in native
+            }
+        )
+    missing = [
+        source + field
+        for field in required
+        if not resolved.get(prefix + field, "").strip()
+    ]
+    if missing:
+        logger.warning(
+            "WorkBuddy verifier LLM route from %s* is incomplete; "
+            "missing required variables: %s",
+            source,
+            ", ".join(missing),
+        )
+    else:
+        logger.info("WorkBuddy verifier LLM route configured from %s*", source)
+    return resolved
+
+
 @contextmanager
 def _staged_verifier_task(verifier):
     """Keep plugin imports, caches, and rewrites in an invocation-owned copy."""
@@ -866,7 +914,9 @@ def _staged_verifier_task(verifier):
         verifier.task.paths = TaskPaths(target)
         verifier.task._task_dir = target
         try:
-            verifier.override_env = resolve_env_vars(merged_verifier_env(verifier))
+            verifier.override_env = _resolve_workbuddy_env(
+                merged_verifier_env(verifier), verifier.logger
+            )
             yield root
         finally:
             verifier.task = original
