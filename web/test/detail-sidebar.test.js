@@ -19,6 +19,50 @@ const catalog = await import("../../src/psycheval/assets/web/modules/serve-catal
 
 test.after(() => browser.cleanup());
 
+function importedReport(adapter = "atif") {
+  const report = harborReport();
+  report.trajectory_meta[0] = {
+    trial_key: "imported-trial", adapter, status: "completed", steps: [{ step_id: 1 }, { step_id: 2 }],
+  };
+  return report;
+}
+
+test("imported trajectories mount only Trajectory and never initialize or request Harbor browsers", () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = path => { calls.push(String(path)); throw new Error("must not fetch"); };
+  try {
+    for (const adapter of ["atif", "opencode", "claude", "psychevo"]) {
+      for (const tab of ["verification", "task", "trajectory"]) {
+        runtime.state.view = importedReport(adapter);
+        runtime.state.selectedTrial = "imported-trial";
+        runtime.state.selectedSourceKey = "imported";
+        runtime.state.selectedStep = null;
+        runtime.state.detailSidebar = { open: true, tab };
+        sidebarModule.renderDetailSidebar();
+        const sidebar = document.querySelector("#detail-sidebar");
+        assert.deepEqual([...sidebar.querySelectorAll("[data-trial-tab]")].map(node => node.dataset.trialTab), ["trajectory"]);
+        assert.equal(sidebar.querySelectorAll("[data-trial-panel]").length, 1);
+        assert.equal(sidebar.querySelector('[data-trial-panel="trajectory"]').hidden, false);
+        const button = sidebar.querySelector('[role="tab"]');
+        assert.equal(button.getAttribute("aria-selected"), "true");
+        assert.equal(button.tabIndex, 0);
+        for (const key of ["ArrowLeft", "ArrowRight", "Home", "End"]) {
+          button.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true }));
+          assert.equal(document.activeElement, button);
+          assert.equal(runtime.state.detailSidebar.tab, "trajectory");
+        }
+        assert.equal(runtime.state.detailSidebar.verificationBrowser, undefined);
+        assert.equal(runtime.state.detailSidebar.taskBrowser, undefined);
+      }
+    }
+    assert.deepEqual(calls, []);
+  } finally {
+    sidebarModule.closeDetailSidebar({ render: false, restoreFocus: false });
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("opening another Trial starts at its default tab unless a position is supplied", () => {
   runtime.state.selectedSourceKey = "first";
   sidebarModule.openDetailSidebar({ trialKey:"first", tab:"task" });
@@ -91,6 +135,7 @@ test("the selected Harbor trial renders the shared read-only browser at its curr
   const task = sidebar.querySelector("[data-detail-sidebar-task]");
   const steps = sidebar.querySelector("[data-detail-sidebar-steps]");
   assert.equal(sidebar.hidden, false);
+  assert.deepEqual([...sidebar.querySelectorAll("[data-trial-tab]")].map(node => node.dataset.trialTab), ["verification", "task", "trajectory"]);
   assert.match(task.textContent, /org\/task/);
   assert.doesNotMatch(task.textContent, /Task description/);
   assert.equal(task.querySelectorAll(".harbor-file-row.kind-file").length, 2);
@@ -177,37 +222,136 @@ test("closing the sidebar preserves the selected Trial and non-Harbor rows show 
   assert.equal(runtime.state.detailSidebar.open, false);
 });
 
-test("a Harbor trial with no configured Task keeps Steps and omits the Task browser", async () => {
-  let fetched = false;
+test("Harbor Trials without a configured Task or Task name fall back to Verification", async () => {
+  const calls = [];
   const previousFetch = globalThis.fetch;
-  globalThis.fetch = async () => {
-    fetched = true;
-    throw new Error("must not fetch");
+  globalThis.fetch = async path => {
+    calls.push(String(path));
+    assert.match(String(path), /^\/api\/verification-files\//);
+    return { ok: true, text: async () => JSON.stringify({ tree: [] }) };
   };
   try {
-    const report = harborReport();
-    report.trajectory_meta[0].task_metadata = {
-      status: "not_configured",
-      live: true,
-    };
-    runtime.state.view = report;
-    runtime.state.selectedTrial = "trial-one";
-    runtime.state.selectedStep = null;
-    runtime.state.detailSidebar.open = true;
-    runtime.state.detailSidebar.tab = "task";
+    for (const missing of ["configuration", "name"]) {
+      const report = harborReport();
+      if (missing === "configuration") report.trajectory_meta[0].task_metadata = { status: "not_configured", live: true };
+      else delete report.trajectory_meta[0].task_name;
+      report.trajectory_meta[0].status = "running";
+      runtime.state.view = report;
+      runtime.state.selectedTrial = "trial-one";
+      runtime.state.selectedSourceKey = missing;
+      runtime.state.selectedStep = null;
+      runtime.state.detailSidebar.open = true;
+      runtime.state.detailSidebar.tab = "task";
 
-    runtime.renderComparisonPanels();
-    await new Promise(resolve => setTimeout(resolve, 0));
+      runtime.renderComparisonPanels();
+      await new Promise(resolve => setTimeout(resolve, 0));
 
-    const sidebar = document.querySelector("#detail-sidebar");
-    assert.equal(sidebar.hidden, false);
-    assert.equal(sidebar.querySelector("[data-detail-sidebar-task]"), null);
-    assert.equal(sidebar.querySelectorAll("[data-detail-sidebar-steps] .step").length, 2);
-    assert.equal(fetched, false);
+      const sidebar = document.querySelector("#detail-sidebar");
+      assert.equal(sidebar.hidden, false);
+      assert.deepEqual([...sidebar.querySelectorAll("[data-trial-tab]")].map(node => node.dataset.trialTab), ["verification", "trajectory"]);
+      assert.equal(sidebar.querySelector('[data-trial-panel="task"]'), null);
+      assert.equal(sidebar.querySelector('[data-trial-panel="verification"]').hidden, false);
+      assert.match(sidebar.querySelector(".verification-notice").textContent, /Not generated yet/);
+      const verification = sidebar.querySelector('[data-trial-tab="verification"]');
+      verification.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      assert.equal(runtime.state.detailSidebar.tab, "trajectory");
+      document.activeElement.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      assert.equal(runtime.state.detailSidebar.tab, "verification");
+    }
+    assert.deepEqual(calls, [
+      "/api/verification-files/configuration", "/api/verification-files/configuration",
+      "/api/verification-files/name", "/api/verification-files/name",
+    ]);
   } finally {
     globalThis.fetch = previousFetch;
   }
 });
+
+test("configured Task resolution and read errors keep the Task tab and its diagnostic", async () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async path => {
+    calls.push(String(path));
+    return { ok: false, status: 500, text: async () => JSON.stringify({ detail: "Task read failed" }) };
+  };
+  try {
+    for (const status of ["not_found", "ambiguous", "invalid", "digest_mismatch", "resolved"]) {
+      const report = harborReport();
+      report.trajectory_meta[0].task_metadata.status = status;
+      if (status !== "resolved") delete report.trajectory_meta[0].task_metadata.task_ref;
+      runtime.state.view = report;
+      runtime.state.selectedTrial = "trial-one";
+      runtime.state.selectedStep = null;
+      runtime.state.detailSidebar.open = true;
+      runtime.state.detailSidebar.tab = "task";
+      sidebarModule.renderDetailSidebar();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const sidebar = document.querySelector("#detail-sidebar");
+      assert.equal(sidebar.querySelector('[data-trial-panel="task"]').hidden, false);
+      assert.equal(sidebar.querySelector('[data-trial-tab="task"]').getAttribute("aria-selected"), "true");
+      assert.match(sidebar.querySelector("[data-harbor-editor]").value, status === "resolved" ? /Task read failed/ : /Task files unavailable/);
+    }
+    assert.deepEqual(calls, ["/api/harbor/datasets/dataset/tasks/task"]);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+for (const tab of ["verification", "task"]) {
+  test(`switching to an import invalidates a pending ${tab} read and clears its state`, async () => {
+    const previousFetch = globalThis.fetch;
+    const calls = [];
+    let complete;
+    globalThis.fetch = path => {
+      calls.push(String(path));
+      return new Promise(resolve => { complete = resolve; });
+    };
+    try {
+      runtime.state.view = harborReport();
+      runtime.state.selectedTrial = "trial-one";
+      runtime.state.selectedSourceKey = "pending";
+      runtime.state.selectedStep = null;
+      runtime.state.detailSidebar.open = true;
+      runtime.state.detailSidebar.tab = tab;
+      sidebarModule.renderDetailSidebar();
+      const oldBrowser = runtime.state.detailSidebar[`${tab}Browser`];
+      assert.equal(calls.length, 1);
+
+      runtime.state.view = importedReport();
+      runtime.state.selectedTrial = "imported-trial";
+      runtime.state.selectedSourceKey = "imported";
+      sidebarModule.renderDetailSidebar();
+      complete({ ok: true, text: async () => JSON.stringify(tab === "verification" ? {
+        tree: [{ id: "reward", path: "verifier/reward.txt", kind: "file", previewable: true, preview_kind: "text" }],
+      } : {
+        dataset_id: "dataset", task: { directory: "task" },
+        tree: [{ path: "steps/collect/instruction.md", kind: "file", previewable: true }],
+      }) });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      assert.equal(calls.length, 1, "stale manifests must not trigger file reads");
+      assert.equal(runtime.state.detailSidebar.tab, "trajectory");
+      assert.equal(document.querySelectorAll("#detail-sidebar [data-trial-panel]").length, 1);
+      if (tab === "task") {
+        assert.equal(oldBrowser.state.detail, null);
+        assert.equal(oldBrowser.state.contextKey, null);
+      } else assert.equal(oldBrowser.element.querySelector("[data-verification-path]").textContent, "");
+
+      globalThis.fetch = async path => {
+        calls.push(String(path));
+        return { ok: true, text: async () => JSON.stringify({ tree: [] }) };
+      };
+      runtime.state.view = harborReport();
+      runtime.state.selectedTrial = "trial-one";
+      runtime.state.selectedSourceKey = "pending";
+      runtime.state.detailSidebar.tab = tab;
+      sidebarModule.renderDetailSidebar();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      assert.equal(calls.length, 2, "reselecting the same Harbor Trial reloads cleared state");
+      assert.equal(runtime.state.detailSidebar.tab, tab);
+    } finally {
+      sidebarModule.closeDetailSidebar({ render: false, restoreFocus: false });
+      globalThis.fetch = previousFetch;
+    }
+  });
+}
 
 test("a resolved Harbor identity without a safe Task ref stays unavailable without fetching", async () => {
   let fetched = false;
@@ -269,7 +413,8 @@ test("guest verification is independent of Task resolution and child Agent navig
     assert.match(sidebar.querySelector(".verification-summary").textContent, /completed.*Score0/);
     assert.equal(sidebar.querySelector(".verification-metrics dd").textContent, "0");
     assert.deepEqual(calls, ["/api/verification-files/root-source", "/api/verification-files/root-source/reward"]);
-    sidebar.querySelector('[data-trial-tab="task"]').click();
+    assert.equal(sidebar.querySelector('[data-trial-tab="task"]'), null);
+    sidebar.querySelector('[data-trial-tab="trajectory"]').click();
     sidebarModule.openDetailSidebar({ trialKey: "trial-two" });
     assert.equal(runtime.state.detailSidebar.tab, "verification");
     sidebarModule.openDetailSidebar({ trialKey: "trial-one", stepId: 2 });

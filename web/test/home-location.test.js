@@ -13,7 +13,7 @@ const catalog = await import("../../src/psycheval/assets/web/modules/serve-catal
 const reports = await import("../../src/psycheval/assets/web/modules/workspace-reports.js");
 const { closeDetailSidebar } = await import("../../src/psycheval/assets/web/modules/detail-sidebar.js");
 const views = await import("../../src/psycheval/assets/web/modules/workspace-views.js");
-const { restoreHomeLocation } = await import("../../src/psycheval/assets/web/modules/home-location.js");
+const { captureHomeLocation, restoreHomeLocation } = await import("../../src/psycheval/assets/web/modules/home-location.js");
 const locationCodec = await import("../../src/psycheval/assets/web/app/workspace-location.js");
 const report = { report_id: "20261012-000000-123456", report_ref: "package:20261012-000000-123456", filename: "report.md", format: "markdown", source_keys: [] };
 
@@ -66,6 +66,67 @@ test("leaderboard search publishes one debounced location with the final input",
   }
 });
 const trajectory = { trajectory: [{ trajectory_id: "root", session_id: "session", agent: { name: "agent" }, steps: [{ step_id: 1, source: "user", message: "request" }], final_metrics: {} }], trajectory_meta: [{ trial_key: "trial", adapter: "psychevo", steps: [{ step_id: 1 }] }], annotations: {} };
+
+test("a default non-Harbor selection never publishes an inapplicable tab", async () => {
+  const { setWorkspaceApp } = await import("../../src/psycheval/assets/web/app/workspace-runtime.js");
+  const previousFetch = globalThis.fetch;
+  const calls = [], commits = [];
+  try {
+    restoreHomeLocation(locationCodec.decodeWorkspaceLocation("home", new URL(window.location.origin)));
+    state.workspaceViewsLoaded = true;
+    globalThis.fetch = async path => {
+      calls.push(String(path));
+      return response({ report: trajectory });
+    };
+    setWorkspaceApp({ locationChanged: (page, kind) => commits.push({ page, kind, object: captureHomeLocation().object }) });
+    await catalog.selectServeDetail("default", { openSidebar: true, throwOnError: true });
+    assert.deepEqual(commits, [
+      { page: "home", kind: "object", object: { source: "default" } },
+      { page: "home", kind: "replace", object: { source: "default", tab: "trajectory" } },
+    ]);
+    assert.equal(state.detailSidebar.tab, "trajectory");
+    assert.deepEqual(calls, ["/api/sources/default"]);
+  } finally {
+    setWorkspaceApp(null);
+    closeDetailSidebar({ render: false });
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("restoring an inapplicable Trial tab commits its fallback location once as a replacement", async () => {
+  const { setWorkspaceApp } = await import("../../src/psycheval/assets/web/app/workspace-runtime.js");
+  const previousFetch = globalThis.fetch;
+  try {
+    for (const [adapter, requested, expected] of [["psychevo", "task", "trajectory"], ["psychevo", "verification", "trajectory"], ["harbor", "task", "verification"]]) {
+      const report = structuredClone(trajectory);
+      Object.assign(report.trajectory_meta[0], { adapter, task_name: "org/task", task_metadata: { status: "not_configured" } });
+      const href = locationCodec.encodeWorkspaceLocation("home", { object: { source: "located", step: "1", tab: requested } });
+      const location = locationCodec.decodeWorkspaceLocation("home", new URL(href, window.location.origin));
+      restoreHomeLocation(location);
+      const commits = [], calls = [];
+      globalThis.fetch = path => {
+        calls.push(String(path));
+        return Promise.resolve(response(String(path).startsWith("/api/sources/") ? { report } : { tree: [] }));
+      };
+      state.workspaceViewsLoaded = true;
+      setWorkspaceApp({ locationChanged: (page, kind) => commits.push({ page, kind, object: { ...state.homeLocationTarget } }) });
+      await catalog.selectServeDetail("located", { openSidebar: true, stepId: "1", tab: requested, throwOnError: true });
+      const object = { source: "located", step: "1", tab: expected };
+      assert.equal(state.detailSidebar.tab, expected);
+      assert.equal(document.querySelector(`[data-trial-tab="${expected}"]`).getAttribute("aria-selected"), "true");
+      assert.equal(document.querySelector(`[data-trial-panel="${expected}"]`).hidden, false);
+      assert.deepEqual(captureHomeLocation().object, object);
+      assert.deepEqual(commits, [{ page: "home", kind: "replace", object }]);
+      assert.equal(new URL(locationCodec.encodeWorkspaceLocation("home", captureHomeLocation()), window.location.origin).searchParams.get("tab"), expected);
+      if (adapter !== "harbor") assert.deepEqual(calls, ["/api/sources/located"]);
+      setWorkspaceApp(null);
+    }
+  } finally {
+    setWorkspaceApp(null);
+    closeDetailSidebar({ render: false });
+    globalThis.fetch = previousFetch;
+  }
+});
 
 test("sort clicks continue a restored API sort through descending and default", () => {
   globalThis.fetch = () => new Promise(() => {});

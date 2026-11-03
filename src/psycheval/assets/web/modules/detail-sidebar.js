@@ -125,7 +125,15 @@ function renderDetailSidebar() {
   }
   const timingStats = stepTimingStats(trial);
   const task = renderDetailSidebarTask(rootMeta);
-  const tabs = [["verification", t("verification", "Verification")], ["task", t("task", "Task")], ["trajectory", t("trajectory", "Trajectory")]];
+  const hasVerification = rootMeta.adapter === "harbor";
+  const tabs = [];
+  if (hasVerification) tabs.push(["verification", t("verification", "Verification")]);
+  if (task) tabs.push(["task", t("task", "Task")]);
+  tabs.push(["trajectory", t("trajectory", "Trajectory")]);
+  const tabChanged = !tabs.some(([id]) => id === sidebar.tab);
+  if (tabChanged) sidebar.tab = tabs[0][0];
+  if (!task) sidebar.taskBrowser?.clear();
+  if (!hasVerification) sidebar.verificationBrowser?.clear();
   target.innerHTML = `
     <div class="detail-sidebar-panel" role="complementary" aria-labelledby="detail-sidebar-title">
       <div class="detail-sidebar-head">
@@ -140,10 +148,10 @@ function renderDetailSidebar() {
         ${tabs.map(([id, text]) => `<button type="button" role="tab" id="trial-tab-${id}" aria-controls="trial-panel-${id}" aria-selected="${sidebar.tab === id}" tabindex="${sidebar.tab === id ? 0 : -1}" data-trial-tab="${id}">${esc(text)}</button>`).join("")}
       </div>
       <div class="detail-sidebar-body">
-        <section id="trial-panel-verification" role="tabpanel" aria-labelledby="trial-tab-verification" data-trial-panel="verification" ${sidebar.tab !== "verification" ? "hidden" : ""}>
+        ${hasVerification ? `<section id="trial-panel-verification" role="tabpanel" aria-labelledby="trial-tab-verification" data-trial-panel="verification" ${sidebar.tab !== "verification" ? "hidden" : ""}>
           <div data-verification-browser></div>
-        </section>
-        <section id="trial-panel-task" role="tabpanel" aria-labelledby="trial-tab-task" data-trial-panel="task" ${sidebar.tab !== "task" ? "hidden" : ""}>${task || `<p class="copy">${esc(t("task_files_unavailable", "Task files unavailable"))}</p>`}</section>
+        </section>` : ""}
+        ${task ? `<section id="trial-panel-task" role="tabpanel" aria-labelledby="trial-tab-task" data-trial-panel="task" ${sidebar.tab !== "task" ? "hidden" : ""}>${task}</section>` : ""}
         <section id="trial-panel-trajectory" role="tabpanel" aria-labelledby="trial-tab-trajectory" data-trial-panel="trajectory" class="detail-sidebar-steps" data-detail-sidebar-steps ${sidebar.tab !== "trajectory" ? "hidden" : ""}>
           ${renderTrajectoryNavigation(root, rootMeta)}
           ${trial.detail_unavailable ? `<p class="copy">${esc(t("verification_trajectory_unavailable", "Trajectory unavailable; retained verification files remain accessible."))}</p>` : renderStepsHeader(trajectory, { headingId: "detail-sidebar-steps-title" })}
@@ -163,10 +171,12 @@ function renderDetailSidebar() {
   bindStepToggle(target, "[data-detail-sidebar-step-list]");
   bindBlockCopyControls(target);
   bindTrajectoryNavigation(target, root, rootMeta);
-  if (!sidebar.verificationBrowser) sidebar.verificationBrowser = createVerificationBrowser();
-  const sourceKey = sourceKeyForTrialKey(rootMeta.trial_key) || rootMeta.verifier_evidence?.source_key;
-  sidebar.verificationBrowser.setSource(sourceKey, rootMeta.verifier_evidence?.revision || rootMeta.evidence_revision || state.catalogPage?.generation);
-  sidebar.verificationBrowser.attach(target.querySelector("[data-verification-browser]"));
+  if (hasVerification) {
+    if (!sidebar.verificationBrowser) sidebar.verificationBrowser = createVerificationBrowser();
+    const sourceKey = sourceKeyForTrialKey(rootMeta.trial_key) || rootMeta.verifier_evidence?.source_key;
+    sidebar.verificationBrowser.setSource(sourceKey, rootMeta.verifier_evidence?.revision || rootMeta.evidence_revision || state.catalogPage?.generation);
+    sidebar.verificationBrowser.attach(target.querySelector("[data-verification-browser]"));
+  }
   bindWorkspaceLinkButtons(target, "home");
   target.querySelectorAll("[data-detail-sidebar-step-list] .step > summary").forEach(summary => {
     summary.addEventListener("click", event => {
@@ -197,7 +207,7 @@ function renderDetailSidebar() {
       event.preventDefault(); buttons[next].focus(); activate(buttons[next].dataset.trialTab);
     });
   });
-  activate(sidebar.tab, false);
+  activate(sidebar.tab, tabChanged);
 }
 
 function renderDetailSidebarTask(trial) {

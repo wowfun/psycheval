@@ -322,8 +322,13 @@ their directly associated sessions. Only imported report packages can be deleted
 Dataset and Job associations follow the [report data contract](state-and-data.md#evaluation-reports).
 
 The Home Trial sidebar keeps run status, score, and score source visible above
-Verification, Task, and Trajectory tabs. Verification uses a searchable file
-tree and on-demand previews under the [evaluation evidence contract](evaluation.md).
+the applicable tabs, ordered Verification, Task, and Trajectory. Non-Harbor
+Trials show only Trajectory. Harbor Trials always offer
+Verification and Trajectory; Task is offered when the root Trial has a Task
+name and its live Task metadata is not `not_configured`. Task resolution or
+read errors remain visible within Task rather than hiding that tab.
+Verification uses a searchable file tree and on-demand previews under the
+[evaluation evidence contract](evaluation.md).
 The preview content pane fills the remaining sidebar height and owns scrolling;
 raw file text has no separate height cap or nested scroll area.
 Complete JSON files offer a key-based collapsible view for nonempty objects,
@@ -341,11 +346,18 @@ present in the current Trial's retained file tree can be opened.
 Switching to raw text preserves
 expansion state, and copying uses the original file text. Malformed or truncated
 JSON remains raw text.
-Its initial tab is Verification; later Trial selections retain the active tab,
-while selecting a trajectory step opens Trajectory. Subagent navigation changes
-the trajectory only, not the Trial or Harbor Step that owns verification.
-Task availability does not control verification access. Sources without retained
-verification files show their existing score summary and an explicit empty state.
+Each new Trial selection opens Verification when applicable, otherwise
+Trajectory; an explicitly requested applicable tab is honored, while selecting a
+trajectory step opens Trajectory. An inapplicable tab in a shared location or
+current selection falls back to the Trial's default and replaces the location
+without adding browser history. Only applicable tabs and panels are mounted;
+keyboard navigation visits those tabs, including a single Trajectory tab.
+Inapplicable browsers are not initialized or loaded, and becoming inapplicable
+invalidates their previous reads and state. Subagent navigation changes the
+trajectory only; tab applicability and verification remain owned by the root
+Trial or Harbor Step. Task availability does not control verification access.
+Harbor Trials without retained verification files show their existing score
+summary and an explicit empty or not-yet-generated state.
 For a missing or removed source (HTTP 404/410), the sidebar uses the catalog's
 existing summary and marks the trajectory unavailable. Temporary server or
 network failures remain errors and do not fabricate missing evidence.

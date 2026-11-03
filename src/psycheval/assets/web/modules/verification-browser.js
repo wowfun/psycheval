@@ -129,7 +129,9 @@ function createVerificationBrowser({ request = serveApi } = {}) {
       try {
         const result = await request(`/api/verification-files/${encodeURIComponent(sourceKey)}`);
         if (!isCurrent()) return;
-        tree = Array.isArray(result.tree) ? result.tree : []; loaded = tree.some(item => item.kind === "file"); notice(""); renderTree();
+        tree = Array.isArray(result.tree) ? result.tree : [];
+        // Retry empty manifests on activation so newly generated evidence can appear.
+        loaded = tree.some(item => item.kind === "file"); notice(""); renderTree();
         const preferred = ["verifier/score.json", "verifier/reward.json", "verifier/reward.txt", "result.json"];
         const path = preferred.find(path => tree.some(item => item.path === path && item.previewable))
           || tree.find(item => item.kind === "file" && item.previewable)?.path
