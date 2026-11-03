@@ -88,9 +88,15 @@ function createHomePage(_context) {
       }
     },
     snapshot() {
+      const index = state.view?.trajectory_meta?.findIndex(meta => meta?.trial_key === state.selectedTrial) ?? -1;
+      const trajectoryId = state.selectedTrajectory?.trialKey === state.selectedTrial
+        ? state.selectedTrajectory.trajectoryId
+        : state.view?.trajectory?.[index]?.trajectory_id;
       return {
         context: {
           page: "home",
+          report_ref: state.reportReader.openRef || null,
+          trajectory_id: trajectoryId || null,
           source_key: state.selectedSourceKey || null,
           trial_key: state.selectedTrial || null,
           step_id: state.selectedStep?.stepId || null,

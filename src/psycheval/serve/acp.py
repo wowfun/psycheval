@@ -14,7 +14,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from psycheval.config import AcpAgent
 
-MAX_ACP_FRAME_BYTES = 2 * 1024 * 1024
+MAX_ACP_FRAME_BYTES = 16 * 1024 * 1024
 MAX_GATEWAY_CONNECTIONS = 16
 MAX_AGENT_CONNECTIONS = 4
 PROCESS_SHUTDOWN_SECONDS = 2.0
@@ -122,7 +122,8 @@ class AcpGateway:
     def agents(self) -> dict[str, object]:
         with self._lock:
             return {
-                "cwd": str(self.workspace_root),
+                "cwd": self.workspace_root.as_posix(),
+                "max_message_bytes": MAX_ACP_FRAME_BYTES,
                 "agents": [
                     {
                         "id": config.id,

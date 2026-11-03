@@ -1,7 +1,7 @@
 # Viewing Source Evidence
 
 Prefer workspace source references because they preserve normalized local or
-Harbor identity without exposing mount paths:
+Harbor identity:
 
 ```console
 peval view tr -r <workspace> --source-ref <ref>
@@ -33,3 +33,10 @@ peval view tr -p <trial-dir>
 
 Passing `agent/trajectory.json` directly intentionally loses Harbor Task, Job,
 Trial, reward, and provenance context.
+
+Workbench references also supply actual evidence paths for deeper reads. A child
+trajectory can share the root file; identify events by source_ref, trajectory_id
+and step_id together. Do not apply a child's step number to a root-only CLI
+filter. Inspect the selected embedded trajectory in the referenced file when
+needed. Direct reads use Agent permissions and bypass HTTP credential filtering.
+Generated Windows references use `/`, including `//server/share` for UNC.

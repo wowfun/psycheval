@@ -66,6 +66,43 @@ def main() -> None:
         )
         if os.environ.get("PEVAL_E2E_VERIFICATION") == "1":
             write_verification_trial(root)
+        if external := os.environ.get("PEVAL_E2E_REFERENCE_ROOT"):
+            from tests.peval.test_harbor_evidence import write_evidence_trial
+
+            trial = Path(external) / "job/live-trial"
+            write_evidence_trial(trial)
+            trajectory_path = trial / "agent/trajectory.json"
+            trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
+            trajectory["steps"][0]["message"] = "Synthetic padding. " * 120_000
+            trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
+            (trial / "verification-marker.txt").write_text(
+                os.environ["PEVAL_E2E_REFERENCE_MARKER"], encoding="utf-8"
+            )
+            with (root / "peval.toml").open("a", encoding="utf-8") as handle:
+                handle.write(
+                    '\n[[harbor.mounts]]\nid = "live"\npath = '
+                    + json.dumps(Path(external).as_posix())
+                    + "\n"
+                )
+            (root / "opencode.json").write_text(
+                json.dumps(
+                    {
+                        "$schema": "https://opencode.ai/config.json",
+                        "default_agent": "plan",
+                        "permissions": [
+                            {
+                                "action": "external_directory",
+                                "resource": "*",
+                                "effect": "ask",
+                            },
+                            {"action": "skill", "resource": "*", "effect": "deny"},
+                            {"action": "edit", "resource": "*", "effect": "deny"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            assert not (root / ".agents/skills").exists()
         if os.environ.get("PEVAL_E2E_JUDGE") == "1":
             from tests.fixtures.judge_server import judge_server
 

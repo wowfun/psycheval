@@ -17,6 +17,22 @@ const { captureHomeLocation, restoreHomeLocation } = await import("../../src/psy
 const locationCodec = await import("../../src/psycheval/assets/web/app/workspace-location.js");
 const report = { report_id: "20261012-000000-123456", report_ref: "package:20261012-000000-123456", filename: "report.md", format: "markdown", source_keys: [] };
 
+test("Copilot identity preserves a child trajectory with a colliding root step ID", async () => {
+  const { createHomePage } = await import("../../src/psycheval/assets/web/pages/home-page.js");
+  const previous = { selectedTrial: state.selectedTrial, selectedSourceKey: state.selectedSourceKey, selectedTrajectory: state.selectedTrajectory, selectedStep: state.selectedStep, view: state.view };
+  try {
+    state.selectedTrial = "trial";
+    state.selectedSourceKey = "source";
+    state.selectedTrajectory = {trialKey: "trial", trajectoryId: "child"};
+    state.selectedStep = {stepId: "2"};
+    state.view = {trajectory_meta: [{trial_key: "trial"}], trajectory: [{trajectory_id: "root", steps: [{step_id: 2}], subagent_trajectories: [{trajectory_id: "child", steps: [{step_id: 2}]}]}]};
+    const context = createHomePage({}).snapshot().context;
+    assert.equal(context.source_key, "source");
+    assert.equal(context.trajectory_id, "child");
+    assert.equal(context.step_id, "2");
+  } finally { Object.assign(state, previous); }
+});
+
 test("clearing query conditions preserves summary presentation, including noncanonical axis order", async () => {
   const { tableControls } = await import("../../src/psycheval/assets/web/modules/data-tables.js");
   const location = locationCodec.decodeWorkspaceLocation("home", new URL("http://localhost"));

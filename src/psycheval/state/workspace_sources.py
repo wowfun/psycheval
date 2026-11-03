@@ -78,6 +78,7 @@ from psycheval.state.workspace_source_models import (
     LOCAL_FINGERPRINT_FILES,
     SourceCandidate,
     SourceDocument,
+    SourceReferenceLocation,
 )
 
 if TYPE_CHECKING:
@@ -182,6 +183,15 @@ class WorkspaceSources:
 
     def verification_file_location(self, source_ref: str) -> tuple[Path, Path]:
         self._reject_legacy_harbor_projections()
+        data_dir, root = self._harbor_location(source_ref)
+        trial_dir = (
+            data_dir.parent.parent if len(Path(source_ref).parts) == 6 else data_dir
+        )
+        if not _looks_like_trial(trial_dir):
+            raise ValueError("unknown Harbor Trial source")
+        return data_dir, root
+
+    def _harbor_location(self, source_ref: str) -> tuple[Path, Path]:
         self.overlay_dir(source_ref)
         parts = Path(source_ref).parts
         mount_id, job_name, trial_name = parts[1:4]
@@ -199,13 +209,67 @@ class WorkspaceSources:
         root = lexical_root.resolve()
         job_dir = self._direct_harbor_directory(root, job_name, "Job")
         trial_dir = self._direct_harbor_directory(job_dir, trial_name, "Trial")
-        if not _looks_like_trial(trial_dir):
-            raise ValueError("unknown Harbor Trial source")
         data_dir = trial_dir
         if len(parts) == 6:
             steps_dir = self._direct_harbor_directory(trial_dir, "steps", "Steps")
             data_dir = self._direct_harbor_directory(steps_dir, parts[5], "Step")
         return data_dir, root
+
+    def reference_location(self, location: SourceReferenceLocation) -> dict[str, Path]:
+        """Locate a catalog identity without reading retained evidence bodies."""
+        source_ref = location.source_ref
+        if source_ref.startswith("harbor/"):
+            data_dir, root = self._harbor_location(source_ref)
+            trial = (
+                data_dir.parent.parent if len(Path(source_ref).parts) == 6 else data_dir
+            )
+            result = {"evidence_path": trial}
+            if data_dir != trial:
+                result["phase_path"] = data_dir
+        elif source_ref.startswith("runs/jobs/"):
+            from psycheval.jobs.storage import safe_path
+
+            job_name = location.job_name
+            if not isinstance(job_name, str) or not job_name:
+                raise ValueError("Job location is unavailable; reconcile the catalog")
+            root = safe_path(self.workspace_root, "jobs", job_name)
+            if not root.is_dir():
+                raise ValueError("Job output directory is missing")
+            result = {"evidence_path": root}
+            relative = location.trajectory_path
+            if relative:
+                path = safe_path(root, *Path(relative).parts)
+                if path.is_file():
+                    result["trajectory_path"] = path
+            return result
+        else:
+            data_dir = self.annotation_dir(source_ref)
+            if not data_dir.is_dir():
+                raise ValueError("source artifact directory is missing")
+            root = self.workspace_root
+            result = {"evidence_path": data_dir}
+        for filename in ("trajectory.json", "trajectory.partial.json"):
+            path = data_dir / "agent" / filename
+            _assert_safe_descendant(root, path, label="Trajectory reference")
+            if path.is_file() and not path.is_symlink():
+                result["trajectory_path"] = path
+                break
+        return result
+
+    def canonical_report_location(self, source_ref: str) -> Path:
+        if source_ref.startswith("harbor/"):
+            data_dir, root = self._harbor_location(source_ref)
+            report_dir = (
+                data_dir.parent.parent if len(Path(source_ref).parts) == 6 else data_dir
+            )
+        else:
+            report_dir = self.annotation_dir(source_ref)
+            root = self.workspace_root
+        path = report_dir / "analysis.md"
+        _assert_safe_descendant(root, path, label="Report reference")
+        if not path.is_file() or path.is_symlink():
+            raise ValueError("canonical report is unavailable")
+        return path
 
     def load(
         self,

@@ -33,6 +33,7 @@ from psycheval.state.evaluation_report_catalog import (
     replace_evaluation_report_projection,
 )
 from psycheval.state.store import ServeStateStore
+from psycheval.state.workspace_source_models import SourceReferenceLocation
 from psycheval.state.workspace_sources import (
     HARBOR_SOURCE_KIND,
     SourceDocument,
@@ -40,7 +41,7 @@ from psycheval.state.workspace_sources import (
 )
 
 CATALOG_SCHEMA_VERSION = 19
-CATALOG_PROJECTION_VERSION = 10
+CATALOG_PROJECTION_VERSION = 11
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 SUMMARY_CACHE_ENTRY_LIMIT = 128
@@ -114,7 +115,11 @@ class CatalogRow:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            **self.payload,
+            **{
+                key: value
+                for key, value in self.payload.items()
+                if key != "_reference_location"
+            },
             "source_key": self.source_key,
             "artifact_revision": self.artifact_revision,
         }
@@ -633,6 +638,21 @@ class WorkspaceCatalog:
             raise ValueError(f"unknown source: {source_key}")
         return json.loads(str(record[0]))
 
+    def reference_locations(
+        self, source_keys: Iterable[str]
+    ) -> dict[str, SourceReferenceLocation]:
+        """Read private locator metadata by identity, independent of UI projections."""
+        return {
+            row["source_key"]: SourceReferenceLocation(
+                source_ref=row["source_ref"],
+                job_name=(row.get("_reference_location") or {}).get("job_name"),
+                trajectory_path=(row.get("_reference_location") or {}).get(
+                    "trajectory_path"
+                ),
+            )
+            for row in self.binding_rows(source_keys=source_keys)
+        }
+
     def binding_rows(
         self,
         *,
@@ -1123,6 +1143,8 @@ class WorkspaceCatalog:
         }
         if document.source_ref.startswith("runs/"):
             row["artifact_dir"] = document.source_ref
+        if document.reference_location is not None:
+            row["_reference_location"] = document.reference_location
         if document.evidence_revision is not None:
             row["evidence_revision"] = document.evidence_revision
         if document.analysis_revision is not None:

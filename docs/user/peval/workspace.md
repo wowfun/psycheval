@@ -200,48 +200,51 @@ After adding an allowlisted Agent such as OpenCode in Configuration, use
 a model in the composer and new conversations reuse it; the preference survives
 page reloads for the same Workspace and Agent. Existing conversations retain
 their own Agent-managed model. Every new conversation starts in the Agent's
-`plan` mode, while an opened conversation retains its Agent-managed mode. Attach
-multiple sources, Tasks, or reports with
-the **Add context** control
-above the prompt. Select an evaluation item, add it, and repeat; remove one with
-the named close control on its chip. Adding the same reference again has no
-effect. The drawer stays open when you switch Workspace pages; close it
-explicitly with its close control, backdrop, or Escape. Page selection changes
-do not silently alter attached references. Every attached reference is resolved
-again for each prompt, so the Agent receives current bounded content in the
-visible chip order. A source context also includes its current canonical report
-when one exists. That report is analysis material, not a publication guard.
-After any terminal turn, including a cancelled turn, the Workspace refreshes
-its catalog because an Agent tool may already have committed a report.
+`plan` mode, while an opened conversation retains its Agent-managed mode.
 
-Connection success, context attachment, duplicate attachment, removal, and
-related errors appear as ordered, low-emphasis rows in the session transcript.
-They exist only in the current browser controller and are neither sent to the
-Agent nor restored from session history. An error that occurs before the chat is
-available appears in the empty chat placeholder; connection progress and a
-normal disconnect do not add notification rows.
+Use the composer's **+** menu to add images, workbench references, Agent commands
+or prompt templates. Select a source, Task, step or report, then choose
+**Workbench references**. The current object starts selected; related materials
+are optional. Review the locations and insert the selected text. References and
+templates append after your existing draft, remain editable and never send
+automatically. They are ordinary text and are not repeated on later turns.
+Source references include `source_ref`, `peval view tr` guidance and real evidence
+paths. Steps also identify their trajectory, avoiding confusion between root and
+child events with the same number. Task observations are cached catalog values,
+not fresh verification. WorkBuddy references include the Dataset root for
+ancestor configuration and shared verifier files.
 
-For a live turn, the transcript shows each submitted item as a **Context
-injection** activity while the user bubble and its Copy action keep only the
-original prompt. The client adds an explicit model-facing boundary around that
-prompt, so reopening a conversation written by the current client can recover
-the original user content even when the Agent flattened the context and prompt
-into plain text. Restored history recreates best-effort **Context injection**
-activities from that prompt prefix: preserved metadata retains distinct items,
-while flattened content appears as one recovered item. These historical rows do
-not become live Workspace references. Conversations created before this boundary
-format are displayed exactly as the Agent replays them because their context and
-user content cannot be separated safely.
+The prompt submenu groups all eight templates by Chinese and English, with the
+interface language first. No template is selected automatically. Workspace
+customizations retain their text and remain marked in Configuration. Agent
+commands preserve the message body and images and wait for you to send.
 
-When no Agent is configured, the connection control links directly to the ACP
-Agent form in **Configuration**.
-The composer can load any configured Markdown prompt asset. Attaching context
-does not fill or send a message, and attaching a source does not select a
-diagnosis prompt. Send remains disabled until the user enters a non-blank
-message. All eight language variants remain available. A fresh Chinese page
-starts with the Chinese evaluation-review prompt and recommends Chinese context
-prompts; other locales use English. An existing valid saved selection always
-wins over that locale default.
+Select, paste or drop PNG, JPEG, WebP or GIF images into the composer. Mixed
+clipboard content prefers text. Images retain original bytes; the composer
+shows used and remaining budget. Image-only messages are supported. Unsupported
+Agent capabilities and oversized images are refused without losing the draft;
+ordinary files are not uploaded. Local admission cannot guarantee an Agent or
+provider's full-conversation image limits.
+
+The drawer stays open across Workspace page navigation. Drafts remain with each
+session in the same controller, including reconnect after unexpected connection
+failure. Explicit disconnect, changing Agent, reload and controller teardown end
+that guarantee. Definitely undelivered failures preserve the submitted draft;
+later edits are never overwritten. **Append undelivered draft** explicitly merges
+a retained failed submission; an over-budget merge changes neither input.
+Uncertain delivery never triggers an automatic resend.
+
+Connection notices and errors stay in their owning live transcript. Older
+**Context injection** activities remain readable when restored from Agent
+history and never become new attachments. After every terminal turn, including
+cancellation, the Workspace refreshes its catalog because a tool may have
+committed a report. When no Agent is configured, the connection control links to
+the ACP Agent form in **Configuration**.
+
+Referenced paths disclose actual locations to the configured local Agent.
+Direct filesystem reads bypass Psycheval HTTP redaction and may require Agent
+permission. A read-only report label is guidance, not an OS sandbox; canonical
+reports still use `peval publish evaluation-report`.
 
 Provision the Agent outside Psycheval first. For OpenCode, use `opencode auth
 login` in a terminal when its provider needs authentication. The panel shows
@@ -268,10 +271,10 @@ rules are in the [workspace reference](../../reference/workspace.md).
 From the Psycheval checkout root, explicitly install the repository Skill with
 `peval init -r .local/evaluation --skill skills/peval`. The option replaces the
 complete same-name workspace copy; plain `peval init` does not install a Skill.
-Start a new Copilot session after an install or replacement and attach a Harbor
+Start a new Copilot session after an install or replacement and insert a reference to a Harbor
 Trial or imported local session. Enter a non-blank evaluation brief and supply
-any useful basis through the message or attached context, such as a Task, a
-report, a live Task context, or a Skill path. Psycheval does not discover,
+any useful basis through the message or inserted references, such as a Task, a
+report, a live Task context, or a Skill path with an explicit request to read it. Psycheval does not discover,
 validate, or rank those materials as authoritative evaluation criteria. When a
 turn contains more than one source and the publication target is unclear, the
 Skill asks which source to use. Batch work is reviewed and published one report

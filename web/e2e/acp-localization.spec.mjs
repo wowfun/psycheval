@@ -22,12 +22,6 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({
   const drawer = page.locator("[data-acp-drawer]");
   await expect(drawer.getByRole("button", { name: "连接" })).toBeVisible();
   await expect(drawer.getByText("连接 Agent 并新建会话后开始协作。", { exact: true })).toBeVisible();
-  await expect(drawer.getByText("预设", { exact: true })).toBeVisible();
-  await expect(drawer.getByRole("button", { name: "使用", exact: true })).toBeVisible();
-  const presets = drawer.locator("[data-acp-prompt-asset]");
-  await expect(presets.locator("option")).toHaveCount(9);
-  await expect(presets).toHaveValue("evaluation-review-zh-cn");
-
   await drawer.getByRole("button", { name: "连接" }).click();
   const chat = drawer.locator("[data-acp-chat]");
   await expect(chat.locator("textarea")).toHaveAttribute("placeholder", "询问这次评测…");
@@ -37,16 +31,14 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({
   await expect(chat.getByText("消息、工具活动和计划会显示在这里。", { exact: true })).toBeVisible();
   await expect(chat.getByRole("button", { name: "新建会话" })).toBeVisible();
   await expect(chat.getByRole("combobox", { name: "模式" })).toBeVisible();
-  const addContext = chat.getByRole("button", { name: "添加上下文" });
-  await expect(addContext).toBeEnabled();
-  await expect.poll(() => page.evaluate(async () =>
-    (await import("/assets/peval/modules/acp-client.js")).currentContext()?.value?.kind,
-  )).toBe("source");
-  await addContext.click();
-  await expect(presets).toHaveValue("evaluation-review-zh-cn");
-  await expect(chat.locator("textarea")).toHaveValue("");
-  await drawer.getByRole("button", { name: "使用", exact: true }).click();
-  await expect(chat.locator("textarea")).toHaveValue(/审阅附带的评测证据/);
+  const add = chat.getByRole("button", { name: "添加到消息" });
+  await add.click();
+  await chat.getByRole("menuitem", { name: "提示词" }).click();
+  await expect(chat.getByRole("menuitem").nth(1)).toHaveText(/中文/);
+  await chat.getByRole("menuitem", { name: "中文", exact: false }).click();
+  await expect(chat.getByRole("menuitem")).toHaveCount(5);
+  await chat.getByRole("menuitem", { name: "评测复盘" }).click();
+  await expect(chat.locator("textarea")).toHaveValue(/按需读取引用/);
   await chat.locator("textarea").fill("检查复制标签");
   await chat.locator(".paui-send").click();
   await expect(chat).toContainText("Synthetic response");
@@ -90,33 +82,15 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({
   await expect(actions).toBeFocused();
 });
 
-test("a saved preset remains selected when source context is attached", async ({
-  page,
-}) => {
+test("old prompt selections are removed without inserting a draft", async ({ page }) => {
   await page.goto(fixture.origin);
-  const workspaceId = await page.locator("#peval-render-options").evaluate(node =>
-    JSON.parse(node.textContent || "{}").workspace_id,
-  );
-  await page.evaluate(id => {
-    window.localStorage.setItem(
-      `peval:${id}:acp-client`,
-      JSON.stringify({ prompt_asset_id: "report-review" }),
-    );
-  }, workspaceId);
+  const workspaceId = await page.locator("#peval-render-options").evaluate(node => JSON.parse(node.textContent || "{}").workspace_id);
+  await page.evaluate(id => window.localStorage.setItem(`peval:${id}:acp-client`, JSON.stringify({prompt_asset_id:"report-review",contexts:[{id:"old"}],models:{other:"retained"}})), workspaceId);
   await page.reload();
   await page.getByRole("button", { name: "Copilot" }).click();
-
-  const drawer = page.locator("[data-acp-drawer]");
-  const presets = drawer.locator("[data-acp-prompt-asset]");
-  await expect(presets).toHaveValue("report-review");
-  await drawer.getByRole("button", { name: "连接" }).click();
-  const addContext = drawer
-    .locator("[data-acp-chat]")
-    .getByRole("button", { name: "添加上下文" });
-  await expect(addContext).toBeEnabled();
-  await expect.poll(() => page.evaluate(async () =>
-    (await import("/assets/peval/modules/acp-client.js")).currentContext()?.value?.kind,
-  )).toBe("source");
-  await addContext.click();
-  await expect(presets).toHaveValue("report-review");
+  await page.getByRole("button", { name: "连接", exact: true }).click();
+  await expect(page.locator("[data-acp-chat] textarea")).toHaveValue("");
+  const saved = await page.evaluate(id => JSON.parse(window.localStorage.getItem(`peval:${id}:acp-client`)), workspaceId);
+  expect(saved.prompt_asset_id).toBeUndefined(); expect(saved.contexts).toBeUndefined();
+  expect(saved.models.other).toBe("retained");
 });

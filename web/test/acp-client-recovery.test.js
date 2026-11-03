@@ -15,7 +15,6 @@ const browser = installBrowserDom(`
     <select data-acp-agent></select><button data-acp-connect>Connect</button>
     <a data-acp-configure hidden></a>
     <div data-acp-placeholder></div><div data-acp-chat></div>
-    <select data-acp-prompt-asset></select><button data-acp-use-prompt>Use</button>
   </aside>
 `, {
   fetch: async path => {
@@ -153,19 +152,14 @@ test.after(async () => {
   else globalThis.WebSocket = previousWebSocket;
 });
 
-test("the host restores only bounded context references and never eager-loads content", async () => {
+test("the host clears obsolete attachment state without eager-loading content", async () => {
   await acp.initializeAcp();
 
   assert.deepEqual(calls, ["/api/acp/agents", "/api/prompts"]);
-  assert.deepEqual(acp.acpState.contexts, [
-    {
-      id: "source:source-7:4",
-      label: "source-7 · Step 4",
-      value: { kind: "source", source_key: "source-7", step_id: "4" },
-    },
-  ]);
   const saved = JSON.parse(window.localStorage.getItem("peval:ownership-test:acp-client"));
-  assert.deepEqual(saved.contexts, acp.acpState.contexts);
+  assert.equal("contexts" in saved, false);
+  assert.equal("prompt_asset_id" in saved, false);
+  assert.equal("prompt_asset_explicit" in saved, false);
   assert.equal(calls.some(path => path.includes("/sessions")), false);
 });
 

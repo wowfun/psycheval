@@ -10,7 +10,7 @@ import pytest
 
 from psycheval.report_library import ReportNotFound
 from psycheval.serve.access import ServeAccess
-from psycheval.serve.api_support import acp_context_items
+from psycheval.serve.acp_references import reference_candidates
 from psycheval.serve.runtime import ServeRuntime
 from psycheval.state import CatalogQuery, open_workspace_state
 from psycheval.workspace_reports import (
@@ -510,18 +510,12 @@ def test_archival_preserves_body_bindings_and_survives_rebuild_and_restart(
         _, updated_at = runtime.workspace_reports.management_state(ref)
         library.set_archived(ref, True)
         assert runtime.workspace_reports.management_state(ref)[1] == updated_at
-        context = acp_context_items(
-            runtime.store,
-            runtime,
-            [{"kind": "report", "report_ref": ref}],
-            embedded_context=True,
-        )
-        assert (
-            original.decode().strip()
-            in json.loads(context[0]["content"][0]["resource"]["text"])["value"][
-                "evidence"
-            ]["content"]
-        )
+        candidate = reference_candidates(
+            runtime, {"kind": "report", "report_ref": ref}
+        )[0]
+        assert candidate["selected"]
+        assert f"report_ref: {ref}" in candidate["text"]
+        assert "report_path (read-only):" in candidate["text"]
         save(runtime, ref, [])
         assert library.metadata(ref)["archived"] is True
         runtime.catalog.reconcile()

@@ -211,6 +211,8 @@ by closing, suspending, or reopening a dialog cannot dismiss it later.
 Enter submits the primary action; destructive secondary actions require explicit
 activation. Opening another dialog suspends an input dialog and preserves its
 draft; closing the newer dialog returns to the suspended one.
+Cancelling a suspended reference picker settles its action and removes it;
+closing the newer dialog must not revive that cancelled picker.
 Accepted writes followed by background reconciliation report those two phases
 separately: reconciliation failure offers a refresh, not a repeated write.
 Reading the displayed data again cannot turn a failed background operation into
@@ -386,7 +388,7 @@ to finish. Other socket and callback errors remain visible. This handling is
 local to serve's socket transports and does not change the process-wide asyncio
 policy or standard-library classes.
 
-The ACP WebSocket and context resolver are administrator-only and same-origin
+The ACP WebSocket and reference-candidate API are administrator-only and same-origin
 because an allowlisted Agent runs with the OS authority of `peval serve`; an ACP
 permission card is Agent protocol state, not an operating-system sandbox.
 Binary WebSocket messages, oversized frames, excess concurrent connections, and
@@ -403,18 +405,66 @@ ACP session transcripts and pending interactions remain inside the Agent and
 the live `pretty-aui` controller; they are not evaluation evidence, workspace
 overlays, or reports. Workspace page navigation leaves the live drawer open and
 does not remount its controller. The browser persists drawer and Agent
-selection, the ordered set of attached evaluation references, and the last
-Agent session identity used for reconnect. Adding the current source, Task, or
-report is explicit and duplicate references are ignored; each attachment can be
-removed independently. On each later prompt, the context provider asks the
-server to resolve and bound every frozen reference according to
-`max_content_chars`. Agents without embedded-context support receive bounded
-text fallbacks. Each item actually submitted is shown by `pretty-aui` as a
-collapsed Context injection activity after the user message; expanding it
-shows a bounded literal view of the content and inert resource metadata. These
-activities remain with the loaded browser controller across in-page session
-selection and reconnect, but Psycheval does not persist a second resolved-
-content log for restoration after a full page reload.
+preferences and reconnect session identity. Text and images belong to the live
+controller's session instance. In-page navigation, session selection and
+same-controller reconnection preserve drafts; explicit disconnect, Agent change,
+page reload and controller destruction end that guarantee. Old persistent
+context and prompt-selection fields are removed without resetting other
+preferences.
+The host connection controls follow controller connection state, including
+recovery initiated by the chat's Retry action.
+
+The composer's single `+` menu offers images, workbench references, Agent
+commands and prompt templates. Inserting references or templates appends editable
+text after a blank paragraph, preserves existing text, and never sends it.
+Nothing is automatically attached on a later turn. Commands replace only an
+exactly recognized leading command or are prefixed to the existing body;
+missing argument hints do not discard arguments. Both template languages remain
+available, with the interface language first and workspace overrides identified.
+
+Reference candidates are administrator-only. Source references contain the
+workspace, source_ref, `peval view tr` reading guidance and actual evidence
+locations. A selected step includes trajectory_id and step_id; a Harbor phase
+also supplies its directory. Imported sources and managed Jobs use their actual
+artifact or Job output location and declared trajectory path, without inventing
+Trial directories. Task candidates include both Task and Dataset roots. Task
+resolution and digest comparisons are cached catalog observations identified by
+their observation version, not a fresh validation. Canonical reports carry a
+read-only path and owning source; imported packages carry their actual report
+file and offer associated sources separately. Related candidates are optional;
+missing or ambiguous locations explain why they are unavailable. No current
+object means no workbench reference candidates.
+Association lookup failures leave the report usable and appear as unavailable
+candidates. Report associations are resolved in batches; the picker offers a
+bounded set with an explicit truncation notice. Labels follow the interface
+language, while reference text remains editable. Text previews can be selected
+without changing the checkboxes; insertion requires an available selection.
+Changing the current object or chat session while loading or choosing references
+cannot append stale text to a draft.
+
+Candidate generation reads only location metadata for the selected identities;
+it never loads trajectory/report bodies, recomputes Task digests or reconciles
+the whole workspace. Generated Windows paths use `/`, including `//server/share`
+for UNC. Paths containing control characters are rejected; other field values
+escape control characters. User-edited text is preserved verbatim.
+POSIX paths preserve literal backslashes. Missing Task directories are reported
+as unavailable without re-reading Task contents or updating cached observations.
+
+An administrator inserting a reference intentionally discloses real paths to
+the configured local Agent. This does not enlarge guest or ordinary browser
+projections. Direct Agent filesystem access bypasses HTTP evidence redaction;
+content is not promised to be sanitized or exempt from Agent permission checks.
+A read-only label is guidance, not an OS sandbox. Canonical reports are still
+published through `peval publish evaluation-report`.
+
+Images retain original bytes and support selection, paste and composer drop;
+ordinary files are not uploaded. Mixed text/image clipboard content prefers
+text. File drops elsewhere never navigate the page. Unsupported images or Agent
+capabilities leave the draft intact. Image admission, delivery uncertainty and
+memory ownership follow the upstream composer contract. The gateway advertises
+its message byte budget to the connector; subprocess lines, bidirectional frames
+and the WebSocket server enforce that same value. Provider-specific and
+conversation-wide image limits remain Agent/provider decisions.
 
 Sessions are process-local, idle-expiring cookies. Direct HTTP is intended for
 a trusted private network; the cookie is not marked `Secure` in this mode.

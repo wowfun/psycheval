@@ -20,7 +20,6 @@ const browser = installBrowserDom(`
     <button data-acp-connect>Connect</button>
     <a href="/config#acp-agents-title" data-acp-configure hidden>Configure agents</a>
     <div data-acp-placeholder></div><div data-acp-chat></div>
-    <select data-acp-prompt-asset></select><button data-acp-use-prompt type="button">Use</button>
   </aside>
   <aside id="workspace-report-reader" hidden></aside>
   <main id="comparison"></main><section id="trace"></section><aside id="detail-sidebar"></aside>

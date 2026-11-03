@@ -45,7 +45,58 @@ test("every new Copilot session starts in plan mode", async ({ page }) => {
   await expect(mode).toContainText("Plan");
 });
 
-test("disconnected drawer keeps controls, placeholder, and presets in separate rows", async ({
+test("ACP v1 fallback never flashes a connection error", async ({ page }) => {
+  const sockets = [];
+  page.on("websocket", socket => sockets.push(socket.url()));
+  await page.goto(fixture.origin);
+  await page.getByRole("button", { name: "Copilot", exact: true }).click();
+  await expect(page.locator("[data-acp-connect]")).toBeEnabled();
+  const observed = await page.evaluate(async () => {
+    const acp = await import("/assets/peval/modules/acp-client.js");
+    const connecting = acp.connectAcpAgent();
+    const mounted = acp.acpState.mounted;
+    const states = [];
+    const alerts = [];
+    const record = () => {
+      const snapshot = mounted.controller.getSnapshot();
+      states.push({ phase: snapshot.phase, error: snapshot.error?.code });
+    };
+    const unsubscribe = mounted.controller.subscribe(record);
+    const host = document.querySelector("[data-acp-chat]");
+    const observer = new MutationObserver(() => {
+      for (const alert of host.shadowRoot.querySelectorAll('[role="alert"]')) alerts.push(alert.textContent);
+    });
+    observer.observe(host.shadowRoot, { subtree: true, childList: true, characterData: true, attributes: true });
+    record();
+    try {
+      const connected = await connecting;
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return { connected, states, alerts };
+    } finally {
+      observer.disconnect();
+      unsubscribe();
+    }
+  });
+  expect(observed.connected).toBe(true);
+  expect(observed.states.at(-1)).toEqual({ phase: "idle", error: undefined });
+  expect(observed.states.filter(state => state.phase === "error" || state.error)).toEqual([]);
+  expect(observed.alerts).toEqual([]);
+  expect(sockets).toHaveLength(2);
+});
+
+test("an Agent without image support rejects selection and preserves the text draft", async ({page}) => {
+  await page.goto(fixture.origin);
+  await page.getByRole("button", {name:"Copilot",exact:true}).click();
+  await page.getByRole("button", {name:"Connect",exact:true}).click();
+  const chat = page.locator("[data-acp-chat]");
+  await chat.locator("textarea").fill("Keep this draft");
+  await chat.locator('input[type="file"]').setInputFiles({name:"image.png",mimeType:"image/png",buffer:Buffer.from("fixture")});
+  await expect(chat.getByRole("alert")).toContainText("does not accept images");
+  await expect(chat.locator("textarea")).toHaveValue("Keep this draft");
+  await expect(chat.locator(".paui-composer-images img")).toHaveCount(0);
+});
+
+test("disconnected drawer keeps controls above the full-height placeholder", async ({
   page,
 }) => {
   await page.goto(fixture.origin);
@@ -65,16 +116,12 @@ test("disconnected drawer keeps controls, placeholder, and presets in separate r
     const controls = box(".acp-controls");
     const chat = box(".acp-chat-frame");
     const placeholder = box(".acp-chat-placeholder");
-    const presets = box(".acp-prompt-assets");
     const result = {
       controlsBottom: controls.bottom,
       chatTop: chat.top,
       chatBottom: chat.bottom,
       placeholderTop: placeholder.top,
       placeholderBottom: placeholder.bottom,
-      presetsTop: presets.top,
-      presetsBottom: presets.bottom,
-      presetsHeight: presets.height,
       drawerBottom: drawerBox.bottom,
       drawerLeft: drawerBox.left,
       regularRightSidebarLeft: widthProbe.getBoundingClientRect().left,
@@ -85,9 +132,7 @@ test("disconnected drawer keeps controls, placeholder, and presets in separate r
   expect(geometry.chatTop).toBeGreaterThanOrEqual(geometry.controlsBottom);
   expect(geometry.placeholderTop).toBeGreaterThanOrEqual(geometry.chatTop);
   expect(geometry.placeholderBottom).toBeLessThanOrEqual(geometry.chatBottom);
-  expect(geometry.presetsTop).toBeGreaterThanOrEqual(geometry.chatBottom);
-  expect(geometry.presetsBottom).toBeLessThanOrEqual(geometry.drawerBottom + 1);
-  expect(geometry.presetsHeight).toBeLessThanOrEqual(96);
+  expect(geometry.chatBottom).toBeCloseTo(geometry.drawerBottom, 0);
   expect(geometry.drawerLeft).toBeCloseTo(
     geometry.regularRightSidebarLeft,
     0,
@@ -271,56 +316,26 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
     "rgba(0, 0, 0, 0)",
   );
   const composer = chat.locator("textarea");
-  const addContext = chat.getByRole("button", { name: "Add context" });
-  await expect(addContext).toBeEnabled();
-  await addContext.click();
-  await expect(
-    chat.locator('[data-pretty-aui-slot="composer-context-item"]'),
-  ).toHaveCount(1);
-  await expect(
-    chat.locator('[data-pretty-aui-slot="composer-context"]'),
-  ).toContainText(sourceKey);
-  const secondSourceRow = page.locator("tr[data-source-key]").nth(1);
-  await expect(secondSourceRow).toBeVisible();
-  const secondSourceKey = await secondSourceRow.getAttribute("data-source-key");
-  await secondSourceRow.click();
-  await addContext.click();
-  await addContext.click();
-  await expect(
-    chat.locator('[data-pretty-aui-slot="composer-context-item"]'),
-  ).toHaveCount(2);
-  await expect(
-    chat.locator('[data-pretty-aui-slot="composer-context"]'),
-  ).toContainText(secondSourceKey);
-  await expect(noticeRows).toHaveCount(4);
-  await expect(noticeRows).toHaveText([
-    "Local agent connected",
-    "Current evaluation context attached",
-    "Current evaluation context attached",
-    "Evaluation context is already attached",
-  ]);
-  const contextInputOrder = await chat.evaluate((element) => {
-    const selection = element.shadowRoot.querySelector(
-      '[data-pretty-aui-slot="composer-context"]',
-    );
-    const input = element.shadowRoot.querySelector("textarea");
-    return Boolean(
-      selection.compareDocumentPosition(input) &
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
-  });
-  expect(contextInputOrder).toBe(true);
+  const add = chat.getByRole("button", { name: "Add to message" });
   await composer.fill("Review this evaluation.");
+  await add.click();
+  await chat.getByRole("menuitem", { name: "Workbench references" }).click();
+  const picker = page.locator(".acp-reference-picker");
+  await expect(picker).toBeVisible();
+  await expect(picker.locator('input[type="checkbox"]').first()).toBeChecked();
+  await picker.getByRole("button", { name: "Insert references" }).click();
+  await expect(composer).toHaveValue(/Review this evaluation\.\n\nsource_ref:/);
+  const insertedText = await composer.inputValue();
+  expect(insertedText).toContain("peval view tr");
+  expect(insertedText).toContain("evidence_path:");
+  await expect(chat.locator('[data-pretty-aui-slot="composer-context-item"]')).toHaveCount(0);
   await chat.locator(".paui-send").click();
-  await expect(page.locator("[data-acp-chat]")).toContainText(
-    "Synthetic response: the evaluation evidence is ready for review.",
-  );
+  await expect(chat).toContainText("Synthetic response: the evaluation evidence is ready for review.");
   await expect(chat).toContainText("Explain the failure cluster");
-  await expect(chat.locator('[data-kind="context"]')).toHaveCount(2);
-
+  await expect(chat.locator('[data-kind="context"]')).toHaveCount(0);
   await composer.fill("Review it one more time.");
   await chat.locator(".paui-send").click();
-  await expect(chat.locator('[data-kind="context"]')).toHaveCount(4);
+  await expect(chat.locator('[data-kind="context"]')).toHaveCount(0);
   const actionRows = chat.locator('[data-pretty-aui-slot="message-actions"]');
   await expect(actionRows).toHaveCount(4);
   await expect(chat.getByRole("button", { name: "Copy" })).toHaveCount(4);
@@ -343,45 +358,12 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
     firstUserMessage.getByRole("button", { name: "Copied" }),
   ).toBeVisible();
   await expect
-    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-    .toBe("Review this evaluation.");
+    .poll(() => page.evaluate(async () => (await navigator.clipboard.readText()).replaceAll("\r\n", "\n")))
+    .toBe(insertedText);
   await expect(
     firstUserMessage.getByRole("button", { name: "Copy" }),
   ).toBeVisible();
-  const contexts = chat.locator('[data-kind="context"]');
-  for (let index = 0; index < 4; index += 1) {
-    const context = contexts.nth(index);
-    await expect(context.locator("details")).not.toHaveAttribute("open", "");
-    await context.locator("summary").click();
-    await expect(context).toContainText("peval://source/");
-    await expect(context).toContainText('"reference"');
-    await expect(context).toContainText(/e2e-trial/);
-  }
-
-  const firstTurnOrder = await chat
-    .locator(".paui-turn")
-    .first()
-    .evaluate((turn) => {
-      const user = turn.querySelector('[data-role="user"]');
-      const context = turn.querySelector('[data-kind="context"]');
-      const assistant = turn.querySelector('[data-kind="assistant"]');
-      if (!user || !context || !assistant)
-        throw new Error("incomplete turn timeline");
-      return {
-        userBeforeContext: Boolean(
-          user.compareDocumentPosition(context) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
-        ),
-        contextBeforeAssistant: Boolean(
-          context.compareDocumentPosition(assistant) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
-        ),
-      };
-    });
-  expect(firstTurnOrder).toEqual({
-    userBeforeContext: true,
-    contextBeforeAssistant: true,
-  });
+  await composer.fill("Draft survives page navigation.");
 
   await chat.evaluate((element) => {
     element.dataset.navigationIdentity = "preserved";
@@ -394,9 +376,10 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
     await expect(chat).toHaveAttribute("data-navigation-identity", "preserved");
     await expect(chat).toContainText("Synthetic response");
     await expect(composer).toBeEnabled();
+    await expect(composer).toHaveValue("Draft survives page navigation.");
     await expect(
       chat.locator('[data-pretty-aui-slot="composer-context-item"]'),
-    ).toHaveCount(2);
+    ).toHaveCount(0);
   }
 
   const workspace = page.locator(".workspace");
@@ -443,10 +426,6 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
     .poll(() => transcript.evaluate((element) => element.scrollTop))
     .toBeGreaterThan(0);
   await expect(composer).toBeInViewport();
-  for (let index = 0; index < 4; index += 1) {
-    await contexts.nth(index).locator("summary").click();
-  }
-
   await transcript.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
@@ -499,21 +478,12 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
     "acp-drawer.png",
     { animations: "disabled" },
   );
-  await chat
-    .locator('[data-pretty-aui-slot="composer-context-item"]')
-    .first()
-    .getByRole("button")
-    .click();
-  await expect(
-    chat.locator('[data-pretty-aui-slot="composer-context-item"]'),
-  ).toHaveCount(1);
-
   expect(
     requests.some((url) => /\/api\/acp\/agents\/[^/]+\/sessions/.test(url)),
   ).toBe(false);
   expect(
-    requests.filter((url) => url.endsWith("/api/acp/context-resolutions")),
-  ).toHaveLength(2);
+    requests.filter((url) => url.endsWith("/api/acp/reference-candidates")),
+  ).toHaveLength(1);
   expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
   expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);

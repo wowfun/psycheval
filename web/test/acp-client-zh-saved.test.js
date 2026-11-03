@@ -13,7 +13,6 @@ const browser = installBrowserDom(`
     <button data-acp-close>Close</button>
     <select data-acp-agent></select><button data-acp-connect>Connect</button>
     <a data-acp-configure hidden></a><div data-acp-placeholder></div><div data-acp-chat></div>
-    <select data-acp-prompt-asset></select><button data-acp-use-prompt>Use</button>
   </aside>
 `, {
   fetch: async path => response(String(path) === "/api/acp/agents"
@@ -33,15 +32,12 @@ const acp = await import("../../src/psycheval/assets/web/modules/acp-client.js")
 
 test.after(() => browser.cleanup());
 
-test("a valid saved prompt selection wins over the Chinese locale default", async () => {
+test("Chinese prompt groups are ordered without automatic insertion or saved selection", async () => {
   await acp.initializeAcp();
-  assert.equal(
-    document.querySelector("[data-acp-prompt-asset]").value,
-    "evaluation-review",
-  );
-  assert.equal(
-    JSON.parse(window.localStorage.getItem("peval:zh-saved:acp-client"))
-      .prompt_asset_explicit,
-    true,
-  );
+  const menu = acp.composerActions().find(action => action.id === "prompts");
+  assert.deepEqual(menu.children.map(group => group.label), ["中文", "English"]);
+  assert.ok(menu.children[0].children.some(action => action.label === "评测复盘"));
+  const saved = JSON.parse(window.localStorage.getItem("peval:zh-saved:acp-client"));
+  assert.equal("prompt_asset_id" in saved, false);
+  assert.equal("prompt_asset_explicit" in saved, false);
 });

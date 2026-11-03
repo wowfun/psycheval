@@ -498,8 +498,9 @@ ReportLibrary combines this canonical adapter with the existing
 workspace-package adapter. Canonical reads always return the current source
 file; package reads delegate to WorkspaceReportLibrary. Stable opaque report
 references identify the two kinds without encoding paths. Report replacement
-does not change a reference, and browser or ACP projections do not disclose
-source paths or revisions.
+does not change a reference. Ordinary browser projections do not disclose
+source paths or revisions. Administrator-inserted Copilot references may disclose
+actual locations under the [workspace trust contract](workspace.md).
 
 Reports share one searchable, paginated library. Imported reports may stand alone
 or have multiple session, Dataset, and Job associations. Canonical reports retain

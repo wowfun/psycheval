@@ -217,6 +217,10 @@ def plugin_document(candidate):
         },
     }
     return SourceDocument(
+        reference_location={
+            "job_name": candidate.job_name,
+            "trajectory_path": trial.get("trajectory_path"),
+        },
         source_ref=candidate.source_ref,
         source_key=candidate.source_key,
         source=source,

@@ -63,6 +63,13 @@ LOCAL_FINGERPRINT_FILES = (
 
 
 @dataclass(frozen=True)
+class SourceReferenceLocation:
+    source_ref: str
+    job_name: str | None = None
+    trajectory_path: str | None = None
+
+
+@dataclass(frozen=True)
 class SourceCandidate:
     source_ref: str
     kind: str
@@ -106,6 +113,7 @@ class SourceDocument:
     active: bool
     last_status: str
     last_error: str | None
+    reference_location: dict[str, Any] | None = None
     harbor_analysis_markdown: str | None = None
     harbor_analysis_relative_path: str | None = None
     evaluation_report_markdown: str | None = None

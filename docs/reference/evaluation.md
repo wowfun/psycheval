@@ -80,7 +80,9 @@ not an authorization boundary: an unrenderable retained artifact can be download
 Both roles are readers of the same shared workspace evidence. Known environment
 credentials, recognizable secret literals and explicit JSON credential fields are
 redacted in textual responses, including downloads, without modifying source
-files. Binary artifacts containing recognized credentials are refused; ZIP-based
+files. This HTTP filtering does not apply to an administrator-configured Agent
+reading referenced paths directly; see the [workspace trust contract](workspace.md).
+Binary artifacts containing recognized credentials are refused; ZIP-based
 artifacts are checked within the same expanded-byte budget. Malformed or
 unsupported compressed members produce a controlled file read error. The
 credential filter does not promise to detect arbitrary private data or encoded secrets:

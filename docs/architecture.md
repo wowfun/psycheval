@@ -230,40 +230,26 @@ reuse the currently selected model across reconnects and page loads, and asks
 new conversation. Existing conversations retain their Agent-owned mode and
 model; recognition and session configuration remain owned by `pretty-aui`. The gateway
 does not enter the retained-session conversion, report, workspace overlay, or
-Harbor evidence paths. ACP conversations remain Agent-owned runtime state; an
-explicit, bounded context adapter keeps an ordered set of evaluation references
-and resolves their current content from the existing authorities without
-transferring write ownership to the ACP client. Transient host notices belong to
-the vendored `pretty-aui` transcript seam: Psycheval forwards successful
-connection and context-selection outcomes to the selected session, routes
-session-scoped errors to that loaded session, and does not persist or replay the
-resulting rows. Before a chat is mounted, only initialization and connection
-errors use the chat placeholder; connection progress and ordinary disconnects
-have no separate notification projection. The vendored client renders the
-context references as addable and individually removable composer chips, then
-records each accepted turn's resolved items as collapsible transcript activities
-rather than duplicating resolved content in serve-owned browser state.
-`pretty-aui` also owns the model-facing user-message envelope and full-history
-recovery that keep resolved context out of a restored user bubble and project
-recoverable prompt prefixes as historical Context injection activities.
-Attaching a source does not select a diagnosis prompt, fill the composer, or
-send a message. The shared composer and controller reject blank prompts.
-Its default React renderer also owns bounded tool presentation: trustworthy
-Execute, Read, and ACP Diff payloads become semantic cards, while ambiguous
-payloads remain lossless generic input/output sections. Psycheval supplies only
-localized chrome and does not parse tool payloads or duplicate the renderer.
-Psycheval neither parses Agent transcripts nor renews those recovered activities
-as live host context references after a page load. A selected source is
-resolved from its normalized local identity or Harbor mount, Job, Trial, and
-optional step identity; live detail reads validate and load only that target
-rather than rediscovering every configured source. When present, its current
-canonical report is included as bounded context for review, not as a
-publication guard. The context adapter resolves an ordered batch under one
-global character budget; stable source identity is never displaced by large
-trajectory content. Any terminal ACP turn asks the Psycheval host to refresh
-current catalog/detail projections because a tool may have committed a report
-before the turn completed or was cancelled. Generic chat event behavior
-remains owned by `pretty-aui`.
+Harbor evidence paths. ACP conversations remain Agent-owned runtime state. Psycheval supplies
+administrator-selected plain-text references through the generic `pretty-aui`
+composer action seam. Source, Dataset and report owners expose lightweight
+locators; the serve adapter combines those locations with cached catalog
+observations without loading evidence bodies or recalculating Task digests.
+Plugin locations are retained during normal catalog reconciliation. Catalog-owned
+typed lookups supply source locators with metadata independently of browser row
+projections. The browser
+supplies the selected source, trajectory and step identity; it never infers a
+child trajectory from a step number alone.
+
+`pretty-aui` owns the unified composer menu, controller-scoped drafts, images,
+submission recovery, message budgets and rendering. Host actions return text;
+the controller appends it to the current owning session's latest draft. Ordinary
+text is never parsed back into hidden attachments. Historical Context injection
+activities remain recoverable but never become new live references. The
+[workspace contract](reference/workspace.md) owns reference disclosure and draft
+lifetime. Terminal turns refresh current catalog/detail projections because a
+tool may have committed a report before completion or cancellation. Psycheval
+does not parse Agent transcripts or tool payloads.
 
 ## Repository topology
 

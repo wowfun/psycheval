@@ -17,7 +17,6 @@ const browser = installBrowserDom(
     <a data-acp-configure hidden></a>
     <div class="acp-chat-placeholder" data-acp-placeholder>Connect first</div>
     <div data-acp-chat></div>
-    <select data-acp-prompt-asset></select><button data-acp-use-prompt>Use</button>
   </aside>
 `,
   {

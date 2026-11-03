@@ -9,6 +9,7 @@ import {
   snapshotWorkspace,
   subscribeWorkspaceInvalidation,
 } from "../app/workspace-runtime.js";
+import { chooseReferences } from "./acp-references.js";
 import { serveApi } from "./http.js";
 import { RENDER_OPTIONS, adminMode, esc, listValue, t } from "./shared.js";
 
@@ -23,26 +24,12 @@ const acpState = {
   cwd: "",
   agentId: "",
   mounted: null,
-  contexts: [],
+  unsubscribeController: null,
+  maxMessageBytes: undefined,
   prompts: [],
-  promptAssetId: "",
   opener: null,
   connecting: false,
   mountGeneration: 0,
-};
-
-const contextListeners = new Set();
-let promptAssetSelectionExplicit = false;
-const contextProvider = {
-  getSelection: () =>
-    acpState.contexts.map(context => ({ id: context.id, label: context.label })),
-  subscribe(listener) {
-    contextListeners.add(listener);
-    return () => contextListeners.delete(listener);
-  },
-  add: captureContext,
-  remove: removeContext,
-  resolve: resolveCapturedContexts,
 };
 
 function drawer() {
@@ -125,6 +112,7 @@ async function loadCatalogs() {
 }
 
 function applyAgentCatalog(agentPayload) {
+  acpState.maxMessageBytes = agentPayload?.max_message_bytes;
   acpState.cwd = typeof agentPayload?.cwd === "string" ? agentPayload.cwd : "";
   acpState.agents = listValue(agentPayload?.agents);
   if (!acpState.agents.some(agent => agent.id === acpState.agentId)) {
@@ -134,26 +122,12 @@ function applyAgentCatalog(agentPayload) {
 
 function applyPromptCatalog(promptPayload) {
   acpState.prompts = listValue(promptPayload);
-  if (!acpState.prompts.some(prompt => prompt.id === acpState.promptAssetId)) {
-    promptAssetSelectionExplicit = false;
-    acpState.promptAssetId =
-      localizedPromptId("evaluation-review") || acpState.prompts[0]?.id || "";
-  }
-}
-
-function localizedPromptId(promptId) {
-  const localized = document.documentElement.lang.toLowerCase() === "zh-cn"
-    ? `${promptId}-zh-cn`
-    : promptId;
-  if (acpState.prompts.some(prompt => prompt.id === localized)) return localized;
-  return acpState.prompts.some(prompt => prompt.id === promptId) ? promptId : "";
 }
 
 async function refreshPromptCatalog() {
   if (!acpState.initialized) return;
   try {
     applyPromptCatalog(await serveApi("/api/prompts"));
-    renderPromptAssets();
   } catch (error) {
     showNotice(errorMessage(error), true);
   }
@@ -187,22 +161,16 @@ function bindControls() {
     renderControls();
   });
   document.querySelector("[data-acp-connect]")?.addEventListener("click", () => {
-    if (acpState.mounted) void disconnectAcpAgent();
+    if (acpState.mounted?.controller.getSnapshot().phase === "error") void reconnectAcpAgent();
+    else if (acpState.mounted) void disconnectAcpAgent();
     else void connectAcpAgent();
   });
-  document.querySelector("[data-acp-prompt-asset]")?.addEventListener("change", event => {
-    const target = /** @type {HTMLSelectElement} */ (event.target);
-    acpState.promptAssetId = String(target.value || "");
-    promptAssetSelectionExplicit = true;
-    persistUiState({
-      prompt_asset_id: acpState.promptAssetId,
-      prompt_asset_explicit: true,
-    });
-    renderPromptAssets();
-  });
-  document
-    .querySelector("[data-acp-use-prompt]")
-    ?.addEventListener("click", usePromptAsset);
+  const preventFileNavigation = event => {
+    if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+  };
+  document.addEventListener("dragover", preventFileNavigation);
+  document.addEventListener("drop", preventFileNavigation);
+
 }
 
 function openAcpDrawer(opener = null) {
@@ -262,6 +230,7 @@ async function connectAcpAgent(options = {}) {
     options: {
       connector: createWebSocketConnector(websocketUrl(agentId), {
         cookies: "include",
+        maxMessageBytes: acpState.maxMessageBytes,
       }),
       protocol: "auto",
       session: { cwd: acpState.cwd },
@@ -273,7 +242,7 @@ async function connectAcpAgent(options = {}) {
         get: () => savedModel(agentId),
         set: value => saveModel(agentId, value),
       },
-      context: contextProvider,
+      composerActions,
       allowAuthentication: false,
       clientInfo: {
         name: "psycheval",
@@ -297,6 +266,14 @@ async function connectAcpAgent(options = {}) {
       return false;
     }
     acpState.connecting = false;
+    let phase = mounted.controller.getSnapshot().phase;
+    acpState.unsubscribeController = mounted.controller.subscribe(() => {
+      if (generation !== acpState.mountGeneration || acpState.mounted !== mounted) return;
+      const next = mounted.controller.getSnapshot().phase;
+      if (next === phase) return;
+      phase = next;
+      renderControls();
+    });
     persistUiState({ auto_connect: true });
     showNotice(t("acp_connected", "Local agent connected"));
     renderControls();
@@ -323,9 +300,21 @@ async function connectAcpAgent(options = {}) {
   }
 }
 
+async function reconnectAcpAgent() {
+  const mounted = acpState.mounted;
+  if (!mounted || acpState.connecting) return false;
+  acpState.connecting = true;
+  renderControls();
+  try { await mounted.controller.reconnect(); return true; }
+  catch (error) { showNotice(errorMessage(error), true); return false; }
+  finally { acpState.connecting = false; renderControls(); }
+}
+
 async function disconnectAcpAgent(options = {}) {
   const mounted = acpState.mounted;
   ++acpState.mountGeneration;
+  acpState.unsubscribeController?.();
+  acpState.unsubscribeController = null;
   acpState.mounted = null;
   acpState.connecting = false;
   if (mounted) await mounted.unmount();
@@ -336,7 +325,11 @@ async function disconnectAcpAgent(options = {}) {
 }
 
 async function releaseMounted(mounted) {
-  if (acpState.mounted === mounted) acpState.mounted = null;
+  if (acpState.mounted === mounted) {
+    acpState.unsubscribeController?.();
+    acpState.unsubscribeController = null;
+    acpState.mounted = null;
+  }
   acpState.connecting = false;
   await mounted.unmount();
 }
@@ -354,6 +347,7 @@ function handleChatEvent(event, agentId, generation) {
     return;
   }
   if (event.type === "error") {
+    renderControls();
     showNotice(
       event.error?.message || t("error", "Error"),
       true,
@@ -362,112 +356,42 @@ function handleChatEvent(event, agentId, generation) {
   }
 }
 
-async function resolveCapturedContexts(request) {
-  if (!request.selection.length) return [];
-  const contextsById = new Map(
-    acpState.contexts.map(context => [context.id, context]),
-  );
-  const contexts = request.selection.map(selection => {
-    const context = contextsById.get(selection.id);
-    if (!context) throw new Error(`Selected context is unavailable: ${selection.label}`);
-    return context.value;
-  });
-  const payload = await serveApi("/api/acp/context-resolutions", {
-    method: "POST",
-    body: {
-      contexts,
-      embedded_context: Boolean(request.capabilities?.embeddedContext),
-    },
-    signal: request.signal,
-  });
-  return listValue(payload?.items);
-}
-
-function captureContext() {
-  const next = currentContext();
-  if (!next) {
-    showNotice(t("acp_context_unavailable", "Select an evaluation item first"), true);
-    return;
-  }
-  if (acpState.contexts.some(context => context.id === next.id)) {
-    showNotice(t("acp_context_already_attached", "Evaluation context is already attached"));
-    return;
-  }
-  if (acpState.contexts.length >= 64) {
-    showNotice(t("acp_context_limit", "Context is limited to 64 items"), true);
-    return;
-  }
-  acpState.contexts = [...acpState.contexts, next];
-  persistUiState({ contexts: acpState.contexts });
-  const suggestedPromptId = {
-    dataset_task: "task-audit",
-    report: "report-review",
-  }[next.value?.kind];
-  const localizedSuggestion = suggestedPromptId
-    ? localizedPromptId(suggestedPromptId)
-    : "";
-  if (localizedSuggestion && !promptAssetSelectionExplicit) {
-    acpState.promptAssetId = localizedSuggestion;
-  }
-  showNotice(t("acp_context_attached", "Current evaluation context attached"));
-  notifyContextSelection();
-  renderPromptAssets();
-}
-
-function removeContext(id) {
-  const next = acpState.contexts.filter(context => context.id !== id);
-  if (next.length === acpState.contexts.length) return;
-  acpState.contexts = next;
-  persistUiState({ contexts: next });
-  notifyContextSelection();
-  showNotice(t("acp_context_removed", "Evaluation context removed"));
-}
-
-function notifyContextSelection() {
-  for (const listener of contextListeners) listener();
-}
-
-function usePromptAsset() {
-  const prompt = acpState.prompts.find(item => item.id === acpState.promptAssetId);
-  if (!prompt || !acpState.mounted) return;
-  acpState.mounted.setDraft(String(prompt.content || ""), { focus: true });
-}
-
-function currentContext() {
+function currentReference() {
   const context = snapshotWorkspace().context || {};
+  if ((context.page === "home" || context.page === "reports") && context.report_ref) {
+    return { kind: "report", report_ref: context.report_ref };
+  }
   if (context.page === "home" && context.source_key) {
-    const stepId = context.step_id;
-    return {
-      id: `source:${context.source_key}:${stepId || ""}`,
-      label: stepId
-        ? `${context.source_key} · ${t("step", "Step")} ${stepId}`
-        : context.source_key,
-      value: {
-        kind: "source",
-        source_key: context.source_key,
-        ...(stepId ? { step_id: stepId } : {}),
-      },
+    return { kind: "source", source_key: context.source_key,
+      ...(context.trajectory_id ? { trajectory_id: context.trajectory_id } : {}),
+      ...(context.step_id && context.trajectory_id ? { step_id: context.step_id } : {}),
     };
   }
   if (context.page === "datasets" && context.dataset_id && context.task) {
-    return {
-      id: `dataset:${context.dataset_id}:${context.task}`,
-      label: `${context.dataset_id} / ${context.task}`,
-      value: {
-        kind: "dataset_task",
-        dataset_id: context.dataset_id,
-        task: context.task,
-      },
-    };
-  }
-  if (context.page === "reports" && context.report_ref) {
-    return {
-      id: `report:${context.report_ref}`,
-      label: context.report_name || context.report_ref,
-      value: { kind: "report", report_ref: context.report_ref },
-    };
+    return { kind: "dataset_task", dataset_id: context.dataset_id, task: context.task };
   }
   return null;
+}
+
+function composerActions() {
+  const reference = currentReference();
+  const languages = document.documentElement.lang.toLowerCase().startsWith("zh") ? ["zh", "en"] : ["en", "zh"];
+  return [
+    ...(reference ? [{ id: "workbench", label: t("acp_references", "Workbench references"), run: async ({ signal }) => {
+      const identity = JSON.stringify(reference);
+      const payload = await serveApi("/api/acp/reference-candidates", { method: "POST", body: { reference }, signal });
+      if (identity !== JSON.stringify(currentReference()) || signal.aborted) return undefined;
+      const text = await chooseReferences(listValue(payload?.items), signal);
+      return identity === JSON.stringify(currentReference()) ? text : undefined;
+    } }] : []),
+    { id: "prompts", label: t("acp_prompts", "Prompt templates"), children: languages.map(language => ({
+      id: `prompts:${language}`, label: language === "zh" ? "中文" : "English",
+      children: acpState.prompts.filter(prompt => String(prompt.id).endsWith("-zh-cn") === (language === "zh")).map(prompt => ({
+        id: `prompt:${prompt.id}`, label: prompt.title,
+        run: () => String(prompt.content || ""),
+      })),
+    })) },
+  ];
 }
 
 function websocketUrl(agentId) {
@@ -477,6 +401,22 @@ function websocketUrl(agentId) {
 
 function prettyLabels() {
   return {
+    composerAdd: t("acp_composer_add", "Add to message"),
+    addImages: t("acp_images", "Images"),
+    imagesUnsupported: t("acp_images_unsupported", "This Agent does not accept images. Your draft is unchanged."),
+    removeImage: name => `${t("acp_remove_image", "Remove image")}: ${name}`,
+    recoverDraft: t("acp_recover_draft", "Append undelivered draft"),
+    back: t("acp_back", "Back"),
+    imageUnavailable: t("acp_image_unavailable", "Image unavailable"),
+    imageUnavailableDetails: t("acp_image_unavailable_details", "Image preview released from local memory; Agent history is unchanged."),
+    imageError: issue => ({
+      count: t("acp_image_error_count", "A message allows at most four images."),
+      budget: t("acp_image_error_budget", "Images exceed the remaining 8 MiB base64 budget."),
+      type: t("acp_image_error_type", "Image signature and MIME must match PNG, JPEG, WebP or GIF."),
+      dimensions: t("acp_image_error_dimensions", "Images must fit 8,000 pixels per edge and 16 million pixels total."),
+      decode: t("acp_image_error_decode", "The image could not be read or decoded."),
+    })[issue],
+    imageBudget: (used, remaining) => `${(used / 1048576).toFixed(2)} / 8 MiB · ${(remaining / 1048576).toFixed(2)} MiB ${t("acp_remaining", "remaining")}`,
     accept: t("acp_continue", "Continue"),
     addContext: t("acp_add_context", "Add context"),
     agentName: agent => agent ? `${agent} Agent` : t("agent", "Agent"),
@@ -619,10 +559,12 @@ function renderControls() {
     document.querySelector("[data-acp-connect]")
   );
   if (connect) {
-    connect.textContent = acpState.mounted
+    connect.textContent = acpState.mounted?.controller.getSnapshot().phase === "error"
+      ? t("acp_reconnect", "Reconnect")
+      : acpState.mounted
       ? t("acp_disconnect", "Disconnect")
       : t("acp_connect", "Connect");
-    connect.disabled = !selectedAgent() || acpState.connecting;
+    connect.disabled = !selectedAgent() || acpState.connecting || acpState.mounted?.controller.getSnapshot().phase === "connecting";
     connect.hidden = !acpState.agents.length;
   }
   const configure = /** @type {HTMLElement | null} */ (
@@ -633,29 +575,6 @@ function renderControls() {
     document.querySelector("[data-acp-placeholder]")
   );
   if (placeholder) placeholder.hidden = Boolean(acpState.mounted);
-  renderPromptAssets();
-}
-
-function renderPromptAssets() {
-  const select = /** @type {HTMLSelectElement | null} */ (
-    document.querySelector("[data-acp-prompt-asset]")
-  );
-  if (select) {
-    select.innerHTML = `<option value="">${esc(t("acp_prompt_custom", "Custom prompt"))}</option>${acpState.prompts
-      .map(
-        prompt =>
-          `<option value="${esc(prompt.id)}" ${prompt.id === acpState.promptAssetId ? "selected" : ""}>${esc(prompt.title)}</option>`,
-      )
-      .join("")}`;
-  }
-  const use = /** @type {HTMLButtonElement | null} */ (
-    document.querySelector("[data-acp-use-prompt]")
-  );
-  if (use) {
-    use.disabled =
-      !acpState.mounted ||
-      !acpState.prompts.some(prompt => prompt.id === acpState.promptAssetId);
-  }
 }
 
 function selectedAgent() {
@@ -736,53 +655,20 @@ function readSavedUi(throwOnError = false) {
 function restoreUiState() {
   const saved = readSavedUi();
   acpState.agentId = typeof saved.agent_id === "string" ? saved.agent_id : "";
-  const savedPromptAssetId =
-    typeof saved.prompt_asset_id === "string" ? saved.prompt_asset_id : "";
-  promptAssetSelectionExplicit = typeof saved.prompt_asset_explicit === "boolean"
-    ? saved.prompt_asset_explicit
-    : Boolean(savedPromptAssetId);
-  acpState.promptAssetId = promptAssetSelectionExplicit ? savedPromptAssetId : "";
-  acpState.contexts = restoredContexts(saved.contexts);
-  persistUiState({ contexts: acpState.contexts });
-}
-
-function restoredContexts(value) {
-  const contexts = [];
-  const ids = new Set();
-  for (const context of listValue(value)) {
-    if (
-      !context ||
-      typeof context !== "object" ||
-      typeof context.id !== "string" ||
-      !context.id ||
-      context.id.length > 16 * 1024 ||
-      ids.has(context.id) ||
-      typeof context.label !== "string" ||
-      !context.label ||
-      context.label.length > 16 * 1024 ||
-      !context.value ||
-      typeof context.value !== "object" ||
-      Array.isArray(context.value)
-    ) {
-      continue;
-    }
-    ids.add(context.id);
-    contexts.push({ id: context.id, label: context.label, value: context.value });
-    if (contexts.length === 64) break;
-  }
-  return contexts;
+  persistUiState();
 }
 
 function persistUiState(extra = {}, throwOnError = false) {
   try {
+    const saved = readSavedUi(throwOnError);
+    delete saved.contexts;
+    delete saved.prompt_asset_id;
+    delete saved.prompt_asset_explicit;
     window.localStorage.setItem(
       storageKey(),
       JSON.stringify({
-        ...readSavedUi(throwOnError),
+        ...saved,
         agent_id: acpState.agentId,
-        prompt_asset_id: acpState.promptAssetId,
-        prompt_asset_explicit: promptAssetSelectionExplicit,
-        contexts: acpState.contexts,
         ...extra,
       }),
     );
@@ -845,7 +731,8 @@ export {
   acpState,
   closeAcpDrawer,
   connectAcpAgent,
-  currentContext,
+  currentReference,
+  composerActions,
   disconnectAcpAgent,
   initializeAcp,
   openAcpDrawer,

@@ -23,7 +23,8 @@ visual and browser behavior gate. Deterministic browser
 fixtures bind an ephemeral loopback port and expose that origin to their tests;
 they do not reserve a repository-wide host port. Fixture startup uses the
 already-synced project environment; it must not reinstall packages or replace a
-running CLI executable. Windows cleanup waits
+running CLI executable. Start fixtures in setup hooks so readiness checks do not
+consume the browser interaction timeout. Windows cleanup waits
 for the child-process exit notification after terminating the tree, including when
 the termination command races a process that has already exited. A fixture that
 does not settle within the cleanup deadline remains a test failure.
@@ -31,6 +32,14 @@ Browser fixtures seed the workspace's ECharts cache from the pinned Node test
 dependency, so chart checks
 do not download assets from a live CDN. Live OpenCode ACP coverage
 remains an explicit opt-in:
+
+The live case starts the local `opencode acp` executable (`PEVAL_OPENCODE`
+can override its path), keeps the Agent in plan mode, and asks it to read a
+synthetic Harbor mount outside the temporary workspace. The large trajectory
+and random evidence marker exist only in that fixture; no peval Skill is
+installed. The test configures external reads to ask for permission and approves
+only the fixture's read request. It uses the operator's configured model access;
+synthetic test success does not establish live-provider acceptance.
 
 ```console
 PEVAL_LIVE_OPENCODE=1 pnpm run test:e2e web/e2e/acp-live.spec.mjs

@@ -162,19 +162,11 @@ class PevalServeHtmlTests(unittest.TestCase):
         self.assertIn("data-acp-agent", controls)
         self.assertIn("data-acp-close", controls)
 
-    def test_chinese_acp_prompt_preset_uses_compact_copy(self) -> None:
+    def test_acp_host_leaves_composer_actions_to_pretty_aui(self) -> None:
         html = render_serve_html(role="admin", locale="zh-CN")
-        drawer = html[html.index('<aside class="acp-drawer"') :]
-        prompt_assets = drawer[
-            drawer.index('<section class="acp-prompt-assets"') : drawer.index(
-                "</section>", drawer.index('<section class="acp-prompt-assets"')
-            )
-        ]
-
-        self.assertIn("<span>预设</span>", prompt_assets)
-        self.assertIn(">使用</button>", prompt_assets)
-        self.assertNotIn("提示词资产", prompt_assets)
-        self.assertNotIn("使用提示词", prompt_assets)
+        self.assertNotIn('class="acp-prompt-assets"', html)
+        self.assertNotIn("data-acp-use-prompt", html)
+        self.assertIn("data-acp-chat", html)
 
     def test_workspace_description_is_json_escaped_and_blank_is_omitted(self) -> None:
         description = "**Nightly** <script>alert(1)</script>"

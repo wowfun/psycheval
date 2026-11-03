@@ -300,10 +300,9 @@ class AcpHttpTests(unittest.TestCase):
             ("GET", "/api/acp/agents", None),
             (
                 "POST",
-                "/api/acp/context-resolutions",
+                "/api/acp/reference-candidates",
                 {
-                    "contexts": [{"kind": "source", "source_key": "missing"}],
-                    "embedded_context": True,
+                    "reference": {"kind": "source", "source_key": "missing"},
                 },
             ),
         )
@@ -322,7 +321,7 @@ class AcpHttpTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         assert isinstance(response, dict)
-        self.assertEqual(response["cwd"], str(self.root.resolve()))
+        self.assertEqual(response["cwd"], self.root.resolve().as_posix())
         self.assertEqual(response["agents"][0]["id"], "synthetic")  # type: ignore[index]
 
         retired_projection_routes = (
@@ -358,37 +357,46 @@ class AcpHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 404)
 
-    def test_context_resolution_validates_at_the_workspace_boundary(self) -> None:
+    def test_reference_candidates_validate_identities_and_explain_missing_sources(
+        self,
+    ) -> None:
         cookie = self.login()
-        status, _headers, response = self.request(
+        for kind in (["source"], {}, None, 3):
+            status, _, _ = self.request(
+                "POST",
+                "/api/acp/reference-candidates",
+                {"reference": {"kind": kind}},
+                cookie=cookie,
+            )
+            self.assertEqual(status, 400)
+        for body in ({}, {"reference": None}):
+            status, _, _ = self.request(
+                "POST", "/api/acp/reference-candidates", body, cookie=cookie
+            )
+            self.assertEqual(status, 422)
+        status, _, response = self.request(
             "POST",
-            "/api/acp/context-resolutions",
+            "/api/acp/reference-candidates",
             {
-                "contexts": [
-                    {
-                        "kind": "source",
-                        "source_key": "missing-source",
-                        "unexpected": True,
-                    }
-                ],
-                "embedded_context": True,
+                "reference": {
+                    "kind": "source",
+                    "source_key": "missing",
+                    "unexpected": "value",
+                }
             },
             cookie=cookie,
         )
         self.assertEqual(status, 400)
-        self.assertIn("unexpected ACP context fields", str(response))
-
-        status, _headers, response = self.request(
+        self.assertIn("invalid reference identity", str(response))
+        status, _, response = self.request(
             "POST",
-            "/api/acp/context-resolutions",
-            {
-                "contexts": [{"kind": "source", "source_key": "missing-source"}],
-                "embedded_context": False,
-            },
+            "/api/acp/reference-candidates",
+            {"reference": {"kind": "source", "source_key": "missing"}},
             cookie=cookie,
         )
-        self.assertEqual(status, 400)
-        self.assertIn("unknown source", str(response))
+        self.assertEqual(status, 200)
+        self.assertIn("unknown source", response["items"][0]["reason"])
+        self.assertFalse(response["items"][0]["selected"])
 
 
 if __name__ == "__main__":

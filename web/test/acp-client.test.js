@@ -7,6 +7,7 @@ const calls = [];
 const contextRequests = [];
 const modelUpdates = [];
 const prompts = [];
+let referenceGate;
 const backgroundErrorPrefix = "background session failed ";
 const oversizedBackgroundError = `${backgroundErrorPrefix}${"😀".repeat(
   8 * 1024,
@@ -18,6 +19,7 @@ const fetchStub = async (path, options = {}) => {
   if (value === "/api/acp/agents") {
     return response({
       cwd: "/workspace/project",
+      max_message_bytes: 16 * 1024 * 1024,
       agents: [{ id: "opencode", title: "OpenCode", connected: false, connections: 0 }],
     });
   }
@@ -35,41 +37,11 @@ const fetchStub = async (path, options = {}) => {
       },
     ]);
   }
-  if (value === "/api/acp/context-resolutions") {
+  if (value === "/api/acp/reference-candidates") {
     const body = JSON.parse(options.body);
     contextRequests.push(body);
-    return response({
-      items: body.contexts.map(context => {
-        const source = context.kind === "source";
-        const report = context.kind === "report";
-        return {
-          id: source
-            ? `source:${context.source_key}:${context.step_id || ""}`
-            : report
-              ? `report:${context.report_ref}`
-              : `dataset:${context.dataset_id}:${context.task}`,
-          label: source
-            ? `${context.source_key} · Step ${context.step_id}`
-            : report
-              ? context.report_ref
-              : `${context.dataset_id} / ${context.task}`,
-          content: [
-            {
-              type: "resource",
-              resource: {
-                uri: source
-                  ? `peval://source/${context.source_key}`
-                  : report
-                    ? `peval://report/${context.report_ref}`
-                    : `peval://dataset/${context.dataset_id}/${context.task}`,
-                mimeType: "application/json",
-                text: JSON.stringify({ reference: context }),
-              },
-            },
-          ],
-        };
-      }),
-    });
+    if (referenceGate) await referenceGate;
+    return response({ items: [{ id: "source", label: "Source", selected: true, text: `source_ref: ${body.reference.source_key}\ntrajectory_id: ${body.reference.trajectory_id}\nstep_id: ${body.reference.step_id}` }] });
   }
   throw new Error(`unexpected request: ${value}`);
 };
@@ -85,13 +57,12 @@ const browser = installBrowserDom(`
     <select data-acp-agent></select><button data-acp-connect>Connect</button>
     <a href="/config#acp-agents-title" data-acp-configure hidden>Configure</a>
     <div data-acp-placeholder>Connect first</div><div data-acp-chat></div>
-    <select data-acp-prompt-asset></select><button data-acp-use-prompt>Use</button>
   </aside>
 `, { fetch: fetchStub });
 
 window.localStorage.setItem(
   "peval:workspace-test:acp-client",
-  JSON.stringify({ models: { another: "another-model" } }),
+  JSON.stringify({ models: { another: "another-model" }, contexts: [{ id: "old" }], prompt_asset_id: "old", prompt_asset_explicit: true }),
 );
 
 class SyntheticAcpSocket extends window.EventTarget {
@@ -143,6 +114,10 @@ class SyntheticAcpSocket extends window.EventTarget {
         sessionId,
         configOptions: [modelConfig("balanced")],
       });
+      return;
+    }
+    if (message.method === "session/load") {
+      this.#result(message.id, {configOptions: [modelConfig("balanced")]});
       return;
     }
     if (message.method === "session/set_config_option") {
@@ -230,312 +205,75 @@ test.after(async () => {
   else globalThis.WebSocket = previousWebSocket;
 });
 
-test("Psycheval composes the vendored controller through its gateway and context seam", async () => {
+test("Psycheval appends references through the controller and cleans legacy preferences", async () => {
   const workspaceRefreshes = [];
-  workspaceRuntime.setWorkspaceApp({
-    invalidate(changes) {
-      workspaceRefreshes.push(["invalidate", changes]);
-    },
-    async navigate(page, options) {
-      workspaceRefreshes.push(["navigate", page, options]);
-    },
-  });
-  let workspaceContext = {
-    page: "home",
-    source_key: "source-7",
-    step_id: "4",
-  };
-  workspaceRuntime.setWorkspaceSnapshotProvider(() => ({
-    context: workspaceContext,
-    dirty: false,
-  }));
-  const opener = document.querySelector("[data-acp-open]");
-  assert.equal(opener.disabled, true);
+  workspaceRuntime.setWorkspaceApp({ invalidate(changes) { workspaceRefreshes.push(changes); }, async navigate() {} });
+  workspaceRuntime.setWorkspaceSnapshotProvider(() => ({ context: { page: "home", source_key: "source-7", trajectory_id: "child", step_id: "4" }, dirty: false }));
   await acp.initializeAcp();
-  assert.equal(opener.disabled, false, "the launcher becomes interactive only after its handler is bound");
-  opener.focus();
-  const workspace = document.querySelector(".workspace");
-  Object.defineProperties(workspace, {
-    offsetWidth: { configurable: true, value: 800 },
-    clientWidth: { configurable: true, value: 785 },
-  });
+  await acp.connectAcpAgent();
+  const opener = document.querySelector("[data-acp-open]");
   acp.openAcpDrawer(opener);
-  assert.equal(
-    document.documentElement.style.getPropertyValue(
-      "--acp-scrollbar-compensation",
-    ),
-    "15px",
-  );
-
-  assert.equal(await acp.connectAcpAgent(), true);
-  assert.equal(SyntheticAcpSocket.instances.length, 2, "v1 fallback gets a fresh gateway process");
-  assert.equal(
-    SyntheticAcpSocket.instances[1].url,
-    "ws://127.0.0.1:8765/api/acp/agents/opencode/ws",
-  );
-  const host = document.querySelector("[data-acp-chat]");
-  assert.ok(host.shadowRoot, "pretty-aui owns an open Shadow DOM");
-  assert.equal(host.shadowRoot.querySelector("style").nonce, "test-nonce");
-  const addContext = host.shadowRoot.querySelector(
-    '[aria-label="Add context"]',
-  );
-  await waitFor(() => addContext.disabled === false);
-  const modelSelect = host.shadowRoot.querySelector(
-    '[role="combobox"][aria-label="Model"]',
-  );
-  assert.match(modelSelect.textContent, /Balanced/);
-  modelSelect.click();
-  await waitFor(() =>
-    [...host.shadowRoot.querySelectorAll('[role="option"]')]
-      .some(option => option.textContent.includes("Fast")),
-  );
-  const fastOption = [...host.shadowRoot.querySelectorAll('[role="option"]')]
-    .find(option => option.textContent.includes("Fast"));
-  assert.ok(fastOption);
-  fastOption.click();
-  await waitFor(() => modelUpdates.length === 1);
-  const newSession = [...host.shadowRoot.querySelectorAll("button")].find(button =>
-    button.textContent.includes("New session"),
-  );
-  assert.ok(newSession);
-  newSession.click();
-  await waitFor(() => SyntheticAcpSocket.newRequests === 2);
-  await waitFor(() => modelUpdates.length === 2);
-  assert.deepEqual(modelUpdates, [
-    { sessionId: "session-1", id: "model", value: "fast" },
-    { sessionId: "session-2", id: "model", value: "fast" },
-  ]);
-  assert.match(
-    host.shadowRoot.querySelector('[role="combobox"][aria-label="Model"]')
-      .textContent,
-    /Fast/,
-  );
-  addContext.click();
-  await waitFor(() => acp.acpState.contexts.length === 1);
-  assert.equal(acp.acpState.promptAssetId, "evaluation-review");
-  assert.equal(host.shadowRoot.querySelector("textarea").value, "");
-  await waitFor(
-    () =>
-      host.shadowRoot.querySelectorAll(
-        '[data-pretty-aui-slot="composer-context-item"]',
-      ).length === 1,
-  );
-  workspaceContext = {
-    page: "datasets",
-    dataset_id: "bench-v1.0",
-    task: "trend-digest-01",
-  };
-  addContext.click();
-  await waitFor(() => acp.acpState.contexts.length === 2);
-  await waitFor(() => addContext.disabled === false);
-  addContext.click();
-  await waitFor(
-    () =>
-      host.shadowRoot.querySelectorAll(
-        '[data-pretty-aui-slot="composer-context-item"]',
-      ).length === 2,
-  );
-  await waitFor(
-    () => host.shadowRoot.querySelectorAll('[data-kind="notice"]').length === 3,
-  );
-  assert.deepEqual(
-    [...host.shadowRoot.querySelectorAll('[data-kind="notice"]')].map(
-      row => row.textContent,
-    ),
-    [
-      "Current evaluation context attached",
-      "Current evaluation context attached",
-      "Evaluation context is already attached",
-    ],
-  );
-  assert.equal(
-    host.shadowRoot.querySelector('[data-kind="notice"] button'),
-    null,
-  );
-  assert.match(host.shadowRoot.textContent, /source-7.*Step 4/);
-  assert.match(host.shadowRoot.textContent, /bench-v1\.0 \/ trend-digest-01/);
-  document.querySelector("[data-acp-use-prompt]").click();
-  const textarea = host.shadowRoot.querySelector("textarea");
-  assert.equal(textarea.value, "Review this evaluation.");
-  await waitFor(() => !host.shadowRoot.querySelector(".paui-send").disabled);
-  host.shadowRoot.querySelector(".paui-send").click();
-
-  await waitFor(() => prompts.length === 1);
-  assert.deepEqual(contextRequests, [
-    {
-      contexts: [
-        { kind: "source", source_key: "source-7", step_id: "4" },
-        {
-          kind: "dataset_task",
-          dataset_id: "bench-v1.0",
-          task: "trend-digest-01",
-        },
-      ],
-      embedded_context: true,
-    },
-  ]);
-  assert.equal(prompts[0][0].type, "resource");
-  assert.equal(prompts[0][1].type, "resource");
-  assert.deepEqual(prompts[0][0]._meta["pretty-aui/context"], {
-    version: 1,
-    id: "source:source-7:4",
-    label: "source-7 · Step 4",
-  });
-  const envelope = prompts[0][2].text.match(
-    /^\n\n<pretty-aui-user-message-v1-([a-f0-9]{32})>\n$/,
-  );
-  assert.ok(envelope);
-  assert.equal(prompts[0][3].text, "Review this evaluation.");
-  assert.equal(
-    prompts[0][4].text,
-    `\n</pretty-aui-user-message-v1-${envelope[1]}>`,
-  );
-  await waitFor(() => host.shadowRoot.textContent.includes("Synthetic response."));
-  await waitFor(() => workspaceRefreshes.length === 2);
-  assert.deepEqual(workspaceRefreshes, [
-    ["invalidate", "catalog"],
-    ["navigate", "datasets", { focus: false, history: false, throwOnError: true }],
-  ]);
-  host.shadowRoot
-    .querySelector('[aria-label="Remove context: source-7 · Step 4"]')
-    .click();
-  await waitFor(
-    () =>
-      host.shadowRoot.querySelectorAll(
-        '[data-pretty-aui-slot="composer-context-item"]',
-      ).length === 1,
-  );
-  await waitFor(
-    () => host.shadowRoot.querySelectorAll('[data-kind="notice"]').length === 4,
-  );
-  assert.deepEqual(
-    [...host.shadowRoot.querySelectorAll('[data-kind="notice"]')].map(
-      row => row.textContent,
-    ),
-    [
-      "Current evaluation context attached",
-      "Current evaluation context attached",
-      "Evaluation context is already attached",
-      "Evaluation context removed",
-    ],
-  );
-  assert.doesNotMatch(
-    host.shadowRoot
-      .querySelector('[data-pretty-aui-slot="composer-context"]')
-      .textContent,
-    /source-7/,
-  );
-  assert.equal(
-    JSON.parse(window.localStorage.getItem("peval:workspace-test:acp-client")).sessions.opencode,
-    "session-2",
-  );
-  assert.deepEqual(
-    JSON.parse(window.localStorage.getItem("peval:workspace-test:acp-client")).models,
-    { another: "another-model", opencode: "fast" },
-  );
-  assert.equal(window.localStorage.getItem("peval:other-workspace:acp-client"), null);
-  assert.deepEqual(
-    JSON.parse(window.localStorage.getItem("peval:workspace-test:acp-client"))
-      .contexts.map(context => context.value.kind),
-    ["dataset_task"],
-  );
-  assert.equal(calls.some(path => path.includes("/sessions")), false);
-
   const controller = acp.acpState.mounted.controller;
-  await controller.openSession("session-1");
-  await waitFor(
-    () =>
-      host.shadowRoot.querySelectorAll('[data-kind="notice"]').length === 1 &&
-      host.shadowRoot.querySelector('[data-kind="notice"]')?.textContent ===
-        "Local agent connected",
-  );
-  assert.deepEqual(
-    [...host.shadowRoot.querySelectorAll('[data-kind="notice"]')].map(
-      row => row.textContent,
-    ),
-    ["Local agent connected"],
-  );
-  await controller.openSession("session-2");
-  const failedTurn = controller.send("fail in background");
-  await waitFor(() => prompts.length === 2);
-  await controller.newSession();
-  await assert.rejects(failedTurn.done, /background session failed/);
-  assert.equal(controller.getSnapshot().sessionId, "session-3");
-  assert.equal(
-    host.shadowRoot.textContent.includes("background session failed"),
-    false,
-  );
-  await controller.openSession("session-2");
-  await waitFor(
-    () =>
-      host.shadowRoot.querySelector(
-        '[data-kind="notice"][data-level="error"]',
-      )?.textContent?.startsWith("background session failed"),
-  );
-  const errorNotice = host.shadowRoot.querySelector(
-    '[data-kind="notice"][data-level="error"]',
-  );
-  assert.equal(new TextEncoder().encode(errorNotice.textContent).length <= 16 * 1024, true);
-  assert.equal(errorNotice.textContent.endsWith("…"), true);
-  assert.equal(
-    oversizedBackgroundError.startsWith(errorNotice.textContent.slice(0, -1)),
-    true,
-  );
-
+  await controller.ready;
+  const host = document.querySelector("[data-acp-chat]");
+  await waitFor(() => host.shadowRoot.querySelector("textarea"));
+  assert.equal(controller.getSnapshot().contextSelection.canAdd, false);
+  assert.equal(host.shadowRoot.querySelectorAll('[aria-label="Add to message"]').length, 1);
+  const saved = JSON.parse(window.localStorage.getItem("peval:workspace-test:acp-client"));
+  for (const key of ["contexts", "prompt_asset_id", "prompt_asset_explicit"]) assert.equal(key in saved, false);
+  assert.equal(saved.models.another, "another-model");
+  controller.setDraft("Analyze this.");
+  const reference = controller.getComposerActions().find(action => action.id === "workbench");
+  const pending = controller.runComposerAction(reference);
+  await waitFor(() => document.querySelector(".acp-reference-picker"));
+  controller.setDraft("Analyze this. Preserve my later edit.");
+  document.querySelector('.acp-reference-picker button[type="submit"]').click();
+  assert.equal(await pending, true);
+  const text = controller.getSnapshot().draft.text;
+  assert.equal(text, "Analyze this. Preserve my later edit.\n\nsource_ref: source-7\ntrajectory_id: child\nstep_id: 4");
+  assert.equal(document.querySelector("[data-acp-drawer]").hidden, false);
+  await controller.sendDraft().done;
+  assert.deepEqual(prompts[0], [{ type: "text", text }]);
+  assert.equal(controller.getSnapshot().draft.text, "");
+  await controller.send("No repeated references.").done;
+  assert.deepEqual(prompts[1], [{ type: "text", text: "No repeated references." }]);
+  assert.equal(contextRequests.length, 1);
+  assert.ok(workspaceRefreshes.length >= 2);
   acp.closeAcpDrawer();
-  assert.equal(document.querySelector("[data-acp-drawer]").hidden, true);
-  assert.equal(
-    document.documentElement.style.getPropertyValue(
-      "--acp-scrollbar-compensation",
-    ),
-    "",
-  );
-  assert.equal(document.activeElement, opener);
-  assert.ok(acp.acpState.mounted, "closing the drawer keeps background sessions alive");
+  assert.ok(acp.acpState.mounted);
 });
 
-test("every terminal turn refreshes catalog even when cancelled without source context", async () => {
-  const workspaceRefreshes = [];
-  workspaceRuntime.setWorkspaceApp({
-    invalidate(changes) {
-      workspaceRefreshes.push(["invalidate", changes]);
-    },
-    async navigate(page, options) {
-      workspaceRefreshes.push(["navigate", page, options]);
-    },
-  });
-  workspaceRuntime.setWorkspaceSnapshotProvider(() => ({
-    context: { page: "reports", report_ref: "package:report-1", report_name: "Report one" },
-    dirty: false,
-  }));
-  const host = document.querySelector("[data-acp-chat]");
-  host.shadowRoot
-    .querySelector('[aria-label="Remove context: bench-v1.0 / trend-digest-01"]')
-    .click();
-  await waitFor(() => acp.acpState.contexts.length === 0);
-  const addContext = host.shadowRoot.querySelector('[aria-label="Add context"]');
-  await waitFor(() => addContext.disabled === false);
-  addContext.click();
-  await waitFor(() => acp.acpState.contexts.length === 1);
-  assert.deepEqual(acp.acpState.contexts[0].value, {
-    kind: "report",
-    report_ref: "package:report-1",
-  });
-
+test("prompt actions append without selecting or sending a default", async () => {
   const controller = acp.acpState.mounted.controller;
-  await controller.newSession();
-  const turn = controller.send("cancelled terminal");
-  await turn.done;
-  await waitFor(() => workspaceRefreshes.length === 2);
+  controller.setDraft("existing");
+  const promptsMenu = controller.getComposerActions().find(action => action.id === "prompts");
+  assert.deepEqual(promptsMenu.children.map(group => group.label), ["English", "中文"]);
+  await controller.runComposerAction(promptsMenu.children[0].children[0]);
+  assert.equal(controller.getSnapshot().draft.text, "existing\n\nReview this evaluation.");
+  assert.equal(prompts.length, 2);
+});
 
-  assert.deepEqual(workspaceRefreshes, [
-    ["invalidate", "catalog"],
-    ["navigate", "reports", { focus: false, history: false, throwOnError: true }],
-  ]);
-  assert.deepEqual(contextRequests.at(-1).contexts, [{
-    kind: "report",
-    report_ref: "package:report-1",
-  }]);
+test("cancelled terminal turns refresh catalog without hidden context resolution", async () => {
+  const refreshes = [];
+  workspaceRuntime.setWorkspaceApp({ invalidate(changes) { refreshes.push(changes); }, async navigate() {} });
+  const controller = acp.acpState.mounted.controller;
+  await controller.send("cancelled terminal").done;
+  assert.ok(refreshes.length);
+  assert.equal(contextRequests.length, 1);
+});
+
+test("background errors remain scoped and bounded", async () => {
+  const controller = acp.acpState.mounted.controller;
+  const first = controller.getSnapshot().sessionId;
+  const turn = controller.send("fail in background");
+  await controller.newSession();
+  await assert.rejects(turn.done, /background session failed/);
+  assert.equal(controller.getSnapshot().activities.some(item => item.type === "notice" && item.level === "error"), false);
+  await controller.openSession(first);
+  const notice = controller.getSnapshot().activities.find(item => item.type === "notice" && item.level === "error");
+  assert.ok(notice);
+  assert.ok(new TextEncoder().encode(notice.text).length <= 16 * 1024);
+  await controller.newSession();
 });
 
 test("prompt asset invalidation refreshes presets without replacing live chat", async () => {
@@ -574,11 +312,6 @@ test("a failed post-turn workspace refresh is reported without an unhandled reje
   try {
     const controller = acp.acpState.mounted.controller;
     await controller.newSession();
-    const host = document.querySelector("[data-acp-chat]");
-    host.shadowRoot.querySelector('[aria-label="Add context"]').click();
-    await waitFor(() =>
-      acp.acpState.contexts.some(context => context.value?.kind === "source"),
-    );
     const turn = controller.send("refresh failure");
     await turn.done;
     await waitFor(() => errors.length === 1);
@@ -598,5 +331,66 @@ async function waitFor(predicate) {
   while (!predicate() && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 10));
   }
-  assert.equal(predicate(), true, "timed out waiting for ACP UI state");
+  assert.ok(predicate(), "timed out waiting for ACP UI state");
 }
+
+for (const during of ["fetch", "picker"]) test(`navigating during reference ${during} never appends stale text`, async () => {
+  const controller = acp.acpState.mounted.controller;
+  let context = {page: "home", source_key: "source-old"};
+  workspaceRuntime.setWorkspaceSnapshotProvider(() => ({context, dirty:false}));
+  controller.setDraft("keep navigation draft");
+  let release;
+  if (during === "fetch") referenceGate = new Promise(resolve => { release = resolve; });
+  try {
+    const action = controller.getComposerActions().find(item => item.id === "workbench");
+    const pending = controller.runComposerAction(action);
+    if (during === "picker") await waitFor(() => document.querySelector(".acp-reference-picker"));
+    context = {page: "datasets", dataset_id: "new", task: "new"};
+    if (during === "fetch") release();
+    else document.querySelector('.acp-reference-picker button[type="submit"]').click();
+    assert.equal(await pending, false);
+    assert.equal(controller.getSnapshot().draft.text, "keep navigation draft");
+    assert.equal(document.querySelector(".acp-reference-picker"), null);
+  } finally { release?.(); referenceGate = undefined; }
+});
+
+test("session switch cancels a suspended picker without touching either draft", async () => {
+  const {openModalSurface, closeModalSurface} = await import("../../src/psycheval/assets/web/modules/modal-surfaces.js");
+  const controller = acp.acpState.mounted.controller;
+  const oldSession = controller.getSnapshot().sessionId;
+  controller.setDraft("old session draft");
+  const pending = controller.runComposerAction(controller.getComposerActions().find(item => item.id === "workbench"));
+  await waitFor(() => document.querySelector(".acp-reference-picker"));
+  const newer = document.createElement("div");
+  newer.setAttribute("aria-modal", "true"); newer.hidden = true; document.body.append(newer);
+  openModalSurface(newer);
+  try {
+    await controller.newSession();
+    controller.setDraft("new session draft");
+    assert.equal(document.querySelector(".acp-reference-picker"), null);
+    assert.equal(await pending, false);
+    assert.equal(controller.getSnapshot().draft.text, "new session draft");
+    await controller.openSession(oldSession);
+    assert.equal(controller.getSnapshot().draft.text, "old session draft");
+  } finally { closeModalSurface(newer); newer.remove(); }
+});
+
+test("vendored Retry updates the host connection button and releases its subscription", async () => {
+  const mounted = acp.acpState.mounted;
+  const controller = mounted.controller;
+  const connect = document.querySelector("[data-acp-connect]");
+  SyntheticAcpSocket.instances.at(-1).close();
+  await waitFor(() => controller.getSnapshot().phase === "error");
+  assert.equal(connect.textContent, "Reconnect");
+  const chat = document.querySelector("[data-acp-chat]");
+  const retry = () => [...chat.shadowRoot.querySelectorAll("button")].find(button => button.textContent === "Retry");
+  await waitFor(retry);
+  retry().click();
+  await waitFor(() => controller.getSnapshot().phase === "idle");
+  assert.equal(connect.textContent, "Disconnect");
+  assert.equal(connect.disabled, false);
+  assert.equal(acp.acpState.mounted, mounted);
+  connect.click();
+  await waitFor(() => acp.acpState.mounted === null);
+  assert.equal(acp.acpState.unsubscribeController, null);
+});

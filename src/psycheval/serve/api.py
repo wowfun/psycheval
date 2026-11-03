@@ -47,6 +47,7 @@ from psycheval.serve.access import (
     LoginRateLimited,
     ServeAccess,
 )
+from psycheval.serve.acp_references import reference_candidates
 from psycheval.serve.api_access import (
     ADMIN_ACCESS,
     GUEST_ACCESS,
@@ -85,7 +86,7 @@ from psycheval.serve.api_http import (
     problem_title as _problem_title,
 )
 from psycheval.serve.api_models import (
-    AcpContextRequest,
+    AcpReferenceRequest,
     BrowserViewsRequest,
     CatalogQueryRequest,
     CatalogSummaryRequest,
@@ -118,7 +119,6 @@ from psycheval.serve.api_models import (
     ViewPutRequest,
 )
 from psycheval.serve.api_support import (
-    acp_context_items,
     add_source_result_payload,
     catalog_query,
     catalog_query_payload,
@@ -1891,14 +1891,11 @@ def _register_acp_routes(app: FastAPI) -> None:
             raise WebSocketException(code=1008, reason="unknown ACP agent") from exc
         await runtime.acp.serve(websocket, agent_id, session_token)
 
-    @app.post("/api/acp/context-resolutions", dependencies=admin_mutation)
+    @app.post("/api/acp/reference-candidates", dependencies=admin_mutation)
     @access(ADMIN_ACCESS)
-    def resolve_acp_context(request: Request, body: AcpContextRequest) -> JSONResponse:
+    def acp_reference_candidates(
+        request: Request, body: AcpReferenceRequest
+    ) -> JSONResponse:
         runtime: ServeRuntime = request.app.state.runtime
-        items = acp_context_items(
-            runtime.store,
-            runtime,
-            body.contexts,
-            embedded_context=body.embedded_context,
-        )
+        items = reference_candidates(runtime, body.reference)
         return _json({"items": items})

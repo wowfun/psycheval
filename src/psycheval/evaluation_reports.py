@@ -137,6 +137,9 @@ class EvaluationReports:
     def resolve(self, source_ref: str) -> EvaluationReportTarget:
         return self._resolve(source_ref, include_documents=True)
 
+    def reference_location(self, source_ref: str) -> Path:
+        return self.sources.canonical_report_location(source_ref)
+
     def _resolve(
         self,
         source_ref: str,

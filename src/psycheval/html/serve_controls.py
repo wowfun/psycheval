@@ -245,12 +245,6 @@ def render_acp_drawer(messages: dict[str, str]) -> str:
       <div class="acp-chat-placeholder" data-acp-placeholder>{escape(messages["acp_empty"])}</div>
       <div class="acp-chat-host" data-acp-chat></div>
     </div>
-    <section class="acp-prompt-assets">
-      <label><span>{escape(messages["acp_prompt_asset"])}</span>
-        <select data-acp-prompt-asset><option value="">{escape(messages["acp_prompt_custom"])}</option></select>
-      </label>
-      <button class="action-button compact" type="button" data-acp-use-prompt>{escape(messages["acp_use_prompt"])}</button>
-    </section>
   </aside>"""
 
 

@@ -143,6 +143,24 @@ class ReportLibrary:
             raise ReportNotFound(f"unknown report: {report_ref}")
         return items[0]
 
+    def reference_location(self, report_ref: str) -> dict[str, Any]:
+        """Return an explicit report's location and associations, never its body."""
+        if report_ref.startswith(PACKAGE_REPORT_REF_PREFIX):
+            report_id = report_ref[len(PACKAGE_REPORT_REF_PREFIX) :]
+            metadata = self.workspace_reports.metadata(report_id)[0]
+            if metadata.format == "unavailable":
+                raise ReportNotFound(
+                    "report package location is ambiguous or unavailable"
+                )
+            return {"path": metadata.report_path, "source_refs": metadata.source_refs}
+        metadata = self.catalog.evaluation_report_location(report_ref)
+        source_ref = metadata["source_ref"]
+        return {
+            "path": self.evaluation_reports.reference_location(source_ref),
+            "source_ref": source_ref,
+            "source_keys": metadata["source_keys"],
+        }
+
     def set_archived(self, report_ref: str, archived: bool) -> dict[str, Any]:
         if not isinstance(report_ref, str) or not report_ref:
             raise ReportNotFound("report reference must be an explicit nonempty string")

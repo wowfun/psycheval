@@ -9,7 +9,7 @@ import pytest
 
 from psycheval.config import HarborDataset, HarborMount, ToolConfig
 from psycheval.report_targets import ReportTargets
-from psycheval.serve.api_support import acp_context_items
+from psycheval.serve.acp_references import reference_candidates
 from psycheval.serve.runtime import ServeRuntime
 from psycheval.state import open_workspace_state
 from psycheval.state.catalog import replace_evaluation_report_projection
@@ -472,18 +472,16 @@ def test_http_typed_associations_and_copilot_read_both_origins(tmp_path):
                 runtime.report_library.metadata(ref)["bindings"] == updated["bindings"]
             )
             for report_ref, expected in [
-                (ref, "Imported context"),
-                (canonical["report_ref"], "Canonical"),
+                (ref, "# Imported context"),
+                (canonical["report_ref"], "# Canonical"),
             ]:
-                context = acp_context_items(
-                    runtime.store,
-                    runtime,
-                    [{"kind": "report", "report_ref": report_ref}],
-                    embedded_context=True,
+                candidate = reference_candidates(
+                    runtime, {"kind": "report", "report_ref": report_ref}
                 )[0]
-                payload = json.loads(context["content"][0]["resource"]["text"])
-                assert expected in payload["value"]["evidence"]["content"]
-                assert payload["reference"]["report_ref"] == report_ref
+                assert candidate["selected"]
+                assert f"report_ref: {report_ref}" in candidate["text"]
+                assert "report_path (read-only):" in candidate["text"]
+                assert expected not in candidate["text"]
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             try:
                 connection.request(

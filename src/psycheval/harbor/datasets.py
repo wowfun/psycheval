@@ -70,6 +70,23 @@ def detect_harbor_dataset_format(root: Path) -> DatasetFormat:
     return "harbor"
 
 
+def locate_harbor_dataset(path: str | Path, format: DatasetFormat) -> tuple[Path, Path]:
+    """Locate roots for one selected Task without enumerating or hashing Tasks."""
+    supplied = Path(path).expanduser().resolve()
+    if format == "harbor":
+        return supplied, supplied
+    if format != "workbuddy.v1":
+        raise HarborDatasetError(f"unsupported Harbor Dataset format: {format}")
+    root, manifest = read_workbuddy_manifest(supplied)
+    layout = manifest.get("layout", {})
+    task_root = (
+        _contained_directory(root, _required_relative(layout, "task_root"))
+        if "task_root" in layout
+        else supplied
+    )
+    return root, task_root
+
+
 def resolve_harbor_dataset(
     *,
     dataset_id: str,

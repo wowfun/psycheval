@@ -28,6 +28,7 @@ from psycheval.harbor.datasets import (
     HarborDatasetError,
     ResolvedHarborDataset,
     detect_harbor_dataset_format,
+    locate_harbor_dataset,
     resolve_harbor_dataset,
     validate_harbor_dataset,
 )
@@ -462,6 +463,15 @@ class HarborWorkspace:
         self._expect_revision(task_dir, expected_revision)
         shutil.rmtree(task_dir)
         return {"dataset_id": dataset_id, "task": task}
+
+    def task_location(self, dataset_id: str, task: str) -> dict[str, Path]:
+        dataset = self._dataset(dataset_id)
+        self._validate_dataset_directory(Path(dataset.path))
+        dataset_root, task_root = locate_harbor_dataset(dataset.path, dataset.format)
+        return {
+            "task_path": self._task_path(task_root, task),
+            "dataset_path": dataset_root,
+        }
 
     def task_detail(self, dataset_id: str, task: str) -> dict[str, Any]:
         dataset = self._dataset(dataset_id)

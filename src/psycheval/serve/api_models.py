@@ -289,6 +289,5 @@ class MountDeletionRequest(StrictRequest):
     mount_ids: list[str] = Field(min_length=1)
 
 
-class AcpContextRequest(StrictRequest):
-    contexts: list[dict[str, Any]] = Field(min_length=1, max_length=64)
-    embedded_context: bool
+class AcpReferenceRequest(StrictRequest):
+    reference: dict[str, Any]

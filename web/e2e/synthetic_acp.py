@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 
@@ -94,7 +95,10 @@ for line in sys.stdin:
                 },
                 "agentCapabilities": {
                     "loadSession": True,
-                    "promptCapabilities": {"embeddedContext": True},
+                    "promptCapabilities": {
+                        "embeddedContext": True,
+                        "image": os.environ.get("PEVAL_E2E_IMAGES") == "1",
+                    },
                     "sessionCapabilities": {
                         "list": {},
                         "close": {},
