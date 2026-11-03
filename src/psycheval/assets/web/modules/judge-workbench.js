@@ -56,8 +56,7 @@ function createJudgeWorkbench({ request }) {
     const body = document.createElement("div"); body.className = "judge-body";
     pane.append(head, status, body); root.append(pane); document.body.append(root); modal = root;
     root.addEventListener("keydown", event => { if (event.key === "Escape") { event.stopPropagation(); close(); } });
-    root.addEventListener("click", event => { if (event.target === root) close(); });
-    openModalSurface(root, { focusTarget: head.querySelector("button") });
+    openModalSurface(root, { focusTarget: head.querySelector("button"), onRequestClose: close });
     const version = generation;
     return { root, body, status, current: () => version === generation && !root.hidden };
   }

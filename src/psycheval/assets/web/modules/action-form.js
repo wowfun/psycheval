@@ -74,7 +74,6 @@ function openActionForm({ title, fields, submit, secondaryAction = null, opener 
     closeModalSurface(root);
   };
   cancel.addEventListener("click", close);
-  root.addEventListener("click", event => { if (event.target === root) close(); });
   root.addEventListener("keydown", event => {
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
   });
@@ -126,6 +125,7 @@ function openActionForm({ title, fields, submit, secondaryAction = null, opener 
   });
   openModalSurface(root, {
     opener, focusTarget: form.querySelector("input, textarea"),
+    onRequestClose: close,
     onClose: () => { feedback?.dispose(); root.remove(); },
   });
   return root;

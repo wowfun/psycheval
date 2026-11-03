@@ -44,9 +44,6 @@ function bindAuthenticationControls() {
     });
   });
   const dialog = document.querySelector("[data-admin-login-dialog]");
-  dialog?.addEventListener("click", event => {
-    if (event.target === dialog) closeAdminLogin();
-  });
   dialog?.querySelector("[data-admin-login-form]")?.addEventListener("submit", submitAdminLogin);
   document.querySelectorAll("[data-admin-logout]").forEach(button => {
     button.addEventListener("click", async event => {
@@ -77,6 +74,7 @@ function openAdminLogin(opener = null) {
     opener,
     bodyClass: "admin-login-open",
     focusTarget: dialog.querySelector('[name="password"]'),
+    onRequestClose: closeAdminLogin,
   });
   return true;
 }

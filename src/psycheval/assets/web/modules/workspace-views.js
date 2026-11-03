@@ -257,9 +257,6 @@ function bindWorkspaceViewDialog() {
     event.preventDefault();
     saveWorkspaceView(dialog);
   });
-  dialog.addEventListener?.("click", event => {
-    if (event.target === dialog) closeWorkspaceViewSaveDialog();
-  });
 }
 
 function openWorkspaceViewSaveDialog(opener) {
@@ -275,6 +272,7 @@ function openWorkspaceViewSaveDialog(opener) {
     opener,
     bodyClass: "view-save-open",
     focusTarget: nameInput,
+    onRequestClose: closeWorkspaceViewSaveDialog,
   });
   if (nameInput) {
     nameInput.value = workspaceViewDefaultName();

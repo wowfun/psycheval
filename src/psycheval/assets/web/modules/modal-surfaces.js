@@ -1,8 +1,42 @@
 const modalOpeners = new WeakMap();
 const modalBodyClasses = new WeakMap();
 const modalClosers = new WeakMap();
+const modalCloseRequests = new WeakMap();
+const modalGestures = new WeakMap();
 const boundModals = new WeakSet();
 const suspendedModals = new WeakMap();
+
+function bindModalBackdrop(root) {
+  root.addEventListener("pointerdown", event => {
+    modalGestures.delete(root);
+    if (!root.hidden && event.isPrimary && event.button === 0 && event.target === root) {
+      modalGestures.set(root, { pointerId: event.pointerId, released: false });
+    }
+  }, true);
+  root.addEventListener("pointerup", event => {
+    const gesture = modalGestures.get(root);
+    if (root.hidden || !gesture || gesture.pointerId !== event.pointerId
+      || !event.isPrimary || event.button !== 0) {
+      modalGestures.delete(root);
+      return;
+    }
+    // Touch and pen may still target the backdrop through implicit pointer capture.
+    const direct = event.pointerType === "touch" || event.pointerType === "pen";
+    const releaseTarget = direct ? root.ownerDocument.elementFromPoint(event.clientX, event.clientY) : event.target;
+    if (releaseTarget === root) gesture.released = true;
+    else modalGestures.delete(root);
+  }, true);
+  root.addEventListener("pointercancel", () => modalGestures.delete(root), true);
+  root.addEventListener("click", event => {
+    const gesture = modalGestures.get(root);
+    modalGestures.delete(root);
+    if (root.hidden || event.defaultPrevented || !gesture?.released
+      || gesture.pointerId !== event.pointerId || event.button !== 0 || event.target !== root) return;
+    const requestClose = modalCloseRequests.get(root);
+    if (requestClose) requestClose();
+    else closeModalSurface(root);
+  });
+}
 
 function focusSoon(target) {
   if (!target || typeof target.focus !== "function") return;
@@ -13,6 +47,8 @@ function focusSoon(target) {
 
 function hideModalSurface(root) {
   if (!root || root.hidden) return false;
+  modalGestures.delete(root);
+  modalCloseRequests.delete(root);
   root.hidden = true;
   const bodyClass = modalBodyClasses.get(root);
   if (bodyClass) document.body.classList.remove(bodyClass);
@@ -23,11 +59,13 @@ function hideModalSurface(root) {
 
 function openModalSurface(root, options = {}) {
   if (!root) return false;
+  modalGestures.delete(root);
   document.querySelectorAll('[aria-modal="true"]').forEach(candidate => {
     const otherRoot = candidate.closest("[data-view-save-dialog],[data-admin-login-dialog]") || candidate;
-    if (otherRoot === root || otherRoot.hidden) return;
+    if (otherRoot === root || otherRoot.hidden || otherRoot.contains(root)) return;
     if (otherRoot.matches(".action-form-overlay")) {
       suspendedModals.set(root, { root: otherRoot, focus: document.activeElement });
+      modalGestures.delete(otherRoot);
       otherRoot.hidden = true;
       return;
     }
@@ -38,8 +76,10 @@ function openModalSurface(root, options = {}) {
   modalOpeners.set(root, options.opener || document.activeElement || null);
   modalBodyClasses.set(root, options.bodyClass || "");
   modalClosers.set(root, options.onClose);
+  modalCloseRequests.set(root, options.onRequestClose);
   if (!boundModals.has(root)) {
     boundModals.add(root);
+    bindModalBackdrop(root);
     root.addEventListener("keydown", event => {
       if (root.hidden || event.key !== "Tab") return;
       const controls = [...root.querySelectorAll(':is(button, input, select, textarea, a[href], [tabindex="0"]):not(:disabled)')]
@@ -67,6 +107,7 @@ function closeModalSurface(root, options = {}) {
   const suspended = suspendedModals.get(root);
   suspendedModals.delete(root);
   if (suspended?.root.isConnected) {
+    modalGestures.delete(suspended.root);
     suspended.root.hidden = false;
     if (options.restoreFocus !== false) focusSoon(suspended.focus);
   } else if (options.restoreFocus !== false) focusSoon(opener);

@@ -434,9 +434,6 @@ function bindConfigurationActions() {
   root.querySelector("[data-acp-agent-form]")?.addEventListener("submit", addAcpAgent);
   root.querySelector("[data-acp-agent-form-cancel]")?.addEventListener("click", () => closeAcpAgentForm());
   const acpAgentPanel = root.querySelector("[data-acp-agent-form-panel]");
-  acpAgentPanel?.addEventListener("click", event => {
-    if (event.target === acpAgentPanel) closeAcpAgentForm();
-  });
   acpAgentPanel?.addEventListener("keydown", event => {
     if (event.key !== "Escape") return;
     event.preventDefault();
@@ -541,6 +538,7 @@ function openAcpAgentForm(event) {
     opener: event?.currentTarget,
     bodyClass: "acp-agent-form-open",
     focusTarget: panel?.querySelector('[name="agent_id"]'),
+    onRequestClose: closeAcpAgentForm,
   });
 }
 function closeAcpAgentForm(options = {}) {

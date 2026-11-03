@@ -204,6 +204,10 @@ its state, and pauses while read. Independent actions retain independent results
 These rules do not replace Copilot's transcript-owned notices.
 
 Input dialogs keep a failed draft open and prevent duplicate submissions.
+Backdrop dismissal requires the same primary pointer to press and release on
+the backdrop before its click. Dragging or selecting text from inside a dialog
+to the backdrop does not dismiss it. Cancelled gestures and gestures interrupted
+by closing, suspending, or reopening a dialog cannot dismiss it later.
 Enter submits the primary action; destructive secondary actions require explicit
 activation. Opening another dialog suspends an input dialog and preserves its
 draft; closing the newer dialog returns to the suspended one.

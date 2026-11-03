@@ -83,4 +83,12 @@ function submitActionForm(values) {
   return form;
 }
 
-export { installBrowserDom, submitActionForm };
+function pointerClick(target) {
+  for (const type of ["pointerdown", "pointerup", "click"]) {
+    target.dispatchEvent(new window.PointerEvent(type, {
+      bubbles: true, cancelable: true, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0,
+    }));
+  }
+}
+
+export { installBrowserDom, pointerClick, submitActionForm };

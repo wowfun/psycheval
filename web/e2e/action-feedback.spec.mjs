@@ -5,6 +5,30 @@ let fixture;
 test.beforeAll(async () => { fixture = await startFixture({ PYTHONPATH: process.cwd() }); });
 test.afterAll(async () => { await stopFixture(fixture); });
 
+for (const surface of [
+  { name: "Dataset registration", opener: "[data-harbor-register-dataset]", root: ".action-form-overlay", field: "path" },
+  { name: "ACP agent configuration", opener: "[data-acp-agent-form-open]", root: "[data-acp-agent-form-panel]", field: "agent_id" },
+]) test(`${surface.name} keeps its draft after dragging onto the backdrop`, async ({ page }) => {
+  await page.goto(`${fixture.origin}/config`);
+  await expect(page.locator("[data-config-page]")).toHaveAttribute("aria-busy", "false");
+  const opener = page.locator(surface.opener);
+  await opener.click();
+  const dialog = page.locator(surface.root);
+  const input = dialog.locator(`[name="${surface.field}"]`);
+  await input.fill("retained draft");
+  const heading = await dialog.locator("h3").first().boundingBox();
+  await page.mouse.move(heading.x + heading.width / 2, heading.y + heading.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(5, 5, { steps: 6 });
+  await expect(dialog).toBeVisible();
+  await page.mouse.up();
+  await expect(dialog).toBeVisible();
+  await expect(input).toHaveValue("retained draft");
+  await page.mouse.click(5, 5);
+  await expect(dialog).toBeHidden();
+  await expect(opener).toBeFocused();
+});
+
 test("Dataset forms retain failures and register a quoted native absolute path", async ({ page }) => {
   await page.goto(`${fixture.origin}/config`);
   await expect(page.locator("[data-config-page]")).toHaveAttribute("aria-busy", "false");

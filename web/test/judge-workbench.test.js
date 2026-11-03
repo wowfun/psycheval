@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { installBrowserDom } from "./support/browser.js";
+import { installBrowserDom, pointerClick } from "./support/browser.js";
 
 const dom = installBrowserDom('<script id="peval-i18n" type="application/json">{}</script>');
 const { createJudgeWorkbench } = await import("../../src/psycheval/assets/web/modules/judge-workbench.js");
@@ -9,6 +9,26 @@ test.after(() => dom.cleanup());
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const click = text => [...document.querySelectorAll('.judge-overlay:not([hidden]) .judge-dialog button')].find(node => node.textContent === text).click();
 const config = { version: 1, artifacts: [], llm_judge: { rubrics: [{ id: "quality", question: "Original", artifact_refs: [], pass_criteria: ["line one\nline two"], fail_criteria: [], scope_limits: [] }] } };
+
+test("backdrop dismissal leaves a pending Judge prompt closed when its read finishes", async () => {
+  let resolve;
+  const opener = document.createElement("button");
+  document.body.append(opener); opener.focus();
+  try {
+    const workbench = createJudgeWorkbench({ request: () => new Promise(done => { resolve = done; }) });
+    workbench.setSource("backdrop");
+    const pending = workbench.prompt("quality");
+    const overlay = document.querySelector('.judge-overlay:not([hidden])');
+    pointerClick(overlay.querySelector("section"));
+    assert.equal(overlay.hidden, false);
+    pointerClick(overlay);
+    assert.equal(overlay.hidden, true);
+    assert.equal(document.activeElement, opener);
+    resolve({ status: "recorded", messages: [{ role: "user", content: "Late prompt" }] });
+    await pending;
+    assert.doesNotMatch(overlay.textContent, /Late prompt/);
+  } finally { opener.remove(); }
+});
 
 test("actual prompt is a standalone read and source changes discard stale responses", async () => {
   const calls = []; let resolve;

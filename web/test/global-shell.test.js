@@ -1,9 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { installBrowserDom } from "./support/browser.js";
+import { installBrowserDom, pointerClick } from "./support/browser.js";
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+
+test("the login backdrop closes through its lifecycle and restores focus", async () => {
+  const browser = installBrowserDom(`
+    <button data-admin-login-open>Log in</button>
+    <div data-admin-login-dialog hidden><section aria-modal="true">
+      <form data-admin-login-form><input name="password"><p data-admin-login-status hidden></p></form>
+    </section></div>
+  `);
+  try {
+    const { bindAuthenticationControls } = await import("../../src/psycheval/assets/web/modules/global-shell.js");
+    bindAuthenticationControls();
+    const opener = document.querySelector("[data-admin-login-open]");
+    const dialog = document.querySelector("[data-admin-login-dialog]");
+    opener.click();
+    assert.equal(dialog.hidden, false);
+    pointerClick(dialog.querySelector("input"));
+    assert.equal(dialog.hidden, false);
+    pointerClick(dialog);
+    assert.equal(dialog.hidden, true);
+    assert.equal(document.body.classList.contains("admin-login-open"), false);
+    assert.equal(document.activeElement, opener);
+  } finally { browser.cleanup(); }
+});
 
 test("locale and logout failures restore controls and surface the server error", async () => {
   const calls = [];

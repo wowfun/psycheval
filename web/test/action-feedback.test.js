@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { installBrowserDom, submitActionForm } from "./support/browser.js";
+import { installBrowserDom, pointerClick, submitActionForm } from "./support/browser.js";
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -313,7 +313,7 @@ test("action forms retain failed input, map structured field errors, and prevent
     let reject, calls = 0;
     const opener = document.querySelector("#opener");
     opener.focus();
-    openActionForm({
+    const root = openActionForm({
       title: "Register Dataset", fields: [{ name: "path", label: "Dataset path" }],
       submit: () => { calls++; return new Promise((_resolve, failure) => { reject = failure; }); },
     });
@@ -322,6 +322,9 @@ test("action forms retain failed input, map structured field errors, and prevent
     assert.equal(calls, 1);
     assert.equal(form.getAttribute("aria-busy"), "true");
     assert.equal(form.elements.namedItem("path").readOnly, true);
+    pointerClick(root);
+    assert.equal(root.isConnected, true);
+    assert.equal(root.hidden, false);
     reject(Object.assign(new Error("Invalid Dataset path"), { problem: { errors: [{ pointer: "/path", detail: "Directory does not exist" }] } }));
     await tick();
     const input = form.elements.namedItem("path");
@@ -332,7 +335,7 @@ test("action forms retain failed input, map structured field errors, and prevent
     assert.match(form.textContent, /Invalid Dataset path/);
     assert.equal(document.querySelector(".action-toast"), null);
     assert.equal(form.querySelector('[type="submit"]').disabled, false);
-    form.querySelector('[data-action-form-cancel]').click();
+    pointerClick(root);
     assert.equal(document.querySelector(".action-form-overlay"), null);
     assert.equal(document.activeElement, opener);
   } finally { browser.cleanup(); }

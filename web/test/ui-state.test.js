@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { installBrowserDom, submitActionForm } from "./support/browser.js";
+import { installBrowserDom, pointerClick, submitActionForm } from "./support/browser.js";
 
 const browser = installBrowserDom(`
   <script type="application/json" id="peval-i18n">{}</script>
@@ -1275,6 +1275,22 @@ test("Category summary preserves server groups for missing and literal dash valu
     runtime.state.catalogPage.total = previous.total;
     target.remove();
   }
+});
+
+test("the Saved View backdrop restores focus and releases the open body class", () => {
+  const opener = document.createElement("button");
+  document.body.append(opener);
+  const dialog = document.querySelector("[data-view-save-dialog]");
+  try {
+    views.openWorkspaceViewSaveDialog(opener);
+    assert.equal(dialog.hidden, false);
+    pointerClick(dialog.querySelector("section"));
+    assert.equal(dialog.hidden, false);
+    pointerClick(dialog);
+    assert.equal(dialog.hidden, true);
+    assert.equal(document.body.classList.contains("view-save-open"), false);
+    assert.equal(document.activeElement, opener);
+  } finally { modals.closeModalSurface(dialog); opener.remove(); }
 });
 
 test("remaining dialog surfaces are mutually exclusive and restore focus", () => {
