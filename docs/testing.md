@@ -7,16 +7,17 @@ uv lock --check
 uv run ruff check .
 uv run ruff format --check .
 uv run pytest
-npm ci
-npx playwright install chromium
-npm run check
+pnpm install --frozen-lockfile
+pnpm exec playwright install chromium
+pnpm run check
 uv run python scripts/check_docs.py
 uv run python scripts/check_skill.py skills/peval
 git diff --check
 ```
 
 Pytest covers Harbor integration and all `peval` CLI behavior in one collection.
-Node `check` runs type checking, browser-module tests against the authored ESM
+The [development workflow](development.md) owns Node and pnpm setup.
+`pnpm run check` runs type checking, browser-module tests against the authored ESM
 graph, including the checked-in `pretty-aui` distribution, and the Chromium
 visual and browser behavior gate. Deterministic browser
 fixtures bind an ephemeral loopback port and expose that origin to their tests;
@@ -32,7 +33,7 @@ do not download assets from a live CDN. Live OpenCode ACP coverage
 remains an explicit opt-in:
 
 ```console
-PEVAL_LIVE_OPENCODE=1 npm run test:e2e -- web/e2e/acp-live.spec.mjs
+PEVAL_LIVE_OPENCODE=1 pnpm run test:e2e web/e2e/acp-live.spec.mjs
 ```
 
 Optional document inspection uses synthetic files and local Judge fixtures:
@@ -61,7 +62,7 @@ the page pane:
 ```console
 node --test web/test/workspace-location.test.js web/test/app.test.js web/test/home-location.test.js web/test/report-manager-race.test.js
 uv run pytest tests/peval/test_serve_catalog_http.py tests/peval/test_workspace_views.py
-npm run test:e2e -- web/e2e/workspace-links.spec.mjs web/e2e/reports.spec.mjs
+pnpm run test:e2e web/e2e/workspace-links.spec.mjs web/e2e/reports.spec.mjs
 ```
 
 The native Harbor OpenCode adapter has a separate opt-in CLI test. With a
@@ -209,7 +210,7 @@ isolated user state and synthetic evidence, with a preseeded ECharts cache.
 All matrix cells install the same build. A separate smoke-fixture artifact carries
 the single ECharts file extracted from its integrity-checked, lock-pinned archive;
 it is not part of the release distribution or its receipt. Local validation can
-pass `--echarts <file>` or use an existing `npm ci` installation.
+pass `--echarts <file>` or use an existing `pnpm install --frozen-lockfile` installation.
 Release helpers test tag/CI gates, artifact recovery, partial uploads, conflicting
 digests and bounded index retries without uploading to a live service.
 

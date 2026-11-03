@@ -40,9 +40,9 @@ jobs:
           artifact-ids: ${{ steps.prior.outputs.artifact_id }}
           path: .local/dist
           merge-multiple: true
+      - run: uv sync --frozen --only-group build
       - if: steps.prior.outputs.artifact_id == ''
         run: |
-          uv sync --frozen --only-group build
           uv build --no-build-isolation --out-dir .local/dist
           uv run --no-sync twine check --strict .local/dist/*
           uv run --no-sync python scripts/check_distribution.py .local/dist --tag "$GITHUB_REF_NAME"
@@ -56,7 +56,7 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-      - run: python scripts/prepare_smoke_asset.py .local/smoke-asset/echarts.min.js
+      - run: uv run --no-sync python scripts/prepare_smoke_asset.py .local/smoke-asset/echarts.min.js
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: smoke-asset

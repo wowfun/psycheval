@@ -2,6 +2,7 @@
   "name": "psycheval-web",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.28.5",
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
@@ -10,7 +11,7 @@
     "vendor:pretty-aui": "node scripts/vendor-pretty-aui.mjs",
     "test": "node --test web/test/*.test.js",
     "test:e2e": "playwright test --project=chromium",
-    "check": "npm run check:types && npm test && npm run test:e2e"
+    "check": "pnpm run check:types && pnpm test && pnpm run test:e2e"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

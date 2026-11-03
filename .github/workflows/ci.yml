@@ -59,14 +59,16 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.12"
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
           node-version: 22.22.2
-          cache: npm
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - run: uv sync --frozen
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npm run check
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm run check
       - run: uv run python scripts/check_docs.py
       - run: >-
           uv run python scripts/check_skill.py
@@ -95,7 +97,7 @@ jobs:
       - run: uv run --no-sync twine check --strict .local/distribution-check/dist/*
       - run: uv run --no-sync python scripts/check_distribution.py .local/distribution-check/dist
       - run: uv export --frozen --no-dev --no-hashes --no-emit-project --output-file .local/distribution-check/runtime-constraints.txt
-      - run: python scripts/prepare_smoke_asset.py .local/distribution-check/echarts.min.js
+      - run: uv run --no-sync python scripts/prepare_smoke_asset.py .local/distribution-check/echarts.min.js
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: distribution-check

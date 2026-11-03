@@ -1,10 +1,12 @@
 # Development
 
-Install the frozen Python and Node environments from the repository root:
+Use the pnpm version declared by `packageManager` in the root `package.json`.
+With [pnpm installed](https://pnpm.io/installation), install the frozen Python
+and Node environments from the repository root:
 
 ```console
 uv sync --frozen
-npm ci
+pnpm install --frozen-lockfile
 ```
 
 The browser test toolchain supports Node.js `^22.22.2`, `^24.15.0`, or `>=26.0.0`.
@@ -15,9 +17,9 @@ under `tests` and use normal package imports. Browser modules live under
 tests under `web` without an application bundle. The exception is the immutable
 `pretty-aui` standalone distribution under `assets/web/vendor`; do not edit
 generated assets directly. To update it, build the owning pretty-aui checkout
-and run `npm run vendor:pretty-aui -- /path/to/pretty-aui/dist/standalone`.
+and run `pnpm run vendor:pretty-aui /path/to/pretty-aui/dist/standalone`.
 Append `--check` to compare that build with the checked-in distribution without
-copying. Review the generated diff and run `npm run check` against the vendored
+copying. Review the generated diff and run `pnpm run check` against the vendored
 assets. Normal installation and validation use those checked-in assets and do
 not require the upstream checkout or a second package archive. Its `LICENSE`
 and `THIRD_PARTY_LICENSES.txt` files must remain present.
@@ -71,8 +73,12 @@ PR installation checks export frozen runtime constraints using
 requirements. Release acceptance omits constraints and installs into an empty
 environment. Neither gate relies on the source checkout to import the package.
 CI builds one pure-Python candidate and distributes it to every consumer cell.
-The build job also prepares the ECharts smoke fixture from the package-lock
-archive, verifying its integrity before extracting the single required asset.
+The build job also prepares the ECharts smoke fixture using the root importer's
+locked version, tarball URL, and integrity in `pnpm-lock.yaml`. The pnpm
+configuration retains tarball URLs in that lockfile. The frozen Python build
+environment rejects unreadable or malformed locks, non-HTTPS tarball URLs, and
+invalid SHA-512 metadata before downloading. It verifies the archive before
+extracting the single required asset; release recovery initializes that environment too.
 Consumers pass that fixture with `--echarts`; they do not install Node dependencies.
 
 ## Publishing a release

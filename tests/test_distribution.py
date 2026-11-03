@@ -104,18 +104,7 @@ def test_smoke_asset_fetches_locked_archive_and_extracts_only_verified_regular_f
     tmp_path, monkeypatch
 ):
     archive, integrity = archive_fixture()
-    (tmp_path / "package-lock.json").write_text(
-        json.dumps(
-            {
-                "packages": {
-                    "node_modules/echarts": {
-                        "resolved": "https://fixture.invalid/chart.tgz",
-                        "integrity": integrity,
-                    }
-                }
-            }
-        )
-    )
+    write_smoke_lock(tmp_path, integrity)
 
     def fetch(url, timeout):
         assert url == "https://fixture.invalid/chart.tgz" and timeout == 30
@@ -133,6 +122,188 @@ def test_smoke_asset_fetches_locked_archive_and_extracts_only_verified_regular_f
     monkeypatch.setattr(smoke_asset, "MAX_ARCHIVE_BYTES", 1)
     with pytest.raises(ValueError, match="size limit"):
         smoke_asset.prepare(tmp_path, output)
+
+
+def write_smoke_lock(root, integrity):
+    lock = {
+        "lockfileVersion": "9.0",
+        "importers": {
+            ".": {
+                "devDependencies": {
+                    "echarts": {"specifier": "1.2.3", "version": "1.2.3"}
+                }
+            }
+        },
+        "packages": {
+            "echarts@0.9.0": {
+                "resolution": {"tarball": "https://fixture.invalid/wrong.tgz"}
+            },
+            "echarts@1.2.3": {
+                "resolution": {
+                    "tarball": "https://fixture.invalid/chart.tgz",
+                    "integrity": integrity,
+                }
+            },
+        },
+    }
+    (root / "pnpm-lock.yaml").write_text(yaml.safe_dump(lock), encoding="utf-8")
+    return lock
+
+
+@pytest.mark.parametrize("missing", ["importers", "package", "tarball", "integrity"])
+def test_smoke_asset_rejects_missing_lock_information_before_fetching(
+    tmp_path, monkeypatch, missing
+):
+    _, integrity = archive_fixture()
+    lock = write_smoke_lock(tmp_path, integrity)
+    if missing == "importers":
+        del lock["importers"]
+    elif missing == "package":
+        del lock["packages"]["echarts@1.2.3"]
+    else:
+        del lock["packages"]["echarts@1.2.3"]["resolution"][missing]
+    (tmp_path / "pnpm-lock.yaml").write_text(yaml.safe_dump(lock), encoding="utf-8")
+    monkeypatch.setattr(
+        smoke_asset,
+        "urlopen",
+        lambda *args, **kwargs: pytest.fail("unexpected download"),
+    )
+    output = tmp_path / "echarts.min.js"
+    with pytest.raises(ValueError, match="ECharts.*lock"):
+        smoke_asset.prepare(tmp_path, output)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tarball", None),
+        ("tarball", ""),
+        ("tarball", "file:///tmp/chart.tgz"),
+        ("tarball", "http://fixture.invalid/chart.tgz"),
+        ("tarball", "https:///chart.tgz"),
+        ("tarball", "https://["),
+        ("integrity", None),
+        ("integrity", "sha256-invalid"),
+        ("integrity", "sha512-!!!"),
+        ("integrity", "sha512-å"),
+        ("integrity", "sha512-" + base64.b64encode(b"short").decode()),
+    ],
+)
+def test_smoke_asset_rejects_invalid_download_information(
+    tmp_path, monkeypatch, field, value
+):
+    _, integrity = archive_fixture()
+    lock = write_smoke_lock(tmp_path, integrity)
+    lock["packages"]["echarts@1.2.3"]["resolution"][field] = value
+    (tmp_path / "pnpm-lock.yaml").write_text(yaml.safe_dump(lock), encoding="utf-8")
+    monkeypatch.setattr(
+        smoke_asset,
+        "urlopen",
+        lambda *args, **kwargs: pytest.fail("unexpected download"),
+    )
+    with pytest.raises(ValueError, match="ECharts.*lock"):
+        smoke_asset.prepare(tmp_path, tmp_path / "echarts.min.js")
+
+
+@pytest.mark.parametrize("lock_text", [None, "importers: ["])
+def test_smoke_asset_reports_unreadable_or_malformed_lock_before_fetching(
+    tmp_path, monkeypatch, lock_text
+):
+    if lock_text is not None:
+        (tmp_path / "pnpm-lock.yaml").write_text(lock_text, encoding="utf-8")
+    monkeypatch.setattr(
+        smoke_asset,
+        "urlopen",
+        lambda *args, **kwargs: pytest.fail("unexpected download"),
+    )
+    output = tmp_path / "echarts.min.js"
+    with pytest.raises(ValueError, match="pnpm-lock.yaml"):
+        smoke_asset.prepare(tmp_path, output)
+    assert not output.exists()
+
+
+def test_smoke_asset_resolves_the_real_lock_before_download(tmp_path, monkeypatch):
+    version = json.loads((ROOT / "package.json").read_text())["devDependencies"][
+        "echarts"
+    ]
+
+    class DownloadReached(Exception):
+        pass
+
+    def fetch(url, timeout):
+        assert url == f"https://registry.npmjs.org/echarts/-/echarts-{version}.tgz"
+        assert timeout == 30
+        raise DownloadReached
+
+    monkeypatch.setattr(smoke_asset, "urlopen", fetch)
+    output = tmp_path / "echarts.min.js"
+    with pytest.raises(DownloadReached):
+        smoke_asset.prepare(ROOT, output)
+    assert not output.exists()
+
+
+def test_smoke_asset_does_not_replace_an_existing_asset_when_integrity_fails(
+    tmp_path, monkeypatch
+):
+    archive, integrity = archive_fixture()
+    write_smoke_lock(tmp_path, integrity)
+    output = tmp_path / "echarts.min.js"
+    output.write_bytes(b"retained asset")
+    monkeypatch.setattr(
+        smoke_asset,
+        "urlopen",
+        lambda *args, **kwargs: io.BytesIO(archive + b"tampered"),
+    )
+    with pytest.raises(ValueError, match="integrity"):
+        smoke_asset.prepare(tmp_path, output)
+    assert output.read_bytes() == b"retained asset"
+
+
+def test_web_ci_initializes_pnpm_before_its_node_cache_and_uses_frozen_install():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    steps = jobs["web-and-source-tool"]["steps"]
+    pnpm_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step.get("uses", "").startswith("pnpm/action-setup@")
+    )
+    node_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step.get("uses", "").startswith("actions/setup-node@")
+    )
+    assert pnpm_index < node_index
+    assert "version" not in steps[pnpm_index].get("with", {})
+    assert steps[node_index]["with"]["cache"] == "pnpm"
+    assert steps[node_index]["with"]["cache-dependency-path"] == "pnpm-lock.yaml"
+    commands = "\n".join(step.get("run", "") for step in steps)
+    assert "pnpm install --frozen-lockfile" in commands
+    assert "pnpm exec playwright install --with-deps chromium" in commands
+    assert "pnpm run check" in commands
+
+
+@pytest.mark.parametrize(
+    ("workflow", "job"), [("ci.yml", "build-distribution"), ("publish.yml", "build")]
+)
+def test_smoke_asset_has_a_frozen_build_environment_even_on_release_recovery(
+    workflow, job
+):
+    jobs = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())["jobs"]
+    steps = jobs[job]["steps"]
+    prepare_index = next(
+        index
+        for index, step in enumerate(steps)
+        if "scripts/prepare_smoke_asset.py" in step.get("run", "")
+    )
+    prepare = steps[prepare_index]
+    assert "if" not in prepare
+    assert "uv run --no-sync python scripts/prepare_smoke_asset.py" in prepare["run"]
+    assert any(
+        "if" not in step
+        and "uv sync --frozen --only-group build" in step.get("run", "")
+        for step in steps[:prepare_index]
+    )
 
 
 def test_ci_builds_once_and_consumers_share_prepared_inputs():

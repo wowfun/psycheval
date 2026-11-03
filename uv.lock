@@ -1729,6 +1729,7 @@ xlsx = [
 build = [
     { name = "hatch-fancy-pypi-readme" },
     { name = "hatchling" },
+    { name = "pyyaml" },
     { name = "twine" },
 ]
 dev = [
@@ -1771,6 +1772,7 @@ provides-extras = ["documents", "docx", "pdf", "pptx", "xlsx"]
 build = [
     { name = "hatch-fancy-pypi-readme", specifier = "==25.1.0" },
     { name = "hatchling", specifier = "==1.32.4" },
+    { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "twine", specifier = "==7.0.0" },
 ]
 dev = [

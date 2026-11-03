@@ -52,7 +52,7 @@ requires = ["hatchling==1.32.4", "hatch-fancy-pypi-readme==25.1.0"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-build = ["hatchling==1.32.4", "hatch-fancy-pypi-readme==25.1.0", "twine==7.0.0"]
+build = ["hatchling==1.32.4", "hatch-fancy-pypi-readme==25.1.0", "twine==7.0.0", "PyYAML>=6.0,<7"]
 dev = [
     "pytest>=8.4,<9",
     "ruff>=0.12,<1",

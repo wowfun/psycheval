@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceArgument = process.argv[2];
 if (!sourceArgument || sourceArgument.startsWith("--")) {
-  throw new Error("usage: npm run vendor:pretty-aui -- <standalone-directory> [--check]");
+  throw new Error("usage: pnpm run vendor:pretty-aui <standalone-directory> [--check]");
 }
 const source = await realpath(resolve(sourceArgument));
 const target = join(

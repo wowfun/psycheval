@@ -22,7 +22,9 @@ def main() -> None:
         args.echarts or root / "node_modules/echarts/dist/echarts.min.js"
     ).resolve()
     if not echarts.is_file():
-        parser.error("ECharts fixture is missing; pass --echarts or run npm ci")
+        parser.error(
+            "ECharts fixture is missing; pass --echarts or run pnpm install --frozen-lockfile"
+        )
     package = (
         str(Path(args.package).resolve())
         if Path(args.package).is_file()
