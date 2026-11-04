@@ -37,9 +37,13 @@ and diagnostics by trajectory ID. A child's metrics are not added to its parent
 or counted as another evaluation source; detail navigation selects the child's
 own evidence within the root source.
 Sources with embedded children show left-aligned tree navigation for the complete
+| Copilot session aliases, pins and archives | Workspace-root `.peval-copilot-<agent>.json`, keyed by session ID | Explicit administrator edit |
 family; sources without children omit it. The detail sidebar keeps the tree in
 its header, with bounded scrolling separate from the step list, so long histories
 and large families cannot displace either navigation or steps.
+Each Agent’s Copilot preferences survive restarts. A sibling `.lock` file coordinates
+concurrent edits across processes. Both files are local workspace state.
+
 Each tree row has a right-aligned Copy action for that trajectory's last Agent
 step's message, without changing the selected trajectory. It copies the original
 message text (text blocks in order for multimodal messages), excluding reasoning

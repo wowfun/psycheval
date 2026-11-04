@@ -223,7 +223,7 @@ owned by that session. On POSIX, shutdown owns the complete new-session process
 group and escalates surviving descendants after the grace period even when the
 group leader has already exited. The vendored `pretty-aui` standalone client owns ACP
 negotiation, sessions, interactions, normalized state, and rendering; serve
-does not maintain a second protocol projection. Psycheval supplies only a
+does not maintain a second protocol projection. Psycheval supplies a
 workspace- and Agent-scoped browser preference adapter so new conversations can
 reuse the currently selected model across reconnects and page loads, and asks
 `pretty-aui` to apply the fixed `plan` mode before publishing every genuinely
@@ -241,7 +241,7 @@ projections. The browser
 supplies the selected source, trajectory and step identity; it never infers a
 child trajectory from a step number alone.
 
-`pretty-aui` owns the unified composer menu, controller-scoped drafts, images,
+`pretty-aui` owns the composer menus, session list and turn disclosures, controller-scoped drafts, images,
 submission recovery, message budgets and rendering. Host actions return text;
 the controller appends it to the current owning session's latest draft. Ordinary
 text is never parsed back into hidden attachments. Historical Context injection

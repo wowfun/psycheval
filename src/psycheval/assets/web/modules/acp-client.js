@@ -82,6 +82,13 @@ async function initializeAcp() {
   acpState.initialized = true;
   restoreUiState();
   bindControls();
+  window.addEventListener("peval:workspace-context", () => {
+    if (!acpState.mounted) return;
+    const available = Boolean(currentReference());
+    if (referenceAvailable === available) return;
+    referenceAvailable = available;
+    acpState.mounted.controller.refreshComposerActions();
+  });
   document.querySelectorAll("[data-acp-open]").forEach(button => {
     /** @type {HTMLButtonElement} */ (button).disabled = false;
   });
@@ -122,6 +129,7 @@ function applyAgentCatalog(agentPayload) {
 
 function applyPromptCatalog(promptPayload) {
   acpState.prompts = listValue(promptPayload);
+  acpState.mounted?.controller.refreshComposerActions();
 }
 
 async function refreshPromptCatalog() {
@@ -150,6 +158,13 @@ function bindControls() {
   });
   document.querySelectorAll("[data-acp-close]").forEach(button => {
     button.addEventListener("click", () => closeAcpDrawer());
+  });
+  const configure = /** @type {HTMLAnchorElement | null} */ (document.querySelector("[data-acp-configure]"));
+  configure?.addEventListener("click", event => {
+    if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey
+      && window.matchMedia("(max-width: 900px)").matches) {
+      closeAcpDrawer({ restoreFocus: false });
+    }
   });
   document.querySelector("[data-acp-backdrop]")?.addEventListener("click", () => {
     closeAcpDrawer();
@@ -251,8 +266,14 @@ async function connectAcpAgent(options = {}) {
       },
       onEvent: event => handleChatEvent(event, agentId, generation),
     },
+    sessionOrganization: {
+      list: () => serveApi(`/api/acp/agents/${encodeURIComponent(agentId)}/organization`),
+      patch: ({sessionId, title, updatedAt}, changes) => serveApi(`/api/acp/agents/${encodeURIComponent(agentId)}/organization`, {
+        method: "PATCH", body: {sessionId, title, updatedAt, ...changes},
+      }),
+    },
     surface: "sidebar",
-    colorScheme: "system",
+    colorScheme: "light",
     labels: prettyLabels(),
     ...(RENDER_OPTIONS.csp_nonce
       ? { styleNonce: String(RENDER_OPTIONS.csp_nonce) }
@@ -373,21 +394,24 @@ function currentReference() {
   return null;
 }
 
+let referenceAvailable = false;
 function composerActions() {
-  const reference = currentReference();
+  referenceAvailable = Boolean(currentReference());
   const languages = document.documentElement.lang.toLowerCase().startsWith("zh") ? ["zh", "en"] : ["en", "zh"];
   return [
-    ...(reference ? [{ id: "workbench", label: t("acp_references", "Workbench references"), run: async ({ signal }) => {
+    ...(referenceAvailable ? [{ id: "workbench", placement: "shortcut", label: t("acp_references", "References"), run: async ({ signal }) => {
+      const reference = currentReference();
+      if (!reference) return;
       const identity = JSON.stringify(reference);
       const payload = await serveApi("/api/acp/reference-candidates", { method: "POST", body: { reference }, signal });
       if (identity !== JSON.stringify(currentReference()) || signal.aborted) return undefined;
       const text = await chooseReferences(listValue(payload?.items), signal);
       return identity === JSON.stringify(currentReference()) ? text : undefined;
     } }] : []),
-    { id: "prompts", label: t("acp_prompts", "Prompt templates"), children: languages.map(language => ({
+    { id: "prompts", placement: "shortcut", label: t("acp_prompts", "Prompts"), children: languages.map(language => ({
       id: `prompts:${language}`, label: language === "zh" ? "中文" : "English",
       children: acpState.prompts.filter(prompt => String(prompt.id).endsWith("-zh-cn") === (language === "zh")).map(prompt => ({
-        id: `prompt:${prompt.id}`, label: prompt.title,
+        id: `prompt:${prompt.id}`, label: prompt.title, description: prompt.content,
         run: () => String(prompt.content || ""),
       })),
     })) },
@@ -406,7 +430,6 @@ function prettyLabels() {
     imagesUnsupported: t("acp_images_unsupported", "This Agent does not accept images. Your draft is unchanged."),
     removeImage: name => `${t("acp_remove_image", "Remove image")}: ${name}`,
     recoverDraft: t("acp_recover_draft", "Append undelivered draft"),
-    back: t("acp_back", "Back"),
     imageUnavailable: t("acp_image_unavailable", "Image unavailable"),
     imageUnavailableDetails: t("acp_image_unavailable_details", "Image preview released from local memory; Agent history is unchanged."),
     imageError: issue => ({
@@ -453,12 +476,15 @@ function prettyLabels() {
     historyGapTitle: t("acp_history_gap_title", "Partial history"),
     loadMore: t("acp_load_more", "Load more"),
     mode: t("acp_mode", "Mode"),
+    modelSearch: t("acp_search_models", "Search models"),
+    noMatchingModels: t("acp_no_matching_models", "No matching models"),
+    back: t("acp_back", "Back"),
     newChat: t("acp_new_session", "New session"),
     noSessions: t("acp_no_session", "No session yet"),
     openLink: t("acp_open_link", "Open link"),
     openChildSession: t("acp_open_child_session", "Open child session"),
     permission: t("acp_permission", "Permission"),
-    pendingInteractions: count => formatLabel(
+    pendingInteractions: count => count === 1 ? t("acp_one_pending_interaction", "1 pending interaction") : formatLabel(
       "acp_pending_interactions",
       "{count} pending interactions",
       { count },
@@ -469,6 +495,20 @@ function prettyLabels() {
     resource: t("acp_resource", "Resource"),
     scrollToLatest: t("acp_scroll_latest", "Scroll to latest message"),
     send: t("acp_send", "Send"),
+    pinned: t("acp_pinned", "Pinned"),
+    sessionTimeUnknown: t("acp_session_time_unknown", "Time unavailable"),
+    pinSession: t("acp_pin", "Pin session"),
+    unpinSession: t("acp_unpin", "Unpin session"),
+    archiveSession: t("acp_archive", "Archive session"),
+    restoreSession: t("acp_restore", "Restore session"),
+    renameSession: t("acp_rename", "Rename session"),
+    archivedSessions: t("acp_archived", "Archived"),
+    defaultWorkspace: t("acp_default_workspace", "Default workspace"),
+    turnCompleted: seconds => seconds === undefined ? t("acp_completed", "Completed") :
+      formatLabel("acp_turn_duration", "Completed in {duration}", {duration: [
+        seconds >= 60 && formatLabel("acp_duration_minutes", "{count}min", {count: Math.floor(seconds / 60)}),
+        formatLabel("acp_duration_seconds", "{count}s", {count: seconds % 60}),
+      ].filter(Boolean).join(" ")}),
     sessionAge: formatSessionAgeLabel,
     sessionActions: title => formatLabel(
       "acp_session_actions",
@@ -516,10 +556,11 @@ function prettyLabels() {
 function formatSessionAgeLabel(value, unit) {
   if (unit === "now") return t("acp_session_age_now", "now");
   const labels = {
-    minute: ["acp_session_age_minute", "{count}m"],
+    minute: ["acp_session_age_minute", "{count}min"],
     hour: ["acp_session_age_hour", "{count}h"],
     day: ["acp_session_age_day", "{count}d"],
-    month: ["acp_session_age_month", "{count}mo"],
+    week: ["acp_session_age_week", "{count}w"],
+    month: ["acp_session_age_month", "{count}m"],
     year: ["acp_session_age_year", "{count}y"],
   };
   const [key, fallback] = labels[unit] || ["acp_session_age_now", "now"];

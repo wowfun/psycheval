@@ -403,8 +403,12 @@ unchanged Agent configurations keep their current connections.
 
 ACP session transcripts and pending interactions remain inside the Agent and
 the live `pretty-aui` controller; they are not evaluation evidence, workspace
-overlays, or reports. Workspace page navigation leaves the live drawer open and
-does not remount its controller. The browser persists drawer and Agent
+overlays, or reports. On wide screens the Copilot drawer stays alongside the
+workspace while navigating and while opening or closing a configuration dialog.
+On narrow screens its Configure agents link dismisses the full-screen drawer
+so the Agent settings are accessible. Navigation preserves the chat controller.
+Copilot uses the workspace's light palette for its native controls and scrollbars
+regardless of the operating system theme. The browser persists drawer and Agent
 preferences and reconnect session identity. Text and images belong to the live
 controller's session instance. In-page navigation, session selection and
 same-controller reconnection preserve drafts; explicit disconnect, Agent change,
@@ -414,8 +418,26 @@ preferences.
 The host connection controls follow controller connection state, including
 recovery initiated by the chat's Retry action.
 
-The composer's single `+` menu offers images, workbench references, Agent
-commands and prompt templates. Inserting references or templates appends editable
+The composer places References and Prompts above the input. References follows
+the current workspace object, including automatic Home selections. A change
+while its picker is open invalidates that selection. Each prompt shows a
+single-line preview beside its name. Hovering the row reveals the full template.
+The add button precedes Mode and groups images and Agent commands. The model
+control beside Send shows the model name and effort. The model list groups
+choices by provider. Separate Model and
+Effort rows open the choices advertised by the Agent. Larger model lists
+support search. Completed turns group
+their intermediate steps behind a disclosure. Local submission and final-answer
+times remain visible when known. History replay supplies no substitute for
+missing original times.
+
+Administrators share session pins, archives and display aliases within the workspace, scoped to the configured Agent and session ID. The session drawer reloads these preferences on open. Its row actions expose archive and pin directly on hover or keyboard focus and in the menu on touch. Pins sort first, and reading history preserves activity order and age. Archiving a session leaves its work accessible from Archived. The Agent owns its original title, messages and deletion. The stored activity
+time and Agent title are display hints for off-page sessions. An edit from an
+older session listing preserves newer dated hints. Concurrent changes to different preference fields merge,
+and the last write to the same field wins. A damaged or oversized organization
+file produces a drawer-local error and is preserved for recovery.
+
+Inserting references or templates appends editable
 text after a blank paragraph, preserves existing text, and never sends it.
 Nothing is automatically attached on a later turn. Commands replace only an
 exactly recognized leading command or are prefixed to the existing body;

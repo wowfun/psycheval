@@ -31,12 +31,9 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({
   await expect(chat.getByText("消息、工具活动和计划会显示在这里。", { exact: true })).toBeVisible();
   await expect(chat.getByRole("button", { name: "新建会话" })).toBeVisible();
   await expect(chat.getByRole("combobox", { name: "模式" })).toBeVisible();
-  const add = chat.getByRole("button", { name: "添加到消息" });
-  await add.click();
-  await chat.getByRole("menuitem", { name: "提示词" }).click();
-  await expect(chat.getByRole("menuitem").nth(1)).toHaveText(/中文/);
-  await chat.getByRole("menuitem", { name: "中文", exact: false }).click();
-  await expect(chat.getByRole("menuitem")).toHaveCount(5);
+  await chat.getByRole("button", { name: "提示词", exact:true }).click();
+  await expect(chat.getByRole("menuitem").first()).toBeFocused();
+  await expect(chat.getByRole("group", {name:"中文",exact:true}).getByRole("menuitem")).toHaveCount(4);
   await chat.getByRole("menuitem", { name: "评测复盘" }).click();
   await expect(chat.locator("textarea")).toHaveValue(/按需读取引用/);
   await chat.locator("textarea").fill("检查复制标签");
@@ -48,6 +45,7 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({
 
   await chat.locator("textarea").fill("Show structured tools");
   await chat.locator(".paui-send").click();
+  await chat.locator(".paui-turn").last().getByRole("button",{name:/已完成，用时/}).click();
   await expect(chat.locator(".paui-tool")).toHaveCount(3);
   for (const tool of await chat.locator(".paui-tool").all()) {
     await tool.locator("summary").click();
@@ -76,7 +74,7 @@ test("Chinese workspace supplies complete visible ACP chat labels", async ({
   expect(actionBox?.height).toBeGreaterThanOrEqual(32);
   await actions.click();
   await expect(
-    dialog.getByRole("menuitem", { name: "删除会话" }),
+    dialog.getByRole("menuitem", { name: "置顶会话" }),
   ).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(actions).toBeFocused();

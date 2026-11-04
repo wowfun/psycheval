@@ -1,2 +1,3 @@
 # Keep the generated third-party bundle byte-for-byte identical to its package.
-src/psycheval/assets/web/vendor/pretty-aui/** -whitespace
+src/psycheval/assets/web/vendor/pretty-aui/** -text -whitespace
+docs/user/peval/*.md text eol=lf

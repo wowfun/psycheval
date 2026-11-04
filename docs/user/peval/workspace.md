@@ -202,9 +202,7 @@ page reloads for the same Workspace and Agent. Existing conversations retain
 their own Agent-managed model. Every new conversation starts in the Agent's
 `plan` mode, while an opened conversation retains its Agent-managed mode.
 
-Use the composer's **+** menu to add images, workbench references, Agent commands
-or prompt templates. Select a source, Task, step or report, then choose
-**Workbench references**. The current object starts selected; related materials
+Use **+** for images and Agent commands, or **Prompts** for templates. Select a source, Task, step or report, then choose **References** above the input. The current object starts selected; related materials
 are optional. Review the locations and insert the selected text. References and
 templates append after your existing draft, remain editable and never send
 automatically. They are ordinary text and are not repeated on later turns.

@@ -298,6 +298,12 @@ class AcpHttpTests(unittest.TestCase):
     def test_gateway_catalog_and_context_resolution_are_admin_only(self) -> None:
         requests = (
             ("GET", "/api/acp/agents", None),
+            ("GET", "/api/acp/agents/synthetic/organization", None),
+            (
+                "PATCH",
+                "/api/acp/agents/synthetic/organization",
+                {"sessionId": "one", "pinned": True},
+            ),
             (
                 "POST",
                 "/api/acp/reference-candidates",
@@ -311,6 +317,86 @@ class AcpHttpTests(unittest.TestCase):
                 status, _headers, response = self.request(method, path, body)
                 self.assertEqual(status, 403)
                 self.assertIn("administrator", str(response))
+
+    def test_organization_reports_damaged_data_without_overwriting_it(self) -> None:
+        from unittest.mock import patch
+
+        cookie = self.login()
+        route = "/api/acp/agents/synthetic/organization"
+        path = self.root / ".peval-copilot-synthetic.json"
+        edit = {"sessionId": "one", "pinned": True}
+        with patch("psycheval.serve.acp_organization._MAX_BYTES", 16):
+            for data in (b"{", b"x" * 17):
+                path.write_bytes(data)
+                for method, body in (("GET", None), ("PATCH", edit)):
+                    status, headers, problem = self.request(
+                        method, route, body, cookie=cookie
+                    )
+                    self.assertEqual(status, 409)
+                    self.assertIn("application/problem+json", headers["content-type"])
+                    self.assertIn(path.name, problem["detail"])
+                self.assertEqual(path.read_bytes(), data)
+            path.write_bytes(b"[]")
+            self.assertEqual(self.request("PATCH", route, edit, cookie=cookie)[0], 422)
+            self.assertEqual(path.read_bytes(), b"[]")
+            path.unlink()
+            path.mkdir()
+            self.assertEqual(self.request("GET", route, cookie=cookie)[0], 409)
+
+    def test_sparse_shared_organization_merges_concurrent_fields(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        cookie = self.login()
+        path = "/api/acp/agents/synthetic/organization"
+        agent = self.runtime.acp.configuration("synthetic")
+        self.runtime.acp.reconfigure((agent, agent.model_copy(update={"id": "other"})))
+        self.assertEqual(self.request("GET", path, cookie=cookie)[2], [])
+        self.assertFalse(list(self.root.glob(".peval-copilot*")))
+
+        def write(fields):
+            return self.request(
+                "PATCH", path, {"sessionId": "opaque/id", **fields}, cookie=cookie
+            )[0]
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            self.assertEqual(
+                list(pool.map(write, [{"alias": "Review"}, {"pinned": True}])),
+                [200, 200],
+            )
+        self.assertEqual(
+            self.request("GET", path, cookie=self.login())[2],
+            [{"sessionId": "opaque/id", "alias": "Review", "pinned": True}],
+        )
+        self.assertEqual(
+            self.request(
+                "GET", path.replace("/synthetic/", "/unknown/"), cookie=cookie
+            )[0],
+            404,
+        )
+        self.assertEqual(
+            self.request("GET", path.replace("/synthetic/", "/other/"), cookie=cookie)[
+                2
+            ],
+            [],
+        )
+        current = {"title": "Agent title", "updatedAt": "2026-11-04T15:00:00Z"}
+        self.assertEqual(write({**current, "alias": "Shared rename"}), 200)
+        self.assertEqual(
+            write(
+                {
+                    "title": "Old title",
+                    "updatedAt": "2026-11-04T16:00:00+02:00",
+                    "pinned": False,
+                }
+            ),
+            200,
+        )
+        self.assertEqual(
+            self.request("GET", path, cookie=cookie)[2],
+            [{"sessionId": "opaque/id", **current, "alias": "Shared rename"}],
+        )
+        self.assertEqual(write({"alias": "", "pinned": False}), 200)
+        self.assertEqual(self.request("GET", path, cookie=cookie)[2], [])
 
     def test_catalog_exposes_gateway_cwd_and_old_projection_routes_are_gone(
         self,

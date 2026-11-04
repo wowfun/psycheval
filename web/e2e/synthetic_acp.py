@@ -126,7 +126,30 @@ for line in sys.stdin:
     elif method == "session/set_mode":
         result(request_id, {})
     elif method == "session/list":
-        result(request_id, {"sessions": list(catalog_sessions.values())})
+        if os.environ.get("PEVAL_E2E_PAGED_SESSIONS") == "1":
+            if params.get("cursor") == "older":
+                result(
+                    request_id,
+                    {
+                        "sessions": [
+                            {
+                                "sessionId": "older-page",
+                                "title": "Previous page",
+                                "updatedAt": "2020-01-01T00:00:00Z",
+                            }
+                        ]
+                    },
+                )
+            else:
+                result(
+                    request_id,
+                    {
+                        "sessions": list(catalog_sessions.values()),
+                        "nextCursor": "older",
+                    },
+                )
+        else:
+            result(request_id, {"sessions": list(catalog_sessions.values())})
     elif method == "session/delete":
         catalog_sessions.pop(params["sessionId"], None)
         result(request_id, {})

@@ -208,7 +208,7 @@ test.after(async () => {
 test("Psycheval appends references through the controller and cleans legacy preferences", async () => {
   const workspaceRefreshes = [];
   workspaceRuntime.setWorkspaceApp({ invalidate(changes) { workspaceRefreshes.push(changes); }, async navigate() {} });
-  workspaceRuntime.setWorkspaceSnapshotProvider(() => ({ context: { page: "home", source_key: "source-7", trajectory_id: "child", step_id: "4" }, dirty: false }));
+  workspaceRuntime.setWorkspaceSnapshotProvider(() => ({ context: { page: "home", source_key: "source-6", trajectory_id: "old", step_id: "1" }, dirty: false }));
   await acp.initializeAcp();
   await acp.connectAcpAgent();
   const opener = document.querySelector("[data-acp-open]");
@@ -224,6 +224,7 @@ test("Psycheval appends references through the controller and cleans legacy pref
   assert.equal(saved.models.another, "another-model");
   controller.setDraft("Analyze this.");
   const reference = controller.getComposerActions().find(action => action.id === "workbench");
+  workspaceRuntime.setWorkspaceSnapshotProvider(() => ({ context: { page: "home", source_key: "source-7", trajectory_id: "child", step_id: "4" }, dirty: false }));
   const pending = controller.runComposerAction(reference);
   await waitFor(() => document.querySelector(".acp-reference-picker"));
   controller.setDraft("Analyze this. Preserve my later edit.");
@@ -248,6 +249,7 @@ test("prompt actions append without selecting or sending a default", async () =>
   controller.setDraft("existing");
   const promptsMenu = controller.getComposerActions().find(action => action.id === "prompts");
   assert.deepEqual(promptsMenu.children.map(group => group.label), ["English", "中文"]);
+  assert.equal(promptsMenu.children[0].children[0].description, "Review this evaluation.");
   await controller.runComposerAction(promptsMenu.children[0].children[0]);
   assert.equal(controller.getSnapshot().draft.text, "existing\n\nReview this evaluation.");
   assert.equal(prompts.length, 2);
