@@ -141,7 +141,7 @@ fails inspection, rather than becoming an unresolved-style diagnostic. Limits ar
 checked as facts are produced; `to_markdown()` also checks the report's text
 budget including formatting. Text budgets count UTF-8 bytes, including multibyte
 characters and Markdown separators. Exceeding a content budget raises
-`DocumentLimitError`, a `DocumentParseError` subtype. Limits fail explicitly,
+`DocumentLimitError`, a `DocumentParseError` subtype. The source byte limit applies to paths and snapshots before loading an optional parser. Limits fail explicitly,
 with no silent truncation.
 
 These bound inputs, outputs and the inspector's color expansion, not all CPU or
