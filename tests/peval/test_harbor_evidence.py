@@ -201,7 +201,7 @@ class HarborEvidenceTests(unittest.TestCase):
 
     def test_live_task_reference_requires_a_unique_mounted_effective_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             bundle = root / "bundle"
             tasks = bundle / "nested" / "collection"
             task = tasks / "office"

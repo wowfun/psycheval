@@ -1207,7 +1207,7 @@ class HarborTrialTests(unittest.TestCase):
 
     def test_partial_refresh_priority_warnings_and_multi_step(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
+            base = Path(tmp).resolve()
             jobs = base / "jobs"
             trial = jobs / "job" / "trial"
             result = completed_result()

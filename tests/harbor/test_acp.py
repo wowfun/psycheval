@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 import threading
-from datetime import UTC, datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -527,7 +527,6 @@ def test_transport_records_successful_prompt_submission_time(tmp_path, failed):
     async def scenario():
         summary = {}
         transport = StrictTransport(None, Writer(), tmp_path, summary)
-        before = datetime.now(UTC)
         try:
             message = {
                 "jsonrpc": "2.0",
@@ -542,10 +541,17 @@ def test_transport_records_successful_prompt_submission_time(tmp_path, failed):
             else:
                 await transport.send(message)
                 timestamp = datetime.fromisoformat(summary["prompt_submitted_at"])
-                assert before <= timestamp <= datetime.now(UTC)
                 assert timestamp.utcoffset().total_seconds() == 0
         finally:
             transport.finish()
+        if not failed:
+            with gzip.open(tmp_path / "acp.events.ndjson.gz", "rt") as stream:
+                sent = json.loads(stream.readline())
+            assert sent["message"] == message
+            origin = datetime.fromisoformat(summary["client_clock"]["origin_utc"])
+            assert timestamp == origin + timedelta(
+                microseconds=sent["elapsed_ns"] // 1000
+            )
 
     asyncio.run(scenario())
 
