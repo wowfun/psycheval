@@ -403,7 +403,6 @@ def main() -> None:
                 listener.bind(("127.0.0.1", 0))
                 listener.listen(2048)
                 origin = f"http://127.0.0.1:{listener.getsockname()[1]}"
-                print(f"PEVAL_E2E_ORIGIN={origin}", flush=True)
                 config = uvicorn.Config(
                     create_app(
                         runtime, ServeAccess(os.environ.get("PEVAL_E2E_PASSWORD"))
@@ -428,7 +427,14 @@ def main() -> None:
                         "Browser fixtures must use the seeded ECharts asset"
                     ),
                 ):
-                    uvicorn.Server(config).run(sockets=[listener])
+
+                    class ReadyServer(uvicorn.Server):
+                        async def startup(self, sockets=None):
+                            await super().startup(sockets)
+                            if self.started:
+                                print(f"PEVAL_E2E_ORIGIN={origin}", flush=True)
+
+                    ReadyServer(config).run(sockets=[listener])
         finally:
             runtime.close()
             store.close()

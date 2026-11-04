@@ -5,12 +5,13 @@ import json
 import shutil
 from pathlib import Path
 
+import psutil
 import pytest
 from harbor.models.task.task import Task
 
 from psycheval.harbor.verifier import aggregate, build_scoring_plan
 from psycheval.harbor.verifier.host import HostVerifier
-from tests.harbor.environment_support import make_environment
+from tests.harbor.environment_support import assert_process_exited, make_environment
 from tests.harbor.test_verifier import _run_cli
 
 
@@ -296,15 +297,14 @@ time.sleep(60)
                     and "verifier started" in stdout.read_text(encoding="utf-8")
                 ):
                     await asyncio.sleep(0.01)
+            identities = [
+                (pid, psutil.Process(pid).create_time())
+                for pid in json.loads(marker.read_text())
+            ]
             with pytest.raises(TimeoutError):
                 await asyncio.wait_for(operation, timeout=0.01)
-            import psutil
-
-            for pid in json.loads(marker.read_text()):
-                assert (
-                    not psutil.pid_exists(pid)
-                    or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
-                )
+            for pid, created_at in identities:
+                assert_process_exited(pid, created_at)
             assert not (logs / "reward.json").exists()
             assert "verifier started" in stdout.read_text(encoding="utf-8")
         finally:

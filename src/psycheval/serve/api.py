@@ -47,6 +47,11 @@ from psycheval.serve.access import (
     LoginRateLimited,
     ServeAccess,
 )
+from psycheval.serve.acp_organization import (
+    SessionDecoration,
+    patch_organization,
+    read_organization,
+)
 from psycheval.serve.acp_references import reference_candidates
 from psycheval.serve.api_access import (
     ADMIN_ACCESS,
@@ -1862,6 +1867,28 @@ def _register_harbor_mount_routes(app: FastAPI) -> None:
 def _register_acp_routes(app: FastAPI) -> None:
     admin_get = [Depends(require_admin)]
     admin_mutation = [Depends(require_admin), Depends(mutation_guard)]
+
+    def organization_path(request: Request, agent_id: str) -> Path:
+        gateway = request.app.state.runtime.acp
+        try:
+            agent = gateway.configuration(agent_id)
+        except KeyError as exc:
+            raise ProblemException(404, "unknown ACP agent") from exc
+        return gateway.workspace_root / f".peval-copilot-{agent.id}.json"
+
+    @app.get("/api/acp/agents/{agent_id}/organization", dependencies=admin_get)
+    @access(ADMIN_ACCESS)
+    def acp_organization(request: Request, agent_id: str) -> JSONResponse:
+        rows = read_organization(organization_path(request, agent_id))
+        return _json([row.model_dump(exclude_defaults=True) for row in rows])
+
+    @app.patch("/api/acp/agents/{agent_id}/organization", dependencies=admin_mutation)
+    @access(ADMIN_ACCESS)
+    def acp_patch_organization(
+        request: Request, agent_id: str, body: SessionDecoration
+    ) -> JSONResponse:
+        row = patch_organization(organization_path(request, agent_id), body)
+        return _json(row.model_dump(exclude_defaults=True) if row else None)
 
     @app.get("/api/acp/agents", dependencies=admin_get)
     @access(ADMIN_ACCESS)

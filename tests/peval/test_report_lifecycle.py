@@ -919,11 +919,6 @@ def test_http_management_lease_deadline_preserves_commit_state(
 ):
     from psycheval import file_access, workspace_reports
 
-    monkeypatch.setattr(
-        workspace_reports,
-        "blocking_file_lease",
-        partial(file_access.blocking_file_lease, timeout_sec=0.05),
-    )
     with library_at(tmp_path) as runtime, report_server(runtime) as send:
         ref = (
             imported_report(runtime, tmp_path)[0]
@@ -938,7 +933,13 @@ def test_http_management_lease_deadline_preserves_commit_state(
             "delete": ("DELETE", "", None),
         }[operation]
         with runtime.workspace_reports._management_state_lease(ref):
-            status, headers, problem = send(method, path + suffix, body)
+            with monkeypatch.context() as contender:
+                contender.setattr(
+                    workspace_reports,
+                    "blocking_file_lease",
+                    partial(file_access.blocking_file_lease, timeout_sec=0.05),
+                )
+                status, headers, problem = send(method, path + suffix, body)
         if origin == "evaluation" and operation == "delete":
             assert status == 500
             assert problem["committed"] is True

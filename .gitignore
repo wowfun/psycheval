@@ -17,3 +17,5 @@ dist/
 .agents/skills/
 .env
 /jobs/
+.peval-copilot-*.json
+.peval-copilot-*.lock

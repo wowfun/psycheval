@@ -227,6 +227,8 @@ def inspect_document(
         )
     except EvidenceLimitError as error:
         raise DocumentLimitError(str(error)) from error
+    if len(snapshot.content) > limits.source_bytes:
+        raise DocumentLimitError("Document exceeds source byte limit")
     kind = format or snapshot.path.suffix.lower().lstrip(".")
     if kind not in {"pdf", "pptx", "xlsx", "docx"}:
         raise DocumentParseError(f"Unsupported document format: {kind}")
@@ -240,8 +242,6 @@ def inspect_document(
         raise MissingDocumentDependency(
             f"Missing dependency {missing!r}; install or repair psycheval[{kind}] before inspection"
         ) from error
-    if len(snapshot.content) > limits.source_bytes:
-        raise DocumentLimitError("Document exceeds source byte limit")
     try:
         if kind != "pdf":
             with zipfile.ZipFile(io.BytesIO(snapshot.content)) as archive:

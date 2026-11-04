@@ -9,8 +9,12 @@ rebuildable projections.
 | Canonical evaluation report | Harbor parent Trial or local source-cell `analysis.md` | Source-scoped publication and deletion through EvaluationReports; local Markdown imports use the same writer |
 | Portable steps, calls, observations, timestamps, usage | ATIF trajectory | Strictly validate before writing |
 | Aliases, state, notes, local analysis JSON, report bindings | Workspace overlay | Explicit user mutation |
+| Copilot session aliases, pins and archives | Workspace-root `.peval-copilot-<agent>.json`, keyed by session ID | Explicit administrator edit |
 | Imported report package | Workspace `reports/` directory | Explicit package mutation through WorkspaceReportLibrary |
 | Catalog rows, summaries, JSON/XLSX exports | Derived data | Rebuildable from authorities |
+
+Each Agent’s Copilot preferences survive restarts. A sibling `.lock` file coordinates
+concurrent edits across processes. Both files are local workspace state.
 
 ## Trajectories and sidecars
 

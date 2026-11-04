@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { startFixture, stopFixture } from "./fixture-process.mjs";
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 let fixture;
-test.beforeAll(async () => { fixture = await startFixture({PEVAL_E2E_IMAGES: "1"}); });
+test.beforeAll(async () => { fixture = await startFixture({PEVAL_E2E_IMAGES: "1", PEVAL_E2E_PAGED_SESSIONS:"1"}); });
 test.afterAll(async () => { await stopFixture(fixture); });
 
 test("image bytes, preview lifetime, mixed paste and page drop stay within the composer", async ({page}, testInfo) => {
@@ -88,12 +88,37 @@ test("Chinese image validation uses localized labels and preserves the draft", a
     await expect(chat.getByRole("alert")).toContainText("图片文件签名与 MIME 必须匹配");
     await expect(chat.locator("textarea")).toHaveValue("保留此草稿");
     await expect(chat.locator(".paui-composer-images img")).toHaveCount(0);
-    await chat.getByRole("button", {name:"添加到消息",exact:true}).click();
-    await chat.getByRole("menuitem", {name:"工作台引用",exact:true}).click();
+    await chat.getByRole("button", {name:"引用",exact:true}).click();
     await expect(page.locator(".acp-reference-picker").getByRole("checkbox", {name:"来源",exact:true})).toBeChecked();
     await page.locator(".acp-reference-picker").getByRole("button", {name:"取消",exact:true}).click();
     await expect(chat.locator("textarea")).toHaveValue("保留此草稿");
   } finally { await stopFixture(localized); }
+});
+
+test("Home reveals References when search selects the first available source in the background", async ({page}) => {
+  const sourcePage = await (await page.request.get(`${fixture.origin}/api/catalog`)).json();
+  const source = sourcePage.items[0];
+  await page.route("**/api/catalog?*", route => route.fulfill({json: {
+    ...sourcePage,
+    ...(!new URL(route.request().url()).searchParams.get("search")
+      ? {items: [], total: 0}
+      : {items: [source], total: 1}),
+  }}));
+  await page.goto(fixture.origin);
+  await page.getByRole("button", {name:"Copilot",exact:true}).click();
+  await page.getByRole("button", {name:"Connect",exact:true}).click();
+  const chat = page.locator("[data-acp-chat]");
+  const composer = chat.locator("textarea");
+  await composer.fill("Review this.");
+  const references = chat.getByRole("button", {name:"References",exact:true});
+  await expect(references).toHaveCount(0);
+  await page.locator("[data-leaderboard-search-input]").fill("e2e");
+  await expect(references).toBeVisible();
+  const request = page.waitForRequest("**/api/acp/reference-candidates");
+  await references.click();
+  expect((await request).postDataJSON().reference.source_key).toBe(source.source_key);
+  await page.locator(".acp-reference-picker").getByRole("button", {name:"Insert references"}).click();
+  await expect(composer).toHaveValue(/Review this\.\n\nsource_ref:/);
 });
 
 test("reference preview selection preserves checks and a cancelled suspended picker stays closed", async ({page}) => {
@@ -105,8 +130,7 @@ test("reference preview selection preserves checks and a cancelled suspended pic
   const composer = chat.locator("textarea");
   await composer.fill("Keep this draft.");
   const openPicker = async () => {
-    await chat.getByRole("button", {name:"Add to message",exact:true}).click();
-    await chat.getByRole("menuitem", {name:"Workbench references",exact:true}).click();
+    await chat.getByRole("button", {name:"References",exact:true}).click();
     await expect(page.locator(".acp-reference-picker")).toBeVisible();
   };
   await openPicker();
@@ -171,19 +195,149 @@ test("Retry in the chat restores the host Disconnect action", async ({page}) => 
   await expect(button).toHaveText("Connect");
 });
 
-test("the single menu supports nested keyboard navigation and focus restoration", async ({page}) => {
+test("flat template groups support keyboard navigation and focus restoration", async ({page}) => {
   await page.goto(fixture.origin);
   await page.getByRole("button", {name:"Copilot",exact:true}).click();
   await page.getByRole("button", {name:"Connect",exact:true}).click();
   const chat = page.locator("[data-acp-chat]");
-  const trigger = chat.getByRole("button", {name:"Add to message",exact:true});
+  const add = chat.getByRole("button", {name:"Add to message",exact:true});
+  const mode = chat.getByRole("combobox", {name:"Mode",exact:true});
+  await expect(mode).toBeVisible();
+  await expect(add).toBeEnabled();
+  for (const width of [1280,390]) {
+    await page.setViewportSize({width,height:850});
+    await add.focus();
+    await page.keyboard.press("Tab");
+    await expect(mode).toBeFocused();
+    const addBox = await add.boundingBox(), modeBox = await mode.boundingBox();
+    expect(addBox.x + addBox.width).toBeLessThanOrEqual(modeBox.x + 1);
+    await add.click();
+    const geometry = await chat.evaluate(host => {
+      const panel = host.shadowRoot.querySelector(".paui-composer-menu__panel");
+      const card = host.shadowRoot.querySelector(".paui-composer");
+      const a = panel.getBoundingClientRect(), b = card.getBoundingClientRect();
+      return {left: a.left-b.left, right:a.right-b.right, above:a.bottom<=b.top,
+        sameColor:getComputedStyle(panel).backgroundColor===getComputedStyle(card).backgroundColor};
+    });
+    expect(Math.abs(geometry.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(geometry.right)).toBeLessThanOrEqual(1);
+    expect(geometry.above && geometry.sameColor).toBe(true);
+    await page.keyboard.press("Escape");
+  }
+  const trigger = chat.getByRole("button", {name:"Prompts",exact:true});
   await trigger.click();
-  await chat.getByRole("menuitem", {name:/^Prompt templates/}).focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(chat.getByRole("menuitem", {name:/^English/})).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(chat.getByRole("menuitem", {name:/^Prompt templates/})).toBeFocused();
+  const english = chat.getByRole("group", {name:"English",exact:true});
+  const first = english.getByRole("menuitem").first();
+  await expect(first).toBeFocused();
+  await expect(first).toHaveCSS("outline-style", "none");
+  await expect(first).not.toHaveCSS("box-shadow", "none");
+  const preview = first.locator("small");
+  const text = await preview.textContent();
+  expect(text.trim().length).toBeGreaterThan(40);
+  await expect(first).toHaveAttribute("title", text);
+  await expect(first).toHaveAccessibleName("Evaluation review");
+  await expect(first).toHaveAccessibleDescription(text);
+  await expect(preview).toHaveCSS("text-overflow", "ellipsis");
+  expect(await preview.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(true);
+  const menu = chat.getByRole("menu", {name:"Prompts"});
+  expect(await menu.evaluate(node => getComputedStyle(node, "::-webkit-scrollbar").width)).toBe("8px");
+  await page.keyboard.press("ArrowDown");
+  await expect(english.getByRole("menuitem").nth(1)).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(trigger).toBeFocused();
   await expect(chat.getByRole("menu")).toHaveCount(0);
+});
+
+test("session organization is shared across browser contexts without writes on history open", async ({browser, page}) => {
+  const other = await browser.newContext({hasTouch:true, viewport:{width:390,height:844}});
+  const peer = await other.newPage();
+  const alias = "Shared investigation of the oldest scored evaluation in the workspace";
+  const connect = async view => {
+    await view.goto(fixture.origin);
+    await view.getByRole("button",{name:"Copilot",exact:true}).click();
+    await view.getByRole("button",{name:"Connect",exact:true}).click();
+    const chat = view.locator("[data-acp-chat]");
+    await expect(chat.locator("textarea")).toBeEnabled();
+    return chat;
+  };
+  const list = chat => chat.getByRole("button",{name:"Session",exact:true}).click();
+  const action = async (chat, title, name) => {
+    const row = chat.locator(".paui-session").filter({has:chat.page().locator(".paui-session__title",{hasText:title})});
+    await row.hover();
+    if (name !== "Rename session") {
+      const actions = row.locator(".paui-session__actions button");
+      await expect(actions.nth(0)).toHaveAccessibleName(`Actions for ${title}`);
+      await expect(actions.nth(1)).toHaveAccessibleName(/^(Archive|Restore) session$/);
+      await expect(actions.nth(2)).toHaveAccessibleName(/^(Pin|Unpin) session$/);
+      await expect(chat.getByRole("tooltip")).toContainText(title);
+      if (name === "Pin session") {
+        const [rowBox, tipBox] = await Promise.all([row.boundingBox(), chat.getByRole("tooltip").boundingBox()]);
+        expect(tipBox.x + tipBox.width).toBeLessThanOrEqual(rowBox.x);
+        expect(Math.abs(tipBox.y - rowBox.y)).toBeLessThanOrEqual(2);
+        const label = row.locator(".paui-session__title");
+        expect(await label.evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
+        await expect.poll(() => label.evaluate(el =>
+          el.firstElementChild.getBoundingClientRect().right - el.getBoundingClientRect().right
+        )).toBeLessThanOrEqual(1);
+      }
+      await row.getByRole("button",{name,exact:true}).click();
+      return;
+    }
+    await row.click({button:"right"});
+    await chat.getByRole("menuitem",{name,exact:true}).click();
+  };
+  try {
+    await page.emulateMedia({colorScheme:"dark"});
+    const first = await connect(page);
+    const cursors = [];
+    peer.on("websocket", socket => socket.on("framesent", frame => {
+      const data = JSON.parse(String(frame.payload));
+      if (data.method === "session/list") cursors.push(data.params.cursor);
+    }));
+    const second = await connect(peer);
+    const writes = [];
+    page.on("request", request => {if (request.url().endsWith("/organization") && request.method() === "PATCH") writes.push(request);});
+    await list(first);
+    await expect(first.locator(".pretty-aui")).toHaveCSS("color-scheme","light");
+    await first.locator(".paui-drawer > header strong").hover();
+    await expect(first.getByRole("button",{name:"Archived",exact:true})).toHaveCSS("background-color","rgba(0, 0, 0, 0)");
+    const group = first.locator(".paui-session-group").first();
+    await group.click();
+    await expect(group).toHaveAttribute("aria-expanded","false");
+    await expect(first.locator(".paui-session")).toHaveCount(0);
+    await group.click();
+    const titles = first.locator(".paui-session__title");
+    await first.getByRole("button",{name:/load more/i}).click();
+    await expect(titles).toContainText(["Previous page"]);
+    const order = await titles.allTextContents();
+    await first.getByRole("button",{name:"Previous page",exact:true}).click();
+    await list(first);
+    await expect(titles).toHaveText(order);
+    await expect(first.locator(".paui-session").filter({hasText:"Previous page"})).not.toContainText("Idle");
+    expect(writes).toHaveLength(0);
+    await action(first, "Previous page", "Rename session");
+    const rename = first.getByRole("textbox",{name:"Rename session"});
+    await expect(rename).toBeFocused();
+    await expect(rename).toHaveCSS("outline-style","none");
+    await rename.fill(alias);
+    await rename.press("Enter");
+    await expect(first.locator(".paui-header")).toContainText(alias);
+    await expect(first.getByRole("button", {name:`Actions for ${alias}`,exact:true})).toBeFocused();
+    await action(first, alias, "Pin session");
+    await expect(first.locator(".paui-session").first()).toContainText(alias);
+    await action(first, alias, "Archive session");
+    await expect(titles).not.toContainText([alias]);
+    await list(second);
+    await second.getByRole("button", {name:"Archived", exact:true}).click();
+    await expect(second.locator(".paui-session__title")).toHaveText([alias]);
+    expect(cursors).not.toContain("older");
+    const archivedRow = second.locator(".paui-session");
+    await expect(archivedRow.locator(".paui-session__quick").first()).toBeHidden();
+    const touchMenu = archivedRow.getByRole("button",{name:`Actions for ${alias}`});
+    await expect(touchMenu).toHaveCSS("opacity","1");
+    await touchMenu.tap();
+    await second.getByRole("menuitem",{name:"Restore session",exact:true}).tap();
+    await second.getByRole("dialog").getByRole("button",{name:"Session",exact:true}).click();
+    await expect(second.locator(".paui-session__title").first()).toHaveText(alias);
+  } finally { await other.close(); }
 });

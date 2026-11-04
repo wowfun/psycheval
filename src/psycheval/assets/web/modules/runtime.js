@@ -163,6 +163,7 @@ function render(view) {
   bindHomeControls();
   renderReportNotes(view.annotations?.report_notes || []);
   renderComparison({ trace: true });
+  window.dispatchEvent(new window.Event("peval:workspace-context"));
   if (!state.workspaceViewsLoaded) refreshWorkspaceViews();
 }
 function renderWorkspaceDescription() {

@@ -62,7 +62,7 @@ function openModalSurface(root, options = {}) {
   modalGestures.delete(root);
   document.querySelectorAll('[aria-modal="true"]').forEach(candidate => {
     const otherRoot = candidate.closest("[data-view-save-dialog],[data-admin-login-dialog]") || candidate;
-    if (otherRoot === root || otherRoot.hidden || otherRoot.contains(root)) return;
+    if (!boundModals.has(otherRoot) || otherRoot.hidden || otherRoot.contains(root)) return;
     if (otherRoot.matches(".action-form-overlay")) {
       suspendedModals.set(root, { root: otherRoot, focus: document.activeElement });
       modalGestures.delete(otherRoot);

@@ -227,6 +227,7 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
       }
 
       restoreScroll(target, hash);
+      window.dispatchEvent(new window.Event("peval:workspace-context"));
       if (options.focus !== false || hash) focusPage(target, hash);
       if (deferredRefresh.delete(target) && pending.get(target)?.size) {
         await app.navigate(target, { focus: false, history: false, throwOnError: options.throwOnError });
@@ -244,6 +245,7 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
           return;
         }
         writeLocation(page, kind);
+        window.dispatchEvent(new window.Event("peval:workspace-context"));
       }
       catch (error) { markStale(page, error); }
     },

@@ -26,10 +26,10 @@ function chooseReferences(items, signal) {
     root.hidden = true;
     root.setAttribute("role", "dialog");
     root.setAttribute("aria-modal", "true");
-    root.setAttribute("aria-label", t("acp_references", "Workbench references"));
+    root.setAttribute("aria-label", t("acp_references", "References"));
     const prefix = `acp-reference-${++pickerSequence}`;
     root.innerHTML = `<form class="action-form">
-      <h3>${esc(t("acp_references", "Workbench references"))}</h3>
+      <h3>${esc(t("acp_references", "References"))}</h3>
       ${items.map((item, index) => `<div class="acp-reference-choice"><label><input type="checkbox" value="${index}" aria-describedby="${prefix}-${index}" ${item.selected && item.text ? "checked" : ""} ${item.text ? "" : "disabled"}> <span>${esc(candidateLabel(item))}</span></label>
         ${item.reason ? `<small id="${prefix}-${index}">${esc(item.id === "truncated" ? t("acp_reference_truncated_hint", "Only the first 64 associated sources are shown; select a source directly for further references.") : item.reason)}</small>` : `<pre id="${prefix}-${index}">${esc(item.text)}</pre>`}</div>`).join("")}
       ${items.some(item => item.text) ? "" : `<p role="status">${esc(t("acp_references_unavailable", "No references are available for this object."))}</p>`}

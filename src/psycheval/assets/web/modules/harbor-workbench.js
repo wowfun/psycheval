@@ -194,6 +194,7 @@ function selectedOverviewKey() {
 function setOverviewSelection(row) {
   workbenchState.datasetId = row?.dataset?.id || null;
   workbenchState.taskName = row?.kind === "task" ? row.task?.directory || null : null;
+  window.dispatchEvent(new window.Event("peval:workspace-context"));
   workbenchState.trashEntryId = row?.kind === "trash" ? row.entry?.entry_id || null : null;
   workbenchState.taskDetail = null;
   workbenchState.taskRequestId += 1;

@@ -93,11 +93,15 @@ def test_document_fact_text_and_rendered_budgets(limited_document):
 
 @pytest.mark.parametrize("snapshot", [False, True])
 def test_inspection_source_limit_has_same_error_for_paths_and_snapshots(
-    tmp_path, snapshot
+    tmp_path, snapshot, monkeypatch
 ):
     path = tmp_path / "source.pdf"
     path.write_bytes(b"too large")
     value = SourceSnapshot.read(path) if snapshot else path
+    monkeypatch.setattr(
+        "psycheval.harbor.documents.importlib.import_module",
+        lambda name: pytest.fail(f"Loaded {name} for an oversized source"),
+    )
     with pytest.raises(DocumentLimitError, match="exceeds"):
         inspect_document(value, limits=DocumentLimits(source_bytes=1))
 

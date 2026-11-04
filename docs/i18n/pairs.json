@@ -3,7 +3,7 @@
     {
       "source": "docs/user/peval/index.md",
       "translation": "docs/i18n/zh-CN/user/peval/index.md",
-      "source_sha256": "ed7885a1a1655b71c62b03155f22bdc4db5d230c18f77f48246342b49a780c39"
+      "source_sha256": "cb2d12ec38463077a13b9afca421edee6251c52c40127a48c1f68102e2781df6"
     },
     {
       "source": "docs/user/peval/inputs-and-adapters.md",
@@ -18,7 +18,7 @@
     {
       "source": "docs/user/peval/workspace.md",
       "translation": "docs/i18n/zh-CN/user/peval/workspace.md",
-      "source_sha256": "dcd46e4b6b4a38a7610f95425e0c2b15c4b305fcbd6b43af91e92e08a78a1893"
+      "source_sha256": "f277b32482e176449bc88b5b390d249a61665b5ed0808280167b673f85371681"
     }
   ]
 }

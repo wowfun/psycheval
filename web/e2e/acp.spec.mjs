@@ -32,6 +32,33 @@ test("fixture exposes its isolated browser origin", async () => {
   expect(response.ok).toBe(true);
 });
 
+for (const width of [1440, 600]) {
+  test(`Copilot configuration link keeps Agent settings usable at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.route("**/api/acp/agents", route => route.fulfill({ json: { agents: [] } }));
+    await page.goto(fixture.origin);
+    const launcher = page.getByRole("button", { name: "Copilot", exact: true });
+    await launcher.click();
+    const drawer = page.locator("[data-acp-drawer]");
+    await drawer.getByRole("link", { name: "Configure agents" }).click();
+    await expect(page.locator("#acp-agents-title")).toBeFocused();
+    const add = page.locator("[data-acp-agent-form-open]");
+    if (width === 600) {
+      await expect(drawer).toBeHidden();
+      await expect(launcher).toHaveAttribute("aria-expanded", "false");
+    }
+    await add.click();
+    await page.locator("[data-acp-agent-form-cancel]").click();
+    await expect(add).toBeFocused();
+    if (width === 1440) {
+      await expect(drawer.locator("[data-acp-close]")).toBeInViewport();
+      await expect(launcher).toHaveAttribute("aria-expanded", "true");
+      await drawer.locator("[data-acp-close]").click();
+      await expect(launcher).toBeFocused();
+    }
+  });
+}
+
 test("every new Copilot session starts in plan mode", async ({ page }) => {
   await page.goto(fixture.origin);
   await page.getByRole("button", { name: "Copilot" }).click();
@@ -245,6 +272,7 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
   context,
   page,
 }) => {
+  await page.clock.setFixedTime(new Date(2026, 7, 29, 17, 30));
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const consoleErrors = [];
   const pageErrors = [];
@@ -316,10 +344,8 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
     "rgba(0, 0, 0, 0)",
   );
   const composer = chat.locator("textarea");
-  const add = chat.getByRole("button", { name: "Add to message" });
   await composer.fill("Review this evaluation.");
-  await add.click();
-  await chat.getByRole("menuitem", { name: "Workbench references" }).click();
+  await chat.getByRole("button", { name: "References", exact:true }).click();
   const picker = page.locator(".acp-reference-picker");
   await expect(picker).toBeVisible();
   await expect(picker.locator('input[type="checkbox"]').first()).toBeChecked();
@@ -331,7 +357,10 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
   await expect(chat.locator('[data-pretty-aui-slot="composer-context-item"]')).toHaveCount(0);
   await chat.locator(".paui-send").click();
   await expect(chat).toContainText("Synthetic response: the evaluation evidence is ready for review.");
+  const steps = chat.getByRole("button", {name:/Completed in/});
+  await steps.click();
   await expect(chat).toContainText("Explain the failure cluster");
+  await steps.click();
   await expect(chat.locator('[data-kind="context"]')).toHaveCount(0);
   await composer.fill("Review it one more time.");
   await chat.locator(".paui-send").click();
@@ -345,8 +374,6 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
     .locator('.paui-message[data-role="user"]');
   const firstUserTime = firstUserMessage.locator("time");
   await expect(firstUserTime).toHaveText(/^\d{2}:\d{2}$/);
-  await expect(firstUserTime).toHaveCSS("opacity", "0");
-  await firstUserMessage.hover();
   await expect(firstUserTime).toHaveCSS("opacity", "1");
   await page.mouse.move(0, 0);
   await firstUserMessage.getByRole("button", { name: "Copy" }).focus();
@@ -372,6 +399,7 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
     await page
       .locator(`.workspace-nav-link[data-workspace-route="${route}"]`)
       .click();
+    await expect(page.locator(`[data-workspace-page="${route}"]`)).toBeFocused();
     await expect(drawer).toBeVisible();
     await expect(chat).toHaveAttribute("data-navigation-identity", "preserved");
     await expect(chat).toContainText("Synthetic response");
@@ -391,12 +419,10 @@ test("vendored ACP chat runs under the workspace CSP and keeps drawer state", as
   expect(workspaceGeometry.scrollHeight).toBeGreaterThan(
     workspaceGeometry.clientHeight,
   );
-  const workspaceBox = await workspace.boundingBox();
-  if (!workspaceBox) throw new Error("missing Workspace geometry");
   await workspace.evaluate((element) => {
     element.scrollTop = 0;
   });
-  await page.mouse.move(workspaceBox.x + 24, workspaceBox.y + 120);
+  await workspace.getByRole("heading", { name: "Leaderboard", exact: true }).hover();
   await page.mouse.wheel(0, 500);
   await expect
     .poll(() => workspace.evaluate((element) => element.scrollTop))
@@ -576,6 +602,7 @@ test("structured Execute, Read, and Diff rows expose semantic cards and copies",
   await composer.press("Enter");
   await expect(chat).toContainText("Synthetic response");
 
+  await chat.getByRole("button",{name:/Completed in/}).last().click();
   const tools = chat.locator(".paui-tool");
   await expect(tools).toHaveCount(3);
   for (const tool of await tools.all()) await tool.locator("summary").click();
