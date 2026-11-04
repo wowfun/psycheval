@@ -15,7 +15,8 @@ async function startFixture(environment = {}) {
     output.push(text);
   });
   fixture.stderr.on("data", chunk => output.push(String(chunk)));
-  const deadline = Date.now() + 15_000;
+  // Leave time for tree cleanup within Playwright's 30-second beforeAll budget.
+  const deadline = Date.now() + 25_000;
   while (Date.now() < deadline) {
     if (fixture.exitCode !== null) {
       throw new Error(`ACP fixture exited early:\n${output.join("")}`);
@@ -40,6 +41,7 @@ async function startFixture(environment = {}) {
     }
     await new Promise(resolve => setTimeout(resolve, 50));
   }
+  await stopFixture(fixture);
   throw new Error(`ACP fixture did not become ready:\n${output.join("")}`);
 }
 
