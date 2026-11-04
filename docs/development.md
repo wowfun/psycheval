@@ -14,15 +14,18 @@ The browser test toolchain supports Node.js `^22.22.2`, `^24.15.0`, or `>=26.0.0
 Python runtime code lives under `src/psycheval`; all Python behavior tests live
 under `tests` and use normal package imports. Browser modules live under
 `src/psycheval/assets/web`, ship as authored ESM, and are exercised by the Node
-tests under `web` without an application bundle. The exception is the immutable
-`pretty-aui` standalone distribution under `assets/web/vendor`; do not edit
-generated assets directly. To update it, build the owning pretty-aui checkout
-and run `pnpm run vendor:pretty-aui /path/to/pretty-aui/dist/standalone`.
-Append `--check` to compare that build with the checked-in distribution without
-copying. Review the generated diff and run `pnpm run check` against the vendored
-assets. Normal installation and validation use those checked-in assets and do
-not require the upstream checkout or a second package archive. Its `LICENSE`
-and `THIRD_PARTY_LICENSES.txt` files must remain present.
+tests under `web` without an application bundle. The exception is the checked-in
+`pretty-aui` standalone under `src/psycheval/assets/web/vendor/pretty-aui`.
+Python wheels and browser tests use those files directly. To update them,
+download the tarball from the [pretty-aui releases](https://github.com/wowfun/pretty-aui/releases),
+extract it, and copy the complete standalone directory, including both licenses:
+
+```console
+node scripts/vendor-pretty-aui.mjs /path/to/package/dist/standalone
+node scripts/vendor-pretty-aui.mjs /path/to/package/dist/standalone --check
+```
+
+Review the vendor diff and run `pnpm run check` against the copied assets.
 
 Keep Harbor-specific adapters at the pinned public `0.24.0` seams under
 `psycheval.harbor`; package-wide CLI, trajectory, report, and workspace code
