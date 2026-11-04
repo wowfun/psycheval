@@ -24,20 +24,9 @@ async function startFixture(environment = {}) {
     const origin = stdout.match(
       /^PEVAL_E2E_ORIGIN=(http:\/\/127\.0\.0\.1:\d+)\r?$/m,
     )?.[1];
-    if (!origin) {
-      await new Promise(resolve => setTimeout(resolve, 50));
-      continue;
-    }
-    try {
-      const response = await fetch(new URL("/api/session", origin), {
-        signal: AbortSignal.timeout(250),
-      });
-      if (response.ok) {
-        fixture.origin = origin;
-        return fixture;
-      }
-    } catch {
-      // The fixture has not bound its listener yet.
+    if (origin) {
+      fixture.origin = origin;
+      return fixture;
     }
     await new Promise(resolve => setTimeout(resolve, 50));
   }
