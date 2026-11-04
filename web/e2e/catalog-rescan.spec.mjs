@@ -34,6 +34,7 @@ async function rescanScenario(page, { failed = false } = {}) {
     // Capture the old generation before holding a read so it can arrive after scan completion.
     const payload = {
       ...original, generation: original.generation + Number(completed), checking: false,
+      effective_sort: query.get("sort") || "last_turn_end",
       total: completed ? 3 : 2, page: Number(query.get("page")), page_size: Number(query.get("page_size")),
       items: [{ ...row, task_name: completed ? "rescanned-office" : row.task_name }],
     };

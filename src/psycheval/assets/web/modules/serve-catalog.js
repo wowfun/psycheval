@@ -511,7 +511,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
       : await serveApi(`/api/catalog?${queryString}`, { signal: controller.signal });
     if (isStale()) return;
     state.catalogPage = page;
-    if (page.effective_sort && page.effective_sort !== state.catalogQuery.sort) {
+    if (page.effective_sort && page.effective_sort !== catalogSortKey(state.catalogQuery.sort)) {
       state.catalogQuery.sort = page.effective_sort; state.catalogQuery.direction = "desc";
       tableControls("leaderboard").sort = tableSortKey(page.effective_sort);
       workspaceLocationChanged("home");
