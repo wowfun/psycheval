@@ -63,7 +63,7 @@ test("Dataset forms retain failures and register a quoted native absolute path",
   expect(removed.status()).toBe(202);
   const operation = await removed.json();
   await expect.poll(async () => (await (await page.request.get(`${fixture.origin}/api/operations/${operation.id}`)).json()).state).toBe("succeeded");
-  await page.locator("[data-harbor-config-reload]").click();
+  await page.reload();
   await expect(page.locator("[data-harbor-dataset-registry]")).not.toContainText("prepared");
   await page.locator("[data-harbor-register-dataset]").click();
   dialog = page.locator(".action-form-overlay");

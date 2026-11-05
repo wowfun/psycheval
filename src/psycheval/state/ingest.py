@@ -224,9 +224,6 @@ class StateIngestMixin:
             self.update_source_status(source, "error", str(exc), timestamp)
             self.log_refresh(source_key, "error", 0, str(exc), timestamp)
 
-    def harbor_source_keys(self, config: ToolConfig) -> list[str]:
-        return WorkspaceSources(self, config).source_keys()
-
     def store_report_for_source(
         self,
         source_key: str,

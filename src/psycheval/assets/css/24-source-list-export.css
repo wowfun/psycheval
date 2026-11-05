@@ -26,6 +26,9 @@
   flex:0 0 auto;
   max-width:100%;
 }
+.catalog-progress {
+  font-variant-numeric:tabular-nums;
+}
 .leaderboard-action-row {
   flex-wrap:wrap;
 }

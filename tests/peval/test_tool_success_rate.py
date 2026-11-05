@@ -1,8 +1,8 @@
 import pytest
 
 from psycheval.report.metrics import automatic_analysis_metrics, tool_success_rate
-from psycheval.state.catalog import _saved_view_summary
 from psycheval.state.catalog_projection import catalog_summary
+from psycheval.state.catalog_summaries import summarize_rows
 
 
 @pytest.mark.parametrize(
@@ -56,7 +56,7 @@ def test_success_rate_percentiles_are_recomputed_from_each_measured_trial():
         {"total_tool_calls": calls, "total_tool_errors": errors}
         for calls, errors in [(10, 0), (10, 2), (10, 10), (0, 0), (10, None)]
     ]
-    summary = _saved_view_summary("all", "overall", rows)
+    summary = summarize_rows("all", "overall", rows)
     metric = next(
         item
         for item in summary["groups"][0]["metrics"]

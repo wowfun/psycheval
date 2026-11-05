@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
 import sqlite3
 import threading
 import uuid
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,13 +20,14 @@ from psycheval.file_access import FileLeaseTimeout, blocking_file_lease
 from psycheval.metric_contract import (
     BUILTIN_IDS,
     METRIC_LIMIT,
-    SAVED_VIEW_METRIC_IDS,
     finite_number,
     metric_descriptions,
     validate_metric_id_syntax,
 )
-from psycheval.report.metrics import tool_success_rate
+from psycheval.state import catalog_summaries
+from psycheval.state.catalog_discovery import SharedObservations
 from psycheval.state.catalog_projection import catalog_summary
+from psycheval.state.catalog_summaries import CatalogSummaryCapacityError
 from psycheval.state.evaluation_report_catalog import (
     evaluation_report_location,
     replace_evaluation_report_projection,
@@ -40,22 +40,18 @@ from psycheval.state.workspace_sources import (
     WorkspaceSources,
 )
 
-CATALOG_SCHEMA_VERSION = 19
+CATALOG_SCHEMA_VERSION = 21
 CATALOG_PROJECTION_VERSION = 11
+_ACTIVE_SCAN_PHASES = frozenset({"discovering", "checking", "committing"})
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
 SUMMARY_CACHE_ENTRY_LIMIT = 128
 SUMMARY_CACHE_BYTE_LIMIT = 16 * 1024 * 1024
-SUMMARY_GROUP_LIMIT = 1_000
 CATALOG_RELATIVE_PATH = Path(".cache/peval/serve-catalog.sqlite3")
 TASK_DIRECTORY_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$")
 
 
 class CatalogBusyError(RuntimeError):
-    pass
-
-
-class CatalogSummaryCapacityError(ValueError):
     pass
 
 
@@ -191,6 +187,27 @@ class OperationStatus:
         }
 
 
+def _valid_metric_values(row: dict[str, Any]) -> bool:
+    metrics = row.get("metric_values", {})
+    return isinstance(metrics, dict) and all(
+        finite_number(value) is not None for value in metrics.values()
+    )
+
+
+def _cached_row(raw: str, source_key: str) -> dict[str, Any] | None:
+    try:
+        row = json.loads(raw)
+    except (ValueError, RecursionError):
+        return None
+    if (
+        isinstance(row, dict)
+        and row.get("source_key") == source_key
+        and _valid_metric_values(row)
+    ):
+        return row
+    return None
+
+
 class WorkspaceCatalog:
     """Serve-only derived index over canonical Trial-cell artifacts."""
 
@@ -202,7 +219,14 @@ class WorkspaceCatalog:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._state_lock = threading.RLock()
         self._writer_lock = threading.Lock()
-        self._checking = False
+        self._writer_busy = False
+        self._scan_progress: dict[str, Any] = {
+            "phase": "idle",
+            "completed": 0,
+            "total": None,
+        }
+        self._scan_error: str | None = None
+        self._scan_operation_id: str | None = None
         self._current_operation: OperationStatus | None = None
         self._recent_operation: OperationStatus | None = None
         self._query_summary_cache: OrderedDict[
@@ -215,9 +239,41 @@ class WorkspaceCatalog:
         self._prepare_database()
 
     @property
+    def writer_busy(self) -> bool:
+        with self._state_lock:
+            return self._writer_busy
+
+    @property
     def checking(self) -> bool:
         with self._state_lock:
-            return self._checking
+            return self._scan_progress["phase"] in _ACTIVE_SCAN_PHASES
+
+    def scan_status(self) -> dict[str, Any]:
+        with self._state_lock:
+            status = {
+                **self._scan_progress,
+                "error": self._scan_error,
+                "operation_id": self._scan_operation_id,
+            }
+        # Read publication after progress so a completed scan includes its generation.
+        with self._connect(readonly=True) as connection:
+            valid = self._meta_int(connection, "valid_generation", 0) == 1
+            generation = self._meta_int(connection, "generation", 0) if valid else 0
+        checking = status["phase"] in _ACTIVE_SCAN_PHASES
+        return {
+            **status,
+            "generation": generation,
+            "checking": checking,
+            "stale": checking and valid,
+        }
+
+    def _scan_update(self, phase: str, completed: int, total: int | None) -> None:
+        with self._state_lock:
+            self._scan_progress = {
+                "phase": phase,
+                "completed": completed,
+                "total": total,
+            }
 
     @property
     def generation(self) -> int:
@@ -235,13 +291,18 @@ class WorkspaceCatalog:
                 "serve catalog is busy with another writer operation"
             )
         with self._state_lock:
-            self._checking = True
+            if self._writer_busy:
+                self._writer_lock.release()
+                raise CatalogBusyError(
+                    "serve catalog is busy with another writer operation"
+                )
+            self._writer_busy = True
         try:
             with self._workspace_writer_lease():
                 return self._reconcile_locked()
         finally:
             with self._state_lock:
-                self._checking = False
+                self._writer_busy = False
             self._writer_lock.release()
 
     def query(
@@ -254,14 +315,15 @@ class WorkspaceCatalog:
     ) -> CatalogPage:
         query = query.normalized()
         normalized_any_queries = tuple(item.normalized() for item in any_queries)
+        checking = self.checking
         with self._connect(readonly=True) as connection:
             generation = self._meta_int(connection, "generation", 0)
             valid = self._meta_int(connection, "valid_generation", 0) == 1
             if not valid:
                 return CatalogPage(
                     generation=0,
-                    checking=self.checking,
-                    stale=self.checking,
+                    checking=checking,
+                    stale=checking,
                     total=0,
                     page=query.page,
                     page_size=query.page_size,
@@ -328,8 +390,8 @@ class WorkspaceCatalog:
             )
         return CatalogPage(
             generation=generation,
-            checking=self.checking,
-            stale=self.checking,
+            checking=checking,
+            stale=checking,
             total=total,
             page=query.page,
             page_size=query.page_size,
@@ -353,8 +415,10 @@ class WorkspaceCatalog:
                 "serve catalog is busy with another writer operation"
             )
         try:
-            if self.checking:
-                raise CatalogBusyError("serve catalog is checking runs")
+            if self.writer_busy:
+                raise CatalogBusyError(
+                    "serve catalog is busy with another writer operation"
+                )
             normalized = query.normalized()
             resolved_any_queries = (
                 any_queries() if callable(any_queries) else any_queries
@@ -423,8 +487,10 @@ class WorkspaceCatalog:
                 "serve catalog is busy with another writer operation"
             )
         try:
-            if self.checking:
-                raise CatalogBusyError("serve catalog is checking runs")
+            if self.writer_busy:
+                raise CatalogBusyError(
+                    "serve catalog is busy with another writer operation"
+                )
             yield
         finally:
             self._writer_lock.release()
@@ -442,16 +508,17 @@ class WorkspaceCatalog:
             (str(name), query.normalized(), str(group_by))
             for name, query, group_by in views
         ]
+        checking = self.checking
         with self._connect(readonly=True) as connection:
             generation = self._meta_int(connection, "generation", 0)
             valid = self._meta_int(connection, "valid_generation", 0) == 1
             if not valid:
                 return {
                     "generation": 0,
-                    "checking": self.checking,
-                    "stale": self.checking,
+                    "checking": checking,
+                    "stale": checking,
                     "views": [
-                        _saved_view_summary(name, group_by, [])
+                        catalog_summaries.summarize_rows(name, group_by, [])
                         for name, _query, group_by in normalized
                     ],
                 }
@@ -459,12 +526,12 @@ class WorkspaceCatalog:
             summaries: list[dict[str, Any]] = []
             for name, query, group_by in normalized:
                 where, parameters = self._query_where(query)
-                rows = _summary_rows(connection, where, parameters)
-                summaries.append(_saved_view_summary(name, group_by, rows))
+                rows = catalog_summaries.summary_rows(connection, where, parameters)
+                summaries.append(catalog_summaries.summarize_rows(name, group_by, rows))
         return {
             "generation": generation,
-            "checking": self.checking,
-            "stale": self.checking,
+            "checking": checking,
+            "stale": checking,
             "views": summaries,
             **metadata,
         }
@@ -514,20 +581,26 @@ class WorkspaceCatalog:
         """Summarize one complete query from a committed catalog generation."""
         normalized = query.normalized()
         normalized_any = tuple(item.normalized() for item in any_queries)
+        checking = self.checking
         with self._connect(readonly=True) as connection:
             generation = self._meta_int(connection, "generation", 0)
             valid = self._meta_int(connection, "valid_generation", 0) == 1
             if not valid:
                 return {
                     "generation": 0,
-                    "checking": self.checking,
-                    "stale": self.checking,
-                    "summary": _saved_view_summary(name, group_by, []),
+                    "checking": checking,
+                    "stale": checking,
+                    "summary": catalog_summaries.summarize_rows(name, group_by, []),
                 }
             cache_key = (
                 generation,
-                _summary_query_scope(normalized),
-                tuple(sorted(_summary_query_scope(item) for item in normalized_any)),
+                catalog_summaries.summary_query_scope(normalized),
+                tuple(
+                    sorted(
+                        catalog_summaries.summary_query_scope(item)
+                        for item in normalized_any
+                    )
+                ),
                 str(name),
                 str(group_by),
             )
@@ -538,15 +611,15 @@ class WorkspaceCatalog:
             if cached_entry is not None:
                 return {
                     "generation": generation,
-                    "checking": self.checking,
-                    "stale": self.checking,
+                    "checking": checking,
+                    "stale": checking,
                     "summary": cached_entry[0],
                     **self.metric_metadata(connection),
                 }
             where, parameters = self._combined_query_where(normalized, normalized_any)
-            rows = _summary_rows(connection, where, parameters)
+            rows = catalog_summaries.summary_rows(connection, where, parameters)
             metadata = self.metric_metadata(connection)
-            summary = _saved_view_summary(
+            summary = catalog_summaries.summarize_rows(
                 name,
                 group_by,
                 rows,
@@ -555,8 +628,8 @@ class WorkspaceCatalog:
         self._cache_query_summary(cache_key, summary)
         return {
             "generation": generation,
-            "checking": self.checking,
-            "stale": self.checking,
+            "checking": checking,
+            "stale": checking,
             "summary": summary,
             **metadata,
         }
@@ -730,10 +803,7 @@ class WorkspaceCatalog:
         action: Callable[[Any], Any],
     ) -> OperationStatus:
         with self._state_lock:
-            if self._checking or (
-                self._current_operation is not None
-                and self._current_operation.state in {"queued", "running"}
-            ):
+            if self._writer_busy or self._writer_lock.locked():
                 raise CatalogBusyError(
                     "serve catalog is busy with another writer operation"
                 )
@@ -745,7 +815,7 @@ class WorkspaceCatalog:
                 total=len(items),
             )
             self._current_operation = status
-            self._checking = True
+            self._writer_busy = True
         threading.Thread(
             target=self._run_operation,
             args=(status, list(items), action),
@@ -759,10 +829,12 @@ class WorkspaceCatalog:
                 "serve catalog is busy with another writer operation"
             )
         with self._state_lock:
-            if self._checking:
+            if self._writer_busy:
                 self._writer_lock.release()
-                raise CatalogBusyError("serve catalog is checking runs")
-            self._checking = True
+                raise CatalogBusyError(
+                    "serve catalog is busy with another writer operation"
+                )
+            self._writer_busy = True
         try:
             with self._workspace_writer_lease():
                 result = action()
@@ -770,7 +842,7 @@ class WorkspaceCatalog:
                 return generation, result
         finally:
             with self._state_lock:
-                self._checking = False
+                self._writer_busy = False
             self._writer_lock.release()
 
     def mutate_with_background_reconcile(
@@ -786,8 +858,10 @@ class WorkspaceCatalog:
         status: OperationStatus | None = None
         try:
             with self._state_lock:
-                if self._checking:
-                    raise CatalogBusyError("serve catalog is checking runs")
+                if self._writer_busy:
+                    raise CatalogBusyError(
+                        "serve catalog is busy with another writer operation"
+                    )
             with self._workspace_writer_lease():
                 result = action()
             status = OperationStatus(
@@ -799,7 +873,7 @@ class WorkspaceCatalog:
             )
             with self._state_lock:
                 self._current_operation = status
-                self._checking = True
+                self._writer_busy = True
         finally:
             self._writer_lock.release()
         assert status is not None
@@ -836,7 +910,7 @@ class WorkspaceCatalog:
                 )
         finally:
             with self._state_lock:
-                self._checking = False
+                self._writer_busy = False
                 self._recent_operation = status
                 self._current_operation = status
 
@@ -905,16 +979,50 @@ class WorkspaceCatalog:
                 )
         finally:
             with self._state_lock:
-                self._checking = False
+                self._writer_busy = False
                 self._recent_operation = status
                 self._current_operation = status
 
     def _reconcile_locked(self) -> int:
-        candidates = self.sources.discover()
+        with self._state_lock:
+            self._scan_error = None
+            operation = self._current_operation
+            self._scan_operation_id = (
+                operation.operation_id
+                if operation is not None and operation.state == "running"
+                else None
+            )
+            self._scan_update("discovering", 0, None)
+        try:
+            generation = self._build_generation()
+        except Exception as exc:
+            with self._state_lock:
+                self._scan_error = str(exc)
+                self._scan_progress["phase"] = "failed"
+            raise
+        with self._state_lock:
+            self._scan_progress["phase"] = "idle"
+        return generation
+
+    def _build_generation(self) -> int:
         config = self.sources.config
         task_roots: dict[str, tuple[tuple[str, Path], ...]] = {}
         with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+            # Project one root at a time into connection-private, disk-spillable
+            # tables. Main-database reads finish before the next filesystem walk.
+            connection.isolation_level = None
+            connection.execute(
+                "CREATE TEMP TABLE projected AS SELECT * FROM cells LIMIT 0"
+            )
+            connection.execute(
+                "CREATE UNIQUE INDEX temp.projected_key ON projected(source_key)"
+            )
+            connection.execute(
+                "CREATE UNIQUE INDEX temp.projected_ref ON projected(source_ref)"
+            )
+            connection.execute(
+                "CREATE TEMP TABLE scans AS SELECT * FROM source_scans LIMIT 0"
+            )
             projection_current = (
                 self._meta_int(connection, "projection_version", -1)
                 == CATALOG_PROJECTION_VERSION
@@ -929,158 +1037,229 @@ class WorkspaceCatalog:
                     "SELECT source_ref, fingerprint, source_key, row_json FROM cells"
                 )
             }
-            seen: set[str] = set()
-            for candidate in candidates:
-                source_ref = candidate.source_ref
-                seen.add(source_ref)
-                prior = existing.get(source_ref)
-                row = None
-                if (
-                    projection_current
-                    and prior is not None
-                    and prior[0] == candidate.fingerprint
-                ):
-                    try:
-                        cached = json.loads(prior[2])
-                    except (ValueError, RecursionError):
-                        cached = None
-                    if (
-                        isinstance(cached, dict)
-                        and cached.get("source_key") == prior[1]
-                    ):
-                        row = cached
-                if row is not None:
-                    task_ref = _live_task_ref(row, config, task_roots=task_roots)
-                    dataset_id = task_ref["dataset_id"] if task_ref else None
-                    if row.get("dataset_id") != dataset_id:
-                        row["dataset_id"] = dataset_id
-                        # Dataset identity is display/query state, not source search evidence.
-                        connection.execute(
-                            "UPDATE cells SET dataset = ?, row_json = ? WHERE source_ref = ?",
-                            (
-                                dataset_id,
-                                json.dumps(
-                                    row, ensure_ascii=False, separators=(",", ":")
-                                ),
-                                source_ref,
-                            ),
-                        )
-                    continue
-                document = self.sources.load(candidate)
-                row, readable, search_doc = self._row_for_document(document)
-                task_ref = _live_task_ref(row, config, task_roots=task_roots)
-                row["dataset_id"] = task_ref["dataset_id"] if task_ref else None
-                source_key = str(row["source_key"])
-                connection.execute(
-                    "DELETE FROM cells WHERE source_ref = ? OR source_key = ?",
-                    (source_ref, source_key),
-                )
-                if prior is not None and prior[1] != source_key:
-                    connection.execute(
-                        "DELETE FROM cell_search WHERE source_key = ?", (prior[1],)
-                    )
-                connection.execute(
-                    "DELETE FROM cell_search WHERE source_key = ?", (source_key,)
-                )
-                connection.execute(
-                    """
-                    INSERT INTO cells (
-                        source_key, source_ref, fingerprint, artifact_revision,
-                        readable, active, last_status, search_doc, category, tags_json,
-                        agent, model, result, task, job, provider, dataset, reward,
-                        session_id, last_turn_end, duration_ms, turns, tool_calls,
-                        tool_errors, tokens, cost_usd, ttft_ms, tps, cache_hit_rate,
-                        created_at_ms, updated_at_ms, row_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        source_key,
-                        source_ref,
-                        document.fingerprint,
-                        document.fingerprint,
-                        int(readable),
-                        int(bool(row.get("active", True))),
-                        str(row.get("last_status") or ""),
-                        search_doc,
-                        str(row.get("source_category") or ""),
-                        json.dumps(
-                            row.get("display_tags") or row.get("source_tags") or [],
-                            ensure_ascii=False,
-                        ),
-                        str(row.get("agent_name") or row.get("adapter") or ""),
-                        str(row.get("model") or ""),
-                        str(row.get("status") or row.get("last_status") or ""),
-                        str(row.get("task_name") or ""),
-                        str(row.get("job_name") or ""),
-                        str(row.get("model_provider") or ""),
-                        row["dataset_id"],
-                        row.get("score"),
-                        str(row.get("session_id") or row.get("trial_session_id") or ""),
-                        optional_int(row.get("last_turn_finished_at_ms")),
-                        row.get("duration_ms"),
-                        row.get("turns"),
-                        row.get("total_tool_calls"),
-                        row.get("total_tool_errors"),
-                        row.get("tokens"),
-                        row.get("cost_usd"),
-                        row.get("ttft_ms"),
-                        row.get("tps"),
-                        row.get("cache_hit_rate"),
-                        int(row.get("created_at_ms") or 0),
-                        int(row.get("updated_at_ms") or 0),
-                        json.dumps(row, ensure_ascii=False, separators=(",", ":")),
-                    ),
-                )
-                connection.execute(
-                    "DELETE FROM metric_values WHERE source_key = ?", (source_key,)
-                )
-                connection.executemany(
-                    "INSERT INTO metric_values(source_key, metric_id, value) VALUES (?, ?, ?)",
-                    [
-                        (source_key, key, float(value))
-                        for key, value in row.get("metric_values", {}).items()
-                    ],
-                )
-                connection.execute(
-                    "INSERT INTO cell_search(source_key, search_doc) VALUES (?, ?)",
-                    (source_key, search_doc),
-                )
-            removed = [
-                (source_ref, source_key)
-                for source_ref, (_, source_key, _) in existing.items()
-                if source_ref not in seen
-            ]
-            for source_ref, source_key in removed:
-                connection.execute(
-                    "DELETE FROM cells WHERE source_ref = ?", (source_ref,)
-                )
-                if (
-                    connection.execute(
-                        "SELECT 1 FROM cells WHERE source_key = ?", (source_key,)
-                    ).fetchone()
-                    is None
-                ):
-                    connection.execute(
-                        "DELETE FROM cell_search WHERE source_key = ?", (source_key,)
-                    )
-            connection.execute(
-                "DELETE FROM metric_values WHERE source_key NOT IN (SELECT source_key FROM cells)"
+            source_counts = Counter(
+                "/".join(ref.split("/")[:4])
+                for ref in existing
+                if ref.startswith("harbor/")
             )
-            ids = set(BUILTIN_IDS) | {
+            known = {
                 row[0]
-                for row in connection.execute(
-                    "SELECT DISTINCT metric_id FROM metric_values"
-                )
+                for row in connection.execute("SELECT source_ref FROM source_scans")
             }
-            if len(ids) > METRIC_LIMIT:
-                raise CatalogSummaryCapacityError(
-                    "Workspace exceeds 128 numeric metrics; reduce source metric keys and rescan. Previous catalog retained."
-                )
-            connection.execute("DELETE FROM metric_registry")
+
+            def cached_candidates(ref: str, manifest: str) -> tuple[str, int] | None:
+                result = connection.execute(
+                    "SELECT candidates_json FROM source_scans WHERE source_ref = ? AND dependencies_json = ?",
+                    (ref, manifest),
+                ).fetchone()
+                return (result[0], source_counts[ref]) if result else None
+
+            # The generator checks the whole root before yielding it. Keep its
+            # decoded rows only until this iteration has consumed the batch.
+            decoded: dict[str, dict[str, Any]] = {}
+
+            def reusable(source_ref: str, fingerprint: str, source_key: str) -> bool:
+                prior = existing.get(source_ref)
+                if (
+                    not projection_current
+                    or prior is None
+                    or prior[:2] != (fingerprint, source_key)
+                ):
+                    return False
+                row = _cached_row(prior[2], source_key)
+                if row is None:
+                    return False
+                decoded[source_ref] = row
+                return True
+
+            seen: set[str] = set()
+            scanned: list[str] = []
+            dataset_updates = []
+            changed = False
+            for batch in self.sources.catalog_batches(
+                known,
+                cached_candidates,
+                reusable,
+                SharedObservations(),
+                self._scan_update,
+            ):
+                entries = []
+                for candidate in batch.candidates:
+                    source_ref = candidate.source_ref
+                    seen.add(source_ref)
+                    prior = existing.get(source_ref)
+                    row = decoded.pop(source_ref, None) if batch.reused else None
+                    if (
+                        row is None
+                        and not batch.dependencies_json
+                        and projection_current
+                        and prior is not None
+                        and prior[0] == candidate.fingerprint
+                    ):
+                        row = _cached_row(prior[2], prior[1])
+                    if row is not None:
+                        task_ref = _live_task_ref(row, config, task_roots=task_roots)
+                        dataset_id = task_ref["dataset_id"] if task_ref else None
+                        if row.get("dataset_id") != dataset_id:
+                            row["dataset_id"] = dataset_id
+                            # Dataset identity is display/query state, not source search evidence.
+                            dataset_updates.append(
+                                (
+                                    dataset_id,
+                                    json.dumps(
+                                        row, ensure_ascii=False, separators=(",", ":")
+                                    ),
+                                    source_ref,
+                                ),
+                            )
+                        continue
+                    document = self.sources.load(candidate)
+                    row, readable, search_doc = self._row_for_document(document)
+                    if not _valid_metric_values(row):
+                        raise ValueError(
+                            f"Invalid catalog metric values for {source_ref}"
+                        )
+                    task_ref = _live_task_ref(row, config, task_roots=task_roots)
+                    row["dataset_id"] = task_ref["dataset_id"] if task_ref else None
+                    source_key = str(row["source_key"])
+                    changed = True
+                    connection.execute(
+                        """
+                        INSERT OR REPLACE INTO projected (
+                            source_key, source_ref, fingerprint, artifact_revision,
+                            readable, active, last_status, search_doc, category, tags_json,
+                            agent, model, result, task, job, provider, dataset, reward,
+                            session_id, last_turn_end, duration_ms, turns, tool_calls,
+                            tool_errors, tokens, cost_usd, ttft_ms, tps, cache_hit_rate,
+                            created_at_ms, updated_at_ms, row_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            source_key,
+                            source_ref,
+                            document.fingerprint,
+                            document.fingerprint,
+                            int(readable),
+                            int(bool(row.get("active", True))),
+                            str(row.get("last_status") or ""),
+                            search_doc,
+                            str(row.get("source_category") or ""),
+                            json.dumps(
+                                row.get("display_tags") or row.get("source_tags") or [],
+                                ensure_ascii=False,
+                            ),
+                            str(row.get("agent_name") or row.get("adapter") or ""),
+                            str(row.get("model") or ""),
+                            str(row.get("status") or row.get("last_status") or ""),
+                            str(row.get("task_name") or ""),
+                            str(row.get("job_name") or ""),
+                            str(row.get("model_provider") or ""),
+                            row["dataset_id"],
+                            row.get("score"),
+                            str(
+                                row.get("session_id")
+                                or row.get("trial_session_id")
+                                or ""
+                            ),
+                            optional_int(row.get("last_turn_finished_at_ms")),
+                            row.get("duration_ms"),
+                            row.get("turns"),
+                            row.get("total_tool_calls"),
+                            row.get("total_tool_errors"),
+                            row.get("tokens"),
+                            row.get("cost_usd"),
+                            row.get("ttft_ms"),
+                            row.get("tps"),
+                            row.get("cache_hit_rate"),
+                            int(row.get("created_at_ms") or 0),
+                            int(row.get("updated_at_ms") or 0),
+                            json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                        ),
+                    )
+                    if batch.dependencies_json:
+                        entries.append(
+                            {
+                                "source_ref": source_ref,
+                                "source_key": source_key,
+                                "fingerprint": document.fingerprint,
+                            }
+                        )
+                decoded.clear()
+                if batch.reused or entries:
+                    scanned.append(batch.source_ref)
+                if entries:
+                    connection.execute(
+                        "INSERT INTO scans VALUES (?, ?, ?)",
+                        (
+                            batch.source_ref,
+                            batch.dependencies_json,
+                            json.dumps(
+                                entries, ensure_ascii=False, separators=(",", ":")
+                            ),
+                        ),
+                    )
+
+            with self._state_lock:
+                self._scan_progress["phase"] = "committing"
+            connection.execute("BEGIN IMMEDIATE")
             connection.executemany(
-                "INSERT INTO metric_registry(metric_id) VALUES (?)",
-                [(key,) for key in sorted(ids)],
+                "UPDATE cells SET dataset = ?, row_json = ? WHERE source_ref = ?",
+                dataset_updates,
             )
+            if changed:
+                connection.execute(
+                    """DELETE FROM cell_search WHERE source_key IN (
+                        SELECT source_key FROM projected UNION ALL
+                        SELECT source_key FROM cells WHERE source_ref IN (SELECT source_ref FROM projected))"""
+                )
+                connection.execute(
+                    "INSERT OR REPLACE INTO cells SELECT * FROM projected"
+                )
+                connection.execute(
+                    "DELETE FROM metric_values WHERE source_key IN (SELECT source_key FROM projected)"
+                )
+                connection.execute(
+                    """INSERT INTO metric_values SELECT p.source_key, m.key, m.value
+                       FROM projected p, json_each(p.row_json, '$.metric_values') m"""
+                )
+                connection.execute(
+                    "INSERT INTO cell_search SELECT source_key, search_doc FROM projected"
+                )
+                connection.execute(
+                    "INSERT OR REPLACE INTO source_scans SELECT * FROM scans"
+                )
+            connection.execute(
+                "DELETE FROM source_scans WHERE source_ref NOT IN (SELECT value FROM json_each(?))",
+                (json.dumps(scanned),),
+            )
+            removed = [ref for ref in existing if ref not in seen]
+            if removed:
+                connection.execute(
+                    "DELETE FROM cells WHERE source_ref IN (SELECT value FROM json_each(?))",
+                    (json.dumps(removed),),
+                )
+                connection.execute(
+                    "DELETE FROM cell_search WHERE source_key NOT IN (SELECT source_key FROM cells)"
+                )
+            if changed or removed or not projection_current:
+                connection.execute(
+                    "DELETE FROM metric_values WHERE source_key NOT IN (SELECT source_key FROM cells)"
+                )
+                ids = set(BUILTIN_IDS) | {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT DISTINCT metric_id FROM metric_values"
+                    )
+                }
+                if len(ids) > METRIC_LIMIT:
+                    raise CatalogSummaryCapacityError(
+                        "Workspace exceeds 128 numeric metrics; reduce source metric keys and rescan. Previous catalog retained."
+                    )
+                connection.execute("DELETE FROM metric_registry")
+                connection.executemany(
+                    "INSERT INTO metric_registry(metric_id) VALUES (?)",
+                    [(key,) for key in sorted(ids)],
+                )
             replace_evaluation_report_projection(connection)
             generation = self._meta_int(connection, "generation", 0) + 1
             self._set_meta(connection, "generation", str(generation))
@@ -1321,6 +1500,11 @@ class WorkspaceCatalog:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS source_scans (
+                source_ref TEXT PRIMARY KEY,
+                dependencies_json TEXT NOT NULL,
+                candidates_json TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS cells (
                 source_key TEXT PRIMARY KEY,
                 source_ref TEXT NOT NULL UNIQUE,
@@ -1477,176 +1661,6 @@ class WorkspaceCatalog:
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
-
-
-def _summary_query_scope(query: CatalogQuery) -> tuple[Any, ...]:
-    return (
-        query.state,
-        query.search,
-        tuple(sorted(query.categories)),
-        tuple(sorted(query.tags)),
-        tuple(sorted(query.agents)),
-        tuple(sorted(query.models)),
-        tuple(sorted(query.results)),
-        tuple(sorted(query.tasks)),
-        tuple(sorted(query.jobs)),
-        tuple(sorted(query.providers)),
-        tuple(sorted(query.datasets)),
-        query.include_unreadable,
-    )
-
-
-def _summary_rows(
-    connection: sqlite3.Connection,
-    where: str,
-    parameters: Sequence[Any],
-) -> Iterator[dict[str, Any]]:
-    records = connection.execute(
-        f"""SELECT cells.source_key, category AS source_category, agent AS agent_name,
-                   model, task AS task_name, job AS job_name, provider AS model_provider,
-                   metric_id, value
-            FROM cells LEFT JOIN metric_values USING(source_key)
-            WHERE {where} ORDER BY cells.source_key""",
-        parameters,
-    )
-    current = None
-    for record in records:
-        if current is None or current["source_key"] != record["source_key"]:
-            if current is not None:
-                yield current
-            current = dict(record)
-            current["metric_values"] = {}
-        if record["metric_id"] is not None:
-            current["metric_values"][record["metric_id"]] = record["value"]
-    if current is not None:
-        yield current
-
-
-@dataclass
-class _SummaryGroupValues:
-    count: int = 0
-    metrics: dict[str, list[float]] = field(default_factory=dict)
-
-
-def _saved_view_summary(
-    name: str,
-    group_by: str,
-    rows: Iterable[dict[str, Any]],
-    metric_ids: Sequence[str] = SAVED_VIEW_METRIC_IDS,
-) -> dict[str, Any]:
-    grouped: dict[str | None, _SummaryGroupValues] = {}
-    if group_by == "overall":
-        grouped["overall"] = _SummaryGroupValues()
-    matched_count = 0
-    for row in rows:
-        matched_count += 1
-        key = _saved_view_group_key(row, group_by)
-        values = grouped.get(key)
-        if values is None:
-            if len(grouped) >= SUMMARY_GROUP_LIMIT:
-                raise CatalogSummaryCapacityError(
-                    f"grouped summaries support at most {SUMMARY_GROUP_LIMIT} groups; "
-                    "refine the query or use an overall summary"
-                )
-            values = _SummaryGroupValues()
-            grouped[key] = values
-        values.count += 1
-        for metric_key in metric_ids:
-            metric_value = _saved_view_metric_value(row, metric_key)
-            if metric_value is not None:
-                values.metrics.setdefault(metric_key, []).append(metric_value)
-    groups = [
-        {
-            "key": key,
-            "label": "-" if key is None else key,
-            "count": group_values.count,
-            "metrics": _saved_view_metric_rows(group_values.metrics, metric_ids),
-        }
-        for key, group_values in sorted(
-            grouped.items(),
-            key=lambda item: (
-                ("-" if item[0] is None else item[0]).casefold(),
-                item[0] is not None,
-            ),
-        )
-    ]
-    return {
-        "name": name,
-        "group_by": group_by,
-        "matched_count": matched_count,
-        "groups": groups,
-    }
-
-
-def _saved_view_group_key(row: dict[str, Any], group_by: str) -> str | None:
-    if group_by == "overall":
-        return "overall"
-    if group_by == "model":
-        return str(row.get("model") or "-")
-    if group_by == "category":
-        category = str(row.get("source_category") or "").strip()
-        return category or None
-    if group_by == "task":
-        return str(row.get("task_name") or "-")
-    if group_by == "job":
-        return str(row.get("job_name") or "-")
-    if group_by == "provider":
-        return str(row.get("model_provider") or "-")
-    return str(row.get("agent_name") or row.get("adapter") or "-")
-
-
-def _saved_view_metric_rows(
-    metric_values: dict[str, list[float]],
-    metric_ids: Sequence[str],
-) -> list[dict[str, Any]]:
-    metrics: list[dict[str, Any]] = []
-    for key in metric_ids:
-        values = metric_values.get(key, [])
-        metrics.append(
-            {
-                "key": key,
-                "count": len(values),
-                "mean": math.fsum(value / len(values) for value in values)
-                if values
-                else None,
-                "distribution": _saved_view_distribution(values),
-            }
-        )
-    return metrics
-
-
-def _saved_view_metric_value(row: dict[str, Any], key: str) -> float | None:
-    if "metric_values" in row:
-        return finite_number(row["metric_values"].get(key))
-    if key != "tool_success_rate":
-        return finite_number(row.get(key))
-    return tool_success_rate(row.get("total_tool_calls"), row.get("total_tool_errors"))
-
-
-def _saved_view_distribution(values: list[float]) -> dict[str, float] | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    return {
-        "min": ordered[0],
-        "q1": _saved_view_percentile(ordered, 25),
-        "p50": _saved_view_percentile(ordered, 50),
-        "q3": _saved_view_percentile(ordered, 75),
-        "p95": _saved_view_percentile(ordered, 95),
-        "max": ordered[-1],
-    }
-
-
-def _saved_view_percentile(ordered: list[float], percentile: int) -> float:
-    if len(ordered) == 1:
-        return ordered[0]
-    position = (len(ordered) - 1) * (percentile / 100)
-    lower = int(position)
-    upper = min(len(ordered) - 1, lower + 1)
-    if lower == upper:
-        return ordered[lower]
-    fraction = position - lower
-    return ordered[lower] * (1 - fraction) + ordered[upper] * fraction
 
 
 def _report_with_live_task_ref(

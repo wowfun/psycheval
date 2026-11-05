@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from dataclasses import replace
 from itertools import chain
 from threading import Event, Lock, Thread
 from typing import Any, Callable, Sequence
@@ -154,6 +155,19 @@ class ServeRuntime:
         with self._lock:
             return self._load_error
 
+    def catalog_status(self) -> dict[str, Any]:
+        with self._lock:
+            loading = self._loading
+            load_error = self._load_error
+        status = self.catalog.scan_status()
+        if loading:
+            status["checking"] = True
+            status["stale"] = bool(status["generation"])
+            if status["phase"] == "idle":
+                status.update(phase="discovering", completed=0, total=None)
+        status["error"] = load_error or status["error"]
+        return status
+
     def set_config(self, config: ToolConfig) -> None:
         effective_timezone = resolve_timezone(config.timezone)
         with self._lock:
@@ -230,12 +244,19 @@ class ServeRuntime:
         inline_views: Sequence[CatalogQuery] = (),
     ) -> CatalogPage:
         bound_refs = self.workspace_reports.bound_source_refs()
-        return self.catalog.query(
+        page = self.catalog.query(
             query,
             any_queries=self.workspace_view_queries(
                 view_names, browser_views, inline_views
             ),
             workspace_report_source_refs=tuple(bound_refs),
+        )
+        with self._lock:
+            loading = self._loading
+        return (
+            replace(page, checking=True, stale=bool(page.generation))
+            if loading
+            else page
         )
 
     def workspace_view_queries(

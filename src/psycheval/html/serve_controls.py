@@ -113,8 +113,6 @@ def render_serve_configuration_page(
                     render_source_add_form("path", messages, adapter_defaults),
                 ]
             ),
-            "RELOAD": escape(messages["serve_reload"]),
-            "RESCAN": escape(messages["serve_rescan"]),
             "TRAJECTORY_INGESTION": escape(messages["serve_trajectory_ingestion"]),
             "TRAJECTORY_INGESTION_COPY": escape(
                 messages["serve_trajectory_ingestion_copy"]

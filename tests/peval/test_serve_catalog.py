@@ -7,7 +7,6 @@ import shutil
 import sqlite3
 import tempfile
 import threading
-import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -22,18 +21,19 @@ from psycheval.state import (
     CatalogBusyError,
     CatalogQuery,
     WorkspaceCatalog,
+    catalog_summaries,
     open_workspace_state,
 )
 from psycheval.state.catalog import (
     CATALOG_PROJECTION_VERSION,
     CATALOG_SCHEMA_VERSION,
-    SUMMARY_GROUP_LIMIT,
     CatalogSummaryCapacityError,
     _count_matching_source_refs,
-    _summary_rows,
 )
+from psycheval.state.catalog_summaries import SUMMARY_GROUP_LIMIT
 from psycheval.state.workspace_source_models import SourceDocument
 from tests.peval.cli_inputs_support import write_trial_cell_artifacts
+from tests.peval.serve_state_support import wait_catalog_operation
 from tests.peval.test_atif_contract import valid_trajectory
 
 
@@ -500,9 +500,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
                     with self.assertRaisesRegex(CatalogBusyError, "writer operation"):
                         catalog.mutate(lambda: None)
                     release.set()
-                    completed = self._wait_catalog_operation(
-                        catalog, status.operation_id
-                    )
+                    completed = wait_catalog_operation(catalog, status.operation_id)
                 self.assertEqual(completed.state, "completed")
                 self.assertEqual(completed.completed, 1)
                 self.assertEqual(completed.failures, [])
@@ -520,9 +518,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
                     self.assertEqual(
                         committed_file.read_text(encoding="utf-8"), "saved"
                     )
-                    failed = self._wait_catalog_operation(
-                        catalog, failed_status.operation_id
-                    )
+                    failed = wait_catalog_operation(catalog, failed_status.operation_id)
                 self.assertEqual(failed.state, "failed")
                 self.assertEqual(committed_file.read_text(encoding="utf-8"), "saved")
                 self.assertIn("reconcile failed", failed.failures[0]["error"])
@@ -538,19 +534,6 @@ class WorkspaceCatalogTests(unittest.TestCase):
         store = open_workspace_state(str(root))
         config = ToolConfig(workspace_root=str(root), analysis_eval_slug=slug)
         return store, WorkspaceCatalog(store, config)
-
-    def _wait_catalog_operation(
-        self,
-        catalog: WorkspaceCatalog,
-        operation_id: str,
-    ):
-        deadline = time.monotonic() + 5
-        status = catalog.operation(operation_id)
-        while status.state in {"queued", "running"} and time.monotonic() < deadline:
-            time.sleep(0.01)
-            status = catalog.operation(operation_id)
-        self.assertNotIn(status.state, {"queued", "running"}, status.to_dict())
-        return status
 
     def write_cell(
         self,
@@ -875,8 +858,8 @@ class WorkspaceCatalogTests(unittest.TestCase):
             try:
                 catalog.reconcile()
                 with patch(
-                    "psycheval.state.catalog._summary_rows",
-                    wraps=_summary_rows,
+                    "psycheval.state.catalog_summaries.summary_rows",
+                    wraps=catalog_summaries.summary_rows,
                 ) as summary_rows:
                     first = catalog.summarize_query(
                         CatalogQuery(), name="Leaderboard Summary", group_by="agent"
@@ -911,8 +894,8 @@ class WorkspaceCatalogTests(unittest.TestCase):
                         1,
                     ),
                     patch(
-                        "psycheval.state.catalog._summary_rows",
-                        wraps=_summary_rows,
+                        "psycheval.state.catalog_summaries.summary_rows",
+                        wraps=catalog_summaries.summary_rows,
                     ) as summary_rows,
                 ):
                     first = catalog.summarize_query(
@@ -938,16 +921,17 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 first_generation = catalog.reconcile()
                 self.write_cell(root, 2)
                 reconciled = False
+                read_rows = catalog_summaries.summary_rows
 
                 def reconcile_before_rows(connection, where, parameters):
                     nonlocal reconciled
                     if not reconciled:
                         reconciled = True
                         self.assertEqual(catalog.reconcile(), first_generation + 1)
-                    return _summary_rows(connection, where, parameters)
+                    return read_rows(connection, where, parameters)
 
                 with patch(
-                    "psycheval.state.catalog._summary_rows",
+                    "psycheval.state.catalog_summaries.summary_rows",
                     side_effect=reconcile_before_rows,
                 ):
                     payload = catalog.summarize_query(
@@ -978,7 +962,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 )
                 with (
                     patch(
-                        "psycheval.state.catalog._summary_rows",
+                        "psycheval.state.catalog_summaries.summary_rows",
                         return_value=rows,
                     ),
                     self.assertRaisesRegex(
@@ -995,7 +979,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
                     for index in range(SUMMARY_GROUP_LIMIT + 1)
                 )
                 with patch(
-                    "psycheval.state.catalog._summary_rows",
+                    "psycheval.state.catalog_summaries.summary_rows",
                     return_value=rows,
                 ):
                     overall = catalog.summarize_query(

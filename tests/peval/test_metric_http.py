@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from tests.peval import test_serve_catalog_http as support
+from tests.peval import catalog_http_support as support
 from tests.peval.cli_inputs_support import write_trial_cell_artifacts
 
 
@@ -15,7 +15,7 @@ def metric_server(tmp_path):
         session_id="session",
         trial_key="trial",
     )
-    helper = support.ServeCatalogHttpTests()
+    helper = support.CatalogHttpTestCase()
     store, runtime, server, thread = helper.running_server(tmp_path)
     try:
         yield lambda payload: helper.request(server, "POST", "/api/exports", payload)

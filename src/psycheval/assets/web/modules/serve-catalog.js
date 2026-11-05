@@ -10,7 +10,7 @@ import { renderServeSourceStateControls } from "./source-state-controls.js";
 import { emptyServeReport, reloadExpiredAdminSession, serveApi, setServeStatus } from "./serve-effects.js";
 import { refreshWorkspaceReports, renderAttachWorkspaceReportAction } from "./workspace-reports.js";
 import { clearWorkspaceViewConditions, refreshWorkspaceViews, workspaceViewQueryPayload, workspaceViews } from "./workspace-views.js";
-import { workspaceLocationChanged } from "../app/workspace-runtime.js";
+import { refreshWorkspace, workspaceLocationChanged } from "../app/workspace-runtime.js";
 import { bindWorkspaceLinkButtons, workspaceLinkButton } from "./workspace-links.js";
 import { selectedTrajectoryDetail, trajectoryFamily } from "./trajectory-family.js";
 import { catalogSortKey, tableSortKey } from "../app/catalog-sort.js";
@@ -146,8 +146,11 @@ function filterOptions(column, rows) {
 
 function renderLeaderboardPanelControls(rows) {
   const selectedCount = state.rowSelection.size;
+  const progress = catalogProgressText();
   return `<div class="leaderboard-actions">
-    <div class="leaderboard-action-row">${workspaceLinkButton()}${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardColumnControls(rows)}${renderLeaderboardExportControls()}</div>
+    <div class="leaderboard-action-row">${workspaceLinkButton()}${adminMode() ? `<button class="action-button" type="button" data-catalog-refresh ${state.workspaceWriteBusy ? 'disabled aria-busy="true" data-busy-previous-disabled="false"' : ""}>${esc(t("serve_refresh", "Refresh"))}</button>` : ""}${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardColumnControls(rows)}${renderLeaderboardExportControls()}</div>
+    <p class="copy catalog-progress" data-catalog-progress ${progress ? "" : "hidden"}>${esc(progress)}</p>
+    <span class="sr-only" data-catalog-phase role="status">${esc(catalogPhaseText())}</span>
     ${state.sharedViewSnapshots.length ? `<p class="copy" data-shared-view-conditions>${esc(t("shared_view_conditions", "Shared conditions"))}: ${state.sharedViewSnapshots.map(view => esc(view.name)).join(" · ")}</p>` : ""}
     <div class="catalog-page-controls" data-catalog-page-controls>
       <button type="button" class="action-button icon-only" data-catalog-prev aria-label="${esc(t("previous", "Previous"))}" ${state.catalogPage.page <= 1 ? "disabled" : ""}>‹</button>
@@ -179,6 +182,7 @@ function catalogPageLabel() {
 
 function bindLeaderboardCatalogControls(target) {
   if (!target) return;
+  target.querySelector("[data-catalog-refresh]")?.addEventListener("click", () => refreshServeSourcesFromServer());
   bindWorkspaceLinkButtons(target, "home");
   target.querySelector("[data-catalog-prev]")?.addEventListener("click", event => {
     event.stopPropagation();
@@ -453,6 +457,105 @@ async function loadLeaderboardSummary() {
 
 let catalogRequestId = 0;
 let catalogAbort = null;
+let catalogStatusController = null;
+let catalogStatusTimer = null;
+let catalogStatusActive = false;
+let latestCatalogStatus = null;
+let catalogChecking = false;
+let submittingCatalogWrite = false;
+const busyCatalogOperations = new Set();
+let manualCatalogOperationId = null;
+let catalogReadCompleted = false;
+
+function catalogProgressText() {
+  const status = latestCatalogStatus;
+  if (!status?.checking) return "";
+  if (status.phase === "committing") return t("serve_index_committing", "Publishing index");
+  if (status.phase === "discovering" || status.total == null) {
+    return t("serve_index_discovering", "Discovering trajectories: {count} found").replace("{count}", String(status.completed || 0));
+  }
+  return t("serve_index_checking", "Checking trajectories: {completed}/{total}")
+    .replace("{completed}", String(status.completed || 0)).replace("{total}", String(status.total));
+}
+
+function catalogPhaseText() {
+  if (!latestCatalogStatus?.checking) return "";
+  switch (latestCatalogStatus.phase) {
+    case "discovering": return t("serve_index_discovery_phase", "Discovering trajectories");
+    case "checking": return t("serve_index_check_phase", "Checking trajectories");
+    case "committing": return t("serve_index_committing", "Publishing index");
+    default: return "";
+  }
+}
+
+function renderCatalogProgress() {
+  const target = document.querySelector("[data-catalog-progress]");
+  if (!target) return;
+  const text = catalogProgressText();
+  if (target.textContent !== text) target.textContent = text;
+  target.hidden = !text;
+  const phase = document.querySelector("[data-catalog-phase]");
+  const phaseText = catalogPhaseText();
+  if (phase && phase.textContent !== phaseText) phase.textContent = phaseText;
+}
+
+function stopCatalogStatusObservation() {
+  catalogStatusActive = false;
+  clearTimeout(catalogStatusTimer);
+  catalogStatusController?.abort();
+  catalogStatusController = null;
+}
+
+function startCatalogStatusObservation(checkingPage = false) {
+  stopCatalogStatusObservation();
+  catalogStatusActive = true;
+  const controller = new AbortController();
+  catalogStatusController = controller;
+  const current = () => !controller.signal.aborted;
+  let retryCheckingRead = checkingPage === true;
+  async function poll() {
+    if (!current()) return;
+    if (busyCatalogOperations.has(manualCatalogOperationId)) { catalogStatusController = null; return; }
+    try {
+      const status = await serveApi("/api/catalog-status", { signal: controller.signal });
+      if (!current()) return;
+      retryCheckingRead = Boolean(status.checking);
+      latestCatalogStatus = status;
+      renderCatalogProgress();
+      catalogChecking = Boolean(status.checking);
+      syncCatalogWriteControls();
+      if (status.error && (!status.operation_id || status.operation_id !== manualCatalogOperationId)) {
+        beginFeedback("#leaderboard .leaderboard-action-row", { key: "home:catalog-status", page: "home" }).error(status.error);
+      } else if (document.querySelector('[data-action-feedback="home:catalog-status"]')) {
+        beginFeedback("#leaderboard .leaderboard-action-row", { key: "home:catalog-status", page: "home" }).clear();
+      }
+      const newer = catalogReadCompleted && Number(status.generation) > Number(state.catalogPage?.generation || 0);
+      if (status.checking || state.catalogLoading || (newer && submittingCatalogWrite && !busyCatalogOperations.size)) {
+        catalogStatusTimer = setTimeout(poll, 250);
+      } else {
+        catalogStatusController = null;
+        if (newer && !busyCatalogOperations.has(status.operation_id)) await refreshWorkspace("catalog");
+      }
+    } catch (error) {
+      if (!current()) return;
+      if (catalogChecking && retryCheckingRead) {
+        retryCheckingRead = false;
+        catalogStatusTimer = setTimeout(poll, 250);
+        return;
+      }
+      if (catalogStatusController === controller) catalogStatusController = null;
+      beginFeedback("#leaderboard .leaderboard-action-row", { key: "home:catalog-status", page: "home" }).error(error.message || String(error), {
+        action: { label: t("feedback_retry", "Check again"), run: startCatalogStatusObservation },
+      });
+    }
+  }
+  return poll();
+}
+
+window.addEventListener("peval:workspace-navigate", event => {
+  if (event.detail?.to !== "home") stopCatalogStatusObservation();
+});
+window.addEventListener("pagehide", stopCatalogStatusObservation);
 function cancelHomeLocationRequests() {
   clearTimeout(state.catalogSearchTimer);
   catalogAbort?.abort();
@@ -511,6 +614,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
       : await serveApi(`/api/catalog?${queryString}`, { signal: controller.signal });
     if (isStale()) return;
     state.catalogPage = page;
+    catalogReadCompleted = true;
     if (page.effective_sort && page.effective_sort !== catalogSortKey(state.catalogQuery.sort)) {
       state.catalogQuery.sort = page.effective_sort; state.catalogQuery.direction = "desc";
       tableControls("leaderboard").sort = tableSortKey(page.effective_sort);
@@ -520,7 +624,6 @@ async function loadCatalogPage(changes = {}, options = {}) {
     state.serveSourceMode = normalizeServeSourceMode(state.catalogQuery.state);
     state.serveSources = listValue(page.items);
     state.catalogRows = listValue(page.items).filter(row => row?.readable !== false).map(normalizeCatalogRow);
-    state.serveLoading = Boolean(page.checking && !page.generation);
     if (page.generation && page.generation !== previousGeneration) await resolveCatalogSelections(controller.signal);
     if (isStale()) return;
     const summaryRequest = document.getElementById("comparison")
@@ -528,11 +631,10 @@ async function loadCatalogPage(changes = {}, options = {}) {
       : Promise.resolve(null);
     void summaryRequest.then(renderCatalogComparison);
     renderCatalogComparison();
-    setWorkspaceWriteControlsDisabled(Boolean(page.checking));
-    if (page.checking) {
-      setServeStatus(t("serve_scanning_runs", "Checking runs"));
-      setTimeout(() => loadCatalogPage({}, { force: true }), 200);
-    } else {
+    catalogChecking = Boolean(page.checking || (catalogStatusActive && latestCatalogStatus?.checking));
+    syncCatalogWriteControls();
+    if (page.checking && catalogStatusActive && !catalogStatusController && !busyCatalogOperations.has(manualCatalogOperationId)) void startCatalogStatusObservation(true);
+    if (!page.checking) {
       setServeStatus("");
       if (wasChecking || (previousGeneration && previousGeneration !== Number(page.generation || 0))) {
         await refreshSourceCategoryOptions();
@@ -760,15 +862,29 @@ function applyServeMutationPayload(payload, options = {}) {
   return loadCatalogPage({}, { force: true, throwOnError: options.throwOnError });
 }
 
-async function applyServeSourceStateMutationPayload(payload, options = {}) {
-  return applyServeMutationPayload(payload, options);
-}
-
 async function pollCatalogOperation(operationId, options = {}) {
   const feedback = options.feedback || beginFeedback("#leaderboard .leaderboard-action-row", { key: `home:operation:${operationId}`, page: "home" });
   await watchOperation(operationId, {
-    feedback, onBusy: setWorkspaceWriteControlsDisabled,
+    feedback, showProgress: !options.discovery,
+    onProgress(operation) {
+      if (operation.catalog_status) {
+        catalogChecking = Boolean(operation.catalog_status.checking);
+        latestCatalogStatus = operation.catalog_status;
+        if (catalogStatusActive) renderCatalogProgress();
+      }
+    },
+    onBusy(busy) {
+      if (busy) busyCatalogOperations.add(operationId);
+      else busyCatalogOperations.delete(operationId);
+      syncCatalogWriteControls();
+      if (options.discovery && !busy && catalogStatusActive) void startCatalogStatusObservation();
+    },
     async onComplete(operation) {
+      if (operation.kind === "source-discovery") {
+        if (latestCatalogStatus?.operation_id === operationId) latestCatalogStatus = { ...latestCatalogStatus, checking: false };
+        await refreshWorkspace("catalog");
+        return;
+      }
       const successfulIndexes = new Set(listValue(operation.successes).map(item => Number(item.index)));
       listValue(options.sourceKeys).forEach((key, index) => { if (successfulIndexes.has(index)) state.rowSelection.delete(key); });
       if (!await loadCatalogPage({}, { force: true })) throw new Error(t("feedback_unknown", "The operation result is temporarily unavailable"));
@@ -776,9 +892,28 @@ async function pollCatalogOperation(operationId, options = {}) {
     },
   });
 }
-function setWorkspaceWriteControlsDisabled(disabled) {
+function syncCatalogWriteControls() {
+  const busy = catalogChecking || submittingCatalogWrite || busyCatalogOperations.size > 0;
+  if (busy !== Boolean(state.workspaceWriteBusy)) setWorkspaceWriteControlsDisabled(busy);
+}
+
+async function submitCatalogWrite(path, body, options = {}) {
+  submittingCatalogWrite = true;
+  syncCatalogWriteControls();
+  try {
+    const payload = await serveApi(path, { method: "POST", body });
+    if (options.discovery) manualCatalogOperationId = payload?.id || null;
+    await applyServeMutationPayload(payload, options);
+    if (options.discovery && !payload?.id) await refreshSourceCategoryOptions();
+  } finally {
+    submittingCatalogWrite = false;
+    syncCatalogWriteControls();
+  }
+}
+
+function setWorkspaceWriteControlsDisabled(disabled, root = document) {
   state.workspaceWriteBusy = Boolean(disabled);
-  document.querySelectorAll("[data-refresh-all],[data-refresh-sources],[data-source-add-form] button[type=submit],[data-harbor-add-mount],[data-harbor-remove-mounts],[data-source-state-action],[data-source-delete-action],[data-source-refresh-action]").forEach(control => {
+  root.querySelectorAll("[data-catalog-refresh],[data-source-add-form] button[type=submit],[data-harbor-add-mount],[data-harbor-remove-mounts],[data-source-state-action],[data-source-delete-action],[data-source-refresh-action]").forEach(control => {
     if (disabled) {
       if (!Object.prototype.hasOwnProperty.call(control.dataset, "busyPreviousDisabled")) {
         control.dataset.busyPreviousDisabled = control.disabled ? "true" : "false";
@@ -796,23 +931,16 @@ function setWorkspaceWriteControlsDisabled(disabled) {
 }
 
 async function refreshServeSourcesFromServer() {
-  if (!adminMode()) return;
+  if (!adminMode() || state.workspaceWriteBusy) return;
   const feedback = beginFeedback("#leaderboard .leaderboard-action-row", { page: "home", key: "home:rescan" });
+  feedback.pending(t("serve_index_check_phase", "Checking trajectories"));
   try {
-    const payload = await serveApi("/api/source-discovery-operations", {
-      method: "POST",
-      body: {},
-    });
-    await applyServeMutationPayload(payload, { feedback });
-    if (!payload?.id) await refreshSourceCategoryOptions();
+    await submitCatalogWrite("/api/source-discovery-operations", {}, { feedback, discovery: true });
   } catch (error) {
     feedback.set(error.message || String(error), true);
   }
 }
 
-async function refreshServeReportFromServer() {
-  return refreshServeSourcesFromServer();
-}
 
 function exportCurrentScope(kind) {
   if (kind === "xlsx") {
@@ -876,7 +1004,6 @@ export {
   applyLeaderboardSearchMode,
   applyServeDetailSelection,
   applyServeMutationPayload,
-  applyServeSourceStateMutationPayload,
   bindLeaderboardCatalogControls,
   catalogPageEnd,
   catalogPageLabel,
@@ -899,7 +1026,8 @@ export {
   metaFor,
   normalizeCatalogRow,
   pollCatalogOperation,
-  refreshServeReportFromServer,
+  startCatalogStatusObservation,
+  stopCatalogStatusObservation,
   refreshServeSourcesFromServer,
   renderLeaderboardPanelControls,
   renderLeaderboardSearchControls,
@@ -913,6 +1041,7 @@ export {
   selectServeSource,
   serveDownload,
   setWorkspaceWriteControlsDisabled,
+  submitCatalogWrite,
   sourceForTrialIndex,
   sourceForTrialKey,
   sourceKeyForTrialKey,

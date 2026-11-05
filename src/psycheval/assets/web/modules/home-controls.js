@@ -1,7 +1,6 @@
 // @ts-check
 
 import { beginNotesEdit, cancelNotesEdit, saveSelectedNotes } from "./analysis-notes.js";
-import { refreshServeReportFromServer, refreshServeSourcesFromServer } from "./serve-catalog.js";
 import { SUBMENU_DETAILS_SELECTOR, closeOpenSubmenus, selectedKey, state } from "./runtime.js";
 import { closeAllSidebars, closeTopmostSidebar } from "./sidebar.js";
 import { bindWorkspaceViewDialog, closeWorkspaceViewSaveDialog } from "./workspace-views.js";
@@ -48,12 +47,6 @@ function bindHomeControls() {
     }
   });
   window.addEventListener("resize", () => state.timelineChart?.resize?.());
-  document.querySelectorAll("[data-refresh-all]").forEach(button => {
-    button.addEventListener("click", () => refreshServeReportFromServer());
-  });
-  document.querySelectorAll("[data-refresh-sources]").forEach(button => {
-    button.addEventListener("click", () => refreshServeSourcesFromServer());
-  });
   bindWorkspaceViewDialog();
 }
 

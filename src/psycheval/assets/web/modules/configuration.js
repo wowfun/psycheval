@@ -447,8 +447,6 @@ function bindConfigurationActions() {
   });
   root.querySelector("[data-prompt-save]")?.addEventListener("click", savePromptAsset);
   root.querySelector("[data-prompt-reset]")?.addEventListener("click", resetPromptAsset);
-  root.querySelector("[data-harbor-config-reload]")?.addEventListener("click", reloadConfiguration);
-  root.querySelector("[data-source-config-rescan]")?.addEventListener("click", rescanTrajectorySources);
   root.removeAttribute("inert");
 }
 function bindConfigurationSourceControls(root) {
@@ -546,12 +544,6 @@ function closeAcpAgentForm(options = {}) {
     document.querySelector("[data-acp-agent-form-panel]"),
     options,
   );
-}
-async function reloadConfiguration() {
-  if (promptConfigState.dirty && !window.confirm(t("serve_prompt_discard_confirm", "Discard unsaved prompt changes?"))) return;
-  promptConfigState.dirty = false;
-  promptConfigState.renderedId = "";
-  await refreshHarborConfig();
 }
 function parseAcpArgs(value) {
   let parsed;
@@ -707,19 +699,6 @@ async function resetPromptAsset() {
   } catch (error) {
     setConfigurationBusy(false);
     await showPromptConflict(error, prompt, feedback);
-  }
-}
-async function rescanTrajectorySources() {
-  const feedback = beginFeedback('[aria-labelledby="trajectory-ingestion-title"]', { page: "config" });
-  try {
-    setConfigurationBusy(true);
-    feedback.pending(t("serve_scanning_runs", "Checking runs"));
-    const operation = await serveApi("/api/source-discovery-operations", { method: "POST", body: {} });
-    setConfigurationBusy(false);
-    await pollConfigurationOperation(operation.id, null, feedback);
-  } catch (error) {
-    setConfigurationBusy(false);
-    feedback.set(error.message || String(error), true);
   }
 }
 async function pollConfigurationOperation(operationId, sourceForm = null, feedback = null, committed = false) {

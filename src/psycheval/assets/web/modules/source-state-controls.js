@@ -1,12 +1,11 @@
 import { beginFeedback } from "./action-feedback.js";
 import { adminMode, currentServeSourceMode, esc, listValue, readableServeSourcesFrom, state, t } from "./runtime.js";
-import { serveApi } from "./serve-effects.js";
-import { applyServeMutationPayload, applyServeSourceStateMutationPayload, leaderboardRows, setWorkspaceWriteControlsDisabled, sourceForTrialKey, switchServeSourceMode, visibleSelectedSourceKeys } from "./serve-catalog.js";
+import { leaderboardRows, setWorkspaceWriteControlsDisabled, submitCatalogWrite, sourceForTrialKey, switchServeSourceMode, visibleSelectedSourceKeys } from "./serve-catalog.js";
 
 function renderSourceRefreshControl(trialKey) {
   const source = sourceForTrialKey(trialKey);
   if (!adminMode() || !source?.refreshable) return "";
-  return `<button class="action-button" type="button" data-source-refresh-action data-source-key="${esc(source.source_key)}" ${state.workspaceWriteBusy ? "disabled" : ""}>${esc(t("serve_refresh_source", "Refresh source"))}</button>`;
+  return `<button class="action-button" type="button" data-source-refresh-action data-source-key="${esc(source.source_key)}" ${state.workspaceWriteBusy ? 'disabled aria-busy="true" data-busy-previous-disabled="false"' : ""}>${esc(t("serve_refresh_source", "Refresh source"))}</button>`;
 }
 
 function renderServeSourceStateControls(rows = leaderboardRows()) {
@@ -37,6 +36,7 @@ function renderServeSourceStateControls(rows = leaderboardRows()) {
 
 function bindServeSourceStateControls(target) {
   if (!target) return;
+  if (state.workspaceWriteBusy) setWorkspaceWriteControlsDisabled(true, target);
   target.querySelectorAll("[data-source-state-toggle]").forEach(input => {
     input.addEventListener("click", event => event.stopPropagation());
     input.addEventListener("change", event => {
@@ -60,15 +60,9 @@ function bindServeSourceStateControls(target) {
     button.addEventListener("click", async event => {
       event.stopPropagation();
       if (!adminMode() || state.workspaceWriteBusy) return;
-      setWorkspaceWriteControlsDisabled(true);
       try {
-        const payload = await serveApi("/api/source-refresh-operations", {
-          method: "POST",
-          body: { source_keys: [button.dataset.sourceKey] },
-        });
-        await applyServeMutationPayload(payload);
+        await submitCatalogWrite("/api/source-refresh-operations", { source_keys: [button.dataset.sourceKey] });
       } catch (error) {
-        setWorkspaceWriteControlsDisabled(false);
         beginFeedback("#leaderboard .leaderboard-action-row", { key: "home:source-refresh", page: "home" }).error(error);
       }
     });
@@ -76,7 +70,7 @@ function bindServeSourceStateControls(target) {
 }
 
 async function mutateVisibleServeSourceState() {
-  if (!adminMode()) return;
+  if (!adminMode() || state.workspaceWriteBusy) return;
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
   const guardFeedback = beginFeedback("#leaderboard .leaderboard-action-row", { key: "home:source-guard", page: "home" });
@@ -88,30 +82,21 @@ async function mutateVisibleServeSourceState() {
   const targetMode = mode === "archived" ? "active" : "archived";
   const feedback = beginFeedback("#leaderboard .leaderboard-action-row", { page: "home", key: "home:source-operation" });
   try {
-    const payload = await serveApi("/api/source-state-operations", {
-      method: "POST",
-      body: {
-        source_keys: sourceKeys,
-        active: targetMode === "active"
-      }
-    });
-    await applyServeSourceStateMutationPayload(payload, { sourceKeys, targetMode, feedback });
+    await submitCatalogWrite("/api/source-state-operations", {
+      source_keys: sourceKeys, active: targetMode === "active",
+    }, { sourceKeys, feedback });
   } catch (error) {
     feedback.set(error.message || String(error), true);
   }
 }
 async function deleteVisibleServeSources() {
-  if (!adminMode()) return;
+  if (!adminMode() || state.workspaceWriteBusy) return;
   const sourceKeys = visibleSelectedSourceKeys();
   if (!sourceKeys.length) return;
   if (!window.confirm(t("serve_delete_selected_confirm", "Permanently delete the selected sources? This cannot be undone."))) return;
   const feedback = beginFeedback("#leaderboard .leaderboard-action-row", { page: "home", key: "home:source-operation" });
   try {
-    const payload = await serveApi("/api/source-deletion-operations", {
-      method: "POST",
-      body: { source_keys: sourceKeys },
-    });
-    await applyServeSourceStateMutationPayload(payload, { sourceKeys, targetMode: currentServeSourceMode(), feedback });
+    await submitCatalogWrite("/api/source-deletion-operations", { source_keys: sourceKeys }, { sourceKeys, feedback });
   } catch (error) {
     feedback.set(error.message || String(error), true);
   }

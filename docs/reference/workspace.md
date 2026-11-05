@@ -220,7 +220,7 @@ a success. Read and refresh retries hold the same busy gate as the initial
 observation; repeated activation cannot start overlapping retries.
 An operation has one active observer per document. Replacing that observer,
 disposing its feedback, or unloading the document stops its reads and timers.
-Completing a source rescan invalidates the catalog again, independently of the
+Completing a source refresh invalidates the catalog again, independently of the
 notification sent when the scan was accepted. The active page reloads affected
 catalog data; inactive catalog views reload on their next activation. A reload waits
 for any in-flight catalog request and preserves filters, sorting, and pagination.
@@ -249,6 +249,41 @@ Clearing feedback ends that action and releases its entry; another attempt
 starts fresh feedback. Empty status containers are hidden. Filesystem path
 tokens reject control characters after normalization, including source imports;
 line breaks separating imported paths are not part of a path token.
+
+## Catalog refresh
+
+The Home Leaderboard's administrator-only Refresh action checks the entire
+workspace, independently of the current query or page. It updates new, changed,
+or damaged index entries rather than forcing every source to be read again.
+Configuration ingestion has no separate Reload or Rescan action. Refresh does
+not reload server configuration from disk.
+
+Startup displays the last valid catalog immediately while checking sources in
+the background. Without a valid cache, the table waits for the initial build.
+A separate progress region reports discovery counts, checked root
+Trials against the discovered total, and index publication. A multi-step Trial
+counts once, after all its entries have been processed. Unknown totals are not
+shown as percentages. Assistive technology announces phase changes and can
+read the current count on demand. Progress survives detail selection and independent action
+feedback. Conflicting writes and duplicate refresh submissions remain disabled
+from submission through operation completion and the resulting data refresh.
+A Home page read that finds a scan in progress resumes status polling.
+
+The internal read-only catalog-status resource reports generation, checking,
+staleness, phase, counts, and errors without waiting for readiness or reading
+evidence. Checking covers source reconciliation. An archive or delete reports
+item progress through its operation until its reconciliation starts. Home observes
+scan status every 250 milliseconds while checking instead of
+repeatedly loading catalog pages. A locally initiated refresh supplies the same
+status through its existing operation observer, avoiding a second polling loop.
+Leaving Home stops that page's observation;
+returning reads current status. Operation completion and generation changes
+share one refresh owner, preserving filters, sorting, pagination, and detail
+selection. A failed status read retries observation, never the refresh write.
+Scan failure retains the last valid data and remains visible after read retries.
+Administrators receive the operation ID of the current or most recent scan when
+a manual refresh owns it. Guests receive progress and redacted errors without
+the operation ID.
 
 ## Storage and identity
 

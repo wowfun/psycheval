@@ -39,9 +39,11 @@ from psycheval.state.workspace_sources import WorkspaceSources, is_harbor_source
 
 def writable_runtime(request: Request) -> ServeRuntime:
     runtime: ServeRuntime = request.app.state.runtime
+    if runtime.catalog.writer_busy or runtime.is_loading():
+        raise ProblemException(
+            409, "serve catalog is busy with another writer operation"
+        )
     runtime.ensure_ready()
-    if runtime.is_loading():
-        raise ProblemException(409, "serve catalog is checking runs")
     return runtime
 
 

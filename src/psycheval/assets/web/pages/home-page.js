@@ -6,6 +6,8 @@ import {
   loadCatalogPage,
   loadServeWorkspace,
   selectServeDetail,
+  startCatalogStatusObservation,
+  stopCatalogStatusObservation,
 } from "../modules/serve-catalog.js";
 import { closeWorkspaceReportReader, openWorkspaceReportRef, refreshWorkspaceReports } from "../modules/workspace-reports.js";
 import { captureHomeLocation, restoreHomeLocation } from "../modules/home-location.js";
@@ -32,6 +34,7 @@ function createHomePage(_context) {
       restoreHomeLocation(location);
     },
     async activate(changes, _hash, signal) {
+      startCatalogStatusObservation();
       if (pendingLocation) {
         const location = pendingLocation;
         pendingLocation = null;
@@ -104,7 +107,7 @@ function createHomePage(_context) {
         dirty: notesDraftChanged(),
       };
     },
-    destroy() { disposeLeaderboardRadar(); },
+    destroy() { stopCatalogStatusObservation(); disposeLeaderboardRadar(); },
   };
 }
 

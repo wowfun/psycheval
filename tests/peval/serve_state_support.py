@@ -297,3 +297,16 @@ def request_text(port: int, path: str) -> tuple[int, dict[str, str], str]:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def wait_catalog_operation(
+    catalog,
+    operation_id: str,
+):
+    deadline = time.monotonic() + 5
+    status = catalog.operation(operation_id)
+    while status.state in {"queued", "running"} and time.monotonic() < deadline:
+        time.sleep(0.01)
+        status = catalog.operation(operation_id)
+    assert status.state not in {"queued", "running"}, status.to_dict()
+    return status

@@ -719,6 +719,18 @@ def _register_session_routes(app: FastAPI) -> None:
 
 
 def _register_catalog_routes(app: FastAPI) -> None:
+    @app.get("/api/catalog-status")
+    @access(GUEST_ACCESS)
+    def get_catalog_status(request: Request) -> JSONResponse:
+        runtime: ServeRuntime = request.app.state.runtime
+        status = runtime.catalog_status()
+        role = role_for(request)
+        if role != ADMIN_ROLE:
+            status.pop("operation_id", None)
+        if status["error"]:
+            status["error"] = project_guest_error(500, status["error"], role)
+        return _json(status)
+
     @app.get("/api/catalog")
     @access(GUEST_ACCESS)
     def get_catalog(request: Request) -> JSONResponse:
@@ -1033,9 +1045,7 @@ def _register_source_routes(app: FastAPI) -> None:
         operation = runtime.start_operation(
             "source-discovery",
             [None],
-            lambda _item: {
-                "source_keys": runtime.store.harbor_source_keys(runtime.config)
-            },
+            lambda _item: None,
         )
         return _operation_response(operation)
 
@@ -1096,7 +1106,10 @@ def _register_source_routes(app: FastAPI) -> None:
         except ValueError as exc:
             raise ProblemException(404, str(exc)) from exc
         headers = {"Retry-After": "1"} if status.state in {"queued", "running"} else {}
-        return _json(_operation_payload(status), headers=headers)
+        payload = _operation_payload(status)
+        if status.operation_type == "source-discovery":
+            payload["catalog_status"] = runtime.catalog_status()
+        return _json(payload, headers=headers)
 
     @app.post(
         "/api/session-inspections",

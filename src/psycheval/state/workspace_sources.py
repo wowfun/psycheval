@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal
 
 from psycheval._harbor_datasets import resolve_harbor_datasets_for_mount
 from psycheval._state.annotations import optional_str
@@ -18,9 +19,20 @@ from psycheval._state.sources import refresh_binding
 from psycheval.atif import validate_atif_trajectory
 from psycheval.config import HarborMount, ToolConfig, validate_harbor_mount_paths
 from psycheval.report import project_meta_from_atif
+from psycheval.state.catalog_discovery import (
+    DirectoryChecks,
+    DiscoveryBatch,
+    SharedObservations,
+    manifest_json,
+    observe_files,
+    observe_tree,
+)
 from psycheval.state.constants import SOURCE_STATE_DIR, SOURCE_STATE_FILENAME
 from psycheval.state.harbor_evidence import (
+    JOB_JSON_FILES,
+    HarborJobCache,
     HarborTaskIndex,
+    _task_dirs,
     read_harbor_evidence,
     read_harbor_task_index,
 )
@@ -45,6 +57,7 @@ from psycheval.state.workspace_harbor import (
     _harbor_candidate_source_files,
     _harbor_entry_source_files,
     _harbor_source,
+    _harbor_source_files,
     _harbor_telemetry,
     _harbor_trial_key,
     _input_bytes,
@@ -142,7 +155,11 @@ class WorkspaceSources:
             for candidate in harbor_candidates
         ]
         candidates.extend(harbor_candidates)
-        candidates.extend(self._retained_missing_candidates(present_refs))
+        candidates.extend(
+            self._missing_harbor_candidate(ref, mount)
+            for ref, mount in self._retained_harbor_refs()
+            if ref not in present_refs
+        )
         return sorted(candidates, key=lambda item: item.source_ref)
 
     def source_keys(self) -> list[str]:
@@ -151,6 +168,182 @@ class WorkspaceSources:
             for candidate in self.discover()
             if candidate.kind == HARBOR_SOURCE_KIND and candidate.source_key
         ]
+
+    def catalog_batches(
+        self,
+        known: set[str],
+        cached_candidates: Callable[[str, str], tuple[str, int] | None],
+        reusable: Callable[[str, str, str], bool],
+        observations: SharedObservations,
+        progress: Callable[[str, int, int | None], None],
+    ) -> Iterator[DiscoveryBatch]:
+        """Locate roots first; hydrate at most one root Trial at a time."""
+        from dataclasses import replace
+
+        from .jobs import plugin_candidates, variant_index
+
+        self._reject_legacy_harbor_projections()
+        if (self.workspace_root / HARBOR_OVERLAY_ROOT).is_symlink():
+            raise ValueError("workspace Harbor overlay root must not be a symlink")
+        progress("discovering", 0, None)
+        local = [*self._local_candidates(), *plugin_candidates(self.workspace_root)]
+        retained: dict[str, list[tuple[str, HarborMount]]] = {}
+        for source_ref, mount in self._retained_harbor_refs():
+            root_ref = "/".join(source_ref.split("/")[:4])
+            retained.setdefault(root_ref, []).append((source_ref, mount))
+        locations = []
+        for location in self._harbor_trial_locations(known):
+            locations.append(location)
+            progress("discovering", len(local) + len(locations), None)
+        live_refs = {
+            f"harbor/{mount.id}/{trial.parent.name}/{trial.name}"
+            for mount, _root, trial, _datasets in locations
+        }
+        total = len(local) + len(live_refs | retained.keys())
+        completed = 0
+        progress("checking", completed, total)
+        for candidate in local:
+            yield DiscoveryBatch(candidate.source_ref, [candidate])
+            completed += 1
+            progress("checking", completed, total)
+        variants = variant_index(self.workspace_root)
+        indexes: dict[tuple[Any, ...], HarborTaskIndex] = {}
+        job_cache = HarborJobCache()
+        for mount, root, trial, datasets in locations:
+            ref = f"harbor/{mount.id}/{trial.parent.name}/{trial.name}"
+            dataset_paths = tuple(str(item.task_root) for item in datasets)
+            formats = tuple(item.format for item in datasets)
+            task_key = (dataset_paths, formats)
+            shared = {
+                "job": observations.get(
+                    f"job:{trial.parent}",
+                    lambda job=trial.parent: observe_files(job, JOB_JSON_FILES),
+                ),
+                "tasks": observations.get(
+                    f"tasks:{task_key}",
+                    lambda paths=dataset_paths, fmts=formats: [
+                        fmts,
+                        [
+                            observe_tree(task, task_package=True)
+                            for path in paths
+                            for task in _task_dirs(Path(path))
+                        ],
+                    ],
+                ),
+            }
+            projection = variants.get((trial.parent.name, trial.name), {})
+            retained_refs = retained.pop(ref, [])
+
+            checks = DirectoryChecks()
+            files = []
+            for data in (trial, *_child_dirs(trial / "steps")):
+                files.extend(
+                    observe_files(
+                        data,
+                        (*_harbor_source_files(data, None), "analysis.md", "steps"),
+                        checks,
+                    )
+                )
+                files.extend(observe_tree(data / "verifier", checks=checks))
+            files.extend(observe_tree(self.overlay_dir(ref), checks=checks))
+            dependencies = {
+                "files": files,
+                "shared": shared,
+                "variants": projection,
+                "retained": [source_ref for source_ref, _mount in retained_refs],
+                "root": str(root),
+                "task_roots": dataset_paths,
+                "formats": formats,
+            }
+            manifest = manifest_json(dependencies)
+            previous = cached_candidates(ref, manifest) if ref in known else None
+            candidates = None
+            if previous is not None:
+                try:
+                    records = json.loads(previous[0])
+                    if (
+                        isinstance(records, list)
+                        and records
+                        and len(records) == previous[1]
+                        and all(
+                            isinstance(item, dict)
+                            and isinstance(item.get("source_ref"), str)
+                            and (
+                                item["source_ref"] == ref
+                                or item["source_ref"].startswith(f"{ref}/steps/")
+                            )
+                            and isinstance(item.get("fingerprint"), str)
+                            and isinstance(item.get("source_key"), str)
+                            and reusable(
+                                item["source_ref"],
+                                item["fingerprint"],
+                                item["source_key"],
+                            )
+                            for item in records
+                        )
+                        and len({item["source_ref"] for item in records})
+                        == len(records)
+                    ):
+                        candidates = [
+                            SourceCandidate(
+                                source_ref=item["source_ref"],
+                                kind=HARBOR_SOURCE_KIND,
+                                path=trial,
+                                fingerprint=item["fingerprint"],
+                                source_key=item["source_key"],
+                                mount_id=mount.id,
+                                job_name=trial.parent.name,
+                                trial_name=trial.name,
+                            )
+                            for item in records
+                        ]
+                except (ValueError, TypeError, RecursionError):
+                    pass
+            reused = candidates is not None
+            if candidates is None:
+                recognizable = ref not in known or _looks_like_trial(trial)
+                if recognizable and task_key not in indexes:
+                    indexes[task_key] = read_harbor_task_index(
+                        dataset_paths,
+                        dataset_formats=formats,
+                    )
+                candidates = (
+                    self._harbor_trial_candidates(
+                        mount,
+                        trial.parent.name,
+                        trial.name,
+                        trial,
+                        root,
+                        indexes[task_key],
+                        dataset_paths,
+                        job_cache=job_cache,
+                    )
+                    if recognizable
+                    else []
+                )
+                candidates = [
+                    replace(candidate, projection=projection)
+                    for candidate in candidates
+                ]
+                present = {candidate.source_ref for candidate in candidates}
+                candidates.extend(
+                    self._missing_harbor_candidate(source_ref, mount)
+                    for source_ref, mount in retained_refs
+                    if source_ref not in present
+                )
+            yield DiscoveryBatch(ref, candidates, manifest, reused)
+            completed += 1
+            progress("checking", completed, total)
+        for ref, missing in retained.items():
+            yield DiscoveryBatch(
+                ref,
+                [
+                    self._missing_harbor_candidate(source_ref, mount)
+                    for source_ref, mount in missing
+                ],
+            )
+            completed += 1
+            progress("checking", completed, total)
 
     def read_harbor_verifier_artifact(
         self,
@@ -585,12 +778,36 @@ class WorkspaceSources:
         return candidates
 
     def _harbor_candidates(self) -> tuple[list[SourceCandidate], set[str]]:
+        candidates: list[SourceCandidate] = []
+        indexes = {}
+        job_cache = HarborJobCache()
+        for mount, root, trial_dir, resolved_datasets in self._harbor_trial_locations():
+            dataset_paths = tuple(str(item.task_root) for item in resolved_datasets)
+            formats = tuple(item.format for item in resolved_datasets)
+            key = (dataset_paths, formats)
+            if key not in indexes:
+                indexes[key] = read_harbor_task_index(
+                    dataset_paths, dataset_formats=formats
+                )
+            candidates.extend(
+                self._harbor_trial_candidates(
+                    mount,
+                    trial_dir.parent.name,
+                    trial_dir.name,
+                    trial_dir,
+                    root,
+                    indexes[key],
+                    dataset_paths,
+                    job_cache=job_cache,
+                )
+            )
+        return candidates, {candidate.source_ref for candidate in candidates}
+
+    def _harbor_trial_locations(self, known: set[str] | None = None):
         validate_harbor_mount_paths(
             self.config.harbor_mounts,
             self.config.harbor_datasets,
         )
-        candidates: list[SourceCandidate] = []
-        present_refs: set[str] = set()
         resolved_mounts: set[Path] = set()
         for mount in self.config.harbor_mounts:
             lexical_root = Path(os.path.abspath(Path(mount.path).expanduser()))
@@ -603,30 +820,15 @@ class WorkspaceSources:
             resolved_mounts.add(root)
             _reject_linked_directories(root, "Job")
             resolved_datasets = resolve_harbor_datasets_for_mount(self.config, mount)
-            dataset_paths = tuple(str(item.task_root) for item in resolved_datasets)
-            task_index = read_harbor_task_index(
-                dataset_paths,
-                dataset_formats=(item.format for item in resolved_datasets),
-            )
             for job_dir in _child_dirs(root):
                 _reject_linked_directories(job_dir, "Trial")
                 for trial_dir in _child_dirs(job_dir):
-                    if not _looks_like_trial(trial_dir):
+                    ref = f"harbor/{mount.id}/{job_dir.name}/{trial_dir.name}"
+                    if not (known and ref in known) and not _looks_like_trial(
+                        trial_dir
+                    ):
                         continue
-                    trial_candidates = self._harbor_trial_candidates(
-                        mount,
-                        job_dir.name,
-                        trial_dir.name,
-                        trial_dir,
-                        root,
-                        task_index,
-                        dataset_paths,
-                    )
-                    candidates.extend(trial_candidates)
-                    present_refs.update(
-                        candidate.source_ref for candidate in trial_candidates
-                    )
-        return candidates, present_refs
+                    yield mount, root, trial_dir, resolved_datasets
 
     def _harbor_trial_candidates(
         self,
@@ -639,6 +841,7 @@ class WorkspaceSources:
         dataset_paths: tuple[str, ...],
         *,
         include_evaluation_report: bool = True,
+        job_cache: HarborJobCache | None = None,
     ) -> list[SourceCandidate]:
         from psycheval._harbor_trials import load_harbor_trial_bundle
 
@@ -651,6 +854,7 @@ class WorkspaceSources:
                 mount_id=mount.id,
                 source_ref=source_ref,
                 task_index=task_index,
+                job_cache=job_cache,
             )
         except (OSError, ValueError) as exc:
             overlay_dir = self.overlay_dir(source_ref)
@@ -771,9 +975,7 @@ class WorkspaceSources:
             entry_warnings=entry.warnings,
         )
 
-    def _retained_missing_candidates(
-        self, present_refs: set[str]
-    ) -> list[SourceCandidate]:
+    def _retained_harbor_refs(self) -> Iterator[tuple[str, HarborMount]]:
         overlay_root = self.workspace_root / HARBOR_OVERLAY_ROOT
         mount_by_id = {mount.id: mount for mount in self.config.harbor_mounts}
         retained_refs = self._bound_harbor_refs()
@@ -801,42 +1003,34 @@ class WorkspaceSources:
                                     f"{mount_dir.name}/{job_dir.name}/{trial_dir.name}"
                                     f"/steps/{step_dir.name}"
                                 )
-        retained: list[SourceCandidate] = []
-        for source_ref in sorted(retained_refs - present_refs):
-            parts = Path(source_ref).parts
-            if len(parts) not in {4, 6}:
-                continue
-            step_name = None
-            if len(parts) == 4:
-                _harbor, mount_id, job_name, trial_name = parts
-            else:
-                _harbor, mount_id, job_name, trial_name, steps, step_name = parts
-                if steps != "steps":
-                    continue
-            mount = mount_by_id.get(mount_id)
-            if mount is None:
-                continue
-            overlay_dir = self.overlay_dir(source_ref)
-            source_path = Path(mount.path) / job_name / trial_name
-            retained.append(
-                SourceCandidate(
-                    source_ref=source_ref,
-                    kind=HARBOR_SOURCE_KIND,
-                    path=source_path,
-                    fingerprint=_fingerprint(overlay_dir, HARBOR_OVERLAY_FILES),
-                    source_key=_harbor_trial_key(
-                        mount_id, job_name, trial_name, step_name
-                    ),
-                    mount_id=mount_id,
-                    job_name=job_name,
-                    trial_name=trial_name,
-                    step_name=step_name,
-                    diagnostic=f"Harbor Trial source not found: {source_path}",
-                    missing=True,
-                    containment_root=Path(mount.path),
-                )
-            )
-        return retained
+        for ref in sorted(retained_refs):
+            parts = Path(ref).parts
+            if len(parts) == 4 or (len(parts) == 6 and parts[4] == "steps"):
+                mount = mount_by_id.get(parts[1])
+                if mount is not None:
+                    yield ref, mount
+
+    def _missing_harbor_candidate(
+        self, ref: str, mount: HarborMount
+    ) -> SourceCandidate:
+        parts = Path(ref).parts
+        job, trial = parts[2:4]
+        step = parts[5] if len(parts) == 6 else None
+        path = Path(mount.path) / job / trial
+        return SourceCandidate(
+            source_ref=ref,
+            kind=HARBOR_SOURCE_KIND,
+            path=path,
+            fingerprint=_fingerprint(self.overlay_dir(ref), HARBOR_OVERLAY_FILES),
+            source_key=_harbor_trial_key(mount.id, job, trial, step),
+            mount_id=mount.id,
+            job_name=job,
+            trial_name=trial,
+            step_name=step,
+            diagnostic=f"Harbor Trial source not found: {path}",
+            missing=True,
+            containment_root=Path(mount.path),
+        )
 
     def _bound_harbor_refs(self) -> set[str]:
         reports_root = self.workspace_root / "reports"

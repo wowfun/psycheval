@@ -3,6 +3,34 @@
 Psycheval separates authoritative evidence from user-authored overlays and
 rebuildable projections.
 
+The serve catalog persists derived rows and per-Trial discovery dependencies in
+its SQLite cache. Reconciliation first enumerates root sources, then checks their
+non-following filesystem signatures before reading evidence. An unchanged,
+valid cached Trial reuses its rows without reading trajectory or verifier bodies
+or recalculating Task content digests. Dependencies include Job and Trial files,
+step topology, mounted Task content and resolution settings, telemetry, verifier
+artifacts, reports, and workspace overlays. Shared Job and Task observations are
+reused within one reconciliation. A changed Trial invalidates its steps together.
+A change to a dataset’s Task inputs invalidates all Trials whose mount uses that
+dataset because Task resolution considers the full set of mounted Tasks.
+Directory safety checks can be shared within
+one Trial's dependency observation and are checked afresh for the next Trial.
+Cached numeric metric maps contain only finite numbers. A malformed map invalidates
+the cached row. A malformed new projection aborts publication.
+Changed or damaged entries are read through
+the ordinary validation boundary; discovery never retains every trajectory body
+at once. File signatures track identity, timestamps and links along the path,
+including Windows junctions. A rewrite that preserves all observed metadata can
+evade detection. Regular scratch files
+outside the Task package inputs do not affect the signature. Task safety checks
+still detect links and special files. Source files remain authoritative.
+
+A valid previous generation stays readable during startup and reconciliation.
+Changed projections are staged while checking evidence. The catalog takes the
+SQLite write lock to publish rows and dependency records together; a failed reconciliation retains the previous generation. An absent
+or incompatible cache requires a complete initial build. The workspace
+[refresh and progress contract](workspace.md#catalog-refresh) owns browser behavior.
+
 | Data | Authority | Mutation rule |
 | --- | --- | --- |
 | Task, Job, Trial, result, reward, artifacts | Harbor files | Read-only to ordinary CLI views |

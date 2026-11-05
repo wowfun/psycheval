@@ -1163,9 +1163,6 @@ class HarborTrialTests(unittest.TestCase):
                 self.assertEqual(
                     detail.report["trajectory"][0]["session_id"], "harbor-session"
                 )
-                self.assertEqual(
-                    store.harbor_source_keys(config), [first["source_key"]]
-                )
                 (trial / "result.json").write_text(
                     json.dumps(completed_result()), encoding="utf-8"
                 )

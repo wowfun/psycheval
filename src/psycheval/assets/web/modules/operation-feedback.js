@@ -19,7 +19,7 @@ function operationFailureDetails(operation, id) {
 }
 
 /** Observe an accepted operation. Retrying this observer never repeats a write. */
-async function watchOperation(id, { feedback, committed = false, onBusy = () => {}, onComplete = async () => {} }) {
+async function watchOperation(id, { feedback, committed = false, showProgress = true, onProgress = () => {}, onBusy = () => {}, onComplete = async () => {} }) {
   const owner = document, view = window;
   if (!observers.has(owner)) observers.set(owner, new Map());
   const active = observers.get(owner);
@@ -79,8 +79,9 @@ async function watchOperation(id, { feedback, committed = false, onBusy = () => 
     try {
       const operation = await serveApi(`/api/operations/${encodeURIComponent(id)}`, { signal: controller.signal });
       if (stopped) return;
+      onProgress(operation);
       if (["queued", "running"].includes(operation.state)) {
-        feedback.pending([
+        if (showProgress) feedback.pending([
           committed ? t("feedback_saved_refreshing", "Saved; refreshing the workspace…") : "",
           `${operation.completed}/${operation.total}`,
         ].filter(Boolean).join(" "));

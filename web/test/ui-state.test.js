@@ -12,7 +12,7 @@ const browser = installBrowserDom(`
   <div data-report-manager hidden><section aria-modal="true"><button data-report-manager-close>Close</button><p data-report-manager-status hidden></p><div data-report-inventory></div><span data-report-count></span><div data-report-bindings></div></section></div>
   <aside id="workspace-report-reader" hidden></aside>
   <div data-view-save-dialog hidden><section aria-modal="true"><button data-view-save-cancel>Cancel</button></section></div>
-  <button data-refresh-all>Refresh</button>
+  <button data-catalog-refresh>Refresh</button>
   <button data-source-delete-action disabled>Delete</button>
   <button data-harbor-add-mount>Add mount</button>
   <main id="comparison"></main>
@@ -281,7 +281,7 @@ test("Configuration loads workspace configuration and prompt assets without a so
   const previousFetch = globalThis.fetch;
   const root = document.querySelector("[data-config-page]");
   root.hidden = false;
-  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-config-reload></button><button data-harbor-add-dataset></button><button data-harbor-register-dataset></button><button data-harbor-unregister-datasets></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><div data-harbor-mount-config></div>';
+  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-add-dataset></button><button data-harbor-register-dataset></button><button data-harbor-unregister-datasets></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><div data-harbor-mount-config></div>';
   delete root.dataset.configBound;
   globalThis.fetch = async path => {
     requests.push(String(path));
@@ -315,7 +315,7 @@ test("Configuration adds ACP agents and saves same-name prompt overrides", async
   root.hidden = false;
   root.innerHTML = `
     <p data-config-page-status hidden></p>
-    <button data-harbor-config-reload></button>
+
     <button data-acp-agent-form-open>Add ACP agent</button>
     <div data-acp-agent-form-panel hidden role="dialog" aria-modal="true">
       <form data-acp-agent-form>
@@ -423,7 +423,7 @@ for (const refreshFails of [false, true]) test(`Configuration retains the confli
   const root = document.querySelector("[data-config-page]");
   root.hidden = false;
   root.innerHTML = `
-    <p data-config-page-status hidden></p><button data-harbor-config-reload></button>
+    <p data-config-page-status hidden></p>
     <button data-prompt-save disabled></button><button data-prompt-reset disabled></button>
     <span data-prompt-asset-count></span><nav data-prompt-config-list></nav>
     <code data-prompt-filename></code><span data-prompt-origin></span><textarea data-prompt-content></textarea>
@@ -481,7 +481,7 @@ test("Configuration preserves a failed Harbor operation status after refreshing"
   const root = document.querySelector("[data-config-page]");
   root.hidden = false;
   root.innerHTML = `
-    <p data-config-page-status hidden></p><button data-harbor-config-reload></button>
+    <p data-config-page-status hidden></p>
     <div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div>
     <div data-harbor-mount-count></div><div data-harbor-mount-config></div>`;
   globalThis.fetch = async path => {
@@ -532,7 +532,7 @@ test("Configuration registers Dataset and Jobs roots from path-only actions", as
   const previousPrompt = window.prompt;
   const root = document.querySelector("[data-config-page]");
   root.hidden = false;
-  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-config-reload></button><button data-harbor-add-dataset></button><button data-harbor-register-dataset></button><button data-harbor-unregister-datasets></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><button data-harbor-add-mount></button><button data-harbor-remove-mounts></button><div data-harbor-mount-count></div><div data-harbor-mount-config></div>';
+  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-add-dataset></button><button data-harbor-register-dataset></button><button data-harbor-unregister-datasets></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><button data-harbor-add-mount></button><button data-harbor-remove-mounts></button><div data-harbor-mount-count></div><div data-harbor-mount-config></div>';
   delete root.dataset.configBound;
   let snapshot = { revision: "r1", datasets: [], mounts: [] };
   globalThis.fetch = async (path, options = {}) => {
@@ -617,7 +617,7 @@ test("Configuration edits Dataset cells and atomically unregisters the selected 
   const previousConfirm = window.confirm;
   const root = document.querySelector("[data-config-page]");
   root.hidden = false;
-  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-config-reload></button><button data-harbor-add-dataset></button><button data-harbor-register-dataset></button><button data-harbor-unregister-datasets></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><div data-harbor-mount-config></div>';
+  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-add-dataset></button><button data-harbor-register-dataset></button><button data-harbor-unregister-datasets></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><div data-harbor-mount-config></div>';
   delete root.dataset.configBound;
   let snapshot = { revision: "r1", datasets: [{ id: "tasks", path: "/workspace/tasks" }], mounts: [] };
   globalThis.fetch = async (path, options = {}) => {
@@ -691,7 +691,7 @@ test("Configuration edits reciprocal Harbor associations and batch removes mount
   const previousConfirm = window.confirm;
   const root = document.querySelector("[data-config-page]");
   root.hidden = false;
-  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-config-reload></button><button data-harbor-add-dataset></button><button data-harbor-register-dataset></button><button data-harbor-unregister-datasets></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><button data-harbor-add-mount></button><button data-harbor-remove-mounts></button><div data-harbor-mount-count></div><div data-harbor-mount-config></div>';
+  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-add-dataset></button><button data-harbor-register-dataset></button><button data-harbor-unregister-datasets></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><button data-harbor-add-mount></button><button data-harbor-remove-mounts></button><div data-harbor-mount-count></div><div data-harbor-mount-config></div>';
   delete root.dataset.configBound;
   let revision = 1;
   let snapshot = {
@@ -946,7 +946,7 @@ test("Leaderboard bulk actions include only selected rows on the visible page", 
 });
 
 test("workspace busy state disables and restores controls", () => {
-  const refresh = document.querySelector("[data-refresh-all]");
+  const refresh = document.querySelector("[data-catalog-refresh]");
   const deleteAction = document.querySelector("[data-source-delete-action]");
   const mountAction = document.querySelector("[data-harbor-add-mount]");
   refresh.disabled = false;
@@ -1135,22 +1135,31 @@ test("Category filters are multi-select while editor suggestions come from an in
 });
 
 test("Category suggestions refresh when the initial catalog scan completes", async () => {
+  const comparison = document.getElementById("comparison");
+  comparison?.remove();
   const previousFetch = globalThis.fetch;
   const previousSetTimeout = globalThis.setTimeout;
   const scheduled = [];
   let catalogPageRequests = 0;
   let suggestionRequests = 0;
+  let statusRequests = 0;
+  const { setWorkspaceApp } = await import("../../src/psycheval/assets/web/app/workspace-runtime.js");
   const response = payload => ({
     ok: true,
     statusText: "OK",
     text: async () => JSON.stringify(payload),
   });
-  globalThis.setTimeout = callback => {
+  globalThis.setTimeout = (callback, delay) => {
+    if (delay !== 250) return previousSetTimeout(callback, delay);
     scheduled.push(callback);
-    return scheduled.length;
+    return 0;
   };
   globalThis.fetch = async path => {
     const request = new URL(String(path), "http://localhost");
+    if (request.pathname === "/api/catalog-status") {
+      statusRequests++;
+      return response({ generation: statusRequests === 1 ? 0 : 1, checking: statusRequests === 1, phase: "checking", completed: statusRequests - 1, total: 1 });
+    }
     if (request.pathname === "/api/catalog-summaries") {
       const generation = catalogPageRequests === 1 ? 0 : 1;
       return response({
@@ -1214,16 +1223,23 @@ test("Category suggestions refresh when the initial catalog scan completes", asy
     runtime.state.workspaceViews = [];
     runtime.state.workspaceViewsLoaded = true;
     await Promise.all([
-      catalog.loadCatalogPage(),
+      catalog.loadCatalogPage({}, { skipDetail: true }),
       catalog.refreshSourceCategoryOptions(),
     ]);
     assert.deepEqual(runtime.state.sourceCategoryOptions, []);
+    setWorkspaceApp({ invalidate() {}, navigate: () => catalog.loadCatalogPage({}, { force: true, skipDetail: true }) });
+    catalog.startCatalogStatusObservation();
+    await new Promise(resolve => previousSetTimeout(resolve, 0));
     assert.equal(scheduled.length, 1);
+    assert.equal(catalogPageRequests, 1);
 
     await scheduled.shift()();
 
     assert.deepEqual(runtime.state.sourceCategoryOptions, ["Regression"]);
   } finally {
+    if (comparison) document.body.append(comparison);
+    catalog.stopCatalogStatusObservation();
+    setWorkspaceApp(null);
     globalThis.fetch = previousFetch;
     globalThis.setTimeout = previousSetTimeout;
     runtime.state.catalogLoading = false;
@@ -1463,7 +1479,7 @@ test("a mount conflict retains its draft and retries with current unrelated fiel
   const previousFetch = globalThis.fetch;
   const root = document.querySelector("[data-config-page]");
   root.hidden = false;
-  root.innerHTML = '<p data-config-page-status hidden></p><button data-harbor-config-reload></button><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><div data-harbor-mount-count></div><div data-harbor-mount-config></div>';
+  root.innerHTML = '<p data-config-page-status hidden></p><div data-harbor-dataset-count></div><div data-harbor-dataset-registry></div><div data-harbor-mount-count></div><div data-harbor-mount-config></div>';
   delete root.dataset.configBound;
   const writes = [];
   globalThis.fetch = async (path, options = {}) => {

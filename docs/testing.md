@@ -72,7 +72,7 @@ the page pane:
 
 ```console
 node --test web/test/workspace-location.test.js web/test/app.test.js web/test/home-location.test.js web/test/report-manager-race.test.js
-uv run pytest tests/peval/test_serve_catalog_http.py tests/peval/test_workspace_views.py
+uv run pytest tests/peval/test_serve_catalog_http.py tests/peval/test_serve_workspace_views_http.py tests/peval/test_serve_catalog_summary_http.py tests/peval/test_workspace_views.py
 pnpm run test:e2e web/e2e/workspace-links.spec.mjs web/e2e/reports.spec.mjs
 ```
 
@@ -193,6 +193,18 @@ Standalone ATIF tests copy and rename only `atif.py`, then execute it under
 field-path errors, and non-mutation. Existing conversion tests separately own
 normalization and metadata behavior. All source-copy checks isolate user state
 and use no real providers, credentials, or WorkBuddy runtime.
+
+## Catalog performance
+
+The catalog benchmark uses a temporary workspace with scored, Task-linked Harbor
+Trials and long trajectories. It reports cold indexing, reconciliation after a
+runtime restart, a single-Trial update, first-page latency, and trajectory body
+read counts. Timing is observational; deterministic regression tests assert
+which evidence is read rather than imposing wall-clock thresholds.
+
+```console
+uv run --no-sync python scripts/benchmark_serve_catalog.py --cells 1100 --steps 100
+```
 
 ## Editable source-tool check
 

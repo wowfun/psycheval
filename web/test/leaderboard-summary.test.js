@@ -690,7 +690,7 @@ test("long Unicode catalog conditions use a POST body without changing the query
   }
 });
 
-test("successful catalog and fresh or cached detail loads clear scan status without clearing action errors", async () => {
+test("catalog and detail reads preserve independent errors without scheduling catalog polling", async () => {
   resetSummaryState();
   const { beginFeedback } = await import("../../src/psycheval/assets/web/modules/action-feedback.js");
   const { setServeStatus } = await import("../../src/psycheval/assets/web/modules/serve-effects.js");
@@ -722,8 +722,7 @@ test("successful catalog and fresh or cached detail loads clear scan status with
   try {
     action.error("Export failed");
     await catalog.loadCatalogPage({}, { skipDetail: true });
-    assert.match(target.textContent, /Checking runs/);
-    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled.length, 0);
     checking = false;
     for (const mode of ["active", "archived", "all"]) {
       runtime.state.catalogQuery.state = mode;

@@ -189,7 +189,7 @@ def test_index_full_scope_safe_sort_missing_last_and_cache(tmp_path, catalog):
         {"metrics": {metric: {"label": "Updated", "direction": "lower"}}},
     )
     with patch(
-        "psycheval.state.catalog._summary_rows",
+        "psycheval.state.catalog_summaries.summary_rows",
         side_effect=AssertionError("numeric cache must be reused"),
     ):
         fresh = catalog.summarize_query(
@@ -433,7 +433,7 @@ def test_selected_excel_and_runtime_descriptor_refresh(tmp_path, catalog):
             )
         )
         with patch(
-            "psycheval.state.catalog._summary_rows",
+            "psycheval.state.catalog_summaries.summary_rows",
             side_effect=AssertionError("selection/config must reuse numeric cache"),
         ):
             sheet = runtime.leaderboard_summary_worksheet(

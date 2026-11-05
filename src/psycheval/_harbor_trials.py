@@ -10,6 +10,7 @@ from psycheval._state.annotations import optional_str
 from psycheval.config import HarborMount, ToolConfig
 from psycheval.harbor.datasets import DatasetFormat
 from psycheval.state.harbor_evidence import (
+    HarborJobCache,
     HarborTaskIndex,
     read_harbor_evidence,
     read_harbor_task_index,
@@ -90,6 +91,7 @@ def load_harbor_trial_bundle(
     task_paths: Iterable[str] = (),
     dataset_formats: Iterable[DatasetFormat] = (),
     task_index: HarborTaskIndex | None = None,
+    job_cache: HarborJobCache | None = None,
 ) -> HarborTrialBundle:
     """Read one Harbor Trial and expose its sources in authoritative order."""
 
@@ -119,6 +121,7 @@ def load_harbor_trial_bundle(
         task_paths=normalized_task_paths,
         mount_id=mount_id,
         task_index=index,
+        job_cache=job_cache,
     )
     trial_result = evidence.trial_values.get("result.json")
     entries = _trial_entries(

@@ -11,6 +11,7 @@ from typing import Any, Iterable
 
 from psycheval._state.annotations import optional_str
 from psycheval.harbor.datasets import DatasetFormat
+from psycheval.harbor.evidence import is_link
 from psycheval.harbor.tasks import load_harbor_task, select_publishable_task_files
 
 TRIAL_JSON_FILES = (
@@ -61,6 +62,24 @@ class HarborTaskIndex:
     )
 
 
+@dataclass
+class HarborJobCache:
+    values: dict[Path, tuple[Any, Any]] = field(default_factory=dict)
+
+    def read(self, job_dir: Path, jobs_root: Path):
+        observed = (_path_signature(job_dir), _json_signatures(job_dir, JOB_JSON_FILES))
+        cached = self.values.get(job_dir)
+        if cached is not None and cached[0] == observed:
+            return cached[1]
+        result = _read_json_objects(job_dir, jobs_root, JOB_JSON_FILES)
+        if observed == (
+            _path_signature(job_dir),
+            _json_signatures(job_dir, JOB_JSON_FILES),
+        ):
+            self.values[job_dir] = (observed, result)
+        return result
+
+
 def read_harbor_evidence(
     trial_dir: Path,
     *,
@@ -68,6 +87,7 @@ def read_harbor_evidence(
     task_paths: Iterable[str],
     mount_id: str | None,
     task_index: HarborTaskIndex | None = None,
+    job_cache: HarborJobCache | None = None,
 ) -> HarborEvidence:
     last_error: Exception | None = None
     job_dir = trial_dir.parent
@@ -82,6 +102,7 @@ def read_harbor_evidence(
                 task_paths=task_paths,
                 mount_id=mount_id,
                 task_index=task_index,
+                job_cache=job_cache,
             )
         except Exception as exc:  # noqa: BLE001 - retry only on concurrent changes.
             last_error = exc
@@ -107,12 +128,17 @@ def _read_once(
     task_paths: Iterable[str],
     mount_id: str | None,
     task_index: HarborTaskIndex | None,
+    job_cache: HarborJobCache | None,
 ) -> HarborEvidence:
     job_dir = trial_dir.parent
     trial_values, trial_revision = _read_json_objects(
         trial_dir, jobs_root, TRIAL_JSON_FILES
     )
-    job_values, job_revision = _read_json_objects(job_dir, jobs_root, JOB_JSON_FILES)
+    job_values, job_revision = (
+        job_cache.read(job_dir, jobs_root)
+        if job_cache is not None
+        else _read_json_objects(job_dir, jobs_root, JOB_JSON_FILES)
+    )
 
     trial_config = trial_values.get("config.json") or {}
     trial_lock = trial_values.get("lock.json") or {}
@@ -397,9 +423,7 @@ def _task_candidates_once(
         _assert_safe_descendant(root, root)
         index_digest.update(str(root).encode("utf-8") + b"\0")
         index_digest.update(dataset_format.encode("ascii") + b"\0")
-        task_dirs = (
-            [root] if _regular_file(root / "task.toml") else _child_task_dirs(root)
-        )
+        task_dirs = _task_dirs(root)
         for task_dir in task_dirs:
             try:
                 _walk_regular_files(task_dir, task_dir)
@@ -709,22 +733,14 @@ def _read_bytes_no_follow(containment_root: Path, path: Path) -> bytes:
 def _assert_safe_descendant(root: Path, path: Path) -> None:
     lexical_root = Path(os.path.abspath(root))
     lexical_path = Path(os.path.abspath(path))
-    current = lexical_root
-    while True:
-        if current.is_symlink():
-            raise ValueError(f"Harbor evidence traverses a symlink: {current}")
-        if current.parent == current:
+    if not lexical_path.is_relative_to(lexical_root):
+        raise ValueError(f"Harbor evidence escapes its root: {path}")
+    for current in reversed((lexical_path, *lexical_path.parents)):
+        try:
+            if is_link(current.lstat()):
+                raise ValueError(f"Harbor evidence traverses a symlink: {current}")
+        except FileNotFoundError:
             break
-        current = current.parent
-    try:
-        relative = lexical_path.relative_to(lexical_root)
-    except ValueError as exc:
-        raise ValueError(f"Harbor evidence escapes its root: {path}") from exc
-    current = lexical_root
-    for part in relative.parts:
-        current /= part
-        if current.is_symlink():
-            raise ValueError(f"Harbor evidence traverses a symlink: {current}")
 
 
 def _json_signatures(root: Path, relative_files: Iterable[str]) -> tuple[Any, ...]:
@@ -740,9 +756,7 @@ def _task_index_signatures(roots: Iterable[Path]) -> tuple[Any, ...]:
     for root in roots:
         _assert_safe_descendant(root, root)
         signatures.append(_path_signature(root))
-        task_dirs = (
-            [root] if _regular_file(root / "task.toml") else _child_task_dirs(root)
-        )
+        task_dirs = _task_dirs(root)
         signatures.extend(
             (
                 str(task_dir),
@@ -759,7 +773,15 @@ def _path_signature(path: Path) -> tuple[Any, ...]:
         value = path.stat(follow_symlinks=False)
     except FileNotFoundError:
         return (str(path), None)
-    return (str(path), value.st_mode, value.st_size, value.st_mtime_ns)
+    return (
+        str(path),
+        value.st_mode,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+        value.st_ino,
+        value.st_dev,
+    )
 
 
 def _regular_file(path: Path) -> bool:
@@ -768,6 +790,10 @@ def _regular_file(path: Path) -> bool:
     except OSError:
         return False
     return stat.S_ISREG(value.st_mode)
+
+
+def _task_dirs(root: Path) -> list[Path]:
+    return [root] if _regular_file(root / "task.toml") else _child_task_dirs(root)
 
 
 def _child_task_dirs(root: Path) -> list[Path]:
