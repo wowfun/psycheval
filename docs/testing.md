@@ -15,6 +15,8 @@ uv run python scripts/check_skill.py skills/peval
 git diff --check
 ```
 
+The documentation check compares paired guide hashes using LF line endings.
+
 Pytest covers Harbor integration and all `peval` CLI behavior in one collection.
 The [development workflow](development.md) owns Node and pnpm setup.
 `pnpm run check` runs type checking, browser-module tests against the authored ESM

@@ -7,6 +7,16 @@ from scripts import check_docs, check_skill
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_translation_hash_ignores_checkout_line_endings_but_detects_edits(tmp_path):
+    guide = tmp_path / "guide.md"
+    guide.write_bytes(b"first\nsecond\n")
+    original = check_docs.source_hash(guide)
+    guide.write_bytes(b"first\r\nsecond\r\n")
+    assert check_docs.source_hash(guide) == original
+    guide.write_bytes(b"edited\r\nsecond\r\n")
+    assert check_docs.source_hash(guide) != original
+
+
 def test_docs_checker_handles_reference_links_and_parenthesized_paths(
     tmp_path: Path,
     monkeypatch,
