@@ -6,6 +6,7 @@ import argparse
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -15,7 +16,11 @@ def main() -> None:
     parser.add_argument("--python", required=True)
     parser.add_argument("--constraints", type=Path)
     parser.add_argument("--echarts", type=Path, help="Preseeded ECharts smoke fixture")
-    parser.add_argument("--refresh", action="store_true")
+    parser.add_argument(
+        "--retry-index",
+        action="store_true",
+        help="Retry installation while a new PyPI release propagates",
+    )
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     echarts = (
@@ -76,9 +81,16 @@ def main() -> None:
         command = ["uv", "pip", "install", "--python", str(python), package]
         if args.constraints:
             command += ["-c", str(args.constraints.resolve())]
-        if args.refresh:
-            command += ["--refresh"]
-        subprocess.run(command, check=True)
+        if args.retry_index:
+            command += ["--refresh-package", "psycheval"]
+        attempts = 5 if args.retry_index else 1
+        for attempt in range(1, attempts + 1):
+            installed = subprocess.run(command)
+            if installed.returncode == 0:
+                break
+            if attempt == attempts:
+                installed.check_returncode()
+            time.sleep(15)
         subprocess.run(["uv", "pip", "check", "--python", str(python)], check=True)
         subprocess.run(
             [

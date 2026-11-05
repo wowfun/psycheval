@@ -5,8 +5,11 @@ import hashlib
 import importlib.util
 import io
 import json
+import subprocess
+import sys
 import tarfile
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -281,6 +284,9 @@ def test_web_ci_initializes_pnpm_before_its_node_cache_and_uses_frozen_install()
     assert "pnpm install --frozen-lockfile" in commands
     assert "pnpm exec playwright install --with-deps chromium" in commands
     assert "pnpm run check" in commands
+    assert "uv tool install -e ." in commands
+    assert "scripts/smoke_source_tool.py" in commands
+    assert "scripts/check_skill.py skills/peval" in commands
 
 
 @pytest.mark.parametrize(
@@ -312,8 +318,9 @@ def test_ci_builds_once_and_consumers_share_prepared_inputs():
     consumer = jobs["distribution"]
     assert "matrix" not in build.get("strategy", {})
     assert consumer["needs"] == "build-distribution"
-    assert len(consumer["strategy"]["matrix"]["os"]) == 2
-    assert len(consumer["strategy"]["matrix"]["python"]) == 3
+    assert "scripts/check_distribution.py" in "\n".join(
+        step.get("run", "") for step in build["steps"]
+    )
     commands = "\n".join(step.get("run", "") for step in consumer["steps"])
     assert "uv build" not in commands and "npm" not in commands
     assert "--constraints" in commands and "--echarts" in commands
@@ -330,3 +337,80 @@ def test_ci_builds_once_and_consumers_share_prepared_inputs():
             step.get("with", {}).get("name") == "smoke-asset"
             for step in jobs[name]["steps"]
         )
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", "publish.yml"])
+def test_ci_uses_python_312_and_checks_installs_on_both_platforms(workflow):
+    jobs = yaml.safe_load((ROOT / ".github/workflows" / workflow).read_text())["jobs"]
+    consumer = jobs["distribution" if workflow == "ci.yml" else "accept"]
+    assert consumer["strategy"]["matrix"] == {"os": ["ubuntu-latest", "windows-latest"]}
+    for job in jobs.values():
+        steps = job["steps"]
+        setup = [
+            step
+            for step in steps
+            if step.get("uses", "").startswith("astral-sh/setup-uv@")
+        ]
+        for step in setup:
+            assert step["with"]["python-version"] == "3.12"
+        for step in steps:
+            if "scripts/validate_install.py" in step.get("run", ""):
+                assert setup and '--python "$UV_PYTHON"' in step["run"]
+
+
+def test_publish_only_requests_upload_permissions_for_missing_index_files():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())["jobs"]
+    privileged = {
+        name
+        for name, job in jobs.items()
+        if job.get("permissions", {}).get("id-token") == "write"
+    }
+    assert privileged == {"upload-testpypi", "upload-pypi"}
+    for name in privileged:
+        job = jobs[name]
+        assert f"{job['needs']}.outputs.needed == 'true'" in job["if"]
+        assert all(
+            "uses" in step and not step["uses"].startswith("actions/checkout@")
+            for step in job["steps"]
+        )
+
+
+def test_public_index_retries_install_but_fails_a_broken_wheel_immediately(
+    tmp_path, monkeypatch
+):
+    validate = script("validate_install")
+    asset = tmp_path / "echarts.min.js"
+    asset.touch()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_install.py",
+            "psycheval==1",
+            "--python",
+            "3.12",
+            "--echarts",
+            str(asset),
+            "--retry-index",
+        ],
+    )
+    error = subprocess.CalledProcessError(1, "smoke_installed.py")
+    run = Mock(
+        side_effect=[
+            None,  # uv venv
+            subprocess.CompletedProcess([], 1),
+            subprocess.CompletedProcess([], 0),
+            None,  # uv pip check
+            error,
+        ]
+    )
+    sleep = Mock()
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(validate.time, "sleep", sleep)
+    with pytest.raises(subprocess.CalledProcessError) as failed:
+        validate.main()
+    assert failed.value is error
+    sleep.assert_called_once_with(15)
+    first, retry = run.call_args_list[1:3]
+    assert first == retry and first.args[0][-2:] == ["--refresh-package", "psycheval"]
+    assert run.call_args_list[-1].args[0][2].endswith("smoke_installed.py")

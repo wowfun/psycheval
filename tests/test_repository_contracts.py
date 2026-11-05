@@ -3,6 +3,8 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 CODE_SUFFIXES = {
     ".bash",
@@ -95,25 +97,15 @@ def test_vendored_pretty_aui_consolidates_third_party_licenses() -> None:
 
 
 def test_ci_uses_least_privilege_and_avoids_duplicate_branch_runs() -> None:
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-
-    assert "permissions:\n  contents: read" in workflow
-    assert "push:\n    branches: [main]" in workflow
-    assert "concurrency:" in workflow
-    assert "cancel-in-progress: true" in workflow
-
-
-def test_ci_validates_editable_and_distribution_installations() -> None:
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-
-    assert "uv tool install -e . --force" in workflow
-    assert "scripts/smoke_source_tool.py" in workflow
-    assert "scripts/check_skill.py\n          skills/peval" in workflow
-    assert "uv build" in workflow
-    assert "scripts/validate_install.py" in workflow
-    assert "--constraints" in workflow
-    assert "scripts/check_distribution.py" in workflow
-    assert "pyinstaller" not in workflow.lower()
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader
+    )
+    assert workflow["permissions"] == {"contents": "read"}
+    assert set(workflow["on"]) == {"push", "pull_request"}
+    assert workflow["on"]["push"]["branches"] == ["main"]
+    group = workflow["concurrency"]["group"]
+    assert "github.event.pull_request.number || github.sha" in group
+    assert workflow["concurrency"]["cancel-in-progress"] == "true"
 
 
 def test_checkout_installs_the_tool_before_using_bare_peval_commands() -> None:

@@ -4,10 +4,12 @@ import hashlib
 import importlib.util
 import io
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("release", ROOT / "scripts/release.py")
@@ -76,9 +78,6 @@ def test_invalid_tag_never_queries_or_uploads(monkeypatch):
 
 
 def test_index_wait_is_bounded(tmp_path, monkeypatch):
-    import json
-    import sys
-
     (tmp_path / "a.whl").write_bytes(b"wheel")
     receipt = {
         "tag": "v1.0.0",
@@ -128,7 +127,7 @@ def test_recover_uses_only_current_run_and_never_rebuilds_uploaded_version(
     def get_json(url, **kwargs):
         queried.append(url)
         if "api.github.com" in url:
-            assert "/actions/runs/42/artifacts" in url
+            assert url.endswith("/actions/runs/42/artifacts?name=release-dist")
             return {
                 "artifacts": []
                 if state in {"new", "missing_uploaded"}
@@ -222,3 +221,25 @@ def test_partial_upload_staging_and_index_download_use_receipt(
         assert {
             p.name: p.read_bytes() for p in (tmp_path / "download").iterdir()
         } == files
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="GitHub release runs on Ubuntu")
+@pytest.mark.parametrize("published", ["matching", "conflicting", "incomplete"])
+def test_existing_github_release_must_contain_the_expected_bytes(tmp_path, published):
+    jobs = yaml.safe_load((ROOT / ".github/workflows/publish.yml").read_text())["jobs"]
+    step = jobs["github-release"]["steps"][-1]["run"]
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "receipt.json").write_bytes(b"expected")
+    digest = hashlib.sha256(
+        b"expected" if published == "matching" else b"other"
+    ).hexdigest()
+    (tmp_path / "assets").write_text(
+        "" if published == "incomplete" else f"sha256:{digest}  receipt.json\n"
+    )
+    completed = subprocess.run(
+        ["bash", "-ec", 'gh() { [[ "$2" == view ]] && cat assets; }\n' + step],
+        cwd=tmp_path,
+        capture_output=True,
+    )
+    assert (completed.returncode == 0) == (published == "matching")

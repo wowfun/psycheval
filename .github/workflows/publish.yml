@@ -22,10 +22,11 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - &setup-uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: '0.12.0'
-          python-version: '3.14'
+          python-version: '3.12'
           enable-cache: false
       - run: python scripts/release.py gate
         env:
@@ -47,7 +48,8 @@ jobs:
           uv run --no-sync twine check --strict .local/dist/*
           uv run --no-sync python scripts/check_distribution.py .local/dist --tag "$GITHUB_REF_NAME"
           python scripts/release.py receipt
-      - run: python scripts/release.py verify
+      - if: steps.prior.outputs.artifact_id != ''
+        run: python scripts/release.py verify
       - if: steps.prior.outputs.artifact_id == ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -73,27 +75,24 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ['3.12', '3.13', '3.14']
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: '0.12.0'
-          python-version: ${{ matrix.python }}
-          enable-cache: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - *setup-uv
+      - &download-release-dist
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-dist
           path: .local/dist
       - run: python scripts/release.py verify
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - &download-smoke-asset
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: smoke-asset
           path: .local/smoke-asset
-      - run: python scripts/validate_install.py .local/dist/*.whl --python '${{ matrix.python }}' --echarts .local/smoke-asset/echarts.min.js
+      - run: python scripts/validate_install.py .local/dist/*.whl --python "$UV_PYTHON" --echarts .local/smoke-asset/echarts.min.js
 
   stage-testpypi:
     needs: accept
@@ -103,10 +102,7 @@ jobs:
       artifact_name: ${{ steps.stage.outputs.artifact_name }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: release-dist
-          path: .local/dist
+      - *download-release-dist
       - id: stage
         run: python scripts/release.py stage --index testpypi
       - if: steps.stage.outputs.needed == 'true'
@@ -118,44 +114,35 @@ jobs:
 
   upload-testpypi:
     needs: stage-testpypi
+    if: needs.stage-testpypi.outputs.needed == 'true'
     runs-on: ubuntu-latest
     environment: testpypi
     permissions:
       id-token: write
     steps:
-      - if: needs.stage-testpypi.outputs.needed == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ needs.stage-testpypi.outputs.artifact_name }}
           path: dist
-      - if: needs.stage-testpypi.outputs.needed == 'true'
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           repository-url: https://test.pypi.org/legacy/
 
   stage-pypi:
     needs: upload-testpypi
+    # Continue after a matching index skipped its upload, but never after a failed gate.
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     outputs:
       needed: ${{ steps.stage.outputs.needed }}
       artifact_name: ${{ steps.stage.outputs.artifact_name }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: '0.12.0'
-          python-version: '3.14'
-          enable-cache: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: release-dist
-          path: .local/dist
+      - *setup-uv
+      - *download-release-dist
       - run: python scripts/release.py download --index testpypi
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: smoke-asset
-          path: .local/smoke-asset
-      - run: python scripts/validate_install.py .local/dist/download/*.whl --python 3.14 --echarts .local/smoke-asset/echarts.min.js
+      - *download-smoke-asset
+      - run: python scripts/validate_install.py .local/dist/download/*.whl --python "$UV_PYTHON" --echarts .local/smoke-asset/echarts.min.js
       - id: stage
         run: python scripts/release.py stage --index pypi
       - if: steps.stage.outputs.needed == 'true'
@@ -167,47 +154,35 @@ jobs:
 
   upload-pypi:
     needs: stage-pypi
+    if: ${{ !cancelled() && needs.stage-pypi.result == 'success' && needs.stage-pypi.outputs.needed == 'true' }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write
     steps:
-      - if: needs.stage-pypi.outputs.needed == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ needs.stage-pypi.outputs.artifact_name }}
           path: dist
-      - if: needs.stage-pypi.outputs.needed == 'true'
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
 
   verify-pypi:
     needs: upload-pypi
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          version: '0.12.0'
-          python-version: '3.14'
-          enable-cache: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: release-dist
-          path: .local/dist
+      - *setup-uv
+      - *download-release-dist
       - run: python scripts/release.py index --index pypi
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: smoke-asset
-          path: .local/smoke-asset
-      - run: |
-          for attempt in 1 2 3 4 5; do
-            python scripts/validate_install.py "psycheval==${GITHUB_REF_NAME#v}" --python 3.14 --echarts .local/smoke-asset/echarts.min.js --refresh && exit 0
-            sleep 15
-          done
-          exit 1
+      - *download-smoke-asset
+      - run: >-
+          python scripts/validate_install.py "psycheval==${GITHUB_REF_NAME#v}"
+          --python "$UV_PYTHON" --echarts .local/smoke-asset/echarts.min.js --retry-index
 
   github-release:
     needs: verify-pypi
+    if: ${{ !cancelled() && needs.verify-pypi.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -217,7 +192,16 @@ jobs:
           name: release-dist
           path: dist
       - run: |
-          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft,assets \
+              --jq 'select(.isDraft == false) | .assets[] | .digest + "  " + .name' > published-assets; then
+            for asset in dist/*; do
+              checksum=$(cd dist && sha256sum "${asset##*/}")
+              grep -Fxq "sha256:$checksum" published-assets || {
+                echo "Existing release is a draft or has a missing or mismatched ${asset##*/}" >&2
+                exit 1
+              }
+            done
+          else
             args=()
             [[ "$GITHUB_REF_NAME" =~ (a|b|rc)[0-9]+$ ]] && args+=(--prerelease)
             gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes "${args[@]}"

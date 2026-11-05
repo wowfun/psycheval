@@ -54,10 +54,10 @@ uv sync --extra documents
 uv run --no-sync pytest tests/harbor/test_documents.py tests/harbor/test_evidence.py tests/harbor/test_vendoring.py
 ```
 
-The base suite skips parser-dependent tests when extras are absent. The Windows
-and Linux CI jobs also run the target with all four extras installed; source-copy
-imports are checked with optional parser imports blocked. Format and publication
-contracts live in [Document inspection and evidence](reference/document-evidence.md).
+The base suite skips parser-dependent tests when extras are absent. CI runs the full
+collection once per OS with the document parsers and pinned WorkBuddy runtime
+installed. The source-copy import test explicitly blocks those optional imports.
+Format and publication contracts live in [Document inspection and evidence](reference/document-evidence.md).
 
 Tests isolate HOME/XDG state, config, sockets, timers, and environment secrets.
 Focused success is not a release claim unless the expected test inventory is
@@ -163,7 +163,7 @@ Dataset service. Install the pinned runtime using the
 then run:
 
 ```console
-PEVAL_WORKBUDDY_RUNTIME_TESTS=1 uv run --no-sync pytest tests/harbor/test_workbuddy_verifier.py tests/harbor/test_vendoring.py -k real_runtime
+PEVAL_WORKBUDDY_RUNTIME_TESTS=1 uv run --no-sync pytest tests/harbor/test_workbuddy_verifier.py tests/harbor/test_vendoring.py
 ```
 
 On PowerShell, set `$env:PYTHONUTF8 = '1'`, `$env:PYTHONIOENCODING = 'utf-8'`, and
@@ -214,22 +214,26 @@ explicit Agent Skill installation and replacement.
 
 Build an sdist and its wheel with the frozen build group, without build isolation.
 Validate metadata, README links, resources, licenses and tracked payload bytes.
-Install the wheel outside the checkout on Linux and Windows, Python 3.12–3.14.
-PR installs use lock-derived runtime constraints, not preinstalled requirements;
-release acceptance also resolves dependencies without constraints. Both use
+CI and release acceptance install the wheel outside the checkout on Linux and
+native Windows using Python 3.12. Index installation checks use the same Python
+version. Package metadata owns the installable Python range.
+CI installs into an empty environment using lock-derived runtime constraints.
+Release acceptance resolves dependencies without constraints. Both use
 isolated user state and synthetic evidence, with a preseeded ECharts cache.
-All matrix cells install the same build. A separate smoke-fixture artifact carries
-the single ECharts file extracted from its integrity-checked, lock-pinned archive;
-it is not part of the release distribution or its receipt. Local validation can
+Both platforms install the same wheel. CI sends the ECharts fixture and runtime
+constraints alongside the build. Publish sends the fixture in a separate artifact
+and records only the distribution files in the receipt. Local validation can
 pass `--echarts <file>` or use an existing `pnpm install --frozen-lockfile` installation.
 Release helpers test tag/CI gates, artifact recovery, partial uploads, conflicting
 digests and bounded index retries without uploading to a live service.
 
 ## Platform boundaries
 
-CI runs the complete Python suite on Linux and native Windows. Node,
-documentation, skill, and editable source-tool checks run on Ubuntu. Local Linux
-or WSL validation does not establish native Windows support; declare it only
+Pull requests and pushes to main run the same CI gates. A new revision supersedes
+the previous run for its PR. Each main commit can finish the CI run used by the
+release gate for that SHA. CI runs the complete Python suite on Linux and native
+Windows. Ruff, Node, documentation, Skill and editable source-tool checks run on
+Ubuntu. Local Linux or WSL validation does not establish native Windows support; declare it only
 after the remote Windows job succeeds.
 
 Live PBench runs are separate opt-in evidence. Classify provider, network,

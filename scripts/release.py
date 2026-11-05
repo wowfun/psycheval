@@ -125,12 +125,10 @@ def main() -> None:
     if args.action == "recover":
         # A rerun keeps the same run ID. Never pick another run's artifact.
         result = get_json(
-            f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}/artifacts",
+            f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}/artifacts?name=release-dist",
             token=os.environ["GH_TOKEN"],
         )
-        matches = [
-            item for item in result["artifacts"] if item["name"] == "release-dist"
-        ]
+        matches = result["artifacts"]
         if matches:
             if len(matches) != 1 or matches[0]["expired"]:
                 raise ValueError(

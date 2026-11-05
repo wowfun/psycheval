@@ -103,22 +103,25 @@ creation bypass. Configure these controls before pushing the first tag.
 Merge the preparation into `main`, wait for its push CI, then push the matching
 `v<version>` tag. The publish workflow checks main ancestry and successful
 push/main CI for that exact commit. It builds once, saves a 90-day artifact and
-SHA-256 receipt, validates Linux/Windows Python 3.12–3.14 consumers, and uploads
-to TestPyPI. It downloads those files, verifies their receipt hashes, and tests
+SHA-256 receipt, runs the [distribution checks](testing.md#distribution-checks),
+and uploads to TestPyPI. It downloads those files, verifies their receipt hashes, and tests
 the downloaded wheel in an empty environment with dependencies from PyPI.
 Review the rendered TestPyPI description before approving the PyPI
 environment. The exact same files then reach PyPI, followed by an index install
 and GitHub release. Candidate versions produce GitHub prereleases.
 The GitHub release deliberately publishes `receipt.json` alongside the wheel and
 sdist so consumers can inspect their commit, tag and SHA-256 provenance.
+On a rerun, an existing GitHub release must be published and its three assets
+must match the local files by name and digest.
 
-Rerun failed jobs to reuse the original artifact; a full rerun also recovers
-that workflow run's artifact instead of rebuilding it. Existing index files are
-skipped only when their SHA-256 matches the receipt. Missing files are uploaded;
-unexpected files or different bytes fail the release. An expired/missing artifact
-after upload requires a new version. Index visibility checks and refreshed
-installs have bounded retries. Upload jobs run no project code and only they
-receive OIDC upload permission; GitHub release permission is separate.
+After a partial upload, rerun all jobs of the same workflow run to recover the
+original artifact and stage only the missing files. An unexpected file or a
+SHA-256 mismatch fails the release. Loss of the original artifact after upload
+requires a new version. Index visibility checks and the final package install
+have bounded retries. The installed application's smoke checks run once after
+installation succeeds. An index with both matching files needs no upload or
+environment approval. Only upload jobs receive OIDC permission. Those jobs run
+no project code. The GitHub release job has separate repository permissions.
 
 If a published candidate is defective, publish an advisory and a new candidate
 version. Yanking is optional and does not protect consumers with an exact pin.
