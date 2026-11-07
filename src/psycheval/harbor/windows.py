@@ -60,6 +60,158 @@ def open_read_descriptor(path: Path) -> int:
         raise
 
 
+def initialize_workspace_permissions(path: Path) -> None:
+    """Give the process user inheritable security-edit rights on a new owned dir."""
+    if os.name != "nt":
+        raise OSError("Workspace ACL initialization requires Windows")
+    from ctypes import wintypes
+
+    class Trustee(ctypes.Structure):
+        _fields_ = [
+            ("multiple", wintypes.LPVOID),
+            ("operation", wintypes.DWORD),
+            ("form", wintypes.DWORD),
+            ("type", wintypes.DWORD),
+            ("sid", wintypes.LPVOID),
+        ]
+
+    class ExplicitAccess(ctypes.Structure):
+        _fields_ = [
+            ("permissions", wintypes.DWORD),
+            ("mode", wintypes.DWORD),
+            ("inheritance", wintypes.DWORD),
+            ("trustee", Trustee),
+        ]
+
+    kernel = _windows_file_api()
+    security = ctypes.WinDLL("advapi32", use_last_error=True)
+    pointer = ctypes.POINTER(wintypes.LPVOID)
+    security.OpenProcessToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    security.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    security.GetSecurityInfo.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        *([pointer] * 5),
+    ]
+    security.SetEntriesInAclW.argtypes = [
+        wintypes.ULONG,
+        ctypes.POINTER(ExplicitAccess),
+        wintypes.LPVOID,
+        pointer,
+    ]
+    security.SetSecurityInfo.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        *([wintypes.LPVOID] * 4),
+    ]
+    kernel.LocalFree.argtypes = [wintypes.LPVOID]
+    kernel.LocalFree.restype = wintypes.LPVOID
+    token = wintypes.HANDLE()
+    descriptor, new_acl, old_acl = (wintypes.LPVOID() for _ in range(3))
+    handle = kernel.CreateFileW(
+        str(path), 0x60000, 7, None, 3, 0x02200000, None
+    )  # READ_CONTROL | WRITE_DAC, open the directory itself without following links.
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        # A link swapped in before opening must never redirect this ACL edit.
+        attributes = (wintypes.DWORD * 2)()
+        kernel.GetFileInformationByHandleEx.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        ]
+        if not kernel.GetFileInformationByHandleEx(
+            handle, 9, attributes, ctypes.sizeof(attributes)
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not attributes[0] & 0x10 or attributes[0] & 0x400:
+            raise ValueError(
+                "owned workspace must be a directory without reparse points"
+            )
+        if not security.OpenProcessToken(wintypes.HANDLE(-1), 8, ctypes.byref(token)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        size = wintypes.DWORD()
+        security.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))
+        if ctypes.get_last_error() != 122:  # ERROR_INSUFFICIENT_BUFFER
+            raise ctypes.WinError(ctypes.get_last_error())
+        user = ctypes.create_string_buffer(size.value)
+        if not security.GetTokenInformation(token, 1, user, size, ctypes.byref(size)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        sid = ctypes.cast(user, pointer)[0]
+        code = security.GetSecurityInfo(
+            handle,
+            1,
+            4,
+            None,
+            None,
+            ctypes.byref(old_acl),
+            None,
+            ctypes.byref(descriptor),
+        )
+        if code:
+            raise ctypes.WinError(code)
+        if not old_acl:
+            return  # A null DACL already grants full access; do not narrow it.
+        # An explicit allow can outrank an inherited deny. Refuse security-right
+        # denials conservatively, even when their trustee may be unrelated.
+        security.GetAclInformation.argtypes = [
+            wintypes.LPVOID,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            ctypes.c_int,
+        ]
+        security.GetAce.argtypes = [wintypes.LPVOID, wintypes.DWORD, pointer]
+        acl_info = (wintypes.DWORD * 3)()
+        if not security.GetAclInformation(
+            old_acl, acl_info, ctypes.sizeof(acl_info), 2
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        for index in range(acl_info[0]):
+            ace = wintypes.LPVOID()
+            if not security.GetAce(old_acl, index, ctypes.byref(ace)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            header = ctypes.cast(ace, ctypes.POINTER(ctypes.c_ubyte))
+            mask = ctypes.cast(ace, ctypes.POINTER(wintypes.DWORD))[1]
+            if header[0] in {1, 6, 10, 12} and mask & 0x100C0000:
+                raise PermissionError("workspace ACL denies security-edit rights")
+        entry = ExplicitAccess(0xC0000, 1, 3, Trustee(None, 0, 0, 1, sid))
+        code = security.SetEntriesInAclW(
+            1, ctypes.byref(entry), old_acl, ctypes.byref(new_acl)
+        )
+        if code:
+            raise ctypes.WinError(code)
+        code = security.SetSecurityInfo(handle, 1, 4, None, None, new_acl, None)
+        if code:
+            raise ctypes.WinError(code)
+        # Existing deny ACEs remain authoritative; fail initialization if denied.
+        verification = kernel.CreateFileW(
+            str(path), 0xC0000, 7, None, 3, 0x02200000, None
+        )
+        if verification == wintypes.HANDLE(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        kernel.CloseHandle(verification)
+    finally:
+        kernel.LocalFree(new_acl)
+        kernel.LocalFree(descriptor)
+        if token:
+            kernel.CloseHandle(token)
+        kernel.CloseHandle(handle)
+
+
 _ABSOLUTE = re.compile(r"^[A-Za-z]:[/\\]")
 
 

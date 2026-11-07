@@ -64,7 +64,7 @@ owns configuration export and Dataset-to-mount selection.
 The package version has one source in the lightweight Harbor initializer,
 shared by the root package and build metadata.
 
-Within Harbor, `windows` owns native Windows path and process mechanics and
+Within Harbor, `windows` owns native Windows path, ACL and process mechanics and
 PowerShell command rendering.
 Environment and Agent adapters consume those mechanics without changing the
 reported host OS or choosing the Agent's tool shell. WorkBuddy owns dataset

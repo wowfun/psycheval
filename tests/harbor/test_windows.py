@@ -5,6 +5,7 @@ import asyncio
 import ctypes
 import json
 import os
+import subprocess
 import sys
 import textwrap
 from pathlib import Path, PureWindowsPath
@@ -14,6 +15,103 @@ import pytest
 
 from psycheval.harbor import windows
 from tests.harbor.environment_support import make_environment
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="native Windows ACLs")
+@pytest.mark.parametrize("borrowed", [False, True])
+@pytest.mark.parametrize("deny_write_owner", [False, True])
+def test_workspace_security_rights_are_initialized_only_for_owned_workspaces(
+    tmp_path, borrowed, deny_write_owner
+):
+    root = tmp_path / "modify only"
+    root.mkdir()
+    quoted = windows.quote_powershell_literal(str(root))
+
+    def powershell(script):
+        return subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    # Reproduce a writable drive whose inherited Modify grant lacks WRITE_OWNER.
+    powershell(
+        "$ErrorActionPreference='Stop'; "
+        "$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; "
+        f"$acl=[IO.Directory]::GetAccessControl({quoted}); "
+        "$acl.SetAccessRuleProtection($true,$false); "
+        "$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new("
+        "$sid,'Modify','ContainerInherit,ObjectInherit','None','Allow')); "
+        + (
+            "$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new("
+            "$sid,'TakeOwnership','ContainerInherit,ObjectInherit','None','Deny')); "
+            if deny_write_owner
+            else ""
+        )
+        + f"[IO.Directory]::SetAccessControl({quoted}, $acl)"
+    )
+    original = powershell(f"[IO.Directory]::GetAccessControl({quoted}).Sddl")
+    environment = make_environment(
+        tmp_path / "host",
+        extra_mounts=(
+            [{"type": "bind", "source": str(root), "target": "/app"}]
+            if borrowed
+            else None
+        ),
+        environment_kwargs={"workdir_root": root, "workspace_baseline": "none"},
+    )
+
+    async def scenario():
+        try:
+            if deny_write_owner and not borrowed:
+                with pytest.raises(PermissionError):
+                    await environment.start(False)
+                assert list(root.iterdir()) == []
+                assert (
+                    powershell(f"[IO.Directory]::GetAccessControl({quoted}).Sddl")
+                    == original
+                )
+                return
+            await environment.start(False)
+            if not borrowed:
+                child = environment.work_dir / "child"
+                child.mkdir()
+                for directory in (environment.work_dir, child):
+                    kernel = windows._windows_file_api()
+                    handle = kernel.CreateFileW(
+                        str(directory), 0xC0000, 7, None, 3, 0x02200000, None
+                    )
+                    assert handle != ctypes.c_void_p(-1).value, (
+                        directory,
+                        ctypes.get_last_error(),
+                    )
+                    kernel.CloseHandle(handle)
+            assert (
+                powershell(f"[IO.Directory]::GetAccessControl({quoted}).Sddl")
+                == original
+            )
+        finally:
+            await environment.stop(True)
+        assert root.exists()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="native Windows junction")
+def test_workspace_security_initialization_rejects_junctions(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    junction = tmp_path / "junction"
+    subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(target)],
+        capture_output=True,
+        check=True,
+    )
+    with pytest.raises(ValueError, match="without reparse points"):
+        windows.initialize_workspace_permissions(junction)
+    assert target.is_dir()
+    junction.rmdir()
 
 
 @pytest.mark.parametrize("stage", ["stat", "chmod", "remove"])

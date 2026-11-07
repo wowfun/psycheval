@@ -904,6 +904,8 @@ class HostEnvironment(BaseEnvironment):
                 f"reuse stale state: {str(workspace)!r}"
             ) from exc
         self._workspace = _Workspace(workspace, self._task_workdir, owned=True)
+        if self.os == TaskOS.WINDOWS:
+            windows.initialize_workspace_permissions(workspace)
 
     def _is_separate_verifier(self) -> bool:
         logical_targets = {

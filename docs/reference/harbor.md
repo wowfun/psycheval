@@ -133,7 +133,11 @@ conversion explicitly. Publication failures cannot admit partial evidence.
 Malformed known protocol data fails explicitly. Context/capacity usage is not
 token accounting; absent token and cost evidence remains unknown. Conversion is
 performed once by Harbor post-run context population, including partial prompts.
-Configuration failures do not fabricate a user turn.
+On Windows, a first projection failure propagates as the Trial failure; a repeated
+Harbor recovery hook preserves that original exception and diagnostic prefix
+instead of aborting the enclosing Job. It never publishes a canonical trajectory
+for the failed projection.
+Configuration failures do not fabricate a user step.
 
 The harness owns a Linux subreaper or a Windows Job and all Agent descendants, including separate
 tool process groups. Every outcome attempts bounded cleanup before verification.
@@ -814,6 +818,16 @@ workspace bind mount or WorkBuddy archive bootstrap. External workspace bind
 mounts are borrowed and are not baseline-initialized. Separate verifier
 environments retain their isolated Task test context without copying the project or
 initializing a Git baseline.
+
+On Windows, each newly created owned workspace grants the current process user
+inheritable `WRITE_DAC` and `WRITE_OWNER` rights before staging inputs. This lets
+native Agents provision their workspace sandbox even when the configured parent
+grants only Modify access. Existing grants and denials, owner and integrity label
+are preserved; parent directories and borrowed workspaces are not changed. An
+existing deny ACE for security-edit rights aborts initialization, even if its
+trustee may be unrelated, so an explicit grant cannot override an inherited deny.
+Failure to establish the rights also aborts and cleans up the owned workspace.
+Agents retain control of their own sandbox policy.
 
 The explicit `runtime_config.load_host_settings(path)` parser owns
 `[harbor.host].workdir_root` in a caller-selected TOML file. Omission uses the
