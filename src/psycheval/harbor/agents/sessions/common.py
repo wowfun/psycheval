@@ -3,17 +3,17 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from psycheval.adapters.base import (
+from ...redaction import redact_value
+from ...timing import timestamp_fallback_allowed
+from .models import (
+    ConversionOptions,
     ConversionResult,
     ObservationMeta,
     StepMeta,
     ToolMeta,
-    timestamp_fallback_allowed,
     timestamp_fallback_duration_ms,
 )
-from psycheval.config import ToolConfig
-from psycheval.redaction import redact_value
-from psycheval.sources import MessageRecord
+from .sources import MessageRecord
 
 
 class CommonMessageAdapter:
@@ -21,7 +21,7 @@ class CommonMessageAdapter:
     default_agent_name = "agent"
 
     def convert(
-        self, records: list[MessageRecord], config: ToolConfig
+        self, records: list[MessageRecord], config: ConversionOptions
     ) -> ConversionResult:
         steps: list[dict[str, Any]] = []
         meta: list[StepMeta] = []
@@ -107,7 +107,7 @@ class CommonMessageAdapter:
         )
 
     def step_from_record(
-        self, record: MessageRecord, step_id: int, config: ToolConfig
+        self, record: MessageRecord, step_id: int, config: ConversionOptions
     ) -> tuple[dict[str, Any], StepMeta] | None:
         message = record.message
         role = message_role(message)
@@ -142,7 +142,7 @@ class CommonMessageAdapter:
         self,
         record: MessageRecord,
         step_id: int,
-        config: ToolConfig,
+        config: ConversionOptions,
         timestamp: int | None,
     ) -> tuple[dict[str, Any], StepMeta]:
         message = record.message
@@ -215,7 +215,7 @@ class CommonMessageAdapter:
         self,
         record: MessageRecord,
         step_id: int,
-        config: ToolConfig,
+        config: ConversionOptions,
         timestamp: int | None,
     ) -> tuple[dict[str, Any], StepMeta]:
         observation, observation_meta = self.tool_result_observation(
@@ -228,7 +228,7 @@ class CommonMessageAdapter:
     def tool_result_observation(
         self,
         record: MessageRecord,
-        config: ToolConfig,
+        config: ConversionOptions,
         timestamp: int | None,
     ) -> tuple[dict[str, Any], ObservationMeta]:
         message = record.message
@@ -316,7 +316,7 @@ def build_step(
     source: str,
     text: str,
     timestamp: int | None,
-    config: ToolConfig,
+    config: ConversionOptions,
     truncated: bool = False,
 ) -> tuple[dict[str, Any], StepMeta]:
     value = redact_value(text) if config.redact else text
@@ -576,8 +576,7 @@ def final_metrics_from_records(
         "total_tool_calls": tool_calls,
         "total_tool_errors": tool_errors,
     }
-    if turns:
-        extra["total_turns"] = turns
+    extra["total_agent_steps"] = turns
     usage = finalized_totals(usage_totals)
     if usage:
         extra["usage"] = usage
@@ -653,13 +652,13 @@ def finalized_totals(totals: dict[str, float]) -> dict[str, int | float]:
     return values
 
 
-def bounded_text(value: str, config: ToolConfig) -> tuple[str, bool]:
+def bounded_text(value: str, config: ConversionOptions) -> tuple[str, bool]:
     if len(value) <= config.max_content_chars:
         return value, False
     return value[: config.max_content_chars], True
 
 
-def bounded_value(value: Any, config: ToolConfig) -> tuple[Any, bool]:
+def bounded_value(value: Any, config: ConversionOptions) -> tuple[Any, bool]:
     if isinstance(value, str):
         return bounded_text(value, config)
     raw = json.dumps(value, ensure_ascii=False, sort_keys=True)
@@ -669,7 +668,7 @@ def bounded_value(value: Any, config: ToolConfig) -> tuple[Any, bool]:
 
 
 def bounded_arguments(
-    value: dict[str, Any], config: ToolConfig
+    value: dict[str, Any], config: ConversionOptions
 ) -> tuple[dict[str, Any], bool]:
     raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if len(raw) <= config.max_content_chars:

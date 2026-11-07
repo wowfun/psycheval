@@ -5,6 +5,16 @@ const { spawn } = require("node:child_process");
 const path = require("node:path");
 const cliEntry = process.argv[2];
 process.argv.splice(1, 1);
+// The server banner uses a captured console; ACP writes directly to stdout.
+const diagnostic = console.error.bind(console);
+console.log = console.info = console.debug = (...args) => {
+  if (args.some(value => typeof value === "string" &&
+      value.includes("HTTP Server") && value.includes("Press Ctrl+C to stop the server"))) {
+    process.stderr.write("NATIVE_ACP_SERVER_READY\n");
+    return;
+  }
+  diagnostic(...args);
+};
 const timeoutMs = Number(process.env.PEVAL_WORKBUDDY_BOOTSTRAP_TIMEOUT_MS);
 const python = process.env.PEVAL_WORKBUDDY_BOOTSTRAP_PYTHON;
 delete process.env.PEVAL_WORKBUDDY_BOOTSTRAP_TIMEOUT_MS;

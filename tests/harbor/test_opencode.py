@@ -16,7 +16,7 @@ from harbor.environments.base import ExecResult
 from harbor.models.agent.context import AgentContext
 from harbor.models.task.config import MCPServerConfig
 
-from psycheval.harbor.opencode import HostOpenCodeAgent, HostOpenCodeOptions
+from psycheval.harbor.agents.opencode import HostOpenCodeAgent, HostOpenCodeOptions
 from psycheval.harbor.trajectory_validation import load_validated_trajectory
 from psycheval.harbor.verifier import evaluate
 from tests.harbor.environment_support import assert_process_exited, make_environment
@@ -37,6 +37,32 @@ def _exported_session():
             }
         ],
     }
+
+
+def test_run_publishes_trajectory_when_measurement_metadata_skips_harbor_callback(
+    tmp_path, monkeypatch
+):
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+
+    async def run_native(instruction, environment, context):
+        (tmp_path / "opencode-session.json").write_text(
+            json.dumps(_exported_session()), encoding="utf-8"
+        )
+        agent._trajectory = agent._convert_events_to_trajectory(
+            agent._session_events([])
+        )
+        agent._measurement_path = tmp_path / "observer.ndjson"
+        agent._measurement_path.write_text('{"kind":"loaded"}\n', encoding="utf-8")
+
+    monkeypatch.setattr(agent, "_run", run_native)
+    context = AgentContext()
+    asyncio.run(agent.run("fixture", None, context))
+    assert not context.is_empty()  # Harbor now skips populate_context_post_run.
+    data = load_validated_trajectory(tmp_path / "trajectory.json")
+    assert data["session_id"] == "session-fixture"
+    assert data["extra"]["measurements"] == context.metadata["measurements"]
+    assert context.n_output_tokens == 7
+    assert context.n_input_tokens == data["final_metrics"]["total_prompt_tokens"]
 
 
 @pytest.mark.parametrize(
@@ -317,10 +343,14 @@ def _native_timed_trajectory(tmp_path, model_time, tool_time, status="completed"
 
 
 def test_native_timing_preserves_model_boundary_parallel_tools_and_projection(tmp_path):
-    from psycheval.conversion import convert_atif_trajectory, finalize_atif_conversion
+    from psycheval.harbor.agents.sessions.conversion import (
+        convert_atif_trajectory,
+        finalize_atif_conversion,
+    )
     from psycheval.report.builder import project_meta_from_atif
     from psycheval.report.inference import inference_row_metrics
-    from psycheval.state.catalog_projection import model_duration_ms, step_outline
+    from psycheval.report.measurements import model_duration_ms
+    from psycheval.state.catalog_projection import step_outline
 
     original = _native_timed_trajectory(
         tmp_path,
@@ -360,7 +390,7 @@ def test_native_timing_preserves_model_boundary_parallel_tools_and_projection(tm
 @pytest.mark.parametrize("boundary", [None, True, "150", -1, 1.5, float("inf"), 10**30])
 def test_invalid_native_boundaries_stay_unknown_without_fallback(tmp_path, boundary):
     from psycheval.report.builder import project_meta_from_atif
-    from psycheval.state.catalog_projection import model_duration_ms
+    from psycheval.report.measurements import model_duration_ms
 
     trajectory = _native_timed_trajectory(
         tmp_path,
@@ -1526,7 +1556,7 @@ def test_opencode_probe_timeout_retains_diagnostic_and_isolated_env(
 def test_host_options_preflight_matches_constructor(tmp_path):
     import pytest
 
-    from psycheval.harbor.opencode import HostOpenCodeAgent
+    from psycheval.harbor.agents.opencode import HostOpenCodeAgent
 
     options = HostOpenCodeAgent.parse_options(
         {"executable": "custom-opencode", "variant": "high"}

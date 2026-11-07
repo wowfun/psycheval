@@ -9,8 +9,8 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-from psycheval.atif import ATIF_VERSION
 from psycheval.config import HarborDataset, HarborMount, ToolConfig
+from psycheval.harbor.atif import ATIF_VERSION
 from psycheval.state import (
     CatalogQuery,
     WorkspaceCatalog,

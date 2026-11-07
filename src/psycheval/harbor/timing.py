@@ -7,9 +7,7 @@ from importlib.resources import files
 from typing import Any
 
 _CONTRACT = json.loads(
-    files("psycheval.assets")
-    .joinpath("web/timing-sources.json")
-    .read_text(encoding="utf-8")
+    files(__package__).joinpath("timing-sources.json").read_text(encoding="utf-8")
 )
 
 

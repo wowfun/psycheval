@@ -468,3 +468,45 @@ default_db_path = "hermes.db"
                 ):
                     self.assertNotIn("custom", available_adapter_ids())
                     self.assertEqual(legacy.load_count, 0)
+
+
+def test_dispatch_passes_only_explicit_conversion_options(monkeypatch):
+    from psycheval.conversion import convert_records
+    from psycheval.harbor.agents.sessions.common import CommonMessageAdapter
+    from psycheval.harbor.agents.sessions.models import ConversionOptions, MessageRecord
+
+    captured = []
+
+    class Plugin(CommonMessageAdapter):
+        def convert(self, records, options):
+            assert isinstance(options, ConversionOptions)
+            assert not hasattr(options, "workspace_root")
+            captured.append(options)
+            return super().convert(records, options)
+
+    monkeypatch.setattr("psycheval.conversion.adapter_for", lambda _: Plugin())
+    config = ToolConfig(
+        adapter="custom",
+        workspace_root="private-workspace",
+        adapter_options_by_id={"custom": {"mode": "explicit"}},
+    )
+    result = convert_records(
+        [MessageRecord(message={"role": "assistant", "content": "done"})], config
+    )
+    assert captured[0].adapter_options == {"mode": "explicit"}
+    assert result.trajectory["final_metrics"]["extra"]["total_agent_steps"] == 1
+
+
+def test_db_mapping_updates_are_validated_by_the_portable_model(tmp_path):
+    from psycheval.config import load_config
+
+    path = tmp_path / "peval.toml"
+    path.write_text('[db]\nmessages_table="custom_messages"\n', encoding="utf-8")
+    assert load_config(workspace_root=tmp_path).db.messages_table == "custom_messages"
+    path.write_text(
+        '[db]\nmessages_table="unsafe; DROP TABLE messages"\n', encoding="utf-8"
+    )
+    import pytest
+
+    with pytest.raises(ValueError, match="unsafe SQL identifier"):
+        load_config(workspace_root=tmp_path)

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from harbor.models.agent.context import AgentContext
 
-from psycheval.harbor.acp_agent import HostACPAgent
+from psycheval.harbor.agents.acp.agent import HostACPAgent
 from tests.harbor.environment_support import make_environment
 
 PEER = Path(__file__).resolve().parents[1] / "fixtures/acp_peer.py"
@@ -48,7 +48,7 @@ def _update_record(
 def test_update_relay_reads_incrementally_and_drains_complete_records(
     tmp_path, monkeypatch, caplog
 ):
-    from psycheval.harbor import acp_agent
+    from psycheval.harbor.agents.acp import agent as acp_agent
 
     monkeypatch.setattr(acp_agent, "_UPDATE_READ_BYTES", 3)
 
@@ -96,7 +96,7 @@ def test_update_relay_reads_incrementally_and_drains_complete_records(
 
 
 def test_update_relay_waits_for_a_partial_utf8_record(tmp_path, caplog):
-    from psycheval.harbor import acp_agent
+    from psycheval.harbor.agents.acp import agent as acp_agent
 
     async def scenario():
         path = tmp_path / "events.ndjson"
@@ -151,7 +151,7 @@ def test_update_relay_waits_for_a_partial_utf8_record(tmp_path, caplog):
 
 
 def test_update_callback_self_cancellation_is_confined_to_observer(tmp_path, caplog):
-    from psycheval.harbor import acp_agent
+    from psycheval.harbor.agents.acp import agent as acp_agent
 
     path = tmp_path / "events.ndjson"
     path.write_bytes(
@@ -180,7 +180,7 @@ def test_update_callback_self_cancellation_is_confined_to_observer(tmp_path, cap
 def test_update_observer_read_failure_is_categorical(
     tmp_path, monkeypatch, caplog, damage
 ):
-    from psycheval.harbor import acp_agent
+    from psycheval.harbor.agents.acp import agent as acp_agent
 
     path = tmp_path / "events.ndjson"
     if damage == "read":
@@ -213,7 +213,7 @@ def test_update_observer_read_failure_is_categorical(
 
 
 def test_update_final_drain_has_its_own_deadline(tmp_path, monkeypatch, caplog):
-    from psycheval.harbor import acp_agent
+    from psycheval.harbor.agents.acp import agent as acp_agent
 
     monkeypatch.setattr(acp_agent, "_UPDATE_CALLBACK_TIMEOUT_SEC", 10)
     monkeypatch.setattr(acp_agent, "_UPDATE_DRAIN_TIMEOUT_SEC", 0.03)
@@ -253,7 +253,7 @@ def test_update_final_drain_has_its_own_deadline(tmp_path, monkeypatch, caplog):
 def test_session_update_failure_does_not_fail_evaluation(
     tmp_path, monkeypatch, caplog, failure
 ):
-    from psycheval.harbor import acp_agent
+    from psycheval.harbor.agents.acp import agent as acp_agent
 
     monkeypatch.setattr(acp_agent, "_UPDATE_CALLBACK_TIMEOUT_SEC", 0.03)
 
@@ -359,7 +359,7 @@ def test_publication_failure_after_successful_execution_is_not_hidden(
 
 
 def test_relay_cancelled_before_it_starts_can_still_finish(tmp_path, caplog):
-    from psycheval.harbor import acp_agent
+    from psycheval.harbor.agents.acp import agent as acp_agent
 
     async def scenario():
         relay = acp_agent._SessionUpdateRelay(
@@ -427,7 +427,7 @@ def test_update_cleanup_preserves_primary_execution_error(
 def test_repeated_cancellation_finishes_update_observer_before_publication(
     tmp_path, monkeypatch, caplog
 ):
-    from psycheval.harbor import acp_agent
+    from psycheval.harbor.agents.acp import agent as acp_agent
 
     monkeypatch.setattr(acp_agent, "_UPDATE_CALLBACK_TIMEOUT_SEC", 10)
     monkeypatch.setattr(acp_agent, "_UPDATE_DRAIN_TIMEOUT_SEC", 0.1)

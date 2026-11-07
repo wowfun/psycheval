@@ -9,6 +9,7 @@ import tempfile
 import tomllib
 from pathlib import Path, PureWindowsPath
 from typing import Any, Iterable, Literal
+from urllib.parse import unquote
 
 import tomlkit
 from pydantic import (
@@ -20,6 +21,7 @@ from pydantic import (
     model_validator,
 )
 
+from psycheval.harbor.agents.sessions.models import ConversionOptions, DbMapping
 from psycheval.harbor.identifiers import HARBOR_ID_RE, validate_harbor_id
 from psycheval.i18n import normalize_locale
 from psycheval.jobs.configuration import HarnessId, JobsDocument
@@ -27,6 +29,7 @@ from psycheval.judge_runs.configuration import JudgeProfiles
 from psycheval.metric_contract import (
     BUILTIN_IDS,
     METRIC_LIMIT,
+    RESERVED_EXTRA_KEYS,
     metric_descriptor,
     validate_metric_id,
 )
@@ -68,20 +71,6 @@ class _FrozenConfigModel(BaseModel):
         values = {name: getattr(self, name) for name in type(self).model_fields}
         values.update(changes)
         return type(self).model_validate(values, strict=True)
-
-
-class DbMapping(_FrozenConfigModel):
-    messages_table: str = "messages"
-    session_id_column: str = "session_id"
-    sequence_column: str = "session_seq"
-    message_column: str = "message_json"
-    usage_column: str = "usage_json"
-    metadata_column: str = "metadata_json"
-
-    @field_validator("*")
-    @classmethod
-    def validate_identifier(cls, value: str) -> str:
-        return _safe_identifier(value)
 
 
 class HarborDataset(_FrozenConfigModel):
@@ -171,6 +160,11 @@ def validate_metric_config(
     if len(value) > METRIC_LIMIT:
         raise ValueError("at most 128 metric descriptions are supported")
     for key, description in value.items():
+        namespace, _, raw_key = key.partition(":")
+        if namespace == "atif.extra" and unquote(raw_key) in RESERVED_EXTRA_KEYS:
+            raise ValueError(
+                f"{key} is reserved; configure the built-in metric or rename the custom metric"
+            )
         validate_metric_id(key)
         if (
             key in BUILTIN_IDS
@@ -213,6 +207,18 @@ class ToolConfig(_FrozenConfigModel):
     @property
     def adapter_options(self) -> dict[str, Any]:
         return _adapter_options_for(self.adapter, self.adapter_options_by_id)
+
+    def conversion_options(self) -> ConversionOptions:
+        return ConversionOptions(
+            agent_name=self.agent_name,
+            agent_version=self.agent_version,
+            model=self.model,
+            max_content_chars=self.max_content_chars,
+            redact=self.redact,
+            db=self.db,
+            adapter_options=self.adapter_options,
+            session_root=self.adapter_default_session_roots.get(self.adapter),
+        )
 
     def for_adapter(self, adapter: object) -> ToolConfig:
         return self.validated_update(adapter=_normalize_adapter_id(adapter))
@@ -607,10 +613,12 @@ def apply_toml_config(
             "metadata_column",
         ]:
             if key in db:
-                db_updates[key] = _safe_identifier(db[key])
+                db_updates[key] = db[key]
         if db_updates:
             config = config.validated_update(
-                db=config.db.validated_update(**db_updates)
+                db=DbMapping.model_validate(
+                    {**config.db.model_dump(), **db_updates}, strict=True
+                )
             )
     adapter_options_by_id, adapter_default_db_paths, session_roots = (
         _adapter_config_by_id(
@@ -1295,13 +1303,6 @@ def _normalize_adapter_id(adapter: object) -> str:
     text = str(adapter or "").strip().lower()
     if not text:
         raise ValueError("adapter id is required")
-    return text
-
-
-def _safe_identifier(value: object) -> str:
-    text = str(value)
-    if not IDENTIFIER_RE.match(text):
-        raise ValueError(f"unsafe SQL identifier: {text}")
     return text
 
 

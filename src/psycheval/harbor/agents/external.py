@@ -11,17 +11,17 @@ from harbor.models.task.config import TaskOS
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.scripts import quote_shell_arg
 
-from . import __version__, windows
-from .environment import HostEnvironment
-from .inference_telemetry import populate_context_from_trajectory
-from .runtime_config import (
+from .. import __version__, windows
+from ..environment import HostEnvironment
+from ..inference_telemetry import populate_context_from_trajectory
+from ..runtime_config import (
     PEVAL_CONFIG_ENV,
     EffectiveRuntimeConfig,
     HarnessInvocation,
     RuntimePaths,
     write_effective_runtime_config,
 )
-from .trajectory_validation import load_validated_trajectory
+from ..trajectory_validation import load_validated_trajectory
 
 
 def _normalize_workdir(value: str, task_os: TaskOS) -> str:

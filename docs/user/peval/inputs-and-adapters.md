@@ -52,7 +52,7 @@ base = JobConfig(
     datasets=[DatasetConfig(path=Path("path/to/tasks").resolve())],
     agents=[
         AgentConfig(
-            import_path="psycheval.harbor.opencode:HostOpenCodeAgent",
+            import_path="psycheval.harbor.agents.opencode:HostOpenCodeAgent",
             model_name="provider/model",
         )
     ],
@@ -191,6 +191,9 @@ An installed distribution registers an adapter in its own `pyproject.toml`:
 custom = "custom_adapter:CustomAdapter"
 ```
 
-The adapter implements a supported record, path, or database conversion method;
-its exact protocol is owned by source and tests. Put settings under
+The adapter implements a supported record, path, or database conversion method
+accepting `psycheval.harbor.agents.sessions.models.ConversionOptions` and returning
+`ConversionResult` from the same module. The options carry explicit conversion
+settings rather than workspace configuration; exact protocols are owned by source
+and tests. Put settings under
 `[adapters.<id>]` in `peval.toml`.

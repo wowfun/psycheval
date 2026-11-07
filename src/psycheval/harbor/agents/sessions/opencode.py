@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from psycheval.adapters.base import SessionInfo
-from psycheval.adapters.common import CommonMessageAdapter
-from psycheval.config import ToolConfig
-from psycheval.sources import MessageRecord, read_jsonl
+from ...inference_telemetry import InferenceObservation, metrics_from_observations
+from .common import CommonMessageAdapter
+from .models import ConversionOptions, SessionInfo
+from .sources import MessageRecord, read_jsonl
 
 OPENCODE_PART_TIMING_SOURCE = "opencode_part_timestamps"
 OPENCODE_EVENT_TOOL_TIMING_SOURCE = "opencode_event_tool_timestamps"
@@ -28,17 +28,28 @@ class OpencodeAdapter(CommonMessageAdapter):
     agent_id = "opencode"
     default_agent_name = "opencode"
 
-    def convert_path(self, path: str, config: ToolConfig):
+    def convert_path(self, path: str, config: ConversionOptions):
         source = Path(path)
         if source.is_dir() or source.suffix in {".db", ".sqlite", ".sqlite3"}:
             return self.convert_db(str(source), None, config)
+        if source.suffix == ".json":
+            try:
+                exported = json.loads(source.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                exported = None
+            if (
+                isinstance(exported, dict)
+                and "info" in exported
+                and "messages" in exported
+            ):
+                return convert_native_export(exported, config)
         return self.convert(read_jsonl(path), config)
 
     def convert_db(
         self,
         path: str,
         session_id: str | None,
-        config: ToolConfig,
+        config: ConversionOptions,
     ):
         records = read_opencode_db(path, session_id)
         return self.convert(records, config)
@@ -448,32 +459,64 @@ def metadata_for(
     return metadata
 
 
+def _token_count(value: object) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
+def native_usage_metrics(tokens: object) -> dict:
+    tokens = tokens if isinstance(tokens, dict) else {}
+    cache = tokens.get("cache")
+    cache = cache if isinstance(cache, dict) else {}
+
+    buckets = [
+        _token_count(tokens.get("input")),
+        _token_count(cache.get("read", 0)),
+        _token_count(cache.get("write", 0)),
+    ]
+    prompt = sum(buckets) if all(value is not None for value in buckets) else None
+    metrics = metrics_from_observations(
+        [
+            InferenceObservation(
+                prompt_tokens=prompt,
+                completion_tokens=_token_count(tokens.get("output")),
+                cached_tokens=_token_count(cache.get("read")),
+                cache_write_tokens=_token_count(cache.get("write")),
+                usage_source="opencode-session",
+            )
+        ]
+    )
+    assert metrics is not None  # One completed message always supplies an observation.
+    reasoning = _token_count(tokens.get("reasoning"))
+    if reasoning is not None:
+        metrics["extra"]["reasoning_tokens"] = reasoning
+    return metrics
+
+
 def usage_from_tokens(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
-    usage: dict[str, Any] = {}
-    token_map = [
+    projected = native_usage_metrics(raw)
+    usage = {
+        key: projected[key]
+        for key in ("prompt_tokens", "completion_tokens", "cached_tokens")
+        if key in projected
+    }
+    for source, target in (
         ("input", "input_tokens"),
         ("output", "output_tokens"),
         ("reasoning", "reasoning_tokens"),
         ("total", "total_tokens"),
-    ]
-    for source, target in token_map:
-        if raw.get(source) is not None:
+    ):
+        if type(raw.get(source)) is int and raw[source] >= 0:
             usage[target] = raw[source]
     cache = raw.get("cache")
     if isinstance(cache, dict):
-        if cache.get("read") is not None:
-            usage["cache_read_tokens"] = cache["read"]
-        if cache.get("write") is not None:
-            usage["cache_write_tokens"] = cache["write"]
-    prompt_buckets = [
-        int_or_none(raw.get("input")),
-        int_or_none(cache.get("read")) if isinstance(cache, dict) else None,
-        int_or_none(cache.get("write")) if isinstance(cache, dict) else None,
-    ]
-    if any(value is not None for value in prompt_buckets):
-        usage["prompt_tokens"] = sum(value or 0 for value in prompt_buckets)
+        for source, target in (
+            ("read", "cache_read_tokens"),
+            ("write", "cache_write_tokens"),
+        ):
+            if type(cache.get(source)) is int and cache[source] >= 0:
+                usage[target] = cache[source]
     return usage
 
 
@@ -497,3 +540,51 @@ def model_name(message_data: dict[str, Any], session: sqlite3.Row) -> str | None
     if isinstance(value, dict) and value.get("id"):
         return str(value["id"])
     return None
+
+
+def convert_native_export(exported: dict[str, Any], config: ConversionOptions):
+    from ...redaction import redact_value
+    from .common import bounded_arguments, bounded_text, bounded_value
+    from .conversion import convert_atif_trajectory
+    from .opencode_native import native_events_to_trajectory, native_session_events
+
+    events = native_session_events(exported)
+    model = config.model
+    if model is None:
+        model = next(
+            (
+                f"{m.get('model', {}).get('providerID')}/{m.get('model', {}).get('id')}"
+                for m in exported["messages"]
+                if m.get("type") == "assistant"
+            ),
+            None,
+        )
+    trajectory = native_events_to_trajectory(
+        events, model_name=model, version=config.agent_version
+    )
+    if trajectory is None:
+        raise ValueError("OpenCode Session export has no completed messages")
+    data = trajectory.to_json_dict()
+    if config.agent_name:
+        data["agent"]["name"] = config.agent_name
+    if config.redact:
+        data = redact_value(data)
+    for step in data["steps"]:
+        truncated = False
+        for key in ("message", "reasoning_content"):
+            if isinstance(step.get(key), str):
+                step[key], changed = bounded_text(step[key], config)
+                truncated |= changed
+        for call in step.get("tool_calls") or []:
+            call["arguments"], changed = bounded_arguments(call["arguments"], config)
+            truncated |= changed
+        for observation in (step.get("observation") or {}).get("results") or []:
+            observation["content"], changed = bounded_value(
+                observation["content"], config
+            )
+            truncated |= changed
+        if truncated:
+            step.setdefault("extra", {})["truncated"] = True
+    result = convert_atif_trajectory(data)
+    result.total_events = len(exported["messages"])
+    return result

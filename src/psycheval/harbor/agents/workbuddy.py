@@ -17,10 +17,11 @@ from pathlib import Path
 from harbor.models.task.config import EnvironmentConfig, TaskOS
 from harbor.models.trial.paths import TrialPaths
 
-from .acp_agent import HostACPAgent
-from .acp_protocol import config_option_choices, validate_json_structure
-from .environment import HostEnvironment, _await_owned_task
-from .windows import open_read_descriptor
+from ..environment import HostEnvironment, _await_owned_task
+from ..measurements import unavailable_marker
+from ..windows import open_read_descriptor
+from .acp.agent import HostACPAgent
+from .acp.protocol import config_option_choices, validate_json_structure
 from .workbuddy_usage import (
     MAX_USAGE_BYTES,
     USAGE_FILENAME,
@@ -178,15 +179,13 @@ class HostWorkBuddyAgent(HostACPAgent):
         product = _json(self.cli_dir / "product.json")
         package = _json(self.cli_dir / "package.json")
         self.desktop_version = _version(product.get("genieVersion"))
-        self.cli_version = _version(
-            _field(package, "publishConfig", "customPackage", "version")
-        )
+        self.cli_version = _version(package.get("version"))
         _authentication_id(_json(self.profile_dir / "cache/acc-product-config-v3.json"))
         self._inspection = _inspection
         for path in (
             self.installation_dir / "WorkBuddy.exe",
             self.cli_dir / "bin/codebuddy",
-            self.cli_dir / "dist/codebuddy-headless.js",
+            self.cli_dir / "dist/codebuddy-lite-wb.mjs",
             self.auth_file,
         ):
             if not _path(path, "runtime file").is_file():
@@ -238,6 +237,15 @@ class HostWorkBuddyAgent(HostACPAgent):
                 str(Path(__file__).with_name("workbuddy_bootstrap.cjs")),
                 str(self.cli_dir / "bin/codebuddy"),
                 "--acp",
+                "--acp-transport",
+                "stdio",
+                "--serve",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "0",
+                "--auth",
+                "password",
                 "--setting-sources",
                 "none",
                 "--no-plugin-management",
@@ -316,8 +324,8 @@ class HostWorkBuddyAgent(HostACPAgent):
             WORKBUDDY_CONFIG_DIR=str(config),
             ACC_PRODUCT_CONFIG_PATH=str(product_path),
             ELECTRON_RUN_AS_NODE="1",
-            CODEBUDDY_FORCE_HEADLESS_BUNDLE="1",
-            CODEBUDDY_FORCE_LITE_WB_BUNDLE="0",
+            CODEBUDDY_FORCE_HEADLESS_BUNDLE="0",
+            CODEBUDDY_FORCE_LITE_WB_BUNDLE="1",
             CODEBUDDY_DISABLE_COMPILE_CACHE="1",
             DISABLE_AUTOUPDATER="1",
             DISABLE_TELEMETRY="1",
@@ -336,7 +344,26 @@ class HostWorkBuddyAgent(HostACPAgent):
         context.n_input_tokens = None
         context.n_output_tokens = None
         context.n_cache_tokens = None
-        super().populate_context_post_run(context)
+        try:
+            super().populate_context_post_run(context)
+        finally:
+            if not getattr(self, "_measurement_marker", None):
+                from ..measurements import unavailable
+
+                self._measurement_marker = unavailable(
+                    self.logs_dir,
+                    producer={
+                        "name": "workbuddy",
+                        "version": self.cli_version,
+                        "desktop_version": self.desktop_version,
+                    },
+                    invocation_id=self._invocation_id,
+                )
+            context.metadata = {
+                **(context.metadata or {}),
+                "measurements": getattr(self, "_measurement_marker", None)
+                or unavailable_marker(),
+            }
         context.metadata.update(
             workbuddy_desktop_version=self.desktop_version,
             workbuddy_cli_version=self.cli_version,
@@ -356,7 +383,10 @@ class HostWorkBuddyAgent(HostACPAgent):
                 ],
             }
             self._usage_evidence = data["extra"]["workbuddy_usage"]
+            self._publish_measurements(data, summary, None)
+            data["extra"]["measurements"] = self._measurement_marker
             return type(trajectory).model_validate(data)
+        evidence = None
         try:
             content = _read_seed(path, label="usage evidence", maximum=MAX_USAGE_BYTES)
             if (
@@ -371,16 +401,76 @@ class HostWorkBuddyAgent(HostACPAgent):
             ):
                 raise ValueError("unrelated_usage_evidence")
             data = project_usage(data, evidence, self._usage_digest)
-            enriched = type(trajectory).model_validate(data)
+            type(trajectory).model_validate(data)
         except Exception:  # noqa: BLE001 - optional telemetry cannot change execution.
+            evidence = None
             data = trajectory.to_json_dict()
             data.setdefault("extra", {})["workbuddy_usage"] = {
                 "status": "unavailable",
                 "diagnostics": ["invalid_usage_evidence"],
             }
-            enriched = type(trajectory).model_validate(data)
+            type(trajectory).model_validate(data)
         self._usage_evidence = data["extra"]["workbuddy_usage"]
-        return enriched
+        self._publish_measurements(data, summary, evidence)
+        data.setdefault("extra", {})["measurements"] = self._measurement_marker
+        return type(trajectory).model_validate(data)
+
+    def _publish_measurements(self, data, summary, usage):
+        from ..measurements import publish, trajectory_tools
+        from .workbuddy_usage import usage_observations
+
+        try:
+            observations, expected, covered, diagnostics = (
+                usage_observations(usage)
+                if usage is not None
+                else ({}, set(), set(), ["native_usage_unavailable"])
+            )
+            records = list(trajectory_tools(data))
+            for request in sorted(expected):
+                observation = observations.get(request)
+                records.append(
+                    {
+                        "type": "request",
+                        "id": request,
+                        "request_id": request,
+                        "session_id": summary["session_id"],
+                        "scope": "main",
+                        "input_tokens": getattr(observation, "prompt_tokens", None),
+                        "output_tokens": getattr(
+                            observation, "completion_tokens", None
+                        ),
+                        "cached_tokens": getattr(observation, "cached_tokens", None),
+                    }
+                )
+            self._measurement_marker = publish(
+                self.logs_dir,
+                records,
+                producer={
+                    "name": "workbuddy",
+                    "version": self.cli_version,
+                    "desktop_version": self.desktop_version,
+                },
+                invocation_id=summary["invocation_id"],
+                session_id=summary["session_id"],
+                capabilities={
+                    "logical_steps": {
+                        "status": "unavailable",
+                        "reason": "native_first_output_and_retry_identity_unavailable",
+                        "evidence": "private history has usage and completed message timestamps; phase updates lack verified attempt linkage",
+                    },
+                    "usage": {
+                        "status": "verified" if usage is not None else "unavailable",
+                        "evidence": USAGE_FILENAME,
+                    },
+                },
+                complete=summary.get("protocol_complete") and not diagnostics,
+                diagnostics=diagnostics,
+            )
+        except Exception as error:
+            self.logger.warning(
+                "WorkBuddy measurement unavailable (%s)", type(error).__name__
+            )
+            self._measurement_marker = unavailable_marker()
 
     def _collect_usage(self, root, baseline):
         try:
@@ -417,10 +507,9 @@ class HostWorkBuddyAgent(HostACPAgent):
             raise ValueError("WorkBuddy inspection cannot submit prompts")
         self._invocation_id = None
         self._invocation_host(environment)
-        if action != "inspect":
-            instruction = f"Workspace root on this native host: {environment.work_dir}. Any /workspace path in the task refers to this directory; use native paths when invoking tools.\n\n{instruction}"
         self._usage_digest = None
         self._usage_evidence = None
+        self._measurement_marker = None
         self._usage_collection_diagnostic = None
         usage_path = self.logs_dir / USAGE_FILENAME
         usage_path.unlink(missing_ok=True)

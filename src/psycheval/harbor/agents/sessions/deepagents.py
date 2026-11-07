@@ -7,10 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from psycheval.adapters.base import SessionInfo
-from psycheval.adapters.common import CommonMessageAdapter
-from psycheval.config import ToolConfig
-from psycheval.sources import MessageRecord
+from .common import CommonMessageAdapter
+from .models import ConversionOptions, SessionInfo
+from .sources import MessageRecord
 
 DEEPAGENTS_TIMING_SOURCE = "deepagents_session_json"
 
@@ -19,7 +18,7 @@ class DeepagentsAdapter(CommonMessageAdapter):
     agent_id = "deepagents"
     default_agent_name = "deepagents"
 
-    def convert_path(self, path: str, config: ToolConfig):
+    def convert_path(self, path: str, config: ConversionOptions):
         source = Path(path).expanduser()
         if not source.exists():
             raise ValueError(f"Deepagents session file not found: {source}")

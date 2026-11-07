@@ -35,14 +35,14 @@ from psycheval._inputs.workspace_snapshots import (
     same_local_path as same_local_path,
 )
 from psycheval.adapters import adapter_for, available_adapter_ids, normalize_adapter_id
-from psycheval.atif import is_atif_json_path
 from psycheval.config import ToolConfig
+from psycheval.harbor.agents.sessions.models import MessageRecord as MessageRecord
+from psycheval.harbor.atif import is_atif_json_path
 from psycheval.models import AdapterAssignments, LoadedInputs, LoadedSession
 from psycheval.session_select import (
     resolve_directory_session_paths,
     resolve_session_selectors,
 )
-from psycheval.sources import MessageRecord as MessageRecord
 
 ADAPTER_SELECTOR_RE = re.compile(r"^([pd])([1-9][0-9]*)=(.+)$")
 SESSION_SELECTOR_RE = re.compile(r"^([pd][1-9][0-9]*)=(.+)$")
@@ -116,8 +116,12 @@ def load_sessions(
         if not callable(resolve_id):
             raise ValueError(f"adapter {adapter_id} does not support session ID lookup")
         active_config = config if isinstance(config, ToolConfig) else ToolConfig()
+        options = active_config.for_adapter(adapter_id).conversion_options()
         resolved = [
-            (identifier, Path(resolve_id(identifier, active_config)))
+            (
+                identifier,
+                Path(resolve_id(identifier, options)),
+            )
             for identifier in args.session_id
         ]
         return [

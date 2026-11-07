@@ -10,7 +10,8 @@ from harbor.agents.installed import hermes as harbor_hermes
 from harbor.environments.base import ExecResult
 from harbor.models.agent.context import AgentContext
 
-from psycheval.harbor.hermes import HermesAgent, _enrich_hermes_trajectory
+from psycheval.harbor.agents.hermes import HermesAgent
+from psycheval.harbor.agents.sessions.hermes import _enrich_hermes_trajectory
 
 
 def test_enriches_exact_assistant_message_with_usage_and_cache() -> None:
@@ -37,7 +38,7 @@ def test_enriches_exact_assistant_message_with_usage_and_cache() -> None:
         }
     )
 
-    enriched = _enrich_hermes_trajectory(trajectory, session)
+    enriched = _enrich_hermes_trajectory(trajectory, json.loads(session)["messages"])
 
     assert enriched["steps"][1]["metrics"]["cached_tokens"] == 48
     assert enriched["final_metrics"]["total_prompt_tokens"] == 120
@@ -89,7 +90,7 @@ def test_enriches_structurally_aligned_list_content_and_tool_calls() -> None:
         }
     )
 
-    enriched = _enrich_hermes_trajectory(trajectory, session)
+    enriched = _enrich_hermes_trajectory(trajectory, json.loads(session)["messages"])
 
     assert enriched["steps"][1]["metrics"]["prompt_tokens"] == 100
     assert enriched["steps"][2]["metrics"]["prompt_tokens"] == 120
@@ -118,8 +119,12 @@ def test_does_not_apply_usage_when_assistant_structure_is_unaligned(
         }
     )
 
-    with caplog.at_level(logging.DEBUG, logger="psycheval.harbor.hermes"):
-        enriched = _enrich_hermes_trajectory(trajectory, session)
+    with caplog.at_level(
+        logging.DEBUG, logger="psycheval.harbor.agents.sessions.hermes"
+    ):
+        enriched = _enrich_hermes_trajectory(
+            trajectory, json.loads(session)["messages"]
+        )
 
     assert all("metrics" not in step for step in enriched["steps"])
     assert "total_prompt_tokens" not in enriched["final_metrics"]
@@ -699,3 +704,22 @@ class _FailingResumeExportEnvironment(_HermesResumeEnvironment):
             self.commands.append((command, env))
             return ExecResult(stdout="", stderr="export failed", return_code=7)
         return await super().exec(command, env=env, **kwargs)
+
+
+@pytest.mark.parametrize("message_usage", [True, False])
+def test_resumed_usage_does_not_borrow_whole_session_totals(
+    tmp_path, monkeypatch, message_usage
+):
+    agent, logs_dir = _completed_resumed_agent(tmp_path, monkeypatch)
+    path = logs_dir / "hermes-session.jsonl"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value.update(input_tokens=903, output_tokens=904)
+    if not message_usage:
+        value["messages"][-1].pop("usage", None)
+    path.write_text(json.dumps(value) + "\n", encoding="utf-8")
+    before = path.read_bytes()
+    context = AgentContext(n_input_tokens=999, n_output_tokens=999)
+    agent.populate_context_post_run(context)
+    assert context.n_input_tokens == (3 if message_usage else None)
+    assert context.n_output_tokens == (4 if message_usage else None)
+    assert path.read_bytes() == before

@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 def test_atif_imports_only_the_standard_library_including_type_only_imports() -> None:
-    source = Path(__file__).resolve().parents[2] / "src/psycheval/atif.py"
+    source = Path(__file__).resolve().parents[2] / "src/psycheval/harbor/atif.py"
     for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
             assert all(
@@ -23,7 +23,7 @@ def test_atif_imports_only_the_standard_library_including_type_only_imports() ->
 
 
 def test_renamed_atif_file_works_without_site_packages(tmp_path: Path) -> None:
-    source = Path(__file__).resolve().parents[2] / "src/psycheval/atif.py"
+    source = Path(__file__).resolve().parents[2] / "src/psycheval/harbor/atif.py"
     copied = tmp_path / "trajectory_contract.py"
     shutil.copyfile(source, copied)
     code = r"""

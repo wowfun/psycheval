@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 from dataclasses import replace
 
-from psycheval.atif import validate_atif_trajectory
 from psycheval.cli.arguments import CliArgs
 from psycheval.cli.sessions import (
     interactive_session_selection,
@@ -15,6 +14,7 @@ from psycheval.cli.workspace import (
     workspace_root_for_args,
 )
 from psycheval.config import apply_overrides, config_for_adapter, load_config
+from psycheval.harbor.atif import validate_atif_trajectory
 from psycheval.inputs import load_inputs, parse_adapter_assignments
 from psycheval.outputs import (
     announce_written,

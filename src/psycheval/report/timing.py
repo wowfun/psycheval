@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from psycheval.adapters.base import (
+from psycheval.harbor.agents.sessions.models import (
     ObservationMeta,
     StepMeta,
     ToolMeta,
-    timestamp_fallback_allowed,
     timestamp_fallback_duration_ms,
 )
-from psycheval.timing_contract import timing_source
+from psycheval.harbor.timing import timestamp_fallback_allowed, timing_source
 
 
 def is_model_duration_source(source: Any) -> bool:

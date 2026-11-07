@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from psycheval.adapters.base import ConversionResult
-from psycheval.sources import MessageRecord
+from psycheval.harbor.agents.sessions.models import ConversionResult, MessageRecord
 
 
 @dataclass(frozen=True)

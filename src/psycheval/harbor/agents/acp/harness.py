@@ -11,7 +11,7 @@ import signal
 import sys
 from pathlib import Path
 
-from .acp_protocol import (
+from .protocol import (
     FORCED_CLEANUP_RESERVE_SEC,
     KILL_REAP_RESERVE_SEC,
     MAX_FRAME,
@@ -299,7 +299,7 @@ async def run(config_path: Path):
     stopping = asyncio.Event()
     loop = asyncio.get_running_loop()
     if sys.platform == "win32":
-        from .windows import WindowsProcessAdapter
+        from ...windows import WindowsProcessAdapter
 
         adapter = WindowsProcessAdapter()
         for signum in (signal.SIGTERM, signal.SIGINT):
@@ -314,6 +314,8 @@ async def run(config_path: Path):
         if config.get("tool_result_format") == "codebuddy"
         else ()
     )
+    if config.get("tool_result_format") == "dsh":
+        excluded += ("DSH_", "DEEPSEEK_")
     environment = {
         key: value
         for key, value in os.environ.items()
@@ -375,7 +377,7 @@ async def run(config_path: Path):
             result_format=config.get("tool_result_format", "acp"),
         )
         kwargs = dict(
-            cwd=config["cwd"],
+            cwd=config.get("process_cwd", config["cwd"]),
             env=environment,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -568,7 +570,7 @@ async def run(config_path: Path):
                 "cleanup_error_stage", summary.get("cleanup_stage", "evidence")
             )
             if summary["host_os"] == "windows" and not evidence_error:
-                from .diagnostics import cleanup_warning
+                from ...diagnostics import cleanup_warning
 
                 summary.setdefault("cleanup_warnings", []).append(
                     cleanup_warning(

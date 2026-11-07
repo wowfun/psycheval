@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from harbor.models.agent.context import AgentContext
 
-from psycheval.harbor.acp_agent import HostACPAgent
-from psycheval.harbor.acp_evidence import recover
+from psycheval.harbor.agents.acp.agent import HostACPAgent
+from psycheval.harbor.agents.acp.evidence import recover
 from psycheval.harbor.diagnostics import write_partial
 from tests.harbor.test_acp import _current_evidence
 
@@ -122,7 +122,7 @@ def test_windows_cleanup_does_not_admit_changed_evidence(tmp_path, failure):
 def test_cleanup_failure_still_runs_rules_and_judge(tmp_path, monkeypatch):
     from harbor.environments.base import ExecResult
 
-    from psycheval.harbor import acp_harness
+    from psycheval.harbor.agents.acp import harness as acp_harness
     from psycheval.harbor.verifier import JudgeSettings, run_verifier
     from tests.fixtures.judge_server import judge_server
     from tests.fixtures.judge_task import api_task
@@ -232,7 +232,7 @@ def test_windows_directory_cleanup_warns_and_retains_paths(tmp_path, monkeypatch
 
 
 def test_opencode_incomplete_export_preserves_running_tool(tmp_path):
-    from psycheval.harbor.opencode import HostOpenCodeAgent
+    from psycheval.harbor.agents.opencode import HostOpenCodeAgent
     from tests.harbor.test_opencode import _exported_session
 
     exported = _exported_session()
@@ -265,7 +265,7 @@ def test_opencode_incomplete_export_preserves_running_tool(tmp_path):
 
 
 def test_repeated_cancel_keeps_original_cancellation_and_prefix(tmp_path, monkeypatch):
-    from psycheval.harbor.opencode import HostOpenCodeAgent
+    from psycheval.harbor.agents.opencode import HostOpenCodeAgent
 
     async def scenario():
         agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
@@ -318,7 +318,7 @@ def test_repeated_cancel_keeps_original_cancellation_and_prefix(tmp_path, monkey
 
 
 def test_opencode_bad_record_stops_before_later_content(tmp_path):
-    from psycheval.harbor.opencode import HostOpenCodeAgent
+    from psycheval.harbor.agents.opencode import HostOpenCodeAgent
 
     agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
     agent._instruction = "task"
@@ -334,7 +334,7 @@ def test_opencode_bad_record_stops_before_later_content(tmp_path):
 
 
 def test_new_opencode_invocation_cannot_reuse_old_trajectory(tmp_path, monkeypatch):
-    from psycheval.harbor.opencode import HostOpenCodeAgent
+    from psycheval.harbor.agents.opencode import HostOpenCodeAgent
     from tests.harbor.test_opencode import _exported_session
 
     agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
@@ -381,7 +381,7 @@ def test_windows_post_run_evidence_failure_preserves_execution_error(
     sys.platform != "win32", reason="native Windows pipe and Job mechanics"
 )
 def test_native_windows_cleanup_drains_flooded_pipes_within_deadline():
-    from psycheval.harbor.acp_harness import _discard, _settle
+    from psycheval.harbor.agents.acp.harness import _discard, _settle
     from psycheval.harbor.windows import WindowsProcessAdapter
 
     async def scenario():

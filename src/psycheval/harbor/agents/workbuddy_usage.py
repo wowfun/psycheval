@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
 
-from .acp_evidence import _events
-from .acp_protocol import MAX_EVENT_FRAME, MAX_EVIDENCE_FRAMES
-from .inference_telemetry import InferenceObservation, metrics_from_observations
-from .windows import open_read_descriptor
+from ..inference_telemetry import InferenceObservation, metrics_from_observations
+from ..windows import open_read_descriptor
+from .acp.evidence import _events
+from .acp.protocol import MAX_EVENT_FRAME, MAX_EVIDENCE_FRAMES
 
 USAGE_FILENAME = "workbuddy.usage.json"
 MAX_USAGE_BYTES = 8 * 1024 * 1024
@@ -503,8 +503,8 @@ def normalize_usage(value, *, conflicts=None):
     return dict(zip(_FIELDS, (prompt, completion, cached, write)))
 
 
-def project_usage(trajectory, evidence, digest):
-    """Use the native request ledger once; ACP snapshots never add consumption."""
+def usage_observations(evidence):
+    """Resolve request identities and conflicts once for both projections."""
     measurements = defaultdict(lambda: {field: set() for field in _FIELDS})
     invalid = defaultdict(set)
     for record in evidence.get("records", []):
@@ -573,6 +573,12 @@ def project_usage(trajectory, evidence, digest):
         )
         for field in _FIELDS
     }
+    return observations, expected, covered, diagnostics
+
+
+def project_usage(trajectory, evidence, digest):
+    """Use the native request ledger once; ACP snapshots never add consumption."""
+    observations, expected, covered, diagnostics = usage_observations(evidence)
     extra = trajectory.setdefault("extra", {})
     extra["workbuddy_usage"] = {
         "path": USAGE_FILENAME,

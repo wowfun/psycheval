@@ -2,9 +2,9 @@ import sys
 
 import pytest
 
-from psycheval.harbor.acp_agent import HostACPAgent
-from psycheval.harbor.hermes import HermesAgent
-from psycheval.harbor.workbuddy_agent import HostWorkBuddyAgent
+from psycheval.harbor.agents.acp.agent import HostACPAgent
+from psycheval.harbor.agents.hermes import HermesAgent
+from psycheval.harbor.agents.workbuddy import HostWorkBuddyAgent
 
 
 def test_acp_skill_admission_follows_subclass_capabilities(tmp_path):

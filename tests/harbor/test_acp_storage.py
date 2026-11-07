@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from psycheval.harbor import acp_protocol as protocol
+from psycheval.harbor.agents.acp import protocol as protocol
 
 
 def test_stored_limit_keeps_a_valid_compressed_prefix(tmp_path):
@@ -88,7 +88,7 @@ def test_budget_close_attempts_every_writer_and_preserves_first_error(
 def test_compressible_peer_can_exceed_stored_budget_in_decoded_bytes(tmp_path):
     from harbor.models.agent.context import AgentContext
 
-    from psycheval.harbor.acp_agent import HostACPAgent
+    from psycheval.harbor.agents.acp.agent import HostACPAgent
     from tests.harbor.environment_support import make_environment
 
     async def scenario():
@@ -174,7 +174,7 @@ def test_evidence_reader_rejects_corruption_and_expansion(tmp_path, damage):
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Job pipe settlement")
 def test_failed_protocol_drains_paused_stdout_before_job_settlement(monkeypatch):
-    from psycheval.harbor import acp_harness
+    from psycheval.harbor.agents.acp import harness as acp_harness
     from psycheval.harbor.windows import WindowsProcessAdapter
 
     monkeypatch.setattr(acp_harness, "FORCED_CLEANUP_RESERVE_SEC", 0.3)

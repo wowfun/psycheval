@@ -22,12 +22,12 @@ def main() -> None:
     from fastapi.testclient import TestClient
 
     import psycheval
-    from psycheval.atif import validate_atif_trajectory
     from psycheval.config import ToolConfig
     from psycheval.harbor import __version__
-    from psycheval.harbor.acp_agent import HostACPAgent
-    from psycheval.harbor.agent import ExternalHarnessAgent
-    from psycheval.harbor.opencode import HostOpenCodeAgent
+    from psycheval.harbor.agents.acp.agent import HostACPAgent
+    from psycheval.harbor.agents.external import ExternalHarnessAgent
+    from psycheval.harbor.agents.opencode import HostOpenCodeAgent
+    from psycheval.harbor.atif import validate_atif_trajectory
     from psycheval.harbor.workbuddy import prepare_workbuddy_job
     from psycheval.jobs.protocol import Harness
     from psycheval.serve.access import ServeAccess

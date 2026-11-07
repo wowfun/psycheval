@@ -60,7 +60,7 @@ def test_three_step_native_trial_with_local_judge(tmp_path, mode):
             "--job-name",
             "trend",
             "--agent",
-            "psycheval.harbor.agent:ExternalHarnessAgent",
+            "psycheval.harbor.agents.external:ExternalHarnessAgent",
             "--agent-kwarg",
             f"command={command}",
             "--env",

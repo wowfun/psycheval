@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from psycheval.harbor import workbuddy_usage as usage
+from psycheval.harbor.agents import workbuddy_usage as usage
 
 
 def record(request="r1", conversation="turn", raw=None, normalized=None):

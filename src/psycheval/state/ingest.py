@@ -27,8 +27,8 @@ from psycheval._state.sources import (
     trial_payload_from_report,
 )
 from psycheval.analysis import write_note_file
-from psycheval.atif import validate_atif_trajectory
 from psycheval.config import ToolConfig
+from psycheval.harbor.atif import validate_atif_trajectory
 from psycheval.models import LoadedInputs, LoadedSession
 from psycheval.pipeline import report_session_for_loaded
 from psycheval.report import build_multi_report, project_meta_from_atif

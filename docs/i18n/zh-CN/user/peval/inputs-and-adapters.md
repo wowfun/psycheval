@@ -46,7 +46,7 @@ base = JobConfig(
     datasets=[DatasetConfig(path=Path("path/to/tasks").resolve())],
     agents=[
         AgentConfig(
-            import_path="psycheval.harbor.opencode:HostOpenCodeAgent",
+            import_path="psycheval.harbor.agents.opencode:HostOpenCodeAgent",
             model_name="provider/model",
         )
     ],
@@ -174,3 +174,7 @@ custom = "custom_adapter:CustomAdapter"
 
 Adapter 实现受支持的记录、路径或数据库转换方法；精确协议以源码和测试为准。
 设置放在 `peval.toml` 的 `[adapters.<id>]` 下。
+
+Adapter 的记录、路径或数据库转换方法接收
+`psycheval.harbor.agents.sessions.models.ConversionOptions`，并返回同一模块的
+`ConversionResult`。这些参数只包含显式转换设置；工作区配置由应用层解析。

@@ -542,3 +542,28 @@ def _validate_json_value(value: Any, path: str) -> None:
             _validate_json_value(item, f"{path}.{key}")
         return
     raise ValueError(f"{path} must contain only JSON-compatible values")
+
+
+def agent_step_count(trajectory: dict[str, Any]) -> int | None:
+    """Read the explicit count or derive it without consulting retired metrics."""
+    if trajectory.get("synthetic") or not isinstance(trajectory.get("steps"), list):
+        return None
+    metrics = trajectory.get("final_metrics")
+    extra = metrics.get("extra") if isinstance(metrics, dict) else None
+    if isinstance(extra, dict) and "total_agent_steps" in extra:
+        value = extra["total_agent_steps"]
+        if (
+            type(value) in {int, float}
+            and 0 <= value <= 2**53 - 1
+            and int(value) == value
+        ):
+            return int(value)
+        return None
+    return count_agent_steps(trajectory["steps"])
+
+
+def count_agent_steps(steps: list[dict[str, Any]]) -> int:
+    """Count normalized ATIF Agent steps, independently of stored counters."""
+    return sum(
+        isinstance(step, dict) and step.get("source") == "agent" for step in steps
+    )

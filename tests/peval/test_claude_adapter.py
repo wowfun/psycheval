@@ -6,9 +6,10 @@ from dataclasses import replace
 import pytest
 
 from psycheval.adapters import adapter_for
-from psycheval.atif import validate_atif_trajectory
 from psycheval.config import ToolConfig
-from psycheval.conversion import convert_path, finalize_atif_conversion
+from psycheval.conversion import convert_path
+from psycheval.harbor.agents.sessions.conversion import finalize_atif_conversion
+from psycheval.harbor.atif import validate_atif_trajectory
 from psycheval.models import ReportSession
 from psycheval.report import build_multi_report, build_report
 from tests.peval.claude_support import event, family, write_events

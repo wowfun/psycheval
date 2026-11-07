@@ -140,7 +140,10 @@ class HarborHarness:
             "label": "Harbor",
             "version": 1,
             "agents": [name.value for name in AgentName if name.value != "acp"]
-            + ["psycheval.harbor.acp_agent:HostACPAgent"],
+            + [
+                "psycheval.harbor.agents.acp.agent:HostACPAgent",
+                "psycheval.harbor.agents.dsh:HostDSHAgent",
+            ],
             "models": [],
             "capabilities": ["variants", "stop", "trajectory", "verification"],
             "defaults": {
@@ -258,7 +261,7 @@ class HarborHarness:
             check_fields(options, AgentConfig, f"variant {variant.label}")
             agent = variant.agent
             if agent == "opencode" and native_host:
-                agent = "psycheval.harbor.opencode:HostOpenCodeAgent"
+                agent = "psycheval.harbor.agents.opencode:HostOpenCodeAgent"
             agents.append(
                 {
                     ("import_path" if ":" in agent else "name"): agent,
@@ -289,7 +292,7 @@ class HarborHarness:
             "psycheval.harbor.workbuddy_environment:WorkBuddyHostEnvironment",
         } and any(agent.name == "acp" for agent in job.agents):
             raise ValueError(
-                "Native Host ACP evaluation requires psycheval.harbor.acp_agent:HostACPAgent"
+                "Native Host ACP evaluation requires psycheval.harbor.agents.acp.agent:HostACPAgent"
             )
         job.validate_agent_concurrency_limits()
         native = job_values(job)

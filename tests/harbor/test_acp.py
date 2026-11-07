@@ -19,9 +19,9 @@ from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import Trajectory
 from harbor.models.trial.config import MCPServerConfig
 
-from psycheval.harbor.acp_agent import HostACPAgent
-from psycheval.harbor.acp_evidence import convert, outcome
-from psycheval.harbor.acp_protocol import (
+from psycheval.harbor.agents.acp.agent import HostACPAgent
+from psycheval.harbor.agents.acp.evidence import convert, outcome
+from psycheval.harbor.agents.acp.protocol import (
     MAX_FRAME,
     EvidenceBudget,
     ProtocolError,
@@ -91,7 +91,7 @@ def test_harness_bootstrap_failure_retains_bounded_diagnostics(
     from harbor.environments.base import ExecResult
     from harbor.models.task.config import TaskOS
 
-    from psycheval.harbor import acp_agent
+    from psycheval.harbor.agents.acp import agent as acp_agent
 
     def unexpected_observer(*args):
         raise AssertionError("no callback must not start an observer")
@@ -167,7 +167,7 @@ def test_harness_bootstrap_real_process_traceback_is_retained(tmp_path, monkeypa
 
 def test_canonical_name_extension_is_validated_before_sdk_projection():
     schema = pytest.importorskip("acp.schema")
-    from psycheval.harbor.acp_protocol import sdk_validators, validate_payload
+    from psycheval.harbor.agents.acp.protocol import sdk_validators, validate_payload
 
     assert "name" not in schema.ToolCallStart.model_fields
     value = {
@@ -289,7 +289,7 @@ def test_wire_frame_limit_is_still_enforced():
 
 
 def test_long_stream_retention_and_projection_share_the_declared_admission(tmp_path):
-    from psycheval.harbor.acp_evidence import _events
+    from psycheval.harbor.agents.acp.evidence import _events
 
     path = tmp_path / "events.ndjson"
     event = (
@@ -305,7 +305,7 @@ def test_long_stream_retention_and_projection_share_the_declared_admission(tmp_p
 
 
 def test_failed_wire_send_rolls_back_correlation_and_phase(tmp_path, monkeypatch):
-    from psycheval.harbor import acp_protocol
+    from psycheval.harbor.agents.acp import protocol as acp_protocol
 
     monkeypatch.setattr(acp_protocol, "sdk_validators", lambda result_format="acp": {})
 
@@ -341,7 +341,7 @@ def test_failed_wire_send_rolls_back_correlation_and_phase(tmp_path, monkeypatch
 def test_legal_control_dense_wire_frame_roundtrips_retained_event(
     tmp_path, monkeypatch
 ):
-    from psycheval.harbor import acp_protocol
+    from psycheval.harbor.agents.acp import protocol as acp_protocol
 
     monkeypatch.setattr(acp_protocol, "sdk_validators", lambda result_format="acp": {})
     text = "\x01" * 150000
@@ -410,7 +410,7 @@ def test_interrupted_publication_cannot_admit_partial_logs(tmp_path, monkeypatch
 
 
 def _seal_evidence(directory, summary):
-    from psycheval.harbor.acp_protocol import EVIDENCE_FILES, evidence_manifest
+    from psycheval.harbor.agents.acp.protocol import EVIDENCE_FILES, evidence_manifest
 
     for name in EVIDENCE_FILES:
         path = directory / name
@@ -952,7 +952,7 @@ def test_invalid_host_invocation_cannot_reuse_prior_evidence(tmp_path):
 )
 def test_extra_config_options_fail_categorically(option):
     pytest.importorskip("acp")
-    from psycheval.harbor.acp_protocol import sdk_validators, validate_payload
+    from psycheval.harbor.agents.acp.protocol import sdk_validators, validate_payload
 
     with pytest.raises(ProtocolError):
         validate_payload(
@@ -997,7 +997,7 @@ def test_deleted_host_runtime_requires_a_new_agent(tmp_path):
 
 @linux
 def test_cleanup_cancel_is_bounded(tmp_path, monkeypatch):
-    from psycheval.harbor import acp_harness
+    from psycheval.harbor.agents.acp import harness as acp_harness
 
     monkeypatch.setattr(acp_harness, "FORCED_CLEANUP_RESERVE_SEC", 0.4)
     monkeypatch.setattr(acp_harness, "KILL_REAP_RESERVE_SEC", 0.15)
@@ -1043,7 +1043,7 @@ def test_cleanup_signal_identity_survives_wall_clock_changes(monkeypatch):
 
     import psutil
 
-    from psycheval.harbor import acp_harness
+    from psycheval.harbor.agents.acp import harness as acp_harness
 
     signals = []
     alive = True
@@ -1102,7 +1102,7 @@ def test_cleanup_signal_identity_survives_wall_clock_changes(monkeypatch):
 
 @linux
 def test_cleanup_stop_interrupts_cooperative_wait():
-    from psycheval.harbor.acp_harness import _settle
+    from psycheval.harbor.agents.acp.harness import _settle
 
     async def run():
         process = await asyncio.create_subprocess_exec(
@@ -1132,7 +1132,7 @@ def test_cleanup_stop_interrupts_cooperative_wait():
 def test_cleanup_task_timeout_preserves_first_failure(first_stage):
     from types import SimpleNamespace
 
-    from psycheval.harbor import acp_harness
+    from psycheval.harbor.agents.acp import harness as acp_harness
 
     async def scenario():
         before = asyncio.all_tasks()
@@ -1202,7 +1202,7 @@ def test_cleanup_task_timeout_preserves_first_failure(first_stage):
 def test_handshake_primary_failure_survives_stop_and_close_error(tmp_path, monkeypatch):
     import acp
 
-    from psycheval.harbor import acp_harness
+    from psycheval.harbor.agents.acp import harness as acp_harness
 
     class Connection:
         def __init__(self, client):
@@ -1588,7 +1588,7 @@ def test_actual_harbor_trial_scores_current_acp_evidence(tmp_path, multi, mode):
         "--path",
         str(task),
         "--agent",
-        "psycheval.harbor.acp_agent:HostACPAgent",
+        "psycheval.harbor.agents.acp.agent:HostACPAgent",
         "--agent-kwarg",
         "argv=" + json.dumps([sys.executable, str(PEER), mode]),
         "--agent-kwarg",

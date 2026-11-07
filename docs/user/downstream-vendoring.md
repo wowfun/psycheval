@@ -53,7 +53,7 @@ environment:
       filesystem: true
       process: true
 agents:
-  - import_path: downstream._vendor.psycheval_harbor.agent:ExternalHarnessAgent
+  - import_path: downstream._vendor.psycheval_harbor.agents.external:ExternalHarnessAgent
     kwargs:
       command: python -m downstream.harness
 verifier:
@@ -131,7 +131,7 @@ A hung script can also prevent interpreter exit; see the
 ## Evaluate desktop WorkBuddy through ACP
 
 Install WorkBuddy on a native Windows host and finish desktop login first.
-Use the copied `workbuddy_agent:HostWorkBuddyAgent` import path in the Job's
+Use the copied `agents.workbuddy:HostWorkBuddyAgent` import path in the Job's
 Agent configuration, with explicit absolute `installation_dir`, `profile_dir`,
 and `auth_file` kwargs. For the standard desktop profile these point to the
 directory containing `WorkBuddy.exe`, the `.workbuddy` profile, and the selected
@@ -201,7 +201,7 @@ Pass a callback when constructing an ACP-backed Agent in Python:
 ```python
 from pathlib import Path
 
-from downstream._vendor.psycheval_harbor.acp_agent import HostACPAgent
+from downstream._vendor.psycheval_harbor.agents.acp import HostACPAgent
 
 
 def show_update(update):
@@ -228,7 +228,7 @@ putting a callable in serialized configuration. For example, save the following
 as `downstream/agents.py`, reusing `show_update` above in that module:
 
 ```python
-from downstream._vendor.psycheval_harbor.workbuddy_agent import HostWorkBuddyAgent
+from downstream._vendor.psycheval_harbor.agents.workbuddy import HostWorkBuddyAgent
 
 
 class VerboseWorkBuddyAgent(HostWorkBuddyAgent):
@@ -422,7 +422,7 @@ base = JobConfig(
     datasets=[DatasetConfig(path=Path("path/to/tasks").resolve())],
     agents=[
         AgentConfig(
-            import_path="downstream._vendor.psycheval_harbor.opencode:HostOpenCodeAgent",
+            import_path="downstream._vendor.psycheval_harbor.agents.opencode:HostOpenCodeAgent",
             model_name="provider/model",
         )
     ],
@@ -466,7 +466,7 @@ base = JobConfig(datasets=[DatasetConfig(path=Path("path/to/tasks").resolve())])
 base.n_attempts = 1
 base.agents = [
     AgentConfig(
-        import_path="downstream._vendor.psycheval_harbor.opencode:HostOpenCodeAgent",
+        import_path="downstream._vendor.psycheval_harbor.agents.opencode:HostOpenCodeAgent",
         model_name="provider-name/model-name",
         env={"OPENCODE_PROVIDER_KEY": "${OPENCODE_PROVIDER_KEY}"},
         kwargs={
@@ -497,7 +497,7 @@ For a downstream harness implementing the
 ```python
 base.agents = [
     AgentConfig(
-        import_path="downstream._vendor.psycheval_harbor.agent:ExternalHarnessAgent",
+        import_path="downstream._vendor.psycheval_harbor.agents.external:ExternalHarnessAgent",
         kwargs={
             "command": '"C:/path/to/downstream/.venv/Scripts/python.exe" -m downstream.harness',
         },
@@ -533,7 +533,9 @@ from downstream._vendor.atif import validate_atif_trajectory
 validate_atif_trajectory(trajectory)  # Raises ValueError with a field path.
 ```
 
-Keep adapter conversion in `psycheval.conversion`; it is outside this copy unit.
+The complete Harbor subtree also includes native session conversion under
+`agents.sessions`; application configuration and plugin discovery remain outside
+the copy unit. Copying only the ATIF file provides validation alone.
 The repository's [source-copy tests](../testing.md#downstream-source-copy-checks)
 exercise renamed imports, synthetic run/resume, WorkBuddy configuration adaptation, and ATIF
 validation without real providers or credentials.

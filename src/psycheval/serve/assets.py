@@ -53,7 +53,11 @@ def packaged_web_asset(path: str) -> bytes:
         or any(part in {"", ".", ".."} for part in candidate.parts)
     ):
         raise HttpError(404, "browser module does not exist")
-    resource = files("psycheval.assets").joinpath("web", *candidate.parts)
+    resource = (
+        files("psycheval.harbor").joinpath("timing-sources.json")
+        if relative == "timing-sources.json"
+        else files("psycheval.assets").joinpath("web", *candidate.parts)
+    )
     if not resource.is_file():
         raise HttpError(404, "browser module does not exist")
     return resource.read_bytes()

@@ -8,12 +8,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from psycheval._state.artifacts import write_json_files_atomically
-from psycheval.atif import validate_atif_trajectory
 from psycheval.config import ToolConfig
-from psycheval.conversion import convert_atif_trajectory, convert_records
+from psycheval.conversion import convert_records
+from psycheval.harbor.agents.sessions.conversion import convert_atif_trajectory
+from psycheval.harbor.agents.sessions.models import MessageRecord
+from psycheval.harbor.atif import validate_atif_trajectory
 from psycheval.report import build_report, project_meta_from_atif
 from psycheval.report.metrics import automatic_analysis_metrics
-from psycheval.sources import MessageRecord
 from psycheval.state import open_workspace_state
 
 

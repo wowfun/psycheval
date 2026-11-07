@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from psycheval.harbor.acp_evidence import convert
-from psycheval.harbor.acp_protocol import (
+from psycheval.harbor.agents.acp.evidence import convert
+from psycheval.harbor.agents.acp.protocol import (
     EVIDENCE_FILES,
     StrictTransport,
     evidence_manifest,
@@ -157,7 +157,7 @@ def test_invocation_clock_mismatch_is_unknown_without_changing_result(tmp_path):
 def test_receive_clock_precedes_evidence_processing_and_is_invocation_local(
     tmp_path, monkeypatch
 ):
-    from psycheval.harbor import acp_protocol
+    from psycheval.harbor.agents.acp import protocol as acp_protocol
 
     now = [1_000_000]
     monkeypatch.setattr(acp_protocol.time, "monotonic_ns", lambda: now[0])
@@ -196,7 +196,10 @@ def test_receive_clock_precedes_evidence_processing_and_is_invocation_local(
 
 
 def test_observed_timing_survives_atif_report_projection(tmp_path):
-    from psycheval.conversion import convert_atif_trajectory, finalize_atif_conversion
+    from psycheval.harbor.agents.sessions.conversion import (
+        convert_atif_trajectory,
+        finalize_atif_conversion,
+    )
     from psycheval.report.builder import project_meta_from_atif
     from psycheval.report.metrics import latency_metrics
 

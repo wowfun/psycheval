@@ -31,6 +31,7 @@ def copied_harbor(tmp_path: Path) -> Path:
     "scenario",
     [
         "imports",
+        "sessions",
         "documents",
         "trajectory_file",
         "verifier",
@@ -71,7 +72,7 @@ def test_copied_harbor_runs_without_the_original_package(
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     for source in SOURCE.rglob("*"):
-        if source.suffix not in {".py", ".cjs"}:
+        if source.suffix not in {".py", ".cjs", ".mjs", ".json"}:
             continue
         copied = (
             copied_harbor

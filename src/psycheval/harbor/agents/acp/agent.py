@@ -19,9 +19,12 @@ from harbor.agents.capabilities import AgentCapabilities
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.models.task.config import TaskOS
 
-from . import __version__
-from .acp_evidence import convert, recover
-from .acp_protocol import (
+from ... import __version__
+from ...diagnostics import PARTIAL_TRAJECTORY, warning_text, write_partial
+from ...environment import HostEnvironment, _await_owned_task
+from ...inference_telemetry import populate_context_from_trajectory
+from .evidence import convert, recover
+from .protocol import (
     DEFAULT_MAX_EVIDENCE_BYTES,
     FORCED_CLEANUP_RESERVE_SEC,
     MAX_CONFIG_ID_BYTES,
@@ -31,9 +34,6 @@ from .acp_protocol import (
     EvidenceReader,
     verify_evidence,
 )
-from .diagnostics import PARTIAL_TRAJECTORY, warning_text, write_partial
-from .environment import HostEnvironment, _await_owned_task
-from .inference_telemetry import populate_context_from_trajectory
 
 SessionUpdateCallback = Callable[[dict[str, Any]], None | Awaitable[None]]
 _UPDATE_POLL_SEC = 0.05
@@ -179,6 +179,7 @@ class HostACPAgent(BaseAgent):
             "acp",
             "rsiversi",
             "codebuddy",
+            "dsh",
         }:
             raise ValueError("unsupported ACP permission mode or result format")
         config_options = {} if config_options is None else config_options
@@ -397,6 +398,7 @@ class HostACPAgent(BaseAgent):
             "cwd": str(host.work_dir),
             "state": str(self._state),
             "child_env": self._child_env,
+            "process_cwd": str(getattr(self, "_launch_cwd", host.work_dir)),
             "config_options": self.config_options,
             "mcp_servers": [
                 server.model_dump(mode="json", exclude_none=True)
@@ -433,7 +435,7 @@ class HostACPAgent(BaseAgent):
         primary_error = None
         try:
             result = await host.exec_argv(
-                [sys.executable, "-m", f"{__package__}.acp_harness", str(config_path)],
+                [sys.executable, "-m", f"{__package__}.harness", str(config_path)],
                 **(
                     {"termination_grace_sec": self.shutdown_timeout_sec + 5}
                     if host.os == TaskOS.LINUX
@@ -517,6 +519,11 @@ class HostACPAgent(BaseAgent):
         except Exception as error:
             self._retain_partial()
             primary = getattr(self, "_execution_error", None)
+            if (
+                primary is None
+                and getattr(self._setup_host, "os", None) == TaskOS.WINDOWS
+            ):
+                self._execution_error = error
             if (
                 primary is not None
                 and getattr(self._setup_host, "os", None) == TaskOS.WINDOWS

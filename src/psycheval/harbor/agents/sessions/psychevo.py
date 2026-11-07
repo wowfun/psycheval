@@ -6,17 +6,16 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from psycheval.adapters.base import SessionInfo
-from psycheval.adapters.common import CommonMessageAdapter
-from psycheval.config import ToolConfig
-from psycheval.sources import MessageRecord, read_jsonl, read_sqlite_messages
+from .common import CommonMessageAdapter
+from .models import ConversionOptions, SessionInfo
+from .sources import MessageRecord, read_jsonl, read_sqlite_messages
 
 
 class PsychevoAdapter(CommonMessageAdapter):
     agent_id = "psychevo"
     default_agent_name = "psychevo"
 
-    def convert_path(self, path: str, config: ToolConfig):
+    def convert_path(self, path: str, config: ConversionOptions):
         source = Path(path).expanduser()
         if source.is_dir() or source.suffix in {".db", ".sqlite", ".sqlite3"}:
             return self.convert_db(str(source), None, config)
@@ -32,7 +31,7 @@ class PsychevoAdapter(CommonMessageAdapter):
         self,
         path: str,
         session_id: str | None,
-        config: ToolConfig,
+        config: ConversionOptions,
     ):
         records, warnings = read_psychevo_db(path, session_id, config)
         result = self.convert(records, config)
@@ -46,7 +45,7 @@ class PsychevoAdapter(CommonMessageAdapter):
 def read_psychevo_db(
     path: str,
     session_id: str | None,
-    config: ToolConfig,
+    config: ConversionOptions,
 ) -> tuple[list[MessageRecord], list[str]]:
     db_path = resolve_psychevo_db(path)
     selected_session_id = select_session_id(db_path, session_id)

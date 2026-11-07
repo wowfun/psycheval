@@ -17,8 +17,8 @@ from psycheval._state.artifacts import (
     write_json_files_atomically,
 )
 from psycheval._state.sources import refresh_binding
-from psycheval.atif import validate_atif_trajectory
 from psycheval.config import ToolConfig
+from psycheval.harbor.atif import validate_atif_trajectory
 from psycheval.report import project_meta_from_atif
 from psycheval.state.constants import (
     SOURCE_STATE_DIR,

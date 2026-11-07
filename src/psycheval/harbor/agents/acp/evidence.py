@@ -8,7 +8,8 @@ from pathlib import Path
 
 from harbor.models.trajectories import Trajectory
 
-from .acp_protocol import (
+from ...atif import count_agent_steps
+from .protocol import (
     DEFAULT_MAX_EVIDENCE_BYTES,
     MAX_EVENT_FRAME,
     MAX_JSON_DEPTH,
@@ -17,7 +18,9 @@ from .acp_protocol import (
     evidence_frame_limit,
     verify_evidence,
 )
-from .acp_timing import ObservedTiming
+from .timing import ObservedTiming
+
+_MAX_EARLY_UPDATES = 32
 
 
 def _text(content, depth=0):
@@ -173,6 +176,11 @@ def outcome(state, result_format):
 
 
 def _merge_call(state, update, result_format):
+    if result_format == "dsh" and update.get("sessionUpdate") == "tool_call":
+        name = update.get("title")
+        if not isinstance(name, str) or not name:
+            raise ProtocolError("DSH tool call has no native name")
+        update = {**update, "name": name}
     if "name" in update and state.get("name") not in {None, update["name"]}:
         raise ProtocolError("Tool canonical identity changed")
     if result_format == "codebuddy":
@@ -205,6 +213,27 @@ def _model_request(step, update, result_format):
         )
         if identity not in identities:
             identities.append(identity)
+
+
+def _late_argument_snapshot(state, update):
+    incoming, previous = _metadata(update), _metadata(state)
+    return (
+        state.get("status") in {"completed", "failed"}
+        and update.get("status") == "pending"
+        and incoming.get("codebuddy.ai/toolArgumentsComplete") is True
+        and isinstance(state.get("name"), str)
+        and bool(state["name"])
+        and incoming.get("codebuddy.ai/toolName") == state["name"]
+        and update.get("name", state["name"]) == state["name"]
+        and isinstance(previous.get("codebuddy.ai/modelRequestId"), str)
+        and bool(previous["codebuddy.ai/modelRequestId"])
+        and incoming.get("codebuddy.ai/modelRequestId")
+        == previous["codebuddy.ai/modelRequestId"]
+        and isinstance(update.get("rawInput"), dict)
+        and update["rawInput"] == state.get("rawInput")
+        and "rawOutput" not in update
+        and incoming.get("codebuddy.ai/rawResponse") is None
+    )
 
 
 def convert(
@@ -313,6 +342,9 @@ def _convert(
             extra={"timestamp_source": "acp_prompt_submission"},
         )
     calls = {}
+    terminal_snapshots = set()
+    early_updates = {}
+    early_count = early_bytes = 0
     tool_ids = {}
     text_chunks = {}
     active = None
@@ -342,13 +374,27 @@ def _convert(
             if kind in {"agent_message_chunk", "agent_thought_chunk"}:
                 if not isinstance(update["content"], dict):
                     raise ProtocolError("invalid retained content block")
-                if active is None or tool_ids.get(active["step_id"]):
+                message_id = update.get("messageId") if result_format == "dsh" else None
+                if result_format == "dsh" and (
+                    not isinstance(message_id, str) or not message_id
+                ):
+                    raise ProtocolError("DSH assistant update has no messageId")
+                if (
+                    active is None
+                    or tool_ids.get(active["step_id"])
+                    or (
+                        message_id is not None
+                        and active.get("extra", {}).get("dsh_message_id") != message_id
+                    )
+                ):
                     active = {
                         "step_id": len(steps) + 1,
                         "source": "agent",
                         "message": "",
                     }
                     steps.append(active)
+                if message_id is not None:
+                    active.setdefault("extra", {})["dsh_message_id"] = message_id
                 _model_request(active, update, result_format)
                 if update["content"].get("type") == "text":
                     timing.chunk(active["step_id"], offset)
@@ -366,6 +412,11 @@ def _convert(
                 identity = update["toolCallId"]
                 if identity in calls:
                     state = calls[identity]
+                    if result_format == "codebuddy" and _late_argument_snapshot(
+                        state, update
+                    ):
+                        terminal_snapshots.add(identity)
+                        continue
                     if (
                         result_format == "codebuddy"
                         and state.get("status") in {"pending", "in_progress"}
@@ -385,6 +436,20 @@ def _convert(
                     }
                     steps.append(active)
                 state = {}
+                waiting = early_updates.pop(identity, [])
+                for previous, previous_offset, size in waiting:
+                    if any(
+                        _metadata(previous).get(key) != _metadata(update).get(key)
+                        for key in (
+                            "codebuddy.ai/toolName",
+                            "codebuddy.ai/modelRequestId",
+                        )
+                    ):
+                        raise ProtocolError("Early Tool update identity changed")
+                    _merge_call(state, previous, result_format)
+                    timing.tool(previous, previous_offset)
+                    early_count -= 1
+                    early_bytes -= size
                 _merge_call(state, update, result_format)
                 calls[identity] = state
                 tool_ids.setdefault(active["step_id"], []).append(identity)
@@ -392,10 +457,42 @@ def _convert(
             elif kind == "tool_call_update":
                 identity = update["toolCallId"]
                 if identity not in calls:
-                    raise ProtocolError("Tool update without initial identity")
+                    metadata = _metadata(update)
+                    if (
+                        result_format != "codebuddy"
+                        or update.get("status") is not None
+                        or "rawOutput" in update
+                        or metadata.get("codebuddy.ai/rawResponse") is not None
+                        or any(
+                            not isinstance(metadata.get(key), str) or not metadata[key]
+                            for key in (
+                                "codebuddy.ai/toolName",
+                                "codebuddy.ai/modelRequestId",
+                            )
+                        )
+                    ):
+                        raise ProtocolError("Tool update without initial identity")
+                    size = len(json.dumps(update, ensure_ascii=False).encode("utf-8"))
+                    if (
+                        early_count >= _MAX_EARLY_UPDATES
+                        or early_bytes + size > MAX_EVENT_FRAME
+                    ):
+                        raise ProtocolError("Early Tool update admission exceeded")
+                    early_updates.setdefault(identity, []).append(
+                        (update, offset, size)
+                    )
+                    early_count += 1
+                    early_bytes += size
+                    continue
                 state = calls[identity]
+                if identity in terminal_snapshots:
+                    raise ProtocolError(
+                        "Tool lifecycle continued after terminal snapshot"
+                    )
                 _merge_call(state, update, result_format)
                 timing.tool(update, offset)
+        if early_updates:
+            raise ProtocolError("Tool update without matching initial identity")
     except (ProtocolError, KeyError, TypeError, ValueError, RecursionError, OSError):
         if not diagnostic:
             raise
@@ -445,6 +542,10 @@ def _convert(
             "session_id": summary.get("session_id"),
             "agent": agent,
             "steps": steps,
+            "final_metrics": {
+                "total_steps": len(steps),
+                "extra": {"total_agent_steps": count_agent_steps(steps)},
+            },
             "extra": {
                 **timing_extra,
                 "acp_tool_evidence_complete": summary.get("protocol_complete", False)

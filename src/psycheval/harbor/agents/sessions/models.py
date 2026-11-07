@@ -1,13 +1,56 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from psycheval.config import ToolConfig
-from psycheval.sources import MessageRecord
-from psycheval.timing_contract import (
-    timestamp_fallback_allowed as timestamp_fallback_allowed,
-)
+from pydantic import BaseModel, ConfigDict, field_validator
+
+
+@dataclass(frozen=True)
+class MessageRecord:
+    message: dict[str, Any]
+    usage: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    accounting: dict[str, Any] | None = None
+    session_seq: int | None = None
+    source_session_id: str | None = None
+
+
+class DbMapping(BaseModel):
+    model_config = ConfigDict(
+        strict=True,
+        extra="forbid",
+        frozen=True,
+        validate_default=True,
+        hide_input_in_errors=True,
+    )
+    messages_table: str = "messages"
+    session_id_column: str = "session_id"
+    sequence_column: str = "session_seq"
+    message_column: str = "message_json"
+    usage_column: str = "usage_json"
+    metadata_column: str = "metadata_json"
+
+    @field_validator("*")
+    @classmethod
+    def validate_identifier(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+            raise ValueError(f"unsafe SQL identifier: {value}")
+        return value
+
+
+@dataclass(frozen=True)
+class ConversionOptions:
+    agent_name: str | None = None
+    agent_version: str = "0.1.0"
+    model: str | None = None
+    max_content_chars: int = 128 * 1024
+    redact: bool = True
+    db: DbMapping = field(default_factory=DbMapping)
+    adapter_options: dict[str, Any] = field(default_factory=dict)
+    session_root: str | None = None
+
 
 ACTIVE_DURATION_FALLBACK_CAP_MS = 600_000
 TIMESTAMP_SEMANTICS_ORDER_ONLY = "order_only"
@@ -88,22 +131,20 @@ class SessionListing:
     warnings: list[str] = field(default_factory=list)
 
 
-class SessionInspectionAdapter(Protocol):
-    def inspect_sessions(self, path: str) -> SessionListing: ...
-
-
 class Adapter(Protocol):
     agent_id: str
 
 
 class RecordAdapter(Adapter, Protocol):
     def convert(
-        self, records: list[MessageRecord], config: ToolConfig
+        self, records: list[MessageRecord], config: ConversionOptions
     ) -> ConversionResult: ...
 
 
 class PathAdapter(Adapter, Protocol):
-    def convert_path(self, path: str, config: ToolConfig) -> ConversionResult: ...
+    def convert_path(
+        self, path: str, config: ConversionOptions
+    ) -> ConversionResult: ...
 
 
 class DirectorySessionAdapter(PathAdapter, Protocol):
@@ -117,7 +158,7 @@ class DbAdapter(Adapter, Protocol):
         self,
         path: str,
         session_id: str | None,
-        config: ToolConfig,
+        config: ConversionOptions,
     ) -> ConversionResult: ...
 
 

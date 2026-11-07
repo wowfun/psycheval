@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from psycheval.config import DbMapping
+from .models import DbMapping, MessageRecord
 
 ACCOUNTING_COLUMNS = [
     "context_input_tokens",
@@ -20,16 +19,6 @@ ACCOUNTING_COLUMNS = [
     "pricing_source",
     "pricing_tier",
 ]
-
-
-@dataclass(frozen=True)
-class MessageRecord:
-    message: dict[str, Any]
-    usage: dict[str, Any] | None = None
-    metadata: dict[str, Any] | None = None
-    accounting: dict[str, Any] | None = None
-    session_seq: int | None = None
-    source_session_id: str | None = None
 
 
 def read_jsonl(path: str) -> list[MessageRecord]:

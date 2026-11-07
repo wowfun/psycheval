@@ -42,6 +42,25 @@ def run_module(name: str, *args: str) -> None:
             assert exc.code == 0, exc.code
 
 
+def sessions(root: Path) -> None:
+    models = module("agents.sessions.models")
+    adapter = module("agents.sessions.common").CommonMessageAdapter()
+    result = adapter.convert(
+        [
+            models.MessageRecord(message={"role": "user", "content": "hello"}),
+            models.MessageRecord(
+                message={"role": "assistant", "content": "Bearer fixture-secret-value"}
+            ),
+        ],
+        models.ConversionOptions(),
+    )
+    finalized = module("agents.sessions.conversion").finalize_atif_conversion(result)
+    assert finalized.trajectory["final_metrics"]["extra"]["total_agent_steps"] == 1
+    assert "fixture-secret" not in json.dumps(finalized.trajectory)
+    module("atif").validate_atif_trajectory(finalized.trajectory)
+    assert not module("timing").timestamp_fallback_allowed("event_observed")
+
+
 def imports(root: Path) -> None:
     class BlockOptionalRuntime(importlib.abc.MetaPathFinder):
         def find_spec(self, fullname, path, target=None):
@@ -62,7 +81,9 @@ def imports(root: Path) -> None:
         importlib.import_module(info.name)
     assert any(info.name == f"{PACKAGE}.tasks" for info in found)
     assert (
-        module("agent").ExternalHarnessAgent(logs_dir=root, command="fixture").version()
+        module("agents.external")
+        .ExternalHarnessAgent(logs_dir=root, command="fixture")
+        .version()
         == package.__version__
     )
     runtime = module("runtime_config")
@@ -483,7 +504,7 @@ def workbuddy(root: Path) -> None:
         }
         assert settings.base_url == "https://fixture.invalid/v1"
         assert settings.model == "copied-model"
-    usage = module("workbuddy_usage")
+    usage = module("agents.workbuddy_usage")
     history = root / "history/project/session.jsonl"
     history.parent.mkdir(parents=True)
     history.write_text(
@@ -616,7 +637,7 @@ def host(root: Path) -> None:
                 )
             ],
         )
-        agent = module("agent").ExternalHarnessAgent(
+        agent = module("agents.external").ExternalHarnessAgent(
             logs_dir=paths.agent_dir,
             command=shlex.join(
                 [
@@ -769,11 +790,13 @@ def opencode(root):
         ],
     }
     (root / "opencode-session.json").write_text(json.dumps(session), encoding="utf-8")
-    agent = module("opencode").HostOpenCodeAgent(
+    agent = module("agents.opencode").HostOpenCodeAgent(
         logs_dir=root, model_name="fixture/model"
     )
     assert agent.options.websearch_provider == "random"
-    assert module("opencode").HostOpenCodeOptions().websearch_provider == "random"
+    assert (
+        module("agents.opencode").HostOpenCodeOptions().websearch_provider == "random"
+    )
     assert (
         type(agent).parse_options({"websearch_provider": None}).websearch_provider
         is None
@@ -821,7 +844,7 @@ def acp(root):
         if update["sessionUpdate"] == "tool_call":
             (root / "live-update-ack").touch()
 
-    agent = module("acp_agent").HostACPAgent(
+    agent = module("agents.acp.agent").HostACPAgent(
         logs_dir=paths.agent_dir,
         argv=[
             sys.executable,
@@ -862,6 +885,7 @@ if __name__ == "__main__":
     sys.meta_path.insert(0, BlockPsycheval())
     scenarios = {
         "imports": imports,
+        "sessions": sessions,
         "documents": documents,
         "trajectory_file": trajectory_file,
         "verifier": verifier,

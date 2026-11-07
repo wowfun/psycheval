@@ -3,14 +3,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from psycheval.adapters.base import ConversionResult
 from psycheval.config import ToolConfig, config_for_adapter
-from psycheval.conversion import (
-    _finalize_atif_session_context,
-    convert_db,
-    convert_path,
-    convert_records,
-)
+from psycheval.conversion import convert_db, convert_path, convert_records
+from psycheval.harbor.agents.sessions.models import ConversionResult
 from psycheval.models import LoadedInputs, LoadedSession
 from psycheval.report import (
     NoteInput,
@@ -43,13 +38,14 @@ def convert_session(session: LoadedSession, config: ToolConfig) -> ConversionRes
     elif session.records is None:
         if not session.input_path:
             raise ValueError("path input is missing a source path")
-        result = convert_path(session.input_path, session_config)
+        result = convert_path(
+            session.input_path, session_config, session_hint=session.session_hint
+        )
     else:
-        result = convert_records(session.records, session_config)
-    return _finalize_atif_session_context(
-        result,
-        session.session_hint if session.adapter_id != "atif" else None,
-    )
+        result = convert_records(
+            session.records, session_config, session_hint=session.session_hint
+        )
+    return result
 
 
 def report_session_for_loaded(

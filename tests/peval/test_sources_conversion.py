@@ -6,20 +6,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from psycheval.atif import validate_atif_trajectory
 from psycheval.config import ToolConfig
 from psycheval.conversion import (
     convert_db,
     convert_path,
     convert_records,
 )
-from psycheval.report import build_report
-from psycheval.sources import (
+from psycheval.harbor.agents.sessions.models import MessageRecord
+from psycheval.harbor.agents.sessions.sources import (
     ACCOUNTING_COLUMNS,
-    MessageRecord,
     read_jsonl,
     read_sqlite_messages,
 )
+from psycheval.harbor.atif import validate_atif_trajectory
+from psycheval.report import build_report
 from tests.peval.peval_test_support import (
     FIXTURES,
     create_hermes_db,
@@ -680,7 +680,7 @@ class PevalSourceConversionTests(unittest.TestCase):
             self.assertEqual(latest.trajectory["steps"][1]["message"], "latest prompt")
             self.assertEqual(latest.trajectory["steps"][2]["message"], "latest answer")
             self.assertEqual(
-                latest.trajectory["steps"][2]["metrics"]["prompt_tokens"], 16
+                latest.trajectory["final_metrics"]["total_prompt_tokens"], 16
             )
             self.assertEqual(
                 latest.trajectory["steps"][2]["reasoning_content"],
@@ -733,7 +733,10 @@ class PevalSourceConversionTests(unittest.TestCase):
             self.assertEqual(old.trajectory["session_id"], "hermes-old")
             self.assertEqual(old.trajectory["steps"][0]["message"], "old prompt")
             self.assertEqual(len(old.trajectory["steps"]), 1)
-            self.assertNotIn("usage", final_extra(old.trajectory))
+            self.assertEqual(final_extra(old.trajectory)["usage"]["input_tokens"], 1)
+            self.assertTrue(
+                all("metrics" not in step for step in old.trajectory["steps"])
+            )
 
     def test_hermes_db_adapter_fuses_current_agent_log_timing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1184,3 +1187,48 @@ class PevalSourceConversionTests(unittest.TestCase):
         self.assertEqual(metrics["extra"]["usage"]["output_tokens"], 13)
         self.assertEqual(metrics["extra"]["accounting"]["billable_input_tokens"], 11)
         self.assertEqual(metrics["extra"]["accounting"]["billable_output_tokens"], 13)
+
+
+def test_session_identity_is_attached_before_single_finalization(monkeypatch):
+    from types import SimpleNamespace
+
+    from psycheval import conversion
+    from psycheval.harbor.agents.sessions.models import ConversionResult
+    from psycheval.models import LoadedSession
+    from psycheval.pipeline import convert_session
+
+    native = ConversionResult(
+        trajectory={
+            "agent": {"name": "fixture", "version": "1"},
+            "steps": [{"step_id": 1, "source": "user", "message": "hello"}],
+        },
+        steps_meta=[],
+        warnings=[],
+        total_events=0,
+        unmapped_events=0,
+        started_at_ms=None,
+        finished_at_ms=None,
+    )
+    monkeypatch.setattr(
+        conversion, "adapter_for", lambda _: SimpleNamespace(convert=lambda *_: native)
+    )
+    original = conversion.finalize_atif_conversion
+    calls = []
+
+    def finalize(result, session_id=None):
+        calls.append(session_id)
+        return original(result, session_id)
+
+    monkeypatch.setattr(conversion, "finalize_atif_conversion", finalize)
+    result = convert_session(
+        LoadedSession(
+            records=[],
+            input_label="fixture",
+            adapter_id="psychevo",
+            session_hint="source-id",
+        ),
+        ToolConfig(),
+    )
+    assert calls == ["source-id"]
+    assert result.trajectory["trajectory_id"] == "fixture:source-id"
+    assert "session_id" not in native.trajectory

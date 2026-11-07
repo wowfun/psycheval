@@ -4,12 +4,12 @@ from collections.abc import Callable
 from importlib.metadata import EntryPoint, entry_points
 from typing import Any
 
-from psycheval.adapters.base import Adapter
-from psycheval.adapters.claude import ClaudeAdapter
-from psycheval.adapters.deepagents import DeepagentsAdapter
-from psycheval.adapters.hermes import HermesAdapter
-from psycheval.adapters.opencode import OpencodeAdapter
-from psycheval.adapters.psychevo import PsychevoAdapter
+from psycheval.harbor.agents.sessions.claude import ClaudeAdapter
+from psycheval.harbor.agents.sessions.deepagents import DeepagentsAdapter
+from psycheval.harbor.agents.sessions.hermes import HermesAdapter
+from psycheval.harbor.agents.sessions.models import Adapter
+from psycheval.harbor.agents.sessions.opencode import OpencodeAdapter
+from psycheval.harbor.agents.sessions.psychevo import PsychevoAdapter
 
 ENTRY_POINT_GROUP = "psycheval.adapters"
 

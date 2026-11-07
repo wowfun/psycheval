@@ -1,21 +1,29 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from psycheval.adapters.base import (
+from ...inference_telemetry import (
+    finalize_trajectory_metrics,
+    metrics_from_observations,
+    observation_from_usage,
+)
+from .common import CommonMessageAdapter, metrics_from_record
+from .models import (
     TIMESTAMP_SEMANTICS_ORDER_ONLY,
+    ConversionOptions,
     SessionInfo,
     timestamp_fallback_duration_ms,
 )
-from psycheval.adapters.common import CommonMessageAdapter
-from psycheval.config import ToolConfig
-from psycheval.sources import MessageRecord, read_jsonl
+from .sources import MessageRecord, read_jsonl
+
+_LOGGER = logging.getLogger(__name__)
 
 HERMES_AGENT_LOG_TIMING_SOURCE = "hermes_agent_log"
 HERMES_MESSAGE_BOUNDARY_ESTIMATE_SOURCE = "hermes_message_boundary_estimate"
@@ -25,20 +33,45 @@ class HermesAdapter(CommonMessageAdapter):
     agent_id = "hermes"
     default_agent_name = "hermes"
 
-    def convert_path(self, path: str, config: ToolConfig):
+    def convert(self, records, config):
+        result = super().convert(records, config)
+        if records:
+            facts = (records[0].metadata or {}).get("hermes_session_metrics", {})
+            usage_keys = {
+                "prompt_tokens",
+                "completion_tokens",
+                "cached_tokens",
+                "cost_usd",
+            }
+            if usage_keys.intersection(facts):
+                for key in usage_keys:
+                    result.trajectory["final_metrics"].pop("total_" + key, None)
+            if facts.get("extra"):
+                result.trajectory["final_metrics"].setdefault("extra", {}).update(
+                    facts["extra"]
+                )
+            for key, value in facts.items():
+                if key in usage_keys:
+                    result.trajectory["final_metrics"]["total_" + key] = value
+                    result.trajectory["final_metrics"].setdefault("extra", {})[
+                        "usage_scope"
+                    ] = "session"
+        return result
+
+    def convert_path(self, path: str, config: ConversionOptions):
         source = Path(path).expanduser()
         if source.is_dir() or source.suffix in {".db", ".sqlite", ".sqlite3"}:
             return self.convert_db(str(source), None, config)
-        exported = read_hermes_session_export(source)
+        exported = _parse_hermes_export_value(source.read_text(encoding="utf-8"))
         if exported is not None:
-            return self.convert(exported, config)
+            return _convert_hermes_export_value(exported, config)
         return self.convert(read_jsonl(path), config)
 
     def convert_db(
         self,
         path: str,
         session_id: str | None,
-        config: ToolConfig,
+        config: ConversionOptions,
     ):
         records = read_hermes_db(path, session_id)
         return self.convert(records, config)
@@ -69,9 +102,6 @@ def read_hermes_db(path: str, session_id: str | None) -> list[MessageRecord]:
 
     aggregate_usage = session_usage(session)
     aggregate_accounting = session_accounting(session)
-    has_aggregate_metrics = bool(aggregate_usage or aggregate_accounting)
-    pending_usage = aggregate_usage
-    pending_accounting = aggregate_accounting
     records: list[MessageRecord] = []
     seq = 1
     system_prompt = row_value(session, "system_prompt")
@@ -96,27 +126,36 @@ def read_hermes_db(path: str, session_id: str | None) -> list[MessageRecord]:
             row,
             session,
             seq,
-            include_row_usage=not has_aggregate_metrics,
+            include_row_usage=True,
         )
-        if (pending_usage or pending_accounting) and message_role(record) in {
-            "assistant",
-            "agent",
-        }:
-            record = with_metrics(record, pending_usage, pending_accounting)
-            pending_usage = {}
-            pending_accounting = {}
         records.append(record)
         seq += 1
+    records = _with_session_metrics(records, aggregate_usage, aggregate_accounting)
     return records_with_hermes_log_timing(records, db_path, str(session["id"]))
 
 
-def read_hermes_session_export(path: Path) -> list[MessageRecord] | None:
+def _parse_hermes_export_value(text: str, session_id: str | None = None) -> dict | None:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(text)
     except json.JSONDecodeError:
-        return None
+        if session_id is None:
+            return None
+        value = {
+            "id": session_id,
+            "messages": [
+                json.loads(line) for line in text.splitlines() if line.strip()
+            ],
+        }
+    if session_id is not None and isinstance(value, dict) and "messages" not in value:
+        value = {"id": session_id, "messages": [value]}
     if not isinstance(value, dict) or "messages" not in value:
         return None
+    if session_id is not None:
+        value = {**value, "id": session_id}
+    return value
+
+
+def _records_from_hermes_export(value: dict) -> list[MessageRecord]:
     messages = value.get("messages")
     if not isinstance(messages, list) or not all(
         isinstance(message, dict) for message in messages
@@ -128,8 +167,6 @@ def read_hermes_session_export(path: Path) -> list[MessageRecord] | None:
     session = {**value, "id": session_id}
     aggregate_usage = session_usage(session)
     aggregate_accounting = session_accounting(session)
-    pending_usage = aggregate_usage
-    pending_accounting = aggregate_accounting
     records: list[MessageRecord] = []
     previous_timestamp_ms: int | None = None
     for seq, message in enumerate(messages, start=1):
@@ -137,16 +174,12 @@ def read_hermes_session_export(path: Path) -> list[MessageRecord] | None:
             message,
             session,
             seq,
-            include_row_usage=False,
+            include_row_usage=True,
             source="hermes-session-export",
         )
         role = message_role(record)
         timestamp_ms = optional_seconds_to_ms(row_value(message, "timestamp"))
         if role in {"assistant", "agent"}:
-            if pending_usage or pending_accounting:
-                record = with_metrics(record, pending_usage, pending_accounting)
-                pending_usage = {}
-                pending_accounting = {}
             elapsed_ms = timestamp_fallback_duration_ms(
                 previous_timestamp_ms, timestamp_ms
             )
@@ -168,7 +201,7 @@ def read_hermes_session_export(path: Path) -> list[MessageRecord] | None:
         records.append(record)
         if timestamp_ms is not None:
             previous_timestamp_ms = timestamp_ms
-    return records
+    return _with_session_metrics(records, aggregate_usage, aggregate_accounting)
 
 
 @dataclass(frozen=True)
@@ -593,21 +626,6 @@ def row_usage(row: Any) -> dict[str, Any]:
     return {"total_tokens": value}
 
 
-def with_metrics(
-    record: MessageRecord,
-    usage: dict[str, Any],
-    accounting: dict[str, Any],
-) -> MessageRecord:
-    return MessageRecord(
-        message=record.message,
-        usage=usage or record.usage,
-        metadata=record.metadata,
-        accounting=accounting or record.accounting,
-        session_seq=record.session_seq,
-        source_session_id=record.source_session_id,
-    )
-
-
 def metadata_for(
     session: Any,
     message_id: object | None = None,
@@ -676,3 +694,99 @@ def float_or_none(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _enrich_hermes_trajectory(trajectory: dict, messages: list[dict]) -> dict:
+    assistants = [
+        message
+        for message in messages
+        if isinstance(message, dict)
+        and message.get("role") == "assistant"
+        and _assistant_emits_step(message)
+    ]
+    assistant_steps = [
+        step
+        for step in trajectory.get("steps", [])
+        if isinstance(step, dict) and step.get("source") in {"agent", "assistant"}
+    ]
+    if len(assistant_steps) != len(assistants):
+        _LOGGER.debug(
+            "Hermes usage enrichment skipped: %d ATIF assistant steps for %d "
+            "session assistant messages",
+            len(assistant_steps),
+            len(assistants),
+        )
+        return finalize_trajectory_metrics(trajectory)
+    for step, assistant in zip(assistant_steps, assistants, strict=True):
+        observation = observation_from_usage(
+            assistant.get("usage"),
+            usage_source="hermes.session.message.usage",
+        )
+        if observation is not None:
+            step["metrics"] = metrics_from_observations([observation])
+    return finalize_trajectory_metrics(trajectory)
+
+
+def _assistant_emits_step(message: dict) -> bool:
+    content = message.get("content", "")
+    if isinstance(content, list):
+        content = " ".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return bool(content or message.get("tool_calls"))
+
+
+def convert_hermes_export(
+    text: str,
+    session_id: str | None,
+    config: ConversionOptions,
+    *,
+    include_session_metrics: bool = True,
+):
+    from .conversion import finalize_atif_conversion
+
+    exported = _parse_hermes_export_value(text, session_id)
+    if exported is None:
+        raise ValueError("Hermes export has no messages")
+    return finalize_atif_conversion(
+        _convert_hermes_export_value(
+            exported, config, include_session_metrics=include_session_metrics
+        )
+    )
+
+
+def _convert_hermes_export_value(
+    exported: dict, config: ConversionOptions, *, include_session_metrics: bool = True
+):
+    records = _records_from_hermes_export(exported)
+    if not records:
+        raise ValueError("Hermes export has no messages")
+    if not include_session_metrics:
+        records = [
+            replace(
+                record,
+                metadata={
+                    key: value
+                    for key, value in (record.metadata or {}).items()
+                    if key != "hermes_session_metrics"
+                },
+            )
+            for record in records
+        ]
+    result = HermesAdapter().convert(records, config)
+    trajectory = _enrich_hermes_trajectory(result.trajectory, exported["messages"])
+    return replace(result, trajectory=trajectory)
+
+
+def _with_session_metrics(records, usage, accounting):
+    if records and (usage or accounting):
+        facts = metrics_from_record(
+            MessageRecord(message={}, usage=usage, accounting=accounting)
+        )
+        records[0] = replace(
+            records[0],
+            metadata={**(records[0].metadata or {}), "hermes_session_metrics": facts},
+        )
+    return records

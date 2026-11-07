@@ -14,7 +14,7 @@ from harbor.models.task.config import EnvironmentConfig, TaskOS
 from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
 from harbor.utils.scripts import quote_shell_arg
 
-from psycheval.harbor.agent import ExternalHarnessAgent
+from psycheval.harbor.agents.external import ExternalHarnessAgent
 from psycheval.harbor.environment import HostEnvironment
 from psycheval.harbor.runtime_config import (
     HARNESS_PROTOCOL_VERSION,

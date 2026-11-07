@@ -19,7 +19,7 @@ lexical root, including Windows short paths, without relaxing containment checks
 
 ## Host ACP Agent
 
-`psycheval.harbor.acp_agent:HostACPAgent` evaluates a preinstalled ACP v1 Agent
+`psycheval.harbor.agents.acp.agent:HostACPAgent` evaluates a preinstalled ACP v1 Agent
 on a native Linux or Windows Host and reports the Agent name `acp`.
 `argv` is literal executable/argument input. `config_dir` seeds
 isolated XDG configuration once; linked entries are rejected. HOME/XDG state
@@ -124,7 +124,7 @@ larger retained-evidence budgets can therefore support longer streamed tool outp
 The fixed cleanup and
 integrity records are retained even when admission is exhausted.
 The strict wire limits and byte-budget default belong to
-[`acp_protocol`](../../src/psycheval/harbor/acp_protocol.py).
+[`acp_protocol`](../../src/psycheval/harbor/agents/acp/protocol.py).
 The closed evidence files are bound to an invocation by a summary manifest of
 stored and decoded sizes and digests. Bounded streaming readers validate gzip
 completion, reject trailing data, and enforce decoded-byte and record limits.
@@ -145,7 +145,7 @@ reserve; Windows then terminates the Job and confirms it is empty.
 `handshake_timeout_sec` bounds the entire setup sequence, including
 initialization, authentication, Session restoration and configuration selection;
 each RPC consumes the remaining deadline. Defaults belong to
-[`HostACPAgent`](../../src/psycheval/harbor/acp_agent.py).
+[`HostACPAgent`](../../src/psycheval/harbor/agents/acp/agent.py).
 Cancel delivery and connection teardown are bounded by the cleanup deadline;
 another stop signal interrupts cooperative waits. Cleanup failures still retain
 categorical summary evidence.
@@ -226,8 +226,11 @@ unreadable retained member cannot confirm settlement.
 
 ## Native WorkBuddy ACP
 
-`psycheval.harbor.workbuddy_agent:HostWorkBuddyAgent` runs the desktop-bundled
+`psycheval.harbor.agents.workbuddy:HostWorkBuddyAgent` runs the desktop-bundled
 CodeBuddy CLI on Windows and reports the Agent name `workbuddy`.
+CLI version identity comes from the native `package.json` version field. The
+installation must contain `dist/codebuddy-lite-wb.mjs`; the adapter selects this
+bundle through the native launcher and specifies `--acp-transport stdio`.
 Supply explicit absolute `installation_dir`,
 `profile_dir` and `auth_file` paths and an exact advertised `model_name`.
 `inspect_workbuddy` accepts the same paths and returns version and model
@@ -258,15 +261,27 @@ the adapter never initiates desktop login or falls back to another CLI or model.
 Custom models still require WorkBuddy authentication in ACP mode.
 
 WorkBuddy's cumulative streaming tool-argument updates are retained losslessly.
+Argument snapshots may arrive before their initial call. Projection buffers a
+bounded number and byte volume until a real initial call confirms the same native
+tool name and model request ID. Terminal results cannot precede their initial
+call, and unresolved or conflicting snapshots fail conversion. Generic ACP does
+not accept this ordering extension; no call identities are invented.
 Its finite stored and decoded evidence budgets are independently configurable;
 their defaults belong to the WorkBuddy adapter. The decoded budget does not
 increase native usage-history read limits. Exhaustion preserves the prefix,
 settles the Job and rejects incomplete tool evidence, as in generic ACP.
 
-The full headless bundle is used, with native session persistence under the
-private profile. Every new or restored session confirms its requested model.
-Each prompt includes the native workspace root and explains how Task `/workspace`
-paths map to it, so native tools can address the prepared files.
+Native sessions persist under the private profile. Every new or restored session
+confirms its requested model.
+The CLI runs in server mode with explicit stdio ACP and an ephemeral loopback
+HTTP listener with native gateway password authentication. The owned process tree
+bounds the listener's lifetime. The bootstrap routes native console diagnostics to
+stderr before the CLI captures its console, replacing the startup banner with a
+constant marker because it contains a generated gateway password. Protocol stdout
+remains unmodified NDJSON.
+This avoids interpreting the native HTTP startup banner as ACP evidence.
+Task prompts are forwarded unchanged. Native tools resolve relative paths against
+the ACP Session's working directory, set to the prepared Host workspace.
 Unless overridden through `config_options`, mode defaults to `bypassPermissions`
 and multitask defaults to disabled. Harbor Skills
 use `CODEBUDDY_SESSION_SKILL_DIRS`; MCP uses ACP session setup. Resume restores
@@ -284,7 +299,7 @@ retained; message bodies, tool results and credentials are excluded. Source
 digests and invocation identity bind the evidence to the current call. Native
 history reads share the configured evidence-byte ceiling and the existing
 event-line limit. Usage size, history enumeration and line-count ceilings belong
-to `harbor.workbuddy_usage`; reaching a limit retains a categorical diagnostic.
+to `harbor.agents.workbuddy_usage`; reaching a limit retains a categorical diagnostic.
 Enumeration bounds cover project entries, entries within each project, and total
 history files. Exhausting them disables native usage capture for that invocation,
 leaving totals unknown without changing execution or scoring. The baseline
@@ -339,18 +354,21 @@ empty within its deadline; missing confirmation produces a warning with owned
 paths and does not block valid evidence or verification.
 The bundled CLI may announce an active tool again when its arguments resolve.
 The WorkBuddy policy merges that snapshot only for the same canonical identity
-while the existing call is nonterminal. Reusing a terminal call ID is rejected;
-generic ACP still rejects duplicate starts. Every original frame remains retained.
+while the existing call is nonterminal. After a terminal result, an explicitly
+marked arguments-complete snapshot may repeat the same tool name, model request
+and identical arguments. It cannot reopen the call or replace its terminal result;
+further lifecycle updates fail. Other terminal-ID reuse and generic ACP duplicate
+starts are rejected. Every original frame remains retained.
 Deferred MCP execution retains its native wrapper identity and arguments. When
 the CLI does not emit the underlying invocation as a separate identified call,
 tool-name evidence is incomplete; artifact and answer scoring remain available.
 
-Desktop 5.7.7 / CLI 2.156.0 is the initial acceptance baseline. Desktop upgrades
+Desktop 5.9.3 / CLI 2.165.0 is the native acceptance baseline. Desktop upgrades
 are checked through required files and native bootstrap capabilities.
 
 ## Public seams
 
-- `psycheval.harbor.agent:ExternalHarnessAgent` runs a configured external
+- `psycheval.harbor.agents.external:ExternalHarnessAgent` runs a configured external
   process and loads its current-invocation ATIF output.
 - `psycheval.harbor.environment:HostEnvironment` executes directly on a trusted
   native host.
@@ -359,9 +377,9 @@ are checked through required files and native bootstrap capabilities.
 - `psycheval.harbor.paths:HostPathMapper` and
   `psycheval.harbor.paths:trial_short_uuid` are the small public seams for
   explicit path translation and workspace naming.
-- `psycheval.harbor.hermes:HermesAgent` is the pinned Harbor compatibility
+- `psycheval.harbor.agents.hermes:HermesAgent` is the pinned Harbor compatibility
   adapter for current Hermes provider and exact-session behavior.
-- `psycheval.harbor.opencode:HostOpenCodeAgent` runs an already installed
+- `psycheval.harbor.agents.opencode:HostOpenCodeAgent` runs an already installed
   OpenCode CLI through `HostEnvironment` on native Windows or Linux.
 - `psycheval.harbor.verifier` implements shared evidence and artifact scoring.
 - `psycheval.harbor.datasets` resolves registered flat Harbor Datasets and
@@ -1253,7 +1271,7 @@ workspace. Namespace changes do not rename `PEVAL_CONFIG`, runtime JSON fields,
 schema identifiers, or Agent identities. The caller owns downstream Job and
 Task commands; copying source does not rewrite external Dataset scripts.
 
-`src/psycheval/atif.py` is a separate copy unit. It can be renamed, uses only the
+`src/psycheval/harbor/atif.py` is a separate copy unit. It can be renamed, uses only the
 standard library, and validates without modifying its input. It also owns
 `is_atif_content` and `iso_timestamp_ms`. Recognition helpers detect candidate
 ATIF; call `validate_atif_trajectory` for strict validation. Adapter conversion
@@ -1263,3 +1281,16 @@ belongs to `psycheval.conversion` and is outside that copy unit. Harbor's
 Follow [Vendoring Harbor integration downstream](../user/downstream-vendoring.md)
 for source layout, dependency and WorkBuddy installation, Job configuration,
 and runtime checks.
+
+## Session conversion
+
+Session adapters use frozen ConversionOptions with agent_name, agent_version,
+model, max_content_chars, redact, DB mapping, selected adapter options and an
+explicit session root. Application configuration owns path expansion and defaults.
+The session module publicly exposes finalization, session-context attachment and
+ATIF-step metadata projection. Imported ATIF is never repaired.
+Hermes resume projects only the current invocation's messages and per-message
+usage. Session-wide totals remain available to full-session imports but cannot
+supply usage for a resumed subset.
+The UTF-8 trajectory reader retains Harbor image-reference checks, including the
+pinned version's private image-path hooks.

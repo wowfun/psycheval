@@ -2,11 +2,11 @@ import json
 
 import pytest
 
-from psycheval.adapters.claude import ClaudeAdapter
 from psycheval.cli import main
 from psycheval.cli.arguments import CliArgs
 from psycheval.config import ToolConfig, default_workspace_config_text, load_config
 from psycheval.conversion import convert_path
+from psycheval.harbor.agents.sessions.claude import ClaudeAdapter
 from psycheval.inputs import load_inputs, parse_adapter_assignments
 from psycheval.serve.api_models import SourceImportRequest
 from psycheval.serve.errors import HttpError
@@ -25,9 +25,9 @@ def test_session_root_default_and_config_resolution(tmp_path, monkeypatch):
         in default_workspace_config_text()
     )
     retained = family(tmp_path / "home/.claude/projects/project")
-    assert ClaudeAdapter().resolve_session_id("root-session", ToolConfig()) == str(
-        retained
-    )
+    assert ClaudeAdapter().resolve_session_id(
+        "root-session", ToolConfig(adapter="claude").conversion_options()
+    ) == str(retained)
     for value, expected in [
         ('"sessions"', root / "sessions"),
         ('"~/sessions"', tmp_path / "home/sessions"),
@@ -54,29 +54,43 @@ def test_lookup_is_bounded_and_validates_exact_identity(tmp_path):
     path = family(tmp_path / "project")
     # Unrelated corrupt logs do not interfere with exact-ID lookup.
     (path.parent / "unrelated.jsonl").write_text("{bad", encoding="utf-8")
-    assert adapter.resolve_session_id("root-session", config) == str(path)
+    assert adapter.resolve_session_id(
+        "root-session", config.for_adapter("claude").conversion_options()
+    ) == str(path)
     for identifier in ["../root-session", "#1", "p1=root-session", "missing"]:
         with pytest.raises(ValueError, match="invalid Claude session ID|not found"):
-            adapter.resolve_session_id(identifier, config)
+            adapter.resolve_session_id(
+                identifier, config.for_adapter("claude").conversion_options()
+            )
     deeper = family(tmp_path / "nested/project")
-    assert adapter.resolve_session_id("root-session", config) == str(path)
+    assert adapter.resolve_session_id(
+        "root-session", config.for_adapter("claude").conversion_options()
+    ) == str(path)
     root_copy = tmp_path / "root-session.jsonl"
     root_copy.write_bytes(path.read_bytes())
     with pytest.raises(ValueError, match="ambiguous Claude session ID"):
-        adapter.resolve_session_id("root-session", config)
+        adapter.resolve_session_id(
+            "root-session", config.for_adapter("claude").conversion_options()
+        )
     root_copy.unlink()
     write_events(
         root_copy, [event("user", content="Wrong identity", sessionId="other")]
     )
     with pytest.raises(ValueError, match="identity does not match"):
-        adapter.resolve_session_id("root-session", config)
+        adapter.resolve_session_id(
+            "root-session", config.for_adapter("claude").conversion_options()
+        )
     root_copy.write_text("{bad", encoding="utf-8")
     with pytest.raises(ValueError, match="JSONL line 1"):
-        adapter.resolve_session_id("root-session", config)
+        adapter.resolve_session_id(
+            "root-session", config.for_adapter("claude").conversion_options()
+        )
     root_copy.unlink()
     path.unlink()
     with pytest.raises(ValueError, match="not found"):
-        adapter.resolve_session_id("root-session", config)
+        adapter.resolve_session_id(
+            "root-session", config.for_adapter("claude").conversion_options()
+        )
     assert deeper.is_file()
 
 

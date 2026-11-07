@@ -161,6 +161,22 @@ def validate_payload(validator, value, result_format="acp"):
     if isinstance(value, dict):
         update = value.get("update", value)
         if isinstance(update, dict):
+            kind = update.get("sessionUpdate")
+            if kind in {"tool_call", "tool_call_update"} and not update.get(
+                "toolCallId"
+            ):
+                raise ProtocolError("empty tool call identity")
+            if result_format == "dsh":
+                if kind == "tool_call" and not update.get("title"):
+                    raise ProtocolError("DSH tool call has no native name")
+                if kind in {
+                    "agent_message_chunk",
+                    "agent_thought_chunk",
+                } and (
+                    not isinstance(update.get("messageId"), str)
+                    or not update["messageId"]
+                ):
+                    raise ProtocolError("DSH assistant update has no messageId")
             if "name" in update and (
                 not isinstance(update["name"], str) or not update["name"]
             ):
@@ -220,7 +236,14 @@ def validate_payload(validator, value, result_format="acp"):
                 ):
                     raise ProtocolError("invalid configuration choices")
                 if any(
-                    not choice or len(choice.encode()) > MAX_CONFIG_VALUE_BYTES
+                    (
+                        not choice
+                        and not (
+                            result_format == "dsh"
+                            and option["id"] == "reasoning_effort"
+                        )
+                    )
+                    or len(choice.encode()) > MAX_CONFIG_VALUE_BYTES
                     for choice in values
                 ):
                     raise ProtocolError("invalid configuration value")

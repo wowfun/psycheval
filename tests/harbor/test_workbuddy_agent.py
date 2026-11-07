@@ -15,10 +15,10 @@ import pytest
 from harbor.models.agent.context import AgentContext
 from harbor.models.trajectories import Trajectory
 
-from psycheval.harbor.acp_agent import HostACPAgent
-from psycheval.harbor.acp_evidence import convert, outcome
-from psycheval.harbor.acp_protocol import ProtocolError, StrictTransport
-from psycheval.harbor.workbuddy_agent import HostWorkBuddyAgent, inspect_workbuddy
+from psycheval.harbor.agents.acp.agent import HostACPAgent
+from psycheval.harbor.agents.acp.evidence import convert, outcome
+from psycheval.harbor.agents.acp.protocol import ProtocolError, StrictTransport
+from psycheval.harbor.agents.workbuddy import HostWorkBuddyAgent, inspect_workbuddy
 from tests.harbor.environment_support import make_environment
 from tests.harbor.test_acp import _current_evidence
 
@@ -55,7 +55,7 @@ def test_invocation_checks_host_setup_before_native_usage_paths(
 def test_inspection_returns_native_models_without_prompting(
     tmp_path, monkeypatch, grouped
 ):
-    from psycheval.harbor import workbuddy_agent
+    from psycheval.harbor.agents import workbuddy as workbuddy_agent
 
     choices = [
         {"value": "custom/中文", "name": "自定义", "description": "Fixture"},
@@ -95,7 +95,7 @@ def test_inspection_returns_native_models_without_prompting(
     monkeypatch.setattr(HostWorkBuddyAgent, "setup", setup)
     monkeypatch.setattr(HostWorkBuddyAgent, "_invoke", invoke)
     result = asyncio.run(inspect_workbuddy(**installation(tmp_path)))
-    assert result.desktop_version == "5.7.7" and result.cli_version == "2.156.0"
+    assert result.desktop_version == "5.9.3" and result.cli_version == "2.165.0"
     assert result.current_model_id == "custom/中文"
     assert result.available_models == (
         {"modelId": "custom/中文", "name": "自定义", "description": "Fixture"},
@@ -108,7 +108,7 @@ def test_inspection_returns_native_models_without_prompting(
 
 @pytest.mark.parametrize("failure", ["setup", "invoke"])
 def test_inspection_settles_host_on_failure(tmp_path, monkeypatch, failure):
-    from psycheval.harbor import workbuddy_agent
+    from psycheval.harbor.agents import workbuddy as workbuddy_agent
 
     roots, stopped = [], []
 
@@ -144,7 +144,9 @@ def test_bootstrap_watchdog_uses_configured_timeout(tmp_path):
       const source = fs.readFileSync(process.argv[1], 'utf8');
       for (const timeout of [250, 60000, 120000]) {
         const timers = [];
+        const diagnostics = [], wire = [], stderr = [];
         const context = {
+          console: {error: message => diagnostics.push(message)},
           require(name) {
             if (name === 'node:net') return {
               createServer: () => ({listen() {}, unref() {}}),
@@ -161,12 +163,18 @@ def test_bootstrap_watchdog_uses_configured_timeout(tmp_path):
                   },
                 };
             assert.equal(name, 'fixture-cli');
+            context.console.log('HTTP startup banner');
+            context.console.info('native information');
+            context.console.debug('native debug');
+            context.console.log('HTTP Server\nPassword: FIXTURE_EPHEMERAL_PASSWORD\nPress Ctrl+C to stop the server');
+            context.process.stdout.write('{"jsonrpc":"2.0"}\n');
           },
           process: {
             argv: ['node', 'bootstrap', 'fixture-cli'],
                 env: {PEVAL_WORKBUDDY_BOOTSTRAP_TIMEOUT_MS: String(timeout), PEVAL_WORKBUDDY_BOOTSTRAP_PYTHON:'fixture-python'},
             _linkedBinding: () => ({loggerGet: () => JSON.stringify({version:1, atRestSecretKey:'fixture'})}),
-            stderr: {write() {}}, exit() {throw Error('unexpected exit')}, pid:42,
+            stderr: {write: value => stderr.push(value)}, exit() {throw Error('unexpected exit')}, pid:42,
+            stdout: {write: value => wire.push(value)},
           },
           setTimeout(callback, delay) {timers.push(delay); return 1}, clearTimeout() {},
               __dirname: require('node:path').dirname(process.argv[1]), Buffer,
@@ -174,6 +182,9 @@ def test_bootstrap_watchdog_uses_configured_timeout(tmp_path):
         vm.runInNewContext(source, context);
         assert.deepEqual(timers, [timeout]);
         assert.equal(context.process.env.PEVAL_WORKBUDDY_BOOTSTRAP_TIMEOUT_MS, undefined);
+        assert.deepEqual(diagnostics, ['HTTP startup banner', 'native information', 'native debug']);
+        assert.deepEqual(wire, ['{"jsonrpc":"2.0"}\n']);
+        assert.deepEqual(stderr, ['NATIVE_ACP_SERVER_READY\n']);
       }
     """
     result = subprocess.run(
@@ -183,7 +194,7 @@ def test_bootstrap_watchdog_uses_configured_timeout(tmp_path):
             script,
             str(
                 Path(__file__).resolve().parents[2]
-                / "src/psycheval/harbor/workbuddy_bootstrap.cjs"
+                / "src/psycheval/harbor/agents/workbuddy_bootstrap.cjs"
             ),
         ],
         capture_output=True,
@@ -196,15 +207,13 @@ def test_bootstrap_watchdog_uses_configured_timeout(tmp_path):
 def installation(tmp_path):
     root = tmp_path / "installation"
     cli = root / "resources/app.asar.unpacked/cli"
-    for name in ("bin/codebuddy", "dist/codebuddy-headless.js"):
+    for name in ("bin/codebuddy", "dist/codebuddy-lite-wb.mjs"):
         path = cli / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("fixture", encoding="utf-8")
     (root / "WorkBuddy.exe").write_text("fixture")
-    (cli / "product.json").write_text(json.dumps({"genieVersion": "5.7.7"}))
-    (cli / "package.json").write_text(
-        json.dumps({"publishConfig": {"customPackage": {"version": "2.156.0"}}})
-    )
+    (cli / "product.json").write_text(json.dumps({"genieVersion": "5.9.3"}))
+    (cli / "package.json").write_text(json.dumps({"version": "2.165.0"}))
     profile = tmp_path / "profile"
     (profile / "cache").mkdir(parents=True)
     (profile / "cache/acc-product-config-v3.json").write_text(
@@ -274,7 +283,7 @@ def test_workbuddy_metadata_parse_is_bounded(tmp_path):
         config["installation_dir"] / "resources/app.asar.unpacked/cli/product.json"
     )
     product.write_text(
-        '{"genieVersion":"5.7.7","nested":' + '{"nested":' * 40 + "0" + "}" * 41
+        '{"genieVersion":"5.9.3","nested":' + '{"nested":' * 40 + "0" + "}" * 41
     )
     with pytest.raises(ValueError, match="configuration"):
         HostWorkBuddyAgent(logs_dir=tmp_path / "logs", model_name="a", **config)
@@ -291,7 +300,7 @@ def test_inspection_cannot_submit_prompts(tmp_path):
 
 @windows
 def test_cleanup_allows_native_persistence_before_job_settlement(tmp_path):
-    from psycheval.harbor.acp_harness import _settle
+    from psycheval.harbor.agents.acp.harness import _settle
     from psycheval.harbor.windows import WindowsProcessAdapter
 
     retained = tmp_path / "session.json"
@@ -321,7 +330,7 @@ def test_cleanup_allows_native_persistence_before_job_settlement(tmp_path):
 
 
 def test_codebuddy_protocol_extensions_are_scoped():
-    from psycheval.harbor.acp_protocol import sdk_validators, validate_payload
+    from psycheval.harbor.agents.acp.protocol import sdk_validators, validate_payload
 
     value = {
         "configOptions": [
@@ -375,7 +384,7 @@ def test_native_output_channels_have_no_artificial_blank_prefix(output, expected
 
 
 def test_null_native_response_uses_raw_output_and_does_not_erase_retained_response():
-    from psycheval.harbor.acp_evidence import _merge_call
+    from psycheval.harbor.agents.acp.evidence import _merge_call
 
     native = {"exitCode": 0, "signal": None, "output": "ok"}
     call = {
@@ -798,7 +807,7 @@ def test_native_usage_pipeline_records_each_invocation_once(tmp_path):
 def test_usage_failure_preserves_original_execution_error(
     tmp_path, monkeypatch, execution_error
 ):
-    from psycheval.harbor import workbuddy_agent
+    from psycheval.harbor.agents import workbuddy as workbuddy_agent
 
     agent = HostWorkBuddyAgent(
         logs_dir=tmp_path / "logs", model_name="b", **installation(tmp_path)
@@ -835,6 +844,31 @@ def test_usage_failure_preserves_original_execution_error(
     assert not (agent.logs_dir / "workbuddy.usage.json").exists()
 
 
+@pytest.mark.parametrize("action", ["run", "resume"])
+def test_native_task_prompt_is_forwarded_without_workspace_hints(
+    tmp_path, monkeypatch, action
+):
+    agent = HostWorkBuddyAgent(
+        logs_dir=tmp_path / "logs", model_name="b", **installation(tmp_path)
+    )
+    agent.logs_dir.mkdir()
+    agent._child_env = {"CODEBUDDY_CONFIG_DIR": str(tmp_path / "private")}
+    host = type("Host", (), {"work_dir": tmp_path})()
+    instruction = (
+        "读取 data/输入.pdf，输出 output/result.xlsx。保留原文 /workspace/example。"
+    )
+    submitted = []
+
+    async def submit(self, action, instruction, environment):
+        submitted.append((action, instruction, environment))
+
+    monkeypatch.setattr(HostACPAgent, "_run_invocation", submit)
+    monkeypatch.setattr(agent, "_invocation_host", lambda environment: environment)
+    monkeypatch.setattr(agent, "_collect_usage", lambda *args: None)
+    asyncio.run(agent._run_invocation(action, instruction, host))
+    assert submitted == [(action, instruction, host)]
+
+
 def test_missing_current_usage_does_not_reuse_previous_invocation_context(
     tmp_path, monkeypatch
 ):
@@ -869,7 +903,8 @@ def test_missing_current_usage_does_not_reuse_previous_invocation_context(
     "failure", ["changed", "unrelated", "projection", "validation"]
 )
 def test_usage_enrichment_guards_and_failure_atomicity(tmp_path, monkeypatch, failure):
-    from psycheval.harbor import workbuddy_agent, workbuddy_usage
+    from psycheval.harbor.agents import workbuddy as workbuddy_agent
+    from psycheval.harbor.agents import workbuddy_usage as workbuddy_usage
 
     agent = HostWorkBuddyAgent(
         logs_dir=tmp_path / "logs", model_name="b", **installation(tmp_path)
@@ -918,7 +953,8 @@ def test_usage_enrichment_guards_and_failure_atomicity(tmp_path, monkeypatch, fa
 def test_usage_workers_leave_event_loop_free_and_settle_repeated_cancellation(
     tmp_path, monkeypatch, stage, primary_failure
 ):
-    from psycheval.harbor import workbuddy_agent, workbuddy_usage
+    from psycheval.harbor.agents import workbuddy as workbuddy_agent
+    from psycheval.harbor.agents import workbuddy_usage as workbuddy_usage
 
     agent = HostWorkBuddyAgent(
         logs_dir=tmp_path / "logs", model_name="b", **installation(tmp_path)
@@ -1015,7 +1051,7 @@ def test_usage_workers_leave_event_loop_free_and_settle_repeated_cancellation(
 
 
 def test_evidence_read_errors_name_their_own_artifact(tmp_path):
-    from psycheval.harbor import workbuddy_agent
+    from psycheval.harbor.agents import workbuddy as workbuddy_agent
 
     path = tmp_path / "invalid.json"
     path.write_text("invalid", encoding="utf-8")
@@ -1029,7 +1065,8 @@ def test_evidence_read_errors_name_their_own_artifact(tmp_path):
 def test_usage_capture_limit_is_visible_without_changing_execution(
     tmp_path, monkeypatch, caplog, kind
 ):
-    from psycheval.harbor import workbuddy_agent, workbuddy_usage
+    from psycheval.harbor.agents import workbuddy as workbuddy_agent
+    from psycheval.harbor.agents import workbuddy_usage as workbuddy_usage
 
     agent = HostWorkBuddyAgent(
         logs_dir=tmp_path / "logs", model_name="b", **installation(tmp_path)
@@ -1169,3 +1206,233 @@ def test_real_workbuddy_skill_mcp_and_resume(tmp_path):
             await host.stop(True)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("policy", ["codebuddy", "acp"])
+def test_early_argument_snapshot_requires_matching_real_initial_call(tmp_path, policy):
+    meta = {"codebuddy.ai/toolName": "Bash", "codebuddy.ai/modelRequestId": "request"}
+    early = {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call",
+        "rawInput": {"command": "prefix"},
+        "_meta": meta,
+    }
+    start = {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call",
+        "title": "Bash",
+        "status": "in_progress",
+        "rawInput": {"command": "actual"},
+        "_meta": meta,
+    }
+    end = {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call",
+        "status": "completed",
+        "rawOutput": {"exitCode": 0, "signal": None, "output": "ok"},
+    }
+    summary = _current_evidence(tmp_path, [early, start, end])
+    before = (tmp_path / "acp.events.ndjson.gz").read_bytes()
+    if policy == "acp":
+        with pytest.raises(ProtocolError, match="initial"):
+            convert(
+                tmp_path, summary, "task", {"name": "fixture", "version": "1"}, policy
+            )
+    else:
+        data = convert(
+            tmp_path, summary, "task", {"name": "fixture", "version": "1"}, policy
+        ).to_json_dict()
+        calls = [c for s in data["steps"] for c in s.get("tool_calls", [])]
+        assert len(calls) == 1 and calls[0]["arguments"] == {"command": "actual"}
+        observations = [
+            r
+            for s in data["steps"]
+            for r in (s.get("observation") or {}).get("results", [])
+        ]
+        assert len(observations) == 1 and observations[0]["content"] == "ok"
+    assert (tmp_path / "acp.events.ndjson.gz").read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "failure", ["missing_start", "name", "request", "terminal", "overflow"]
+)
+def test_early_argument_snapshots_fail_without_bounded_matching_identity(
+    tmp_path, failure
+):
+    meta = {"codebuddy.ai/toolName": "Bash", "codebuddy.ai/modelRequestId": "request"}
+    early = {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call",
+        "rawInput": {},
+        "_meta": meta,
+    }
+    start = {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call",
+        "title": "Bash",
+        "status": "in_progress",
+        "_meta": dict(meta),
+    }
+    if failure == "name":
+        start["_meta"]["codebuddy.ai/toolName"] = "Other"
+    if failure == "request":
+        start["_meta"]["codebuddy.ai/modelRequestId"] = "other"
+    if failure == "terminal":
+        early["status"] = "completed"
+    updates = (
+        [early]
+        if failure == "missing_start"
+        else [early] * 33 + [start]
+        if failure == "overflow"
+        else [early, start]
+    )
+    summary = _current_evidence(tmp_path, updates)
+    with pytest.raises(ProtocolError):
+        convert(
+            tmp_path, summary, "task", {"name": "fixture", "version": "1"}, "codebuddy"
+        )
+
+
+@windows
+def test_windows_projection_failure_remains_primary_during_recovery(
+    tmp_path, monkeypatch
+):
+    agent = HostWorkBuddyAgent(
+        logs_dir=tmp_path, model_name="b", **installation(tmp_path / "desktop")
+    )
+    agent._setup_host = make_environment(tmp_path / "host")
+    primary = ProtocolError("invalid retained evidence")
+
+    def fail(context):
+        raise primary
+
+    monkeypatch.setattr(agent, "_populate_context", fail)
+    monkeypatch.setattr(agent, "_retain_partial", lambda: None)
+    with pytest.raises(ProtocolError) as raised:
+        agent.populate_context_post_run(AgentContext())
+    assert raised.value is primary
+    context = AgentContext()
+    agent.populate_context_post_run(context)
+    assert context.metadata["trajectory_error"] == "ProtocolError"
+    assert not (tmp_path / "trajectory.json").exists()
+
+
+def test_early_argument_snapshot_storage_has_an_independent_byte_bound(
+    tmp_path, monkeypatch
+):
+    from psycheval.harbor.agents.acp import evidence
+
+    updates = [
+        {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "call",
+            "rawInput": {"command": "x" * 400},
+            "_meta": {
+                "codebuddy.ai/toolName": "Bash",
+                "codebuddy.ai/modelRequestId": "request",
+            },
+        }
+        for _ in range(2)
+    ]
+    summary = _current_evidence(tmp_path, updates)
+    monkeypatch.setattr(evidence, "MAX_EVENT_FRAME", 1024)
+    with pytest.raises(ProtocolError, match="admission"):
+        convert(
+            tmp_path, summary, "task", {"name": "fixture", "version": "1"}, "codebuddy"
+        )
+
+
+@pytest.mark.parametrize("status", ["completed", "failed"])
+def test_arguments_complete_snapshot_cannot_reopen_terminal_workbuddy_call(
+    tmp_path, status
+):
+    meta = {"codebuddy.ai/toolName": "Bash", "codebuddy.ai/modelRequestId": "request"}
+    start = {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call",
+        "title": "Bash",
+        "status": "in_progress",
+        "rawInput": {"command": "actual"},
+        "_meta": meta,
+    }
+    end = {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call",
+        "status": status,
+        "rawOutput": {
+            "exitCode": 0 if status == "completed" else 2,
+            "signal": None,
+            "output": "native outcome",
+        },
+    }
+    late = {
+        **start,
+        "status": "pending",
+        "_meta": {**meta, "codebuddy.ai/toolArgumentsComplete": True},
+    }
+    summary = _current_evidence(tmp_path, [start, end, late])
+    before = (tmp_path / "acp.events.ndjson.gz").read_bytes()
+    data = convert(
+        tmp_path, summary, "task", {"name": "fixture", "version": "1"}, "codebuddy"
+    ).to_json_dict()
+    calls = [c for s in data["steps"] for c in s.get("tool_calls", [])]
+    outcomes = [
+        r
+        for s in data["steps"]
+        for r in (s.get("observation") or {}).get("results", [])
+    ]
+    assert len(calls) == len(outcomes) == 1
+    assert outcomes[0]["content"] == "native outcome"
+    assert outcomes[0]["extra"]["status"] == status
+    assert (tmp_path / "acp.events.ndjson.gz").read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["flag", "name", "request", "arguments", "new_result", "continued", "generic"],
+)
+def test_terminal_reannouncement_requires_exact_readonly_arguments_snapshot(
+    tmp_path, change
+):
+    meta = {"codebuddy.ai/toolName": "Bash", "codebuddy.ai/modelRequestId": "request"}
+    start = {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call",
+        "title": "Bash",
+        "status": "in_progress",
+        "rawInput": {"command": "actual"},
+        "_meta": meta,
+    }
+    end = {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call",
+        "status": "failed",
+        "rawOutput": {"exitCode": 2, "signal": None},
+    }
+    late = {
+        **start,
+        "status": "pending",
+        "_meta": {**meta, "codebuddy.ai/toolArgumentsComplete": True},
+    }
+    if change == "flag":
+        late["_meta"]["codebuddy.ai/toolArgumentsComplete"] = False
+    if change == "name":
+        late["_meta"]["codebuddy.ai/toolName"] = "Other"
+    if change == "request":
+        late["_meta"]["codebuddy.ai/modelRequestId"] = "other"
+    if change == "arguments":
+        late["rawInput"] = {"command": "different"}
+    if change == "new_result":
+        late["rawOutput"] = {"exitCode": 0, "signal": None}
+    updates = [start, end, late] + (
+        [{**end, "status": "completed"}] if change == "continued" else []
+    )
+    summary = _current_evidence(tmp_path, updates)
+    with pytest.raises(ProtocolError):
+        convert(
+            tmp_path,
+            summary,
+            "task",
+            {"name": "fixture", "version": "1"},
+            "acp" if change == "generic" else "codebuddy",
+        )

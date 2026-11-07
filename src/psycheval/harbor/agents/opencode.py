@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-import math
 import shutil
 import sys
+from pathlib import Path
 from typing import override
 from uuid import uuid4
 
@@ -16,73 +16,22 @@ from harbor.agents.installed.base import NonZeroAgentExitCodeError
 from harbor.agents.installed.opencode import OpenCode, OpenCodeOptions
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
-from harbor.models.trajectories import Metrics, Trajectory
+from harbor.models.trajectories import Trajectory
 from pydantic import field_validator
 
-from .diagnostics import PARTIAL_TRAJECTORY, write_partial
-from .environment import HostEnvironment, _await_owned_task
-from .inference_telemetry import (
-    InferenceObservation,
-    finalize_trajectory_metrics,
-    metrics_from_observations,
+from ..diagnostics import PARTIAL_TRAJECTORY, write_partial
+from ..environment import HostEnvironment, _await_owned_task
+from ..inference_telemetry import (
     populate_context_from_trajectory,
 )
+from ..measurements import unavailable_marker
+from .sessions.opencode_native import native_events_to_trajectory, native_session_events
 
 _STDIN_LAUNCHER = (
     "import subprocess,sys; "
     "f=open(sys.argv[1],'rb'); "
     "sys.exit(subprocess.call(sys.argv[2:],stdin=f))"
 )
-
-
-def _token_count(value: object) -> int | None:
-    return value if type(value) is int and value >= 0 else None
-
-
-def _usage_metrics(tokens: object) -> dict:
-    tokens = tokens if isinstance(tokens, dict) else {}
-    cache = tokens.get("cache")
-    cache = cache if isinstance(cache, dict) else {}
-
-    buckets = [
-        _token_count(tokens.get("input")),
-        _token_count(cache.get("read", 0)),
-        _token_count(cache.get("write", 0)),
-    ]
-    prompt = sum(buckets) if all(value is not None for value in buckets) else None
-    metrics = metrics_from_observations(
-        [
-            InferenceObservation(
-                prompt_tokens=prompt,
-                completion_tokens=_token_count(tokens.get("output")),
-                cached_tokens=_token_count(cache.get("read")),
-                cache_write_tokens=_token_count(cache.get("write")),
-                usage_source="opencode-session",
-            )
-        ]
-    )
-    assert metrics is not None  # One completed message always supplies an observation.
-    reasoning = _token_count(tokens.get("reasoning"))
-    if reasoning is not None:
-        metrics["extra"]["reasoning_tokens"] = reasoning
-    return metrics
-
-
-def _native_duration(
-    timing: object, start: str, end: str
-) -> tuple[int | None, str | None]:
-    if not isinstance(timing, dict):
-        return None, "missing_native_timing"
-    first, last = timing.get(start), timing.get(end)
-    if first is None or last is None:
-        return None, "missing_native_timing_boundary"
-    if any(type(value) is not int or value < 0 for value in (first, last)):
-        return None, "invalid_native_timing_boundary"
-    if any(OpenCode._millis_to_iso(value) is None for value in (first, last)):
-        return None, "invalid_native_timing_boundary"
-    if last < first:
-        return None, "reversed_native_timing_boundary"
-    return last - first, None
 
 
 class HostOpenCodeOptions(OpenCodeOptions):
@@ -252,6 +201,24 @@ class HostOpenCodeAgent(OpenCode):
                 value = {"type": "remote", "url": server.url}
             config.setdefault("mcp", {})[server.name] = value
         self._deep_merge(config, copy.deepcopy(self._opencode_config))
+        plugin = root / "measurement-plugin"
+        plugin.mkdir(exist_ok=True)
+        shutil.copyfile(
+            Path(__file__).with_name("opencode_measurements.mjs"), plugin / "index.mjs"
+        )
+        (plugin / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "peval-measurements",
+                    "type": "module",
+                    "exports": {".": "./index.mjs"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        config.setdefault("plugins", []).append(plugin.as_uri())
+        self._measurement_path = root / "measurement-observer.ndjson"
+        env["PEVAL_OPENCODE_MEASUREMENTS"] = str(self._measurement_path)
         if self.skills_dir:
             config.setdefault("skills", {}).setdefault("paths", []).append(
                 str(host.native_path(self.skills_dir))
@@ -300,304 +267,34 @@ class HostOpenCodeAgent(OpenCode):
         return events
 
     def _session_events(
-        self,
-        streamed: list[dict] | None = None,
-        *,
-        filename="opencode-session.json",
-        diagnostic=False,
-    ) -> list[dict]:
+        self, streamed=None, *, filename="opencode-session.json", diagnostic=False
+    ):
         path = self.logs_dir / filename
         if not path.is_file():
             return []
-        exported = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(exported, dict):
-            raise ValueError("Malformed OpenCode Session export")
-        info, messages = exported.get("info"), exported.get("messages")
-        if not isinstance(info, dict) or not isinstance(messages, list):
-            raise ValueError("Malformed OpenCode Session export")
-        session_id = info.get("id")
-        if not isinstance(session_id, str) or not session_id:
-            raise ValueError("OpenCode Session export has no identity")
-        if not diagnostic and info.get("outcome") != "succeeded":
-            raise ValueError("OpenCode Session export is not a successful invocation")
-        if streamed is None:
-            streamed = self._parse_stdout()
-        if any(event.get("sessionID") != session_id for event in streamed):
-            raise ValueError("OpenCode Session export does not match streamed evidence")
-        expected_model = self.model_name.split("#", 1)[0]
-        events = []
-        for message in messages:
-            if not isinstance(message, dict):
-                raise ValueError("Malformed OpenCode Session message")
-            if message.get("type") != "assistant":
-                continue
-            model = message.get("model", {})
-            if not isinstance(model, dict):
-                raise ValueError("Malformed OpenCode Session model")
-            if f"{model.get('providerID')}/{model.get('id')}" != expected_model:
-                raise ValueError(
-                    "OpenCode Session message does not match requested model"
-                )
-            timing, content = message.get("time", {}), message.get("content")
-            if not isinstance(timing, dict):
-                raise ValueError("Malformed OpenCode Session time")
-            completed = timing.get("completed")
-            if (completed is None and not diagnostic) or not isinstance(content, list):
-                raise ValueError("OpenCode Session contains an incomplete message")
-            if completed is not None and (
-                type(completed) not in {int, float}
-                or (type(completed) is float and not math.isfinite(completed))
-            ):
-                raise ValueError("Malformed OpenCode Session completion time")
-            events.append(
-                {
-                    "type": "step_start",
-                    "sessionID": session_id,
-                    "timestamp": timing.get("created"),
-                }
-            )
-            for part in content:
-                if not isinstance(part, dict):
-                    raise ValueError("Malformed OpenCode Session content")
-                kind = part.get("type")
-                if kind == "tool":
-                    state = part.get("state", {})
-                    if not isinstance(state, dict):
-                        raise ValueError("Malformed OpenCode Session tool state")
-                    output = state.get("content", [])
-                    if not isinstance(output, list) or any(
-                        not isinstance(item, dict)
-                        or (
-                            item.get("type") == "text"
-                            and not isinstance(item.get("text", ""), str)
-                        )
-                        for item in output
-                    ):
-                        raise ValueError("Malformed OpenCode Session tool content")
-                    error = state.get("error")
-                    if error is not None and (
-                        not isinstance(error, dict)
-                        or not isinstance(error.get("message", ""), str)
-                    ):
-                        raise ValueError("Malformed OpenCode Session tool error")
-                    state["output"] = "\n".join(
-                        item.get("text", "")
-                        if item.get("type") == "text"
-                        else json.dumps(item, ensure_ascii=False)
-                        for item in output
-                    ) or (error.get("message", "") if error is not None else "")
-                    part = {
-                        "type": "tool",
-                        "callID": part.get("id"),
-                        "tool": part.get("name"),
-                        "state": state,
-                        "time": part.get("time"),
-                    }
-                    kind = "tool_use"
-                if kind not in {"text", "reasoning", "tool_use"}:
-                    raise ValueError(f"Unsupported OpenCode Session content: {kind}")
-                events.append({"type": kind, "sessionID": session_id, "part": part})
-            if completed is None:
-                break
-            events.append(
-                {
-                    "type": "step_finish",
-                    "sessionID": session_id,
-                    "part": {
-                        "cost": message.get("cost"),
-                        "tokens": message.get("tokens", {}),
-                        "time": timing,
-                    },
-                }
-            )
-        native_tools = {
-            (event["part"].get("callID"), event["part"].get("tool"))
-            for event in events
-            if event["type"] == "tool_use"
-        }
-        if any(
-            (
-                event.get("part", {}).get("callID", event.get("part", {}).get("id")),
-                event.get("part", {}).get("tool"),
-            )
-            not in native_tools
-            for event in streamed
-            if event.get("type") == "tool_use"
-        ):
-            raise ValueError(
-                "OpenCode streamed tool is missing from the Session export"
-            )
-        return events
+        return native_session_events(
+            json.loads(path.read_text(encoding="utf-8")),
+            streamed=self._parse_stdout() if streamed is None else streamed,
+            model_name=self.model_name,
+            diagnostic=diagnostic,
+        )
 
     @override
     def _convert_events_to_trajectory(self, events: list[dict]) -> Trajectory | None:
-        converted_events = []
-        states = {}
-        tool_times = {}
-        identities = set()
-        finishes = []
-        in_step = False
-        for index, event in enumerate(events):
-            if not isinstance(event, dict):
-                continue
-            part = event.get("part", {})
-            if event.get("type") == "tool_use":
-                if not isinstance(part, dict) or part.get("type") != "tool":
-                    raise ValueError(
-                        f"Malformed OpenCode tool event at index {index}: expected a tool part"
-                    )
-                call_id = part.get("callID", part.get("id"))
-                name, state = part.get("tool"), part.get("state")
-                if (
-                    not isinstance(call_id, str)
-                    or not call_id
-                    or not isinstance(name, str)
-                    or not name
-                    or not isinstance(state, dict)
-                ):
-                    raise ValueError(
-                        f"Malformed OpenCode tool event at index {index}: expected identity and state"
-                    )
-                identities.add((call_id, name))
-                states[call_id] = state
-                tool_times[call_id] = part.get("time")
-            elif not isinstance(part, dict):
-                if event.get("type") in {"step_start", "step_finish"}:
-                    raise ValueError(
-                        f"Malformed OpenCode step boundary at index {index}"
-                    )
-                continue
-            if event.get("type") == "step_start":
-                in_step = True
-            elif event.get("type") == "step_finish" and in_step:
-                finishes.append(part)
-                in_step = False
-                # Harbor handles content and cost; native usage is projected below.
-                tokens = part.get("tokens")
-                tokens = tokens if isinstance(tokens, dict) else {}
-                cache = tokens.get("cache")
-                cache = cache if isinstance(cache, dict) else {}
-                event = {
-                    **event,
-                    "part": {
-                        **part,
-                        "tokens": {
-                            key: _token_count(tokens.get(key)) or 0
-                            for key in ("input", "output", "reasoning")
-                        }
-                        | {
-                            "cache": {
-                                key: _token_count(cache.get(key)) or 0
-                                for key in ("read", "write")
-                            }
-                        },
-                    },
-                }
-            converted_events.append(event)
-        trajectory = super()._convert_events_to_trajectory(converted_events)
-        represented = (
-            {
-                (call.tool_call_id, call.function_name)
-                for step in trajectory.steps
-                for call in (step.tool_calls or [])
-            }
-            if trajectory is not None
-            else set()
+        return native_events_to_trajectory(
+            events,
+            model_name=self.model_name,
+            instruction=getattr(self, "_instruction", ""),
+            version=self.version(),
         )
-        if identities - represented:
-            raise ValueError("OpenCode tool events could not be represented in ATIF")
-        if trajectory is None:
-            return None
-        agent_steps = [step for step in trajectory.steps if step.source == "agent"]
-        if len(agent_steps) != len(finishes):
-            raise ValueError(
-                "OpenCode completed message usage does not align with ATIF steps"
-            )
-        for step, finish in zip(agent_steps, finishes):
-            timing = finish.get("time")
-            duration, diagnostic = _native_duration(timing, "created", "streamed")
-            if duration is not None:
-                lifecycle, lifecycle_error = _native_duration(
-                    timing, "created", "completed"
-                )
-                if lifecycle_error or lifecycle < duration:
-                    duration, diagnostic = None, "invalid_native_model_lifecycle"
-            step.extra = {
-                **(step.extra or {}),
-                "duration_ms": duration,
-                "duration_source": "opencode_native_model_call",
-                **({"timing_diagnostic": diagnostic} if diagnostic else {}),
-            }
-            projected = _usage_metrics(finish.get("tokens", {}))
-            metrics = step.metrics.model_dump(exclude_none=True) if step.metrics else {}
-            if finish.get("cost") is not None:
-                metrics["cost_usd"] = finish["cost"]
-            for field in ("prompt_tokens", "completion_tokens", "cached_tokens"):
-                metrics.pop(field, None)
-            extra = metrics.pop("extra", {})
-            extra.pop("cache_write_tokens", None)
-            extra.update(projected.pop("extra"))
-            step.metrics = Metrics.model_validate(
-                {**metrics, **projected, "extra": extra}
-            )
-        for step in trajectory.steps:
-            for call in step.tool_calls or []:
-                timing = tool_times.get(call.tool_call_id)
-                start = timing.get("ran") if isinstance(timing, dict) else None
-                if type(start) is int and start >= 0:
-                    timestamp = self._millis_to_iso(start)
-                    if timestamp is not None:
-                        call.extra = {**(call.extra or {}), "started_at": timestamp}
-            for observation in step.observation.results if step.observation else []:
-                state = states.get(observation.source_call_id)
-                if state is None:
-                    continue
-                status = state.get("status")
-                metadata = state.get("metadata")
-                metadata = metadata if isinstance(metadata, dict) else {}
-                exit_code = metadata.get("exit")
-                extra = dict(observation.extra or {})
-                extra["status"] = (
-                    status
-                    if isinstance(status, str) and status in {"completed", "error"}
-                    else "incomplete"
-                )
-                extra["is_error"] = bool(extra.get("is_error")) or status != "completed"
-                if type(exit_code) is int:
-                    extra["exit_code"] = exit_code
-                    extra["is_error"] = bool(extra.get("is_error")) or exit_code != 0
-                if "content" in state:
-                    extra["raw_output"] = state["content"]
-                timing = tool_times.get(observation.source_call_id)
-                duration, diagnostic = _native_duration(timing, "ran", "completed")
-                if not isinstance(status, str) or status not in {"completed", "error"}:
-                    duration, diagnostic = None, "nonterminal_native_tool"
-                extra.update(
-                    execution_duration_ms=duration,
-                    execution_duration_source="opencode_native_tool_call",
-                )
-                if diagnostic:
-                    extra["timing_diagnostic"] = diagnostic
-                elif (
-                    timestamp := self._millis_to_iso(timing["completed"])
-                ) is not None:
-                    extra["finished_at"] = timestamp
-                observation.extra = extra or None
-        data = trajectory.to_json_dict()
-        data["extra"] = {
-            **(data.get("extra") or {}),
-            "timestamp_semantics": "event_observed",
-        }
-        for field in (
-            "total_prompt_tokens",
-            "total_completion_tokens",
-            "total_cached_tokens",
-        ):
-            data["final_metrics"].pop(field, None)
-        return Trajectory.model_validate(finalize_trajectory_metrics(data))
 
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:
+        context.metadata = {
+            **(context.metadata or {}),
+            "measurements": getattr(self, "_measurement_marker", None)
+            or unavailable_marker(),
+        }
         context.n_input_tokens = context.n_output_tokens = context.n_cache_tokens = None
         if getattr(self, "_invocation_failed", False):
             return
@@ -653,6 +350,93 @@ class HostOpenCodeAgent(OpenCode):
                     f"OpenCode diagnostic retention failed: {type(error).__name__}"
                 )
             raise
+        finally:
+            await _await_owned_task(
+                asyncio.create_task(
+                    asyncio.to_thread(self._publish_measurements, context)
+                )
+            )
+        # Measurement metadata makes AgentContext nonempty, so Harbor will not
+        # invoke its fallback population callback after this method returns.
+        self.populate_context_post_run(context)
+
+    def _publish_measurements(self, context):
+        from ..measurements import publish, unavailable
+        from .opencode_measurements import capture
+
+        self._measurement_marker = unavailable_marker()
+        published = False
+        try:
+            partial = self.logs_dir / PARTIAL_TRAJECTORY
+            if self._trajectory is not None:
+                data = self._trajectory.to_json_dict()
+            elif partial.is_file():
+                data = json.loads(partial.read_text(encoding="utf-8"))
+            else:
+                # Cancellation can precede any retained message while native
+                # hooks already prove a start and first output. CLI identity is
+                # only an association key; its notification times are not used.
+                sessions = {
+                    event["sessionID"]
+                    for event in self._parse_stdout(diagnostic=True)
+                    if isinstance(event.get("sessionID"), str) and event["sessionID"]
+                }
+                if len(sessions) != 1:
+                    raise ValueError("measurement_session_identity_unavailable")
+                data = {"session_id": sessions.pop(), "steps": []}
+            records, linked, complete, diagnostics = capture(
+                self._measurement_path, data
+            )
+            self._measurement_marker = publish(
+                self.logs_dir,
+                records,
+                producer={"name": "opencode", "version": self.version()},
+                invocation_id=self._runtime_id,
+                session_id=data.get("session_id"),
+                complete=complete,
+                capabilities={
+                    "logical_steps": {
+                        "status": "verified" if linked else "unavailable",
+                        "reason": diagnostics[0] if diagnostics else None,
+                        "basis_id": "native_step_start_to_streamed_v1",
+                        "start_boundary": "session.step.started.started (first attempt)",
+                        "end_boundary": "session.step.streamed.created",
+                        "first_output_quality": "observed",
+                        "clock": {
+                            "id": "opencode:"
+                            + str(data.get("session_id"))
+                            + ":epoch_ms",
+                            "type": "epoch_ms",
+                            "semantics": "in_process_wall_clock",
+                            "precision_ms": 1,
+                        },
+                        "evidence": "incremental HTTP hooks correlated by Session and native assistantMessageID",
+                    }
+                },
+                diagnostics=diagnostics,
+            )
+            data.setdefault("extra", {})["measurements"] = self._measurement_marker
+            published = True
+            if self._trajectory is not None:
+                self._trajectory = type(self._trajectory).model_validate(data)
+            elif partial.is_file():
+                partial.write_text(
+                    json.dumps(data, ensure_ascii=False) + "\n", encoding="utf-8"
+                )
+        except Exception as error:
+            self.logger.warning(
+                "OpenCode measurement unavailable (%s)", type(error).__name__
+            )
+            if not published:
+                self._measurement_marker = unavailable(
+                    self.logs_dir,
+                    producer={"name": "opencode", "version": self.version()},
+                    invocation_id=self._runtime_id,
+                )
+        context.metadata = {
+            **(context.metadata or {}),
+            "measurements": self._measurement_marker,
+        }
 
     async def _retain_failure(self, environment):
         if self._diagnostic_env is None:

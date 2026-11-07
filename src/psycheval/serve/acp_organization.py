@@ -7,8 +7,8 @@ from pathlib import Path
 
 from pydantic import Field, TypeAdapter, ValidationError
 
-from psycheval.atif import iso_timestamp_ms
 from psycheval.file_access import blocking_file_lease, open_read_descriptor
+from psycheval.harbor.atif import iso_timestamp_ms
 from psycheval.serve.api_http import ProblemException
 from psycheval.serve.api_models import StrictRequest
 

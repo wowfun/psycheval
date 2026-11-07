@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from psycheval.adapters import adapter_for
-from psycheval.adapters.base import SessionInfo, SessionListing
+from psycheval.harbor.agents.sessions.models import SessionInfo, SessionListing
 
 
 def inspect_adapter_sessions(adapter_id: str, path: str) -> SessionListing:

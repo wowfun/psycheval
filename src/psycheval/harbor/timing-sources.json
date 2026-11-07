@@ -4,6 +4,35 @@
     {"prefix": "acp_client_observed_", "observed": true, "model_duration": false}
   ],
   "sources": {
+    "dsh_native_logical_step": {
+      "model_duration": true,
+      "estimated": false,
+      "clock_type": "epoch_ms",
+      "timestamp_semantics": "native_event",
+      "precision_ms": 1,
+      "start_boundary": "step/start",
+      "end_boundary": "assistant/message",
+      "retry_policy": "included",
+      "metrics": ["model_duration_ms", "ttft_ms", "tps"]
+    },
+    "opencode_plugin_logical_step": {
+      "model_duration": true,
+      "observed": true,
+      "estimated": false,
+      "clock_type": "epoch_ms",
+      "timestamp_semantics": "in_process_wall_clock",
+      "start_boundary": "session.step.started",
+      "end_boundary": "session.step.streamed",
+      "retry_policy": "included",
+      "metrics": ["model_duration_ms", "ttft_ms", "tps"]
+    },
+    "workbuddy_native_phase": {
+      "model_duration": false,
+      "estimated": false,
+      "clock_type": "epoch_ms",
+      "timestamp_semantics": "native_phase",
+      "metrics": []
+    },
     "opencode_model_boundary_estimate": {
       "estimated": true
     },

@@ -695,7 +695,7 @@ def test_workbuddy_trial_uploads_skills_using_native_host_paths(native_task, tmp
                     "trials_dir": str(tmp_path / "trials"),
                     "install_only": True,
                     "agent": {
-                        "import_path": "psycheval.harbor.agent:ExternalHarnessAgent",
+                        "import_path": "psycheval.harbor.agents.external:ExternalHarnessAgent",
                         "kwargs": {"command": "unused"},
                         "skills": [str(skill)],
                     },

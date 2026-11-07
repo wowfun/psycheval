@@ -14,8 +14,8 @@ from uuid import uuid4
 
 import pytest
 
-from psycheval.harbor import workbuddy_agent
-from psycheval.harbor.workbuddy_bootstrap import (
+from psycheval.harbor.agents import workbuddy as workbuddy_agent
+from psycheval.harbor.agents.workbuddy_bootstrap import (
     BootstrapError,
     _server_process,
     transfer,

@@ -6,8 +6,7 @@ not a second package or module.
 ```text
 psycheval
 ├── cli                 -> installed as `peval`
-├── atif                -> standalone ATIF format recognition and validation
-├── adapters, conversion -> retained-session conversion
+├── adapters, conversion -> session plugin registration and application dispatch
 ├── report, workspace   -> derived views and user overlays
 ├── serve, state        -> local evaluation workspace and ACP client runtime
 ├── jobs                -> evaluation configuration, harness plugins and workers
@@ -97,18 +96,32 @@ For native WorkBuddy execution, the Host adapter records the host OS in Harbor's
 in-memory Task environment configuration; Harbor uses it when injecting Skills.
 The source Task and its scoring contract remain unchanged.
 
-`psycheval.atif` is a separate, standard-library-only source-copy unit. It owns
-strict ATIF validation, content recognition, and timestamp parsing.
-`psycheval.conversion` owns adapter dispatch, normalization, and metadata
-projection, using the existing types owned by `adapters.base`. Adapters own
-retained-session directory discovery, inspection diagnostics, and resolution to concrete files.
-Adapters also own exact session-ID lookup within their configured session root;
-the shared input loader handles pathless CLI and workspace imports. Workspace
-input parsing distinguishes existing paths from bare session IDs before loading.
-Conversion
-recursively normalizes embedded subagent results; one selected root remains one
-source, with child navigation owned by the trajectory detail view. Imported ATIF
-is validated without repair; only adapter conversion normalizes evidence.
+`psycheval.harbor.atif` owns strict, non-mutating ATIF recognition and validation.
+It remains a standard-library-only file that can also be copied separately.
+`psycheval.harbor.agents` owns execution adapters built on the installed upstream
+`harbor.agents` interfaces. Its `sessions` module owns native
+session discovery, parsing, conversion, normalization, and metadata projection.
+Import-only Claude, Psychevo, and Deepagents adapters do not imply execution support.
+`psycheval.adapters` owns third-party registration and protocol admission;
+`psycheval.conversion` translates application configuration and dispatches inputs.
+Converters accept explicit ConversionOptions, paths, and selected session roots,
+never application ToolConfig or ambient workspace configuration. Claude's default
+session root remains application-owned. Imported ATIF is validated without repair;
+only native conversion normalizes evidence. One selected root remains one source,
+with child navigation owned by the trajectory detail view.
+Application dispatch attaches source session identity before its single native
+finalization. Standalone execution export helpers finalize at their own public
+boundary; native adapter facts do not require a second normalization pass.
+
+`harbor.redaction` owns pure trajectory content filtering shared with reports;
+`redaction` retains credential filtering and retained-file protection for Jobs,
+Judge and file access. `harbor.timing` owns the shared time-source metadata and
+fallback rules; report and browser presentation consume that single resource.
+`harbor.measurements` owns bounded native measurement evidence and pure
+value/provenance construction; Agent collectors normalize native events for it.
+Core application modules may consume these public pure services, the session
+models/readers and conversion interfaces. The Harbor copy unit imports no other
+Psycheval module, including in type annotations or resource loading.
 
 The CLI and Harbor adapter share formats and one `peval.toml`, but not parser
 ownership: the CLI reads workspace, adapter, Dataset, and mount fields; Harbor
@@ -275,7 +288,8 @@ Core CLI implementation may consume pinned Harbor interfaces and the explicit
 `psycheval.harbor.datasets`, `psycheval.harbor.tasks`, and
 `psycheval.harbor.workbuddy` services, the public preparation/execution interfaces
 in `psycheval.harbor.verifier`, the explicit host-settings parser in
-`psycheval.harbor.runtime_config`, shared identifier rules, and the
+`psycheval.harbor.runtime_config`, shared identifier rules, the public ATIF, timing, trajectory-redaction and
+`harbor.agents.sessions` conversion interfaces, and the
 `psycheval.harbor.windows` helpers for rendering Windows shell commands, but not
 Agent, Environment, or harness internals. The implementations exchange only
 owned configuration sections and explicit formats. Tasks invoke the installed

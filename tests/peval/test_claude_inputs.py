@@ -46,7 +46,7 @@ def test_cli_listing_rejects_unsupported_directory_adapter(tmp_path):
 
 
 def test_directory_multiselect_scans_catalog_once(tmp_path):
-    from psycheval.adapters import claude
+    from psycheval.harbor.agents.sessions import claude
 
     project = project_with_two_sessions(tmp_path / ".claude")
     with patch.object(claude, "_scan_session", wraps=claude._scan_session) as scan:

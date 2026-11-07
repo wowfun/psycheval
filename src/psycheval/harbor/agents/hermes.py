@@ -12,12 +12,11 @@ from harbor.agents.installed import hermes as harbor_hermes
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
-from .inference_telemetry import (
-    finalize_trajectory_metrics,
-    metrics_from_observations,
-    observation_from_usage,
+from ..inference_telemetry import (
     populate_context_from_trajectory,
 )
+from .sessions.hermes import convert_hermes_export
+from .sessions.models import ConversionOptions
 
 _XIAOMI_PROVIDER = "xiaomi"
 _XIAOMI_NATIVE_MAPPING = ("xiaomi", ["XIAOMI_API_KEY"])
@@ -259,15 +258,22 @@ class HermesAgent(harbor_hermes.Hermes):
             current_turn = _current_turn_export(
                 session_path.read_text(encoding="utf-8"), instruction
             )
-            trajectory = self._convert_hermes_session_to_atif(current_turn, session_id)
-            if trajectory is None:
-                raise ValueError("current Hermes turn produced no ATIF steps")
-            trajectory_value = _enrich_hermes_trajectory(
-                trajectory.to_json_dict(), current_turn
+            converted = convert_hermes_export(
+                current_turn,
+                session_id,
+                ConversionOptions(agent_name="hermes", redact=False),
+                include_session_metrics=not getattr(self, "_current_was_resume", False),
             )
+            trajectory_value = converted.trajectory
             trajectory_path = self.logs_dir / "trajectory.json"
             trajectory_path.write_text(
                 json.dumps(trajectory_value, indent=2), encoding="utf-8"
+            )
+            context.n_input_tokens = None
+            context.n_output_tokens = None
+            context.n_cache_tokens = None
+            context.cost_usd = trajectory_value.get("final_metrics", {}).get(
+                "total_cost_usd"
             )
             populate_context_from_trajectory(context, trajectory_value)
         except Exception as exc:
@@ -306,60 +312,6 @@ def _current_turn_export(jsonl_text: str, instruction: str) -> str:
     return "\n".join(
         json.dumps(record, ensure_ascii=False) for record in records[boundary:]
     )
-
-
-def _enrich_hermes_trajectory(trajectory: dict, current_turn_export: str) -> dict:
-    records = [
-        value
-        for line in current_turn_export.splitlines()
-        if line.strip()
-        for value in [json.loads(line)]
-        if isinstance(value, dict)
-    ]
-    messages = (
-        records[0].get("messages")
-        if len(records) == 1 and isinstance(records[0].get("messages"), list)
-        else records
-    )
-    assistants = [
-        message
-        for message in messages
-        if isinstance(message, dict)
-        and message.get("role") == "assistant"
-        and _assistant_emits_step(message)
-    ]
-    assistant_steps = [
-        step
-        for step in trajectory.get("steps", [])
-        if isinstance(step, dict) and step.get("source") in {"agent", "assistant"}
-    ]
-    if len(assistant_steps) != len(assistants):
-        _LOGGER.debug(
-            "Hermes usage enrichment skipped: %d ATIF assistant steps for %d "
-            "session assistant messages",
-            len(assistant_steps),
-            len(assistants),
-        )
-        return finalize_trajectory_metrics(trajectory)
-    for step, assistant in zip(assistant_steps, assistants, strict=True):
-        observation = observation_from_usage(
-            assistant.get("usage"),
-            usage_source="hermes.session.message.usage",
-        )
-        if observation is not None:
-            step["metrics"] = metrics_from_observations([observation])
-    return finalize_trajectory_metrics(trajectory)
-
-
-def _assistant_emits_step(message: dict) -> bool:
-    content = message.get("content", "")
-    if isinstance(content, list):
-        content = " ".join(
-            str(part.get("text") or "")
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
-        )
-    return bool(content or message.get("tool_calls"))
 
 
 def _last_instruction_index(messages: list, instruction: str) -> int | None:

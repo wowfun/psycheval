@@ -8,12 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from psycheval.adapters.base import ConversionResult, SessionInfo, SessionListing
-from psycheval.adapters.common import CommonMessageAdapter, bounded_value
-from psycheval.atif import iso_timestamp_ms
-from psycheval.config import ToolConfig
-from psycheval.redaction import redact_value
-from psycheval.sources import MessageRecord
+from ...atif import iso_timestamp_ms
+from ...redaction import redact_value
+from .common import CommonMessageAdapter, bounded_value
+from .models import ConversionOptions, ConversionResult, SessionInfo, SessionListing
+from .sources import MessageRecord
 
 _SAFE_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
 _BOOKKEEPING = {
@@ -58,10 +57,14 @@ class ClaudeAdapter:
     def is_session_id(self, value: str) -> bool:
         return bool(_SAFE_ID.fullmatch(value))
 
-    def resolve_session_id(self, session_id: str, config: ToolConfig) -> str:
+    def resolve_session_id(self, session_id: str, config: ConversionOptions) -> str:
         if not self.is_session_id(session_id):
             raise ValueError(f"invalid Claude session ID: {session_id}")
-        root = Path(config.adapter_default_session_roots["claude"]).expanduser()
+        if config.session_root is None:
+            raise ValueError(
+                "Claude session ID lookup requires an explicit session root"
+            )
+        root = Path(config.session_root).expanduser()
         if not root.is_dir():
             raise ValueError(f"Claude default_session_root does not exist: {root}")
         candidates = [root / f"{session_id}.jsonl"]
@@ -117,7 +120,7 @@ class ClaudeAdapter:
                 return str(session.path)
         raise ValueError(f"Claude session not found: {session_id}")
 
-    def convert_path(self, path: str, config: ToolConfig) -> ConversionResult:
+    def convert_path(self, path: str, config: ConversionOptions) -> ConversionResult:
         source = Path(path).expanduser()
         if source.is_dir():
             source = Path(self.resolve_session_path(str(source), None))
@@ -296,7 +299,7 @@ def _read_family(
     return result
 
 
-def _evidence(value: Any, config: ToolConfig) -> Any:
+def _evidence(value: Any, config: ConversionOptions) -> Any:
     if config.redact:
         value = redact_value(value)
     return bounded_value(value, config)[0]
@@ -576,7 +579,7 @@ def _normalize(events, session_id, agent_id, config):
         result.trajectory["session_id"] = f"{session_id}:agent:{agent_id}"
     result.trajectory["trajectory_id"] = _trajectory_id(session_id, agent_id)
     result.trajectory["extra"] = {"claude": _evidence(source_meta, config)}
-    result.trajectory["final_metrics"]["extra"]["total_turns"] = sum(
+    result.trajectory["final_metrics"]["extra"]["total_agent_steps"] = sum(
         r.message.get("role") == "assistant" and not r.message.get("synthetic")
         for r in records
     )
