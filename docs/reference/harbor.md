@@ -67,7 +67,7 @@ for direct Python and Harbor configuration integration.
 
 `permission_mode=allow|deny` prefers the corresponding once option, then always.
 Unavailable policy choices cancel the request and fail the invocation. Decisions
-are retained. `tool_result_format=acp|rsiversi|codebuddy` defaults to ACP status semantics;
+are retained. `tool_result_format=acp|rsiversi|codebuddy|dsh` defaults to ACP status semantics;
 the RSIversi policy additionally interprets the native ToolResult envelope and
 recognizable process outcomes independently of tool name. A running background
 command, timeout, signal, nonzero exit or unknown terminal result cannot prove
@@ -1343,3 +1343,42 @@ replace execution exceptions or verifier conclusions. Metric calculation and
 value/provenance construction follow the
 [measurement contract](state-and-data.md#numeric-metrics).
 
+## Native DSH ACP
+
+HostDSHAgent runs a preinstalled `dsh --profile acp` with ordered explicit YAML
+patches and an Agent-owned DSH_HOME inside the existing Host runtime. Setup copies
+patches once; resume reuses those copies and the exact Session. Setup accepts
+at most 16 MiB per patch, opened without following the leaf and checked
+against the validated regular-file identity before reading.
+New Agent instances get independent state. Host stop(delete=True) owns deletion after process settlement;
+delete=False and cleanup failure preserve the existing diagnostic/retry semantics.
+There is no recovery after the owning Host runtime is destroyed.
+Inherited DSH_/DEEPSEEK_ environment is removed before explicit extra_env; generated
+isolation paths win last. Process startup uses the private directory, whereas ACP
+Session cwd remains the Task workspace. Raw patches and complete private DSH logs
+are not published into Trial evidence; whitelist-only measurement records below
+are permitted. Patch provenance retains order and digests, not
+contents or environment values. Relative patch resources resolve from the private
+startup directory; external resources must use absolute paths.
+
+The DSH wire contract is pinned to deepseek-ai/deepseek-harness commit
+`fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159` (0.2.2-rc.1), in
+packages/acp/acp/src/{updates,model-control}.ts. DSH messageId identifies assistant
+messages; its initial tool title is the original tool name. This vendor-specific
+identity mapping does not change generic ACP. Context occupancy is not cumulative
+usage. model_name is an exact advertised ACP model ID; model is applied before
+reasoning_effort and cannot also appear in config_options.
+
+DSH advertises an empty reasoning-effort choice for provider default. The DSH
+wire policy admits that exact native choice; requested assignments remain bounded
+and nonempty, and generic ACP continues to reject empty advertised values.
+
+DSH setup probes the executable version before prompting and retains it with patch
+digests. Patch validation checks YAML syntax and a sequence root without evaluating
+native tagged expressions; DSH owns interpretation of those expressions. Invalid
+patch diagnostics omit YAML contents, which may contain credentials.
+
+Tool lifecycle identities must be nonempty before SDK projection. The DSH wire
+policy additionally requires nonempty native tool names and messageId on assistant
+updates. Malformed model/native output remains failed evidence; conversion never
+invents identities to make it gradeable.

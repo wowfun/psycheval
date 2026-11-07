@@ -522,9 +522,43 @@ grader expressions retained and recorded in the audit. See
 [Host configuration](../reference/harbor.md#host-configuration)
 for process, path, and native-platform acceptance semantics.
 
+## Evaluate official DSH through ACP
+
+Install `@deepseek-ai/dsh@0.2.2-rc.1` before evaluation. Supply a native ordered
+patch list using existing bundle IDs. For an OpenAI-compatible model route:
+
+```yaml
+- id: llm-pi-ai
+  config:
+    providers:
+      evaluation:
+        apiKeyEnv: EVALUATION_API_KEY
+        api: openai-completions
+        baseURL: https://your-provider.example/v1
+        models:
+          - id: your-model
+            contextWindow: 262144
+            reasoningEfforts:
+              high: high
+- id: acp
+  config:
+    provider: evaluation
+    model: your-model
+```
+
+Use `downstream._vendor.psycheval_harbor.agents.dsh:HostDSHAgent` as the Agent import path. Set
+`model_name` to the exact advertised ID, `'["evaluation","your-model"]'`,
+`kwargs.patch_paths` to an ordered list of absolute YAML paths, and
+`kwargs.config_options` to `{"reasoning_effort": "high"}`. Supply the API key through
+Harbor's explicit Agent `env`; do not rely on inherited DSH/DeepSeek configuration.
+For a vision model absent from the native catalog, declare `input: [text, image]`
+on its model profile; the native fallback for undeclared modalities is text-only.
+The [DSH contract](../reference/harbor.md#native-dsh-acp) owns Home,
+resume, evidence and configuration semantics.
+
 ## Copy ATIF validation separately
 
-To validate ATIF without Harbor, copy only `src/psycheval/atif.py` and LICENSE.
+To validate ATIF without Harbor, copy only `src/psycheval/harbor/atif.py` and LICENSE.
 You can rename the file to fit your package. It uses only the standard library:
 
 ```python

@@ -916,7 +916,7 @@ def test_native_harbor_acp_preview_requires_host_adapter(jobs):
     }
     with pytest.raises(ValueError, match="HostACPAgent"):
         jobs.preview(payload)
-    payload["variants"][0]["agent"] = "psycheval.harbor.acp_agent:HostACPAgent"
+    payload["variants"][0]["agent"] = "psycheval.harbor.agents.acp.agent:HostACPAgent"
     preview = jobs.preview(payload)
     assert (
         preview["prepared"]["config"]["agents"][0]["import_path"]
@@ -944,4 +944,5 @@ def test_harbor_invalid_environment_is_a_validation_failure(jobs, environment):
 def test_harbor_agent_suggestions_use_explicit_acp_adapter(jobs):
     suggestions = jobs.registry["harbor"].describe(None)["agents"]
     assert "acp" not in suggestions
-    assert "psycheval.harbor.acp_agent:HostACPAgent" in suggestions
+    assert "psycheval.harbor.agents.acp.agent:HostACPAgent" in suggestions
+    assert "psycheval.harbor.agents.dsh:HostDSHAgent" in suggestions
