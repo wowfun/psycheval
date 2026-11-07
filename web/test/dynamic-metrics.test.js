@@ -6,9 +6,14 @@ import { encodeWorkspaceLocation, decodeWorkspaceLocation, HOME_QUERY } from "..
 import { normalizeColumnLayout } from "../../src/psycheval/assets/web/modules/leaderboard-columns.js";
 
 const browser = installBrowserDom('<script id="peval-render-options" type="application/json">{}</script><section id="leaderboard-summary"></section>');
-const { state } = await import("../../src/psycheval/assets/web/modules/runtime.js");
+const { state, agentStepCount } = await import("../../src/psycheval/assets/web/modules/runtime.js");
 const summary = await import("../../src/psycheval/assets/web/modules/leaderboard-summary.js");
-const { selectedMetricDefinitions } = await import("../../src/psycheval/assets/web/modules/metric-presentation.js");
+const { selectedMetricDefinitions, metricProvenanceHint } = await import("../../src/psycheval/assets/web/modules/metric-presentation.js");
+
+test("partial metric provenance has readable unknowns instead of JavaScript values", () => {
+  for (const provenance of [{}, { variants: [{}] }]) assert.doesNotMatch(metricProvenanceHint(provenance), /undefined/);
+  assert.doesNotMatch(metricProvenanceHint({ missing_reason: "plugin_not_loaded" }), /plugin_not_loaded/);
+});
 const { radarContext } = await import("../../src/psycheval/assets/web/modules/leaderboard-radar.js");
 const base = JSON.parse(readFileSync(new URL("./support/metrics.json", import.meta.url), "utf8"));
 const extra = { key: "atif.extra:Energy", column_key: "atif.extra:Energy", label: "长中文能耗指标", unit: "Wh", type: "number", direction: "neutral", default: false };
@@ -25,6 +30,45 @@ function reset() {
   summary.renderLeaderboardSummary();
 }
 test.after(() => browser.cleanup());
+
+test("metric choices expose bounded keyboard descriptions and concise cell names", () => {
+  reset();
+  state.leaderboardSummaryTableOpen = true;
+  const provenance = {available: 1, missing: 0, mixed_basis: false, variants: [{source: "fixture", method: "successes/known", contract_version: 1, trials: 1}]};
+  state.leaderboardSummary.summary.groups = Array.from({length:100}, (_, i) => ({key:String(i), label:`Group ${i}`, count:1, metrics:[{key:"score", count:1, mean:1, provenance}]}));
+  summary.renderLeaderboardSummary();
+  const input = document.querySelector('[data-metric-id="score"]');
+  const description = document.getElementById(input.getAttribute("aria-describedby"));
+  assert.ok(description);
+  assert.match(description.textContent, /100/);
+  assert.ok(description.textContent.length < 500);
+  assert.doesNotMatch(description.textContent, /Group 99/);
+  const cell = document.querySelector('[data-summary-stat="mean"]');
+  assert.ok(cell);
+  assert.equal(cell.getAttribute("aria-label"), "1");
+  assert.match(cell.title, /successes\/known/);
+});
+
+test("cost hints disclose native estimates and actual billing in values and summaries", () => {
+  const billed = {source: "fixture", method: "sum(native_request_cost)", quality: "reported", contract_version: 1, cost_kinds: ["billed"], trials: 1};
+  const estimated = {...billed, quality: "estimated", cost_kinds: ["native_estimate"]};
+  assert.match(metricProvenanceHint(estimated, "cost_usd"), /Cost basis: Native estimate/);
+  const hint = metricProvenanceHint({variants: [billed, estimated], mixed_basis: true, available: 2, missing: 0}, "cost_usd");
+  assert.match(hint, /Mixed measurement bases/);
+  assert.match(hint, /reported.*Cost basis: Billed/);
+  assert.match(hint, /estimated.*Cost basis: Native estimate/);
+});
+
+test("Agent steps ignores retired counts and validates explicit safe whole numbers", () => {
+  const trajectory = { steps: [{source: "user"}, {source: "agent"}, {source: "agent"}], final_metrics: {extra: {total_turns: 9999}} };
+  assert.equal(agentStepCount(trajectory), 2);
+  for (const [value, expected] of [[0, 0], [7.0, 7], [1.5, null], [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER], [2**53, null], [null, null], [true, null], [-1, null]]) {
+    trajectory.final_metrics.extra.total_agent_steps = value;
+    assert.equal(agentStepCount(trajectory), expected);
+  }
+  assert.equal(agentStepCount({synthetic: true, steps: []}), null);
+  assert.equal(agentStepCount({steps: []}), 0);
+});
 
 test("one ordered selection controls bars, radar direction and export snapshots without fetching", () => {
   reset();

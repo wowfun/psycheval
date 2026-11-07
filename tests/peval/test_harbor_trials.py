@@ -56,7 +56,7 @@ def atif_trajectory(session_id: str = "harbor-session") -> dict[str, object]:
         "final_metrics": {
             "total_steps": 2,
             "extra": {
-                "total_turns": 1,
+                "total_agent_steps": 1,
                 "total_tool_calls": 0,
                 "total_tool_errors": 0,
             },
@@ -126,7 +126,7 @@ class HarborTrialTests(unittest.TestCase):
 
         from harbor.models.agent.context import AgentContext
 
-        from psycheval.harbor.opencode import HostOpenCodeAgent
+        from psycheval.harbor.agents.opencode import HostOpenCodeAgent
 
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -194,7 +194,7 @@ class HarborTrialTests(unittest.TestCase):
                 store.close()
 
     def test_last_turn_end_approximation_sorts_harbor_rows_without_changing_times(self):
-        from psycheval.atif import iso_timestamp_ms
+        from psycheval.harbor.atif import iso_timestamp_ms
 
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -310,7 +310,7 @@ class HarborTrialTests(unittest.TestCase):
             self.assertIsNone(row["last_turn_finished_at_ms"])
 
     def test_workbuddy_bash_outcomes_reach_catalog_error_rate_and_detail(self):
-        from psycheval.harbor.acp_evidence import convert
+        from psycheval.harbor.agents.acp.evidence import convert
         from tests.harbor.test_acp import _current_evidence
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -834,7 +834,7 @@ class HarborTrialTests(unittest.TestCase):
                 catalog.reconcile()
                 row = catalog.query(CatalogQuery()).items[0].to_dict()
                 self.assertTrue(row["readable"])
-                self.assertEqual(row["turns"], 1)
+                self.assertEqual(row["agent_steps"], 1)
                 self.assertEqual(row["total_tool_calls"], 1)
                 self.assertEqual(row["total_tool_errors"], 0)
                 self.assertEqual(row["tokens"], 10)
@@ -842,10 +842,23 @@ class HarborTrialTests(unittest.TestCase):
                 self.assertEqual(row["duration_ms"], 1_500)
                 detail = catalog.load_detail(row["source_key"]).report
                 self.assertEqual(detail["trajectory"][0]["schema_version"], "ATIF-v1.8")
+                extra = detail["trajectory"][0]["final_metrics"]["extra"]
                 self.assertEqual(
-                    detail["trajectory"][0]["final_metrics"]["extra"],
+                    extra["metric_field_origins"]["total_prompt_tokens"],
+                    "harbor.agent_result",
+                )
+                self.assertEqual(
+                    extra["metric_field_origins"]["total_agent_steps"],
+                    "derived.main_trajectory",
+                )
+                self.assertEqual(
                     {
-                        "total_turns": 1,
+                        key: value
+                        for key, value in extra.items()
+                        if key != "metric_field_origins"
+                    },
+                    {
+                        "total_agent_steps": 1,
                         "total_tool_calls": 1,
                         "total_tool_errors": 0,
                     },
@@ -965,7 +978,7 @@ class HarborTrialTests(unittest.TestCase):
                 catalog.reconcile()
                 row = catalog.query(CatalogQuery()).items[0].to_dict()
                 self.assertEqual(row["duration_ms"], 48_100)
-                self.assertEqual(row["turns"], 1)
+                self.assertEqual(row["agent_steps"], 1)
                 self.assertEqual(row["total_tool_calls"], 1)
                 self.assertEqual(row["total_tool_errors"], 0)
                 self.assertEqual(row["model_duration_ms"], 100)

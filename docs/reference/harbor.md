@@ -492,7 +492,10 @@ estimates. Model-call spans contribute to Model duration, but do not supply
 TTFT or decode speed without first-token evidence. Source logs stay unchanged.
 OpenCode's `tokens.input`
 excludes cache reads and writes; inclusive prompt tokens sum `input`, `cache.read`,
-and `cache.write`. Cache hit rate divides cache-read tokens by inclusive prompt
+and `cache.write`. Input and supplied cache components must be nonnegative
+integers; absent cache buckets use the native zero default. Missing input or
+invalid components, including numeric strings, leave the inclusive total unknown.
+Known raw components remain in usage evidence. Cache hit rate divides cache-read tokens by inclusive prompt
 tokens over messages with valid paired measurements. An explicit zero read is a
 measured miss; a missing or invalid read remains unknown and contributes neither
 numerator nor denominator. An omitted cache-write bucket contributes zero;
@@ -1294,3 +1297,49 @@ usage. Session-wide totals remain available to full-session imports but cannot
 supply usage for a resumed subset.
 The UTF-8 trajectory reader retains Harbor image-reference checks, including the
 pinned version's private image-path hooks.
+
+## Native measurement evidence
+
+Agent adapters own native collection and normalization. Measurement evidence
+schema 1 / contract 1 uses `agent/measurements.json` and associated reduced event
+files, linked from ATIF extra or AgentContext metadata. The manifest records
+invocation/Session identity, installed producer version, per-capability status
+(`verified`, `unsupported`, `unavailable`), probe evidence and file digests.
+Capabilities require isolated runtime verification; reference symbols alone
+are insufficient. A missing capability disables only dependent measurements.
+Adapters that populate AgentContext during `run` also publish their canonical
+trajectory and usage before returning: Harbor skips its post-run population
+callback when the context is already nonempty, including metadata-only contexts.
+
+DSH verifies native Session location/identity, ACP stream retention and flush,
+structured tool-result hooks, and availability after normal, cancelled and timed
+out runs before Host deletion. Its logical boundary is `step/start` to committed
+`assistant/message`, including retries; tools execute afterwards. Native `error`
+alone does not establish nonzero shell status. WorkBuddy distinguishes bundled
+fields, retained events and readable private records with verified identities.
+Phase updates without proven step/retry correspondence cannot supply complete
+performance measurements. OpenCode verifies isolated `run --standalone` plugin
+loading, incremental HTTP response observation and request/retry/Session linkage.
+Its initial protocol support is the MiMo OpenAI-compatible stream. Buffered
+responses or unlinked steps leave TTFT/TPS unavailable. Neither ACP notification
+gaps nor headless text replace native first-output evidence.
+Collection completeness follows retained native settlement events and collection
+diagnostics, independently of the execution result. A truncated prefix can still
+supply TTFT/TPS samples with proven identities and complete required boundaries;
+it cannot supply complete totals. Unsupported response parsing does not invalidate
+independently retained native start/completion boundaries.
+
+Only timestamps, event kinds, nonempty flags/lengths, identities, usage, exit
+status and digests may be retained. No prompt, body, reasoning, tool output,
+authentication header or configuration content is copied. Reduced event evidence
+is bounded by 8 MiB and 100,000 records per Trial; the manifest by 64 KiB. Private
+reads are streamed, cumulatively bounded by 512 MiB and individually by 16 MiB
+per native record, subject to tighter Host/ACP limits. Exhaustion preserves the
+prefix/counts/diagnostic and marks truncation; complete totals become unknown.
+Observers do not change requests, responses, tool results, permission decisions
+or cancellation. Publish after process settlement and before private-directory
+deletion: event files first, atomic manifest last. Collection failures never
+replace execution exceptions or verifier conclusions. Metric calculation and
+value/provenance construction follow the
+[measurement contract](state-and-data.md#numeric-metrics).
+

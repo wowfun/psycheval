@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
+from .atif import count_agent_steps
+
 if TYPE_CHECKING:
     from harbor.models.agent.context import AgentContext
 
@@ -200,11 +202,15 @@ def finalize_trajectory_metrics(trajectory: dict[str, Any]) -> dict[str, Any]:
     existing = trajectory.get("final_metrics")
     final_metrics = dict(existing) if isinstance(existing, Mapping) else {}
     final_metrics["total_steps"] = len(trajectory.get("steps", []))
-    if prompt_values:
+    session_scope = (
+        isinstance(final_metrics.get("extra"), Mapping)
+        and final_metrics["extra"].get("usage_scope") == "session"
+    )
+    if prompt_values and not session_scope:
         final_metrics["total_prompt_tokens"] = sum(prompt_values)
-    if completion_values:
+    if completion_values and not session_scope:
         final_metrics["total_completion_tokens"] = sum(completion_values)
-    if cached_values:
+    if cached_values and not session_scope:
         final_metrics["total_cached_tokens"] = sum(cached_values)
 
     compact = _compact_aggregate(aggregate)
@@ -214,6 +220,7 @@ def finalize_trajectory_metrics(trajectory: dict[str, Any]) -> dict[str, Any]:
         compact["usage_sources"] = sorted(usage_sources)
     final_extra = final_metrics.get("extra")
     final_extra = dict(final_extra) if isinstance(final_extra, Mapping) else {}
+    final_extra["total_agent_steps"] = count_agent_steps(trajectory.get("steps", []))
     if compact.get("attempt_count", 0) > 0:
         final_extra[MODEL_INFERENCE_KEY] = compact
     if final_extra:

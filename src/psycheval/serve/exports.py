@@ -10,6 +10,7 @@ import xlsxwriter
 from psycheval.config import ToolConfig
 from psycheval.i18n import messages_for
 from psycheval.metric_contract import BUILTIN_IDS, finite_number, metric_descriptions
+from psycheval.report.builder import VIEW_SCHEMA_VERSION
 from psycheval.report.metrics import tool_success_rate
 from psycheval.serve.summary_xlsx import (
     EXCEL_CONTENT_TYPE,
@@ -17,6 +18,7 @@ from psycheval.serve.summary_xlsx import (
     SummaryWorksheet,
     metric_heading,
     summary_workbook,
+    write_provenance_sheet,
 )
 from psycheval.serve.visibility import project_catalog_rows, project_report
 from psycheval.state import CatalogQuery, ServeStateStore, WorkspaceCatalog
@@ -98,7 +100,7 @@ def build_serve_export(
     if audience != "admin":
         report = project_report(report)
     return ServeExport(
-        filename="peval-report-v19.json",
+        filename=f"peval-report-v{VIEW_SCHEMA_VERSION}.json",
         content_type="application/json; charset=utf-8",
         content=(json.dumps(report, ensure_ascii=False, indent=2) + "\n").encode(
             "utf-8"
@@ -239,4 +241,16 @@ def xlsx_summary(
                     sheet.write_blank(index, column, None, metric_formats[offset])
         sheet.freeze_panes(1, 0)
         sheet.set_column(0, len(columns) + len(definitions) - 1, 20)
+        write_provenance_sheet(
+            workbook,
+            (
+                (
+                    row.get("source_key") or row.get("trial_name") or str(index),
+                    key,
+                    provenance,
+                )
+                for index, row in enumerate(rows)
+                for key, provenance in (row.get("metric_provenance") or {}).items()
+            ),
+        )
     return output.getvalue()

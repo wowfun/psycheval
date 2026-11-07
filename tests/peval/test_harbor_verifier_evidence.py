@@ -19,6 +19,44 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
+@pytest.mark.parametrize("applied", [True, False])
+def test_grading_provenance_preserves_actual_score_merge_before_judge_defaults(
+    tmp_path, applied
+):
+    actual = {
+        "method": "weighted_sum",
+        "applied": applied,
+        "rule_weight": 0.8,
+        "llm_weight": 0.2,
+        "rule_score": 1,
+        "llm_score": 0.8,
+        "overall": 0.96,
+    }
+    _write_json(
+        tmp_path / "verifier/score.json",
+        {
+            "reward": 0.96,
+            "metadata": {
+                "score_merge": {**actual, "private_prompt": "must not publish"}
+            },
+        },
+    )
+    _write_json(
+        tmp_path / "verifier/llm_judge.json",
+        {
+            "score_merge": {
+                "method": "weighted_sum",
+                "rule_weight": 0.1,
+                "llm_weight": 0.9,
+            }
+        },
+    )
+    evidence = read_harbor_verifier_evidence(
+        tmp_path, containment_root=tmp_path, dataset_format="harbor", harbor_reward=0.96
+    )
+    assert evidence.grading["score_merge"] == actual
+
+
 def test_evidence_writer_manifest_projects_raw_and_text(tmp_path):
     from psycheval.harbor.evidence import EvidenceWriter
 

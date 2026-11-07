@@ -114,7 +114,7 @@ an already embedded child receives an explicit omitted-link diagnostic.
 Child sidecar adapter identity follows the root input adapter, including ATIF
 imports. Retained source files are never modified. Task notifications,
 compaction, and local-command
-context retain their source classification; bookkeeping does not create turns.
+context retain their source classification; bookkeeping does not create Agent steps.
 An explicit native Claude import stores its concrete source binding in the local
 source overlay for administrator-requested refresh. The canonical cell remains
 the read authority; reads do not consult the original logs. Imported ATIF and
@@ -197,7 +197,7 @@ Recorded partial or unavailable WorkBuddy usage coverage is projected into the
 existing read-only diagnostic display; this does not change execution or
 conversion status and does not fill missing totals.
 
-Active duration sums recorded Agent-step and tool execution contributions. It
+For ordinary trajectory projection, Active duration sums recorded Agent-step and tool execution contributions. It
 measures aggregate activity rather than the union of elapsed intervals; parallel
 contributions can overlap. Wall duration remains the separate elapsed measure.
 Projected durations accept only nonnegative integer milliseconds, excluding
@@ -237,7 +237,7 @@ duration refuses that fallback for steps with tools. Recorded tool contributions
 may cover only some calls; their sum is never a measured step span.
 
 The core timing classification lives in
-[`timing-sources.json`](../../src/psycheval/assets/web/timing-sources.json), consumed
+[`timing-sources.json`](../../src/psycheval/harbor/timing-sources.json), consumed
 by Python projections and browser labels. It defines source families, model
 eligibility, observed/estimated flags and timestamp-estimation admission.
 Harbor producers retain their independent evidence contract and emit wire source
@@ -271,6 +271,110 @@ source diagnostics. Objects and arrays are not traversed. `model_inference`,
 `usage`, and aliases consumed by built-ins are excluded from custom discovery.
 Only finite numbers count; booleans and numeric strings are unknown. Existing
 source-metric fallback and explicit ATIF precedence apply.
+
+Metric names and numeric values remain independent of measurement provenance.
+Each Trial row carries `metric_provenance`, keyed by the same metric IDs as
+`metric_values`, including metadata for unavailable default metrics. It records
+the selected evidence source and fields, calculation and measurement basis,
+reported/observed/estimated quality, and known coverage. Coverage describes the
+retained evidence or measured samples, not unobserved Agent activity. Counts
+whose target scope cannot be established remain null: an unavailable
+logical-step capability does not establish zero total or zero unknown steps.
+Reported values are not a certification of provider accuracy or grading objectivity;
+missing evidence stays unknown. Metadata is derived alongside the selected
+value and never supplies a numeric observation or changes sorting.
+
+Harbor Active duration uses aligned supplemental telemetry when available,
+otherwise the recorded `agent_execution` start/end interval; absent source
+timing, ordinary trajectory projection applies. Its metadata distinguishes
+summed contributions from elapsed phase time. Elapsed Agent execution includes
+waiting, retries and adapter work within the phase, and excludes the subsequent
+verifier. Metadata does not change those existing selection rules.
+
+Grouped metrics retain the number of contributing Trials and distinct source,
+basis and calculation combinations. Mixed combinations are disclosed rather
+than assigned a single provenance; missing metadata is also counted. Numeric
+aggregation remains unchanged. The workbench exposes this information in value
+hints, and JSON catalog responses retain the structured metadata.
+
+Measurement contract 1 covers the ten Home defaults, Leaderboard Cost and Last
+Turn End. One constructor selects value and provenance together. Each record
+identifies producer/version, original fields, bounded evidence references,
+formula, target scope, sample unit, actual start/end boundaries, retry policy,
+token basis, clock identity/type/semantics/precision, quality, coverage and
+missing reasons, contract version and basis ID. Native reporting does not certify
+completeness or accuracy. Intervals use one clock; invalid or missing boundaries
+are not repaired with zero clamps, interpolation or adjacent timestamps.
+
+A logical model step generates one final assistant message, including its
+retries. Performance covers the main Session, with child performance separate.
+Model call duration sums start-to-final-message intervals, including waiting
+and retry backoff, without adding subsequent tool time. Incomplete target
+boundaries make the total unknown. Avg TTFT averages complete start-to-first
+nonempty text, reasoning or tool-call output pairs; failed/cancelled steps with
+that pair qualify. Empty blocks, roles, heartbeats and usage do not.
+Decode TPS is effective output throughput including retry waiting: final-message
+output tokens divided by first-output-to-final-completion durations over the
+same complete samples. Discarded attempts add no output tokens. Reasoning tokens
+are included exactly once; unknown token basis or final usage excludes a sample.
+Agent-specific boundaries and preparation overhead remain explicit in basis IDs.
+
+Tokens and Cost cover the Harbor-visible trajectory tree, deduplicated by request
+identity; parent totals including children cannot be added to those children.
+Missing necessary token components make totals unknown. Cache Hit uses requests
+with complete cache data and cache-inclusive input as denominator, with subset
+coverage. Hidden background requests are outside scope. Agent steps and Tool
+Calls retain main-trajectory counting; `total_turns` is ignored. Capture state,
+cancellation or truncation proves partial retention; task failure alone does not.
+Count provenance follows the ATIF retention boundary independently of native
+measurement collection. A partial ATIF reports its retained main-trajectory scope;
+complete native timing evidence cannot relabel that trajectory as complete.
+New Tool Success Rate is successes / known outcomes, retaining failed, unknown
+and total counts. Structured exit status, error, timeout and cancellation override
+`completed`; no known outcomes means unknown. Cost requires evidence, distinguishes
+native estimates from billing, and is not filled with fixed zero or new price
+estimates. Cost basis IDs include the retained cost kinds; a total containing any
+native estimate is marked estimated. Summaries retain cost kinds and distinct
+quality variants instead of assigning the first Trial's quality to every Trial.
+Reward selection/composition remains unchanged with grader/Judge/version
+recorded. Retained score metadata supplies the applied merge method, weights and
+component scores; configured Judge weights are only a fallback when that evidence
+is absent. Last Turn End distinguishes native completion, observed trajectory
+boundary and Harbor fallback.
+
+New runs link evidence schema 1 / measurement contract 1 through ATIF extra or
+AgentContext metadata. Damaged linked evidence is unavailable, never legacy.
+Without that marker, historical values and denominators are preserved and
+provenance is `legacy`; neither reimport date nor Agent name upgrades a record.
+Reprojection adds explanations without recalculating historical measurements.
+
+Provenance follows report `trajectory_meta`, catalog `row_json` and paginated
+Trial responses without new tables or numeric columns. Catalog schema is 22 and
+projection is 13. Manifest and evidence digests join source revision; values and
+provenance commit in one generation. In-memory summary, presence and registry caches
+also include the persistent catalog instance identity, so rebuilding a database
+cannot reuse an older instance's generation number. Bounds are 2 KiB and four references per
+metric, 32 KiB per Trial. Summaries read compact provenance once per source in
+the same read transaction as indexed values, without trajectory reads or
+repetition on metric joins. Generation/query caching stays independent of metric
+and statistic selection. Page-wide column presence uses the same bounded cache,
+keyed by generation and query scope; page number and display choices do not
+duplicate entries. Each metric retains sixteen source/basis/version variants
+at most; overflow becomes `other` with accurate counts and a truncation flag.
+Additional summary detail is bounded by 8 MiB per response. Same-basis different
+sources are distinguished from mixed bases/contracts. Legacy Tool Success Rate
+`(calls-errors)/calls` and contract-1 `successes/known` may contribute to Mean
+together; hints disclose formulas and Trial counts.
+
+Report schema is 21; export filenames derive from the same constant. Browser
+downloads use the server's Content-Disposition filename. ATIF schema
+is independent. JSON includes structured provenance. Server-generated Excel keeps
+numeric worksheets and adds a provenance worksheet. Provenance detail is bounded
+to 100,000 rows per workbook; an explicit final record reports retained and omitted
+detail-row counts when this limit is exceeded. Numeric rows are unaffected. Failed
+provenance cell writes fail the export instead of silently truncating it.
+The browser does not maintain
+a second XLSX writer; export selection and missing-value rules are unchanged.
 
 Rewards originate in `reward.json` and are read from Harbor's
 `result.json.verifier_result.rewards`. `score` retains the effective primary-score
@@ -331,7 +435,7 @@ infer zero errors from an absent count.
 The Home summary offers bar and radar views of the same complete-query data.
 Its ordered selection controls tables, both charts and all summary exports, with
 at most 32 IDs. The default selection retains the original ten metrics: Reward,
-Active Duration, Avg TTFT, Decode TPS, Tokens, Cache Hit, Turns, Model Call Duration,
+Active Duration, Avg TTFT, Decode TPS, Tokens, Cache Hit, Agent steps, Model Call Duration,
 Tool Calls and Tool Success Rate. Restore defaults restores this selection.
 Custom metrics and new leaderboard columns are hidden by default.
 Saved Views keep their original ten built-in metrics with data and Mean, without
@@ -346,7 +450,7 @@ in the current query, including unselected groups. Min–max scaling maps each a
 to 0–100, reversed for metrics configured as lower-is-better so that larger radii
 mean better performance.
 Equal measured values map to 50 and are identified as having no group difference.
-Changing comparison groups does not change these bounds. Tokens, turns, and tool
+Changing comparison groups does not change these bounds. Tokens, Agent steps, and tool
 call counts default to neutral direction; configuring a direction admits them
 to radar axes. Directions come from the shared metric descriptions.
 Radar uses solid outlines whose colors remain visible during hover and keyboard
@@ -675,3 +779,28 @@ Strict imports accept ATIF 1.7 and 1.8 without modification. Audio content is
 valid in 1.8 only; its references and metadata survive projection and export.
 Audio is shown as an identified media reference, without automatic playback or
 transcription. Adapter conversion emits canonical 1.8.
+
+### Agent steps
+
+The builtin agent_steps metric consumes a nonnegative safe JSON integer
+final_metrics.extra.total_agent_steps, including zero. When absent it counts only
+the current trajectory's source=agent steps; total_turns is never consulted.
+Whole numeric values such as 7.0 have the same meaning as 7. Values outside
+JavaScript's safe integer range are invalid, keeping catalog and browser reads
+consistent. An invalid explicit value is diagnosed and remains unknown. No trajectory means
+unknown; an empty valid trajectory means zero. Native conversion always writes the
+field: assistant/agent records count, Claude synthetic records do not, and children
+count separately. Total steps counts every ATIF step; source events counts native
+input events. These are distinct units. Both total_agent_steps and the retired total_turns/turns keys are reserved from
+custom-metric discovery. Configuration rejects aliases for all reserved extra
+keys, including agent_steps, total_agent_steps, turns and total_turns; custom
+metrics must use distinct names.
+Rebuilding derived catalogs never rewrites source evidence.
+
+Hermes retained-session and export totals remain root metrics with extra.usage_scope=session;
+conversion does not assign them to the first message or replace them with partial
+per-message sums. Missing session-total fields remain unknown even when some
+messages have measurements. Per-message usage is projected only when actually
+present. Session exports accept a JSON object with a messages array, including
+pretty-printed JSON, or native message JSONL with an explicit session identity.
+Malformed JSONL records fail conversion rather than silently dropping evidence.

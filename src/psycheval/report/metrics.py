@@ -18,7 +18,9 @@ def automatic_analysis_metrics(
         {
             "tooling": compact_dict(
                 {
-                    "tool_success_rate": tool_success_rate(
+                    "tool_success_rate": meta["metric_values"].get("tool_success_rate")
+                    if "metric_values" in meta
+                    else tool_success_rate(
                         final_metric(metrics, "total_tool_calls"),
                         final_metric(metrics, "total_tool_errors"),
                     ),

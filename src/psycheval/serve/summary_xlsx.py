@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
@@ -12,6 +13,7 @@ from psycheval.metric_contract import SAVED_VIEW_METRIC_IDS, metric_descriptor
 
 EXCEL_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 SUMMARY_STATISTICS = ("mean", "min", "q1", "p50", "q3", "p95", "max")
+MAX_PROVENANCE_DETAIL_ROWS = 100_000
 METRIC_NUMBER_FORMATS = {
     "number": "#,##0.00",
     "duration": "[h]:mm:ss.000",
@@ -67,9 +69,102 @@ def summary_workbook(
                 formats=formats,
                 messages=messages,
             )
+        write_provenance_sheet(
+            workbook,
+            (
+                (
+                    f"{sheet.name} / {group.get('label', '-')}",
+                    metric["key"],
+                    metric.get("provenance") or {},
+                )
+                for sheet in sheets
+                for group in sheet.groups
+                for metric in group.get("metrics", [])
+                if metric["key"] in {item["key"] for item in sheet.metric_descriptions}
+            ),
+            name=unique_sheet_name("Metric Provenance", used_names),
+        )
     finally:
         workbook.close()
     return output.getvalue()
+
+
+def write_provenance_sheet(workbook, entries, *, name="Metric Provenance"):
+    """One server writer for Trial and summary provenance, including missing values."""
+    worksheet = workbook.add_worksheet(name)
+    headings = (
+        "Source / Group",
+        "Metric",
+        "Contract",
+        "Basis",
+        "Source",
+        "Method",
+        "Provenance JSON",
+    )
+    header = workbook.add_format({"bold": True})
+
+    def write(index, column, value, cell_format=None):
+        if worksheet.write_string(index, column, value, cell_format) != 0:
+            raise ValueError("provenance cell exceeds Excel limits")
+
+    for column, title in enumerate(headings):
+        write(0, column, title, header)
+    index = 1
+    omitted = 0
+    for scope, key, provenance in entries:
+        details = (
+            provenance.get("variants") if "variants" in provenance else [provenance]
+        )
+        if provenance.get("other"):
+            details = [
+                *details,
+                {"source": "other", **provenance["other"], "details_truncated": True},
+            ]
+        for detail in details:
+            if index > MAX_PROVENANCE_DETAIL_ROWS:
+                omitted += 1
+                continue
+            exported = (
+                {
+                    **detail,
+                    "summary": {
+                        key: value
+                        for key, value in provenance.items()
+                        if key not in {"variants", "other"}
+                    },
+                }
+                if "variants" in provenance
+                else detail
+            )
+            row = (
+                scope,
+                key,
+                detail.get("contract_version"),
+                detail.get("basis_id"),
+                detail.get("source"),
+                detail.get("method"),
+                json.dumps(exported, ensure_ascii=False, sort_keys=True),
+            )
+            for column, value in enumerate(row):
+                write(index, column, "" if value is None else str(value))
+            index += 1
+    if omitted:
+        write(index, 0, "Provenance details truncated")
+        write(
+            index,
+            6,
+            json.dumps(
+                {
+                    "details_truncated": True,
+                    "retained_detail_rows": index - 1,
+                    "omitted_detail_rows": omitted,
+                },
+                sort_keys=True,
+            ),
+        )
+    worksheet.freeze_panes(1, 0)
+    worksheet.set_column(0, 5, 24)
+    worksheet.set_column(6, 6, 80)
 
 
 def unique_sheet_name(value: str, used_names: set[str]) -> str:

@@ -72,16 +72,18 @@
     "type": "percent"
   },
   {
-    "key": "turns",
-    "label": "Turns",
-    "message_key": "turns",
+    "key": "agent_steps",
+    "label": "Agent steps",
+    "message_key": "agent_steps",
     "unit": "",
     "direction": "neutral",
     "default": true,
     "saved_view": true,
-    "column_key": "turns",
+    "column_key": "agent_steps",
     "column_default": true,
-    "type": "number"
+    "type": "number",
+    "description": "Effective assistant/agent records; Claude excludes synthetic records. Historical ATIF without a count uses agent steps. Children count separately.",
+    "description_message_key": "metric_agent_steps_hint"
   },
   {
     "key": "model_duration_ms",
@@ -229,7 +231,7 @@
   },
   {
     "key": "total_steps",
-    "label": "Steps",
+    "label": "Total steps",
     "message_key": "metric_steps",
     "unit": "",
     "direction": "neutral",

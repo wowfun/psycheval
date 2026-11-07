@@ -15,6 +15,7 @@ HARBOR_JSON_SOURCE_FILES = (
     "agent/trajectory.json",
     "agent/trajectory.partial.json",
     "agent/cleanup.json",
+    "agent/measurements.json",
     "config.json",
     "lock.json",
     "result.json",
@@ -36,6 +37,7 @@ HARBOR_SOURCE_FILES = (
     + HARBOR_OPENCODE_TELEMETRY_FILES
     + HARBOR_PSYCHEVO_TELEMETRY_FILES
     + HARBOR_HERMES_TELEMETRY_FILES
+    + ("agent/measurement-events.ndjson",)
 )
 HARBOR_OVERLAY_FILES = (
     "state.json",

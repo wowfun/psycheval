@@ -21,3 +21,9 @@ Use `--no-redact` only when the output location and audience are trusted. The
 [CLI reference](../../reference/cli.md) owns output behavior; the
 [state and data reference](../../reference/state-and-data.md) owns evidence and
 presentation boundaries.
+
+JSON reports include structured `metric_provenance` for default measurements,
+including unavailable values. Hover over workbench metrics for source, formula,
+coverage and missing reasons. Excel exports retain the numeric sheets and add a
+provenance sheet. If its detail limit is reached, a final record states how many
+source records were omitted; numeric rows remain intact. Historical values keep their original measurement basis.

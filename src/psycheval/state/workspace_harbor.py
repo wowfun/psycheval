@@ -16,16 +16,18 @@ from psycheval._state.artifacts import (
     read_json_object,
     source_key_for_components,
 )
-from psycheval.atif import (
-    ATIF_VERSION,
-    iso_timestamp_ms,
-    validate_atif_trajectory,
-)
 from psycheval.config import ToolConfig
 from psycheval.conversion import (
     convert_db,
     convert_path,
 )
+from psycheval.harbor.atif import (
+    ATIF_VERSION,
+    count_agent_steps,
+    iso_timestamp_ms,
+    validate_atif_trajectory,
+)
+from psycheval.harbor.measurements import measurement
 from psycheval.report import project_meta_from_atif
 from psycheval.report.metrics import final_metric
 from psycheval.report.timing import step_meta_reports, trial_active_duration_ms
@@ -141,36 +143,60 @@ def _project_harbor_metrics(
     metrics = deepcopy(existing) if isinstance(existing, dict) else {}
     supplemental = telemetry.final_metrics if telemetry is not None else {}
     result_metrics = _result_final_metrics(result_json)
+    origins = {key: "atif.final_metrics" for key in metrics if key != "extra"}
     for key in (
         "total_prompt_tokens",
         "total_completion_tokens",
         "total_cached_tokens",
         "total_cost_usd",
     ):
-        for source in (supplemental, result_metrics):
+        for source_name, source in (
+            ("supplemental_telemetry", supplemental),
+            ("harbor.agent_result", result_metrics),
+        ):
             if key not in metrics and source.get(key) is not None:
                 metrics[key] = source[key]
+                origins[key] = source_name
     metrics.setdefault("total_steps", len(projected.get("steps") or []))
 
     extra = (
         deepcopy(metrics.get("extra")) if isinstance(metrics.get("extra"), dict) else {}
     )
+    origins.update(
+        {
+            key: "atif.final_metrics.extra"
+            for key in extra
+            if key != "metric_field_origins"
+        }
+    )
     steps = [step for step in projected.get("steps") or [] if isinstance(step, dict)]
     derived = {
-        "total_turns": sum(step.get("source") == "agent" for step in steps),
+        "total_agent_steps": count_agent_steps(steps),
         "total_tool_calls": sum(len(step.get("tool_calls") or []) for step in steps),
         "total_tool_errors": _derived_tool_errors(steps),
     }
     for key, value in derived.items():
         if key in extra:
             continue
+        if key == "total_agent_steps":
+            extra[key] = value
+            origins[key] = "derived.main_trajectory"
+            continue
         supplemental_value = final_metric(supplemental, key)
         extra[key] = supplemental_value if supplemental_value is not None else value
+        origins[key] = (
+            "supplemental_telemetry"
+            if supplemental_value is not None
+            else "derived.main_trajectory"
+        )
     supplemental_extra = (
         supplemental.get("extra") if isinstance(supplemental.get("extra"), dict) else {}
     )
     for key, value in supplemental_extra.items():
+        if key not in extra:
+            origins[key] = "supplemental_telemetry"
         extra.setdefault(key, deepcopy(value))
+    extra["metric_field_origins"] = origins
     if extra:
         metrics["extra"] = extra
     projected["final_metrics"] = metrics
@@ -512,6 +538,7 @@ def _result_only_meta(
         "status": evaluation["status"],
         "failure_class": evaluation.get("failure_class") or "missing-trajectory",
         "score": evaluation.get("score"),
+        "metric_provenance": evaluation.pop("metric_provenance", {}),
         "score_message": evaluation.get("score_message"),
         "warnings": [
             *candidate.entry_warnings,
@@ -560,10 +587,24 @@ def _result_only_meta(
     active = _result_duration_ms(result_json, "agent_execution")
     wall = _result_duration_ms(result_json)
     if active is not None:
-        meta["duration_ms"] = active
+        selected = measurement(
+            active,
+            source="harbor.agent_execution",
+            method="finished_at-started_at",
+            basis="agent_execution_wall_clock",
+            fields=(
+                "result.agent_execution.started_at",
+                "result.agent_execution.finished_at",
+            ),
+        )
+        meta["duration_ms"] = selected["value"]
+        meta.setdefault("metric_provenance", {})["duration_ms"] = selected["provenance"]
     if wall is not None:
         meta["wall_duration_ms"] = wall
-    return meta
+    _load_measurements(candidate, {}, result_json, meta)
+    from psycheval.report.measurements import project
+
+    return project({}, meta)
 
 
 def _result_only_error(
@@ -730,6 +771,7 @@ def _trajectory_meta(
         "status": evaluation["status"],
         "failure_class": evaluation.get("failure_class"),
         "score": evaluation.get("score"),
+        "metric_provenance": evaluation.pop("metric_provenance", {}),
         "score_message": evaluation.get("score_message"),
         "warnings": [
             *candidate.entry_warnings,
@@ -776,6 +818,12 @@ def _trajectory_meta(
             "source_atif_schema_version": source_schema,
             "supplemental_telemetry": telemetry is not None,
             "source_timing": {
+                "duration_source": "supplemental_telemetry"
+                if telemetry is not None and telemetry.duration_ms is not None
+                else "harbor.agent_execution",
+                "duration_method": "sum(aligned_telemetry_contributions)"
+                if telemetry is not None and telemetry.duration_ms is not None
+                else "finished_at-started_at",
                 **(
                     {"duration_ms": active_duration}
                     if active_duration is not None
@@ -798,8 +846,36 @@ def _trajectory_meta(
     _apply_harbor_step_meta(meta, candidate, trial_result_json)
     if lock_json is not None:
         data_ref["lock_available"] = True
+    _load_measurements(candidate, trajectory, result_json, meta)
     projected = project_meta_from_atif(trajectory, meta)
     return projected
+
+
+def _load_measurements(candidate, trajectory, result_json, meta):
+    from psycheval.harbor.measurements import calculate, read
+
+    marker = (trajectory.get("extra") or {}).get("measurements")
+    if marker is None:
+        marker = (
+            ((result_json or {}).get("agent_result") or {}).get("metadata") or {}
+        ).get("measurements")
+    if marker is None:
+        return
+    meta["measurement_marker"] = marker
+    try:
+        manifest, records = read(
+            (candidate.data_path or candidate.path) / "agent", marker
+        )
+        session = trajectory.get("session_id")
+        if session and manifest.get("session_id") != session:
+            raise ValueError("measurement_session_mismatch")
+        meta["native_measurements"] = calculate(manifest, records)
+        meta["measurement_retention"] = (
+            "complete" if manifest.get("complete") else "partial"
+        )
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
+        meta["measurement_error"] = "invalid_measurement_evidence"
+        meta["measurement_retention"] = "unknown"
 
 
 def _data_ref_provenance(provenance: dict[str, Any]) -> dict[str, Any]:
@@ -910,18 +986,36 @@ def _evaluation(result: dict[str, Any] | None) -> dict[str, Any]:
             if isinstance(value, (int, float)) and not isinstance(value, bool)
         }
     score: int | float | None = None
+    score_field = None
     score_message = "Harbor Trial completed without a numeric reward"
     if "reward" in rewards:
         score = rewards["reward"]
+        score_field = "reward"
         score_message = "Harbor verifier reward"
     elif len(rewards) == 1:
         key, score = next(iter(rewards.items()))
+        score_field = key
         score_message = f"Harbor verifier reward: {key}"
     elif len(rewards) > 1:
         score_message = "Harbor verifier returned multiple reward dimensions"
+    selected = measurement(
+        score,
+        source="harbor.verifier_result.rewards",
+        method="reward_key_else_single_numeric_dimension",
+        basis="harbor_primary_reward",
+        version="legacy",
+        fields=("result.verifier_result.rewards." + score_field,)
+        if score_field
+        else (),
+        missing="ambiguous_reward_dimensions"
+        if len(rewards) > 1
+        else "missing_evidence",
+        producer={"name": "harbor.verifier", "version": "unreported"},
+    )
     payload: dict[str, Any] = {
         "status": status,
-        "score": score,
+        "score": selected["value"],
+        "metric_provenance": {"score": selected["provenance"]},
         "score_message": score_message,
         "rewards": rewards,
         "started_at": result.get("started_at"),
@@ -944,7 +1038,20 @@ def _effective_evaluation(
         return evaluation
     evaluation["harbor_score"] = evaluation.get("score")
     evaluation["harbor_score_message"] = evaluation.get("score_message")
-    evaluation["score"] = verifier_evidence.score
+    selected = measurement(
+        verifier_evidence.score,
+        source="workbuddy.verifier.score_json",
+        method="canonical_score_selection",
+        basis="workbuddy_primary_score",
+        version="legacy",
+        fields=(verifier_evidence.score_source,)
+        if verifier_evidence.score_source
+        else (),
+        evidence=("verifier/score.json#" + verifier_evidence.revision,),
+        producer={"name": "workbuddy.verifier", "version": "unreported"},
+    )
+    evaluation["score"] = selected["value"]
+    evaluation["metric_provenance"] = {"score": selected["provenance"]}
     evaluation["score_message"] = "WorkBuddy verifier score.json" + (
         f": {verifier_evidence.score_source}" if verifier_evidence.score_source else ""
     )
@@ -1344,6 +1451,16 @@ def _signature_parts(
                 f"{prefix}{relative}:{stat.st_size}:{stat.st_mtime_ns}:"
                 f"{stat.st_ctime_ns}:{stat.st_ino}:{stat.st_mode}"
             )
+            if relative.endswith("agent/measurements.json"):
+                from psycheval.harbor.measurements import MAX_MANIFEST_BYTES, _read
+
+                try:
+                    parts.append(
+                        "measurement_manifest:"
+                        + hashlib.sha256(_read(path, MAX_MANIFEST_BYTES)).hexdigest()
+                    )
+                except ValueError:
+                    parts.append("measurement_manifest:invalid")
         except FileNotFoundError:
             parts.append(f"{prefix}{relative}:-")
         except OSError as exc:

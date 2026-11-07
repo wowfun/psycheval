@@ -736,7 +736,7 @@ def test_result_without_trajectory_does_not_invent_usage():
     assert meta["trajectory_available"] is False
     row = catalog_summary(report["trajectory"][0], meta, 0)
     assert row["score"] == 0
-    for key in ("turns", "tokens", "cost_usd", "total_tool_calls"):
+    for key in ("agent_steps", "tokens", "cost_usd", "total_tool_calls"):
         assert row[key] is None
 
 

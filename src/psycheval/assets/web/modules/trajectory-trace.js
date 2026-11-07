@@ -1,3 +1,4 @@
+import { agentStepCount } from "./runtime.js";
 import { renderDateTime } from "./date-time.js";
 import { timingSource } from "./timing-source.js";
 import { $, esc, fmtCost, fmtMs, fmtNum, fmtPct, fmtScore, hasMetricValue, listValue, lower, renderComparisonPanels, selectedKey, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, statusLabel, t } from "./runtime.js";
@@ -145,7 +146,8 @@ function renderTrace() {
     [t("agent_model", "Agent / model"), `${agentName} / ${model}`],
     [t("time", "Time"), () => `${renderDateTime(trial.started_at_ms)} → ${renderDateTime(trial.finished_at_ms)}`],
     [t("wall_duration", "Wall duration"), fmtMs(trialWallDurationMs(trial))],
-    [t("steps_events", "Steps/events"), `${(trajectory?.steps || []).length}/${trial.total_events ?? "-"}`],
+    [t("metric_steps", "Total steps"), (trajectory?.steps || []).length],
+    [t("source_events", "Source events"), trial.total_events ?? "-"],
     [t("system_exposed", "System exposed"), systemExposed(trajectory) ? t("yes", "yes") : t("no", "no")],
     [t("reasoning_exposed", "Reasoning exposed"), reasoningExposed(trajectory) ? t("yes", "yes") : t("no", "no")]
   ];
@@ -166,7 +168,7 @@ function renderTrace() {
       [t("score", "Score"), fmtScore(trial.score)],
       [t("evaluator", "Evaluator"), trial.score_message || "-"],
       [t("tokens", "Tokens"), fmtNum(tokenTotal(metrics))],
-      [t("turns", "Turns"), finalMetric(metrics, "total_turns") ?? "-"],
+      [t("agent_steps", "Agent steps"), agentStepCount(trajectory) ?? "-"],
       [t("tool_success_rate", "Tool Success Rate"), fmtPct(rowToolSuccessRate({ total_tool_calls: toolCalls, total_tool_errors: toolErrors }))],
       [t("tool_success_total", "Tool success / total"), toolCallRatio(toolCalls, toolErrors)],
       [t("cost", "Cost"), fmtCost(metrics.total_cost_usd)]

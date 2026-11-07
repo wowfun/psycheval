@@ -179,7 +179,7 @@ def write_trial_cell_artifacts(
         "final_metrics": {
             "total_steps": 2,
             "extra": {
-                "total_turns": 1,
+                "total_agent_steps": 1,
                 "total_tool_calls": 1 if tool_error else 0,
                 "total_tool_errors": 1 if tool_error else 0,
             },

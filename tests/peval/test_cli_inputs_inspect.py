@@ -134,7 +134,7 @@ class PevalCliInputInspectTests(unittest.TestCase):
         self.assertEqual(source["total_output_tokens"], 8)
         self.assertEqual(source["total_tool_calls"], 1)
         self.assertEqual(source["total_tool_errors"], 0)
-        self.assertEqual(source["total_turns"], 2)
+        self.assertEqual(source["total_agent_steps"], 2)
         self.assertNotIn("status", source)
         self.assertEqual(len(source["steps"]["head"]), 2)
         self.assertEqual(len(source["steps"]["tail"]), 2)
@@ -584,7 +584,7 @@ class PevalCliInputInspectTests(unittest.TestCase):
                                     "total_completion_tokens": 6,
                                     "total_cached_tokens": 1,
                                     "extra": {
-                                        "total_turns": 1,
+                                        "total_agent_steps": 1,
                                         "total_tool_calls": 1,
                                         "total_tool_errors": 1,
                                     },

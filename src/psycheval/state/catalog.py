@@ -40,8 +40,8 @@ from psycheval.state.workspace_sources import (
     WorkspaceSources,
 )
 
-CATALOG_SCHEMA_VERSION = 21
-CATALOG_PROJECTION_VERSION = 11
+CATALOG_SCHEMA_VERSION = 22
+CATALOG_PROJECTION_VERSION = 13
 _ACTIVE_SCAN_PHASES = frozenset({"discovering", "checking", "committing"})
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
@@ -1129,7 +1129,7 @@ class WorkspaceCatalog:
                             source_key, source_ref, fingerprint, artifact_revision,
                             readable, active, last_status, search_doc, category, tags_json,
                             agent, model, result, task, job, provider, dataset, reward,
-                            session_id, last_turn_end, duration_ms, turns, tool_calls,
+                            session_id, last_turn_end, duration_ms, agent_steps, tool_calls,
                             tool_errors, tokens, cost_usd, ttft_ms, tps, cache_hit_rate,
                             created_at_ms, updated_at_ms, row_json
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1163,7 +1163,7 @@ class WorkspaceCatalog:
                             ),
                             optional_int(row.get("last_turn_finished_at_ms")),
                             row.get("duration_ms"),
-                            row.get("turns"),
+                            row.get("agent_steps"),
                             row.get("total_tool_calls"),
                             row.get("total_tool_errors"),
                             row.get("tokens"),
@@ -1527,7 +1527,7 @@ class WorkspaceCatalog:
                 session_id TEXT NOT NULL,
                 last_turn_end INTEGER,
                 duration_ms REAL,
-                turns REAL,
+                agent_steps REAL,
                 tool_calls REAL,
                 tool_errors REAL,
                 tokens REAL,

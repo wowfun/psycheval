@@ -1,14 +1,15 @@
 import pytest
 
-from psycheval.adapters.base import StepMeta, ToolMeta
+from psycheval.harbor.agents.sessions.models import StepMeta, ToolMeta
+from psycheval.harbor.timing import timestamp_fallback_allowed, timing_source
+from psycheval.report.measurements import model_duration_ms
 from psycheval.report.metrics import latency_metrics
 from psycheval.report.timing import (
     is_model_duration_source,
     node_duration,
     step_duration_ms,
 )
-from psycheval.state.catalog_projection import model_duration_ms, step_outline
-from psycheval.timing_contract import timestamp_fallback_allowed, timing_source
+from psycheval.state.catalog_projection import step_outline
 
 
 def test_observed_output_does_not_become_model_latency_or_timestamp_estimate():

@@ -1,6 +1,6 @@
 import { esc, t } from "./shared.js";
 import { METRIC_SELECTION_LIMIT } from "../app/metric-contract.js";
-import { metricDefinitions, selectedMetricIds, metricSearchText } from "./metric-presentation.js";
+import { metricDefinitions, selectedMetricIds, metricSearchText, metricSelectionHint } from "./metric-presentation.js";
 import { preflightHomeChange } from "./home-location.js";
 
 function renderSummaryMetricControl(state) {
@@ -14,14 +14,17 @@ function renderSummaryMetricControl(state) {
     <div class="column-control-panel">
       <label>${esc(t("search", "Search"))}<input type="search" data-metric-search value="${esc(search)}"></label>
       <div class="column-control-head">${[["all", t("select_all", "Select all")], ["none", t("clear", "Clear")], ["default", t("metric_reset", "Restore defaults")]].map(([action, label]) => `<button type="button" data-metric-action="${action}">${esc(label)}</button>`).join("")}</div>
-      <ol class="column-control-list">${keys.map(key => {
+      <ol class="column-control-list">${keys.map((key, index) => {
         const definition = definitions.find(item => item.key === key);
         const label = definition?.label || key;
         const haystack = metricSearchText(label, key);
+        const groups = state.leaderboardSummary?.summary?.groups || [];
+        const hint = metricSelectionHint(groups, key);
         return `<li class="column-control-row" data-metric-row="${esc(key)}" data-metric-match="${esc(haystack)}" ${haystack.includes(search.toLocaleLowerCase()) ? "" : "hidden"}>
-          <label><input type="checkbox" data-metric-id="${esc(key)}" ${selected.includes(key) ? "checked" : ""}><span>${esc(label)}</span></label>
+          <label><input type="checkbox" data-metric-id="${esc(key)}" aria-describedby="summary-metric-hint-${index}" ${selected.includes(key) ? "checked" : ""}><span>${esc(label)}</span></label>
           <small>${definition ? esc(definition.unit || "") : esc(t("metric_unavailable", "Currently unavailable"))}</small>
           <span class="column-control-moves" ${selected.includes(key) ? "" : "hidden"}>${[-1, 1].map(direction => `<button type="button" data-metric-move="${direction}" aria-label="${esc(`${direction < 0 ? t("move_earlier", "Move earlier") : t("move_later", "Move later")}: ${label}`)}" ${(direction < 0 ? selected.indexOf(key) <= 0 : selected.indexOf(key) === selected.length - 1) ? "disabled" : ""}>${direction < 0 ? "↑" : "↓"}</button>`).join("")}</span>
+          <small class="column-description" id="summary-metric-hint-${index}">${esc(hint)}</small>
         </li>`;
       }).join("")}</ol>
       <p data-metric-error role="alert"></p>

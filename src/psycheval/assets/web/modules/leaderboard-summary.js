@@ -1,4 +1,4 @@
-import { metricDefinitions, selectedMetricDefinitions, formatMetric } from "./metric-presentation.js";
+import { metricDefinitions, selectedMetricDefinitions, formatMetric, metricProvenanceHint } from "./metric-presentation.js";
 import { renderSummaryMetricControl, bindSummaryMetricControl } from "./summary-metrics.js";
 import { $, esc, fmtMs, fmtNum, fmtPct, hasMetricValue, listValue, state, t } from "./runtime.js";
 import { tableCellContent, tableValueAttributes } from "./data-tables.js";
@@ -162,7 +162,7 @@ function renderLeaderboardSummaryMetricGroup(definition, groups, statistics) {
       ${index === 0 ? `<th ${tableValueAttributes("identity", definition.label, "summary-metric-cell")} scope="rowgroup" rowspan="${groups.length}">${tableCellContent(esc(definition.label))}</th>` : ""}
       <th ${tableValueAttributes("identity", group.label, "summary-group-cell")} scope="row">${tableCellContent(`<strong>${esc(group.label)}</strong><span>n=${fmtNum(group.count)}</span>`)}</th>
       <td ${tableValueAttributes("number", fmtNum(row?.count), "num")}>${tableCellContent(fmtNum(row?.count))}</td>
-      ${statistics.map(statistic => { const value = leaderboardSummaryValue(row, statistic.value(row)); return `<td ${tableValueAttributes("number", value, `num${state.leaderboardSummaryStatistic === statistic.key ? " summary-selected-stat" : ""}`)} data-summary-stat="${esc(statistic.key)}">${tableCellContent(esc(value))}</td>`; }).join("")}
+      ${statistics.map(statistic => { const value = leaderboardSummaryValue(row, statistic.value(row)); return `<td ${tableValueAttributes("number", value, `num${state.leaderboardSummaryStatistic === statistic.key ? " summary-selected-stat" : ""}`, `${value}\n${metricProvenanceHint(row?.provenance, definition.key)}`)} data-summary-stat="${esc(statistic.key)}">${tableCellContent(esc(value))}</td>`; }).join("")}
     </tr>`;
   }).join("");
 }
@@ -266,7 +266,7 @@ function renderLeaderboardSummaryChart(definition, groups, statistic) {
     <div class="leaderboard-summary-bar-list">${values.map(item => {
       const { formatted, width } = item;
       const ariaLabel = `${item.group.label}; ${definition.label}; ${statistic.label} ${formatted}; n=${item.row?.count || 0}`;
-      return `<div class="leaderboard-summary-bar" role="img" aria-label="${esc(ariaLabel)}">
+      return `<div class="leaderboard-summary-bar" role="img" aria-label="${esc(ariaLabel)}" title="${esc(metricProvenanceHint(item.row?.provenance, definition.key))}">
         <span class="leaderboard-summary-bar-label" title="${esc(item.group.label)}">${esc(item.group.label)}</span>
         <span class="leaderboard-summary-bar-track"><b style="left:${item.zero}%"></b><i style="left:${item.start}%;width:${Number(width.toFixed(2))}%"></i></span>
         <span class="leaderboard-summary-bar-value"><strong>${esc(formatted)}</strong><small>n=${fmtNum(item.row?.count || 0)}</small></span>

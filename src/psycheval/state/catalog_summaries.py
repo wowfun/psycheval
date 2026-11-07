@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Iterable, Iterator, Sequence
 
+from psycheval.harbor.measurements import METRICS
 from psycheval.metric_contract import SAVED_VIEW_METRIC_IDS, finite_number
 from psycheval.report.metrics import tool_success_rate
 
@@ -40,6 +42,12 @@ def summary_rows(
     where: str,
     parameters: Sequence[Any],
 ) -> Iterator[dict[str, Any]]:
+    provenance_rows = iter(
+        connection.execute(
+            f"SELECT source_key, json_extract(row_json, '$.metric_provenance') AS provenance FROM cells WHERE {where} ORDER BY source_key",
+            parameters,
+        )
+    )
     records = connection.execute(
         f"""SELECT cells.source_key, category AS source_category, agent AS agent_name,
                    model, task AS task_name, job AS job_name, provider AS model_provider,
@@ -55,6 +63,15 @@ def summary_rows(
                 yield current
             current = dict(record)
             current["metric_values"] = {}
+            provenance_row = next(provenance_rows, None)
+            if (
+                provenance_row is None
+                or provenance_row["source_key"] != current["source_key"]
+            ):
+                raise RuntimeError("summary generation changed during read")
+            current["metric_provenance"] = json.loads(
+                provenance_row["provenance"] or "{}"
+            )
         if record["metric_id"] is not None:
             current["metric_values"][record["metric_id"]] = record["value"]
     if current is not None:
@@ -65,6 +82,106 @@ def summary_rows(
 class _SummaryGroupValues:
     count: int = 0
     metrics: dict[str, list[float]] = field(default_factory=dict)
+    provenance: dict[str, Any] = field(default_factory=dict)
+
+
+def _identity(value):
+    """Hashable JSON identity without serializing every metric of every Trial."""
+    if isinstance(value, dict):
+        return tuple((key, _identity(item)) for key, item in sorted(value.items()))
+    if isinstance(value, list):
+        return tuple(_identity(item) for item in value)
+    return value
+
+
+class _ProvenanceSummary:
+    def __init__(self):
+        self.variants = {}
+        self.other = {"trials": 0, "available": 0, "missing": 0}
+        self.first_basis = self.first_source = None
+        self.mixed_basis = self.mixed_sources = False
+        self.trials = self.available = 0
+
+    def add(self, provenance, available, budget):
+        self.trials += 1
+        self.available += available
+        provenance = provenance or {
+            "source": "unknown",
+            "basis_id": "unknown",
+            "contract_version": "unknown",
+            "method": "unknown",
+            "missing_reason": "missing_provenance",
+        }
+        source = (
+            provenance.get("source"),
+            _identity(provenance.get("producer")),
+        )
+        basis = (
+            provenance.get("contract_version"),
+            provenance.get("basis_id"),
+            provenance.get("method"),
+        )
+        if self.first_basis is None:
+            self.first_basis, self.first_source = basis, source
+        self.mixed_basis |= basis != self.first_basis
+        self.mixed_sources |= source != self.first_source
+        key = (
+            source,
+            basis,
+            provenance.get("quality"),
+            provenance.get("missing_reason"),
+        )
+        item = self.variants.get(key)
+        if item is None and (len(self.variants) >= 16 or budget[0] < 128):
+            item = self.other
+        if item is None:
+            compact = {
+                k: v
+                for k, v in provenance.items()
+                if k
+                in {
+                    "source",
+                    "producer",
+                    "contract_version",
+                    "basis_id",
+                    "method",
+                    "quality",
+                    "scope",
+                    "sample_unit",
+                    "start_boundary",
+                    "end_boundary",
+                    "retry_policy",
+                    "token_basis",
+                    "cost_kinds",
+                    "missing_reason",
+                    "clock",
+                }
+            }
+            size = len(json.dumps(compact, ensure_ascii=False).encode()) + 128
+            if len(self.variants) < 16 and budget[0] >= size:
+                budget[0] -= size
+                item = {**compact, "trials": 0, "available": 0, "missing": 0}
+                self.variants[key] = item
+            else:
+                item = self.other
+        item["trials"] += 1
+        item["available"] += available
+        item["missing"] += not available
+
+    def result(self):
+        return {
+            "trials": self.trials,
+            "available": self.available,
+            "missing": self.trials - self.available,
+            "mixed_basis": self.mixed_basis,
+            "mixed_sources": self.mixed_sources,
+            "variants": list(self.variants.values()),
+            **(
+                {"other": self.other, "details_truncated": True}
+                if self.other["trials"]
+                else {}
+            ),
+        }
 
 
 def summarize_rows(
@@ -77,6 +194,7 @@ def summarize_rows(
     if group_by == "overall":
         grouped["overall"] = _SummaryGroupValues()
     matched_count = 0
+    provenance_budget = [8 * 1024 * 1024 - SUMMARY_GROUP_LIMIT * len(METRICS) * 256]
     for row in rows:
         matched_count += 1
         key = _saved_view_group_key(row, group_by)
@@ -94,12 +212,26 @@ def summarize_rows(
             metric_value = _saved_view_metric_value(row, metric_key)
             if metric_value is not None:
                 values.metrics.setdefault(metric_key, []).append(metric_value)
+            if metric_key in METRICS:
+                values.provenance.setdefault(metric_key, _ProvenanceSummary()).add(
+                    (row.get("metric_provenance") or {}).get(metric_key),
+                    metric_value is not None,
+                    provenance_budget,
+                )
     groups = [
         {
             "key": key,
             "label": "-" if key is None else key,
             "count": group_values.count,
-            "metrics": _saved_view_metric_rows(group_values.metrics, metric_ids),
+            "metrics": [
+                {
+                    **metric,
+                    "provenance": group_values.provenance[metric["key"]].result(),
+                }
+                if metric["key"] in group_values.provenance
+                else metric
+                for metric in _saved_view_metric_rows(group_values.metrics, metric_ids)
+            ],
         }
         for key, group_values in sorted(
             grouped.items(),

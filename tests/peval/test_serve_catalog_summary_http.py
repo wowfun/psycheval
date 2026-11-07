@@ -488,7 +488,7 @@ class ServeCatalogSummaryHttpTests(CatalogHttpTestCase):
                 self.assertIn("<t>-</t>", strings)
                 self.assertIn("Active Duration", strings)
                 self.assertIn("Model call duration", strings)
-                self.assertIn("Turns", strings)
+                self.assertIn("Agent steps", strings)
                 self.assertIn("Tool Calls", strings)
                 self.assertIn("Tool Success Rate", strings)
                 self.assertNotIn("Reward", strings)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import mimetypes
@@ -10,7 +11,7 @@ import os
 import re
 import stat
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Literal
 
@@ -57,6 +58,7 @@ class HarborVerifierEvidence:
     artifacts: tuple[dict[str, Any], ...]
     warnings: tuple[str, ...]
     revision: str
+    grading: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self, *, include_artifacts: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -70,6 +72,7 @@ class HarborVerifierEvidence:
             "llm_judge": self.llm_judge,
             "warnings": list(self.warnings),
             "revision": self.revision,
+            "grading": self.grading,
         }
         if include_artifacts:
             payload["artifacts"] = [dict(item) for item in self.artifacts]
@@ -200,6 +203,7 @@ def read_harbor_verifier_evidence(
     digest.update(artifact_revision.encode("ascii"))
 
     llm_judge: dict[str, Any] | None = None
+    judge_payload = None
     try:
         judge_payload, judge_bytes = _read_json_optional(
             containment_root, verifier_dir / "llm_judge.json"
@@ -228,6 +232,7 @@ def read_harbor_verifier_evidence(
         artifacts=tuple(artifact_rows),
         warnings=tuple(warnings),
         revision=digest.hexdigest(),
+        grading=_grading_provenance(score_payload, judge_payload, dataset_format),
     )
 
 
@@ -239,6 +244,18 @@ def read_harbor_verifier_artifact(
     purpose: Literal["preview", "download"],
 ) -> HarborVerifierArtifact:
     """Resolve an opaque artifact ID by re-reading the bounded manifest."""
+
+    from psycheval.harbor.measurements import artifact
+
+    _assert_contained(containment_root, data_dir / "agent")
+    measured = artifact(data_dir / "agent", artifact_id)
+    if measured is not None:
+        name, content = measured
+        return HarborVerifierArtifact(
+            name,
+            "text/plain; charset=utf-8",
+            content[:TEXT_PREVIEW_MAX_BYTES] if purpose == "preview" else content,
+        )
 
     spec, path = _resolve_artifact_path(
         data_dir,
@@ -285,6 +302,16 @@ def open_harbor_verifier_artifact_download(
     artifact_id: str,
 ) -> HarborVerifierArtifactStream:
     """Open one bounded artifact for incremental HTTP download."""
+
+    from psycheval.harbor.measurements import artifact
+
+    _assert_contained(containment_root, data_dir / "agent")
+    measured = artifact(data_dir / "agent", artifact_id)
+    if measured is not None:
+        name, content = measured
+        return HarborVerifierArtifactStream(
+            name, "text/plain; charset=utf-8", len(content), io.BytesIO(content)
+        )
 
     spec, path = _resolve_artifact_path(
         data_dir,
@@ -410,6 +437,46 @@ def _project_llm_judge(payload: dict[str, Any]) -> dict[str, Any] | None:
     if rubrics:
         result["rubrics"] = rubrics
     return result or None
+
+
+def _grading_provenance(score, judge, dataset_format):
+    model = (judge or {}).get("model")
+    settings = {}
+    groups = (score or {}).get("judges")
+    for group in groups[:ARTIFACT_LIMIT] if isinstance(groups, list) else []:
+        if isinstance(group, dict):
+            details = group.get("metadata")
+            candidate = details.get("settings") if isinstance(details, dict) else None
+            if isinstance(candidate, dict):
+                settings = candidate
+    model = model or settings.get("model")
+    metadata = (score or {}).get("metadata")
+    merge = metadata.get("score_merge") if isinstance(metadata, dict) else None
+    if not isinstance(merge, dict):
+        merge = (judge or {}).get("score_merge")
+    merge = merge if isinstance(merge, dict) else {}
+    return {
+        "grader": "workbuddy.verifier"
+        if dataset_format == "workbuddy.v1"
+        else "harbor.verifier",
+        "grader_version": "unreported",
+        "judge_model": model[:128] if isinstance(model, str) else None,
+        "judge_version": "unreported",
+        "judge_reasoning_effort": settings.get("reasoning_effort")
+        if settings.get("reasoning_effort") in {"low", "medium", "high"}
+        else None,
+        "score_merge": {
+            key: value
+            for key, value in merge.items()
+            if (key == "method" and value == "weighted_sum")
+            or (key == "applied" and type(value) is bool)
+            or (
+                key
+                in {"rule_weight", "llm_weight", "rule_score", "llm_score", "overall"}
+                and _finite_number(value) is not None
+            )
+        },
+    }
 
 
 def _artifact_specs(

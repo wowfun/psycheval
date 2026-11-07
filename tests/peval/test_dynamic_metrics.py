@@ -6,9 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
-from psycheval.config import ToolConfig, apply_toml_config
+from psycheval.config import MetricDescription, ToolConfig, apply_toml_config
 from psycheval.metric_contract import (
     BUILTIN_IDS,
+    RESERVED_EXTRA_KEYS,
     custom_metric_id,
     metric_descriptions,
     validate_metric_id,
@@ -52,10 +53,11 @@ def test_ids_scalars_aliases_and_explicit_unknowns():
             custom_metric_id("atif.extra", key)
     row = catalog_summary(
         {
+            "steps": [],
             "final_metrics": {
                 "extra": {
                     raw: 0,
-                    "total_turns": 2,
+                    "total_agent_steps": 2,
                     "model_inference": 42,
                     "usage": 7,
                     "nested": {"value": 2},
@@ -64,14 +66,14 @@ def test_ids_scalars_aliases_and_explicit_unknowns():
                     "nan": float("nan"),
                     "\n": 3,
                 }
-            }
+            },
         },
         {"rewards": {raw: 4}},
         0,
     )
     assert row["metric_values"][metric] == 0
     assert row["metric_values"][custom_metric_id("reward", raw)] == 4
-    assert row["metric_values"]["turns"] == 2
+    assert row["metric_values"]["agent_steps"] == 2
     assert {key for key in row["metric_values"] if key.startswith("atif.extra:")} == {
         metric
     }
@@ -84,6 +86,16 @@ def test_browser_fixture_matches_authoritative_metric_descriptions():
         json.loads(fixture.read_text(encoding="utf-8"))
         == metric_descriptions(BUILTIN_IDS)["metric_descriptions"]
     )
+
+
+@pytest.mark.parametrize("key", sorted(RESERVED_EXTRA_KEYS))
+def test_reserved_extra_metric_aliases_fail_at_configuration_boundary(key):
+    with pytest.raises(ValueError, match="reserved"):
+        ToolConfig(
+            metrics={
+                custom_metric_id("atif.extra", key): MetricDescription(label="Alias")
+            }
+        )
 
 
 def test_reward_dimension_presence_does_not_create_a_primary_measurement(
@@ -368,7 +380,7 @@ def test_builtin_values_do_not_coerce_unknowns(value):
             "final_metrics": {
                 "total_prompt_tokens": value,
                 "total_cost_usd": value,
-                "extra": {"total_turns": value},
+                "extra": {"total_agent_steps": value},
             }
         },
         {"duration_ms": value, "score": value},

@@ -10,6 +10,8 @@ import unicodedata
 from typing import Any, Mapping
 from urllib.parse import quote, unquote
 
+from psycheval.i18n import MESSAGES
+
 METRIC_LIMIT = 128
 METRIC_SELECTION_LIMIT = 32
 METRIC_KEY_BYTES = 128
@@ -40,7 +42,16 @@ _BUILTINS = (
         True,
         "cache_hit_rate",
     ),
-    ("turns", "Turns", "turns", "", "neutral", True, True, "turns"),
+    (
+        "agent_steps",
+        "Agent steps",
+        "agent_steps",
+        "",
+        "neutral",
+        True,
+        True,
+        "agent_steps",
+    ),
     (
         "model_duration_ms",
         "Model call duration",
@@ -152,7 +163,7 @@ _BUILTINS = (
         False,
         "",
     ),
-    ("total_steps", "Steps", "metric_steps", "", "neutral", False, False, ""),
+    ("total_steps", "Total steps", "metric_steps", "", "neutral", False, False, ""),
     (
         "total_tool_errors",
         "Tool errors",
@@ -168,7 +179,15 @@ BUILTIN_IDS = tuple(item[0] for item in _BUILTINS)
 DEFAULT_METRIC_IDS = tuple(item[0] for item in _BUILTINS if item[5])
 SAVED_VIEW_METRIC_IDS = tuple(item[0] for item in _BUILTINS if item[6])
 RESERVED_EXTRA_KEYS = frozenset(
-    (*BUILTIN_IDS, "total_turns", "total_cost_usd", "model_inference", "usage")
+    (
+        *BUILTIN_IDS,
+        "total_agent_steps",
+        "total_turns",
+        "turns",
+        "total_cost_usd",
+        "model_inference",
+        "usage",
+    )
 )
 
 
@@ -232,6 +251,14 @@ def metric_descriptor(key: str) -> dict[str, Any]:
                 else "metric_llm_score"
             )
     return dict(
+        **(
+            {
+                "description": MESSAGES["en"]["metric_agent_steps_hint"],
+                "description_message_key": "metric_agent_steps_hint",
+            }
+            if key == "agent_steps"
+            else {}
+        ),
         key=key,
         label=label,
         message_key=message,

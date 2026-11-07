@@ -92,7 +92,7 @@ def source_payload(
                 "total_cached_tokens": source.get("total_cached_tokens"),
                 "total_tool_calls": source.get("total_tool_calls"),
                 "total_tool_errors": source.get("total_tool_errors"),
-                "total_turns": source.get("total_turns"),
+                "total_agent_steps": source.get("total_agent_steps"),
                 "steps": steps_digest(source_steps, head=head, tail=tail, top=top),
                 "tools": tools_digest(source_tools, top=top),
             }

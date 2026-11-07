@@ -30,6 +30,9 @@ test("dynamic metrics retain selection, numeric exports and safe links across la
       await metricMenu.locator("summary").click();
       await page.locator("[data-metric-search]").fill("自定义");
       await expect(page.locator("[data-metric-row]:visible")).toHaveCount(1);
+      const stepsLabel = page.locator('th[data-table-column="agent_steps"] .sort-label');
+      await expect(stepsLabel).toHaveText("Agent steps");
+      expect(await stepsLabel.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
       const box = await metricMenu.locator(".column-control-panel").boundingBox();
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(width);
@@ -37,6 +40,19 @@ test("dynamic metrics retain selection, numeric exports and safe links across la
       await page.keyboard.press("Escape");
       await expect(metricMenu).not.toHaveAttribute("open");
       await expect(metricMenu.locator("summary")).toBeFocused();
+      const columnMenu = page.locator("#leaderboard .column-control");
+      await columnMenu.locator("summary").click();
+      await page.locator("[data-column-search]").fill("agent_steps");
+      const stepChoice = page.locator('[data-column-visible="agent_steps"]');
+      await expect(stepChoice).toHaveAccessibleDescription(/Historical ATIF/);
+      const hint = page.locator('[data-column-row="agent_steps"] .column-description');
+      await expect(hint).toBeVisible();
+      const columnBox = await columnMenu.locator(".column-control-panel").boundingBox();
+      expect(columnBox.x).toBeGreaterThanOrEqual(0);
+      expect(columnBox.x + columnBox.width).toBeLessThanOrEqual(width);
+      expect(await hint.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`metric-hint-${width}.png`) });
+      await page.keyboard.press("Escape");
     }
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.locator("#leaderboard .column-control > summary").click();

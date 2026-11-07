@@ -128,7 +128,7 @@ function synthesizedReportRow(trajectory, meta, index = -1) {
     finished_at_ms: meta?.finished_at_ms,
     duration_ms: meta?.duration_ms,
     wall_duration_ms: trialWallDurationMs(meta),
-    turns: finalMetric(metrics, "total_turns"),
+    agent_steps: agentStepCount(trajectory),
     total_tool_calls: totalToolCalls,
     total_tool_errors: totalToolErrors,
     tokens: tokenTotal(metrics),
@@ -457,6 +457,7 @@ function scrollProgress(node, range = scrollRange(node)) {
   return Math.max(0, Math.min(1, (node.scrollTop || 0) / range));
 }
 export {
+  agentStepCount,
   homeDetail,
   $,
   I18N,
@@ -542,3 +543,10 @@ export {
   t,
   trialIndexForView,
 };
+
+function agentStepCount(trajectory) {
+  if (trajectory?.synthetic || !Array.isArray(trajectory?.steps)) return null;
+  const extra = trajectory?.final_metrics?.extra || {};
+  if (Object.hasOwn(extra, "total_agent_steps")) return Number.isSafeInteger(extra.total_agent_steps) && extra.total_agent_steps >= 0 ? extra.total_agent_steps : null;
+  return trajectory.steps.filter(step => step?.source === "agent").length;
+}

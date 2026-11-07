@@ -4,29 +4,30 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from psycheval.adapters.base import ConversionResult
 from psycheval.analysis import (
     ANALYSIS_REPORT_FIELDS,
     RESERVED_ANALYSIS_METRIC_KEYS,
     cached_analysis_report,
     cached_note_report,
 )
-from psycheval.atif import (
+from psycheval.config import ToolConfig
+from psycheval.harbor.agents.sessions.conversion import (
+    attach_atif_session_context,
+    step_meta_from_atif_step,
+)
+from psycheval.harbor.agents.sessions.models import ConversionResult
+from psycheval.harbor.atif import (
     iso_timestamp_ms,
     validate_atif_trajectory,
 )
-from psycheval.config import ToolConfig
-from psycheval.conversion import (
-    _finalize_atif_session_context,
-    step_meta_from_atif_step,
-)
+from psycheval.harbor.measurements import measurement
+from psycheval.harbor.redaction import redact_value
 from psycheval.models import NoteInput, ReportSession
-from psycheval.redaction import redact_value
 from psycheval.report.data_ref import data_ref_for_input
 from psycheval.report.metrics import automatic_analysis_metrics
 from psycheval.report.timing import step_meta_reports
 
-VIEW_SCHEMA_VERSION = 19
+VIEW_SCHEMA_VERSION = 21
 
 
 def build_report(
@@ -154,7 +155,7 @@ def prepare_session_report(
     multi: bool,
     seen_trial_keys: dict[str, int],
 ) -> dict[str, Any]:
-    conversion = _finalize_atif_session_context(
+    conversion = attach_atif_session_context(
         session.conversion,
         session.session_hint if session.adapter_id != "atif" else None,
     )
@@ -329,11 +330,13 @@ def project_meta_from_atif(
     merge_sidecar_owned_step_fields(steps, prior_steps)
     projected["steps"] = steps
     project_canonical_step_facts(trajectory, steps, started)
-    projected["duration_ms"] = active_duration_from_sidecar(
+    active = active_duration_measurement_from_sidecar(
         trajectory,
         steps,
         projected.get("duration_ms") if not isinstance(prior_steps, list) else None,
     )
+    projected["duration_ms"] = active["value"]
+    projected.setdefault("metric_provenance", {})["duration_ms"] = active["provenance"]
     import_context = projected.get("import_context")
     source_timing = (
         import_context.get("source_timing")
@@ -345,6 +348,16 @@ def project_meta_from_atif(
         value = strict_nonnegative_int(source_timing.get(key))
         if value is not None:
             projected[key] = max(0, value)
+            if key == "duration_ms":
+                selected = measurement(
+                    value,
+                    source=source_timing.get("duration_source", "source_timing"),
+                    method=source_timing.get("duration_method", "reported_duration"),
+                    basis=source_timing.get("duration_method", "reported_duration"),
+                    fields=("import_context.source_timing.duration_ms",),
+                )
+                projected["duration_ms"] = selected["value"]
+                projected["metric_provenance"]["duration_ms"] = selected["provenance"]
     projected["prompt_unavailable"] = not any(
         isinstance(step, dict) and step.get("source") == "user"
         for step in trajectory.get("steps") or []
@@ -370,7 +383,9 @@ def project_meta_from_atif(
             projected["subagent_meta"][identifier] = project_meta_from_atif(
                 child, {**defaults, **(previous if isinstance(previous, dict) else {})}
             )
-    return projected
+    from .measurements import project
+
+    return project(trajectory, projected)
 
 
 def merge_sidecar_owned_step_fields(
@@ -440,11 +455,11 @@ def _unique_reports_by_identity(value: Any, key: str) -> dict[str, dict[str, Any
     return found
 
 
-def active_duration_from_sidecar(
+def _active_duration_components(
     trajectory: dict[str, Any],
     steps: list[dict[str, Any]],
     fallback: Any,
-) -> int | None:
+) -> tuple[int | None, bool]:
     total = 0
     observed = False
     for trajectory_step, step in zip(trajectory.get("steps") or [], steps, strict=True):
@@ -463,7 +478,27 @@ def active_duration_from_sidecar(
             if duration is not None:
                 total += duration
                 observed = True
-    return total if observed else strict_nonnegative_int(fallback)
+    return (total if observed else strict_nonnegative_int(fallback)), observed
+
+
+def active_duration_from_sidecar(trajectory, steps, fallback) -> int | None:
+    return _active_duration_components(trajectory, steps, fallback)[0]
+
+
+def active_duration_measurement_from_sidecar(trajectory, steps, fallback) -> dict:
+    value, observed = _active_duration_components(trajectory, steps, fallback)
+    return measurement(
+        value,
+        source="trajectory.contributions" if observed else "retained_sidecar",
+        method="sum(agent_and_tool_durations)"
+        if observed
+        else "retained_active_duration",
+        basis="summed_contributions" if observed else "retained_active_duration",
+        fields=("steps.duration_ms", "steps.tool_calls.execution_duration_ms")
+        if observed
+        else ("duration_ms",),
+        quality="mixed" if observed else "unknown",
+    )
 
 
 def strict_nonnegative_int(value: Any) -> int | None:

@@ -5,10 +5,58 @@ import unittest
 import zipfile
 from xml.etree import ElementTree
 
+import pytest
+
 from psycheval.serve.errors import HttpError
 from psycheval.serve.exports import xlsx_summary
 from psycheval.serve.payloads import summary_export_payload
 from psycheval.serve.summary_xlsx import SummaryWorksheet, summary_workbook
+
+
+def test_provenance_rejects_excel_cell_truncation():
+    with pytest.raises(ValueError, match="provenance cell exceeds Excel limits"):
+        xlsx_summary(
+            [
+                {
+                    "source_key": "x" * 32768,
+                    "metric_provenance": {"score": {"source": "fixture"}},
+                }
+            ]
+        )
+
+
+def test_provenance_overflow_is_explicit_and_keeps_numeric_rows(monkeypatch):
+    from psycheval.serve import summary_xlsx
+
+    monkeypatch.setattr(summary_xlsx, "MAX_PROVENANCE_DETAIL_ROWS", 2, raising=False)
+    content = xlsx_summary(
+        [
+            {
+                "source_key": str(i),
+                "score": i,
+                "metric_provenance": {"score": {"source": "fixture"}},
+            }
+            for i in range(5)
+        ]
+    )
+    ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        numeric = ElementTree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+        provenance = ElementTree.fromstring(archive.read("xl/worksheets/sheet2.xml"))
+        assert len(numeric.findall("s:sheetData/s:row", ns)) == 6
+        assert len(provenance.findall("s:sheetData/s:row", ns)) == 4
+        import json
+
+        marker = json.loads(
+            provenance.findall("s:sheetData/s:row", ns)[-1][-1].findtext(
+                "s:is/s:t", namespaces=ns
+            )
+        )
+        assert marker == {
+            "details_truncated": True,
+            "omitted_detail_rows": 3,
+            "retained_detail_rows": 2,
+        }
 
 
 def metric(key: str, value_type: str, mean: float | None) -> dict:
@@ -43,7 +91,7 @@ def summary_groups() -> list[dict]:
                 metric("tps", "number", 40),
                 metric("tokens", "number", 0),
                 metric("cache_hit_rate", "percent", 0.25),
-                metric("turns", "number", None),
+                metric("agent_steps", "number", None),
                 metric("model_duration_ms", "duration", 500),
                 metric("total_tool_calls", "number", 2),
                 metric("tool_success_rate", "percent", 0),

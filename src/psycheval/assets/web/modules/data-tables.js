@@ -1,4 +1,4 @@
-import { metricDefinitions, formatMetric, metricSortKey, metricSearchText } from "./metric-presentation.js";
+import { metricDefinitions, formatMetric, metricSortKey, metricSearchText, metricProvenanceHint } from "./metric-presentation.js";
 import { renderDateTime } from "./date-time.js";
 import { $, RENDER_OPTIONS, adminMode, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, statusLabel, t } from "./shared.js";
 import { columnVisibleForLayout, loadColumnLayout, moveColumn, normalizeColumnLayout, presenceForColumns, resolveColumns, saveColumnLayout } from "./leaderboard-columns.js";
@@ -94,8 +94,10 @@ function metricColumn(key) {
   if (!definition) return null;
   return {
     key: definition.column_key, label: definition.label, valueType: "number",
+    description: definition.description || "",
     numeric: true, sortable: true, metric: true, defaultVisible: definition.column_default,
     value: row => row.metric_values?.[key] ?? row[key],
+    cellTitle: row => `${formatMetric(definition, row.metric_values?.[key] ?? row[key])}\n${metricProvenanceHint(row.metric_provenance?.[key], key)}`,
     ...(key === "score" ? { presence: row => row.metric_values?.score ?? row.score ?? Object.keys(row.rewards || {}) } : {}),
     format: (value, row) => {
       if (key === "score" && value == null) return rewardValue(row);
@@ -113,11 +115,11 @@ function leaderboardColumns() {
     { key: "model_provider", label: t("provider", "Provider"), valueType: "identity", defaultVisible: false, filterable: true, sortable: true, value: row => row?.model_provider || "-" },
     metricColumn("score"),
     { key: "status", label: t("result", "Result"), valueType: "status", filterable: true, value: row => row.status || "-", filterLabel: value => statusLabel(value), html: row => `<span class="stamp ${lower(row.status || "passed")}">${esc(statusLabel(row.status))}</span>` },
-    { key: "finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.finished_at_ms, format: (value, row) => `${lastTurnEndHint(row) ? "≈ " : ""}${fmtDate(value)}`, html: renderLastTurnEnd, cellTitle: row => lastTurnEndHint(row) ? `${fmtDate(row.finished_at_ms)} · ${lastTurnEndHint(row)}` : "" },
+    { key: "finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.finished_at_ms, format: (value, row) => `${lastTurnEndHint(row) ? "≈ " : ""}${fmtDate(value)}`, html: renderLastTurnEnd, cellTitle: row => `${fmtDate(row.finished_at_ms)} · ${lastTurnEndHint(row)}\n${metricProvenanceHint(row.metric_provenance?.last_turn_finished_at_ms)}` },
     metricColumn("duration_ms"),
     metricColumn("ttft_ms"),
     metricColumn("tps"),
-    metricColumn("turns"),
+    metricColumn("agent_steps"),
     metricColumn("total_tool_calls"),
     metricColumn("tool_success_rate"),
     metricColumn("tokens"),
@@ -217,9 +219,10 @@ function renderLeaderboardColumnControls(rows = leaderboardRows()) {
     const condition = [activeSort ? state.catalogQuery?.direction : "", filtered ? t("filtered", "Filtered") : ""].filter(Boolean).join(" · ");
     return `<li class="column-control-row${isChecked ? "" : " hidden-column"}" data-column-row="${esc(column.key)}" data-column-match="${esc(metricSearchText(column.label, column.key))}" ${metricSearchText(column.label, column.key).includes((state.leaderboardColumnSearch || "").toLocaleLowerCase()) ? "" : "hidden"}>
       <span class="column-control-index">${String(index + 1).padStart(2, "0")}</span>
-      <label><input type="checkbox" data-column-visible="${esc(column.key)}" ${isChecked ? "checked" : ""}><span>${esc(column.label)}</span></label>
+      <label><input type="checkbox" data-column-visible="${esc(column.key)}" ${column.description ? `aria-describedby="leaderboard-column-hint-${index}"` : ""} ${isChecked ? "checked" : ""}><span>${esc(column.label)}</span></label>
       <span class="column-control-state">${column.unavailable ? esc(t("metric_unavailable", "Currently unavailable")) : presence[column.key] ? "" : esc(t("no_data", "No data"))}${condition ? `<small>${esc(condition)}</small>` : ""}</span>
       <span class="column-control-moves"><button type="button" data-column-move="${esc(column.key)}" data-column-direction="-1" aria-label="${esc(`${t("move_earlier", "Move earlier")}: ${column.label}`)}" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-column-move="${esc(column.key)}" data-column-direction="1" aria-label="${esc(`${t("move_later", "Move later")}: ${column.label}`)}" ${index === ordered.length - 1 ? "disabled" : ""}>↓</button></span>
+      ${column.description ? `<small class="column-description" id="leaderboard-column-hint-${index}">${esc(column.description)}</small>` : ""}
     </li>`;
   }).join("");
   return `<details class="column-control" ${state.leaderboardColumnDraft ? "open" : ""}>
@@ -464,15 +467,16 @@ function tableFullText(row, column) {
   if (Array.isArray(text)) return text.join(", ");
   return String(text ?? "");
 }
-function tableValueAttributes(valueType, fullText = "", className = "") {
+function tableValueAttributes(valueType, fullText = "", className = "", title = fullText) {
   const type = tableValueType({ valueType });
   const label = String(fullText ?? "");
   const classes = [className, `table-value-${type}`].filter(Boolean).join(" ");
-  return `class="${esc(classes)}" data-value-type="${esc(type)}"${label ? ` title="${esc(label)}" aria-label="${esc(label)}"` : ""}`;
+  return `class="${esc(classes)}" data-value-type="${esc(type)}"${title ? ` title="${esc(title)}"` : ""}${label ? ` aria-label="${esc(label)}"` : ""}`;
 }
 function tableCellContent(html) {
   return `<div class="table-cell-content">${html}</div>`;
 }
+/** @param {{tableId: string, columns: any[], rows: any[], rowKey?: any, tableClass?: string, shellClass?: string, rowClass?: string | ((row: any) => string), rowAttrs?: string | ((row: any) => string), rowTitle?: any, emptyText?: string, filterOptionsRows?: any[]}} options */
 function renderDataTable({ tableId, columns, rows, rowKey = null, tableClass = "", shellClass = "", rowClass = "", rowAttrs = "", rowTitle = null, emptyText = null, filterOptionsRows = rows }) {
   const controls = tableControls(tableId);
   const headers = columns.map(column => renderTableHeader(tableId, column, controls, rows, filterOptionsRows)).join("");
@@ -575,7 +579,7 @@ function renderDataCell(row, column, rows) {
   const title = column.cellTitle ? (column.cellTitle(row) || fullText) : fullText;
   const attrs = typeof column.cellAttrs === "function" ? column.cellAttrs(row) : (column.cellAttrs || "");
   const editableAttrs = edit ? ` tabindex="0" aria-keyshortcuts="Enter"` : "";
-  return `<td class="${classes}" data-table-column-key="${esc(column.key)}" data-value-type="${esc(valueType)}"${attrs ? ` ${attrs}` : ""}${title ? ` title="${esc(title)}" aria-label="${esc(title)}"` : ""}${editableAttrs}><div class="table-cell-content">${html}</div></td>`;
+  return `<td class="${classes}" data-table-column-key="${esc(column.key)}" data-value-type="${esc(valueType)}"${attrs ? ` ${attrs}` : ""}${title ? ` title="${esc(title)}"` : ""}${fullText ? ` aria-label="${esc(fullText)}"` : ""}${editableAttrs}><div class="table-cell-content">${html}</div></td>`;
 }
 function metricCellShade(row, column, rows) {
   const value = column.value(row);

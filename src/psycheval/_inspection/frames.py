@@ -13,6 +13,7 @@ from psycheval._inspection.utils import (
     stable_hash,
     token_total,
 )
+from psycheval.harbor.atif import agent_step_count
 
 
 class InspectFrames:
@@ -155,7 +156,7 @@ def source_row(
         "total_cached_tokens": final_metrics.get("total_cached_tokens"),
         "total_cost_usd": final_metrics.get("total_cost_usd"),
         "total_tokens": token_total(final_metrics),
-        "total_turns": final_metric(final_metrics, "total_turns"),
+        "total_agent_steps": agent_step_count(trajectory),
         "total_tool_calls": final_metric(final_metrics, "total_tool_calls"),
         "total_tool_errors": final_metric(final_metrics, "total_tool_errors"),
     }
