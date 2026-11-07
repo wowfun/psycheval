@@ -38,6 +38,36 @@ from tests.peval.test_atif_contract import valid_trajectory
 
 
 class WorkspaceCatalogTests(unittest.TestCase):
+    def test_database_rebuild_does_not_reuse_same_generation_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_cell(root, 1)
+            store, catalog = self.catalog(root)
+            try:
+                catalog.reconcile()
+                before = catalog.query(CatalogQuery())
+                self.assertEqual(
+                    catalog.summarize_query(
+                        CatalogQuery(), name="All", group_by="overall"
+                    )["summary"]["matched_count"],
+                    1,
+                )
+                catalog._delete_database_files()
+                catalog._prepare_database()
+                self.write_cell(root, 2)
+                catalog.reconcile()
+                after = catalog.query(CatalogQuery())
+                self.assertEqual(after.generation, before.generation)
+                self.assertEqual(after.total, 2)
+                self.assertEqual(
+                    catalog.summarize_query(
+                        CatalogQuery(), name="All", group_by="overall"
+                    )["summary"]["matched_count"],
+                    2,
+                )
+            finally:
+                store.close()
+
     def test_tool_success_sort_and_presence_use_valid_measurements(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

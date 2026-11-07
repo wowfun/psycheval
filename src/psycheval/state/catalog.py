@@ -335,11 +335,28 @@ class WorkspaceCatalog:
             where, parameters = self._combined_query_where(
                 query, normalized_any_queries
             )
-            total, column_presence = _catalog_query_presence(
-                connection,
+            presence_key = (
+                "column_presence",
+                self._meta(connection, "instance_id"),
+                generation,
                 where,
-                parameters,
+                tuple(parameters),
             )
+            with self._state_lock:
+                cached_presence = self._query_summary_cache.get(presence_key)
+                if cached_presence is not None:
+                    self._query_summary_cache.move_to_end(presence_key)
+            if cached_presence is None:
+                total, column_presence = _catalog_query_presence(
+                    connection, where, parameters
+                )
+                self._cache_query_summary(
+                    presence_key, {"total": total, "presence": column_presence}
+                )
+            else:
+                total = cached_presence[0]["total"]
+                column_presence = cached_presence[0]["presence"]
+            column_presence = dict(column_presence)
             column_presence["workspace_reports"] = _count_matching_source_refs(
                 connection,
                 where,
@@ -363,12 +380,18 @@ class WorkspaceCatalog:
             offset = (query.page - 1) * query.page_size
             records = connection.execute(
                 f"""
-                SELECT source_key, artifact_revision, row_json
-                FROM cells {sort_join}
-                WHERE {where}
-                ORDER BY ({sort_expression} IS NULL) ASC,
-                         {sort_expression} {direction}, source_key ASC
-                LIMIT ? OFFSET ?
+                WITH page AS MATERIALIZED (
+                    SELECT source_key, {sort_expression} AS ordering
+                    FROM cells {sort_join}
+                    WHERE {where}
+                    ORDER BY ({sort_expression} IS NULL) ASC,
+                             {sort_expression} {direction}, source_key ASC
+                    LIMIT ? OFFSET ?
+                )
+                SELECT cells.source_key, cells.artifact_revision, cells.row_json
+                FROM page JOIN cells USING(source_key)
+                ORDER BY (page.ordering IS NULL) ASC,
+                         page.ordering {direction}, cells.source_key ASC
                 """,
                 [*sort_parameters, *parameters, query.page_size, offset],
             ).fetchall()
@@ -544,6 +567,7 @@ class WorkspaceCatalog:
                 return self.metric_metadata(current)
         overrides = dict(self.config.metrics)
         key = (
+            self._meta(connection, "instance_id"),
             self._meta_int(connection, "generation", 0),
             tuple(
                 (key, value.label, value.unit, value.direction)
@@ -593,6 +617,7 @@ class WorkspaceCatalog:
                     "summary": catalog_summaries.summarize_rows(name, group_by, []),
                 }
             cache_key = (
+                self._meta(connection, "instance_id"),
                 generation,
                 catalog_summaries.summary_query_scope(normalized),
                 tuple(
@@ -1591,6 +1616,8 @@ class WorkspaceCatalog:
             "source_key UNINDEXED, search_doc, tokenize='trigram case_sensitive 0')"
         )
         self._set_meta(connection, "schema_version", str(CATALOG_SCHEMA_VERSION))
+        if self._meta(connection, "instance_id") is None:
+            self._set_meta(connection, "instance_id", uuid.uuid4().hex)
         if self._meta(connection, "generation") is None:
             self._set_meta(connection, "generation", "0")
         if self._meta(connection, "valid_generation") is None:
