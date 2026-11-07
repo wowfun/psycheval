@@ -12,7 +12,8 @@ const PAGE_PATHS = Object.freeze({
 
 const INVALIDATION_PAGES = Object.freeze({
   catalog: ["home", "reports"],
-  reports: ["home", "reports"],
+  reports: ["home", "reports", "datasets", "jobs"],
+  collections: ["datasets", "jobs"],
   "dataset-registry": ["home", "datasets", "jobs", "reports", "config"],
   tasks: ["home", "datasets", "jobs"],
   jobs: ["jobs", "home", "reports"],

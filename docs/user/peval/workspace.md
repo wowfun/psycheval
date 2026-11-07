@@ -87,6 +87,11 @@ metrics; its selection also controls exports. Neutral metrics work in tables
 and bars; a direction admits them to radar. Configuration is optional. See
 [metric descriptions](../../reference/workspace.md#metric-descriptions).
 
+Hover over a metric or unavailable metric choice to inspect its source, basis,
+coverage and missing reason. Mixed summaries keep their numeric aggregates and
+explain differing formulas and Trial counts. Decode TPS measures effective output
+throughput including retry waiting; provenance is also retained in JSON and Excel.
+
 ### Other workspace settings
 
 One file may configure both the CLI and Harbor host execution:
@@ -125,16 +130,19 @@ Configuration ownership and path semantics live in the
 [workspace reference](../../reference/workspace.md).
 
 The administrator-only **Configuration** page (`/config`) is the UI for
-trajectory ingestion, ACP Agents, prompt assets, Dataset registration, and
-Harbor mounts. **Add ACP agent** opens a form panel seeded with an OpenCode
+trajectory ingestion, ACP Agents, and prompt assets.
+**Add ACP agent** opens a form panel seeded with an OpenCode
 template; configured entries remain editable as direct executable-and-argument
 arrays. Changes apply immediately, and changing or removing a connected Agent
 stops its process. Repository Markdown files provide the default prompts.
 Editing one in the page writes a same-name override to the workspace `prompts/`
 directory; **Restore default** removes that override. The four English prompts
 and their four Simplified Chinese counterparts are separate assets, so each can
-be customized or restored without changing its translation. Dataset IDs and paths are edited
-directly in the registry table. Registering an existing Dataset
+be customized or restored without changing its translation.
+
+Manage Dataset registrations above the Tasks table on **Datasets**. Open
+**Harbor mounts** above the Jobs table to manage mounted result directories.
+Dataset IDs and paths are edited directly in the registry table. Registering an existing Dataset
 requires only its path; adding a Jobs mount likewise requires only the Jobs path.
 Each generated ID uses the directory basename when it is path-safe and unique,
 or a random path-safe ID when the basename is invalid or already used. A new
@@ -147,13 +155,38 @@ as one atomic operation without deleting Jobs files. Unregistering a Dataset
 likewise leaves its files in place and is rejected while a mount still references
 it. Handwritten `peval.toml` entries still require explicit IDs.
 
-The **Datasets** page manages Tasks only. Double-click a Task cell to rename it,
-select rows to archive, restore, or permanently delete them, and use **Sync
-manifest** only when `dataset.toml` should be updated. The **Leaderboard** owns
-the corresponding trajectory lifecycle, including archived views and permanent
-source deletion.
+The **Datasets** page initially shows every registered Task. Click a Dataset row
+to filter Tasks, then **Clear filters** to return to all Datasets. Management
+checkboxes do not select a Dataset or open details. Click a Task row to open its
+resizable right sidebar; closing it returns focus to the row. File browsing,
+Markdown preview and editing remain there. Switching Tasks protects unsaved file
+drafts. Double-click a Task cell to rename it, select rows to archive, restore or
+permanently delete them, and use **Sync manifest** only when `dataset.toml` should
+be updated.
 
-Home, Datasets, Reports, and Configuration share one persistent browser
+The **Jobs** table combines managed runs and individual mounted Jobs, deduplicated
+by result directory. Click a row for progress, logs and paged results; mounted
+Jobs expose retained results without process controls. Below it, **New run** uses
+the same searchable, sortable Task table. Checkboxes select Tasks across filters;
+clicking a row opens read-only details without changing the run selection.
+Guests can select Tasks and preview configuration but cannot start a run.
+
+Both tables show **Note**, **Reports**, and actual Task or root Trial counts.
+Unavailable counts display a dash. Double-click Note, or focus it and press Enter,
+to edit multiline Markdown; Save and Cancel retain line breaks. Notes are saved
+in workspace collection overlays, leaving source directories unchanged. Reports
+counts active associated reports and opens the Reports page with that filter.
+Guests see notes and report links; paths, mount relationships and management
+controls are administrator-only.
+
+Administrators can archive Jobs with verified completion. Archival excludes all
+of that Job's Trials from Home discovery, filtering, summaries and exports without
+deleting files or changing scores. **Show archived** exposes retained counts and
+Restore; restored Jobs are discovered normally. Reports are not archived with
+their Job. Collection storage and lifecycle rules live in the
+[state contract](../../reference/state-and-data.md#collection-overlays).
+
+Home, Datasets, Jobs, Reports, and Configuration share one persistent browser
 document. Their direct URLs still open the named page, while navigation and the
 browser back/forward controls switch pages without reloading the document.
 Visited pages retain their selection, scroll position, and unsaved Dataset file

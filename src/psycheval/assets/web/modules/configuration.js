@@ -1,6 +1,5 @@
 import { setDisplayTimezone } from "./date-time.js";
 import { beginFeedback, pageFeedback, savedContentPreview } from "./action-feedback.js";
-import { openActionForm } from "./action-form.js";
 import { watchOperation } from "./operation-feedback.js";
 import { adminMode, esc, fmtDate, t } from "./shared.js";
 import { applyDataTableControls, bindDataTableControls, bindDataTableSelection, renderDataTable, selectionColumn } from "./data-tables.js";
@@ -12,8 +11,6 @@ import { renderJudgeProfiles } from "./judge-profiles.js";
 
 const harborConfigState = {
   snapshot: null,
-  datasetSelection: new Set(),
-  mountSelection: new Set(),
   acpSelection: new Set(),
   busy: false,
 };
@@ -129,14 +126,6 @@ async function refreshHarborConfig() {
       promptConfigState.dirty = false;
       promptConfigState.renderedId = "";
     }
-    const knownDatasets = new Set((harborConfigState.snapshot?.datasets || []).map(dataset => dataset.id));
-    Array.from(harborConfigState.datasetSelection).forEach(id => {
-      if (!knownDatasets.has(id)) harborConfigState.datasetSelection.delete(id);
-    });
-    const knownMounts = new Set((harborConfigState.snapshot?.mounts || []).map(mount => mount.id));
-    Array.from(harborConfigState.mountSelection).forEach(id => {
-      if (!knownMounts.has(id)) harborConfigState.mountSelection.delete(id);
-    });
     const knownAgents = new Set((harborConfigState.snapshot?.acp_agents || []).map(agent => agent.id));
     Array.from(harborConfigState.acpSelection).forEach(id => {
       if (!knownAgents.has(id)) harborConfigState.acpSelection.delete(id);
@@ -184,42 +173,6 @@ async function showPromptConflict(error, prompt, feedback) {
     details: current ? [savedContentPreview(current.filename, current.content)] : [],
   });
 }
-function datasetMounts(dataset) {
-  return (harborConfigState.snapshot?.mounts || [])
-    .filter(mount => (mount.dataset_ids || []).includes(dataset.id))
-    .map(mount => mount.id);
-}
-function referenceListHtml(values) {
-  return values.length
-    ? `<span class="source-tag-list">${values.map(value => `<span class="source-tag-chip">${esc(value)}</span>`).join("")}</span>`
-    : "-";
-}
-function harborDatasetColumns() {
-  return [
-    selectionColumn({
-      key: "__dataset_select",
-      selectionKey: dataset => dataset.id,
-      selectionSet: () => harborConfigState.datasetSelection,
-      rowAriaLabel: id => `${t("select_row", "Select row")}: ${id}`,
-    }),
-    { key: "id", label: t("harbor_dataset", "Dataset"), valueType: "identity", sortable: true, value: dataset => dataset.id, edit: { value: dataset => dataset.id, commit: (dataset, value) => updateHarborDataset(dataset, { new_id: value }) } },
-    { key: "path", label: t("harbor_dataset_path", "Dataset path"), valueType: "path", value: dataset => dataset.path, edit: { value: dataset => dataset.path, commit: (dataset, value) => updateHarborDataset(dataset, { path: value }) } },
-    { key: "mounts", label: t("serve_harbor_mounts", "Harbor mounts"), valueType: "list", value: dataset => datasetMounts(dataset), format: values => values.join(", ") || "-", html: dataset => referenceListHtml(datasetMounts(dataset)), edit: { value: dataset => datasetMounts(dataset), suggestions: () => (harborConfigState.snapshot?.mounts || []).map(mount => mount.id), allowCustom: false, commit: (dataset, value) => updateHarborDataset(dataset, { mount_ids: value }) } },
-  ];
-}
-function harborMountColumns() {
-  return [
-    selectionColumn({
-      key: "__mount_select",
-      selectionKey: mount => mount.id,
-      selectionSet: () => harborConfigState.mountSelection,
-      rowAriaLabel: id => `${t("select_row", "Select row")}: ${id}`,
-    }),
-    { key: "id", label: t("serve_harbor_mount_id", "Mount ID"), valueType: "identity", sortable: true, value: mount => mount.id, edit: { value: mount => mount.id, commit: (mount, value) => updateHarborMount(mount, { mount_id: value }) } },
-    { key: "path", label: t("serve_harbor_jobs_path", "Jobs path"), valueType: "path", value: mount => mount.path, edit: { value: mount => mount.path, commit: (mount, value) => updateHarborMount(mount, { jobs_path: value }) } },
-    { key: "datasets", label: t("harbor_mount_datasets", "Datasets (in evidence lookup order)"), valueType: "list", value: mount => mount.dataset_ids || [], format: values => values.join(", ") || "-", html: mount => referenceListHtml(mount.dataset_ids || []), edit: { value: mount => mount.dataset_ids || [], suggestions: () => (harborConfigState.snapshot?.datasets || []).map(dataset => dataset.id), allowCustom: false, commit: (mount, value) => updateHarborMount(mount, { dataset_ids: value }) } },
-  ];
-}
 function acpAgentColumns() {
   return [
     selectionColumn({
@@ -266,8 +219,6 @@ function renderHarborConfiguration() {
   renderTimezoneConfiguration();
   renderAcpAgentConfiguration();
   renderPromptConfiguration();
-  renderHarborDatasetRegistry();
-  renderHarborMountConfiguration();
   syncConfigurationBusy();
 }
 function renderAcpAgentConfiguration() {
@@ -357,79 +308,12 @@ function syncConfigurationBusy() {
   });
   syncTimezoneControls();
 }
-function renderHarborDatasetRegistry() {
-  const root = document.querySelector("[data-harbor-dataset-registry]");
-  if (!root) return;
-  const datasets = harborConfigState.snapshot?.datasets || [];
-  const columns = harborDatasetColumns();
-  const rows = applyDataTableControls("harbor-dataset-registry", datasets, columns);
-  root.innerHTML = renderDataTable({
-    tableId: "harbor-dataset-registry",
-    columns,
-    rows,
-    rowKey: dataset => dataset.id,
-    emptyText: t("harbor_dataset_empty", "No Datasets registered"),
-  });
-  bindDataTableControls(root, {
-    tableId: "harbor-dataset-registry",
-    columns,
-    rows,
-    rowKey: dataset => dataset.id,
-    onChange: renderHarborDatasetRegistry,
-    onSelectionChange: renderHarborDatasetRegistry,
-  });
-  const count = document.querySelector("[data-harbor-dataset-count]");
-  if (count) count.textContent = `${datasets.length}`;
-  const unregister = document.querySelector("[data-harbor-unregister-datasets]");
-  if (unregister) {
-    unregister.disabled = harborConfigState.datasetSelection.size < 1;
-    unregister.textContent = harborConfigState.datasetSelection.size
-      ? `${t("harbor_unregister_selected", "Unregister selected")} (${harborConfigState.datasetSelection.size})`
-      : t("harbor_unregister_selected", "Unregister selected");
-  }
-}
-function renderHarborMountConfiguration() {
-  const root = document.querySelector("[data-harbor-mount-config]");
-  if (!root) return;
-  const mounts = harborConfigState.snapshot?.mounts || [];
-  const columns = harborMountColumns();
-  const rows = applyDataTableControls("harbor-mount-registry", mounts, columns);
-  root.innerHTML = renderDataTable({
-    tableId: "harbor-mount-registry",
-    columns,
-    rows,
-    rowKey: mount => mount.id,
-    emptyText: t("harbor_mount_empty", "No Harbor mounts configured"),
-  });
-  bindDataTableControls(root, {
-    tableId: "harbor-mount-registry",
-    columns,
-    rows,
-    rowKey: mount => mount.id,
-    onChange: renderHarborMountConfiguration,
-    onSelectionChange: renderHarborMountConfiguration,
-  });
-  const count = document.querySelector("[data-harbor-mount-count]");
-  if (count) count.textContent = `${mounts.length}`;
-  const remove = document.querySelector("[data-harbor-remove-mounts]");
-  if (remove) {
-    remove.disabled = harborConfigState.mountSelection.size < 1;
-    remove.textContent = harborConfigState.mountSelection.size
-      ? `${t("harbor_remove_selected_mounts", "Remove selected")} (${harborConfigState.mountSelection.size})`
-      : t("harbor_remove_selected_mounts", "Remove selected");
-  }
-}
 function bindConfigurationActions() {
   const root = document.querySelector("[data-config-page]");
   if (!root || root.dataset.configBound === "true") return;
   root.dataset.configBound = "true";
   bindTimezoneConfiguration(root);
   bindConfigurationSourceControls(root);
-  root.querySelector("[data-harbor-add-dataset]")?.addEventListener("click", () => createHarborDataset(false));
-  root.querySelector("[data-harbor-register-dataset]")?.addEventListener("click", () => createHarborDataset(true));
-  root.querySelector("[data-harbor-unregister-datasets]")?.addEventListener("click", unregisterSelectedHarborDatasets);
-  root.querySelector("[data-harbor-add-mount]")?.addEventListener("click", addHarborMount);
-  root.querySelector("[data-harbor-remove-mounts]")?.addEventListener("click", removeSelectedHarborMounts);
   root.querySelector("[data-acp-agent-form-open]")?.addEventListener("click", openAcpAgentForm);
   root.querySelector("[data-acp-agent-form]")?.addEventListener("submit", addAcpAgent);
   root.querySelector("[data-acp-agent-form-cancel]")?.addEventListener("click", () => closeAcpAgentForm());
@@ -741,118 +625,6 @@ async function pollConfigurationOperation(operationId, sourceForm = null, feedba
     },
   });
 }
-async function mutateHarborDataset(body, feedback = null) {
-  setConfigurationBusy(true);
-  try {
-    let path = "/api/harbor/datasets";
-    let method = "POST";
-    let requestBody;
-    if (body.action === "update") {
-      path = `${path}/${encodeURIComponent(body.dataset_id)}`;
-      method = "PATCH";
-      requestBody = { new_id: body.new_id, path: body.path, mount_ids: body.mount_ids || [] };
-    } else if (body.action === "unregister") {
-      path = "/api/harbor/dataset-unregistration-operations";
-      requestBody = { dataset_ids: body.dataset_ids };
-    } else {
-      requestBody = {
-        source: body.action === "register" ? "existing" : "new",
-        id: body.dataset_id || undefined,
-        path: body.path,
-        package_name: body.package_name || undefined,
-        description: body.description || "",
-      };
-    }
-    const operation = await serveApi(path, {
-      method,
-      body: requestBody,
-      ifMatch: true,
-      etagKey: "/api/config",
-    });
-    if (body.action === "update") {
-      const selectedMounts = new Set(body.mount_ids || []);
-      harborConfigState.snapshot = {
-        ...harborConfigState.snapshot,
-        datasets: (harborConfigState.snapshot?.datasets || []).map(dataset => dataset.id === body.dataset_id
-          ? { ...dataset, id: body.new_id, path: body.path }
-          : dataset),
-        mounts: (harborConfigState.snapshot?.mounts || []).map(mount => ({
-          ...mount,
-          dataset_ids: Array.from(new Set((mount.dataset_ids || [])
-            .map(id => id === body.dataset_id ? body.new_id : id)
-            .filter(id => id !== body.new_id || selectedMounts.has(mount.id))
-            .concat(selectedMounts.has(mount.id) ? [body.new_id] : []))),
-        })),
-      };
-    } else if (body.action === "unregister") {
-      const removed = new Set(body.dataset_ids || []);
-      harborConfigState.snapshot = {
-        ...harborConfigState.snapshot,
-        datasets: (harborConfigState.snapshot?.datasets || []).filter(dataset => !removed.has(dataset.id)),
-        mounts: (harborConfigState.snapshot?.mounts || []).map(mount => ({
-          ...mount,
-          dataset_ids: (mount.dataset_ids || []).filter(id => !removed.has(id)),
-        })),
-      };
-    }
-    setConfigurationBusy(false);
-    feedback ||= beginFeedback('[aria-labelledby="dataset-registry-title"]', {
-      key: `config:operation:${operation.id}`, page: "config", label: t("harbor_dataset", "Dataset"),
-    });
-    setTimeout(() => pollConfigurationOperation(operation.id, null, feedback, true), 0);
-    return operation;
-  } catch (error) {
-    setConfigurationBusy(false);
-    await refreshConfigurationAfterConflict(error);
-    throw error;
-  }
-}
-async function updateHarborDataset(dataset, changes) {
-  dataset = harborConfigState.snapshot?.datasets?.find(item => item.id === dataset.id) || dataset;
-  const newId = String(changes.new_id ?? dataset.id).trim();
-  const path = String(changes.path ?? dataset.path).trim();
-  const mountIds = Array.isArray(changes.mount_ids) ? changes.mount_ids : datasetMounts(dataset);
-  if (!newId || !path) throw new Error(t("required", "Required"));
-  try {
-    await mutateHarborDataset({ action: "update", dataset_id: dataset.id, new_id: newId, path, mount_ids: mountIds });
-    if (newId !== dataset.id && harborConfigState.datasetSelection.delete(dataset.id)) harborConfigState.datasetSelection.add(newId);
-    renderHarborConfiguration();
-    return { rowKey: newId };
-  } catch (error) {
-    throw error;
-  }
-}
-async function createHarborDataset(register = false) {
-  if (!adminMode()) return;
-  const title = register ? t("harbor_register_dataset", "Register existing") : t("harbor_add_dataset", "New Dataset");
-  return openActionForm({
-    title, submitLabel: title,
-    fields: [
-      ...(!register ? [{ name: "dataset_id", label: t("harbor_dataset_id_prompt", "Dataset ID") }] : []),
-      { name: "path", label: t("harbor_dataset_path", "Dataset path") },
-      ...(!register ? [
-        { name: "package_name", label: t("harbor_dataset_package_prompt", "Dataset package name (org/name)"), defaultFrom: "dataset_id" },
-        { name: "description", label: t("harbor_dataset_description_prompt", "Dataset description"), required: false },
-      ] : []),
-    ],
-    async submit(values) {
-      await mutateHarborDataset({ action: register ? "register" : "create", ...values });
-    },
-  });
-}
-async function unregisterSelectedHarborDatasets() {
-  const datasetIds = Array.from(harborConfigState.datasetSelection);
-  if (!datasetIds.length || !window.confirm(t("harbor_unregister_selected_confirm", "Unregister selected Datasets? Files will not be deleted."))) return;
-  const feedback = beginFeedback('[aria-labelledby="dataset-registry-title"]', { page: "config" });
-  try {
-    feedback.pending();
-    await mutateHarborDataset({ action: "unregister", dataset_ids: datasetIds }, feedback);
-    harborConfigState.datasetSelection.clear();
-    renderHarborConfiguration();
-  } catch (error) {
-    feedback.set(error.message || String(error), true);
-  }
-}
 async function submitServeSourceForm(form) {
   if (!adminMode()) return;
   if (form?.dataset?.sourceKind === "db") applyDefaultDbToForm(form);
@@ -1035,106 +807,13 @@ async function addSelectedSessions(form) {
     feedback.error(error);
   }
 }
-async function mutateHarborMount(body, feedback = null) {
-  if (!adminMode()) return;
-  setConfigurationBusy(true);
-  try {
-    let path = "/api/harbor/mounts";
-    let method = "POST";
-    let requestBody;
-    if (body.action === "delete") {
-      path = "/api/harbor/mount-deletion-operations";
-      requestBody = { mount_ids: body.mount_ids };
-    } else if (body.original_id) {
-      path = `${path}/${encodeURIComponent(body.original_id)}`;
-      method = "PATCH";
-      requestBody = { new_id: body.mount_id, path: body.jobs_path, dataset_ids: body.dataset_ids || [] };
-    } else {
-      requestBody = { path: body.jobs_path };
-    }
-    const operation = await serveApi(path, {
-      method,
-      body: requestBody,
-      ifMatch: true,
-      etagKey: "/api/config",
-    });
-    if (body.action === "delete") {
-      const removed = new Set(body.mount_ids || []);
-      harborConfigState.snapshot = {
-        ...harborConfigState.snapshot,
-        mounts: (harborConfigState.snapshot?.mounts || []).filter(mount => !removed.has(mount.id)),
-      };
-    } else if (body.original_id) {
-      harborConfigState.snapshot = {
-        ...harborConfigState.snapshot,
-        mounts: (harborConfigState.snapshot?.mounts || []).map(mount => mount.id === body.original_id
-          ? { ...mount, id: body.mount_id, path: body.jobs_path, dataset_ids: body.dataset_ids || [] }
-          : mount),
-      };
-    }
-    setConfigurationBusy(false);
-    feedback ||= beginFeedback('[aria-labelledby="harbor-mounts-title"]', {
-      key: `config:operation:${operation.id}`, page: "config", label: t("serve_harbor_mounts", "Harbor mounts"),
-    });
-    setTimeout(() => pollConfigurationOperation(operation.id, null, feedback, true), 0);
-    return operation;
-  } catch (error) {
-    setConfigurationBusy(false);
-    await refreshConfigurationAfterConflict(error);
-    throw error;
-  }
-}
-async function addHarborMount() {
-  if (!adminMode()) return;
-  return openActionForm({
-    title: t("serve_harbor_mounts", "Harbor mounts"),
-    fields: [{ name: "jobs_path", label: t("serve_harbor_jobs_path_prompt", "Jobs path") }],
-    submit: values => mutateHarborMount({ action: "upsert", ...values }),
-  });
-}
-async function updateHarborMount(mount, changes) {
-  mount = harborConfigState.snapshot?.mounts?.find(item => item.id === mount.id) || mount;
-  const mountId = String(changes.mount_id ?? mount.id).trim();
-  const jobsPath = String(changes.jobs_path ?? mount.path).trim();
-  const datasetIds = Array.isArray(changes.dataset_ids) ? changes.dataset_ids : (mount.dataset_ids || []);
-  if (!mountId || !jobsPath) throw new Error(t("required", "Required"));
-  try {
-    await mutateHarborMount({
-      action: "upsert",
-      original_id: mount.id,
-      mount_id: mountId,
-      jobs_path: jobsPath,
-      dataset_ids: datasetIds,
-    });
-    if (mountId !== mount.id && harborConfigState.mountSelection.delete(mount.id)) harborConfigState.mountSelection.add(mountId);
-    renderHarborConfiguration();
-    return { rowKey: mountId };
-  } catch (error) {
-    throw error;
-  }
-}
-async function removeSelectedHarborMounts() {
-  const mountIds = Array.from(harborConfigState.mountSelection);
-  if (!mountIds.length || !window.confirm(t("harbor_remove_selected_mounts_confirm", "Remove selected Harbor mounts? Jobs files will not be deleted."))) return;
-  const feedback = beginFeedback('[aria-labelledby="harbor-mounts-title"]', { page: "config" });
-  try {
-    feedback.pending();
-    await mutateHarborMount({ action: "delete", mount_ids: mountIds }, feedback);
-    harborConfigState.mountSelection.clear();
-    renderHarborConfiguration();
-  } catch (error) {
-    feedback.set(error.message || String(error), true);
-  }
-}
 export {
-  addHarborMount,
   addSelectedSessions,
   choosePathSourceFiles,
   initializeConfiguration,
   inspectSourceSessions,
   pollConfigurationOperation,
   renderSessionPicker,
-  removeSelectedHarborMounts,
   selectedSessionIds,
   submitServeSourceForm,
   updateSessionSelectedCount,

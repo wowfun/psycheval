@@ -6,11 +6,10 @@ test.beforeAll(async () => { fixture = await startFixture({ PYTHONPATH: process.
 test.afterAll(async () => { await stopFixture(fixture); });
 
 for (const surface of [
-  { name: "Dataset registration", opener: "[data-harbor-register-dataset]", root: ".action-form-overlay", field: "path" },
-  { name: "ACP agent configuration", opener: "[data-acp-agent-form-open]", root: "[data-acp-agent-form-panel]", field: "agent_id" },
+  { page: "datasets", name: "Dataset registration", opener: "[data-harbor-register-dataset]", root: ".action-form-overlay", field: "path" },
+  { page: "config", name: "ACP agent configuration", opener: "[data-acp-agent-form-open]", root: "[data-acp-agent-form-panel]", field: "agent_id" },
 ]) test(`${surface.name} keeps its draft after dragging onto the backdrop`, async ({ page }) => {
-  await page.goto(`${fixture.origin}/config`);
-  await expect(page.locator("[data-config-page]")).toHaveAttribute("aria-busy", "false");
+  await page.goto(`${fixture.origin}/${surface.page}`);
   const opener = page.locator(surface.opener);
   await opener.click();
   const dialog = page.locator(surface.root);
@@ -30,8 +29,7 @@ for (const surface of [
 });
 
 test("Dataset forms retain failures and register a quoted native absolute path", async ({ page }) => {
-  await page.goto(`${fixture.origin}/config`);
-  await expect(page.locator("[data-config-page]")).toHaveAttribute("aria-busy", "false");
+  await page.goto(`${fixture.origin}/datasets`);
   await page.locator("[data-harbor-register-dataset]").click();
   let dialog = page.locator(".action-form-overlay");
   await dialog.locator('[name="path"]').fill('"  "');
@@ -49,7 +47,7 @@ test("Dataset forms retain failures and register a quoted native absolute path",
 
   await page.locator("[data-harbor-add-dataset]").click();
   dialog = page.locator(".action-form-overlay");
-  await dialog.locator('[name="dataset_id"]').fill("prepared");
+  await dialog.locator('[name="id"]').fill("prepared");
   await dialog.locator('[name="path"]').fill('"existing-dataset"');
   await dialog.locator('[name="package_name"]').fill("local/prepared");
   await dialog.locator('[type="submit"]').click();

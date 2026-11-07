@@ -67,7 +67,8 @@ test("Saved View conditions survive deletion in a fresh guest context; Trial loc
     expect((await page.request.delete(viewPath, { headers })).status()).toBe(204);
     await recipient.reload();
     await expect(recipient.locator(".trajectory-row")).toHaveCount(1);
-    await expect(recipient.locator("[data-shared-view-conditions]")).toContainText("Original 中文");
+    await expect(recipient.locator("[data-shared-view-conditions]")).toHaveCount(0);
+    expect(decodeWorkspaceLocation("home", new URL(recipient.url())).state.views).toEqual(state.views);
     await expect(recipient.locator("[data-summary-group-by=model]")).toHaveAttribute("aria-pressed", "true");
     await expect(recipient.locator("[data-summary-statistic=p95]")).toHaveAttribute("aria-pressed", "true");
     await expect(recipient.locator("[data-summary-table-toggle]")).toHaveAttribute("aria-expanded", "true");

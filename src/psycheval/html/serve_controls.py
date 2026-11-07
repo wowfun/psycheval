@@ -137,15 +137,6 @@ def render_serve_configuration_page(
             "PROMPT_CONTENT": escape(messages["serve_prompt_content"]),
             "RESTORE_DEFAULT": escape(messages["serve_restore_default"]),
             "SAVE_PROMPT": escape(messages["serve_save_prompt"]),
-            "DATASET_REGISTRY": escape(messages["serve_dataset_registry"]),
-            "DATASET_REGISTRY_COPY": escape(messages["serve_dataset_registry_copy"]),
-            "NEW_DATASET": escape(messages["harbor_add_dataset"]),
-            "REGISTER_DATASET": escape(messages["harbor_register_dataset"]),
-            "UNREGISTER_SELECTED": escape(messages["harbor_unregister_selected"]),
-            "HARBOR_MOUNTS": escape(messages["serve_harbor_mounts"]),
-            "HARBOR_MOUNTS_COPY": escape(messages["serve_harbor_config_copy"]),
-            "ADD_HARBOR_MOUNT": escape(messages["serve_add_harbor_mount"]),
-            "REMOVE_SELECTED_MOUNTS": escape(messages["harbor_remove_selected_mounts"]),
         },
     )
 

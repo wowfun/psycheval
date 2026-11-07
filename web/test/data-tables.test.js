@@ -32,6 +32,17 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 test.after(() => browser.cleanup());
 
+test("metric descriptions remain visible and associated with keyboard controls", () => {
+  const root = document.getElementById("table-root");
+  root.innerHTML = tables.renderLeaderboardColumnControls([]);
+  const choice = root.querySelector('[data-column-visible="agent_steps"]');
+  const hint = document.getElementById(choice.getAttribute("aria-describedby"));
+  assert.match(hint.textContent, /Historical ATIF/);
+  assert.equal(hint.hidden, false);
+  assert.equal(hint.title, "");
+  assert.equal(choice.closest("label").textContent, "Agent steps");
+});
+
 test("approximate Last Turn End keeps its source hint and timezone-aware timestamp", async () => {
   const dates = await import("../../src/psycheval/assets/web/modules/date-time.js");
   const column = tables.leaderboardColumns().find(column => column.key === "finished_at_ms");
@@ -158,7 +169,7 @@ test("Leaderboard renders the complete-query summary returned by the server", ()
     "tps",
     "tokens",
     "cache_hit_rate",
-    "turns",
+    "agent_steps",
     "model_duration_ms",
     "total_tool_calls",
     "tool_success_rate",
@@ -232,7 +243,7 @@ test("Saved View summaries hide metrics with no measured Trials", () => {
         count: 1,
         metrics: [
           { key: "tokens", type: "number", count: 0, mean: null, distribution: null },
-          { key: "turns", type: "number", count: 0, mean: null, distribution: null },
+          { key: "agent_steps", type: "number", count: 0, mean: null, distribution: null },
         ],
       },
       {
@@ -241,7 +252,7 @@ test("Saved View summaries hide metrics with no measured Trials", () => {
         count: 1,
         metrics: [
           { key: "tokens", type: "number", count: 1, mean: 0, distribution: { min: 0, q1: 0, p50: 0, q3: 0, p95: 0, max: 0 } },
-          { key: "turns", type: "number", count: 0, mean: null, distribution: null },
+          { key: "agent_steps", type: "number", count: 0, mean: null, distribution: null },
         ],
       },
     ],
@@ -253,7 +264,7 @@ test("Saved View summaries hide metrics with no measured Trials", () => {
   assert.match(table, /Tokens/);
   assert.doesNotMatch(table, /Turns/);
   assert.match(charts, /data-view-chart="tokens"/);
-  assert.doesNotMatch(charts, /data-view-chart="turns"/);
+  assert.doesNotMatch(charts, /data-view-chart="agent_steps"/);
 });
 
 test("#Analysis counts Harbor and workspace origins without double-counting overlay files", () => {

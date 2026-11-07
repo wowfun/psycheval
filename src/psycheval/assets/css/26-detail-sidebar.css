@@ -1,6 +1,38 @@
 .detail-sidebar[hidden] {
   display:none;
 }
+.collection-sidebar-panel {
+  display:grid;
+  grid-template-rows:auto minmax(0,1fr);
+  height:100%;
+  min-height:0;
+}
+.collection-sidebar-body { min-width:0; min-height:0; overflow:auto; }
+.collection-sidebar .harbor-task-detail { height:100%; min-height:0; grid-template-rows:auto minmax(0,1fr); }
+.collection-sidebar .harbor-workbench-grid { height:100%; min-height:0; grid-template-columns:minmax(140px,30%) minmax(0,1fr); }
+.collection-sidebar .harbor-pane { min-height:0; overflow:hidden; }
+.collection-sidebar .harbor-files-pane { display:flex; flex-direction:column; }
+.collection-sidebar .harbor-file-tree { flex:1; }
+.collection-sidebar .harbor-file-actions { flex-shrink:0; }
+.collection-sidebar .harbor-editor { min-height:0; }
+.collection-sidebar .harbor-task-detail-head { flex-wrap:wrap; }
+.collection-sidebar pre { white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.65 var(--mono); }
+.collection-sidebar [hidden] { display:none; }
+.registry-manager-panel { width:min(1100px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); overflow:auto; padding:18px; background:var(--surface); border:1px solid var(--rule); border-radius:var(--radius); }
+.registry-manager-panel .table-region-head, [data-dataset-collections] .table-region-head, [data-jobs-collection] > .table-region-head {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+}
+.registry-manager-panel .table-region-head, [data-dataset-collections] .table-region-head { padding:14px 16px; }
+[data-dataset-collections] .table-region-title-stack { display:grid; gap:10px; }
+[data-dataset-search] { width:min(300px,100%); padding:8px 10px; border:1px solid var(--rule); border-radius:5px; background:var(--surface); color:var(--ink); font:12px var(--mono); }
+@media (max-width:600px) {
+  .collection-sidebar .harbor-workbench-grid { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(80px,28%) minmax(0,1fr); }
+  .collection-sidebar .harbor-task-detail-head { padding:10px; }
+}
 .detail-sidebar {
   position:fixed;
   top:0;

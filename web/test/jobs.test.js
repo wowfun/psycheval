@@ -5,6 +5,36 @@ const dom = installBrowserDom('<script id="peval-i18n" type="application/json">{
 const { createJobsPage, parseEntries, flattenEntries, summarizeVariants } = await import("../../src/psycheval/assets/web/pages/jobs-page.js");
 test.after(() => dom.cleanup());
 
+test("Jobs replaces external detail with unchanged managed results and paginates once", async () => {
+  const root = document.createElement("section"); document.body.append(root);
+  const previous = globalThis.fetch, calls = [];
+  const managed = { id: "one", job_name: "Managed A", state: "completed", request: {}, result_count: 150, results: [{ id: "managed-trial", task: "Managed result", score: 1 }] };
+  globalThis.fetch = async path => {
+    calls.push(String(path));
+    const value = path === "/api/jobs/options" ? { harnesses: [{ id: "fixture" }] }
+      : path === "/api/jobs/tasks/fixture" ? { datasets: [] }
+      : String(path).startsWith("/api/collections/jobs?") ? { items: [{ id: "one", name: "Managed A", run_id: "one", report_ref: "managed:one", state: "completed" }, { id: "external", name: "Mounted B", report_ref: "harbor:mount/b", state: "completed", run_id: null }] }
+      : path === "/api/collections/jobs/external?offset=0" ? { name: "Mounted B", results: [{ task: "External result", source_key: "b" }], result_count: 1 }
+      : String(path).endsWith("/logs") ? { entries: [], truncated: false } : managed;
+    return new Response(JSON.stringify(value));
+  };
+  const controller = createJobsPage({ root, app: /** @type {any} */ ({}) });
+  const settle = async check => { for (let i = 0; i < 100 && !check(); i++) await new Promise(r => setTimeout(r, 0)); assert.ok(check()); };
+  try {
+    await controller.activate(new Set(), "");
+    root.querySelector('[data-select-job="one"]').click();
+    await settle(() => root.querySelector("[data-job-detail]").textContent.includes("Managed result"));
+    root.querySelector('[data-select-job="external"]').click();
+    await settle(() => root.querySelector("[data-job-detail]").textContent.includes("External result"));
+    root.querySelector('[data-select-job="one"]').click();
+    await settle(() => root.querySelector("[data-job-detail]").textContent.includes("Managed result"));
+    const before = calls.length;
+    root.querySelector('[data-job-page="next"]').click();
+    await settle(() => calls.slice(before).some(path => path.includes("offset=50")));
+    assert.deepEqual(calls.slice(before).filter(path => path.startsWith("/api/jobs/one?")), ["/api/jobs/one?offset=50"]);
+  } finally { controller.destroy(); root.remove(); globalThis.fetch = previous; }
+});
+
 test("variant summaries retain parameter identities and distinguish zero from unscored", () => {
   const groups = summarizeVariants([
     { variant_id: "low", score: 0 }, { variant_id: "low", score: 1 },
@@ -36,23 +66,23 @@ test("Jobs DOM treats plugin labels, progress and results as literal text", asyn
   globalThis.fetch = async path => {
     const value = path === "/api/jobs/options" ? { harnesses: [{ id: "fixture", label: payload, defaults: { variants: [{ id: "a", label: payload, agent: payload, model: payload, options: {} }] } }] }
       : path === "/api/jobs/tasks/fixture" ? { datasets: [{ id: "d", label: payload, tasks: [{ id: "t", label: payload }] }] }
-        : path === "/api/jobs" ? { items: [run] } : String(path).endsWith("/logs") ? { entries: [{ format: "json", text: payload }], truncated: false } : run;
+        : path === "/api/collections/jobs?state=active" ? { items: [{ ...run, run_id: run.id, name: run.submitted_at || run.id, report_ref: `managed:${run.id}` }] } : String(path).endsWith("/logs") ? { entries: [{ format: "json", text: payload }], truncated: false } : run;
     return new Response(JSON.stringify(value));
   };
   const controller = createJobsPage({ root, app: /** @type {any} */ ({}) });
   try {
     await controller.activate(new Set(), "");
-    root.querySelector("[data-select-run]").click();
-    for (let i = 0; i < 20 && root.querySelector("[data-job-detail]").hidden; i++) await new Promise(resolve => setTimeout(resolve, 0));
-    assert.equal(root.querySelector("[data-job-detail]").hidden, false);
+    root.querySelector("[data-select-job]").click();
+    for (let i = 0; i < 20 && document.querySelector('[data-sidebar-id="jobs-detail"] [data-job-detail]').hidden; i++) await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(document.querySelector('[data-sidebar-id="jobs-detail"] [data-job-detail]').hidden, false);
     assert.equal(root.querySelectorAll("svg, img, [onload], [onerror]").length, 0);
-    assert.match(root.querySelector(".job-progress").textContent, /svg onload/);
+    assert.match(document.querySelector('[data-sidebar-id="jobs-detail"] .job-progress').textContent, /svg onload/);
     assert.equal(root.querySelector("[data-variant-agent]").value, payload);
-    assert.equal(root.querySelector(".job-log-entry").textContent, payload);
-    const log = root.querySelector(".job-log");
+    assert.equal(document.querySelector('[data-sidebar-id="jobs-detail"] .job-log-entry').textContent, payload);
+    const log = document.querySelector('[data-sidebar-id="jobs-detail"] .job-log');
     const entry = log.firstElementChild;
     await controller.activate(new Set(), "");
-    assert.equal(root.querySelector(".job-log"), log);
+    assert.equal(document.querySelector('[data-sidebar-id="jobs-detail"] .job-log'), log);
     assert.equal(log.firstElementChild, entry);
   } finally { controller.destroy(); root.remove(); globalThis.fetch = previous; }
 });
@@ -66,9 +96,9 @@ test("Jobs ignores a run-list refresh that finishes after leaving the page", asy
     let value;
     if (path === "/api/jobs/options") value = { harnesses: [{ id: "fixture" }] };
     else if (path === "/api/jobs/tasks/fixture") value = { datasets: [] };
-    else if (path === "/api/jobs") {
+    else if (path === "/api/collections/jobs?state=active") {
       if (delayListing) await new Promise(resolve => { resolveListing = resolve; });
-      value = { items: [run] };
+      value = { items: [{ ...run, run_id: run.id, name: run.submitted_at || run.id, report_ref: `managed:${run.id}` }] };
     } else if (String(path).endsWith("/logs")) value = { entries: [{ format: "json", text: "null" }], truncated: false };
     else { detailReads++; value = run; }
     return new Response(JSON.stringify(value));
@@ -76,9 +106,9 @@ test("Jobs ignores a run-list refresh that finishes after leaving the page", asy
   const controller = createJobsPage({ root, app: /** @type {any} */ ({}) });
   try {
     await controller.activate(new Set(), "");
-    root.querySelector("[data-select-run]").click();
-    for (let i = 0; i < 20 && !root.querySelector(".job-log-entry"); i++) await new Promise(resolve => setTimeout(resolve, 0));
-    assert.equal(root.querySelector(".job-log-entry").textContent, "null");
+    root.querySelector("[data-select-job]").click();
+    for (let i = 0; i < 20 && !document.querySelector('[data-sidebar-id="jobs-detail"] .job-log-entry'); i++) await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(document.querySelector('[data-sidebar-id="jobs-detail"] .job-log-entry').textContent, "null");
     delayListing = true;
     const pending = controller.activate(new Set(), "");
     window.dispatchEvent(new CustomEvent("peval:workspace-navigate", { detail: { to: "home" } }));
@@ -107,7 +137,7 @@ test("Jobs restores an available preferred harness and falls back without saving
         await controller.activate(new Set(), "");
         assert.equal(root.querySelector("[data-job-harness]").value, expected);
         assert.equal(root.querySelector("[data-job-start]").disabled, false);
-        assert.deepEqual(requests, [["/api/jobs/options", "GET"], [`/api/jobs/tasks/${expected}`, "GET"], ["/api/jobs", "GET"]]);
+        assert.deepEqual(requests, [["/api/jobs/options", "GET"], [`/api/jobs/tasks/${expected}`, "GET"], ["/api/collections/jobs?state=active", "GET"]]);
       } finally { controller.destroy(); root.remove(); }
     }
   } finally { globalThis.fetch = previous; }

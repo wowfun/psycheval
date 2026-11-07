@@ -28,7 +28,7 @@ let existingSourceCategoryOptions = () => [];
 let existingSourceTagOptions = () => [];
 let bindLeaderboardCatalogControls = () => {};
 let catalogSortKey = value => value;
-let filterOptions = () => [];
+let leaderboardFilterOptions = () => [];
 let leaderboardRows = () => [];
 let renderLeaderboardPanelControls = () => "";
 let renderLeaderboardSearchControls = () => "";
@@ -64,7 +64,7 @@ function configureLeaderboardDataTables(dependencies) {
     else if (name === "existingSourceTagOptions") existingSourceTagOptions = value;
     else if (name === "bindLeaderboardCatalogControls") bindLeaderboardCatalogControls = value;
     else if (name === "catalogSortKey") catalogSortKey = value;
-    else if (name === "filterOptions") filterOptions = value;
+    else if (name === "filterOptions") leaderboardFilterOptions = value;
     else if (name === "leaderboardRows") leaderboardRows = value;
     else if (name === "renderLeaderboardPanelControls") renderLeaderboardPanelControls = value;
     else if (name === "renderLeaderboardSearchControls") renderLeaderboardSearchControls = value;
@@ -318,7 +318,6 @@ function renderLeaderboard(rows = leaderboardRows()) {
     <div class="panel-head leaderboard-panel-head">
       <div class="leaderboard-title-stack">
         <h2 id="leaderboard-title">${esc(t("leaderboard", "Leaderboard"))}</h2>
-        ${RENDER_OPTIONS.workspace_id ? `<a class="action-button" href="/jobs" data-workspace-route="jobs">${esc(t("jobs_configure_run", "Configure run"))}</a>` : ""}
         ${renderLeaderboardSearchControls()}
       </div>
       ${renderLeaderboardPanelControls(rows)}
@@ -497,24 +496,27 @@ function renderTableHeader(tableId, column, controls, rows = [], filterOptionsRo
   const direction = catalogSort ? state.catalogQuery?.direction : controls.direction;
   const mark = active ? (direction === "desc" ? "&#9660;" : "&#9650;") : "&#8597;";
   const label = column.sortable
-    ? `<button class="sort-button ${active ? "active" : ""}" type="button" data-table-sort="${esc(column.key)}" aria-label="${esc(t("sort", "Sort"))} ${esc(column.label)}"><span class="sort-label">${esc(column.label)}</span><span class="sort-mark">${mark}</span></button>`
+    ? `<button class="sort-button ${active ? "active" : ""}" type="button" data-table-sort="${esc(column.key)}" title="${esc(column.description || column.label)}" aria-label="${esc(t("sort", "Sort"))} ${esc(column.label)}"><span class="sort-label">${esc(column.label)}</span><span class="sort-mark">${mark}</span></button>`
     : `<span class="static-head">${esc(column.label)}</span>`;
   const filter = column.filterable ? renderFilterControl(tableId, column, filterOptionsRows) : "";
   const contentClass = column.filterable ? "table-head-cell table-head-inline" : "table-head-cell";
   const valueType = tableValueType(column);
   const ariaSort = column.sortable ? ` aria-sort="${active ? (direction === "desc" ? "descending" : "ascending") : "none"}"` : "";
-  return `<th class="${column.numeric ? "num " : ""}table-value-${esc(valueType)}" data-value-type="${esc(valueType)}"${ariaSort}><div class="${contentClass}">${label}${filter}</div></th>`;
+  return `<th class="${column.numeric ? "num " : ""}table-value-${esc(valueType)}" data-value-type="${esc(valueType)}" data-table-column="${esc(column.key)}"${ariaSort}><div class="${contentClass}">${label}${filter}</div></th>`;
 }
 function renderFilterControl(tableId, column, rows) {
   const selected = new Set(activeFilterValues(tableId, column.key));
-  const options = Array.from(new Set([...filterOptions(column, rows), ...selected]))
+  const values = tableId === "leaderboard"
+    ? leaderboardFilterOptions(column, rows)
+    : rows.flatMap(row => filterValues(row, column));
+  const options = Array.from(new Set([...values, ...selected]))
     .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
   const count = selected.size;
   const countText = count ? `<span class="filter-count">${esc(`${count} ${t("selected_count", "selected")}`)}</span>` : "";
   const optionHtml = options.length
     ? options.map(value => `<label class="filter-option"><input type="checkbox" data-filter-key="${esc(column.key)}" value="${esc(value)}" ${selected.has(value) ? "checked" : ""}><span>${esc(filterLabel(column, value))}</span></label>`).join("")
     : `<p class="filter-empty">${esc(t("no_matching_rows", "No matching rows"))}</p>`;
-  return `<details class="filter-control ${count ? "active" : ""}" data-filter-menu="${esc(column.key)}"><summary class="filter-button" aria-label="${esc(t("filter", "Filter"))} ${esc(column.label)}"><span class="filter-icon">&#9662;</span>${countText}</summary><div class="filter-menu"><div class="filter-menu-head"><strong>${esc(column.label)}</strong><div class="filter-menu-actions"><button class="action-button compact filter-clear" type="button" data-filter-clear="${esc(column.key)}" ${count ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button><button class="action-button compact primary filter-apply" type="button" data-filter-apply="${esc(column.key)}" disabled>${esc(t("apply", "Apply"))}</button></div></div><div class="filter-options">${optionHtml}</div></div></details>`;
+  return `<details class="filter-control ${count ? "active" : ""}" name="peval-table-filter" data-filter-menu="${esc(column.key)}"><summary class="filter-button" aria-label="${esc(t("filter", "Filter"))} ${esc(column.label)}"><span class="filter-icon">&#9662;</span>${countText}</summary><div class="filter-menu"><div class="filter-menu-head"><strong>${esc(column.label)}</strong><div class="filter-menu-actions"><button class="action-button compact filter-clear" type="button" data-filter-clear="${esc(column.key)}" ${count ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button><button class="action-button compact primary filter-apply" type="button" data-filter-apply="${esc(column.key)}" disabled>${esc(t("apply", "Apply"))}</button></div></div><div class="filter-options">${optionHtml}</div></div></details>`;
 }
 function selectionSetForColumn(column) {
   const value = typeof column?.selectionSet === "function" ? column.selectionSet() : column?.selectionSet;
@@ -655,6 +657,7 @@ function bindDataTableControls(root, options = {}) {
       event.stopPropagation();
       menu.open = false;
       resetDataTableFilterDraft(menu, tableId);
+      menu.querySelector("summary").focus();
     });
   });
   bindDataTableEditors(root, { tableId, columns, rows, rowKey, onChange: rerender });
@@ -856,7 +859,7 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
   let pending = false;
   const focusCell = (rowKey = renderedRowKey) => focusTableCell(tableId, rowKey, column.key, cell);
   let afterCancel = null;
-  const cancel = () => {
+  const cancel = async () => {
     if (finished || pending) return;
     finished = true;
     cell.innerHTML = original;
@@ -865,7 +868,7 @@ function beginTableCellEdit(cell, { tableId, column, row, onChange = null }) {
     if (originalAriaLabel === null) cell.removeAttribute("aria-label");
     else cell.setAttribute("aria-label", originalAriaLabel);
     cell.focus();
-    if (afterCancel) { afterCancel(); focusCell(); }
+    if (afterCancel) { await afterCancel(); focusCell(); }
   };
   const save = async () => {
     if (finished || pending) return;

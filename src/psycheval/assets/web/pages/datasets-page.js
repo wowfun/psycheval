@@ -4,6 +4,7 @@ import {
   initializeHarborWorkbench,
   isHarborDirty,
   refreshHarborInventory,
+  resumeTaskSidebar,
   workbenchState,
 } from "../modules/harbor-workbench.js";
 
@@ -18,13 +19,14 @@ function createDatasetsPage(_context) {
         initialized = true;
         return;
       }
-      if (changes.has("dataset-registry") || changes.has("tasks")) {
+      if (changes.has("dataset-registry") || changes.has("tasks") || changes.has("reports") || changes.has("collections")) {
         const loaded = await refreshHarborInventory({
           skipGuard: true,
           skipTaskReload: isHarborDirty(),
         });
         if (loaded === null) throw new Error("Dataset inventory is stale");
       }
+      resumeTaskSidebar();
     },
     snapshot() {
       return {

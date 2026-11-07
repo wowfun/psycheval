@@ -20,11 +20,12 @@ const browser = installBrowserDom(`
   <div data-report-manager hidden><section aria-modal="true"><button data-report-manager-close>Close</button><p data-report-manager-status hidden></p><div data-report-inventory></div><span data-report-count></span><div data-report-bindings>stale admin content</div></section></div>
   <aside id="workspace-report-reader" hidden></aside>
   <section data-harbor-workbench>
+    <section data-dataset-collections></section>
     <button data-harbor-reload>Reload</button>
     <input data-harbor-search type="search">
     <span data-harbor-overview-count></span>
     <div data-harbor-overview></div>
-    <h2 data-harbor-selected-title></h2>
+    <section class="harbor-task-detail"><h2 data-harbor-selected-title></h2>
     <span data-harbor-selected-meta></span>
     <p data-harbor-workbench-status hidden></p>
     <div data-harbor-file-actions hidden></div>
@@ -32,7 +33,7 @@ const browser = installBrowserDom(`
     <strong data-harbor-editor-path></strong>
     <span data-harbor-editor-meta></span>
     <textarea data-harbor-editor disabled></textarea>
-    <div data-harbor-diagnostics></div>
+    <div data-harbor-diagnostics></div></section>
   </section>
   <main id="comparison"></main>
   <section id="leaderboard"></section>
@@ -134,7 +135,7 @@ test("guest Dataset page loads Task text as read-only without download controls"
   globalThis.fetch = async path => {
     calls.push(String(path));
     const value = String(path);
-    const payload = value === "/api/harbor/datasets"
+    const payload = value === "/api/collections/datasets"
       ? { datasets: [{ id: "public", tasks: [{ directory: "task-1", package_name: "org/task", status: "valid", diagnostics: [] }] }] }
       : value === "/api/harbor/datasets/public/tasks/task-1"
         ? { dataset_id: "public", task: { directory: "task-1", package_name: "org/task", status: "valid", diagnostics: [] }, tree: [{ path: "solution/solve.sh", kind: "file", size: 9, previewable: true, editable: true }] }
@@ -144,7 +145,7 @@ test("guest Dataset page loads Task text as read-only without download controls"
   try {
     await harbor.initializeHarborWorkbench();
     assert.deepEqual(calls.slice(0, 2), [
-      "/api/harbor/datasets",
+      "/api/collections/datasets",
       "/api/harbor/datasets/public/tasks/task-1",
     ]);
     document.querySelector(".harbor-file-row.kind-file").click();
@@ -196,8 +197,12 @@ test("guest administrator action functions issue no requests when invoked direct
     await shell.changeLocale("zh-CN");
     await configuration.submitServeSourceForm(sourceForm);
     await configuration.inspectSourceSessions(dbForm);
-    await configuration.addHarborMount();
-    await configuration.removeSelectedHarborMounts();
+    const { createRegistryManager } = await import("../../src/psycheval/assets/web/modules/registry-manager.js");
+    const registry = createRegistryManager({ root: document.body, page: "datasets", onRefresh: async () => {} });
+    await registry.createDataset(true);
+    await registry.removeDatasets();
+    await registry.openMounts();
+    registry.destroy();
     await harbor.saveFile();
     const task = { directory: "private-task", revision: "task-r1" };
     const trash = { entry_id: "trash-1", directory: "private-task", revision: "trash-r1" };

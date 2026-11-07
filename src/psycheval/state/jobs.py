@@ -119,6 +119,7 @@ def variant_index(workspace):
 
 def plugin_candidates(workspace, *, run_id=None):
     from psycheval.jobs.service import JobsService
+    from psycheval.state.collections import CollectionStore
     from psycheval.state.workspace_source_models import SourceCandidate
 
     try:
@@ -135,6 +136,8 @@ def plugin_candidates(workspace, *, run_id=None):
         retained = records(workspace)
     for _, state in retained:
         if state["harness"] == "harbor":
+            continue
+        if CollectionStore(workspace).archived(workspace / "jobs" / state["job_name"]):
             continue
         try:
             detail = service.detail(state["id"])
@@ -178,7 +181,7 @@ def plugin_candidate_for_ref(workspace, ref):
 
 
 def plugin_document(candidate):
-    from psycheval.atif import validate_atif_trajectory
+    from psycheval.harbor.atif import validate_atif_trajectory
     from psycheval.state.workspace_source_models import SourceDocument
 
     trial = candidate.projection

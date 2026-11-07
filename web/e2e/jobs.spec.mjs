@@ -5,14 +5,14 @@ test("mobile Jobs results keep scores and navigation readable with long Task nam
   const fixture = await startFixture({ PEVAL_E2E_JOBS: "1", PYTHONPATH: process.cwd(), UV_NO_SYNC: "1" });
   try {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.route("**/api/jobs", route => route.fulfill({ json: { items: [{ id: "abc", state: "completed", harness: "fixture" }] } }));
+    await page.route("**/api/collections/jobs?*", route => route.fulfill({ json: { items: [{ id: "abc", run_id: "abc", name: "abc", report_ref: "managed:abc", state: "completed", harness: "fixture" }] } }));
     await page.route("**/api/jobs/abc", route => route.fulfill({ json: {
-      id: "abc", state: "completed", request: {},
+      id: "abc", run_id: "abc", name: "abc", report_ref: "managed:abc", state: "completed", request: {},
       results: [{ id: "one", task: "workbuddy/research-factor-table-extract-L3-016", variant_label: "MiMo Pro", score: 0.2619, score_source: "reward", source_key: "one" }],
     } }));
     await page.route("**/api/jobs/abc/logs", route => route.fulfill({ json: { entries: [], truncated: false } }));
     await page.goto(`${fixture.origin}/jobs`);
-    await page.locator('[data-select-run="abc"]').click();
+    await page.locator('[data-select-job="abc"]').click();
     const result = page.locator(".job-result");
     await expect(result).toBeVisible();
     const sizes = await result.evaluate(node => {
@@ -34,7 +34,8 @@ test("Jobs configures A/B, saves typed defaults, retains results and cancels a r
   try {
     await page.goto(`${fixture.origin}/jobs`);
     await page.locator("[data-job-harness]").selectOption("fixture");
-    await page.locator('[data-select-task="fixture/one"]').check();
+    await page.locator('[data-table-row-select="fixture/one"]').focus();
+    await page.keyboard.press("Space");
     await page.locator("[data-add-variant]").click();
     await page.locator("[data-variant-model]").nth(1).fill("model-b");
     await page.getByRole("button", { name: "Preview configuration", exact: true }).click();
@@ -58,7 +59,8 @@ test("Jobs configures A/B, saves typed defaults, retains results and cancels a r
     await page.reload();
     await expect(page.locator("[data-job-harness]")).toHaveValue("fixture");
     await expect(page.locator("[data-variant]")).toHaveCount(2);
-    await page.locator('[data-select-task="fixture/one"]').check();
+    await page.locator('[data-table-row-select="fixture/one"]').focus();
+    await page.keyboard.press("Space");
     await expect(page.locator("[data-job-preview-output]")).toBeHidden();
     const directStart = page.waitForRequest(request => request.url() === `${fixture.origin}/api/jobs` && request.method() === "POST");
     await page.locator("[data-job-start]").click();
@@ -80,7 +82,8 @@ test("editing a variant invalidates an in-flight preview and source entry preser
   try {
     await page.goto(`${fixture.origin}/jobs`);
     await page.locator("[data-job-harness]").selectOption("fixture");
-    await page.locator('[data-select-task="fixture/one"]').check();
+    await page.locator('[data-table-row-select="fixture/one"]').focus();
+    await page.keyboard.press("Space");
     let release;
     const pending = new Promise(resolve => { release = resolve; });
     await page.route("**/api/jobs/preview", async route => {
@@ -97,9 +100,10 @@ test("editing a variant invalidates an in-flight preview and source entry preser
     await expect(page.locator("[data-job-preview-output]")).toBeHidden();
     await expect(page.locator("[data-job-start]")).toBeEnabled();
     await page.getByRole("link", { name: "Home", exact: true }).click();
-    await page.getByRole("link", { name: "Configure run", exact: true }).click();
+    await expect(page.locator('#leaderboard').getByRole("link", { name: "Configure run", exact: true })).toHaveCount(0);
+    await page.getByRole("navigation", { name: "Workspace navigation" }).getByRole("link", { name: "Jobs", exact: true }).click();
     await expect(page.locator("[data-variant-model]")).toHaveValue("changed-model");
-    await expect(page.locator('[data-select-task="fixture/one"]')).toBeChecked();
+    await expect(page.locator('[data-table-row-select="fixture/one"]')).toBeChecked();
     const started = page.waitForRequest(request => request.url() === `${fixture.origin}/api/jobs` && request.method() === "POST");
     await page.locator("[data-job-start]").click();
     const body = (await started).postDataJSON();
@@ -114,7 +118,8 @@ test("guests can read and preview Jobs but cannot launch or save defaults", asyn
   try {
     await page.goto(`${fixture.origin}/jobs`);
     await page.locator("[data-job-harness]").selectOption("fixture");
-    await page.locator('[data-select-task="fixture/one"]').check();
+    await page.locator('[data-table-row-select="fixture/one"]').focus();
+    await page.keyboard.press("Space");
     await page.getByRole("button", { name: "Preview configuration" }).click();
     await expect(page.locator("[data-job-preview-count]")).toContainText("1 Trials");
     await expect(page.locator("[data-job-start]")).toBeHidden();
@@ -133,16 +138,17 @@ test("Jobs tolerates malformed links and polling preserves the reading state", a
     await page.goto(`${fixture.origin}/jobs#task=%`);
     await expect(page.locator("[data-jobs-notice]")).toContainText("Invalid Task link");
     await page.locator("[data-job-harness]").selectOption("fixture");
-    await page.locator('[data-select-task="fixture/one"]').check();
+    await page.locator('[data-table-row-select="fixture/one"]').focus();
+    await page.keyboard.press("Space");
     await page.locator('[data-job-setting="n_attempts"]').fill("");
     await page.locator("[data-job-preview]").click();
     await expect(page.locator("[data-jobs-notice]")).toContainText("valid positive numbers");
     let revision = 0;
-    await page.route("**/api/jobs", route => route.fulfill({ json: { items: [{ id: "abc", state: "running", harness: "fixture" }] } }));
-    await page.route("**/api/jobs/abc", route => route.fulfill({ json: { id: "abc", state: "running", trials_completed: revision++, request: {}, results: [] } }));
+    await page.route("**/api/collections/jobs?*", route => route.fulfill({ json: { items: [{ id: "abc", run_id: "abc", name: "abc", report_ref: "managed:abc", state: "running", harness: "fixture" }] } }));
+    await page.route("**/api/jobs/abc", route => route.fulfill({ json: { id: "abc", run_id: "abc", name: "abc", report_ref: "managed:abc", state: "running", trials_completed: revision++, request: {}, results: [] } }));
     await page.route("**/api/jobs/abc/logs", route => route.fulfill({ json: { entries: [{ format: "text", text: "A log line\n".repeat(100) }], truncated: false } }));
     await page.locator("[data-jobs-refresh]").click();
-    await page.locator('[data-select-run="abc"]').click();
+    await page.locator('[data-select-job="abc"]').click();
     const details = page.locator("[data-job-detail] details");
     await details.first().locator("summary").click();
     await details.last().locator("summary").click();
@@ -163,7 +169,9 @@ test("Jobs shows arbitrary NDJSON from stdout and stderr before the worker finis
     expect(response.ok()).toBe(true);
     const run = await response.json();
     await page.locator("[data-jobs-refresh]").click();
-    await page.locator(`[data-select-run="${run.id}"]`).click();
+    const listed = await (await page.request.get(`${fixture.origin}/api/collections/jobs`)).json();
+    const collection = listed.items.find(item => item.run_id === run.id);
+    await page.locator(`[data-select-job="${collection.id}"]`).click();
     const log = page.locator(".job-log");
     await expect(log).toContainText("first event");
     await expect(log).toContainText("中文");
@@ -185,11 +193,11 @@ test("Jobs log refresh follows the bottom and preserves reading, focus and liter
   try {
     let version = 0;
     const entries = Array.from({ length: 25 }, (_, i) => ({ format: "json", text: JSON.stringify({ arbitrary: i, html: '<svg onload="unsafe()">', huge: "900719925474099312345" }, null, 2) }));
-    await page.route("**/api/jobs", route => route.fulfill({ json: { items: [{ id: "abc", state: "running", harness: "fixture" }] } }));
-    await page.route("**/api/jobs/abc", route => route.fulfill({ json: { id: "abc", state: "running", trials_completed: version, request: {}, results: [] } }));
+    await page.route("**/api/collections/jobs?*", route => route.fulfill({ json: { items: [{ id: "abc", run_id: "abc", name: "abc", report_ref: "managed:abc", state: "running", harness: "fixture" }] } }));
+    await page.route("**/api/jobs/abc", route => route.fulfill({ json: { id: "abc", run_id: "abc", name: "abc", report_ref: "managed:abc", state: "running", trials_completed: version, request: {}, results: [] } }));
     await page.route("**/api/jobs/abc/logs", route => route.fulfill({ json: { entries, truncated: true } }));
     await page.goto(`${fixture.origin}/jobs`);
-    await page.locator('[data-select-run="abc"]').click();
+    await page.locator('[data-select-job="abc"]').click();
     const log = page.locator(".job-log");
     const bottomGap = () => log.evaluate(node => node.scrollHeight - node.clientHeight - node.scrollTop);
     await expect(log.locator(".job-log-entry")).toHaveCount(25);
@@ -231,8 +239,8 @@ test("Jobs discards delayed log responses after selecting another run", async ({
   let release;
   const pending = new Promise(resolve => { release = resolve; });
   try {
-    const items = ["abc", "def"].map(id => ({ id, state: "completed", harness: "fixture", request: {}, results: [] }));
-    await page.route("**/api/jobs", route => route.fulfill({ json: { items } }));
+    const items = ["abc", "def"].map(id => ({ id, run_id: id, name: id, report_ref: `managed:${id}`, state: "completed", harness: "fixture", request: {}, results: [] }));
+    await page.route("**/api/collections/jobs?*", route => route.fulfill({ json: { items } }));
     for (const item of items) {
       await page.route(`**/api/jobs/${item.id}`, route => route.fulfill({ json: item }));
       await page.route(`**/api/jobs/${item.id}/logs`, async route => {
@@ -242,9 +250,9 @@ test("Jobs discards delayed log responses after selecting another run", async ({
     }
     await page.goto(`${fixture.origin}/jobs`);
     const sent = page.waitForRequest("**/api/jobs/abc/logs");
-    await page.locator('[data-select-run="abc"]').click();
+    await page.locator('[data-select-job="abc"]').click();
     await sent;
-    await page.locator('[data-select-run="def"]').click();
+    await page.locator('[data-select-job="def"]').click();
     await expect(page.locator(".job-log")).toContainText("def");
     const received = page.waitForResponse("**/api/jobs/abc/logs");
     release();

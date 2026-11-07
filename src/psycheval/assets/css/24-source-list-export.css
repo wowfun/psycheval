@@ -145,6 +145,9 @@
 .summary-metric-control .column-control-row {
   grid-template-columns:minmax(0,1fr) auto auto;
 }
+.summary-metric-control .column-control-row .column-description {
+  grid-column:1 / -1;
+}
 .summary-metric-control .column-control-moves[hidden] { display:none; }
 .summary-metric-control .column-control-row label span {
   white-space:normal;
@@ -194,6 +197,12 @@
 }
 .column-control-row:last-child {
   border-bottom:0;
+}
+.column-control-row .column-description {
+  grid-column:2 / -1;
+  color:var(--muted);
+  white-space:normal;
+  overflow-wrap:anywhere;
 }
 .column-control-row.hidden-column {
   color:var(--muted);
@@ -253,8 +262,7 @@
   cursor:default;
 }
 @media (max-width:700px) {
-  .column-control-panel { right:auto; left:0; }
-  .summary-metric-control .column-control-panel { position:fixed; left:14px; right:14px; top:12vh; width:auto; }
+  .column-control-panel { position:fixed; left:14px; right:14px; top:12vh; width:auto; }
   .column-control-row { grid-template-columns:24px minmax(105px,1fr) minmax(50px,auto) 78px; }
   .column-control-moves button { width:36px; height:36px; }
 }

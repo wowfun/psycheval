@@ -30,11 +30,11 @@ test("Dataset Task cells keep single-click selection and double-click editing se
   await page.goto(`${fixture.origin}/datasets`);
   const workbench = page.locator("[data-harbor-workbench]");
   await expect(workbench).toHaveAttribute("aria-busy", "false");
-  const first = page.locator('[data-harbor-row-key="dataset:editable|task:first"]');
+  const first = page.locator('[data-task-row-key="dataset:editable|task:first"]');
   await first.locator('[data-table-column-key="task"]').click();
   await expect(first).toHaveClass(/selected-row/);
   await expect(workbench).toHaveAttribute("aria-busy", "false");
-  const row = page.locator('[data-harbor-row-key="dataset:editable|task:second"]');
+  const row = page.locator('[data-task-row-key="dataset:editable|task:second"]');
   const cell = row.locator('[data-table-column-key="task"]');
   await cell.dblclick({ delay: 150 });
   await expect(cell.locator('[data-table-cell-editor]')).toBeVisible();
@@ -70,4 +70,69 @@ test("Dataset is the first data column and filters and sorts the complete catalo
   expect(response.request().postDataJSON().query.datasets).toEqual(['office']);
   expect(response.status()).toBe(200);
   expect((await downloaded).suggestedFilename()).toBe('peval-leaderboard.xlsx');
+});
+
+for (const width of [1440, 390]) test(`filter actions stay fixed while options scroll at ${width}px`, async ({ page }, testInfo) => {
+  const longFixture = await startFixture({ PEVAL_E2E_VERIFICATION: "1", PEVAL_E2E_LONG_TABLE: "1" });
+  try {
+    await page.setViewportSize({ width, height: 900 });
+    // Expand only facet choices; real fixture Jobs still exercise apply and clear.
+    await page.route('**/api/catalog?*', async route => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      payload.facets.jobs = [
+        ...Array.from({ length: 40 }, (_, i) => ({ value: `000-long-filter-job-${String(i).padStart(2, '0')}`, count: 1 })),
+        ...payload.facets.jobs,
+      ];
+      await route.fulfill({ response, json: payload });
+    });
+    await page.goto(longFixture.origin);
+    const menu = page.locator('#leaderboard [data-filter-menu="job_name"]');
+    // Center the column in the horizontally scrollable narrow table before opening.
+    if (width < 700) await menu.locator('summary').evaluate(node => node.scrollIntoView({ block: 'nearest', inline: 'center' }));
+    await menu.locator('summary').click();
+    const options = menu.locator('.filter-options');
+    const inputs = options.locator('input');
+    const clear = menu.locator('[data-filter-clear]');
+    const apply = menu.locator('[data-filter-apply]');
+    const before = await clear.boundingBox();
+    const listBox = await options.boundingBox();
+    await page.mouse.move(listBox.x + listBox.width / 2, listBox.y + 10);
+    await page.mouse.wheel(0, 10000);
+    await expect.poll(() => options.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+    const last = inputs.last();
+    const chosen = await last.inputValue();
+    expect(chosen).not.toMatch(/^000-long-filter-job-/);
+    await expect(last).toBeInViewport();
+    const after = await clear.boundingBox();
+    expect(after.y).toBeCloseTo(before.y, 1);
+    await expect(clear).toBeInViewport();
+    await expect(apply).toBeInViewport();
+    await last.check();
+    await inputs.first().focus();
+    await page.keyboard.press('Shift+Tab');
+    await expect(apply).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(clear).toBeFocused();
+    await page.keyboard.press('Space');
+    await expect(options.locator('input:checked')).toHaveCount(0);
+    await inputs.first().focus();
+    for (let i = 1; i < await inputs.count(); i++) await page.keyboard.press('Tab');
+    await expect(last).toBeFocused();
+    await expect(last).toBeInViewport();
+    expect((await clear.boundingBox()).y).toBeCloseTo(before.y, 1);
+    await page.screenshot({ path: testInfo.outputPath(`filter-actions-${width}.png`) });
+    await page.keyboard.press('Space');
+    const filtered = page.waitForRequest(request => request.url().includes('/api/catalog?') && new URL(request.url()).searchParams.get('job') === chosen);
+    await apply.click();
+    await filtered;
+    await expect(page.locator('#leaderboard tbody [data-table-column-key="job_name"]').first()).toHaveText(chosen);
+    await menu.locator('summary').click();
+    await clear.click();
+    const restored = page.waitForRequest(request => request.url().includes('/api/catalog?') && !new URL(request.url()).searchParams.has('job'));
+    await apply.click();
+    await restored;
+    await menu.locator('summary').click();
+    await expect(options.locator('input:checked')).toHaveCount(0);
+  } finally { await stopFixture(longFixture); }
 });

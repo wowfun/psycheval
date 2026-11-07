@@ -1,3 +1,5 @@
+// The shared Harbor JSON is served by serve/assets.py; web/test/register-loader.mjs
+// resolves this same URL-shaped import in Node. Keep both mappings on one resource.
 import contract from "../timing-sources.json" with { type: "json" };
 import { t } from "./runtime.js";
 

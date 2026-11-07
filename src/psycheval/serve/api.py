@@ -85,6 +85,12 @@ from psycheval.serve.api_http import (
     json_response as _json,
 )
 from psycheval.serve.api_http import (
+    operation_payload as _operation_payload,
+)
+from psycheval.serve.api_http import (
+    operation_response as _operation_response,
+)
+from psycheval.serve.api_http import (
     problem_slug as _problem_slug,
 )
 from psycheval.serve.api_http import (
@@ -227,34 +233,6 @@ def _problem_response(
         status=status,
         media_type="application/problem+json",
         headers=headers,
-    )
-
-
-def _operation_payload(operation: Any) -> dict[str, Any]:
-    state = operation.state
-    if state == "completed":
-        state = "failed" if operation.failures else "succeeded"
-    return {
-        "id": operation.operation_id,
-        "kind": operation.operation_type,
-        "state": state,
-        "completed": operation.completed,
-        "total": operation.total,
-        "successes": list(operation.successes),
-        "failures": list(operation.failures),
-    }
-
-
-def _operation_response(
-    operation: Any, *, headers: dict[str, str] | None = None
-) -> JSONResponse:
-    location = f"/api/operations/{quote(operation.operation_id)}"
-    response_headers = {"Location": location, "Retry-After": "1"}
-    response_headers.update(headers or {})
-    return _json(
-        _operation_payload(operation),
-        status=202,
-        headers=response_headers,
     )
 
 
@@ -509,11 +487,13 @@ def create_app(runtime: ServeRuntime, access_control: ServeAccess) -> FastAPI:
     register_report_routes(app)
     _register_harbor_routes(app)
     _register_acp_routes(app)
+    from psycheval.serve.collections import register_collection_routes
     from psycheval.serve.jobs import register_jobs_routes
     from psycheval.serve.judge import register_judge_routes
     from psycheval.serve.verification import register_verification_routes
 
     register_jobs_routes(app)
+    register_collection_routes(app)
     register_verification_routes(app)
     register_judge_routes(app)
     _verify_route_access(app)

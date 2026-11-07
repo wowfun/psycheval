@@ -8,17 +8,17 @@
     {
       "source": "docs/user/peval/inputs-and-adapters.md",
       "translation": "docs/i18n/zh-CN/user/peval/inputs-and-adapters.md",
-      "source_sha256": "224f8f51095bcc1fcf0d4cf9dcc0a152428449da700af4323e17f5457d8b1f29"
+      "source_sha256": "ccd7ad61bd4217dff056f4ffc82ac93df9411fd3c82886ee0d03952373bae553"
     },
     {
       "source": "docs/user/peval/reports.md",
       "translation": "docs/i18n/zh-CN/user/peval/reports.md",
-      "source_sha256": "8ddd0f3ab5c6fd7b13db79b3f4cd5528d74eecc2ed8ba1cac8fe57171b0a184b"
+      "source_sha256": "f048212ea3f87be9b75ab72096ffb06a532eb2868a3fed93af00c0bbae308cfb"
     },
     {
       "source": "docs/user/peval/workspace.md",
       "translation": "docs/i18n/zh-CN/user/peval/workspace.md",
-      "source_sha256": "f277b32482e176449bc88b5b390d249a61665b5ed0808280167b673f85371681"
+      "source_sha256": "7484b7b1cf5a09c53b10d312e91bc89728dcd042b75afaeffa1b73c6db0292fc"
     }
   ]
 }

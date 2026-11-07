@@ -756,6 +756,22 @@ class WorkspaceCatalog:
                 )
             ]
 
+    def collection_rows(self) -> list[dict[str, Any]]:
+        """Small collection projection; never load trajectories or provenance."""
+        with self._connect(readonly=True) as connection:
+            return [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT source_key, source_ref, "
+                    "json_extract(row_json, '$.task_name') AS task, "
+                    "json_extract(row_json, '$.score') AS score, "
+                    "json_extract(row_json, '$.status') AS result, "
+                    "json_extract(row_json, '$.dataset_id') AS dataset_id, "
+                    "json_extract(row_json, '$.trial_name') AS trial_name "
+                    "FROM cells WHERE last_status != 'missing' ORDER BY source_ref"
+                )
+            ]
+
     def evaluation_report_rows(
         self, report_ref: str | None = None
     ) -> list[dict[str, Any]]:

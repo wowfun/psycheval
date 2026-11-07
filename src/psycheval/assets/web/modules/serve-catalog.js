@@ -151,7 +151,6 @@ function renderLeaderboardPanelControls(rows) {
     <div class="leaderboard-action-row">${workspaceLinkButton()}${adminMode() ? `<button class="action-button" type="button" data-catalog-refresh ${state.workspaceWriteBusy ? 'disabled aria-busy="true" data-busy-previous-disabled="false"' : ""}>${esc(t("serve_refresh", "Refresh"))}</button>` : ""}${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardColumnControls(rows)}${renderLeaderboardExportControls()}</div>
     <p class="copy catalog-progress" data-catalog-progress ${progress ? "" : "hidden"}>${esc(progress)}</p>
     <span class="sr-only" data-catalog-phase role="status">${esc(catalogPhaseText())}</span>
-    ${state.sharedViewSnapshots.length ? `<p class="copy" data-shared-view-conditions>${esc(t("shared_view_conditions", "Shared conditions"))}: ${state.sharedViewSnapshots.map(view => esc(view.name)).join(" · ")}</p>` : ""}
     <div class="catalog-page-controls" data-catalog-page-controls>
       <button type="button" class="action-button icon-only" data-catalog-prev aria-label="${esc(t("previous", "Previous"))}" ${state.catalogPage.page <= 1 ? "disabled" : ""}>‹</button>
       <span>${esc(catalogPageLabel())}</span>
@@ -991,7 +990,8 @@ async function serveDownload(kind, body, requestedFilename = "") {
       throw new Error(payload?.detail || payload?.title || response.statusText);
     }
     const blob = await response.blob();
-    const filename = requestedFilename || (kind === "xlsx" ? "peval-leaderboard.xlsx" : "peval-report-v19.json");
+    const serverFilename = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1];
+    const filename = serverFilename || requestedFilename || (kind === "xlsx" ? "peval-leaderboard.xlsx" : "peval-report.json");
     downloadBlob(filename, blob.type || "application/octet-stream", blob);
     feedback.success();
   } catch (error) {

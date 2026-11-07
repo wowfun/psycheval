@@ -345,7 +345,12 @@
   grid-template-columns:auto auto;
   align-items:baseline;
   justify-content:start;
+  flex:1 1 220px;
+  min-width:min(220px,100%);
 }
+.harbor-overview-head { flex-wrap:wrap; }
+[data-harbor-overview-count] { white-space:nowrap; }
+.harbor-search input { width:100%; }
 .harbor-overview-head .table-region-title-stack .harbor-search {
   grid-column:1/-1;
 }

@@ -52,7 +52,7 @@ test("the distributed ESM entrypoint starts a Live Workspace page", async () => 
     fetch: async input => {
       const url = String(input);
       requests.push(url);
-      if (url === "/api/harbor/datasets") {
+      if (url === "/api/collections/datasets") {
         return new Response(JSON.stringify({ datasets: [] }));
       }
       throw new Error(`unexpected request: ${url}`);
@@ -62,7 +62,7 @@ test("the distributed ESM entrypoint starts a Live Workspace page", async () => 
     await import(`${MAIN_ENTRY.href}?smoke=${Date.now()}`);
     await new Promise(resolve => setImmediate(resolve));
     await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(requests, ["/api/harbor/datasets"]);
+    assert.deepEqual(requests, ["/api/collections/datasets"]);
     assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 0);
     document.querySelector("[data-admin-login-open]").click();
     assert.equal(document.querySelector("[data-admin-login-dialog]").hidden, false);

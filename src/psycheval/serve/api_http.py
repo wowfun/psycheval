@@ -4,6 +4,7 @@ import base64
 import binascii
 import re
 from typing import Any
+from urllib.parse import quote
 
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
@@ -206,3 +207,31 @@ def opaque_path_value(token: str) -> str:
 def content_disposition(disposition: str, filename: str) -> str:
     safe_filename = re.sub(r"[^A-Za-z0-9_.:-]", "_", filename)[:145] or "artifact"
     return f'{disposition}; filename="{safe_filename}"'
+
+
+def operation_payload(operation: Any) -> dict[str, Any]:
+    state = operation.state
+    if state == "completed":
+        state = "failed" if operation.failures else "succeeded"
+    return {
+        "id": operation.operation_id,
+        "kind": operation.operation_type,
+        "state": state,
+        "completed": operation.completed,
+        "total": operation.total,
+        "successes": list(operation.successes),
+        "failures": list(operation.failures),
+    }
+
+
+def operation_response(
+    operation: Any, *, headers: dict[str, str] | None = None
+) -> JSONResponse:
+    location = f"/api/operations/{quote(operation.operation_id)}"
+    response_headers = {"Location": location, "Retry-After": "1"}
+    response_headers.update(headers or {})
+    return json_response(
+        operation_payload(operation),
+        status=202,
+        headers=response_headers,
+    )

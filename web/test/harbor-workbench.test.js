@@ -8,6 +8,7 @@ const browser = installBrowserDom(`
   <script type="application/json" id="peval-i18n">{}</script>
   <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","sources":[]}</script>
   <section data-harbor-workbench>
+    <section data-dataset-collections></section>
       <button data-harbor-reload>Reload</button>
       <button data-harbor-create-task>New Task</button>
       <button data-harbor-sync-manifest>Sync</button>
@@ -15,11 +16,11 @@ const browser = installBrowserDom(`
       <button data-harbor-delete-selected>Delete selected</button>
       <button data-harbor-show-trash>Show archived</button>
       <p data-harbor-workbench-status hidden></p>
-      <div class="harbor-overview-head"></div><div class="harbor-editor-head"></div>
+      <div class="harbor-overview-head"></div>
       <input data-harbor-search type="search">
       <span data-harbor-overview-count></span>
       <div data-harbor-overview></div>
-      <h2 data-harbor-selected-title></h2>
+      <section class="harbor-task-detail"><h2 data-harbor-selected-title></h2>
       <span data-harbor-selected-meta></span>
       <div data-harbor-file-actions hidden>
         <button data-harbor-new-file>New file</button>
@@ -28,13 +29,14 @@ const browser = installBrowserDom(`
         <input type="file" data-harbor-upload-input>
       </div>
       <div data-harbor-task-browser>
+        <div class="harbor-editor-head"></div>
         <div data-harbor-file-tree></div>
         <strong data-harbor-editor-path></strong>
         <span data-harbor-editor-meta></span>
         <button data-harbor-save disabled>Save</button>
         <textarea data-harbor-editor disabled></textarea>
       </div>
-      <div data-harbor-diagnostics></div>
+      <div data-harbor-diagnostics></div></section>
   </section>
 `);
 
@@ -121,16 +123,32 @@ const inventory = {
   }],
 };
 
+test("Dataset browsing survives an unavailable administrator configuration", async () => {
+  const previous = globalThis.fetch;
+  globalThis.fetch = async path => {
+    if (path === "/api/config") return new Response(JSON.stringify({ detail: "Management unavailable" }), { status: 503 });
+    if (path === "/api/collections/datasets") return new Response(JSON.stringify(inventory));
+    if (String(path).endsWith("/files/instruction.md")) return new Response(JSON.stringify({ content: "hello", revision: "file-r1", path: "instruction.md" }));
+    return new Response(JSON.stringify(detail));
+  };
+  try {
+    assert.ok(await harbor.initializeHarborWorkbench());
+    assert.match(document.querySelector("[data-harbor-overview]").textContent, /valid-task/);
+    assert.match(document.querySelector("[data-dataset-collections]").textContent, /Management unavailable/);
+  } finally { globalThis.fetch = previous; }
+});
+
 for (const reconcileFails of [false, true]) test(`Dataset file save stays committed when reconcile ${reconcileFails ? "fails" : "succeeds"}`, async () => {
   const calls = [];
   let committedContent = "Original";
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (path, options = {}) => {
+    if (String(path) === "/api/config") return new Response(JSON.stringify({ datasets: inventory.datasets, mounts: [] }), { headers: { ETag: '"config-r1"' } });
     const method = options.method || "GET";
     const body = options.body ? JSON.parse(String(options.body)) : null;
     calls.push({ path: String(path), method, body });
     let payload = {};
-    if (String(path) === "/api/harbor/datasets") payload = inventory;
+    if (String(path) === "/api/collections/datasets") payload = inventory;
     else if (String(path) === "/api/harbor/datasets/pbench/tasks/valid-task") payload = detail;
     else if (String(path).endsWith("/tasks/valid-task/files/instruction.md") && method === "GET") {
       payload = { path: "instruction.md", content: committedContent, revision: "file-r1", task_revision: "task-r1" };
@@ -198,12 +216,13 @@ for (const large of [false, true]) test(`a file conflict retains the draft with 
   const writes = [];
   let conflicted = false;
   globalThis.fetch = async (path, options = {}) => {
+    if (String(path) === "/api/config") return new Response(JSON.stringify({ datasets: inventory.datasets, mounts: [] }), { headers: { ETag: '"config-r1"' } });
     if (options.method === "PUT") {
       writes.push({ body: JSON.parse(options.body), revision: options.headers["If-Match"] });
       conflicted = true;
       return new Response(JSON.stringify({ detail: "File changed elsewhere" }), { status: 412 });
     }
-    const payload = path === "/api/harbor/datasets" ? inventory
+    const payload = path === "/api/collections/datasets" ? inventory
       : path.endsWith("/files/instruction.md")
         ? { path: "instruction.md", content: conflicted ? (large ? "Remote change\n" + "x".repeat(2 * 1024 * 1024 - 30) + "END OF FILE" : "Remote change") : "Original", revision: conflicted ? "file-r2" : "file-r1" }
         : detail;
@@ -243,6 +262,7 @@ test("Task rename preserves edits made during the request and rebinds file reads
   let accept, renamed = false;
   const requests = [];
   globalThis.fetch = async (path, options = {}) => {
+    if (String(path) === "/api/config") return new Response(JSON.stringify({ datasets: inventory.datasets, mounts: [] }), { headers: { ETag: '"config-r1"' } });
     requests.push({ path, method: options.method });
     if (options.method === "PATCH") return new Promise(resolve => {
       accept = () => {
@@ -252,7 +272,7 @@ test("Task rename preserves edits made during the request and rebinds file reads
     });
     const currentInventory = structuredClone(inventory);
     if (renamed) currentInventory.datasets[0].tasks[0].directory = "renamed-live";
-    const payload = path === "/api/harbor/datasets" ? currentInventory
+    const payload = path === "/api/collections/datasets" ? currentInventory
       : path === "/api/operations/rename-draft-op" ? { state: "failed", failures: [{ error: "Index offline" }] }
         : path.includes("/files/") ? { path: "instruction.md", content: "Original", revision: "file-r1" }
           : detail;
@@ -291,8 +311,9 @@ test("Task rename preserves edits made during the request and rebinds file reads
 test("dirty guard protects navigation and Archived is a separate overview", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async path => {
+    if (String(path) === "/api/config") return new Response(JSON.stringify({ datasets: inventory.datasets, mounts: [] }), { headers: { ETag: '"config-r1"' } });
     const requestPath = String(path);
-    const payload = requestPath === "/api/harbor/datasets"
+    const payload = requestPath === "/api/collections/datasets"
       ? inventory
       : requestPath === "/api/harbor/datasets/pbench/tasks/valid-task"
         ? detail
@@ -313,7 +334,6 @@ test("dirty guard protects navigation and Archived is a separate overview", asyn
     assert.equal(harbor.confirmDiscard(), false);
     document.querySelector("[data-harbor-show-trash]").click();
     assert.equal(document.querySelectorAll(".status-valid").length, 1);
-    assert.equal(harbor.closeHarborWorkbench(), false);
     assert.equal(surface.hidden, false);
 
     window.confirm = () => true;
@@ -377,6 +397,7 @@ test("renaming the open Task keeps the renamed Task selected", async () => {
     }],
   };
   globalThis.fetch = async (path, options = {}) => {
+    if (String(path) === "/api/config") return new Response(JSON.stringify({ datasets: inventory.datasets, mounts: [] }), { headers: { ETag: '"config-r1"' } });
     const requestPath = String(path);
     const method = options.method || "GET";
     let payload;
@@ -384,7 +405,7 @@ test("renaming the open Task keeps the renamed Task selected", async () => {
       payload = { id: "rename-op", kind: "harbor-task-reconcile", state: "queued", completed: 0, total: 1, successes: [], failures: [] };
     }
     else if (requestPath === "/api/operations/rename-op") payload = { id: "rename-op", kind: "harbor-task-reconcile", state: "succeeded", completed: 1, total: 1, successes: [{ index: 0, status: "ok" }], failures: [] };
-    else if (requestPath === "/api/harbor/datasets") payload = renamedInventory;
+    else if (requestPath === "/api/collections/datasets") payload = renamedInventory;
     else if (requestPath.includes("/api/harbor/datasets/pbench/tasks/")) {
       const taskName = decodeURIComponent(requestPath.split("/tasks/")[1]);
       payload = { dataset_id: "pbench", task: task(taskName, taskName === "valid-task" ? "valid" : "draft"), tree: [] };
@@ -429,6 +450,7 @@ test("a pending file save rejects an overlapping save", async () => {
   const pendingSaves = [];
   let saveRequests = 0;
   globalThis.fetch = async (path, options = {}) => {
+    if (String(path) === "/api/config") return new Response(JSON.stringify({ datasets: inventory.datasets, mounts: [] }), { headers: { ETag: '"config-r1"' } });
     const requestPath = String(path);
     if (requestPath.endsWith("/tasks/valid-task/files/instruction.md") && options.method === "PUT") {
       saveRequests += 1;
@@ -439,7 +461,7 @@ test("a pending file save rejects an overlapping save", async () => {
         text: async () => JSON.stringify({ id: "save-op", kind: "harbor-task-file", state: "queued", completed: 0, total: 1, successes: [], failures: [] }),
       })));
     }
-    if (requestPath === "/api/harbor/datasets") {
+    if (requestPath === "/api/collections/datasets") {
       return { ok: true, status: 200, statusText: "OK", text: async () => JSON.stringify(inventory) };
     }
     if (requestPath === "/api/harbor/datasets/pbench/tasks/valid-task") {
@@ -531,6 +553,7 @@ test("Task batches span Datasets, restore edited archive names, and retain only 
     failures: [{ index: 1, status: "error", error: "second failed" }],
   };
   globalThis.fetch = async (path, options = {}) => {
+    if (String(path) === "/api/config") return new Response(JSON.stringify({ datasets: inventory.datasets, mounts: [] }), { headers: { ETag: '"config-r1"' } });
     const requestPath = String(path);
     const method = options.method || "GET";
     const body = options.body ? JSON.parse(String(options.body)) : null;
@@ -539,7 +562,7 @@ test("Task batches span Datasets, restore edited archive names, and retain only 
     if (requestPath === "/api/harbor/task-state-operations") payload = operation;
     else if (requestPath === "/api/harbor/task-deletion-operations") payload = operation;
     else if (requestPath.startsWith("/api/operations/")) payload = operation;
-    else if (requestPath === "/api/harbor/datasets") payload = harbor.workbenchState.inventory;
+    else if (requestPath === "/api/collections/datasets") payload = harbor.workbenchState.inventory;
     else if (requestPath.includes("/api/harbor/datasets/") && requestPath.includes("/tasks/")) {
       const [, suffix] = requestPath.split("/api/harbor/datasets/");
       const [datasetId, taskName] = suffix.split("/tasks/").map(decodeURIComponent);
@@ -631,6 +654,7 @@ test("a newly created Task is selected after its queued reconcile completes", as
   const answers = ["new-task", "local/new-task", "0"];
   window.prompt = () => answers.shift();
   globalThis.fetch = async (path, options = {}) => {
+    if (String(path) === "/api/config") return new Response(JSON.stringify({ datasets: inventory.datasets, mounts: [] }), { headers: { ETag: '"config-r1"' } });
     const requestPath = String(path);
     const method = options.method || "GET";
     let payload;
@@ -638,7 +662,7 @@ test("a newly created Task is selected after its queued reconcile completes", as
       payload = { id: "create-op", kind: "harbor-task-reconcile", state: "queued", completed: 0, total: 1, successes: [], failures: [] };
     } else if (requestPath === "/api/operations/create-op") {
       payload = { id: "create-op", kind: "harbor-task-reconcile", state: "succeeded", completed: 1, total: 1, successes: [{ index: 0, status: "ok" }], failures: [] };
-    } else if (requestPath === "/api/harbor/datasets") {
+    } else if (requestPath === "/api/collections/datasets") {
       payload = createdInventory;
     } else if (requestPath.includes("/api/harbor/datasets/pbench/tasks/")) {
       const taskName = decodeURIComponent(requestPath.split("/tasks/")[1]);
@@ -742,9 +766,10 @@ test("WorkBuddy Datasets remain browsable while every editing surface is disable
     tree: [{ path: "instruction.md", kind: "file", size: 11, previewable: true, editable: false }],
   };
   globalThis.fetch = async (path, options = {}) => {
+    if (String(path) === "/api/config") return new Response(JSON.stringify({ datasets: inventory.datasets, mounts: [] }), { headers: { ETag: '"config-r1"' } });
     calls.push({ path: String(path), method: options.method || "GET" });
     const requestPath = String(path);
-    const payload = requestPath === "/api/harbor/datasets"
+    const payload = requestPath === "/api/collections/datasets"
       ? readonlyInventory
       : requestPath === "/api/harbor/datasets/wb-office/tasks/office-task"
         ? readonlyDetail
@@ -763,7 +788,7 @@ test("WorkBuddy Datasets remain browsable while every editing surface is disable
     harbor.workbenchState.search = "";
     await harbor.openHarborWorkbench();
 
-    assert.equal(document.querySelectorAll("[data-table-row-select]").length, 0);
+    assert.equal(document.querySelectorAll("[data-harbor-overview] [data-table-row-select]").length, 0);
     assert.equal(document.querySelector("[data-harbor-create-task]").disabled, true);
     assert.equal(document.querySelector("[data-harbor-sync-manifest]").disabled, true);
     assert.equal(document.querySelector("[data-harbor-file-actions]").hidden, true);

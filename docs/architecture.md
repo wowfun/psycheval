@@ -21,6 +21,8 @@ supervision; native harnesses own execution and scoring. Its Harbor adapter
 consumes the relocatable Harbor integration. See the [Jobs contract](reference/jobs.md).
 `state.jobs` owns managed-run discovery and catalog identity projection. Jobs
 services return native results; the serve boundary adds workspace Trial links.
+`state.collections` owns workspace Dataset/Job notes and Job archival overlays;
+source discovery consumes that archival state before reading Trial directories.
 `redaction` owns credential filtering shared by Jobs and retained-file reads.
 `file_access` supplies non-following file descriptors and per-file coordination
 leases; each consumer owns its

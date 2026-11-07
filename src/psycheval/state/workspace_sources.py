@@ -16,8 +16,8 @@ from psycheval._state.artifacts import (
     write_json_file,
 )
 from psycheval._state.sources import refresh_binding
-from psycheval.atif import validate_atif_trajectory
 from psycheval.config import HarborMount, ToolConfig, validate_harbor_mount_paths
+from psycheval.harbor.atif import validate_atif_trajectory
 from psycheval.report import project_meta_from_atif
 from psycheval.state.catalog_discovery import (
     DirectoryChecks,
@@ -804,6 +804,9 @@ class WorkspaceSources:
         return candidates, {candidate.source_ref for candidate in candidates}
 
     def _harbor_trial_locations(self, known: set[str] | None = None):
+        from .collections import CollectionStore
+
+        collections = CollectionStore(self.workspace_root)
         validate_harbor_mount_paths(
             self.config.harbor_mounts,
             self.config.harbor_datasets,
@@ -821,6 +824,8 @@ class WorkspaceSources:
             _reject_linked_directories(root, "Job")
             resolved_datasets = resolve_harbor_datasets_for_mount(self.config, mount)
             for job_dir in _child_dirs(root):
+                if collections.archived(job_dir):
+                    continue
                 _reject_linked_directories(job_dir, "Trial")
                 for trial_dir in _child_dirs(job_dir):
                     ref = f"harbor/{mount.id}/{job_dir.name}/{trial_dir.name}"
@@ -976,6 +981,9 @@ class WorkspaceSources:
         )
 
     def _retained_harbor_refs(self) -> Iterator[tuple[str, HarborMount]]:
+        from .collections import CollectionStore
+
+        collections = CollectionStore(self.workspace_root)
         overlay_root = self.workspace_root / HARBOR_OVERLAY_ROOT
         mount_by_id = {mount.id: mount for mount in self.config.harbor_mounts}
         retained_refs = self._bound_harbor_refs()
@@ -984,6 +992,9 @@ class WorkspaceSources:
                 if mount_dir.name not in mount_by_id:
                     continue
                 for job_dir in _child_dirs(mount_dir):
+                    mount = mount_by_id[mount_dir.name]
+                    if collections.archived(Path(mount.path) / job_dir.name):
+                        continue
                     for trial_dir in _child_dirs(job_dir):
                         if any(
                             _regular_file(trial_dir / name)
@@ -1007,7 +1018,9 @@ class WorkspaceSources:
             parts = Path(ref).parts
             if len(parts) == 4 or (len(parts) == 6 and parts[4] == "steps"):
                 mount = mount_by_id.get(parts[1])
-                if mount is not None:
+                if mount is not None and not collections.archived(
+                    Path(mount.path) / parts[2]
+                ):
                     yield ref, mount
 
     def _missing_harbor_candidate(

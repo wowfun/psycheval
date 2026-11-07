@@ -132,6 +132,21 @@ class ReportLibrary:
         items.sort(key=lambda item: (item["label"].casefold(), item["key"]))
         return _page(items, page, page_size)
 
+    def association_counts(self, rows=None) -> dict[tuple[str, str], int]:
+        """Count active reports once per resolved association, without bodies."""
+        targets = ReportTargets(
+            self.workspace_reports.workspace_root,
+            self.catalog.config,
+            self.catalog.collection_rows() if rows is None else rows,
+        )
+        counts: dict[tuple[str, str], int] = {}
+        for item in self._metadata(targets, state_filter="active"):
+            for key in {
+                (target["kind"], target["key"]) for target in item["associations"]
+            }:
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+
     def metadata(self, report_ref: str) -> dict[str, Any]:
         if not isinstance(report_ref, str) or not report_ref:
             raise ReportNotFound("report reference must be an explicit nonempty string")

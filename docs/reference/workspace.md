@@ -1,5 +1,20 @@
 # Evaluation Workspace Reference
 
+Metric cells retain concise accessible value names. Measurement explanations are
+available as hover descriptions; metric selection exposes a compact, visible
+coverage summary associated with its focusable checkbox. Per-group provenance
+stays in that group's metric cells instead of being repeated in the selector.
+
+Shared table-column filter menus keep their title and Clear/Apply actions visible
+at the top. Only the option list scrolls within the menu's height limit; pointer
+and keyboard navigation use the same list and preserve the filtering workflow.
+Only one shared table-column filter menu may be open across the workspace.
+Opening another closes the previous menu and discards its unapplied draft while
+retaining applied filters. Escape closes the menu and returns focus to its trigger.
+Local tables derive options from their complete supplied option rows, independently
+of Home initialization and catalog facets; the paginated Leaderboard uses server
+facets so choices cover the entire query rather than the visible page.
+
 The Psycheval workspace organizes retained sources, overlays, reports, Saved Views,
 Harbor mounts, and browser presentation without taking ownership of source
 evidence.
@@ -7,6 +22,51 @@ evidence.
 The shared header uses the same width, inset, and navigation layout across
 Home, Datasets, Jobs, Reports, and Configuration at a fixed viewport and sidebar
 state. Changes in page height reserve scrollbar space without shifting it.
+
+## Dataset and Job tables
+
+Datasets owns the Dataset registry above its Tasks table. Selecting a Task opens
+the shared resizable right sidebar; closing it returns focus to the selected row.
+File drafts survive page navigation, and replacing a dirty Task requires the
+existing discard confirmation. Jobs uses the same Task table vocabulary, with
+checkbox selection for the run draft independent of the selected detail row.
+Selecting a Dataset filters the Tasks table; clearing that selection restores
+all Tasks. Batch-management selection is independent of row activation. Jobs
+shows Job details in the same right sidebar and Task details as read-only.
+Mounted Jobs with a start record but no end record display an unfinished native
+state; this does not prove their process is running. Only active managed workers
+trigger automatic polling. Refresh reads updated mounted Job records.
+Page navigation preserves drafts, filters and selection.
+Job pagination advances once per action. Switching between managed and mounted
+Jobs replaces the detail content even when the managed result has not changed.
+Dataset browsing remains available if administrator configuration cannot load;
+management controls require a successfully loaded configuration revision.
+
+Jobs lists individual retained Jobs above the new-run composer. Mount controls
+live in an administrator-only panel opened from that table's upper-right actions.
+Dataset registration controls likewise live above the Dataset table, not on
+Configuration. Guests can read tables, counts, notes and associated reports;
+editing, registration and Job archive/restore controls are administrator-only.
+Dataset and mount cell edits preserve their draft on a revision conflict and
+show the current saved configuration when available. An explicit retry combines
+the edited field with the latest untouched fields; cancelling reloads the saved
+view. Mount renaming retains row selection and keyboard focus through reconciliation.
+Dataset rows show active Task counts; Job rows show root Trial counts (not
+multi-step projections). Note cells support double-click and keyboard editing.
+Reports cells link to the Reports page filtered to the corresponding association.
+Archive hides a Job's Trials from discovery and all Home calculations; the Jobs
+table can show archived Jobs for restoration. Retained files are never deleted.
+Archived counts are the last count captured at archive time, not a fresh scan.
+Only ended Jobs may be archived: managed worker terminal state or an external
+Job's native completion record must establish that execution has ended. Unknown
+or active state disables archival with an explanation. Guests see active Jobs;
+administrators can include archived Jobs and restore them.
+Guest column definitions and column pickers omit management checkboxes, source
+paths, mount relationships and archive controls. Notes remain read-only and report
+links remain available. Run-draft Task checkboxes remain available to guests for
+configuration preview. Report counts include active reports, deduplicating manual
+and session-derived associations; links open the corresponding Reports filter.
+Storage and concurrency follow [collection overlays](state-and-data.md#collection-overlays).
 
 ## Configuration ownership
 
@@ -134,6 +194,16 @@ and neutral direction. `ms`, `ratio`, and `USD` select duration, percentage and
 currency formatting; other units are literal suffixes. No values are converted.
 Invalid IDs, unknown built-in IDs, invalid fields and incompatible built-in units
 fail validation. Valid custom IDs not observed yet remain pending with a diagnostic.
+
+Default metric names and selections remain unchanged. Value hints show source,
+calculation basis, scope, coverage and missing reasons from the
+[measurement contract](state-and-data.md#numeric-metrics). Missing cells and
+all-empty metric choices also explain unavailable evidence. Decode TPS hints
+identify contract-1 effective output throughput including retry waiting, while
+explicitly preserving the recorded basis for legacy values. Summary hints
+distinguish different sources with one basis from mixed bases/contract versions,
+including old/new Tool Success Rate formulas and Trial counts. Hints do not
+add a detail panel or suppress mixed numeric aggregates.
 
 ```toml
 [metrics."atif.extra:energy_wh"]

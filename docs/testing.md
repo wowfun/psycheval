@@ -71,7 +71,7 @@ and ensure that Home toolbar actions do not overlap when a report reader narrows
 the page pane:
 
 ```console
-node --test web/test/workspace-location.test.js web/test/app.test.js web/test/home-location.test.js web/test/report-manager-race.test.js
+node --import ./web/test/register-loader.mjs --test web/test/workspace-location.test.js web/test/app.test.js web/test/home-location.test.js web/test/report-manager-race.test.js
 uv run pytest tests/peval/test_serve_catalog_http.py tests/peval/test_serve_workspace_views_http.py tests/peval/test_serve_catalog_summary_http.py tests/peval/test_workspace_views.py
 pnpm run test:e2e web/e2e/workspace-links.spec.mjs web/e2e/reports.spec.mjs
 ```

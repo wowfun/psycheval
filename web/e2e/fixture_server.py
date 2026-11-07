@@ -117,6 +117,28 @@ def main() -> None:
                 config_file.write(
                     '\n[[harbor.datasets]]\nid = "editable"\npath = "editable"\n'
                 )
+        if os.environ.get("PEVAL_E2E_COLLECTIONS") == "1":
+            from tests.peval.test_harbor_evidence import write_task
+            from tests.peval.test_harbor_trials import completed_result, write_trial
+
+            write_task(root / "other" / "third", "org/third")
+            for name, ended in (("ended", True), ("running", False)):
+                job = root / "collection-jobs" / name
+                write_trial(job / "trial", result=completed_result())
+                (job / "result.json").write_text(
+                    json.dumps(
+                        {
+                            "started_at": "2026-11-07T00:00:00Z",
+                            "finished_at": "2026-11-07T01:00:00Z" if ended else None,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            with (root / "peval.toml").open("a", encoding="utf-8") as config_file:
+                config_file.write(
+                    '\n[[harbor.datasets]]\nid = "other"\npath = "other"\n'
+                    '\n[[harbor.mounts]]\nid = "collections"\npath = "collection-jobs"\n'
+                )
         write_e2e_trial(
             root / "runs/default/psychevo/e2e-session/e2e-trial",
             "e2e-trial",
@@ -125,8 +147,14 @@ def main() -> None:
             root / "runs/default/psychevo/e2e-session/e2e-trial-2",
             "e2e-trial-2",
         )
+        if os.environ.get("PEVAL_E2E_LONG_TABLE") == "1":
+            for index in range(12):
+                name = f"filter-trial-{index:02d}"
+                write_e2e_trial(root / "runs/default/psychevo/e2e-session" / name, name)
         if os.environ.get("PEVAL_E2E_METRICS") == "1":
             write_metric_trials(root)
+        if os.environ.get("PEVAL_E2E_PROVENANCE") == "1":
+            write_measurement_trial(root)
         if os.environ.get("PEVAL_E2E_LINKS") == "1":
             path = (
                 root
@@ -628,6 +656,40 @@ def write_verification_trial(root: Path) -> None:
         )
 
 
+def write_measurement_trial(root: Path) -> None:
+    from psycheval.harbor.measurements import calculate, publish, read
+
+    agent = root / "runs/default/psychevo/e2e-session/e2e-trial/agent"
+    trajectory = json.loads((agent / "trajectory.json").read_text(encoding="utf-8"))
+    metadata = json.loads((agent / "trajectory_meta.json").read_text(encoding="utf-8"))
+    marker = publish(
+        agent,
+        [
+            {
+                "type": "tool",
+                "id": "call_error",
+                "session_id": "e2e-session",
+                "scope": "main",
+                "status": "failed",
+            }
+        ],
+        producer={"name": "workbuddy", "version": "fixture"},
+        invocation_id="fixture",
+        session_id="e2e-session",
+        capabilities={
+            "logical_steps": {
+                "status": "unavailable",
+                "reason": "native_first_output_and_retry_identity_unavailable",
+            }
+        },
+        complete=True,
+    )
+    trajectory.setdefault("extra", {})["measurements"] = marker
+    metadata["native_measurements"] = calculate(*read(agent, marker))
+    (agent / "trajectory.json").write_text(json.dumps(trajectory), encoding="utf-8")
+    (agent / "trajectory_meta.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+
 def write_metric_trials(root: Path) -> None:
     from psycheval.metric_contract import custom_metric_id
 
@@ -690,7 +752,7 @@ def write_e2e_trial(cell: Path, trial_id: str) -> None:
         "final_metrics": {
             "total_steps": 2,
             "extra": {
-                "total_turns": 1,
+                "total_agent_steps": 1,
                 "total_tool_calls": 1,
                 "total_tool_errors": 1,
             },

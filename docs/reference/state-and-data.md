@@ -1,5 +1,44 @@
 # State and Data
 
+## Collection overlays
+
+A malformed Job archival state excludes that Job from discovery until an
+administrator explicitly restores it. Other collections remain available. The
+archived listing exposes the error and a revision of the retained bytes so that
+restoration can repair the state without modifying original Job evidence.
+
+Managed runs appear in the Jobs table while preparing, before a result directory
+exists. Their run identity links to progress and cancellation; notes and archival
+become available only after allocation establishes the directory identity.
+
+Workspace-owned Dataset and Job notes are UTF-8 `notes.md` files under
+`.peval/collections/<dataset|job>/<path-sha256>/`. The identity hashes the
+normalized absolute source directory, so renaming a registration does not lose
+its note or Job archive state. External source trees remain read-only.
+Job `state.json` records logical archival and the last root Trial count. Archive
+and restore do not alter individual Trial archival overlays, scores or reports.
+Discovery skips archived Job directories before inspecting their Trials and
+excludes retained Trial overlays for those Jobs. Reconciliation removes those
+projections atomically; restoring allows ordinary discovery to rebuild them.
+
+Notes are limited to 64 KiB, reject linked storage paths and use atomic writes.
+Reads expose a revision; administrator writes require that revision and serialize
+per collection so stale edits cannot overwrite another editor. Empty notes remove
+the file. Counts and reports are read-only projections, not new source evidence.
+Report counts use active report associations owned by ReportLibrary. Archiving a
+Job does not archive its reports; canonical reports disappear from catalog-based
+queries while their Job is excluded, and imported reports remain independently
+managed. Guests cannot change collection overlays or mount configuration.
+Collection list responses omit management-only fields for guests. A Job is one
+retained result directory, deduplicated across managed execution and explicit
+mounts. Trial counts count discovered root Trials, including individually archived
+Trials, rather than step projections or planned work. Unavailable counts are null.
+Jobs lists read one compact catalog projection, group it by Job once and reuse it
+for Trial counts and report associations without loading trajectory bodies.
+Archival requires a verified terminal state and invalidates the catalog as one
+generation, including summaries, facets and exports. Plugin discovery and retained
+overlay fallback apply the same exclusion before reading Trial evidence.
+
 Psycheval separates authoritative evidence from user-authored overlays and
 rebuildable projections.
 

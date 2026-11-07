@@ -5,6 +5,14 @@ shared selection of registered Tasks and named Agent/Model variants. The
 workspace owns configuration, process lifetime and derived views; the harness
 owns execution, retries, native artifacts and scoring. Harbor is built in.
 
+The Jobs table combines managed runs and individually mounted Harbor Jobs, with
+one row per retained result directory. Its Task selection and right-sidebar
+interaction follow the [workspace contract](workspace.md#dataset-and-job-tables).
+Notes and Job archival are workspace-owned
+[collection overlays](state-and-data.md#collection-overlays), independent of
+worker execution state. Archival requires a verified terminal state; it does not
+stop a process or change native results.
+
 Atomic control-file replacement tolerates temporary Windows reader contention
 within a finite retry deadline. Its default belongs to
 [`storage`](../../src/psycheval/jobs/storage.py). Expiry preserves the previous
@@ -99,7 +107,7 @@ control directory. TOML defaults cannot represent JSON null; saving such a value
 fails explicitly.
 
 Native Host ACP variants select
-[`psycheval.harbor.acp_agent:HostACPAgent`](harbor.md#host-acp-agent) explicitly.
+[`psycheval.harbor.agents.acp.agent:HostACPAgent`](harbor.md#host-acp-agent) explicitly.
 The Harbor built-in `acp` installer is rejected for native Hosts.
 Agent suggestions use the explicit Host adapter for ACP. Built-in installer
 names may still be entered for compatible non-Host environments. Environment
