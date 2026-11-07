@@ -1166,7 +1166,13 @@ class WorkspaceCatalogTests(unittest.TestCase):
                             ("category", CatalogQuery(), "category"),
                         ]
                     )
-                loads.assert_not_called()
+                # Contract 1 reads only compact provenance once per matched source;
+                # it must not decode full row_json on each metric join row.
+                self.assertEqual(loads.call_count, 125 + 63 + 125)
+                for call in loads.call_args_list:
+                    self.assertNotIn(
+                        "trial_key", json.JSONDecoder().decode(call.args[0])
+                    )
                 all_view, even_view, category_view = payload["views"]
                 self.assertEqual(all_view["matched_count"], 125)
                 self.assertEqual(all_view["groups"][0]["count"], 125)
@@ -1450,6 +1456,22 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 catalog.config,
                 kind="json",
                 source_keys=hundred_keys,
+            )
+            from psycheval.report.builder import VIEW_SCHEMA_VERSION
+
+            self.assertEqual(
+                export.filename, f"peval-report-v{VIEW_SCHEMA_VERSION}.json"
+            )
+            self.assertEqual(
+                json.loads(export.content)["schema_version"], VIEW_SCHEMA_VERSION
+            )
+            self.assertEqual(
+                len(
+                    json.loads(export.content)["trajectory_meta"][0][
+                        "metric_provenance"
+                    ]
+                ),
+                12,
             )
             self.assertEqual(
                 len(json.loads(export.content)["trajectory"]),
