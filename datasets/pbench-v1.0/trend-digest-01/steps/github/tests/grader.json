@@ -13,7 +13,8 @@
             "*terminal*",
             "*shell*",
             "bash",
-            "Bash"
+            "Bash",
+            "pwsh"
           ],
           "argument_terms": [
             "https://github.com/trending?since=weekly"

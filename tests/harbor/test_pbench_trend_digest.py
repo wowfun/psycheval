@@ -170,7 +170,7 @@ def test_trend_digest_task_contract_and_workbook(x_fetch: ModuleType) -> None:
         )
         branch = config["required_calls"][0]["any"][0]
         assert branch == {
-            "tool_names": ["*exec*", "*terminal*", "*shell*", "bash", "Bash"],
+            "tool_names": ["*exec*", "*terminal*", "*shell*", "bash", "Bash", "pwsh"],
             "argument_terms": [skill_name],
         }
 
@@ -533,7 +533,7 @@ def test_final_answer_failure_preserves_other_rule_credit(platform, tmp_path, ve
 
 
 @pytest.mark.parametrize("platform", ["github", "x", "hacker-news"])
-@pytest.mark.parametrize("tool_name", ["bash", "Bash"])
+@pytest.mark.parametrize("tool_name", ["bash", "Bash", "pwsh"])
 def test_shell_tool_aliases_preserve_source_gates_and_evidence(
     platform, tool_name, tmp_path, verifier
 ):
@@ -545,6 +545,27 @@ def test_shell_tool_aliases_preserve_source_gates_and_evidence(
     rewards, _ = _grade(verifier, runtime, config)
     assert rewards["reward"] == 1
     assert (Path(runtime.paths.verifier_logs) / "artifact_text/sources.md").is_file()
+
+
+@pytest.mark.parametrize("platform", ["github", "x", "hacker-news"])
+@pytest.mark.parametrize("failure", ["arguments", "observation"])
+def test_pwsh_alias_still_requires_successful_source_evidence(
+    platform, failure, tmp_path, verifier
+):
+    runtime, config, _, _ = _case(tmp_path, platform)
+    path = Path(runtime.paths.agent_logs) / "trajectory.json"
+    trajectory = json.loads(path.read_text(encoding="utf-8"))
+    step = trajectory["steps"][1]
+    call = step["tool_calls"][0]
+    call["function_name"] = "pwsh"
+    if failure == "arguments":
+        call["arguments"] = {"command": "Write-Output unrelated"}
+    else:
+        step["observation"]["results"][0]["extra"]["exit_code"] = 2
+    path.write_text(json.dumps(trajectory), encoding="utf-8")
+    rewards, _ = _grade(verifier, runtime, config)
+    assert rewards["required_" + failure] == 0
+    assert rewards["final_answer"] == 1
 
 
 def test_github_previous_step_evidence_is_not_accepted(tmp_path, verifier):
@@ -858,6 +879,11 @@ def test_github_ranked_direct_fetch_accepts_repository_fields_and_later_details(
             {"command": 'Get-Content -LiteralPath "c:\\temp\\trending.html"'},
         ),
         (
+            'Invoke-WebRequest -OutFile "C:\\Temp\\trending.html"',
+            "pwsh",
+            {"command": 'Get-Content -LiteralPath "c:\\temp\\trending.html"'},
+        ),
+        (
             'cd /tmp && curl -o "trending.html"',
             "Bash",
             {
@@ -915,11 +941,14 @@ def test_github_source_keeps_later_linked_descriptions(tmp_path, verifier):
         "wget_log",
     ],
 )
+@pytest.mark.parametrize("tool_name", ["exec_command", "pwsh"])
 def test_github_saved_page_requires_current_successful_linked_evidence(
-    tmp_path, verifier, failure
+    tmp_path, verifier, failure, tool_name
 ):
     runtime, config, path, data, _ = _github_saved_page(tmp_path)
     fetch, read = data["steps"][1:3]
+    fetch["tool_calls"][0]["function_name"] = tool_name
+    read["tool_calls"][0]["function_name"] = tool_name
     observation = read["observation"]["results"][0]
     if failure == "fetch_failed":
         fetch["observation"]["results"][0]["extra"]["exit_code"] = 1

@@ -8,7 +8,8 @@
             "*terminal*",
             "*shell*",
             "bash",
-            "Bash"
+            "Bash",
+            "pwsh"
           ],
           "argument_terms": [
             "x-daily"
