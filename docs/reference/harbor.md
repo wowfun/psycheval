@@ -1379,6 +1379,24 @@ are permitted. Patch provenance retains order and digests, not
 contents or environment values. Relative patch resources resolve from the private
 startup directory; external resources must use absolute paths.
 
+DSH supports Harbor Skills through the existing `skills_dir` argument. Harbor
+prepares Task Skills and merges Job-injected Skills into the effective directory;
+the adapter passes its native absolute path directly to DSH's filesystem provider.
+Bundle scripts and references retain their original relative paths. The directory
+must be readable at setup and before every new or resumed invocation; an absent
+or unreadable declared directory fails before the prompt is submitted.
+
+An adapter-owned runtime patch follows every caller patch. It enables the native
+Skill registry, filesystem provider and loading tool, sets
+`includeDefaultRoots=false`, and replaces `customSkillDirs` with the effective
+directory, or an empty list when no Skills were supplied. Default project and
+user filesystem roots are never scanned. Other built-in Skill providers remain
+under DSH's native configuration. Skill parsing, catalog conflicts and loading
+remain DSH-owned; the adapter does not inject Skill bodies into the task prompt.
+The generic ACP adapter still requires an explicit subclass Skills capability.
+Provenance retains the effective native Skill directories and runtime-patch digest
+alongside the existing caller-patch digests, without retaining patch contents.
+
 The DSH wire contract is pinned to deepseek-ai/deepseek-harness commit
 `fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159` (0.2.2-rc.1), in
 packages/acp/acp/src/{updates,model-control}.ts. DSH messageId identifies assistant

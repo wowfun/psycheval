@@ -3,6 +3,7 @@ import sys
 import pytest
 
 from psycheval.harbor.agents.acp.agent import HostACPAgent
+from psycheval.harbor.agents.dsh import HostDSHAgent
 from psycheval.harbor.agents.hermes import HermesAgent
 from psycheval.harbor.agents.workbuddy import HostWorkBuddyAgent
 
@@ -19,6 +20,13 @@ def test_acp_skill_admission_follows_subclass_capabilities(tmp_path):
         HostACPAgent(logs_dir=tmp_path, argv=[sys.executable], skills_dir=skills)
 
     assert HostWorkBuddyAgent.capabilities.skills
+    assert HostDSHAgent.capabilities.skills
+    assert (
+        HostDSHAgent(
+            logs_dir=tmp_path, model_name="fixture", skills_dir=skills
+        ).skills_dir
+        == skills
+    )
 
     class NoSkillAgent(SkillAgent):
         capabilities = SkillAgent.capabilities.model_copy(update={"skills": False})

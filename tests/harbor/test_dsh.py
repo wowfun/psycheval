@@ -168,6 +168,176 @@ def test_dsh_patches_are_seeded_once_and_isolation_wins(tmp_path, monkeypatch, v
     assert seeded.read_bytes() == original
     assert agent._child_env["DSH_HOME"] == home
     assert "fixture-key" not in json.dumps(agent._agent_metadata)
+    managed = {item["id"]: item for item in yaml.safe_load(original) if "id" in item}
+    assert managed["skill-filesystem"]["config"] == {
+        "includeDefaultRoots": False,
+        "customSkillDirs": [],
+    }
+
+
+@pytest.mark.parametrize("skills_kind", ["task", "job", "both"])
+def test_harbor_prepares_and_injects_dsh_skills_before_setup(
+    tmp_path, monkeypatch, skills_kind
+):
+    from harbor.job import Job
+    from harbor.models.job.config import JobConfig
+
+    task = tmp_path / "task 中文"
+    data = task / "environment/data"
+    data.mkdir(parents=True)
+    has_task = skills_kind in {"task", "both"}
+    has_job = skills_kind in {"job", "both"}
+    (task / "instruction.md").write_text(
+        "Synthetic Skill setup only.", encoding="utf-8"
+    )
+    (task / "task.toml").write_text(
+        'schema_version = "1.4"\n[task]\nname = "fixture/dsh-skills"\n[environment]\nworkdir = "/app"\n'
+        + ('skills_dir = "/app/skills"\n' if has_task else ""),
+        encoding="utf-8",
+    )
+
+    def skill(path, name):
+        path.mkdir(parents=True)
+        (path / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Fixture skill\n---\nUse scripts/marker.py and references/input.txt.\n",
+            encoding="utf-8",
+        )
+        (path / "scripts").mkdir()
+        (path / "scripts/marker.py").write_text("print('fixture')", encoding="utf-8")
+        (path / "references").mkdir()
+        (path / "references/input.txt").write_text(name, encoding="utf-8")
+
+    if has_task:
+        skill(data / "skills/task-skill", "task-skill")
+    injected = tmp_path / "Job 注入/job-skill"
+    if has_job:
+        skill(injected, "job-skill")
+    source = tmp_path / "caller.yaml"
+    source.write_text(
+        "- id: skill-filesystem\n  disabled: true\n  config:\n    includeDefaultRoots: true\n    customSkillDirs: [ambient]\n- id: tool-skill\n  disabled: true\n",
+        encoding="utf-8",
+    )
+    observed = []
+    task_config_bytes = (task / "task.toml").read_bytes()
+    setup = HostDSHAgent.setup
+
+    async def probe(self, environment):
+        return "fixture-version"
+
+    async def capture(self, environment):
+        await setup(self, environment)
+        config = yaml.safe_load(Path(self.argv[-1]).read_text(encoding="utf-8"))
+        managed = {item["id"]: item for item in config if "id" in item}
+        root = environment.native_path(self.skills_dir)
+        assert managed["skill-filesystem"] == {
+            "id": "skill-filesystem",
+            "disabled": False,
+            "config": {"includeDefaultRoots": False, "customSkillDirs": [str(root)]},
+        }
+        assert (
+            managed["skill"]["disabled"] is False
+            and managed["tool-skill"]["disabled"] is False
+        )
+        assert Path(self.argv[-3]).read_bytes() == source.read_bytes()
+        names = sorted(p.name for p in root.iterdir())
+        for name in names:
+            assert (root / name / "references/input.txt").read_text(
+                encoding="utf-8"
+            ) == name
+            assert (root / name / "scripts/marker.py").read_text(
+                encoding="utf-8"
+            ) == "print('fixture')"
+        argv = list(self.argv)
+        await setup(self, environment)
+        assert self.argv == argv
+        observed.append(names)
+
+    monkeypatch.setattr(HostDSHAgent, "_probe_version", probe)
+    monkeypatch.setattr(HostDSHAgent, "setup", capture)
+
+    async def scenario():
+        job = await Job.create(
+            JobConfig.model_validate(
+                {
+                    "job_name": "dsh-skills",
+                    "jobs_dir": str(tmp_path / "jobs"),
+                    "quiet": True,
+                    "install_only": True,
+                    "tasks": [{"path": str(task)}],
+                    "agents": [
+                        {
+                            "import_path": "psycheval.harbor.agents.dsh:HostDSHAgent",
+                            "model_name": "fixture",
+                            "skills": [str(injected)] if has_job else [],
+                            "kwargs": {
+                                "executable": sys.executable,
+                                "patch_paths": [str(source)],
+                            },
+                        }
+                    ],
+                    "environment": {
+                        "import_path": "psycheval.harbor.environment:HostEnvironment",
+                        "kwargs": {
+                            "host_access": {"filesystem": True, "process": True},
+                            "workdir_root": str(tmp_path / "workspaces"),
+                        },
+                    },
+                }
+            )
+        )
+        result = await job.run()
+        assert len(result.trial_results) == 1
+        assert result.trial_results[0].exception_info is None
+
+    asyncio.run(scenario())
+    assert (task / "task.toml").read_bytes() == task_config_bytes
+    assert observed == [
+        sorted(
+            (["task-skill"] if has_task else []) + (["job-skill"] if has_job else [])
+        )
+    ]
+
+
+def test_dsh_declared_skill_directory_must_be_readable(tmp_path, monkeypatch):
+    import os
+
+    from tests.harbor.environment_support import make_environment
+
+    async def scenario():
+        environment = make_environment(
+            tmp_path, environment_kwargs={"workdir_root": tmp_path / "workspaces"}
+        )
+        await environment.start(force_build=False)
+        try:
+            agent = HostDSHAgent(
+                logs_dir=tmp_path / "logs",
+                model_name="fixture",
+                executable=sys.executable,
+                skills_dir="/app/skills",
+            )
+            root = environment.native_path(agent.skills_dir)
+            with pytest.raises(FileNotFoundError):
+                await agent.setup(environment)
+            root.mkdir()
+            scandir = os.scandir
+
+            def denied(path):
+                if Path(path) == root:
+                    raise PermissionError("fixture denied directory")
+                return scandir(path)
+
+            with monkeypatch.context() as scoped:
+                scoped.setattr(os, "scandir", denied)
+                with pytest.raises(PermissionError, match="fixture denied"):
+                    await agent.setup(environment)
+            await agent.setup(environment)
+            root.rmdir()
+            with pytest.raises(FileNotFoundError):
+                agent._invocation_host(environment)
+        finally:
+            await environment.stop(delete=True)
+
+    asyncio.run(scenario())
 
 
 def test_native_provider_default_choice_is_admitted_only_for_dsh_reasoning():

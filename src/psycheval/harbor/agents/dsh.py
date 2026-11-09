@@ -44,6 +44,8 @@ def _read_patch(source):
 
 
 class HostDSHAgent(HostACPAgent):
+    capabilities = HostACPAgent.capabilities.model_copy(update={"skills": True})
+
     def __init__(self, *args, executable="dsh", patch_paths=(), **kwargs):
         if any(
             key in kwargs
@@ -84,6 +86,7 @@ class HostDSHAgent(HostACPAgent):
     async def setup(self, environment):
         if self._dsh_seeded:
             await super().setup(environment)
+            self._skill_dirs(environment)
             return
         # Validate every source before spawning the Agent or materializing configuration.
         patches = []
@@ -97,6 +100,7 @@ class HostDSHAgent(HostACPAgent):
                 raise ValueError("DSH patch must be a YAML patch list")
             patches.append(content)
         await super().setup(environment)
+        skill_dirs = self._skill_dirs(environment)
         cli_version = await self._probe_version(environment)
         home = self._state / "dsh"
         home.mkdir(exist_ok=True)
@@ -115,8 +119,8 @@ class HostDSHAgent(HostACPAgent):
         shutil.copyfile(Path(__file__).with_name("dsh_measurements.mjs"), observer)
         self._measurement_hook = home / "tool-measurements.ndjson"
         self._child_env["PEVAL_DSH_MEASUREMENTS"] = str(self._measurement_hook)
-        measurement_patch = home / "measurements.yaml"
-        measurement_patch.write_text(
+        runtime_patch = home / "runtime.yaml"
+        runtime_patch.write_text(
             yaml.safe_dump(
                 [
                     {
@@ -127,18 +131,46 @@ class HostDSHAgent(HostACPAgent):
                         },
                     },
                     {"insert": [{"id": "peval-measurements", "name": str(observer)}]},
+                    {"id": "skill", "disabled": False},
+                    {
+                        "id": "skill-filesystem",
+                        "disabled": False,
+                        "config": {
+                            "includeDefaultRoots": False,
+                            "customSkillDirs": skill_dirs,
+                        },
+                    },
+                    {"id": "tool-skill", "disabled": False},
                 ],
                 sort_keys=False,
             ),
             encoding="utf-8",
         )
-        self.argv.extend((*patch_argv, "--patch", str(measurement_patch)))
+        self.argv.extend((*patch_argv, "--patch", str(runtime_patch)))
         self._agent_metadata = {
             "dsh_reference": DSH_REFERENCE,
             "dsh_cli_version": cli_version,
             "dsh_patches": provenance,
+            "dsh_skill_dirs": skill_dirs,
+            "dsh_runtime_patch_sha256": hashlib.sha256(
+                runtime_patch.read_bytes()
+            ).hexdigest(),
         }
         self._dsh_seeded = True
+
+    def _skill_dirs(self, host):
+        if not self.skills_dir:
+            return []
+        root = host.native_path(self.skills_dir)
+        with os.scandir(root) as entries:
+            next(entries, None)
+        return [str(root)]
+
+    def _invocation_host(self, environment):
+        host = super()._invocation_host(environment)
+        # Admission runs before every prompt, including resumed sessions.
+        self._skill_dirs(host)
+        return host
 
     def _publish_call(self, invocation):
         super()._publish_call(invocation)

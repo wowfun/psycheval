@@ -84,8 +84,15 @@ uses an isolated Trial home and a local HTTP model fixture with a dummy key. It
 checks provider/model registration, Unicode stdin, JSON events, and ATIF without
 contacting a live model provider.
 
-The Host ACP tests use synthetic stdio peers by default. Opt-in RSIversi
-acceptance uses `PEVAL_RSIVERSI_ACP` as the absolute prebuilt executable. Its
+The Host ACP tests use synthetic stdio peers by default. DSH Skill wiring is covered by
+`tests/harbor/test_dsh.py` and `tests/harbor/test_capabilities.py`, including native
+Host preparation of Task and Job Skills, missing-directory admission, isolated
+filesystem roots and unchanged source Tasks. Real DSH model calls remain opt-in;
+verify native Skill loading and bundled-script execution separately from network
+Task scores. The source-copy ACP scenario also exercises DSH setup without the
+original package.
+
+Opt-in RSIversi acceptance uses `PEVAL_RSIVERSI_ACP` as the absolute prebuilt executable. Its
 test owns a local HTTP provider and a private configuration seed. Run
 `uv run pytest tests/harbor/test_acp.py -k rsiversi` on Linux. Local-fixture and
 live-provider evidence are reported separately. WorkBuddy desktop ACP acceptance

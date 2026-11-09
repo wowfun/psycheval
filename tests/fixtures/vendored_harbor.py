@@ -859,6 +859,35 @@ def acp(root):
     async def scenario():
         await host.start(False)
         try:
+            skills = host.work_dir / "explicit skills 中文"
+            skills.mkdir()
+            (skills / "fixture").mkdir()
+            (skills / "fixture/SKILL.md").write_text(
+                "---\nname: fixture\ndescription: Copied package skill\n---\nFixture body.\n",
+                encoding="utf-8",
+            )
+            dsh = module("agents.dsh").HostDSHAgent(
+                logs_dir=root / "dsh-logs",
+                executable=sys.executable,
+                model_name="fixture",
+                skills_dir=str(skills),
+            )
+            await dsh.setup(host)
+            import yaml
+
+            managed = {
+                item["id"]: item
+                for item in yaml.safe_load(
+                    Path(dsh.argv[-1]).read_text(encoding="utf-8")
+                )
+                if "id" in item
+            }
+            assert dsh.capabilities.skills
+            assert managed["skill-filesystem"]["config"] == {
+                "includeDefaultRoots": False,
+                "customSkillDirs": [str(skills)],
+            }
+            assert host.task_env_config.os == host.os
             await agent.setup(host)
             for action in (agent.run, agent.resume):
                 received.clear()
