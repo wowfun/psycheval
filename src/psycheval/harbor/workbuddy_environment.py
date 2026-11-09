@@ -74,8 +74,6 @@ class WorkBuddyHostEnvironment(HostEnvironment):
                 raise ValueError(
                     "WorkBuddy Host accepts only inert WorkBuddy Compose metadata"
                 )
-        # Harbor consults this private Task copy when uploading Skills.
-        self.task_env_config.os = self.os
 
     def _validate_mounts(self) -> None:
         super()._validate_mounts()

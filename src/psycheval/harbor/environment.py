@@ -578,6 +578,8 @@ class HostEnvironment(BaseEnvironment):
                 "HostEnvironment cannot enforce Task resources: "
                 + ", ".join(sorted(requested))
             )
+        # Harbor consults this private Task copy when uploading Skills.
+        self.task_env_config.os = self.os
 
     def _validate_build_context(self) -> None:
         if any(

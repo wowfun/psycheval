@@ -691,6 +691,10 @@ tests are ordinary workspace content.
 
 ## Host configuration
 
+Every native Host records its actual OS in Harbor's in-memory Task environment
+before Skill upload, so Windows injection never requests Linux `root`/`chmod`.
+Source Task files remain unchanged.
+
 `HostEnvironment` requires an explicit `host_access` policy. In Python this is
 `HostAccessPolicy(filesystem=True, process=True)`; Job YAML uses the equivalent
 `host_access: {filesystem: true, process: true}` object. Filesystem and process

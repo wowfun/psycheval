@@ -94,7 +94,7 @@ retention through the verifier's callback. See [Judge inspection and runs](refer
 Task graders own requirements and score decisions. Their interfaces and output
 ownership are defined in [Document inspection and evidence](reference/document-evidence.md).
 External Dataset sources remain read-only, including during plugin loading.
-For native WorkBuddy execution, the Host adapter records the host OS in Harbor's
+For native Host execution, the Host adapter records the host OS in Harbor's
 in-memory Task environment configuration; Harbor uses it when injecting Skills.
 The source Task and its scoring contract remain unchanged.
 
