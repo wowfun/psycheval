@@ -15,6 +15,7 @@ from ..evidence import EvidenceLimitError, SourceSnapshot, _check_path, is_link
 from ._limits import DocumentLimitError, DocumentLimits, DocumentParseError
 from .models import (  # noqa: F401
     DocxReport,
+    MarkdownReport,
     PdfReport,
     PptxOptions,
     PptxReport,
@@ -115,11 +116,12 @@ def select_document(
     *,
     format: str,
     preferred_stem: str | None = None,
+    excluded_roots=(),
     max_entries: int = 100000,
     max_depth: int = 64,
     max_compare_bytes: int = 256 * 1024 * 1024,
 ):
-    if format not in {"pdf", "pptx", "xlsx", "docx"}:
+    if format not in {"pdf", "pptx", "xlsx", "docx", "md"}:
         raise ValueError(f"Unsupported document format: {format}")
     if type(max_entries) is not int or max_entries < 1:
         raise ValueError("max_entries must be a positive integer")
@@ -128,11 +130,14 @@ def select_document(
     if type(max_compare_bytes) is not int or max_compare_bytes < 1:
         raise ValueError("max_compare_bytes must be a positive integer")
     found, visited = {}, set()
+    excluded = tuple(Path(os.path.abspath(path)) for path in excluded_roots)
     count = 0
     scans = []
 
     def visit(entry, info, depth):
         nonlocal count
+        if any(entry.is_relative_to(path) for path in excluded):
+            return
         count += 1
         if count > max_entries:
             raise ValueError(f"scan entry limit reached ({max_entries})")
@@ -230,8 +235,12 @@ def inspect_document(
     if len(snapshot.content) > limits.source_bytes:
         raise DocumentLimitError("Document exceeds source byte limit")
     kind = format or snapshot.path.suffix.lower().lstrip(".")
-    if kind not in {"pdf", "pptx", "xlsx", "docx"}:
+    if kind not in {"pdf", "pptx", "xlsx", "docx", "md"}:
         raise DocumentParseError(f"Unsupported document format: {kind}")
+    if kind == "md":
+        from ._markdown import inspect
+
+        return inspect(snapshot, limits)
     module_name = {"pdf": "pypdf", "pptx": "pptx", "xlsx": "openpyxl", "docx": "docx"}[
         kind
     ]

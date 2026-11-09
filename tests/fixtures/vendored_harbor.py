@@ -110,13 +110,14 @@ def documents(root: Path) -> None:
     pptx.Presentation().save(workdir / "input.pptx")
     openpyxl.Workbook().save(workdir / "input.xlsx")
     docx.Document().save(workdir / "input.docx")
+    (workdir / "input.md").write_text("| A |\n| --- |\n| B |\n", encoding="utf-8")
     api, evidence = module("documents"), module("evidence")
     mirror = root / "mirror"
     mirror.mkdir()
-    for kind in ("pdf", "pptx", "xlsx", "docx"):
+    for kind in ("pdf", "pptx", "xlsx", "docx", "md"):
         (mirror / f"input.{kind}").write_bytes((workdir / f"input.{kind}").read_bytes())
     with evidence.EvidenceWriter(root / "evidence") as writer:
-        for kind in ("pdf", "pptx", "xlsx", "docx"):
+        for kind in ("pdf", "pptx", "xlsx", "docx", "md"):
             selection = api.select_document([workdir, mirror], format=kind)
             assert selection.selected is not None and len(selection.candidates) == 2
             source = writer.capture(f"source_{kind}", selection.selected)

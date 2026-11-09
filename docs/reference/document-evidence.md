@@ -17,10 +17,13 @@ OOXML access affect grading facts; upgrades require the style regression target.
 
 ## Inspection
 
-`select_document(roots, format=..., preferred_stem=..., max_entries=100000,
+`select_document(roots, format=..., preferred_stem=..., excluded_roots=(), max_entries=100000,
 max_depth=64, max_compare_bytes=256 * 1024 * 1024)` incrementally discovers
 regular files, excludes symbolic links, Windows reparse points and Office lock
-files, and deduplicates overlapping roots. Matching preferred stems form the
+files, and deduplicates overlapping roots. Explicit
+`excluded_roots` are omitted together with their descendants before traversal.
+Markdown uses `format="md"` and the `.md` extension.
+Matching preferred stems form the
 selection pool when present; otherwise all candidates participate. One candidate
 is selected without reading its contents. Multiple candidates are treated as one
 document only when their lengths and bytes match, including copies with different
@@ -66,6 +69,25 @@ converted into failed document checks.
 | PPTX | Slides, recursive leaf shapes, bounds, paragraphs, runs, table cells, effective font sizes/colors, selected title and background colors. |
 | XLSX | Sheet order/visibility, nonempty cells and addresses, merged ranges; formulas and cached results are separate. |
 | DOCX | Body paragraphs and tables in document order, nested table content, run text and heading styles; merged cells retain spans. |
+| Markdown | Decoded source text, top-level blocks with zero-based, end-exclusive line ranges, pipe and HTML table facts. |
+
+Markdown inspection uses the runtime dependency `markdown-it-py`, imported only
+when requested. It accepts UTF-8 (with optional BOM), or BOM-marked UTF-16/32,
+and normalizes line endings. Invalid encoding raises `DocumentParseError`.
+`MarkdownReport.to_markdown()` preserves that decoded source, including content
+outside tables. Blocks distinguish tables, thematic breaks, headings, code and
+other prose; fenced code and comments do not contribute tables or breaks.
+HTML tables outside `pre` and `code` retain cell text, row/column spans and nested
+tables as ordered cell blocks without executing HTML, fetching URLs, loading
+images or rendering. Optional cell and row end tags are accepted. Malformed or
+incomplete tables and unsupported zero row/column spans produce no table facts;
+their text remains in the decoded source. Other complete top-level tables in the
+same HTML block are retained. HTML table blocks use the containing HTML block's
+line range, so multiple tables can share a range; nested tables have cell-local
+structure, without separate line ranges. Inspection limits bound
+source text, tokens, blocks and table facts. The facts budget also charges every
+active-span candidate before placement scans and row pruning; grading policies
+remain task-owned.
 
 PPTX title selection prefers a nonempty title placeholder. Without one, paragraphs
 containing a Unicode letter (including Chinese characters) take precedence over

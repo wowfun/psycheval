@@ -55,6 +55,25 @@ class Table:
 
 
 @dataclass(frozen=True)
+class MarkdownBlock:
+    kind: str
+    start_line: int
+    end_line: int
+    table: Table | None = None
+
+
+@dataclass(frozen=True)
+class MarkdownReport:
+    source: SourceSnapshot
+    text: str
+    blocks: tuple[MarkdownBlock, ...]
+    text_limit: int = DocumentLimits().text_bytes
+
+    def to_markdown(self):
+        return bounded_markdown((self.text,), self.text_limit)
+
+
+@dataclass(frozen=True)
 class PptxShape:
     index: int
     shape_id: int
