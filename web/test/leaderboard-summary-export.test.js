@@ -6,7 +6,7 @@ const browser = installBrowserDom('<script id="peval-i18n" type="application/jso
 const { state } = await import("../../src/psycheval/assets/web/modules/runtime.js");
 const summary = await import("../../src/psycheval/assets/web/modules/leaderboard-summary.js");
 const images = await import("../../src/psycheval/assets/web/modules/leaderboard-summary-export.js");
-const { downloadBlob } = await import("../../src/psycheval/assets/web/modules/export.js");
+const { downloadBlob } = await import("../../src/psycheval/assets/web/modules/download.js");
 test.after(() => browser.cleanup());
 
 const tick = () => new Promise(resolve => setImmediate(resolve));

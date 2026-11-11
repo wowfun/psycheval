@@ -1,5 +1,5 @@
 import { fmtNum, t } from "./shared.js";
-import { downloadBlob } from "./export.js";
+import { downloadBlob } from "./download.js";
 import { originNote, radarMetricLabel, radarOption } from "./leaderboard-radar.js";
 
 const WIDTH = 1000, SCALE = 2, MARGIN = 32, GAP = 24;

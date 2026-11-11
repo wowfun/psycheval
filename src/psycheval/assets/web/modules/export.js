@@ -47,23 +47,9 @@ function exportTableText(row, column) {
   if (column.valueType === "datetime") return formatUtcDate(raw);
   return column.format ? column.format(raw, row) : (raw ?? "-");
 }
-function downloadBlob(filename, mime, blob) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  try {
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-  } finally {
-    link.remove();
-    URL.revokeObjectURL(url);
-  }
-}
 export {
   bindServeExportControls,
   bindTrialSelection,
-  downloadBlob,
   firstUserStepSelection,
   xlsxTableRows,
 };
