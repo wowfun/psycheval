@@ -32,11 +32,17 @@ from psycheval.harbor.datasets import (
     resolve_harbor_dataset,
     validate_harbor_dataset,
 )
+from psycheval.harbor.task_scoring import (
+    SCORING_TEXT_LIMIT,
+    scoring_file_preview,
+    task_scoring_inventory,
+)
 from psycheval.harbor.tasks import (
     load_harbor_task,
     load_harbor_task_config,
     select_publishable_task_files,
 )
+from psycheval.serve.task_inventory_cache import TaskInventoryCache
 
 TEXT_EDIT_LIMIT = 2 * 1024 * 1024
 UPLOAD_LIMIT = 16 * 1024 * 1024
@@ -72,9 +78,18 @@ def config_revision(config_path: Path) -> str:
 class HarborWorkspace:
     """Owns safe Dataset registration, Task lifecycle, and file mutations."""
 
-    def __init__(self, config_path: Path, config: ToolConfig) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        config: ToolConfig,
+        *,
+        scoring_cache: TaskInventoryCache | None = None,
+    ) -> None:
         self.config_path = config_path.expanduser()
         self.config = config
+        self.scoring_cache = (
+            scoring_cache if scoring_cache is not None else TaskInventoryCache()
+        )
 
     def inventory(self) -> dict[str, Any]:
         payload = {
@@ -210,6 +225,10 @@ class HarborWorkspace:
                 allow_partial=current.allow_partial
                 if allow_partial is None
                 else allow_partial,
+                task_rule_counts=current.task_rule_counts
+                if os.path.normcase(str(root))
+                == os.path.normcase(str(self._config_path(current.path)))
+                else {},
             )
             validate_harbor_dataset(
                 dataset_id=updated_dataset.id,
@@ -255,6 +274,30 @@ class HarborWorkspace:
     def remove_dataset(self, *, dataset_id: str, expected_revision: str) -> ToolConfig:
         return self.remove_datasets(
             dataset_ids=(dataset_id,), expected_revision=expected_revision
+        )
+
+    def set_task_rule_count(
+        self, dataset_id: str, task: str, count: int | None, *, expected_revision: str
+    ) -> ToolConfig:
+        self._expect_config_revision(expected_revision)
+        dataset = self._dataset(dataset_id)
+        if dataset.format != "workbuddy.v1":
+            raise HarborWorkspaceError(
+                "Manual rule counts are only supported for WorkBuddy"
+            )
+        self._task_path(self._task_root(dataset), task)
+        counts = dict(dataset.task_rule_counts)
+        if count is None:
+            counts.pop(task, None)
+        else:
+            counts[task] = count
+        updated = dataset.validated_update(task_rule_counts=counts)
+        return self._save_config(
+            tuple(
+                updated if item.id == dataset_id else item
+                for item in self.config.harbor_datasets
+            ),
+            self.config.harbor_mounts,
         )
 
     def remove_datasets(
@@ -490,6 +533,7 @@ class HarborWorkspace:
                 self._task_summary(task_dir),
             )
         tree = self._file_tree(task_dir, editable=not resolved.read_only)
+        summary.update(self._task_scoring(dataset, task_dir))
         return {
             "dataset_id": dataset_id,
             "format": resolved.format,
@@ -515,6 +559,7 @@ class HarborWorkspace:
         return {
             "path": relative_path,
             "content": text,
+            **self._parse_preview(resolved.format, task_dir, relative_path, text),
             "revision": revision,
             "task_revision": (
                 _tree_metadata_revision(task_dir)
@@ -522,6 +567,35 @@ class HarborWorkspace:
                 else _directory_revision(task_dir)
             ),
         }
+
+    def preview_file(
+        self, dataset_id: str, task: str, relative_path: str, content: str
+    ) -> dict[str, Any]:
+        if Path(relative_path).name not in {"judge.yaml", "grader.json"}:
+            return {}
+        dataset = self._dataset(dataset_id)
+        location = self.task_location(dataset_id, task)
+        self._safe_task_file(location["task_path"], relative_path, must_exist=False)
+        return self._parse_preview(
+            dataset.format, location["task_path"], relative_path, content
+        )
+
+    @staticmethod
+    def _parse_preview(
+        format: str, task_dir: Path, relative_path: str, content: str
+    ) -> dict[str, Any]:
+        if Path(relative_path).name not in {"judge.yaml", "grader.json"}:
+            return {}
+        try:
+            return {
+                "preview": scoring_file_preview(relative_path, content, format=format),
+                "preview_error": None,
+            }
+        except (ValueError, RecursionError) as exc:
+            return {
+                "preview": None,
+                "preview_error": _safe_diagnostic(exc, task_dir, "<task>"),
+            }
 
     def mutate_file(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
         dataset_id = _required_string(payload, "dataset_id")
@@ -643,6 +717,8 @@ class HarborWorkspace:
                     self._trash_summary(dataset, entry)
                     for entry in _child_dirs(trash_root)
                 ]
+        for task in tasks:
+            task.update(self._task_scoring(dataset, root / task["directory"]))
         return {
             "id": dataset.id,
             "path": dataset.path,
@@ -658,6 +734,45 @@ class HarborWorkspace:
             "tasks": tasks,
             "trash": trash,
         }
+
+    def _task_scoring(self, dataset: HarborDataset, task_dir: Path) -> dict[str, Any]:
+        def read(path: Path) -> bytes:
+            _assert_safe_child(task_dir, path, allow_missing=True)
+            return _read_regular_file(path, limit=SCORING_TEXT_LIMIT)
+
+        def signature(path: Path):
+            _assert_safe_child(task_dir, path, allow_missing=True)
+            try:
+                value = path.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                return None
+            return (
+                value.st_dev,
+                value.st_ino,
+                value.st_mode,
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+            )
+
+        count = dataset.task_rule_counts.get(task_dir.name)
+        return self.scoring_cache.get(
+            (str(task_dir), dataset.format, count),
+            read=read,
+            signature=signature,
+            load=lambda reader: task_scoring_inventory(
+                task_dir,
+                read_bytes=reader,
+                format=dataset.format,
+                manual_rule_count=count,
+            ),
+        )
+
+    def task_scoring(self, dataset_id: str, task: str) -> dict[str, Any]:
+        dataset = self._dataset(dataset_id)
+        return self._task_scoring(
+            dataset, self._task_path(self._task_root(dataset), task)
+        )
 
     def _registered_task_summaries(
         self, resolved: ResolvedHarborDataset

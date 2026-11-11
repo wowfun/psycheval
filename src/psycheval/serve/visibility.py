@@ -158,6 +158,7 @@ def project_harbor_text_file(payload: dict[str, Any], role: str) -> dict[str, An
     if role == ADMIN_ROLE:
         return payload
     return {
+        **{key: payload[key] for key in ("preview", "preview_error") if key in payload},
         "path": str(payload.get("path") or ""),
         "content": str(payload.get("content") or ""),
     }
@@ -265,6 +266,31 @@ def _project_harbor_dataset(value: dict[str, Any]) -> dict[str, Any]:
 def _project_harbor_task_summary(value: dict[str, Any]) -> dict[str, Any]:
     diagnostics = value.get("diagnostics")
     return {
+        **{
+            key: value[key]
+            for key in (
+                "tags",
+                "instruction",
+                "instruction_path",
+                "rule_count",
+                "rubric_count",
+                "scoring_item_count",
+                "rule_count_source",
+                "scoring_items",
+                "scoring_paths",
+            )
+            if key in value
+        },
+        **(
+            {
+                "scoring_diagnostics": [
+                    project_guest_error(400, item, "guest")
+                    for item in value.get("scoring_diagnostics", [])
+                ]
+            }
+            if "scoring_diagnostics" in value
+            else {}
+        ),
         "directory": str(value.get("directory") or ""),
         "status": str(value.get("status") or "draft"),
         "package_name": (

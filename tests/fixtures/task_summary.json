@@ -1,0 +1,15 @@
+{
+  "tasks": [
+    {"dataset": "office", "rule_count": null, "rubric_count": 4, "scoring_item_count": null},
+    {"dataset": "office", "rule_count": 3, "rubric_count": null, "scoring_item_count": null},
+    {"dataset": "native", "rule_count": 0, "rubric_count": 0, "scoring_item_count": 0},
+    {"dataset": "native", "rule_count": 2, "rubric_count": 1, "scoring_item_count": 3}
+  ],
+  "overall": [
+    {"group": "overall", "task_count": 4, "rule_count": null, "rubric_count": null, "scoring_item_count": null, "missing_rule_count": 1, "missing_rubric_count": 1, "missing_scoring_item_count": 2}
+  ],
+  "dataset": [
+    {"group": "office", "task_count": 2, "rule_count": null, "rubric_count": null, "scoring_item_count": null, "missing_rule_count": 1, "missing_rubric_count": 1, "missing_scoring_item_count": 2},
+    {"group": "native", "task_count": 2, "rule_count": 2, "rubric_count": 1, "scoring_item_count": 3, "missing_rule_count": 0, "missing_rubric_count": 0, "missing_scoring_item_count": 0}
+  ]
+}

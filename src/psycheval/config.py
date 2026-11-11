@@ -8,7 +8,7 @@ import stat
 import tempfile
 import tomllib
 from pathlib import Path, PureWindowsPath
-from typing import Any, Iterable, Literal
+from typing import Annotated, Any, Iterable, Literal
 from urllib.parse import unquote
 
 import tomlkit
@@ -73,16 +73,26 @@ class _FrozenConfigModel(BaseModel):
         return type(self).model_validate(values, strict=True)
 
 
+ManualRuleCount = Annotated[
+    int, Field(ge=0, le=9007199254740991)
+]  # JavaScript safe integer.
+
+
 class HarborDataset(_FrozenConfigModel):
     id: str
     path: str
     format: Literal["harbor", "workbuddy.v1"] = "harbor"
     allow_partial: bool = Field(default=False, strict=True)
+    task_rule_counts: dict[str, ManualRuleCount] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_partial_format(self):
         if self.allow_partial and self.format != "workbuddy.v1":
             raise ValueError("allow_partial is only supported for WorkBuddy")
+        if self.task_rule_counts and self.format != "workbuddy.v1":
+            raise ValueError("task_rule_counts is only supported for WorkBuddy")
+        for name in self.task_rule_counts:
+            validate_harbor_id(name, kind="task")
         return self
 
     @field_validator("id")
@@ -326,6 +336,7 @@ class _HarborDatasetDocument(_RawConfigModel):
     path: str
     format: Literal["harbor", "workbuddy.v1"] = "harbor"
     allow_partial: bool = Field(default=False, strict=True)
+    task_rule_counts: dict[str, ManualRuleCount] = Field(default_factory=dict)
 
 
 class _HarborMountDocument(_RawConfigModel):
@@ -486,7 +497,8 @@ def apply_toml_config(
                 if not isinstance(raw_dataset, dict):
                     raise ValueError(f"harbor.datasets[{index}] must be a TOML table")
                 dataset_unknown = sorted(
-                    set(raw_dataset) - {"format", "id", "path", "allow_partial"}
+                    set(raw_dataset)
+                    - {"format", "id", "path", "allow_partial", "task_rule_counts"}
                 )
                 if dataset_unknown:
                     raise ValueError(
@@ -510,6 +522,7 @@ def apply_toml_config(
                         path=dataset_path,
                         format=raw_dataset.get("format", "harbor"),
                         allow_partial=raw_dataset.get("allow_partial", False),
+                        task_rule_counts=raw_dataset.get("task_rule_counts", {}),
                     )
                 )
 
@@ -854,6 +867,12 @@ def write_workspace_harbor_config(
                 lines.append("allow_partial = true\n")
             if dataset.format != "harbor":
                 lines.append(f"format = {json.dumps(dataset.format)}\n")
+            if dataset.task_rule_counts:
+                lines.append("[harbor.datasets.task_rule_counts]\n")
+                lines.extend(
+                    f"{json.dumps(name, ensure_ascii=False)} = {count}\n"
+                    for name, count in sorted(dataset.task_rule_counts.items())
+                )
         if datasets and mounts:
             lines.append("\n")
         for index, mount in enumerate(mounts):
@@ -967,6 +986,10 @@ def _harbor_table_ranges(lines: list[str]) -> list[tuple[int, int]]:
     for start in starts:
         end = len(lines)
         for index in range(start + 1, len(lines)):
+            if re.match(
+                r"^\s*\[\s*harbor\.datasets\.task_rule_counts\s*\]", lines[index]
+            ):
+                continue
             if lines[index].lstrip().startswith("["):
                 end = index
                 break

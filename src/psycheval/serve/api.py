@@ -490,12 +490,14 @@ def create_app(runtime: ServeRuntime, access_control: ServeAccess) -> FastAPI:
     from psycheval.serve.collections import register_collection_routes
     from psycheval.serve.jobs import register_jobs_routes
     from psycheval.serve.judge import register_judge_routes
+    from psycheval.serve.task_tables import register_task_table_routes
     from psycheval.serve.verification import register_verification_routes
 
     register_jobs_routes(app)
     register_collection_routes(app)
     register_verification_routes(app)
     register_judge_routes(app)
+    register_task_table_routes(app)
     _verify_route_access(app)
     return app
 

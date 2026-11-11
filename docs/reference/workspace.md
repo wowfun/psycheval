@@ -68,6 +68,63 @@ configuration preview. Report counts include active reports, deduplicating manua
 and session-derived associations; links open the corresponding Reports filter.
 Storage and concurrency follow [collection overlays](state-and-data.md#collection-overlays).
 
+### Task scoring inventory
+
+The Dataset Tasks table shows Task keywords as Tags, the first declared step's
+Instruction (or the single-step instruction), Rules, Rubrics, and Scoring items.
+Instruction cells render a bounded excerpt and expose the complete text on hover
+or keyboard focus. Search and exports retain the complete instruction.
+Package identity, validation status, and diagnostics belong to the Task sidebar.
+Jobs retains its run-selection table.
+
+Ordinary Harbor rule counts use the verifier's declared scoring plan, including
+custom checks. Rubric counts describe the Task's declarations independently of
+whether a run enables the Judge. Multi-step Tasks sum each step's effective
+configuration: step tests replace shared files, and shared items used by several
+steps count once per step. Missing scoring files contribute zero; unreadable or
+invalid configurations leave the affected counts unknown.
+
+WorkBuddy Office Rubrics come from its extended Judge metadata, with bounded
+source size, expanded metadata size, and Rubric count. This reader preserves
+extensions without applying the ordinary Judge's execution schema. Its deterministic
+checks are generated during evaluation and are not inferred from Python source
+or represented as one rule. Their count is initially blank. Administrators can
+double-click or keyboard-edit the Rules cell to save a nonnegative integer;
+clearing it removes the value. These counts are workspace configuration, even
+when the Dataset itself is read-only. Guests can read them. Manually supplied
+values are identified as such. A Task total is unknown until both counts are known.
+
+Clicking Rules selects the first effective `grader.json`; clicking Rubrics or
+Scoring items selects the first effective `judge.yaml`. Missing files fall back
+to the Task's default Instruction. Flatten scoring items replaces the count
+columns with step, ID, type, question, pass/fail criteria, scope limits, and
+artifact references. Rule rows contain only their identity and type; rows with
+no declared items retain their Task context. Selecting an item opens its actual
+source file. Manual counts never produce synthetic items; the flattened view
+discloses their unexpanded count. Selection and management remain Task-based.
+
+Task Summary follows Dataset selection, search, and Task filters, counts each
+Task once, and groups by Overall or Dataset. Unknown values leave their group
+totals blank with a missing-Task count; known Rubric totals remain available.
+Flattening does not change this scope. Task exports follow the current mode,
+visible business columns, and filtered row order rather than checkbox selection.
+JSON preserves lists; Excel writes full text and multiline lists. Summary Excel
+uses the displayed grouping. Unknown values remain null or blank. Archived
+Tasks retain management controls but have no scoring view, export, or summary.
+
+Task `judge.yaml` and `grader.json` files open as structured previews with a
+source toggle. WorkBuddy previews retain extended metadata. Previewing a draft
+parses that draft without saving it; parse errors retain the editable source.
+Draft preview also accepts a new, contained scoring-file path without creating it.
+Browsing, counting, and previewing never import Dataset plugins or run Task
+preparation, grading scripts, or model calls.
+
+The service caches scoring projections within a bounded runtime cache. It checks
+the identity, size, and timestamps of every input and missing override candidate
+before reuse, rechecks containment, and invalidates changed or unsafe paths.
+Manual count changes use a separate cache identity. Collection responses retain
+the scoring projection used by the Dataset page's Tasks table.
+
 ## Configuration ownership
 
 An initialized root contains `peval.toml`. The CLI discovers it through explicit
@@ -75,6 +132,18 @@ An initialized root contains `peval.toml`. The CLI discovers it through explicit
 no separate config-file option. Workspace configuration is strict: unknown
 Psycheval-owned fields, removed defaults, invalid types, duplicate identities,
 and dangling Dataset references fail before any command or mutation runs.
+
+WorkBuddy Dataset registrations may carry `task_rule_counts`, a mapping from
+Task directory names to manually supplied nonnegative rule counts. Absence means
+unknown, not zero. Counts follow Dataset renaming, are removed with registration,
+and are cleared when the registration changes to a different source path.
+Other configuration edits preserve them. Writes use the configuration revision
+guard; they never alter the external Dataset. Counts for absent Tasks are ignored
+by the current inventory. WorkBuddy Task rename, archive, and restore remain
+unavailable because external Dataset sources are read-only. Count mappings use a
+TOML subtable with one Task per line. A cell edit keeps its starting configuration
+version; after a successful save or explicit conflict retry it uses the returned
+version. Waiting for an earlier write is bounded and retains the input on failure.
 
 Plain `peval init` creates or validates only the workspace configuration and log
 directory. `peval init --skill <skill-dir>` additionally validates one local

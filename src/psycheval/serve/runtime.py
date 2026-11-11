@@ -15,6 +15,7 @@ from psycheval.serve.acp import AcpGateway
 from psycheval.serve.prompt_assets import PromptAssetLibrary
 from psycheval.serve.sources import load_serve_inputs
 from psycheval.serve.summary_xlsx import SummaryWorksheet
+from psycheval.serve.task_inventory_cache import TaskInventoryCache
 from psycheval.state import (
     CatalogBusyError,
     CatalogPage,
@@ -48,6 +49,7 @@ class ServeRuntime:
     ) -> None:
         self.store = store
         self.config = config
+        self.task_inventory_cache = TaskInventoryCache()
         self.effective_timezone = resolve_timezone(config.timezone)
         from psycheval.jobs.service import JobsService
 

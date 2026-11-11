@@ -67,7 +67,11 @@ def harbor_workspace(
     store: ServeStateStore,
     runtime: ServeRuntime,
 ) -> HarborWorkspace:
-    return HarborWorkspace(store.paths.config_path, runtime.config)
+    return HarborWorkspace(
+        store.paths.config_path,
+        runtime.config,
+        scoring_cache=runtime.task_inventory_cache,
+    )
 
 
 def catalog_view_names(raw_query: str) -> tuple[str, ...]:
@@ -229,6 +233,7 @@ def harbor_config_payload(
                 "path": dataset.path,
                 "format": dataset.format,
                 "allow_partial": dataset.allow_partial,
+                "task_rule_counts": dict(dataset.task_rule_counts),
             }
             for dataset in current.harbor_datasets
         ],
