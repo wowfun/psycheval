@@ -55,8 +55,8 @@ for (const locale of ["en", "zh-CN"]) for (const role of ["admin", "guest"]) {
       await expect(page.locator('[data-workspace-page="reports"]')).toBeVisible();
       await page.goBack();
       await expect(taskRows).toHaveCount(3);
-      const first = taskRows.filter({ hasText: "org/first" });
-      await first.locator('[data-table-column-key="status"]').click();
+      const first = taskRows.filter({ has: page.locator('[data-table-column-key="task"]', { hasText: /^first$/ }) });
+      await first.locator('[data-table-column-key="instruction"]').click();
       const sidebar = page.locator('[data-sidebar-id="dataset-task"]');
       await expect(sidebar).toBeVisible();
       await expect(sidebar.locator("[data-harbor-editor]")).not.toHaveValue("");
@@ -65,7 +65,7 @@ for (const locale of ["en", "zh-CN"]) for (const role of ["admin", "guest"]) {
         await sidebar.getByRole("button", { name: locale === "en" ? "Raw" : "原文", exact: true }).click();
         await editor.fill("Unsaved 中文 draft");
         page.once("dialog", dialog => dialog.dismiss());
-        await taskRows.filter({ hasText: "org/second" }).locator('[data-table-column-key="status"]').click();
+        await taskRows.filter({ has: page.locator('[data-table-column-key="task"]', { hasText: /^second$/ }) }).locator('[data-table-column-key="instruction"]').click();
         await expect(editor).toHaveValue("Unsaved 中文 draft");
         await page.locator('nav [data-workspace-route="jobs"]').click();
         await page.locator('nav [data-workspace-route="datasets"]').click();

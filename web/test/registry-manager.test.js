@@ -17,14 +17,14 @@ function response(value, status = 200, headers = {}) {
   return new Response(JSON.stringify(value), { status, headers });
 }
 
-function fixture(config, write) {
+function fixture(config, write, options = {}) {
   const root = document.createElement("section");
   root.innerHTML = '<div data-harbor-dataset-registry></div>';
   document.body.append(root);
   const target = root.firstElementChild;
   const previousFetch = globalThis.fetch;
-  const value = { config, requests: [], revision: 1, refreshes: 0, configError: null };
-  const manager = createRegistryManager({ root, page: "datasets", onRefresh: () => { render(); value.refreshes++; } });
+  const value = { config, requests: [], revision: 1, refreshes: 0, configError: null, operationState: "succeeded" };
+  const manager = createRegistryManager({ root, page: "datasets", onRefresh: () => { render(); value.refreshes++; }, ...options });
   function render() {
     const columns = manager.datasetColumns();
     const rows = value.config.datasets.map(row => ({ ...row, mount_ids: value.config.mounts.filter(m => m.dataset_ids.includes(row.id)).map(m => m.id) }));
@@ -37,12 +37,12 @@ function fixture(config, write) {
     if (request.path === "/api/config") return value.configError
       ? response({ detail: value.configError }, 503)
       : response(value.config, 200, { ETag: `"r${value.revision}"` });
-    if (request.path.startsWith("/api/operations/")) return response({ state: "succeeded", successes: [{ index: 0 }], failures: [] });
+    if (request.path.startsWith("/api/operations/")) return response({ state: value.operationState, successes: [{ index: 0 }], failures: [] });
     assert.notEqual(request.method, "GET", `unexpected request: ${request.path}`);
     const result = await write(request, value);
     if (result) return result;
     value.revision++;
-    return response({ id: `registry-${value.revision}` }, 202);
+    return response({ id: `registry-${value.revision}` }, 202, { ETag: `"r${value.revision}"` });
   };
   return Object.assign(value, {
     root, manager,
@@ -221,5 +221,48 @@ test("a failed conflict refresh keeps the original error and editable draft", as
     assert.equal(input.value, "/my-draft");
     assert.match(cell.querySelector(".table-cell-editor-status").textContent, /Changed elsewhere.*Configuration temporarily unavailable/);
     assert.equal(f.requests.filter(r => r.method === "PATCH").length, 1);
+  } finally { f.close(); }
+});
+
+test("rule count edits retain their starting revision and reconcile never replaces a subsequent editor", async () => {
+  const f = fixture({ datasets: [{ id: "office", path: "/office", task_rule_counts: {} }], mounts: [] }, (request, state) => {
+    if (request.revision !== `"r${state.revision}"`) return response({ detail: "Changed elsewhere" }, 412);
+    state.config.datasets[0].task_rule_counts.task = request.body.count;
+  });
+  try {
+    await f.load();
+    const write = f.manager.taskRuleCountWriter("office", "task");
+    f.config.datasets[0].task_rule_counts.task = 5; f.revision++;
+    await f.manager.refresh();
+    await assert.rejects(write(12), error => error.status === 412 && error.savedContent.includes("5"));
+    await write(12);
+    await until(() => f.requests.filter(r => r.path === "/api/config").length === 4);
+    assert.equal(f.refreshes, 0);
+    assert.equal(f.config.datasets[0].task_rule_counts.task, 12);
+    assert.deepEqual(f.requests.filter(r => r.method === "PUT").map(r => r.revision), ['"r1"', '"r2"']);
+  } finally { f.close(); }
+});
+
+test("a reused rule count writer advances its revision after each save", async () => {
+  const f = fixture({ datasets: [{ id: "office", path: "/office", task_rule_counts: {} }], mounts: [] }, (request, state) => {
+    assert.equal(request.revision, `"r${state.revision}"`);
+    state.config.datasets[0].task_rule_counts.task = request.body.count;
+  });
+  try {
+    await f.load();
+    const write = f.manager.taskRuleCountWriter("office", "task");
+    await write(1); await write(2);
+    assert.deepEqual(f.requests.filter(r => r.method === "PUT").map(r => r.revision), ['"r1"', '"r2"']);
+  } finally { f.close(); }
+});
+
+test("a rule count waiting for a stalled reconcile fails without issuing another write", async () => {
+  const f = fixture({ datasets: [{ id: "office", path: "/office", task_rule_counts: {} }], mounts: [] }, () => {}, { idleTimeoutMs: 10 });
+  try {
+    await f.load(); f.operationState = "running";
+    const write = f.manager.taskRuleCountWriter("office", "task");
+    await write(1);
+    await assert.rejects(write(2), /input is retained/);
+    assert.equal(f.requests.filter(r => r.method === "PUT").length, 1);
   } finally { f.close(); }
 });

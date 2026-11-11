@@ -117,6 +117,30 @@ def main() -> None:
                 config_file.write(
                     '\n[[harbor.datasets]]\nid = "editable"\npath = "editable"\n'
                 )
+        if os.environ.get("PEVAL_E2E_TASK_SCORING") == "1":
+            from tests.fixtures.judge_task import YAML
+            from tests.peval.test_harbor_evidence import write_task
+            from tests.peval.test_workbuddy_datasets import _write_workbuddy_bundle
+
+            for name in ("scored", "empty"):
+                write_task(root / "native" / name, f"fixture/{name}")
+            scored = root / "native/scored"
+            (scored / "instruction.md").write_text(
+                "Full instruction 中文 " * 40, encoding="utf-8"
+            )
+            (scored / "tests/judge.yaml").write_text(YAML, encoding="utf-8")
+            (scored / "tests/grader.json").write_text(
+                '{"custom_checks":["answer","output"]}', encoding="utf-8"
+            )
+            bundle = _write_workbuddy_bundle(root / "office")
+            (bundle / "tasks/office-one/tests/judge.yaml").write_text(
+                YAML + "\nactivation_policy: {mode: optional}\n", encoding="utf-8"
+            )
+            with (root / "peval.toml").open("a", encoding="utf-8") as config_file:
+                config_file.write(
+                    '\n[[harbor.datasets]]\nid = "native"\npath = "native"\n'
+                    '\n[[harbor.datasets]]\nid = "office"\npath = "office"\nformat = "workbuddy.v1"\n'
+                )
         if os.environ.get("PEVAL_E2E_COLLECTIONS") == "1":
             from tests.peval.test_harbor_evidence import write_task
             from tests.peval.test_harbor_trials import completed_result, write_trial

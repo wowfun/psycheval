@@ -1,0 +1,130 @@
+import { readFile } from "node:fs/promises";
+import { test, expect } from "@playwright/test";
+import { startFixture, stopFixture } from "./fixture-process.mjs";
+
+for (const locale of ["en", "zh-CN"]) for (const role of ["admin", "guest"]) {
+  test(`Task scoring ${locale} ${role}: counts, preview, flattening, export and responsive layout`, async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+    const fixture = await startFixture({ PEVAL_E2E_TASK_SCORING: "1", PEVAL_E2E_LOCALE: locale,
+      ...(role === "guest" ? { PEVAL_E2E_PASSWORD: "secret" } : {}), PYTHONPATH: process.cwd() });
+    const errors = []; page.on("pageerror", error => errors.push(error.message));
+    try {
+      await page.goto(`${fixture.origin}/datasets`);
+      const table = page.locator("[data-harbor-overview]"), summary = page.locator("[data-task-summary]");
+      const rows = table.locator("tbody tr");
+      const row = name => rows.filter({ has: page.locator('td[data-table-column-key="task"]', { hasText: new RegExp(`^${name}$`) }) });
+      const cell = (name, key) => row(name).locator(`td[data-table-column-key="${key}"]`);
+      const sum = key => summary.locator(`td[data-table-column-key="${key}"]`);
+      const sidebar = page.locator('[data-sidebar-id="dataset-task"]');
+      await expect(rows).toHaveCount(3);
+      expect(await table.locator("thead th").evaluateAll(nodes => nodes.map(node => node.dataset.columnKey || node.querySelector("[data-sort-key]")?.getAttribute("data-sort-key") || node.textContent.trim()))).toHaveLength(role === "admin" ? 8 : 7);
+      expect(await row("scored").locator("td").evaluateAll(nodes => nodes.map(n => n.dataset.tableColumnKey || n.querySelector("[data-table-selection-column]")?.getAttribute("data-table-selection-column")))).toEqual([...(role === "admin" ? ["__task_select"] : []), "dataset", "task", "tags", "instruction", "rule_count", "rubric_count", "scoring_item_count"]);
+      await expect(cell("scored", "rule_count")).toHaveText("2");
+      await expect(cell("scored", "scoring_item_count")).toHaveText("3");
+      await expect(cell("office-one", "rule_count")).toHaveText("");
+      await expect(cell("office-one", "scoring_item_count")).toHaveText("");
+      await cell("scored", "instruction").hover();
+      expect((await cell("scored", "instruction").getAttribute("title")).length).toBeGreaterThan(500);
+      await expect(sum("task_count")).toHaveText("3");
+      await expect(sum("rule_count")).toHaveText("");
+      await expect(sum("rubric_count")).toHaveText("2");
+      await cell("scored", "rule_count").click();
+      await expect(sidebar.locator("[data-harbor-editor-path]")).toHaveText("tests/grader.json");
+      await expect(sidebar.locator(".task-scoring-preview h3")).toHaveText(["custom:answer", "custom:output"]);
+      await cell("scored", "rubric_count").click();
+      await expect(sidebar.locator("[data-harbor-editor-path]")).toHaveText("tests/judge.yaml");
+      await expect(sidebar.locator(".task-scoring-preview h3")).toHaveText("fidelity");
+      await cell("office-one", "rule_count").click();
+      await expect(sidebar.locator("[data-harbor-editor-path]")).toHaveText("instruction.md");
+      await sidebar.locator("[data-sidebar-close]").click();
+      const rules = cell("office-one", "rule_count");
+      if (role === "admin") {
+        await rules.dblclick();
+        await expect(rules.locator("input")).toBeVisible();
+        await expect(sidebar).toBeHidden();
+        await rules.locator("input").fill("-1"); await rules.locator("input").press("Enter");
+        await expect(rules.locator(".table-cell-editor-status")).not.toBeEmpty();
+        await rules.locator("input").fill("0"); await rules.locator("input").press("Enter");
+        await expect(rules).toHaveText("0");
+        await expect(sum("scoring_item_count")).toHaveText("4");
+        await expect(rules).toHaveAttribute("title", locale === "en" ? "Manually entered" : "手工填写");
+        await rules.focus(); await page.keyboard.press("Enter");
+        await rules.locator("input").fill("12");
+        const config = await page.request.get(`${fixture.origin}/api/config`);
+        const remote = await page.request.put(`${fixture.origin}/api/harbor/datasets/office/tasks/office-one/rule-count`, { data: { count: 5 }, headers: { "If-Match": config.headers().etag } });
+        expect(remote.status()).toBe(202);
+        await expect.poll(async () => (await (await page.request.get(`${fixture.origin}/api/operations/${(await remote.json()).id}`)).json()).state).toBe("succeeded");
+        await rules.locator("input").press("Enter");
+        await expect(rules.locator(".table-cell-editor-status")).toContainText("resource changed");
+        await expect(rules.locator("input")).toHaveValue("12");
+        await expect(rules.locator(".table-cell-editor-status pre")).toContainText("5");
+        await rules.locator("input").press("Enter");
+        await expect(rules).toHaveText("12");
+        await expect(sum("scoring_item_count")).toHaveText("16");
+        await page.reload(); await expect(rules).toHaveText("12");
+      } else {
+        await rules.dblclick(); await expect(rules.locator("input")).toHaveCount(0);
+        await expect(table.locator("[data-table-row-select]")).toHaveCount(0);
+      }
+      await page.locator("[data-task-flatten]").click();
+      await expect(rows).toHaveCount(5);
+      await expect(row("office-one")).toHaveCount(1);
+      await expect(cell("office-one", "type")).toHaveText("Rubric");
+      await expect(cell("empty", "id")).toHaveText("");
+      await expect(table.locator('[data-table-column-key="rule_count"]')).toHaveCount(0);
+      await expect(sum("task_count")).toHaveText("3");
+      await expect(page.locator("[data-task-unexpanded]")).toContainText(role === "admin" ? "12" : "1");
+      if (role === "admin") {
+        await row("scored").first().locator(".select-box").click();
+        await expect(row("scored").locator("input[type=checkbox]:checked")).toHaveCount(3);
+      }
+      await page.locator("[data-harbor-search]").fill("office-one");
+      await expect(rows).toHaveCount(1); await expect(sum("task_count")).toHaveText("1");
+      await expect(sum("rubric_count")).toHaveText("1");
+      await page.locator('[data-task-summary-group="dataset"]').click();
+      await expect(sum("group")).toHaveText("office");
+      await table.locator('td[data-table-column-key="id"]').click();
+      await expect(sidebar.locator("[data-harbor-editor-path]")).toHaveText("tests/judge.yaml");
+      await expect(sidebar.locator(".task-scoring-preview")).toContainText("fidelity");
+      await sidebar.locator("[data-sidebar-close]").click();
+      await page.locator("[data-task-scoring-actions] summary").click();
+      const jsonDownload = page.waitForEvent("download"); await page.locator('[data-task-export="json"]').click();
+      const json = JSON.parse(await readFile(await (await jsonDownload).path(), "utf8"));
+      expect(json).toHaveLength(1); expect(json[0].id).toBe("fidelity");
+      expect(json[0].artifact_refs).toEqual(["report"]); expect(json[0]).not.toHaveProperty("rule_count");
+      const excelDownload = page.waitForEvent("download"); await page.locator("[data-task-summary-export]").click();
+      expect((await readFile(await (await excelDownload).path())).subarray(0, 2).toString()).toBe("PK");
+      await page.screenshot({ path: testInfo.outputPath(`scoring-${locale}-${role}-desktop.png`) });
+      await page.setViewportSize({ width: 390, height: 844 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await cell("office-one", "id").click();
+      await expect(sidebar).toBeInViewport();
+      await expect(sidebar.locator(".task-scoring-preview")).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath(`scoring-${locale}-${role}-mobile.png`) });
+      await sidebar.locator("[data-sidebar-close]").click();
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.locator("[data-harbor-search]").fill("");
+      await page.locator("[data-task-flatten]").click();
+      await table.locator('[data-table-sort="task"]').click();
+      await table.locator('[data-table-sort="task"]').click();
+      const displayed = await rows.locator('td[data-table-column-key="task"]').allTextContents();
+      await page.locator("[data-task-scoring-actions] summary").click();
+      const tasksDownload = page.waitForEvent("download"); await page.locator('[data-task-export="json"]').click();
+      const exported = JSON.parse(await readFile(await (await tasksDownload).path(), "utf8"));
+      expect(exported.map(task => task.task)).toEqual(displayed);
+      expect(exported.find(task => task.task === "scored").instruction.length).toBeGreaterThan(500);
+      expect(exported.find(task => task.task === "scored").tags).toEqual(["web-agent", "web-search"]);
+      expect(exported.find(task => task.task === "office-one").rule_count).toBe(role === "admin" ? 12 : null);
+      if (role === "admin") {
+        await rules.dblclick(); await rules.locator("input").fill(""); await rules.locator("input").press("Enter");
+        await expect(rules).toHaveText("");
+        await expect(cell("office-one", "scoring_item_count")).toHaveText("");
+        await page.reload(); await expect(rules).toHaveText("");
+        await page.locator("[data-harbor-show-trash]").click();
+        await expect(page.locator("[data-task-scoring-actions]")).toBeHidden();
+        await expect(summary).toBeHidden();
+      }
+      expect(errors).toEqual([]);
+    } finally { await stopFixture(fixture); }
+  });
+}

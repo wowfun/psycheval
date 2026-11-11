@@ -78,6 +78,7 @@ function publishInvalidations(response, path, method, body) {
 
 function requestInvalidations(path, method, body) {
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return [];
+  if (/^\/api\/harbor\/(?:task-exports$|datasets\/[^/]+\/tasks\/[^/]+\/preview$)/.test(path)) return [];
   const changes = new Set();
   if (path !== "/api/source-key-resolutions" && /^\/api\/(?:sources|source-|analysis)/.test(path)) {
     changes.add("catalog");
@@ -87,7 +88,10 @@ function requestInvalidations(path, method, body) {
     /^\/api\/harbor\/(?:dataset-unregistration-operations|mounts|mount-deletion-operations)(?:\/|$)/.test(path)
     || /^\/api\/harbor\/datasets(?:\/[^/]+)?$/.test(path)
   ) changes.add("dataset-registry");
-  else if (/^\/api\/harbor\//.test(path)) changes.add("tasks");
+  else if (/^\/api\/harbor\//.test(path)) {
+    changes.add("tasks");
+    if (path.endsWith("/rule-count")) changes.add("dataset-registry");
+  }
   if (/^\/api\/prompts(?:\/|$)/.test(path)) changes.add("prompt-assets");
   if (path === "/api/config") {
     const keys = new Set(Object.keys(body && typeof body === "object" ? body : {}));

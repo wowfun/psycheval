@@ -65,10 +65,10 @@ for (const width of [1440, 390]) test(`table filters have local choices and one 
     await expect(page.locator("[data-filter-menu][open]")).toHaveCount(1);
     await page.screenshot({ path: testInfo.outputPath(`jobs-filter-${width}.png`) });
     await page.locator('nav [data-workspace-route="datasets"]').click();
-    const datasetStatus = page.locator('[data-harbor-overview] [data-filter-menu="status"]');
-    await open(datasetStatus);
-    await expect(datasetStatus.locator("input")).not.toHaveCount(0);
-    expect(await choices(datasetStatus)).not.toContain("Run completed");
+    const datasetTags = page.locator('[data-harbor-overview] [data-filter-menu="tags"]');
+    await open(datasetTags);
+    await expect(datasetTags.locator("input")).not.toHaveCount(0);
+    expect(await choices(datasetTags)).toContain("web-agent");
     await expect(page.locator("[data-filter-menu][open]")).toHaveCount(1);
   } finally { await stopFixture(fixture); }
 });

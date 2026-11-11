@@ -245,3 +245,34 @@ test("Task Markdown defaults to rendering and preserves an editable draft across
   taskBrowser.acceptSave("instruction.md", taskBrowser.currentFile().content);
   assert.equal(taskBrowser.isDirty(), false);
 });
+
+test("scoring draft previews preserve source on errors and ignore responses after switching files", async () => {
+  const root = document.createElement("div");
+  root.innerHTML = '<header class="harbor-editor-head"></header><button data-harbor-save></button><textarea data-harbor-editor></textarea>';
+  const parsed = id => ({ kind: "judge", items: [{ id, question: "Safe <script> text" }], config: { artifacts: { report: {} } } });
+  const pending = [];
+  const taskBrowser = createTaskBrowser({ root, editable: true,
+    readFile: async (_ref, path) => ({ content: path.endsWith("yaml") ? "saved source" : "# Instruction", preview: path.endsWith("yaml") ? parsed("saved") : null }),
+    previewFile: (_ref, path, content) => new Promise(resolve => pending.push({ path, content, resolve })),
+  });
+  const taskDetail = detail("tests/judge.yaml");
+  taskDetail.tree.push({ path: "tests/judge.yaml", kind: "file", previewable: true, editable: true });
+  await taskBrowser.setTaskDetail(taskDetail, { taskRef: { dataset_id: "dataset", task: "task" } });
+  assert.equal(root.querySelector(".task-scoring-preview h3").textContent, "saved");
+  assert.equal(root.querySelector("script"), null);
+  const toggle = root.querySelector("[data-file-preview-toggle]"), editor = root.querySelector("[data-harbor-editor]");
+  toggle.click(); editor.value = "draft source"; editor.dispatchEvent(new window.Event("input")); toggle.click();
+  assert.equal(pending[0].content, "draft source");
+  pending[0].resolve({ preview: null, preview_error: "Invalid YAML" }); await tick();
+  assert.equal(editor.hidden, false); assert.equal(editor.value, "draft source"); assert.equal(taskBrowser.isDirty(), true);
+  assert.equal(root.querySelector("[data-task-preview-error]").textContent, "Invalid YAML");
+  editor.value = "valid draft"; editor.dispatchEvent(new window.Event("input")); toggle.click();
+  pending[1].resolve({ preview: parsed("draft"), preview_error: null }); await tick();
+  assert.equal(root.querySelector(".task-scoring-preview h3").textContent, "draft");
+  assert.equal(taskBrowser.isDirty(), true);
+  toggle.click(); editor.value = "later"; editor.dispatchEvent(new window.Event("input")); toggle.click();
+  await taskBrowser.openPath("instruction.md");
+  pending[2].resolve({ preview: parsed("stale") }); await tick();
+  assert.equal(taskBrowser.currentFile().path, "instruction.md");
+  assert.equal(root.querySelector(".task-scoring-preview"), null);
+});

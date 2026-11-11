@@ -8,9 +8,15 @@ import { applyDataTableControls, bindDataTableControls, renderDataTable, selecti
 import { invalidateWorkspace } from "../app/workspace-runtime.js";
 
 /** Dataset registration and mount management share revisioned configuration. */
-function createRegistryManager({ root, page, onRefresh }) {
-  let snapshot = null, revision = null, busy = false, panel = null;
+function createRegistryManager({ root, page, onRefresh, idleTimeoutMs = 15000 }) {
+  let snapshot = null, revision = null, busy = false, panel = null, destroyed = false;
+  let operationFeedback = null;
+  const idleWaiters = new Set();
   const selectedDatasets = new Set(), selectedMounts = new Set();
+  function setBusy(value) {
+    busy = value;
+    if (!busy) { idleWaiters.forEach(resolve => resolve()); idleWaiters.clear(); }
+  }
   async function refresh() {
     if (!adminMode()) return;
     snapshot = await serveApi("/api/config");
@@ -20,26 +26,34 @@ function createRegistryManager({ root, page, onRefresh }) {
       for (const id of selection) if (!known.has(id)) selection.delete(id);
     }
   }
-  async function mutate(path, method, body) {
+  async function mutate(path, method, body, { expectedRevision = revision, refreshView = true, waitForIdle = false } = {}) {
+    const deadline = Date.now() + idleTimeoutMs;
+    while (busy && waitForIdle) await new Promise((resolve, reject) => {
+      const resume = () => { clearTimeout(timer); idleWaiters.delete(resume); resolve(undefined); };
+      const timer = setTimeout(() => { idleWaiters.delete(resume); reject(new Error(t("task_rules_wait_timeout", "The earlier write is still pending. Your input is retained; try again."))); }, Math.max(0, deadline - Date.now()));
+      idleWaiters.add(resume);
+    });
+    if (destroyed) throw new Error(t("feedback_target_changed", "The selected resource changed; reopen the form"));
     if (busy) throw new Error(t("feedback_saved_refreshing", "Saved; refreshing the workspace…"));
-    busy = true;
+    setBusy(true);
     try {
-      const operation = await serveApi(path, { method, body, ifMatch: revision });
+      const operation = await serveApi(path, { method, body, ifMatch: expectedRevision });
       const label = path.startsWith("/api/harbor/mount") ? t("serve_harbor_mounts", "Harbor mounts") : t("harbor_dataset", "Dataset");
       const feedback = beginFeedback(root, { page, key: `${page}:registry`, label });
+      operationFeedback = feedback;
       setTimeout(() => watchOperation(operation.id, {
         feedback, committed: true,
-        onBusy(value) { busy = value; },
+        onBusy: setBusy,
         async onComplete() {
           await refresh();
           invalidateWorkspace("dataset-registry");
-          await onRefresh();
+          if (refreshView) await onRefresh();
           if (panel && !panel.hidden) renderMounts();
         },
       }), 0);
       return operation;
     } catch (error) {
-      busy = false;
+      setBusy(false);
       if (error.status === 412) {
         try {
           await refresh();
@@ -65,6 +79,25 @@ function createRegistryManager({ root, page, onRefresh }) {
     Object.assign(row, { id: next.new_id, path: next.path, mount_ids: next.mount_ids });
     if (selectedDatasets.delete(current.id)) selectedDatasets.add(next.new_id);
     return { rowKey: next.new_id };
+  }
+  function taskRuleCountWriter(datasetId, task) {
+    let expectedRevision = revision;
+    return async count => {
+      try {
+        // The cell updates the shared task projection immediately after saving.
+        // A later reconcile must not replace a newly opened cell editor.
+        const path = `/api/harbor/datasets/${encodeURIComponent(datasetId)}/tasks/${encodeURIComponent(task)}/rule-count`;
+        const result = await mutate(path, "PUT", { count }, { expectedRevision, refreshView: false, waitForIdle: true });
+        expectedRevision = revision = serveEtag(path) || revision;
+        return result;
+      } catch (error) {
+        if (error.status === 412 && snapshot) {
+          expectedRevision = revision;
+          error.savedContent = savedContentPreview(t("task_rules", "Rules"), String(snapshot.datasets.find(row => row.id === datasetId)?.task_rule_counts?.[task] ?? ""));
+        }
+        throw error;
+      }
+    };
   }
   function datasetColumns() {
     const identity = { key: "id", label: t("harbor_dataset", "Dataset"), valueType: "identity", sortable: true, filterable: true, value: row => row.id };
@@ -149,7 +182,7 @@ function createRegistryManager({ root, page, onRefresh }) {
     renderMounts();
     openModalSurface(panel, { opener, focusTarget: panel.querySelector("[data-close]"), onRequestClose: () => closeModalSurface(panel) });
   }
-  return { get ready() { return snapshot !== null; }, refresh, datasetColumns, selectedDatasets, createDataset, removeDatasets, openMounts, destroy() { if (panel) { closeModalSurface(panel, { restoreFocus: false }); panel.remove(); } } };
+  return { get ready() { return snapshot !== null; }, refresh, datasetColumns, selectedDatasets, createDataset, removeDatasets, openMounts, taskRuleCountWriter, destroy() { destroyed = true; operationFeedback?.dispose(); setBusy(false); if (panel) { closeModalSurface(panel, { restoreFocus: false }); panel.remove(); } } };
 }
 
 export { createRegistryManager };

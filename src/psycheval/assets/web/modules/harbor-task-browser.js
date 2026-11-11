@@ -1,5 +1,7 @@
 import { listValue, t } from "./shared.js";
 import { bindFilePreviewToggle, createFileMarkdown, createFileRead, formatBytes, renderFileTree, selectFile, showFileText } from "./file-browser.js";
+import { createScoringPreview } from "./task-file-preview.js";
+import { serveApi } from "./http.js";
 
 function createTaskBrowser(options = {}) {
   const fileRead = createFileRead();
@@ -26,6 +28,11 @@ function createTaskBrowser(options = {}) {
     taskRequestPromise: null,
     previewStatus: "empty",
     previewMessage: "",
+    structured: null,
+    structuredText: null,
+    structuredError: "",
+    structuredRequest: 0,
+    structuredBusy: false,
   };
 
   function attach(root) {
@@ -152,6 +159,7 @@ function createTaskBrowser(options = {}) {
     if (!item || item.kind !== "file") return null;
     if (!options.skipDiscard && browser.dirty && !window.confirm(t("harbor_discard_changes", "Discard unsaved file changes?"))) return null;
     const isCurrent = fileRead.begin();
+    clearStructuredPreview();
     browser.filePath = item.path;
     browser.fileRevision = null;
     browser.savedText = "";
@@ -173,6 +181,9 @@ function createTaskBrowser(options = {}) {
       browser.fileRevision = payload?.revision || null;
       browser.savedText = String(payload?.content ?? "");
       browser.draftText = browser.savedText;
+      browser.structured = payload?.preview || null;
+      browser.structuredText = browser.savedText;
+      browser.structuredError = payload?.preview_error || "";
       setDirty(false);
       browser.previewStatus = "ready";
       browser.previewMessage = "";
@@ -224,6 +235,7 @@ function createTaskBrowser(options = {}) {
   }
 
   function resetState({ keepRoot = false } = {}) {
+    clearStructuredPreview();
     fileRead.invalidate();
     browser.taskRequestId += 1;
     browser.taskRequestPromise = null;
@@ -278,14 +290,50 @@ function createTaskBrowser(options = {}) {
     const preview = node("[data-harbor-markdown]");
     const toggle = node("[data-file-preview-toggle]");
     const markdown = browser.previewStatus === "ready" ? createFileMarkdown(browser.filePath, browser.draftText) : null;
-    editor.hidden = Boolean(markdown) && !browser.raw;
+    const scoring = browser.previewStatus === "ready" && isScoringFile();
+    const structured = scoring && browser.structuredText === browser.draftText ? createScoringPreview(browser.structured) : null;
+    const rendered = markdown || structured;
+    editor.hidden = Boolean(rendered) && !browser.raw;
     if (preview) {
       preview.hidden = !editor.hidden;
-      preview.replaceChildren(...(markdown ? [markdown] : []));
+      preview.replaceChildren(...(rendered ? [rendered] : []));
     }
     if (toggle) {
-      toggle.hidden = !markdown;
-      bindFilePreviewToggle(toggle, browser.raw, raw => { browser.raw = raw; renderPreview(); });
+      toggle.hidden = !markdown && !scoring;
+      toggle.disabled = browser.structuredBusy;
+      bindFilePreviewToggle(toggle, !editor.hidden, async raw => {
+        if (!raw && scoring && browser.structuredText !== browser.draftText) await previewDraft();
+        else { browser.raw = raw; renderPreview(); }
+      });
+    }
+    let notice = node("[data-task-preview-error]");
+    if (!notice) { notice = document.createElement("p"); notice.dataset.taskPreviewError = ""; notice.className = "copy task-preview-error"; notice.setAttribute("role", "status"); editor.before(notice); }
+    notice.hidden = !scoring || !browser.structuredError;
+    notice.textContent = browser.structuredError;
+  }
+
+  function isScoringFile() { return /(?:^|\/)(grader\.json|judge\.yaml)$/.test(browser.filePath || ""); }
+
+  function clearStructuredPreview() {
+    browser.structuredRequest += 1;
+    browser.structured = null; browser.structuredText = null; browser.structuredError = ""; browser.structuredBusy = false;
+  }
+
+  async function previewDraft() {
+    const requestId = ++browser.structuredRequest, content = browser.draftText, path = browser.filePath;
+    const ref = browser.taskRef;
+    if (!ref) return;
+    browser.structuredBusy = true;
+    renderPreview();
+    try {
+      const payload = await (options.previewFile || ((ref, path, content) => serveApi(`/api/harbor/datasets/${encodeURIComponent(ref.dataset_id)}/tasks/${encodeURIComponent(ref.task)}/preview`, { method: "POST", body: { path, content } })))(ref, path, content);
+      if (requestId !== browser.structuredRequest || content !== browser.draftText || path !== browser.filePath) return;
+      browser.structured = payload.preview; browser.structuredText = content;
+      browser.structuredError = payload.preview_error || ""; browser.raw = !payload.preview;
+    } catch (error) {
+      if (requestId === browser.structuredRequest) { browser.structuredError = error?.message || String(error); browser.raw = true; }
+    } finally {
+      if (requestId === browser.structuredRequest) { browser.structuredBusy = false; renderPreview(); }
     }
   }
 
@@ -346,6 +394,8 @@ function createTaskBrowser(options = {}) {
   const api = {
     rebindTask(taskRef) {
       fileRead.invalidate();
+      browser.structuredRequest += 1;
+      browser.structuredBusy = false;
       browser.taskRef = normalizeTaskRef(taskRef);
       browser.contextKey = taskContextKey(browser.taskRef);
     },

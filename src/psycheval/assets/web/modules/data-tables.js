@@ -438,10 +438,12 @@ function compareTableValues(left, right, type, direction) {
   return direction === "desc" ? -delta : delta;
 }
 function applyDataTableControls(tableId, rows, columns, filterOptionsRows = rows) {
+  return sortDataTableRows(tableId, applyDataTableFilters(tableId, rows, columns, filterOptionsRows), columns);
+}
+function sortDataTableRows(tableId, rows, columns) {
   const controls = tableControls(tableId);
-  const filtered = applyDataTableFilters(tableId, rows, columns, filterOptionsRows);
   const sortColumn = columns.find(column => column.key === controls.sort && column.sortable);
-  const out = [...filtered];
+  const out = [...rows];
   if (sortColumn) out.sort((left, right) => compareTableValues(sortColumn.value(left), sortColumn.value(right), tableSortType(sortColumn), controls.direction));
   return out;
 }
@@ -1131,6 +1133,7 @@ export {
   activeFilterValues,
   agentNameFor,
   applyDataTableControls,
+  sortDataTableRows,
   applyDataTableFilters,
   beginTableCellEdit,
   bindDataTableControls,
