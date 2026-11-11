@@ -4,6 +4,18 @@ import { installBrowserDom, pointerClick, submitActionForm } from "./support/bro
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
+test("an already aborted operation observer releases the caller's busy state", async () => {
+  const browser = installBrowserDom('<div id="aborted-operation"></div>', { fetch: () => assert.fail("aborted observers must not poll") });
+  try {
+    const { beginFeedback } = await import("../../src/psycheval/assets/web/modules/action-feedback.js");
+    const { watchOperation } = await import("../../src/psycheval/assets/web/modules/operation-feedback.js");
+    const feedback = beginFeedback("#aborted-operation"), states = [];
+    feedback.dispose();
+    await watchOperation("aborted", { feedback, onBusy: value => states.push(value) });
+    assert.deepEqual(states, [false]);
+  } finally { browser.cleanup(); }
+});
+
 for (const failures of [[{ error: "Scan reconciliation failed" }], []]) {
   test(`failed operation diagnostics survive a failed refresh and its read retry (${failures.length} details)`, async () => {
     let reads = 0, refreshes = 0;

@@ -24,7 +24,7 @@ async function watchOperation(id, { feedback, committed = false, showProgress = 
   if (!observers.has(owner)) observers.set(owner, new Map());
   const active = observers.get(owner);
   active.get(id)?.();
-  if (feedback.signal.aborted) return;
+  if (feedback.signal.aborted) { onBusy(false); return; }
   const controller = new view.AbortController();
   let refreshing = false, polling = false, stopped = false, busy = false, timer;
   const setBusy = value => {
