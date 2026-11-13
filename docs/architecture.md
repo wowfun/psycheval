@@ -285,9 +285,11 @@ does not parse Agent transcripts or tool payloads.
   harness.
 - `datasets/` contains maintained Harbor Datasets; `examples/` contains
   authoring examples, not maintained evaluation members.
-- `skills/peval/` is the repository source of the project Agent Skill and is
-  not package data. `peval init --skill <skill-dir>` explicitly installs or
-  replaces one workspace copy at `.agents/skills/<name>/`.
+- `skills/` owns authored Agent workflows and their supporting resources; it is
+  not package data. Skills consume public runtime interfaces, while runtime
+  contracts remain with their owning modules and reference documentation.
+  `peval init --skill <skill-dir>` explicitly installs or replaces one workspace
+  copy at `.agents/skills/<name>/`.
 
 ## Dependency direction
 
