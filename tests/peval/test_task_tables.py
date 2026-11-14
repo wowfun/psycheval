@@ -130,7 +130,7 @@ def test_scoring_cache_tracks_missing_step_overrides_and_config_versions(office)
     another = HarborWorkspace(
         config_path,
         load_config(workspace_root=config_path.parent),
-        scoring_cache=service.scoring_cache,
+        task_catalog=service.task_catalog,
     )
     assert another.task_scoring("office", "office-one")["scoring_item_count"] == 2
     assert service.task_scoring("office", "office-one")["rule_count"] is None
@@ -317,10 +317,39 @@ def test_unknown_summary_is_not_silently_zero():
 
 def test_summary_matches_shared_browser_and_export_contract():
     fixture = json.loads(
-        (Path(__file__).parents[1] / "fixtures/task_summary.json").read_text()
+        (Path(__file__).parents[1] / "fixtures/task_summary.json").read_text(
+            encoding="utf-8"
+        )
     )
-    for group_by in ("overall", "dataset"):
+    for group_by in ("overall", "dataset", "category", "difficulty", "tags"):
         assert task_summary(fixture["tasks"], group_by) == fixture[group_by]
+
+
+def test_summary_export_respects_nullable_groups_and_metric_order(office):
+    config_path, _ = office
+    request = TaskExport(
+        kind="json",
+        mode="summary",
+        group_by="category",
+        comparison_groups=[None],
+        rows=[TaskRowRef(dataset_id="office", task="office-one")] * 2,
+        columns=["group", "rubric_count", "task_count", "missing_rubric_count"],
+    )
+    service = library(config_path)
+    rows = task_export_rows(service, request, "guest")
+    assert len(rows) == 1 and rows[0]["task_count"] == 1
+    payload = json.loads(build_task_export(rows, request, "en")[0])
+    assert list(payload[0]) == request.columns
+    assert payload[0] == {
+        "group": None,
+        "rubric_count": 1,
+        "task_count": 1,
+        "missing_rubric_count": 0,
+    }
+    request.comparison_groups = []
+    assert task_export_rows(service, request, "guest") == []
+    request.comparison_groups = ["outside-current-results"]
+    assert task_export_rows(service, request, "guest") == []
 
 
 def test_flat_export_indexes_items_once_per_task():
@@ -376,7 +405,7 @@ def test_http_count_permissions_conflicts_preview_and_exports(office):
         ) as parse:
             assert admin.get("/api/collections/datasets").status_code == 200
             assert guest.get("/api/collections/datasets").status_code == 200
-            assert parse.call_count == 1
+            assert parse.call_count == 0  # Both roles read the published snapshot.
         headers = {"If-Match": initial.headers["ETag"]}
         assert (
             guest.put(

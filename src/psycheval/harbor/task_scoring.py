@@ -109,6 +109,8 @@ def task_scoring_inventory(
     office = format == "workbuddy.v1"
     result: dict[str, Any] = {
         "tags": [],
+        "category": None,
+        "difficulty": None,
         "instruction": None,
         "instruction_path": "instruction.md",
         "rule_count": manual_rule_count if office else 0,
@@ -141,6 +143,8 @@ def task_scoring_inventory(
             result.update(rule_count=None, rule_count_source="unknown")
         return result
     result["tags"] = list(config.task.keywords or []) if config.task else []
+    for field in ("category", "difficulty"):
+        result[field] = config.metadata.get(field)
     steps = [step.name for step in config.steps] if config.steps else [""]
     if steps[0]:
         result["instruction_path"] = f"steps/{steps[0]}/instruction.md"

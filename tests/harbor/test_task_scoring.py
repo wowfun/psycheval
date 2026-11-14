@@ -31,6 +31,18 @@ def inventory(root, **kwargs):
     return task_scoring_inventory(root, read_bytes=lambda p: p.read_bytes(), **kwargs)
 
 
+def test_summary_metadata_uses_declared_fields_and_keeps_missing_labels(tmp_path):
+    task(tmp_path)
+    assert inventory(tmp_path)["category"] is None
+    assert inventory(tmp_path)["difficulty"] is None
+    with (tmp_path / "task.toml").open("a", encoding="utf-8") as source:
+        source.write('\n[metadata]\ncategory = "coding"\ndifficulty = "hard"\n')
+    result = inventory(tmp_path)
+    assert result["category"] == "coding"
+    assert result["difficulty"] == "hard"
+    assert result["tags"] == ["中文", "office"]
+
+
 def test_declared_rule_items_match_scoring_and_preserve_rubric_lists(tmp_path):
     task(tmp_path)
     write(

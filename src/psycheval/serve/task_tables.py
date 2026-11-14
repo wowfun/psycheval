@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Header, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from psycheval.config import ManualRuleCount
+from psycheval.harbor.task_resources import task_totals
 from psycheval.i18n import messages_for
 from psycheval.serve.api_access import (
     ADMIN_ACCESS,
@@ -59,7 +60,10 @@ class TaskExport(_Request):
     mode: Literal["tasks", "items", "summary"]
     rows: list[TaskRowRef] = Field(max_length=100_000)
     columns: list[str] = Field(default_factory=list, max_length=20)
-    group_by: Literal["overall", "dataset"] = "overall"
+    group_by: Literal["overall", "dataset", "category", "difficulty", "tags"] = (
+        "overall"
+    )
+    comparison_groups: list[str | None] | None = Field(default=None, max_length=100_000)
 
 
 TASK_COLUMNS = {
@@ -67,12 +71,17 @@ TASK_COLUMNS = {
     "task": ("task", "Task"),
     "tags": ("tags", "Tags"),
     "instruction": ("task_instruction", "Instruction"),
+    "skill_count": ("task_skills", "Skills"),
+    "input_file_count": ("task_files", "Files"),
+    "has_prepare": ("task_prepare", "Prepare"),
     "rule_count": ("task_rules", "Rules"),
     "rubric_count": ("task_rubrics", "Rubrics"),
     "scoring_item_count": ("task_scoring_items", "Scoring items"),
 }
 ITEM_COLUMNS = {
-    key: value for key, value in TASK_COLUMNS.items() if not key.endswith("count")
+    key: value
+    for key, value in TASK_COLUMNS.items()
+    if key not in {"rule_count", "rubric_count", "scoring_item_count"}
 } | {
     "step": ("task_scoring_step", "Step"),
     "id": ("task_scoring_id", "ID"),
@@ -86,7 +95,10 @@ ITEM_COLUMNS = {
 SUMMARY_COLUMNS = {
     "group": ("summary_group_by", "Group by"),
     "task_count": ("tasks", "Tasks"),
-    **{key: value for key, value in TASK_COLUMNS.items() if key.endswith("count")},
+    **{
+        key: TASK_COLUMNS[key]
+        for key in ("rule_count", "rubric_count", "scoring_item_count")
+    },
     "missing_rule_count": ("task_missing_rules", "Tasks without a rule count"),
     "missing_rubric_count": ("task_missing_rubrics", "Tasks without a rubric count"),
     "missing_scoring_item_count": (
@@ -97,31 +109,19 @@ SUMMARY_COLUMNS = {
 
 
 def task_summary(rows: list[dict[str, Any]], group_by: str) -> list[dict[str, Any]]:
-    groups: dict[str, list[dict[str, Any]]] = {}
+    groups: dict[str | None, list[dict[str, Any]]] = {}
     for row in rows:
-        groups.setdefault(
-            row["dataset"] if group_by == "dataset" else "overall", []
-        ).append(row)
+        if group_by == "tags":
+            keys = list(dict.fromkeys(tag for tag in row.get("tags", []) if tag)) or [
+                None
+            ]
+        else:
+            keys = ["overall" if group_by == "overall" else row.get(group_by)]
+        for key in keys:
+            groups.setdefault(key, []).append(row)
     result = []
     for group, tasks in groups.items():
-        counts = {}
-        for field in ("rule_count", "rubric_count", "scoring_item_count"):
-            values = [task[field] for task in tasks]
-            counts[field] = None if None in values else sum(values)
-        result.append(
-            {
-                "group": group,
-                "task_count": len(tasks),
-                **counts,
-                "missing_rule_count": sum(task["rule_count"] is None for task in tasks),
-                "missing_rubric_count": sum(
-                    task["rubric_count"] is None for task in tasks
-                ),
-                "missing_scoring_item_count": sum(
-                    task["scoring_item_count"] is None for task in tasks
-                ),
-            }
-        )
+        result.append({"group": group, **task_totals(tasks)})
     return result
 
 
@@ -157,6 +157,8 @@ def task_export_rows(library, request: TaskExport, role: str) -> list[dict[str, 
                 if key not in {"dataset", "task"}
             },
         }
+        if request.mode == "summary":
+            row.update(category=task.get("category"), difficulty=task.get("difficulty"))
         if request.mode == "items":
             task_key = (ref.dataset_id, ref.task)
             if task_key not in item_indexes:
@@ -178,9 +180,13 @@ def task_export_rows(library, request: TaskExport, role: str) -> list[dict[str, 
                 },
             }
         result.append(row)
-    return (
-        task_summary(result, request.group_by) if request.mode == "summary" else result
-    )
+    if request.mode != "summary":
+        return result
+    summary = task_summary(result, request.group_by)
+    if request.comparison_groups is None or request.group_by == "overall":
+        return summary
+    selected = set(request.comparison_groups)
+    return [group for group in summary if group["group"] in selected]
 
 
 def build_task_export(
@@ -239,8 +245,11 @@ def build_task_export(
         for index, row in enumerate(projected, 1):
             for column, key in enumerate(columns):
                 value = row[key]
-                if key == "group" and request.group_by == "overall":
-                    value = messages["summary_overall"]
+                if key == "group":
+                    if request.group_by == "overall":
+                        value = messages["summary_overall"]
+                    elif value is None:
+                        value = messages["task_group_unset"]
                 if isinstance(value, list):
                     value = "\n".join(
                         item
