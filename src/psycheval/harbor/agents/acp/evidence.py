@@ -370,6 +370,15 @@ def _convert(
             update = params["update"]
             if not isinstance(update, dict):
                 raise ProtocolError("invalid retained Session update")
+            vendor = update.get("_meta") or {}
+            if result_format == "codebuddy" and vendor.get(
+                "codebuddy.ai/parentToolCallId"
+            ):
+                if vendor["codebuddy.ai/parentToolCallId"] not in summary.get(
+                    "family_parent_calls", ()
+                ):
+                    summary["family_unattributed"] = True
+                continue
             kind = update["sessionUpdate"]
             if kind in {"agent_message_chunk", "agent_thought_chunk"}:
                 if not isinstance(update["content"], dict):
@@ -548,7 +557,8 @@ def _convert(
             },
             "extra": {
                 **timing_extra,
-                "acp_tool_evidence_complete": summary.get("protocol_complete", False)
+                "acp_tool_evidence_complete": not summary.get("family_unattributed")
+                and summary.get("protocol_complete", False)
                 and not (
                     result_format == "codebuddy"
                     and any(

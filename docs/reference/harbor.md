@@ -464,7 +464,7 @@ effects of the first attempt are not rolled back.
 `opencode-retry.json` records the fallback. The normal execution logs and exported
 Session describe the final attempt; only that successful attempt supplies ATIF.
 Native JSON events and stderr stream to Agent logs, including on cancellation.
-Execution must emit exactly one Session identity before export. Export failure
+Execution must establish one invocation root before exporting it and verified descendants. Export failure
 or timeout fails the invocation and retains its logs; a previous invocation's
 converted trajectory is never reused for a new run.
 After a nonzero exit, error event, timeout or cancellation, the adapter attempts
@@ -1318,8 +1318,30 @@ pinned version's private image-path hooks.
 
 ## Native measurement evidence
 
+Adapters publish versioned `extra.family` with the root ATIF. Family topology
+and metric scope follow [state and data](state-and-data.md#session-families-and-metric-scope).
+WorkBuddy still rejects ACP frames for unrelated invocation sessions. Vendor
+child events in the root envelope require verified native parentage and current
+invocation membership before partitioning. They share the root wire budget and
+digest manifest. Child conversation ATIF is separate from numeric-only usage
+evidence. Child history reads validate containment, identity and baseline.
+OpenCode admits one invocation root and separately verified descendants;
+descendant export shares a 30-second collection deadline, a 128 MiB retained
+export budget and the family member/depth caps. Exhausted budgets or unavailable child
+exports retain the admitted prefix, missing-member metadata and diagnostics;
+they do not turn a successful root execution into an Agent failure.
+The augmented export replaces the original root export atomically. Ordinary
+forks and their descendants, including metadata-only descendants, are excluded.
+Depth-limited branches retain their
+first excluded member as missing without reading its body or deeper descendants.
+DB import reads membership and message/part rows
+from one read-only SQLite snapshot. Native `session_v2` uses the same export
+projection as CLI captures; legacy `session` sources retain their own reader.
+Fork metadata is checked before admitting descendants.
+
+
 Agent adapters own native collection and normalization. Measurement evidence
-schema 1 / contract 1 uses `agent/measurements.json` and associated reduced event
+schema 2 / contract 2 uses `agent/measurements.json` and associated reduced event
 files, linked from ATIF extra or AgentContext metadata. The manifest records
 invocation/Session identity, installed producer version, per-capability status
 (`verified`, `unsupported`, `unavailable`), probe evidence and file digests.

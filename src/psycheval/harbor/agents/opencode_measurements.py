@@ -5,13 +5,46 @@ from .dsh_measurements import bounded_records
 
 
 def capture(path, trajectory):
+    diagnostics = []
+    if not path.exists():
+        return [], False, False, ["plugin_not_loaded"]
+    events = list(bounded_records(path, [MAX_EVENT_BYTES], diagnostics))
+    if trajectory.get("subagent_trajectories"):
+        from itertools import chain
+
+        from ..family import trajectories
+
+        grouped, shared = {}, []
+        for event in events:
+            if event.get("session"):
+                grouped.setdefault(event["session"], []).append(event)
+            else:
+                shared.append(event)
+        results = [
+            _capture(chain(shared, grouped.get(body["session_id"], ())), body)
+            for body, _, _ in trajectories(trajectory)
+        ]
+        records = [
+            dict(row, scope="main" if i == 0 else "child")
+            for i, (rows, _, _, _) in enumerate(results)
+            for row in rows
+        ]
+        return (
+            records,
+            all(r[1] for r in results),
+            all(r[2] for r in results) and not diagnostics,
+            sorted(set(diagnostics) | {d for r in results for d in r[3]}),
+        )
+    rows, linked, complete, issues = _capture(events, trajectory)
+    return rows, linked, complete and not diagnostics, sorted(set(issues + diagnostics))
+
+
+def _capture(events, trajectory):
     session = trajectory.get("session_id")
     requests, steps, diagnostics, ends = {}, {}, [], []
     request_events, request_conflicts = {}, set()
     loaded = False
-    if not path.exists():
-        return [], False, False, ["plugin_not_loaded"]
-    for event in bounded_records(path, [MAX_EVENT_BYTES], diagnostics):
+    for event in events:
         kind = event.get("kind")
         if kind == "loaded":
             loaded = True

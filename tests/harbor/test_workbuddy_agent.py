@@ -920,6 +920,16 @@ def test_usage_enrichment_guards_and_failure_atomicity(tmp_path, monkeypatch, fa
         }
     )
     before = original.to_json_dict()
+    from tests.harbor.test_family import trajectory
+
+    agent._family_capture = {
+        "children": {
+            "child": ("session", trajectory("child")),
+            "grandchild": ("child", trajectory("grandchild")),
+        },
+        "diagnostics": [],
+        "usage": [],
+    }
     evidence = {
         "session_id": "other" if failure == "unrelated" else "session",
         "invocation_id": "call",
@@ -945,6 +955,7 @@ def test_usage_enrichment_guards_and_failure_atomicity(tmp_path, monkeypatch, fa
     assert projected == ([1] if failure in {"projection", "validation"} else [])
     assert result["steps"] == before["steps"]
     assert result["extra"]["workbuddy_usage"]["status"] == "unavailable"
+    assert len(result["extra"]["family"]["members"]) == 3
     assert original.to_json_dict() == before
 
 

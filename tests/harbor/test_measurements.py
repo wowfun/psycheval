@@ -176,6 +176,76 @@ def test_dsh_capture_read_and_file_limits(tmp_path, monkeypatch):
         dsh.capture(tmp_path, "root", {}, tmp_path / "missing")
 
 
+def test_dsh_resume_capture_keeps_only_current_invocation_execution(tmp_path):
+    from psycheval.harbor.agents.dsh_measurements import capture
+
+    offsets = {}
+    files = {}
+
+    def events(turn, start, text):
+        return [
+            {
+                "seq": start,
+                "type": "step/start",
+                "time": start * 10,
+                "data": {"turn": turn, "step": 1},
+            },
+            {
+                "seq": start + 1,
+                "type": "assistant/message",
+                "time": start * 10 + 5,
+                "data": {
+                    "turn": turn,
+                    "step": 1,
+                    "message": {"content": text},
+                    "usage": {"totalTokens": 12, "outputTokens": 2},
+                },
+            },
+            {"seq": start + 2, "type": "turn/end", "time": start * 10 + 7, "data": {}},
+        ]
+
+    for identity, parent in [("root", None), ("child", "root")]:
+        path = tmp_path / "sessions/date" / identity / "session.v4.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            "\n".join(
+                map(
+                    json.dumps,
+                    [
+                        {
+                            "version": 4,
+                            "id": identity,
+                            "origin": "subagent" if parent else "user",
+                            "parentSession": parent,
+                        },
+                        *events(1, 1, "previous prompt"),
+                    ],
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        files[identity] = path
+    first = {}
+    capture(tmp_path, "root", offsets, tmp_path / "absent", family=first)
+    assert first["child"]["trajectory"]["steps"][0]["message"] == "previous prompt"
+    for path in files.values():
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(
+                "\n".join(map(json.dumps, events(2, 4, "current prompt"))) + "\n"
+            )
+    second = {}
+    records, complete, diagnostics = capture(
+        tmp_path, "root", offsets, tmp_path / "absent", family=second
+    )
+    assert complete and not diagnostics
+    assert [step["message"] for step in second["child"]["trajectory"]["steps"]] == [
+        "current prompt"
+    ]
+    assert all(record.get("step_id") != "1:1" for record in records)
+    assert offsets == {"root": 6, "child": 6}
+
+
 def test_dsh_capture_retains_prefix_on_non_object_or_invalid_json(tmp_path):
     from psycheval.harbor.agents.dsh_measurements import capture
 

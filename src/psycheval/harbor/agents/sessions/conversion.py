@@ -15,6 +15,7 @@ from ...atif import (
     read_atif_json_path,
     validate_atif_trajectory,
 )
+from ...family import call_activation, retain, trajectories, validate
 from .models import (
     TIMESTAMP_SEMANTICS_ORDER_ONLY,
     ConversionResult,
@@ -96,6 +97,27 @@ def finalize_atif_conversion(
 
     trajectory["final_metrics"] = _aggregate_final_metrics(trajectory)
     validate_atif_trajectory(trajectory)
+    native_family = trajectory.setdefault("extra", {}).pop("_retain_family", False)
+    discovery_complete = trajectory["extra"].pop(
+        "family_discovery_complete", not warnings
+    )
+    if (
+        (trajectory.get("extra") or {}).get("claude") or native_family
+    ) and trajectory.get("trajectory_id"):
+        trajectory.setdefault("extra", {})["tool_evidence"] = (
+            "partial" if warnings else "complete"
+        )
+        missing = trajectory["extra"].pop("family_missing", [])
+        retain(
+            trajectory,
+            missing=missing,
+            diagnostics=trajectory["extra"].pop("family_diagnostics", []),
+            complete=discovery_complete and not warnings,
+            activations=_claude_activations(trajectory)
+            if (trajectory.get("extra") or {}).get("claude")
+            else [],
+        )
+
     return replace(
         result,
         trajectory=trajectory,
@@ -103,6 +125,35 @@ def finalize_atif_conversion(
         warnings=warnings,
         subagent_results=children,
     )
+
+
+def _claude_activations(root):
+    members = {body["trajectory_id"]: body for body, _, _ in trajectories(root)}
+    links = {}
+    for owner in members.values():
+        children = {
+            child["trajectory_id"] for child in owner.get("subagent_trajectories") or []
+        }
+        for step in owner.get("steps") or []:
+            if step.get("is_copied_context"):
+                continue
+            calls = {call["tool_call_id"] for call in step.get("tool_calls") or []}
+            for observation in (step.get("observation") or {}).get("results") or []:
+                call = observation.get("source_call_id")
+                if call not in calls:
+                    continue
+                for ref in observation.get("subagent_trajectory_ref") or []:
+                    identity = ref.get("trajectory_id")
+                    if identity in children:
+                        links.setdefault(identity, {})[
+                            (owner["trajectory_id"], call)
+                        ] = owner
+    activations = []
+    for child, parents in links.items():
+        if len(parents) == 1:
+            (_, call), parent = next(iter(parents.items()))
+            activations.append(call_activation(parent, members[child], call))
+    return activations
 
 
 def attach_atif_session_context(
@@ -129,6 +180,7 @@ def convert_atif_json_path(path: str) -> ConversionResult | None:
 
 def convert_atif_trajectory(parsed: dict[str, Any]) -> ConversionResult:
     validate_atif_trajectory(parsed)
+    validate(parsed)
     steps = parsed["steps"]
     meta = [step_meta_from_atif_step(index, step) for index, step in enumerate(steps)]
     timestamps = [step.timestamp_ms for step in meta if step.timestamp_ms is not None]
@@ -345,6 +397,7 @@ def _aggregate_final_metrics(trajectory: dict[str, Any]) -> dict[str, Any]:
             step["metrics"][source_key]
             for step in trajectory.get("steps") or []
             if isinstance(step, dict)
+            and not step.get("is_copied_context")
             and isinstance(step.get("metrics"), dict)
             and step["metrics"].get(source_key) is not None
         ]
@@ -353,7 +406,9 @@ def _aggregate_final_metrics(trajectory: dict[str, Any]) -> dict[str, Any]:
             totals[total_key] = (
                 round(float(total), 12) if source_key == "cost_usd" else int(total)
             )
-    totals["total_steps"] = len(trajectory.get("steps") or [])
+    totals["total_steps"] = sum(
+        not step.get("is_copied_context") for step in trajectory.get("steps") or []
+    )
     if previous_extra:
         totals["extra"] = previous_extra
     return totals

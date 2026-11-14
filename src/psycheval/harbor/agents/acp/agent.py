@@ -597,6 +597,7 @@ class HostACPAgent(BaseAgent):
             raise RuntimeError(
                 "ACP invocation is unsafe to verify; see current Agent evidence"
             )
+        summary = self._prepare_evidence_summary(summary)
         trajectory = convert(
             self.logs_dir,
             summary,
@@ -628,6 +629,9 @@ class HostACPAgent(BaseAgent):
             context.metadata["cleanup_warnings"] = warnings
             for warning in warnings:
                 self.logger.warning(warning_text(warning))
+
+    def _prepare_evidence_summary(self, summary):
+        return summary
 
     def _enrich_trajectory(self, trajectory, summary):
         return trajectory

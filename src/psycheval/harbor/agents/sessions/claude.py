@@ -289,6 +289,16 @@ def _read_family(
                     raise ValueError("subagent has no retained conversation")
                 children[child_identity] = child
             except ValueError as exc:
+                if child_identity not in visited:
+                    result.trajectory.setdefault("extra", {}).setdefault(
+                        "family_missing", []
+                    ).append(
+                        {
+                            "trajectory_id": child_identity,
+                            "session_id": f"{session_id}:agent:{child_id}",
+                            "parent_trajectory_id": identity,
+                        }
+                    )
                 result.warnings.append(f"subagent {child_id}: {exc}; link omitted")
                 continue
         observation["subagent_trajectory_ref"] = [{"trajectory_id": child_identity}]

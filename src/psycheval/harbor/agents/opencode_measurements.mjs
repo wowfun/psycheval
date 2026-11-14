@@ -87,6 +87,7 @@ export default {id:'peval-measurements', async setup(ctx) {
   });
   await ctx.session.hook('retry',e=>write({kind:'retry',session:e.sessionID,attempt:e.attempt,time:Date.now()}));
   (async()=>{for await(const e of ctx.event.subscribe()) {
+    if(e.type==='session.created') { write({kind:'family',session:e.data.sessionID,parent:e.data.parentID}); continue; }
     if(!['session.step.started','session.step.streamed','session.step.ended'].includes(e.type)) continue;
     const d=e.data,session=d.sessionID,attempt=active.get(session);
     write({kind:e.type,session,message:d.assistantMessageID,request:attempt?.id,

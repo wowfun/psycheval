@@ -252,7 +252,7 @@ def normalize(
     return [*steps.values(), *requests, *tools.values(), *ends], maximum, finished
 
 
-def capture(home, session_id, offsets, hook_path):
+def capture(home, session_id, offsets, hook_path, *, family=None, agent=None):
     records, diagnostics, complete = [], [], False
     budget = [MAX_PRIVATE_BYTES]
     # Admit only the selected root and explicitly declared subagent descendants.
@@ -290,6 +290,23 @@ def capture(home, session_id, offsets, hook_path):
         if next(iterator, {}) != header:
             raise ValueError("native_session_identity")
         previous = offsets.get(identity)
+        if family is not None:
+            from .sessions.dsh import NativeSession
+
+            parser = NativeSession(
+                identity, agent or {"name": "dsh", "version": "unknown"}
+            )
+            source = iterator
+
+            def observed():
+                for event in source:
+                    if type(event.get("seq")) is int and event["seq"] > offsets.get(
+                        identity, -1
+                    ):
+                        parser.feed(event)
+                    yield event
+
+            iterator = observed()
         collected, last, finished = normalize(
             iterator,
             identity,
@@ -298,6 +315,13 @@ def capture(home, session_id, offsets, hook_path):
             diagnostics=diagnostics,
             seeded=header.get("isSeeded") is True,
         )
+        if family is not None:
+            family[identity] = {
+                "header": header,
+                "trajectory": parser.finish(),
+                "children": parser.children,
+                "child_calls": parser.child_calls,
+            }
         records.extend(collected)
         offsets[identity] = last
         if identity == session_id:

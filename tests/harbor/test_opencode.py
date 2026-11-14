@@ -7,8 +7,10 @@ import os
 import shutil
 import sys
 import threading
+from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
@@ -37,6 +39,170 @@ def _exported_session():
             }
         ],
     }
+
+
+@pytest.mark.parametrize("limit", ["time", "bytes", "members", "identity"])
+def test_optional_child_exports_share_budgets_and_preserve_root(
+    tmp_path, monkeypatch, limit
+):
+    from psycheval.harbor.agents import opencode
+
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    agent._measurement_path = tmp_path / "observer.ndjson"
+    root = _exported_session()
+    root_id = root["info"]["id"]
+    agent._measurement_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {"kind": "loaded"},
+                *[
+                    {"kind": "family", "session": f"child-{i}", "parent": root_id}
+                    for i in range(3)
+                ],
+            ]
+        ),
+        encoding="utf-8",
+    )
+    calls, clock = [], [0]
+    monkeypatch.setattr(opencode, "monotonic", lambda: clock[0])
+    if limit == "time":
+        monkeypatch.setattr(opencode, "MAX_FAMILY_EXPORT_SECONDS", 1)
+    elif limit == "bytes":
+        monkeypatch.setattr(
+            opencode, "MAX_FAMILY_EXPORT_BYTES", opencode._json_size(root) + 1024
+        )
+    elif limit == "members":
+        monkeypatch.setattr(opencode, "MAX_MEMBERS", 2)
+
+    class Host:
+        def scoped_exec_env(self, env):
+            return nullcontext()
+
+        def scoped_output_callback(self, callback):
+            self.callback = callback
+            return nullcontext()
+
+        async def exec_argv(self, argv, *, env, timeout_sec):
+            calls.append((argv[-1], timeout_sec))
+            if limit == "time":
+                clock[0] += 0.6
+            child = _exported_session()
+            child["info"].update(
+                id="wrong" if limit == "identity" else argv[-1], parentID=root_id
+            )
+            text = json.dumps(child)
+            await self.callback(text, "stdout")
+            return SimpleNamespace(return_code=0, stdout=text)
+
+    asyncio.run(agent._capture_export_family(Host(), {}, root))
+    assert root["info"]["id"] == root_id
+    assert root["messages"][0]["content"][0]["text"] == "完成 🎉"
+    assert not root["family_capture_complete"]
+    assert all(
+        0 < timeout <= opencode.MAX_FAMILY_EXPORT_SECONDS for _, timeout in calls
+    )
+    expected = {
+        "time": "family_export_time_limit",
+        "bytes": "family_export_byte_limit",
+        "members": "family_member_limit",
+        "identity": "child_export_unavailable",
+    }[limit]
+    assert expected in root["family_diagnostics"]
+    if limit == "time":
+        assert len(calls) == 2 and len(root["family_missing"]) == 1
+    elif limit == "bytes":
+        assert len(calls) <= 2 and root["family_missing"]
+        assert opencode._json_size(root) <= opencode.MAX_FAMILY_EXPORT_BYTES
+    elif limit == "members":
+        assert len(calls) == 1 and len(root["children"]) == 1
+    else:
+        assert not root["children"] and len(root["family_missing"]) == 3
+
+
+def test_child_export_stops_at_depth_boundary_before_io(tmp_path):
+    from psycheval.harbor.agents.sessions.models import ConversionOptions
+    from psycheval.harbor.agents.sessions.opencode import convert_native_export
+    from psycheval.harbor.family import MAX_DEPTH
+
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    root = _exported_session()
+    root_id = root["info"]["id"]
+    relations = {f"child-{i}": f"child-{i - 1}" if i else root_id for i in range(70)}
+    agent._measurement_path = tmp_path / "observer.ndjson"
+    agent._measurement_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {"kind": "loaded"},
+                *[
+                    {"kind": "family", "session": key, "parent": parent}
+                    for key, parent in relations.items()
+                ],
+            ]
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    class Host:
+        def scoped_exec_env(self, env):
+            return nullcontext()
+
+        def scoped_output_callback(self, callback):
+            return nullcontext()
+
+        async def exec_argv(self, argv, **kwargs):
+            calls.append(argv[-1])
+            child = _exported_session()
+            child["info"].update(id=argv[-1], parentID=relations[argv[-1]])
+            return SimpleNamespace(return_code=0, stdout=json.dumps(child))
+
+    asyncio.run(agent._capture_export_family(Host(), {}, root))
+    assert len(calls) == MAX_DEPTH
+    assert "family_depth_limit" in root["family_diagnostics"]
+    result = convert_native_export(root, ConversionOptions())
+    family = result.trajectory["extra"]["family"]
+    assert family["members"][-1]["content_status"] == "missing"
+    assert not family["discovery_complete"]
+
+
+def test_family_export_serialization_failure_preserves_root(tmp_path, monkeypatch):
+    from psycheval.harbor.agents import opencode
+
+    agent = HostOpenCodeAgent(logs_dir=tmp_path, model_name="fixture/model")
+    root = _exported_session()
+    content = json.dumps(root)
+
+    class Host:
+        def scoped_exec_env(self, env):
+            return nullcontext()
+
+        def scoped_output_callback(self, callback):
+            self.callback = callback
+            return nullcontext()
+
+        async def exec_argv(self, argv, **kwargs):
+            await self.callback(content, "stdout")
+            return SimpleNamespace(return_code=0)
+
+    async def capture(*args):
+        args[-1]["children"] = []
+
+    def fail_dump(value, output, **kwargs):
+        output.write('{"interrupted":')
+        raise OSError("simulated full disk")
+
+    monkeypatch.setattr(agent, "_capture_export_family", capture)
+    monkeypatch.setattr(opencode.json, "dump", fail_dump)
+    with pytest.raises(OSError, match="full disk"):
+        asyncio.run(
+            agent._export_session(
+                Host(), {}, [{"sessionID": root["info"]["id"]}], "opencode-session.json"
+            )
+        )
+    assert (tmp_path / "opencode-session.json").read_text(encoding="utf-8") == content
+    assert not list(tmp_path.glob(".opencode-family-*"))
 
 
 def test_run_publishes_trajectory_when_measurement_metadata_skips_harbor_callback(

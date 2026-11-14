@@ -51,16 +51,101 @@ class OpencodeAdapter(CommonMessageAdapter):
         session_id: str | None,
         config: ConversionOptions,
     ):
-        records = read_opencode_db(path, session_id)
-        return self.convert(records, config)
+        from ...family import MAX_DEPTH, MAX_MEMBERS
+
+        connection = sqlite3.connect(
+            f"file:{resolve_opencode_db(path)}?mode=ro", uri=True
+        )
+        connection.row_factory = sqlite3.Row
+        try:
+            connection.execute("BEGIN")
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='session_v2'"
+            ).fetchone():
+                return _convert_v2_db(connection, session_id, config)
+            root = self.convert(
+                read_opencode_db(path, session_id, connection=connection), config
+            )
+            root_id = root.trajectory["session_id"]
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(session)")
+            }
+            relations = (
+                connection.execute(
+                    "SELECT * FROM session WHERE parent_id IS NOT NULL"
+                ).fetchall()
+                if "parent_id" in columns
+                else []
+            )
+            forks = set()
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='event'"
+            ).fetchone():
+                for row in connection.execute(
+                    "SELECT aggregate_id FROM event WHERE type LIKE 'session.forked%'"
+                ):
+                    forks.add(row[0])
+            children = {}
+            for row in relations:
+                if row["id"] in forks or ("fork" in columns and row["fork"]):
+                    continue
+                children.setdefault(row["parent_id"], []).append(row["id"])
+            results, pending = {root_id: root}, [root_id]
+            depths, missing, diagnostics = {root_id: 0}, [], set()
+            while pending:
+                parent = pending.pop()
+                for identity in children.get(parent, []):
+                    if identity in results:
+                        raise ValueError("cyclic OpenCode family")
+                    if len(results) + len(missing) >= MAX_MEMBERS:
+                        diagnostics.add("family_member_limit")
+                        continue
+                    if depths[parent] >= MAX_DEPTH:
+                        diagnostics.add("family_depth_limit")
+                        missing.append(
+                            {
+                                "trajectory_id": "opencode:" + identity,
+                                "session_id": identity,
+                                "parent_trajectory_id": "opencode:" + parent,
+                            }
+                        )
+                        continue
+                    child = self.convert(
+                        read_opencode_db(path, identity, connection=connection), config
+                    )
+                    results[parent].subagent_results.append(child)
+                    results[identity] = child
+                    depths[identity] = depths[parent] + 1
+                    pending.append(identity)
+        finally:
+            connection.close()
+        for identity, result in results.items():
+            result.trajectory["trajectory_id"] = "opencode:" + identity
+            result.trajectory.setdefault("extra", {}).update(
+                tool_evidence="partial" if result.warnings else "complete",
+                _retain_family=True,
+                family_discovery_complete="parent_id" in columns,
+            )
+        root.trajectory["extra"].update(
+            family_missing=missing,
+            family_diagnostics=sorted(diagnostics),
+            family_discovery_complete="parent_id" in columns and not diagnostics,
+        )
+        return root
 
     def list_sessions(self, path: str) -> list[SessionInfo]:
         return list_opencode_sessions(resolve_opencode_db(path))
 
 
-def read_opencode_db(path: str, session_id: str | None) -> list[MessageRecord]:
+def read_opencode_db(
+    path: str, session_id: str | None, *, connection=None
+) -> list[MessageRecord]:
     db_path = resolve_opencode_db(path)
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = (
+        connection
+        if connection is not None
+        else sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    )
     conn.row_factory = sqlite3.Row
     try:
         session = select_session(conn, session_id)
@@ -89,7 +174,8 @@ def read_opencode_db(path: str, session_id: str | None) -> list[MessageRecord]:
     except sqlite3.Error as exc:
         raise ValueError(f"failed to read OpenCode DB: {exc}") from exc
     finally:
-        conn.close()
+        if connection is None:
+            conn.close()
 
     grouped_parts: dict[str, list[sqlite3.Row]] = {}
     for part in parts:
@@ -153,10 +239,17 @@ def select_session(conn: sqlite3.Connection, session_id: str | None) -> sqlite3.
 def list_opencode_sessions(path: Path) -> list[SessionInfo]:
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
+        table = (
+            "session_v2"
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='session_v2'"
+            ).fetchone()
+            else "session"
+        )
         rows = conn.execute(
-            """
+            f"""
             SELECT id, title, time_updated
-            FROM session
+            FROM {table}
             ORDER BY time_updated DESC, id DESC
             """
         ).fetchall()
@@ -542,13 +635,15 @@ def model_name(message_data: dict[str, Any], session: sqlite3.Row) -> str | None
     return None
 
 
-def convert_native_export(exported: dict[str, Any], config: ConversionOptions):
+def convert_native_export(
+    exported: dict[str, Any], config: ConversionOptions, *, diagnostic=False
+):
     from ...redaction import redact_value
     from .common import bounded_arguments, bounded_text, bounded_value
     from .conversion import convert_atif_trajectory
     from .opencode_native import native_events_to_trajectory, native_session_events
 
-    events = native_session_events(exported)
+    events = native_session_events(exported, diagnostic=diagnostic)
     model = config.model
     if model is None:
         model = next(
@@ -564,27 +659,156 @@ def convert_native_export(exported: dict[str, Any], config: ConversionOptions):
     )
     if trajectory is None:
         raise ValueError("OpenCode Session export has no completed messages")
-    data = trajectory.to_json_dict()
+    from .opencode_native import retain_export_family
+
+    data = retain_export_family(
+        trajectory.to_json_dict(), exported, version=config.agent_version
+    )
     if config.agent_name:
         data["agent"]["name"] = config.agent_name
     if config.redact:
         data = redact_value(data)
-    for step in data["steps"]:
-        truncated = False
-        for key in ("message", "reasoning_content"):
-            if isinstance(step.get(key), str):
-                step[key], changed = bounded_text(step[key], config)
+    from ...family import trajectories
+
+    for member, _, _ in trajectories(data):
+        for step in member["steps"]:
+            truncated = False
+            for key in ("message", "reasoning_content"):
+                if isinstance(step.get(key), str):
+                    step[key], changed = bounded_text(step[key], config)
+                    truncated |= changed
+            for call in step.get("tool_calls") or []:
+                call["arguments"], changed = bounded_arguments(
+                    call["arguments"], config
+                )
                 truncated |= changed
-        for call in step.get("tool_calls") or []:
-            call["arguments"], changed = bounded_arguments(call["arguments"], config)
-            truncated |= changed
-        for observation in (step.get("observation") or {}).get("results") or []:
-            observation["content"], changed = bounded_value(
-                observation["content"], config
-            )
-            truncated |= changed
-        if truncated:
-            step.setdefault("extra", {})["truncated"] = True
+            for observation in (step.get("observation") or {}).get("results") or []:
+                observation["content"], changed = bounded_value(
+                    observation["content"], config
+                )
+                truncated |= changed
+            if truncated:
+                step.setdefault("extra", {})["truncated"] = True
     result = convert_atif_trajectory(data)
     result.total_events = len(exported["messages"])
     return result
+
+
+def _convert_v2_db(connection, session_id, config):
+    """Reconstruct the native export from one SQLite read transaction."""
+    from ...family import MAX_DEPTH, MAX_MEMBERS
+
+    selected = (
+        connection.execute(
+            "SELECT * FROM session_v2 WHERE id=?", (session_id,)
+        ).fetchone()
+        if session_id
+        else connection.execute(
+            "SELECT * FROM session_v2 ORDER BY time_updated DESC,id DESC LIMIT 1"
+        ).fetchone()
+    )
+    if selected is None:
+        raise ValueError("OpenCode Session not found")
+    selected = dict(selected)
+    rows = connection.execute(
+        "SELECT id,parent_id,fork_session_id FROM session_v2 WHERE parent_id IS NOT NULL"
+    ).fetchall()
+    children = {}
+    for row in rows:
+        if not row["fork_session_id"]:
+            children.setdefault(row["parent_id"], []).append(row["id"])
+
+    def export(session):
+        identity = session["id"]
+        info = {
+            "id": identity,
+            "parentID": session["parent_id"],
+            "outcome": session["idle_outcome"],
+        }
+        if session["time_busy"] and (
+            not session["time_idle"] or session["time_busy"] > session["time_idle"]
+        ):
+            info["outcome"] = None
+        boundary = None
+        if session["fork_session_id"]:
+            value = parse_json_object(session["fork_boundary"], "fork_boundary")
+            row = connection.execute(
+                "SELECT seq FROM session_message WHERE session_id=? AND id=?",
+                (session["fork_session_id"], value["messageID"]),
+            ).fetchone()
+            if row is not None:
+                boundary = row[0] - (value["type"] == "before")
+            info["fork"] = {"sessionID": session["fork_session_id"], "boundary": value}
+        parts = {}
+        for row in connection.execute(
+            "SELECT message_id,ordinal,type,data FROM session_part WHERE session_id=? ORDER BY ordinal",
+            (identity,),
+        ):
+            parts.setdefault(row["message_id"], []).append(
+                (
+                    row["ordinal"],
+                    {
+                        "type": row["type"],
+                        **parse_json_object(row["data"], "session_part.data"),
+                    },
+                )
+            )
+        messages = []
+        for row in connection.execute(
+            "SELECT id,type,seq,data FROM session_message WHERE session_id=? ORDER BY seq",
+            (identity,),
+        ):
+            message = {
+                "id": row["id"],
+                "type": row["type"],
+                **parse_json_object(row["data"], "session_message.data"),
+            }
+            if row["id"] in parts:
+                content = message.setdefault("content", [])
+                for ordinal, part in parts[row["id"]]:
+                    if ordinal > len(content):
+                        raise ValueError("OpenCode Session part sequence is incomplete")
+                    if ordinal == len(content):
+                        content.append(part)
+                    else:
+                        content[ordinal] = part
+            if boundary is not None and row["seq"] <= boundary:
+                message["is_copied_context"] = True
+            messages.append(message)
+        return {"info": info, "messages": messages}
+
+    root = export(selected)
+    pending, seen, descendants = [selected["id"]], {selected["id"]}, []
+    depths, missing, diagnostics = {selected["id"]: 0}, [], set()
+    while pending:
+        parent = pending.pop()
+        for identity in children.get(parent, []):
+            if identity in seen:
+                raise ValueError("cyclic OpenCode family")
+            if len(seen) >= MAX_MEMBERS:
+                diagnostics.add("family_member_limit")
+                continue
+            seen.add(identity)
+            if depths[parent] >= MAX_DEPTH:
+                diagnostics.add("family_depth_limit")
+                missing.append(
+                    {
+                        "trajectory_id": identity,
+                        "session_id": identity,
+                        "parent_trajectory_id": parent,
+                    }
+                )
+                continue
+            row = connection.execute(
+                "SELECT * FROM session_v2 WHERE id=?", (identity,)
+            ).fetchone()
+            descendants.append(export(dict(row)))
+            depths[identity] = depths[parent] + 1
+            pending.append(identity)
+    root.update(
+        children=descendants,
+        family_capture_complete=not diagnostics,
+        family_missing=missing,
+        family_diagnostics=sorted(diagnostics),
+    )
+    return convert_native_export(root, config, diagnostic=True)

@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
+from time import monotonic
 from typing import override
 from uuid import uuid4
 
@@ -21,10 +24,12 @@ from pydantic import field_validator
 
 from ..diagnostics import PARTIAL_TRAJECTORY, write_partial
 from ..environment import HostEnvironment, _await_owned_task
+from ..family import MAX_DEPTH, MAX_MEMBERS
 from ..inference_telemetry import (
     populate_context_from_trajectory,
 )
-from ..measurements import unavailable_marker
+from ..measurements import MAX_EVENT_BYTES, unavailable_marker
+from .dsh_measurements import bounded_records
 from .sessions.opencode_native import native_events_to_trajectory, native_session_events
 
 _STDIN_LAUNCHER = (
@@ -32,6 +37,22 @@ _STDIN_LAUNCHER = (
     "f=open(sys.argv[1],'rb'); "
     "sys.exit(subprocess.call(sys.argv[2:],stdin=f))"
 )
+
+MAX_FAMILY_EXPORT_BYTES = 128 * 1024 * 1024
+MAX_FAMILY_EXPORT_SECONDS = 30
+
+
+class _FamilyExportByteLimit(ValueError):
+    pass
+
+
+def _json_size(value):
+    return sum(
+        len(chunk.encode("utf-8"))
+        for chunk in json.JSONEncoder(
+            ensure_ascii=False, separators=(",", ":")
+        ).iterencode(value)
+    )
 
 
 class HostOpenCodeOptions(OpenCodeOptions):
@@ -272,8 +293,10 @@ class HostOpenCodeAgent(OpenCode):
         path = self.logs_dir / filename
         if not path.is_file():
             return []
+        exported = json.loads(path.read_text(encoding="utf-8"))
+        self._family_export = exported if isinstance(exported, dict) else {}
         return native_session_events(
-            json.loads(path.read_text(encoding="utf-8")),
+            exported,
             streamed=self._parse_stdout() if streamed is None else streamed,
             model_name=self.model_name,
             diagnostic=diagnostic,
@@ -281,12 +304,22 @@ class HostOpenCodeAgent(OpenCode):
 
     @override
     def _convert_events_to_trajectory(self, events: list[dict]) -> Trajectory | None:
-        return native_events_to_trajectory(
+        trajectory = native_events_to_trajectory(
             events,
             model_name=self.model_name,
             instruction=getattr(self, "_instruction", ""),
             version=self.version(),
         )
+        if trajectory is not None:
+            from .sessions.opencode_native import retain_export_family
+
+            data = retain_export_family(
+                trajectory.to_json_dict(),
+                getattr(self, "_family_export", {}),
+                version=self.version(),
+            )
+            trajectory = Trajectory.model_validate(data)
+        return trajectory
 
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:
@@ -715,8 +748,13 @@ class HostOpenCodeAgent(OpenCode):
                 "w", encoding="utf-8"
             ) as errors,
         ):
+            export_bytes = 0
 
             async def capture_export(text: str, stream: str) -> None:
+                nonlocal export_bytes
+                export_bytes += len(text.encode("utf-8"))
+                if export_bytes > MAX_FAMILY_EXPORT_BYTES - 1024:
+                    raise ValueError("OpenCode root export byte limit")
                 handle = output if stream == "stdout" else errors
                 handle.write(text)
                 handle.flush()
@@ -737,6 +775,151 @@ class HostOpenCodeAgent(OpenCode):
             raise RuntimeError(
                 "OpenCode Session export failed; see opencode-export.stderr.log"
             )
+
+        if filename == "opencode-session.json":
+            path = self.logs_dir / filename
+            root = json.loads(path.read_text(encoding="utf-8"))
+            await self._capture_export_family(host, env, root)
+            fd, temporary = tempfile.mkstemp(
+                prefix=".opencode-family-", dir=self.logs_dir
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as output:
+                    json.dump(root, output, ensure_ascii=False, separators=(",", ":"))
+                os.replace(temporary, path)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+
+    async def _capture_export_family(self, host, env, root):
+        deadline = monotonic() + MAX_FAMILY_EXPORT_SECONDS
+        root_id = root["info"]["id"]
+        relations, diagnostics = {}, []
+        loaded = False
+        observer = getattr(self, "_measurement_path", None)
+        if observer and observer.exists():
+            for row in bounded_records(observer, [MAX_EVENT_BYTES], diagnostics):
+                loaded |= row.get("kind") == "loaded"
+                if row.get("kind") == "family" and row.get("parent"):
+                    relations[row["session"]] = row["parent"]
+        limits = [
+            "family_member_limit",
+            "family_depth_limit",
+            "family_export_byte_limit",
+            "family_export_time_limit",
+            "child_export_unavailable",
+        ]
+        root.update(
+            children=[],
+            family_missing=[],
+            family_diagnostics=sorted(set(diagnostics + limits)),
+            family_capture_complete=False,
+        )
+        budget = MAX_FAMILY_EXPORT_BYTES - _json_size(root)
+        admitted, members = {root_id}, []
+        depths = {root_id: 0}
+        pending = [root_id]
+        by_parent = {}
+        for identity, parent in relations.items():
+            by_parent.setdefault(parent, []).append(identity)
+        for parent in pending:
+            for identity in sorted(by_parent.get(parent, [])):
+                if identity in admitted:
+                    continue
+                if len(admitted) >= MAX_MEMBERS:
+                    diagnostics.append("family_member_limit")
+                    break
+                missing = {
+                    "trajectory_id": identity,
+                    "session_id": identity,
+                    "parent_trajectory_id": parent,
+                }
+                size = _json_size(missing) + 1
+                if size > budget:
+                    diagnostics.append("family_export_byte_limit")
+                    break
+                budget -= size  # Reserve missing metadata before attempting a child.
+                admitted.add(identity)
+                depths[identity] = depths[parent] + 1
+                if depths[identity] <= MAX_DEPTH:
+                    pending.append(identity)
+                members.append(missing)
+        missing = []
+        for member in members:
+            identity = member["session_id"]
+            remaining = deadline - monotonic()
+            reason = (
+                "family_depth_limit"
+                if depths[identity] > MAX_DEPTH
+                else "family_export_time_limit"
+                if remaining <= 0
+                else "family_export_byte_limit"
+                if budget <= 0
+                else None
+            )
+            if reason:
+                diagnostics.append(reason)
+                missing.append(member)
+                continue
+            try:
+                captured_bytes = 0
+
+                async def bound_child_export(text, stream):
+                    nonlocal captured_bytes
+                    captured_bytes += len(text.encode("utf-8"))
+                    if captured_bytes > budget:
+                        raise _FamilyExportByteLimit()
+
+                with (
+                    host.scoped_exec_env(env),
+                    host.scoped_output_callback(bound_child_export),
+                ):
+                    child = await host.exec_argv(
+                        [
+                            self.executable,
+                            "session",
+                            "export",
+                            "--standalone",
+                            identity,
+                        ],
+                        env=env,
+                        timeout_sec=remaining,
+                    )
+                if child.return_code != 0:
+                    raise ValueError("child export failed")
+                if len(child.stdout) > budget:
+                    diagnostics.append("family_export_byte_limit")
+                    missing.append(member)
+                    budget = 0
+                    continue
+                body = json.loads(child.stdout)
+                info = body.get("info") if isinstance(body, dict) else None
+                if (
+                    not isinstance(info, dict)
+                    or info.get("id") != identity
+                    or info.get("parentID") != relations[identity]
+                ):
+                    raise ValueError("child identity mismatch")
+                size = _json_size(body) + 1
+                if size > budget:
+                    diagnostics.append("family_export_byte_limit")
+                    missing.append(member)
+                    budget = 0
+                    continue
+            except _FamilyExportByteLimit:
+                diagnostics.append("family_export_byte_limit")
+                missing.append(member)
+                budget = 0
+            except (OSError, TimeoutError, ValueError):
+                diagnostics.append("child_export_unavailable")
+                missing.append(member)
+            else:
+                root["children"].append(body)
+                budget -= size
+        root.update(
+            family_missing=missing,
+            family_diagnostics=sorted(set(diagnostics)),
+            family_capture_complete=loaded and not diagnostics and not missing,
+        )
 
     @override
     async def resume(self, *args, **kwargs) -> None:

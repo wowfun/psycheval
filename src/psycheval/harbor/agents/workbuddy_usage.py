@@ -121,6 +121,15 @@ def _files(root):
             if path.suffix == ".jsonl":
                 _safe_path(path, checked)
                 result.append(path)
+            elif path.is_dir():
+                subagents = path / "subagents"
+                if subagents.exists():
+                    _safe_path(subagents, checked)
+                    for child in subagents.glob("*.jsonl"):
+                        _safe_path(child, checked)
+                        if len(result) >= MAX_HISTORY_FILES:
+                            raise UsageLimitError("history_file_limit")
+                        result.append(child)
     return sorted(result)
 
 
@@ -206,6 +215,8 @@ def prompt_requests(directory: Path, summary: dict):
             raise ValueError("unrelated_session")
         update = params.get("update", {})
         meta = update.get("_meta") or {}
+        if meta.get("codebuddy.ai/parentToolCallId"):
+            continue
         request = meta.get("codebuddy.ai/modelRequestId")
         conversation = meta.get("codebuddy.ai/conversationRequestId") or meta.get(
             "codebuddy.ai/requestId"

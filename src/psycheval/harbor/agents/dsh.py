@@ -175,6 +175,9 @@ class HostDSHAgent(HostACPAgent):
     def _publish_call(self, invocation):
         super()._publish_call(invocation)
         self._measurement_marker = None
+        self._family_sessions = {}
+        self._family_complete = False
+        self._family_diagnostics = ["family_capture_unavailable"]
         try:
             summary = json.loads(
                 (self.logs_dir / "acp.summary.json").read_text(encoding="utf-8")
@@ -187,7 +190,14 @@ class HostDSHAgent(HostACPAgent):
                 session,
                 self._measurement_offsets,
                 self._measurement_hook,
+                family=self._family_sessions,
+                agent={
+                    "name": "dsh",
+                    "version": self._agent_metadata["dsh_cli_version"],
+                    "model_name": self.model_name,
+                },
             )
+            self._family_complete, self._family_diagnostics = complete, diagnostics
             self._measurement_marker = publish(
                 self.logs_dir,
                 records,
@@ -238,6 +248,52 @@ class HostDSHAgent(HostACPAgent):
         data = trajectory.to_json_dict()
         data.setdefault("extra", {})["measurements"] = (
             self._measurement_marker or unavailable_marker()
+        )
+        from ..family import link_call, retain
+
+        data.setdefault("trajectory_id", "dsh:" + data["session_id"])
+        sessions = getattr(self, "_family_sessions", {})
+        bodies = {data["session_id"]: data}
+        bodies.update(
+            {
+                identity: value["trajectory"]
+                for identity, value in sessions.items()
+                if identity != data["session_id"] and value["trajectory"].get("steps")
+            }
+        )
+        for identity, value in sessions.items():
+            parent = value["header"].get("parentSession")
+            if (
+                identity != data["session_id"]
+                and identity in bodies
+                and parent in bodies
+            ):
+                bodies[parent].setdefault("subagent_trajectories", []).append(
+                    bodies[identity]
+                )
+        missing, activations = [], []
+        for identity, value in sessions.items():
+            if identity not in bodies:
+                continue
+            for child_id in value.get("children", ()):
+                if child_id not in bodies:
+                    missing.append(
+                        {
+                            "trajectory_id": "dsh:" + child_id,
+                            "session_id": child_id,
+                            "parent_trajectory_id": bodies[identity]["trajectory_id"],
+                        }
+                    )
+                elif call := value.get("child_calls", {}).get(child_id):
+                    activations.append(
+                        link_call(bodies[identity], bodies[child_id], call)
+                    )
+        retain(
+            data,
+            missing=missing,
+            activations=activations,
+            complete=getattr(self, "_family_complete", False) and not missing,
+            diagnostics=getattr(self, "_family_diagnostics", []),
         )
         return type(trajectory).model_validate(data)
 

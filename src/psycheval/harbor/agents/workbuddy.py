@@ -255,6 +255,7 @@ class HostWorkBuddyAgent(HostACPAgent):
             **kwargs,
         )
         self._profile_seeded = False
+        self._family_capture = None
         self._usage_digest = None
         self._usage_evidence = None
         self._usage_history_cache = {}
@@ -372,10 +373,21 @@ class HostWorkBuddyAgent(HostACPAgent):
         if self._usage_evidence is not None:
             context.metadata["workbuddy_usage"] = self._usage_evidence
 
+    def _prepare_evidence_summary(self, summary):
+        captured = getattr(self, "_family_capture", None)
+        if captured:
+            summary["family_parent_calls"] = captured["parent_calls"]
+        return summary
+
     def _enrich_trajectory(self, trajectory, summary):
+        from .workbuddy_family import attach
+
         data = trajectory.to_json_dict()
+        captured = getattr(self, "_family_capture", None)
         path = self.logs_dir / USAGE_FILENAME
         if self._usage_digest is None:
+            if captured:
+                data = attach(data, captured)
             data.setdefault("extra", {})["workbuddy_usage"] = {
                 "status": "unavailable",
                 "diagnostics": [
@@ -410,6 +422,8 @@ class HostWorkBuddyAgent(HostACPAgent):
                 "diagnostics": ["invalid_usage_evidence"],
             }
             type(trajectory).model_validate(data)
+        if captured:
+            data = attach(data, captured)
         self._usage_evidence = data["extra"]["workbuddy_usage"]
         self._publish_measurements(data, summary, evidence)
         data.setdefault("extra", {})["measurements"] = self._measurement_marker
@@ -426,6 +440,13 @@ class HostWorkBuddyAgent(HostACPAgent):
                 else ({}, set(), set(), ["native_usage_unavailable"])
             )
             records = list(trajectory_tools(data))
+            captured = getattr(self, "_family_capture", None)
+            if captured:
+                records.extend(captured["usage"])
+                for _, child in captured["children"].values():
+                    records.extend(
+                        {**row, "scope": "child"} for row in trajectory_tools(child)
+                    )
             for request in sorted(expected):
                 observation = observations.get(request)
                 records.append(
@@ -480,6 +501,31 @@ class HostWorkBuddyAgent(HostACPAgent):
                 and summary.get("cleanup_complete")
                 and summary.get("prompt_submitted")
             ):
+                from .workbuddy_family import capture
+
+                try:
+                    self._family_capture = capture(
+                        root,
+                        summary,
+                        baseline,
+                        {
+                            "name": "workbuddy",
+                            "version": self.cli_version,
+                            "model_name": self.model_name,
+                        },
+                        directory=self.logs_dir,
+                    )
+                except Exception as error:  # noqa: BLE001 - usage remains independent.
+                    self._family_capture = {
+                        "children": {},
+                        "parent_calls": set(),
+                        "diagnostics": ["family_capture_unavailable"],
+                        "usage": [],
+                    }
+                    self.logger.warning(
+                        "WorkBuddy family collection unavailable (%s)",
+                        type(error).__name__,
+                    )
                 evidence = capture_usage(
                     root, self.logs_dir, summary, baseline, self.cli_version
                 )
@@ -507,6 +553,7 @@ class HostWorkBuddyAgent(HostACPAgent):
             raise ValueError("WorkBuddy inspection cannot submit prompts")
         self._invocation_id = None
         self._invocation_host(environment)
+        self._family_capture = None
         self._usage_digest = None
         self._usage_evidence = None
         self._measurement_marker = None
