@@ -13,7 +13,7 @@ window.HTMLCanvasElement.prototype.getContext = () => ({ font: "", measureText: 
 const runtime = await import("../../src/psycheval/assets/web/modules/runtime.js");
 const catalog = await import("../../src/psycheval/assets/web/modules/serve-catalog.js");
 const summaryUi = await import("../../src/psycheval/assets/web/modules/leaderboard-summary.js");
-const radarUi = await import("../../src/psycheval/assets/web/modules/leaderboard-radar.js");
+const radarUi = await import("../../src/psycheval/assets/web/modules/summary-radar.js");
 
 test.after(() => browser.cleanup());
 
@@ -486,7 +486,7 @@ test("comparison groups share unlimited selection across table, charts and expor
     assert.equal(target.querySelectorAll("[data-comparison-group]:disabled").length, 0);
     assert.match(target.textContent, /No data.*n=0/);
     assert.equal(target.querySelectorAll("[data-metric-id]:checked").length, 10);
-    const context = radarUi.radarContext(runtime.state.leaderboardSummary.summary.groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+    const context = radarUi.radarContext(runtime.state.leaderboardSummary.summary.groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue, runtime.state.leaderboardSummaryComparisonGroups);
     const option = radarUi.radarOption(context, 600, 440);
     assert.ok(option.series.every(series => series.lineStyle.type === "solid"));
     assert.ok(option.graphic.some(marker => marker.type === "group"));
@@ -617,7 +617,7 @@ test("radar resize skips unchanged sizes, coalesces notifications and cancels pe
   let width = 600;
   Object.defineProperties(node, { clientWidth: { get: () => width }, clientHeight: { value: 440 } });
   const groups = [{ key: "a", label: "a", count: 1, metrics: [] }];
-  const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue, runtime.state.leaderboardSummaryComparisonGroups);
   const previous = { ResizeObserver: globalThis.ResizeObserver, requestAnimationFrame: globalThis.requestAnimationFrame, cancelAnimationFrame: globalThis.cancelAnimationFrame };
   const frames = new Map();
   let notify, sequence = 0, updates = 0;
@@ -646,17 +646,17 @@ test("radar resize skips unchanged sizes, coalesces notifications and cancels pe
 test("group colors stay stable when comparison selection changes", () => {
   resetSummaryState();
   const groups = ["group-0", "group-4", "group-8", "group-12", "group-16"].map(key => ({ key, label: key, count: 1, metrics: [] }));
-  const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue, runtime.state.leaderboardSummaryComparisonGroups);
   assert.equal(new Set(context.series.map(item => item.color)).size, 5);
   const html = radarUi.renderLeaderboardRadar(context);
   for (const item of context.series) assert.ok(html.includes(`--radar-color:${item.color}`));
   runtime.state.leaderboardSummaryComparisonGroups = [groups[3].key, groups[1].key];
-  const changed = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  const changed = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue, runtime.state.leaderboardSummaryComparisonGroups);
   assert.deepEqual(changed.series.map(item => item.group.key), [groups[1].key, groups[3].key]);
   assert.deepEqual(changed.series.map(item => item.color), [context.series[1].color, context.series[3].color]);
   assert.equal(changed.series.length, 2);
   runtime.state.leaderboardSummaryComparisonGroups = groups.filter((_, index) => index !== 2).map(group => group.key);
-  const middleRemoved = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  const middleRemoved = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue, runtime.state.leaderboardSummaryComparisonGroups);
   assert.equal(middleRemoved.series[2].group.key, groups[3].key);
   assert.equal(middleRemoved.series[2].color, context.series[3].color);
 });
@@ -664,7 +664,7 @@ test("group colors stay stable when comparison selection changes", () => {
 test("duplicate radar metric labels include metric identities", () => {
   resetSummaryState();
   const definitions = ["one", "two", "three"].map((key, index) => ({ key, direction: "higher", label: index < 2 ? "Quality" : "Speed" }));
-  const context = radarUi.radarContext([], definitions, summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  const context = radarUi.radarContext([], definitions, summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue, runtime.state.leaderboardSummaryComparisonGroups);
   assert.equal(radarUi.radarMetricLabel(context, "one"), "Quality (one)");
   assert.equal(radarUi.radarMetricLabel(context, "two"), "Quality (two)");
   assert.equal(radarUi.radarMetricLabel(context, "three"), "Speed");
@@ -674,7 +674,7 @@ test("missing annotations identify individual axes and groups without covering m
   resetSummaryState();
   const groups = [{ key: "a", label: "a", count: 1, metrics: [{ key: "score", count: 1, mean: 0 }] }, { key: "b", label: "b", count: 1, metrics: [{ key: "score", count: 1, mean: 1 }] }];
   groups.push(...Array.from({ length: 6 }, (_, index) => ({ key: `extra-${index}`, label: `extra-${index}`, count: 1, metrics: [] })));
-  const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue, runtime.state.leaderboardSummaryComparisonGroups);
   const option = radarUi.radarOption(context, 600, 440);
   const missing = option.graphic.filter(marker => marker.type === "group");
   assert.equal(new Set(missing.map(marker => `${marker.x},${marker.y}`)).size, missing.length);
@@ -688,7 +688,7 @@ test("missing annotations identify individual axes and groups without covering m
 test("an unavailable metric definition retains a readable key rather than breaking the radar", () => {
   resetSummaryState();
   const groups = [{ key: "a", label: "a", count: 1, metrics: [] }];
-  const context = radarUi.radarContext(groups, [], summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  const context = radarUi.radarContext(groups, [], summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue, runtime.state.leaderboardSummaryComparisonGroups);
   assert.doesNotThrow(() => radarUi.renderLeaderboardRadar(context));
   assert.doesNotThrow(() => radarUi.radarOption(context, 600, 440));
 });
@@ -697,7 +697,7 @@ test("a measured polygon collapsed to the origin is identified separately from w
   resetSummaryState();
   const groups = [{ key: "a", label: "a", count: 1, metrics: [{ key: "score", count: 1, mean: 0 }] }, { key: "b", label: "b", count: 1, metrics: [{ key: "score", count: 1, mean: 1 }] }];
   runtime.state.leaderboardSummaryComparisonGroups = ["a"];
-  const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
+  const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue, runtime.state.leaderboardSummaryComparisonGroups);
   const html = radarUi.renderLeaderboardRadar(context);
   assert.match(html, /Measured relative values are all 0; the outline is at the origin/);
   assert.ok(context.series[0].points.some(point => point.value === 0));

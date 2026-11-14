@@ -13,7 +13,7 @@ import { closeWorkspaceReportReader, openWorkspaceReportRef, refreshWorkspaceRep
 import { captureHomeLocation, restoreHomeLocation } from "../modules/home-location.js";
 import { setServeStatus } from "../modules/serve-effects.js";
 import { notesDraftChanged } from "../modules/analysis-notes.js";
-import { disposeLeaderboardRadar } from "../modules/leaderboard-radar.js";
+import { disposeLeaderboardRadar } from "../modules/summary-radar.js";
 
 const EMPTY_REPORT = Object.freeze({
   schema_version: 19,
@@ -38,7 +38,7 @@ function createHomePage(_context) {
       if (pendingLocation) {
         const location = pendingLocation;
         pendingLocation = null;
-        await ensureEcharts();
+        await ensureEcharts().catch(() => {}); // Chart readers provide their own fallback.
         if (signal.aborted) return;
         render(EMPTY_REPORT);
         const results = await Promise.all([loadCatalogPage({}, { force: true, signal, skipDetail: Boolean(location.object.source || location.object.report) }), refreshWorkspaceReports({ signal })]);
@@ -58,7 +58,7 @@ function createHomePage(_context) {
         return;
       }
       if (!initialized) {
-        await ensureEcharts();
+        await ensureEcharts().catch(() => {}); // Chart readers provide their own fallback.
         if (signal.aborted) return;
         render(EMPTY_REPORT);
         await loadServeWorkspace({ signal });

@@ -1,20 +1,19 @@
 import { esc, fmtNum, t } from "./shared.js";
 import { comparisonGroups, radarColors } from "./summary-chart.js";
-import { preflightHomeChange } from "./home-location.js";
 
 function groupOptions(state, groups) {
   const known = new Set(groups.map(group => group.key));
-  return [...groups, ...(state.leaderboardSummaryComparisonGroups || [])
+  return [...groups, ...(state.groups || [])
     .filter(key => !known.has(key)).map(key => ({ key, label: key ?? "-", unavailable: true }))];
 }
 
 function renderSummaryGroupControl(state, groups) {
-  if (state.leaderboardSummaryGroupBy === "overall") return "";
-  const keys = state.leaderboardGroupDraft ? state.leaderboardGroupDraft.keys : state.leaderboardSummaryComparisonGroups;
+  if (state.groupBy === "overall") return "";
+  const keys = state.groupDraft ? state.groupDraft.keys : state.groups;
   const chosen = new Set(comparisonGroups(groups, keys).map(group => group.key));
   const colors = radarColors(groups.length);
-  const search = state.leaderboardSummaryGroupSearch || "";
-  return `<details class="column-control summary-group-control" ${state.leaderboardGroupDraft ? "open" : ""}>
+  const search = state.groupSearch || "";
+  return `<details class="column-control summary-group-control" ${state.groupDraft ? "open" : ""}>
     <summary class="action-button">${esc(t("summary_comparison_groups", "Comparison groups"))} <span data-group-selection-count>${chosen.size}/${groups.length}</span></summary>
     <div class="column-control-panel">
       <label>${esc(t("search", "Search"))}<input type="search" data-group-search value="${esc(search)}"></label>
@@ -30,13 +29,13 @@ function renderSummaryGroupControl(state, groups) {
   </details>`;
 }
 
-function bindSummaryGroupControl(target, state, groups, change) {
+function bindSummaryGroupControl(target, state, groups, change, validate = () => {}) {
   const details = target.querySelector(".summary-group-control");
   if (!details) return;
   const options = groupOptions(state, groups);
-  const keys = () => state.leaderboardGroupDraft ? state.leaderboardGroupDraft.keys : state.leaderboardSummaryComparisonGroups;
+  const keys = () => state.groupDraft ? state.groupDraft.keys : state.groups;
   const setDraft = selected => {
-    state.leaderboardGroupDraft = { keys: selected };
+    state.groupDraft = { keys: selected };
     details.querySelectorAll("[data-comparison-group]").forEach(input => {
       input.checked = selected === null || selected.includes(options[Number(input.dataset.comparisonGroup)].key);
     });
@@ -50,8 +49,8 @@ function bindSummaryGroupControl(target, state, groups, change) {
       const selected = keys();
       setDraft(selected === null ? null : [...selected]);
     } else {
-      setDraft(state.leaderboardSummaryComparisonGroups);
-      state.leaderboardGroupDraft = null;
+      setDraft(state.groups);
+      state.groupDraft = null;
     }
   });
   details.addEventListener("keydown", event => {
@@ -67,7 +66,7 @@ function bindSummaryGroupControl(target, state, groups, change) {
     rows.forEach(row => { row.hidden = !row.dataset.groupMatch.includes(query); });
     details.querySelector("[data-group-search-empty]").hidden = rows.some(row => !row.hidden);
   };
-  search.addEventListener("input", () => { state.leaderboardSummaryGroupSearch = search.value; filter(); });
+  search.addEventListener("input", () => { state.groupSearch = search.value; filter(); });
   filter();
   details.querySelectorAll("[data-comparison-group]").forEach(input => input.addEventListener("change", () => {
     const key = options[Number(input.dataset.comparisonGroup)].key;
@@ -77,10 +76,10 @@ function bindSummaryGroupControl(target, state, groups, change) {
   details.querySelectorAll("[data-group-action]").forEach(button => button.addEventListener("click", () => setDraft(button.dataset.groupAction === "all" ? null : [])));
   details.querySelector("[data-group-apply]").addEventListener("click", () => {
     const selected = keys();
-    try { preflightHomeChange({ summary: { comparison_groups: selected } }); }
-    catch { details.querySelector("[data-group-error]").textContent = t("summary_group_link_limit", "The link is too large. Select fewer groups or use Select all."); return; }
-    state.leaderboardSummaryComparisonGroups = selected === null ? null : [...selected];
-    state.leaderboardGroupDraft = null;
+    try { validate(selected); }
+    catch (error) { details.querySelector("[data-group-error]").textContent = error.message; return; }
+    state.groups = selected === null ? null : [...selected];
+    state.groupDraft = null;
     change();
     target.querySelector(".summary-group-control > summary")?.focus({ preventScroll: true });
   });

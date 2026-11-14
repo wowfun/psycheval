@@ -125,7 +125,7 @@ test("32 radar axes use real font bounds and stay attached to the exported chart
     const result = await page.evaluate(async () => {
       const { state } = await import("/assets/peval/modules/runtime.js");
       const { leaderboardSummaryImageSnapshot } = await import("/assets/peval/modules/leaderboard-summary.js");
-      const { summaryImageLayout, summaryImageBlob } = await import("/assets/peval/modules/leaderboard-summary-export.js");
+      const { summaryImageLayout, summaryImageBlob } = await import("/assets/peval/modules/summary-image.js");
       const definitions = Array.from({ length: 32 }, (_, index) => ({
         key: `reward:axis-${index}`, type: "number", direction: index % 2 ? "lower" : "higher",
         label: index === 0 ? "无空格的完整中文指标名称".repeat(3) : index === 16 ? "UnbrokenMetricIdentifier".repeat(3) : index === 8 ? "A long English metric label with multiple lines" : `Metric ${index}`,

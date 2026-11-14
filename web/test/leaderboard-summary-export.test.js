@@ -5,7 +5,7 @@ import { installBrowserDom } from "./support/browser.js";
 const browser = installBrowserDom('<script id="peval-i18n" type="application/json">{}</script><script id="peval-render-options" type="application/json">{"mode":"serve","role":"admin"}</script>');
 const { state } = await import("../../src/psycheval/assets/web/modules/runtime.js");
 const summary = await import("../../src/psycheval/assets/web/modules/leaderboard-summary.js");
-const images = await import("../../src/psycheval/assets/web/modules/leaderboard-summary-export.js");
+const images = await import("../../src/psycheval/assets/web/modules/summary-image.js");
 const { downloadBlob } = await import("../../src/psycheval/assets/web/modules/download.js");
 test.after(() => browser.cleanup());
 
@@ -140,15 +140,25 @@ function canvasMock() {
   const prototype = window.HTMLCanvasElement.prototype;
   const previous = { getContext: prototype.getContext, toBlob: prototype.toBlob };
   const canvases = [], charts = [], paintedText = [];
-  const context = { ...measure, scale() {}, fillRect() {}, fillText(text, x, y) { paintedText.push({ text, x, y, align: this.textAlign, font: this.font }); }, drawImage() {} };
+  const context = { ...measure, scale() {}, fillRect() {}, fillText(text, x, y) { paintedText.push({ text, x, y, align: this.textAlign, font: this.font }); }, drawImage() {}, getImageData() {} };
   prototype.getContext = function () { canvases.push(this); return context; };
   prototype.toBlob = function (callback) { callback(new Blob(["png"], { type: "image/png" })); };
   window.echarts = { init: host => {
     const chart = { host, disposed: false, setOption(option) { this.option = option; }, renderToCanvas() { const canvas = document.createElement("canvas"); canvases.push(canvas); return canvas; }, dispose() { this.disposed = true; } };
     charts.push(chart); return chart;
   } };
-  return { canvases, charts, paintedText, restore() { Object.assign(prototype, previous); delete window.echarts; } };
+  return { context, canvases, charts, paintedText, restore() { Object.assign(prototype, previous); delete window.echarts; } };
 }
+
+test("image allocation failure is reported and releases offscreen resources", async () => {
+  const target = setup(), mock = canvasMock();
+  try {
+    mock.context.getImageData = () => { throw new Error("allocation failed"); };
+    await assert.rejects(images.summaryImageBlob("radar", summary.leaderboardSummaryImageSnapshot()), /Image rendering is unavailable/);
+    assert.ok(mock.canvases.every(canvas => canvas.width === 0 && canvas.height === 0));
+    assert.ok(mock.charts.every(chart => chart.disposed));
+  } finally { mock.restore(); target.remove(); }
+});
 
 test("offscreen radar uses current selection without fetching or replacing the page chart, and releases resources", async () => {
   const target = setup(), mock = canvasMock();
@@ -256,7 +266,7 @@ test("oversized images fail without truncation, and failed exports restore the m
     assert.equal(target.querySelector("[data-summary-export=bar]").disabled, true);
     await tick();
     assert.equal(target.querySelector("[data-summary-export=bar]").disabled, false);
-    assert.match(target.querySelector(".action-feedback").textContent, /Could not export.*Encoding failed/);
+    assert.match(target.querySelector(".action-feedback").textContent, /Could not export.*Image rendering is unavailable/);
     assert.ok(mock.canvases.every(canvas => canvas.width === 0));
   } finally { mock.restore(); target.remove(); }
 });

@@ -1,15 +1,10 @@
 import { esc, t } from "./shared.js";
-import { METRIC_SELECTION_LIMIT } from "../app/metric-contract.js";
-import { metricDefinitions, selectedMetricIds, metricSearchText, metricSelectionHint } from "./metric-presentation.js";
-import { preflightHomeChange } from "./home-location.js";
 
-function renderSummaryMetricControl(state) {
-  const definitions = metricDefinitions(state);
-  const selected = state.leaderboardMetricDraft || selectedMetricIds(state);
+function renderSummaryMetricControl(state, { definitions, defaults, hint = key => "", note = "", diagnostics = [], limit = definitions.length, searchText = (label, key) => `${label} ${key}`.toLocaleLowerCase() }) {
+  const selected = state.metricDraft || (state.metrics || defaults);
   const keys = [...selected, ...definitions.map(item => item.key).filter(key => !selected.includes(key))];
-  const search = state.leaderboardMetricSearch || "";
-  const diagnostics = [...(state.catalogPage?.metric_diagnostics || state.leaderboardSummary?.metric_diagnostics || []), ...(state.catalogRows || []).flatMap(row => (row.metric_diagnostics || []).map(message => `${row.source_key}: ${message}`))];
-  return `<details class="column-control summary-metric-control" ${state.leaderboardMetricDraft ? "open" : ""}>
+  const search = state.metricSearch || "";
+  return `<details class="column-control summary-metric-control" ${state.metricDraft ? "open" : ""}>
     <summary class="action-button">${esc(t("metric_control", "Metrics"))} ${selected.length}</summary>
     <div class="column-control-panel">
       <label>${esc(t("search", "Search"))}<input type="search" data-metric-search value="${esc(search)}"></label>
@@ -17,31 +12,30 @@ function renderSummaryMetricControl(state) {
       <ol class="column-control-list">${keys.map((key, index) => {
         const definition = definitions.find(item => item.key === key);
         const label = definition?.label || key;
-        const haystack = metricSearchText(label, key);
-        const groups = state.leaderboardSummary?.summary?.groups || [];
-        const hint = metricSelectionHint(groups, key);
+        const haystack = searchText(label, key);
+        const description = hint(key);
         return `<li class="column-control-row" data-metric-row="${esc(key)}" data-metric-match="${esc(haystack)}" ${haystack.includes(search.toLocaleLowerCase()) ? "" : "hidden"}>
-          <label><input type="checkbox" data-metric-id="${esc(key)}" aria-describedby="summary-metric-hint-${index}" ${selected.includes(key) ? "checked" : ""}><span>${esc(label)}</span></label>
+          <label><input type="checkbox" data-metric-id="${esc(key)}" aria-describedby="${esc(state.id || "summary")}-metric-hint-${index}" ${selected.includes(key) ? "checked" : ""}><span>${esc(label)}</span></label>
           <small>${definition ? esc(definition.unit || "") : esc(t("metric_unavailable", "Currently unavailable"))}</small>
           <span class="column-control-moves" ${selected.includes(key) ? "" : "hidden"}>${[-1, 1].map(direction => `<button type="button" data-metric-move="${direction}" aria-label="${esc(`${direction < 0 ? t("move_earlier", "Move earlier") : t("move_later", "Move later")}: ${label}`)}" ${(direction < 0 ? selected.indexOf(key) <= 0 : selected.indexOf(key) === selected.length - 1) ? "disabled" : ""}>${direction < 0 ? "↑" : "↓"}</button>`).join("")}</span>
-          <small class="column-description" id="summary-metric-hint-${index}">${esc(hint)}</small>
+          <small class="column-description" id="${esc(state.id || "summary")}-metric-hint-${index}">${esc(description)}</small>
         </li>`;
       }).join("")}</ol>
       <p data-metric-error role="alert"></p>
-      <p class="copy">${esc(t("metric_timing_note", "Recorded durations may be incomplete or overlap. Other duration covers non-model Agent records; it is not idle time."))}</p>
+      ${note ? `<p class="copy">${esc(note)}</p>` : ""}
       ${diagnostics.length ? `<p class="copy" role="status">${diagnostics.map(esc).join("<br>")}</p>` : ""}
-      <div class="column-control-foot"><span data-metric-count>${selected.length}/${METRIC_SELECTION_LIMIT}</span><button class="action-button primary" type="button" data-metric-apply>${esc(t("apply", "Apply"))}</button></div>
+      <div class="column-control-foot"><span data-metric-count>${selected.length}/${limit}</span><button class="action-button primary" type="button" data-metric-apply>${esc(t("apply", "Apply"))}</button></div>
     </div></details>`;
 }
 
-function bindSummaryMetricControl(target, state, render) {
+function bindSummaryMetricControl(target, state, render, { definitions, defaults, limit = definitions.length, validate = () => {} }) {
   const details = target.querySelector(".summary-metric-control");
   if (!details) return;
   const error = message => { details.querySelector("[data-metric-error]").textContent = message; };
-  const draft = () => state.leaderboardMetricDraft || [...selectedMetricIds(state)];
+  const draft = () => state.metricDraft || [...(state.metrics || defaults)];
   const setDraft = keys => {
-    if (keys.length > METRIC_SELECTION_LIMIT) { error(t("metric_limit", "Select at most 32 metrics; narrow the selection.")); return false; }
-    state.leaderboardMetricDraft = keys;
+    if (keys.length > limit) { error(t("metric_limit", "Select at most 32 metrics; narrow the selection.")); return false; }
+    state.metricDraft = keys;
     error("");
     details.querySelectorAll("[data-metric-id]").forEach(input => { input.checked = keys.includes(input.dataset.metricId); });
     const rows = [...details.querySelectorAll("[data-metric-row]")];
@@ -54,21 +48,21 @@ function bindSummaryMetricControl(target, state, render) {
       });
       row.parentElement.append(row);
     });
-    details.querySelector("[data-metric-count]").textContent = `${keys.length}/${METRIC_SELECTION_LIMIT}`;
+    details.querySelector("[data-metric-count]").textContent = `${keys.length}/${limit}`;
     return true;
   };
   details.addEventListener("toggle", () => {
     if (!details.isConnected) return;
-    if (details.open) setDraft(state.leaderboardMetricDraft || [...selectedMetricIds(state)]);
-    else { setDraft([...selectedMetricIds(state)]); state.leaderboardMetricDraft = null; }
+    if (details.open) setDraft(state.metricDraft || [...(state.metrics || defaults)]);
+    else { setDraft([...(state.metrics || defaults)]); state.metricDraft = null; }
   });
   details.addEventListener("keydown", event => {
     if (event.key !== "Escape") return;
     event.preventDefault(); event.stopPropagation();
-    state.leaderboardMetricDraft = null; details.open = false; details.querySelector("summary").focus();
+    state.metricDraft = null; details.open = false; details.querySelector("summary").focus();
   });
   details.querySelector("[data-metric-search]").addEventListener("input", event => {
-    state.leaderboardMetricSearch = event.target.value;
+    state.metricSearch = event.target.value;
     const query = event.target.value.toLocaleLowerCase();
     details.querySelectorAll("[data-metric-row]").forEach(row => { row.hidden = !row.dataset.metricMatch.includes(query); });
   });
@@ -78,7 +72,7 @@ function bindSummaryMetricControl(target, state, render) {
   }));
   details.querySelectorAll("[data-metric-action]").forEach(button => button.addEventListener("click", () => {
     const action = button.dataset.metricAction;
-    setDraft(action === "none" ? [] : metricDefinitions(state).filter(item => action === "all" || item.default).map(item => item.key));
+    setDraft(action === "none" ? [] : (action === "all" ? definitions.map(item => item.key) : defaults));
   }));
   details.querySelectorAll("[data-metric-move]").forEach(button => button.addEventListener("click", () => {
     const keys = [...draft()];
@@ -91,10 +85,10 @@ function bindSummaryMetricControl(target, state, render) {
   }));
   details.querySelector("[data-metric-apply]").addEventListener("click", () => {
     const keys = [...draft()];
-    try { preflightHomeChange({ summary: { metrics: keys } }); }
-    catch { error(t("metric_link_limit", "The link is too large. Reduce selected metrics or view conditions.")); return; }
-    state.leaderboardSummaryMetrics = keys;
-    state.leaderboardMetricDraft = null;
+    try { validate(keys); }
+    catch (failure) { error(failure.message); return; }
+    state.metrics = keys;
+    state.metricDraft = null;
     render();
     target.querySelector(".summary-metric-control > summary")?.focus();
   });

@@ -139,7 +139,7 @@
   background:var(--surface);
   font:normal 16px/1 var(--mono);
 }
-#leaderboard-summary-table-region {
+.summary-table-region {
   padding:0 10px 10px;
   background:var(--surface);
 }
@@ -147,17 +147,11 @@
   overflow:hidden;
   border-radius:6px;
 }
-.leaderboard-summary-shell .table-wrap {
-  max-height:720px;
-  overflow:auto;
-}
+
 .leaderboard-summary-table {
   font-size:12px;
 }
 .leaderboard-summary-table thead th {
-  position:sticky;
-  top:0;
-  z-index:5;
   white-space:nowrap;
 }
 .leaderboard-summary-table tbody th,
@@ -417,3 +411,12 @@
     scroll-behavior:auto;
   }
 }
+
+.summary-bar-note { grid-column:1/-1; color:var(--muted); font:12px/1.4 var(--mono); }
+.summary-pie svg { display:block; width:min(100%, 240px); margin:0 auto; }
+.summary-pie ul { list-style:none; padding:0; margin:12px 0 0; display:grid; gap:8px; }
+.summary-pie li { display:grid; grid-template-columns:10px minmax(0,1fr) auto; gap:8px; align-items:baseline; font-size:12px; }
+.summary-pie li i { width:8px; height:8px; border-radius:50%; }
+.summary-pie li span { overflow-wrap:anywhere; }
+.summary-pie li small { grid-column:2 / -1; color:var(--muted); }
+.summary-pie p { text-align:center; color:var(--muted); }

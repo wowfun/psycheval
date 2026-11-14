@@ -1,4 +1,4 @@
-import { esc, fmtNum, state, t } from "./runtime.js";
+import { esc, fmtNum, t } from "./shared.js";
 import { radarAxes, radarPoints, comparisonGroups, radarColors, wrappedLines } from "./summary-chart.js";
 
 let chart = null;
@@ -14,9 +14,9 @@ function disposeLeaderboardRadar() {
   chart = null;
 }
 
-function radarContext(groups, definitions, statistic, format) {
+function radarContext(groups, definitions, statistic, format, selectedKeys = null) {
   const axes = radarAxes(groups, definitions, statistic.value);
-  const selected = comparisonGroups(groups, state.leaderboardSummaryComparisonGroups);
+  const selected = comparisonGroups(groups, selectedKeys);
   const radarColorsForGroups = radarColors(groups.length);
   const colors = new Map(groups.map((group, index) => [group.key, radarColorsForGroups[index]]));
   const series = selected.map(group => ({ group, points: radarPoints(group, axes, statistic.value), color: colors.get(group.key) }));
