@@ -18,7 +18,7 @@ from psycheval.serve.api_access import (
     role_for,
 )
 from psycheval.serve.api_http import ProblemException, json_response, operation_response
-from psycheval.serve.api_support import harbor_workspace, writable_runtime
+from psycheval.serve.api_support import writable_runtime
 from psycheval.serve.visibility import project_harbor_inventory
 from psycheval.state.collections import (
     CollectionConflict,
@@ -55,25 +55,25 @@ class WorkspaceCollections:
         self.store = CollectionStore(self.workspace)
 
     def datasets(self, role):
-        service = harbor_workspace(self.runtime.store, self.runtime)
+        inventory = self.runtime.task_inventory.snapshot()
+        snapshots = {item["id"]: item for item in inventory["datasets"]}
         counts = self.runtime.report_library.association_counts()
         items = []
         for dataset in self.runtime.config.harbor_datasets:
-            try:
-                value = service.task_inventory(dataset.id)["datasets"][0]
-                count = len(value["tasks"])
-                error = None
-            except (ValueError, OSError) as exc:
-                value = {
+            value = snapshots.get(
+                dataset.id,
+                {
                     "id": dataset.id,
                     "path": dataset.path,
                     "tasks": [],
                     "trash": [],
-                }
-                count, error = (
-                    None,
-                    str(exc) if role == "admin" else "Dataset unavailable",
-                )
+                    "task_count": None,
+                },
+            )
+            count = value.get("task_count")
+            error = value.get("error")
+            if error and role != "admin":
+                error = "Dataset unavailable"
             projected = project_harbor_inventory({"datasets": [value]}, role)[
                 "datasets"
             ][0]
@@ -98,7 +98,13 @@ class WorkspaceCollections:
                 for field in ("collection_revision",):
                     projected.pop(field, None)
             items.append(projected)
-        return {"datasets": items}
+        return {
+            **{key: inventory[key] for key in ("generation", "checking", "stale")},
+            "error": inventory.get("error")
+            if role == "admin"
+            else ("Dataset unavailable" if inventory.get("error") else None),
+            "datasets": items,
+        }
 
     def _jobs(self, *, runs=None):
         result = {}
@@ -293,6 +299,22 @@ def register_collection_routes(app: FastAPI):
                 )
             )
         )
+
+    @app.get("/api/collections/datasets/status")
+    @access(GUEST_ACCESS)
+    def dataset_status(request: Request):
+        value = request.app.state.runtime.task_inventory.status()
+        if role_for(request) != "admin" and value.get("error"):
+            value["error"] = "Dataset unavailable"
+        return json_response(value)
+
+    @app.post(
+        "/api/collections/datasets/refresh", dependencies=[Depends(mutation_guard)]
+    )
+    @access(GUEST_ACCESS)
+    def refresh_datasets(request: Request):
+        request.app.state.runtime.task_inventory.refresh()
+        return dataset_status(request)
 
     @app.get("/api/collections/jobs")
     @access(GUEST_ACCESS)

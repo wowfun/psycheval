@@ -124,11 +124,16 @@ def project_harbor_inventory(payload: dict[str, Any], role: str) -> dict[str, An
         return payload
     datasets = payload.get("datasets")
     projected = {
+        **{
+            key: payload[key]
+            for key in ("generation", "checking", "stale")
+            if key in payload
+        },
         "datasets": [
             _project_harbor_dataset(item) for item in datasets if isinstance(item, dict)
         ]
         if isinstance(datasets, list)
-        else []
+        else [],
     }
     return projected
 
@@ -250,6 +255,16 @@ def project_guest_error(status: int, message: str, role: str) -> str:
 def _project_harbor_dataset(value: dict[str, Any]) -> dict[str, Any]:
     tasks = value.get("tasks")
     return {
+        **{
+            key: value[key]
+            for key in (
+                "task_count",
+                "rule_count",
+                "rubric_count",
+                "scoring_item_count",
+            )
+            if key in value
+        },
         "id": str(value.get("id") or ""),
         "format": str(value.get("format") or "harbor"),
         "read_only": bool(value.get("read_only")),
@@ -272,25 +287,26 @@ def _project_harbor_task_summary(value: dict[str, Any]) -> dict[str, Any]:
                 "tags",
                 "instruction",
                 "instruction_path",
+                "category",
+                "difficulty",
                 "rule_count",
                 "rubric_count",
                 "scoring_item_count",
+                "skill_count",
+                "input_file_count",
+                "has_prepare",
+                "resources",
                 "rule_count_source",
                 "scoring_items",
                 "scoring_paths",
             )
             if key in value
         },
-        **(
-            {
-                "scoring_diagnostics": [
-                    project_guest_error(400, item, "guest")
-                    for item in value.get("scoring_diagnostics", [])
-                ]
-            }
-            if "scoring_diagnostics" in value
-            else {}
-        ),
+        **{
+            key: [project_guest_error(400, item, "guest") for item in value[key]]
+            for key in ("scoring_diagnostics", "resource_diagnostics")
+            if key in value
+        },
         "directory": str(value.get("directory") or ""),
         "status": str(value.get("status") or "draft"),
         "package_name": (

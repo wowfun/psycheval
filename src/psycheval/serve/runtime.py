@@ -15,7 +15,7 @@ from psycheval.serve.acp import AcpGateway
 from psycheval.serve.prompt_assets import PromptAssetLibrary
 from psycheval.serve.sources import load_serve_inputs
 from psycheval.serve.summary_xlsx import SummaryWorksheet
-from psycheval.serve.task_inventory_cache import TaskInventoryCache
+from psycheval.serve.task_catalog import TaskInventory
 from psycheval.state import (
     CatalogBusyError,
     CatalogPage,
@@ -49,7 +49,7 @@ class ServeRuntime:
     ) -> None:
         self.store = store
         self.config = config
-        self.task_inventory_cache = TaskInventoryCache()
+        self.task_inventory = TaskInventory(store.paths.config_path, config)
         self.effective_timezone = resolve_timezone(config.timezone)
         from psycheval.jobs.service import JobsService
 
@@ -94,6 +94,10 @@ class ServeRuntime:
             self._ready.clear()
             try:
                 self.catalog.reconcile()
+                if self.task_inventory.status()["generation"]:
+                    self.task_inventory.refresh()
+                else:
+                    self.task_inventory.reconcile()
             finally:
                 self._loading = False
                 self._ready.set()
@@ -115,6 +119,7 @@ class ServeRuntime:
                 daemon=True,
             )
             self._thread.start()
+            self.task_inventory.refresh()
 
     def _run_initial_load(
         self,
@@ -184,6 +189,8 @@ class ServeRuntime:
                 config,
             )
 
+        self.task_inventory.configure(config)
+
     def config_with_acp_status(self) -> tuple[ToolConfig, dict[str, Any]]:
         with self._lock:
             return self.config, self.acp.agents()
@@ -194,6 +201,7 @@ class ServeRuntime:
             jobs_thread = self._jobs_thread
         if jobs_thread is not None:
             jobs_thread.join()
+        self.task_inventory.close()
         self.acp.close()
         self.evaluation_reports.close()
 
@@ -468,7 +476,11 @@ class ServeRuntime:
         source_keys: list[str],
         action: Callable[[], Any],
     ) -> dict[str, Any]:
-        generation, result = self.catalog.mutate(action)
+        run, finished = self._task_mutation(change_type, action)
+        try:
+            generation, result = self.catalog.mutate(run)
+        finally:
+            finished()
         payload: dict[str, Any] = {
             "generation": generation,
             "change": change_type,
@@ -483,10 +495,13 @@ class ServeRuntime:
         change_type: str,
         action: Callable[[], Any],
     ) -> dict[str, Any]:
-        result, operation = self.catalog.mutate_with_background_reconcile(
-            change_type,
-            action,
-        )
+        run, finished = self._task_mutation(change_type, action)
+        try:
+            result, operation = self.catalog.mutate_with_background_reconcile(
+                change_type, run
+            )
+        finally:
+            finished()
         return {
             "change": change_type,
             "result": result,
@@ -499,7 +514,29 @@ class ServeRuntime:
         items: Sequence[Any],
         action: Callable[[Any], Any],
     ) -> OperationStatus:
-        return self.catalog.start_operation(operation_type, items, action)
+        run, finished = self._task_mutation(operation_type, action)
+        return self.catalog.start_operation(
+            operation_type, items, run, on_finished=finished
+        )
+
+    def _task_mutation(self, kind, action):
+        if "harbor" not in kind and "task" not in kind and "dataset" not in kind:
+            return action, lambda: None
+
+        started = False
+
+        def run(*args, **kwargs):
+            nonlocal started
+            if not started:
+                self.task_inventory.begin_mutation()
+                started = True
+            return action(*args, **kwargs)
+
+        def finished():
+            if started:
+                self.task_inventory.end_mutation()
+
+        return run, finished
 
     def operation(self, operation_id: str) -> OperationStatus:
         return self.catalog.operation(operation_id)

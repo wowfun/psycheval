@@ -32,6 +32,7 @@ from psycheval.harbor.datasets import (
     resolve_harbor_dataset,
     validate_harbor_dataset,
 )
+from psycheval.harbor.task_resources import task_resource_inventory, task_totals
 from psycheval.harbor.task_scoring import (
     SCORING_TEXT_LIMIT,
     scoring_file_preview,
@@ -42,7 +43,7 @@ from psycheval.harbor.tasks import (
     load_harbor_task_config,
     select_publishable_task_files,
 )
-from psycheval.serve.task_inventory_cache import TaskInventoryCache
+from psycheval.state.task_catalog import TaskCatalog
 
 TEXT_EDIT_LIMIT = 2 * 1024 * 1024
 UPLOAD_LIMIT = 16 * 1024 * 1024
@@ -83,13 +84,11 @@ class HarborWorkspace:
         config_path: Path,
         config: ToolConfig,
         *,
-        scoring_cache: TaskInventoryCache | None = None,
+        task_catalog: TaskCatalog | None = None,
     ) -> None:
         self.config_path = config_path.expanduser()
         self.config = config
-        self.scoring_cache = (
-            scoring_cache if scoring_cache is not None else TaskInventoryCache()
-        )
+        self.task_catalog = task_catalog if task_catalog is not None else TaskCatalog()
 
     def inventory(self) -> dict[str, Any]:
         payload = {
@@ -521,19 +520,8 @@ class HarborWorkspace:
         resolved = self._resolved_dataset(dataset)
         root = resolved.task_root
         task_dir = self._task_path(root, task)
-        if resolved.read_only:
-            summary = self._task_summary(task_dir, metadata_revision=True)
-        else:
-            summary = next(
-                (
-                    item
-                    for item in self._task_summaries(root)
-                    if item["directory"] == task_dir.name
-                ),
-                self._task_summary(task_dir),
-            )
+        summary = self._task_projection(dataset, task_dir, resolved)
         tree = self._file_tree(task_dir, editable=not resolved.read_only)
-        summary.update(self._task_scoring(dataset, task_dir))
         return {
             "dataset_id": dataset_id,
             "format": resolved.format,
@@ -700,6 +688,15 @@ class HarborWorkspace:
         return self._dataset_summary(dataset)
 
     def _dataset_summary(self, dataset: HarborDataset) -> dict[str, Any]:
+        # A generation's aggregates must describe the same Tasks as its rows.
+        resolved = self._resolved_dataset(dataset)
+        return self.task_catalog.project(
+            ("dataset", dataset.model_dump(mode="json"), dict(resolved.manifest)),
+            signature=lambda: _tree_metadata_revision(resolved.task_root),
+            load=lambda: self._scan_dataset(dataset),
+        )
+
+    def _scan_dataset(self, dataset: HarborDataset) -> dict[str, Any]:
         resolved = self._resolved_dataset(dataset)
         root = resolved.task_root
         if resolved.read_only:
@@ -707,8 +704,12 @@ class HarborWorkspace:
             revision = _registered_dataset_revision(resolved, tasks)
             trash: list[dict[str, Any]] = []
         else:
-            tasks = self._task_summaries(root)
-            revision = _directory_revision(root)
+            tasks = [
+                self._task_projection(dataset, path, resolved)
+                for path in self._task_dirs(root)
+            ]
+            self._mark_duplicate_tasks(tasks)
+            revision = _directory_revision(root, cache=self.task_catalog)
             trash_root = root / TRASH_DIRNAME
             trash = []
             if trash_root.exists():
@@ -717,8 +718,13 @@ class HarborWorkspace:
                     self._trash_summary(dataset, entry)
                     for entry in _child_dirs(trash_root)
                 ]
-        for task in tasks:
-            task.update(self._task_scoring(dataset, root / task["directory"]))
+        if resolved.read_only:
+            tasks = [
+                self._task_projection(
+                    dataset, root / task["directory"], resolved, registered=task
+                )
+                for task in tasks
+            ]
         return {
             "id": dataset.id,
             "path": dataset.path,
@@ -732,39 +738,75 @@ class HarborWorkspace:
                 for name in ("dataset.toml", "README.md", "metric.py")
             },
             "tasks": tasks,
+            **task_totals(tasks),
             "trash": trash,
         }
+
+    def _task_projection(self, dataset, task_dir, resolved, *, registered=None):
+        def load():
+            summary = (
+                dict(registered)
+                if registered is not None
+                else self._task_summary(task_dir, metadata_revision=resolved.read_only)
+            )
+            summary.update(self._task_scoring(dataset, task_dir))
+            tree = []
+            for path in _walk_tree(task_dir):
+                value = path.stat(follow_symlinks=False)
+                tree.append(
+                    {
+                        "path": path.relative_to(task_dir).as_posix(),
+                        "kind": "file" if stat.S_ISREG(value.st_mode) else "directory",
+                        "size": value.st_size,
+                    }
+                )
+
+            def read(path, limit):
+                _assert_safe_child(task_dir, path, allow_missing=False)
+                return _read_regular_file(path, limit=limit)
+
+            summary.update(
+                task_resource_inventory(
+                    task_dir,
+                    read_bytes=read,
+                    tree=tree,
+                    format=dataset.format,
+                    layout=resolved.manifest.get("layout"),
+                )
+            )
+            return summary
+
+        return self.task_catalog.project(
+            (
+                "task",
+                str(task_dir),
+                dataset.format,
+                dataset.task_rule_counts.get(task_dir.name),
+                dict(resolved.manifest),
+                registered,
+            ),
+            signature=lambda: _tree_metadata_revision(task_dir),
+            load=load,
+        )
 
     def _task_scoring(self, dataset: HarborDataset, task_dir: Path) -> dict[str, Any]:
         def read(path: Path) -> bytes:
             _assert_safe_child(task_dir, path, allow_missing=True)
             return _read_regular_file(path, limit=SCORING_TEXT_LIMIT)
 
-        def signature(path: Path):
-            _assert_safe_child(task_dir, path, allow_missing=True)
-            try:
-                value = path.stat(follow_symlinks=False)
-            except FileNotFoundError:
-                return None
-            return (
-                value.st_dev,
-                value.st_ino,
-                value.st_mode,
-                value.st_size,
-                value.st_mtime_ns,
-                value.st_ctime_ns,
-            )
-
-        count = dataset.task_rule_counts.get(task_dir.name)
-        return self.scoring_cache.get(
-            (str(task_dir), dataset.format, count),
-            read=read,
-            signature=signature,
-            load=lambda reader: task_scoring_inventory(
+        return self.task_catalog.project(
+            (
+                "scoring",
+                str(task_dir),
+                dataset.format,
+                dataset.task_rule_counts.get(task_dir.name),
+            ),
+            signature=lambda: _tree_metadata_revision(task_dir),
+            load=lambda: task_scoring_inventory(
                 task_dir,
-                read_bytes=reader,
+                read_bytes=read,
                 format=dataset.format,
-                manual_rule_count=count,
+                manual_rule_count=dataset.task_rule_counts.get(task_dir.name),
             ),
         )
 
@@ -801,7 +843,7 @@ class HarborWorkspace:
             revision = (
                 _tree_metadata_revision(task_dir)
                 if metadata_revision
-                else _directory_revision(task_dir)
+                else _directory_revision(task_dir, cache=self.task_catalog)
             )
         except HarborWorkspaceError as exc:
             return {
@@ -823,6 +865,11 @@ class HarborWorkspace:
 
     def _task_summaries(self, root: Path) -> list[dict[str, Any]]:
         summaries = [self._task_summary(path) for path in self._task_dirs(root)]
+        self._mark_duplicate_tasks(summaries)
+        return summaries
+
+    @staticmethod
+    def _mark_duplicate_tasks(summaries):
         package_counts: dict[str, int] = {}
         for summary in summaries:
             package_name = summary.get("package_name")
@@ -1172,7 +1219,7 @@ def _safe_relative_path(value: str) -> PurePosixPath:
 def _assert_unlinked_ancestors(path: Path) -> None:
     current = path
     while True:
-        if current.is_symlink():
+        if current.is_symlink() or current.is_junction():
             raise HarborWorkspaceError("Path traverses a symbolic link")
         if current.parent == current:
             break
@@ -1200,7 +1247,7 @@ def _assert_safe_child(root: Path, path: Path, *, allow_missing: bool) -> None:
     current = lexical_root
     for part in relative.parts:
         current /= part
-        if current.is_symlink():
+        if current.is_symlink() or current.is_junction():
             raise HarborWorkspaceError("Task path traverses a symbolic link")
         if not current.exists():
             if allow_missing:
@@ -1219,7 +1266,7 @@ def _walk_tree(root: Path) -> list[Path]:
     with os.scandir(root) as entries:
         for entry in sorted(entries, key=lambda item: item.name.casefold()):
             path = Path(entry.path)
-            if entry.is_symlink():
+            if entry.is_symlink() or path.is_junction():
                 raise HarborWorkspaceError(
                     f"Task content is a symbolic link: {entry.name}"
                 )
@@ -1291,7 +1338,7 @@ def _registered_dataset_revision(
     ).hexdigest()
 
 
-def _directory_revision(root: Path) -> str:
+def _directory_revision(root: Path, *, cache: TaskCatalog | None = None) -> str:
     digest = hashlib.sha256()
     for path in _walk_tree(root):
         relative = path.relative_to(root).as_posix()
@@ -1300,8 +1347,28 @@ def _directory_revision(root: Path) -> str:
             digest.update(f"d\0{relative}\0".encode())
             continue
         digest.update(f"f\0{relative}\0{value.st_size}\0".encode())
-        for chunk in _regular_file_chunks(path):
-            digest.update(chunk)
+        if cache is None:
+            file_hash = _regular_file_hash(path)
+        else:
+
+            def signature():
+                _assert_safe_child(root, path, allow_missing=False)
+                value = path.stat(follow_symlinks=False)
+                return (
+                    value.st_dev,
+                    value.st_ino,
+                    value.st_mode,
+                    value.st_size,
+                    value.st_mtime_ns,
+                    value.st_ctime_ns,
+                )
+
+            file_hash = cache.project(
+                ("digest", str(path)),
+                signature=signature,
+                load=lambda: _regular_file_hash(path),
+            )
+        digest.update(file_hash.encode("ascii"))
         digest.update(b"\0")
     return digest.hexdigest()
 

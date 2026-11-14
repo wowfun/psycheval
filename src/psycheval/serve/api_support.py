@@ -70,7 +70,7 @@ def harbor_workspace(
     return HarborWorkspace(
         store.paths.config_path,
         runtime.config,
-        scoring_cache=runtime.task_inventory_cache,
+        task_catalog=runtime.task_inventory.cache,
     )
 
 

@@ -855,6 +855,8 @@ class WorkspaceCatalog:
         operation_type: str,
         items: Sequence[Any],
         action: Callable[[Any], Any],
+        *,
+        on_finished: Callable[[], None] | None = None,
     ) -> OperationStatus:
         with self._state_lock:
             if self._writer_busy or self._writer_lock.locked():
@@ -872,7 +874,7 @@ class WorkspaceCatalog:
             self._writer_busy = True
         threading.Thread(
             target=self._run_operation,
-            args=(status, list(items), action),
+            args=(status, list(items), action, on_finished),
             daemon=True,
         ).start()
         return status
@@ -983,7 +985,9 @@ class WorkspaceCatalog:
         status: OperationStatus,
         items: list[Any],
         action: Callable[[Any], Any],
+        on_finished: Callable[[], None] | None = None,
     ) -> None:
+        final_state = "completed"
         try:
             if not self._writer_lock.acquire(blocking=False):
                 raise CatalogBusyError(
@@ -1023,16 +1027,24 @@ class WorkspaceCatalog:
                     self._reconcile_locked()
             finally:
                 self._writer_lock.release()
-            with self._state_lock:
-                status.state = "completed"
         except Exception as exc:  # noqa: BLE001 - operation thread boundary.
+            final_state = "failed"
             with self._state_lock:
-                status.state = "failed"
                 status.failures.append(
                     {"index": None, "status": "error", "error": str(exc)}
                 )
         finally:
+            try:
+                if on_finished is not None:
+                    on_finished()
+            except Exception as exc:  # noqa: BLE001 - operation completion boundary.
+                final_state = "failed"
+                with self._state_lock:
+                    status.failures.append(
+                        {"index": None, "status": "error", "error": str(exc)}
+                    )
             with self._state_lock:
+                status.state = final_state
                 self._writer_busy = False
                 self._recent_operation = status
                 self._current_operation = status

@@ -88,7 +88,16 @@ class HarborWorkspaceTests(unittest.TestCase):
             self.assertEqual(status, 200)
             if body["state"] not in {"queued", "running"}:
                 self.assertEqual(body["state"], expected_state, body)
-                return body
+                while time.monotonic() < deadline:
+                    _, inventory_status = self._request(
+                        server, "GET", "/api/collections/datasets/status"
+                    )
+                    if not inventory_status["checking"]:
+                        return body
+                    time.sleep(0.01)
+                self.fail(
+                    f"Task inventory refresh did not complete: {inventory_status}"
+                )
             time.sleep(0.01)
         self.fail(f"Harbor reconcile operation did not complete: {last_body}")
 
@@ -1007,9 +1016,8 @@ class HarborWorkspaceTests(unittest.TestCase):
                     server, "POST", "/api/config/harbor-mount", {}
                 )
                 self.assertEqual(status, 404, legacy)
-                status, headers, inventory = self._get_json(
-                    server, "/api/harbor/datasets"
-                )
+                status, _, inventory = self._get_json(server, "/api/harbor/datasets")
+                _, headers, _ = self._get_json(server, "/api/config")
                 self.assertEqual(status, 200)
                 status, registered = self._request(
                     server,
@@ -1021,9 +1029,8 @@ class HarborWorkspaceTests(unittest.TestCase):
                 self.assertEqual(status, 202, registered)
                 self._wait_operation(server, registered)
 
-                status, headers, inventory = self._get_json(
-                    server, "/api/harbor/datasets"
-                )
+                status, _, inventory = self._get_json(server, "/api/harbor/datasets")
+                _, headers, _ = self._get_json(server, "/api/config")
                 self.assertEqual(status, 200)
                 self.assertEqual(
                     [item["id"] for item in inventory["datasets"]], ["existing"]
@@ -1062,9 +1069,8 @@ class HarborWorkspaceTests(unittest.TestCase):
                     self.assertEqual(status, 409, symlinked)
                     self.assertIn("already registered", symlinked["detail"])
 
-                status, headers, inventory = self._get_json(
-                    server, "/api/harbor/datasets"
-                )
+                status, _, inventory = self._get_json(server, "/api/harbor/datasets")
+                _, headers, _ = self._get_json(server, "/api/config")
                 status, updated = self._request(
                     server,
                     "PATCH",
@@ -1078,9 +1084,8 @@ class HarborWorkspaceTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 202, updated)
                 self._wait_operation(server, updated)
-                status, headers, inventory = self._get_json(
-                    server, "/api/harbor/datasets"
-                )
+                status, _, inventory = self._get_json(server, "/api/harbor/datasets")
+                _, headers, _ = self._get_json(server, "/api/config")
                 self.assertEqual(
                     [item["id"] for item in inventory["datasets"]], ["renamed"]
                 )
@@ -1103,6 +1108,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+                runtime.close()
                 store.close()
 
     def test_http_register_dataset_derives_id_from_path(self) -> None:
@@ -1117,9 +1123,8 @@ class HarborWorkspaceTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                status, headers, inventory = self._get_json(
-                    server, "/api/harbor/datasets"
-                )
+                status, _, inventory = self._get_json(server, "/api/harbor/datasets")
+                _, headers, _ = self._get_json(server, "/api/config")
                 self.assertEqual(status, 200)
                 status, registered = self._request(
                     server,
@@ -1143,6 +1148,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+                runtime.close()
                 store.close()
 
     def test_http_register_dataset_suffixes_conflicts_and_invalid_basenames(
@@ -1169,9 +1175,10 @@ class HarborWorkspaceTests(unittest.TestCase):
                     side_effect=["abc123", "def456"],
                 ):
                     for path in paths:
-                        status, headers, inventory = self._get_json(
+                        status, _, inventory = self._get_json(
                             server, "/api/harbor/datasets"
                         )
+                        _, headers, _ = self._get_json(server, "/api/config")
                         self.assertEqual(status, 200)
                         status, registered = self._request(
                             server,
@@ -1195,6 +1202,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+                runtime.close()
                 store.close()
 
     def test_http_rejects_partial_flat_dataset_without_mutating_config(self) -> None:
@@ -1247,6 +1255,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+                runtime.close()
                 store.close()
 
     def test_http_add_harbor_mount_derives_id_and_starts_without_datasets(
@@ -1292,6 +1301,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+                runtime.close()
                 store.close()
 
     def test_http_dataset_update_sets_mount_membership_atomically(self) -> None:
@@ -1324,9 +1334,8 @@ class HarborWorkspaceTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                status, headers, inventory = self._get_json(
-                    server, "/api/harbor/datasets"
-                )
+                status, _, inventory = self._get_json(server, "/api/harbor/datasets")
+                _, headers, _ = self._get_json(server, "/api/config")
                 self.assertEqual(status, 200)
                 status, updated = self._request(
                     server,
@@ -1341,9 +1350,10 @@ class HarborWorkspaceTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 202, updated)
                 self._wait_operation(server, updated)
-                status, headers, _updated_inventory = self._get_json(
+                status, _, _updated_inventory = self._get_json(
                     server, "/api/harbor/datasets"
                 )
+                _, headers, _ = self._get_json(server, "/api/config")
                 mount_status, _mount_headers, mounts = self._get_json(
                     server, "/api/harbor/mounts"
                 )
@@ -1371,6 +1381,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+                runtime.close()
                 store.close()
 
     def test_http_batch_remove_harbor_mounts_is_atomic_and_preserves_jobs(self) -> None:
@@ -1432,6 +1443,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+                runtime.close()
                 store.close()
 
     def test_http_routes_apply_revisions_and_return_safe_diagnostics(self) -> None:
@@ -1444,9 +1456,8 @@ class HarborWorkspaceTests(unittest.TestCase):
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:
-                status, headers, inventory = self._get_json(
-                    server, "/api/harbor/datasets"
-                )
+                status, _, inventory = self._get_json(server, "/api/harbor/datasets")
+                _, headers, _ = self._get_json(server, "/api/config")
                 self.assertEqual(status, 200)
                 status, created = self._request(
                     server,
@@ -1695,6 +1706,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+                runtime.close()
                 store.close()
 
     def test_task_batch_isolates_failures_and_active_delete_preserves_manifest(
@@ -1798,6 +1810,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+                runtime.close()
                 store.close()
 
     def test_guest_can_browse_task_text_without_private_fields_or_downloads(
@@ -1853,11 +1866,22 @@ class HarborWorkspaceTests(unittest.TestCase):
             try:
                 status, inventory = self._request(server, "GET", "/api/harbor/datasets")
                 self.assertEqual(status, 200)
-                self.assertEqual(set(inventory), {"datasets"})
+                self.assertEqual(
+                    set(inventory), {"datasets", "generation", "checking", "stale"}
+                )
                 public_dataset = inventory["datasets"][0]
                 self.assertEqual(
                     set(public_dataset),
-                    {"format", "id", "read_only", "tasks"},
+                    {
+                        "format",
+                        "id",
+                        "read_only",
+                        "tasks",
+                        "task_count",
+                        "rule_count",
+                        "rubric_count",
+                        "scoring_item_count",
+                    },
                 )
                 self.assertEqual(public_dataset["format"], "harbor")
                 self.assertFalse(public_dataset["read_only"])
@@ -1923,6 +1947,7 @@ class HarborWorkspaceTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join(timeout=5)
+                runtime.close()
                 store.close()
 
 

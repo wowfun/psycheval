@@ -295,17 +295,27 @@ def test_http_permissions_revisions_archive_and_restore(collection_runtime):
     assert admin.get("/api/catalog").json()["total"] == 1
 
 
-def test_dataset_missing_is_not_zero_and_public_fields_are_trimmed(collection_runtime):
+def test_dataset_missing_retains_last_count_with_error_and_public_fields_are_trimmed(
+    collection_runtime,
+):
     runtime, _trial = collection_runtime
     service = WorkspaceCollections(runtime)
-    public = service.datasets("guest")["datasets"][0]
-    assert public["task_count"] == 0
-    assert not {"path", "mount_ids", "collection_revision"} & public.keys()
     from pathlib import Path
 
-    Path(runtime.config.harbor_datasets[0].path).rmdir()
+    from tests.harbor.test_task_scoring import task
+
+    dataset = Path(runtime.config.harbor_datasets[0].path)
+    task(dataset / "retained")
+    runtime.task_inventory.reconcile()
     public = service.datasets("guest")["datasets"][0]
-    assert public["task_count"] is None and public["error"] == "Dataset unavailable"
+    assert public["task_count"] == 1
+    assert not {"path", "mount_ids", "collection_revision"} & public.keys()
+
+    dataset.rename(dataset.with_name("temporarily-unavailable"))
+    runtime.task_inventory.reconcile()
+    public = service.datasets("guest")["datasets"][0]
+    assert public["task_count"] == 1 and public["error"] == "Dataset unavailable"
+    assert service.datasets("guest")["stale"]
 
 
 def test_reports_count_matches_filtered_library_and_deduplicates_associations(

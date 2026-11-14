@@ -113,6 +113,10 @@ def main() -> None:
 
             for name in ("first", "second"):
                 write_task(root / "editable" / name, f"org/{name}")
+            if os.environ.get("PEVAL_E2E_TABLE_SCROLL") == "1":
+                for index in range(24):
+                    name = f"scroll-{index:02}"
+                    write_task(root / "editable" / name, f"org/{name}")
             with (root / "peval.toml").open("a", encoding="utf-8") as config_file:
                 config_file.write(
                     '\n[[harbor.datasets]]\nid = "editable"\npath = "editable"\n'
@@ -125,6 +129,20 @@ def main() -> None:
             for name in ("scored", "empty"):
                 write_task(root / "native" / name, f"fixture/{name}")
             scored = root / "native/scored"
+            with (scored / "task.toml").open("a", encoding="utf-8") as task_config:
+                task_config.write(
+                    '\n[metadata]\ncategory = "coding"\ndifficulty = "hard"\n'
+                    '\n[environment]\nworkdir = "/app"\nskills_dir = "/app/skills"\n'
+                )
+            skill = scored / "environment/data/skills/helper/SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("# Helper Skill", encoding="utf-8")
+            (scored / "environment/data/input.csv").write_text(
+                "value\n1\n", encoding="utf-8"
+            )
+            (scored / "environment/prepare.py").write_text(
+                "raise AssertionError('inspection must not execute')", encoding="utf-8"
+            )
             (scored / "instruction.md").write_text(
                 "Full instruction 中文 " * 40, encoding="utf-8"
             )

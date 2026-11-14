@@ -344,15 +344,11 @@ def _patch_workspace_config(
         temporary.unlink(missing_ok=True)
 
 
-def _harbor_inventory_response(
-    runtime: ServeRuntime, payload: dict[str, Any], role: str
-) -> JSONResponse:
-    revision = str(
-        payload.pop("revision", config_revision(runtime.store.paths.config_path))
-    )
-    return _json(
-        project_harbor_inventory(payload, role), headers={"ETag": _etag(revision)}
-    )
+def _harbor_inventory_response(payload: dict[str, Any], role: str) -> JSONResponse:
+    payload.pop("revision", None)
+    response = _json(project_harbor_inventory(payload, role))
+    response.headers["ETag"] = _etag(hashlib.sha256(response.body).hexdigest())
+    return response
 
 
 def _install_error_handlers(app: FastAPI) -> None:
@@ -1285,8 +1281,8 @@ def _register_harbor_routes(app: FastAPI) -> None:
     @access(GUEST_ACCESS)
     def harbor_datasets(request: Request) -> JSONResponse:
         runtime: ServeRuntime = request.app.state.runtime
-        payload = harbor_workspace(runtime.store, runtime).inventory()
-        return _harbor_inventory_response(runtime, payload, role_for(request))
+        payload = runtime.task_inventory.snapshot()
+        return _harbor_inventory_response(payload, role_for(request))
 
     @app.post(
         "/api/harbor/datasets",
@@ -1384,8 +1380,8 @@ def _register_harbor_routes(app: FastAPI) -> None:
     @access(GUEST_ACCESS)
     def harbor_tasks(request: Request, dataset_id: str) -> JSONResponse:
         runtime: ServeRuntime = request.app.state.runtime
-        payload = harbor_workspace(runtime.store, runtime).task_inventory(dataset_id)
-        return _harbor_inventory_response(runtime, payload, role_for(request))
+        payload = runtime.task_inventory.snapshot(dataset_id)
+        return _harbor_inventory_response(payload, role_for(request))
 
     @app.post(
         "/api/harbor/datasets/{dataset_id}/tasks",
@@ -1423,6 +1419,11 @@ def _register_harbor_routes(app: FastAPI) -> None:
     def harbor_task(request: Request, dataset_id: str, task: str) -> JSONResponse:
         runtime: ServeRuntime = request.app.state.runtime
         payload = harbor_workspace(runtime.store, runtime).task_detail(dataset_id, task)
+        cached = runtime.task_inventory.conflict(
+            dataset_id, task, payload["task"].get("revision")
+        )
+        if cached:
+            payload["task"].update(cached)
         projected = project_harbor_task(payload, role_for(request))
         revision = str(payload["task"]["revision"])
         return _json(projected, headers={"ETag": _etag(revision)})
