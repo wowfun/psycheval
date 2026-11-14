@@ -38,6 +38,63 @@ from tests.peval.test_atif_contract import valid_trajectory
 
 
 class WorkspaceCatalogTests(unittest.TestCase):
+    def test_scope_changes_indexed_sort_summary_and_export_values(self):
+        from copy import deepcopy
+
+        from psycheval.harbor.family import retain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for index, prompt, child_prompt in [(1, 10, 100), (2, 20, 0)]:
+                cell = self.write_cell(root, index)
+                path = cell / "agent/trajectory.json"
+                body = json.loads(path.read_text(encoding="utf-8"))
+                body["trajectory_id"] = f"root-{index}"
+                body["steps"][0]["message"] = "scope-search-fixture"
+                body["final_metrics"] = {
+                    "total_prompt_tokens": prompt,
+                    "total_completion_tokens": 2,
+                }
+                child = deepcopy(body)
+                child.update(
+                    trajectory_id=f"child-{index}", session_id=f"child-{index}"
+                )
+                child["final_metrics"]["total_prompt_tokens"] = child_prompt
+                body["subagent_trajectories"] = [child]
+                path.write_text(json.dumps(retain(body)), encoding="utf-8")
+            store, catalog = self.catalog(root)
+            try:
+                catalog.reconcile()
+                root_rows = catalog.query(
+                    CatalogQuery(
+                        metric_scope="root", sort="metric:tokens", direction="asc"
+                    )
+                ).items
+                family_rows = catalog.query(
+                    CatalogQuery(
+                        metric_scope="family", sort="metric:tokens", direction="asc"
+                    )
+                ).items
+                self.assertEqual([r.payload["tokens"] for r in root_rows], [12, 22])
+                self.assertEqual([r.payload["tokens"] for r in family_rows], [24, 114])
+                for selection, expected in [("root", 17), ("family", 69), ("root", 17)]:
+                    summary = catalog.summarize_query(
+                        CatalogQuery(
+                            metric_scope=selection, search="scope-search-fixture"
+                        ),
+                        name="All",
+                        group_by="overall",
+                    )["summary"]
+                    self.assertEqual(summary["matched_count"], 2)
+                    metric = next(
+                        m
+                        for m in summary["groups"][0]["metrics"]
+                        if m["key"] == "tokens"
+                    )
+                    self.assertEqual(metric["mean"], expected)
+            finally:
+                store.close()
+
     def test_database_rebuild_does_not_reuse_same_generation_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -953,7 +1010,9 @@ class WorkspaceCatalogTests(unittest.TestCase):
                 reconciled = False
                 read_rows = catalog_summaries.summary_rows
 
-                def reconcile_before_rows(connection, where, parameters):
+                def reconcile_before_rows(
+                    connection, where, parameters, metric_scope="family"
+                ):
                     nonlocal reconciled
                     if not reconciled:
                         reconciled = True
@@ -1471,7 +1530,7 @@ class WorkspaceCatalogTests(unittest.TestCase):
                         "metric_provenance"
                     ]
                 ),
-                12,
+                20,
             )
             self.assertEqual(
                 len(json.loads(export.content)["trajectory"]),

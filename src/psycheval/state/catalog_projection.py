@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from psycheval._state.annotations import optional_int, optional_str
+from psycheval.harbor.family import coverage
 from psycheval.metric_contract import (
     BUILTIN_IDS,
     RESERVED_EXTRA_KEYS,
@@ -12,10 +13,10 @@ from psycheval.metric_contract import (
     finite_number,
 )
 from psycheval.report.inference import inference_row_metrics
-from psycheval.report.measurements import construct
+from psycheval.report.measurements import construct, scoped_metrics
 from psycheval.report.measurements import summary_metrics as _summary_metrics
 from psycheval.report.metrics import final_metric, number_metric
-from psycheval.report.timing import is_model_duration_source, node_duration
+from psycheval.report.timing import node_duration
 
 
 def catalog_summary(
@@ -97,6 +98,30 @@ def catalog_summary(
             values[metric_id] = number
     row["metric_values"] = values
     row["metric_diagnostics"] = diagnostics
+    sets = meta.get("metric_sets") or {
+        selection: dict(
+            zip(
+                ("metric_values", "metric_provenance"),
+                construct(trajectory, meta, selection),
+            )
+        )
+        for selection in ("root", "family")
+    }
+    row["metric_sets"] = {
+        selection: {
+            "metric_values": {
+                key: value
+                for key, value in {**values, **measured["metric_values"]}.items()
+                if (key in BUILTIN_IDS or ":" in key)
+                and finite_number(value) is not None
+            },
+            "metric_provenance": measured["metric_provenance"],
+            "family_coverage": measured.get("family_coverage")
+            or coverage(trajectory, selection),
+        }
+        for selection, measured in sets.items()
+    }
+    row["metric_scope"] = "family"
     return row
 
 
@@ -112,30 +137,6 @@ def _additional_metrics(
             "total_steps",
         )
     }
-    tools, other = [], []
-    for step, step_meta in zip(trajectory.get("steps") or [], meta.get("steps") or []):
-        if not isinstance(step, dict) or not isinstance(step_meta, dict):
-            continue
-        duration = finite_number(step_meta.get("duration_ms"))
-        if (
-            step.get("source") in {"agent", "assistant"}
-            and not is_model_duration_source(step_meta.get("duration_source"))
-            and duration is not None
-            and duration >= 0
-        ):
-            other.append(duration)
-        for tool in step_meta.get("tool_calls") or []:
-            duration = (
-                finite_number(tool.get("execution_duration_ms"))
-                if isinstance(tool, dict)
-                else None
-            )
-            if duration is not None and duration >= 0:
-                tools.append(duration)
-    result.update(
-        tool_duration_ms=finite_number(sum(tools)) if tools else None,
-        other_duration_ms=finite_number(sum(other)) if other else None,
-    )
     tests = (meta.get("verifier_evidence") or {}).get("tests") or {}
     passed, total = (
         finite_number(tests.get("passed")),
@@ -230,3 +231,18 @@ def _wall_duration_ms(meta: dict[str, Any]) -> int | None:
     if started is None or finished is None:
         return None
     return max(0, finished - started)
+
+
+def scoped_row(row, metric_scope="family"):
+    measured = scoped_metrics(row, metric_scope)
+    row = dict(row)
+    row.pop("metric_sets", None)
+    if "metric_values" in measured:
+        for key in (
+            set(BUILTIN_IDS)
+            | set(row.get("metric_values", {}))
+            | set(measured["metric_values"])
+        ):
+            row[key] = measured["metric_values"].get(key)
+    row.update(measured)
+    return row

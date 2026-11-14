@@ -22,6 +22,7 @@ class CatalogSummaryCapacityError(ValueError):
 
 def summary_query_scope(query: CatalogQuery) -> tuple[Any, ...]:
     return (
+        query.metric_scope,
         query.state,
         query.search,
         tuple(sorted(query.categories)),
@@ -41,10 +42,11 @@ def summary_rows(
     connection: sqlite3.Connection,
     where: str,
     parameters: Sequence[Any],
+    metric_scope="family",
 ) -> Iterator[dict[str, Any]]:
     provenance_rows = iter(
         connection.execute(
-            f"SELECT source_key, json_extract(row_json, '$.metric_provenance') AS provenance FROM cells WHERE {where} ORDER BY source_key",
+            f"SELECT source_key, json_extract(row_json, '$.metric_sets.{metric_scope}.metric_provenance') AS provenance FROM cells WHERE {where} ORDER BY source_key",
             parameters,
         )
     )
@@ -52,9 +54,9 @@ def summary_rows(
         f"""SELECT cells.source_key, category AS source_category, agent AS agent_name,
                    model, task AS task_name, job AS job_name, provider AS model_provider,
                    metric_id, value
-            FROM cells LEFT JOIN metric_values USING(source_key)
+            FROM cells LEFT JOIN metric_values ON cells.source_key = metric_values.source_key AND metric_values.metric_scope = ?
             WHERE {where} ORDER BY cells.source_key""",
-        parameters,
+        [metric_scope, *parameters],
     )
     current = None
     for record in records:

@@ -17,6 +17,7 @@ from psycheval._state.annotations import optional_int
 from psycheval.analysis import cached_note_report_for_cell
 from psycheval.config import ToolConfig
 from psycheval.file_access import FileLeaseTimeout, blocking_file_lease
+from psycheval.harbor.family import scope
 from psycheval.metric_contract import (
     BUILTIN_IDS,
     METRIC_LIMIT,
@@ -26,7 +27,7 @@ from psycheval.metric_contract import (
 )
 from psycheval.state import catalog_summaries
 from psycheval.state.catalog_discovery import SharedObservations
-from psycheval.state.catalog_projection import catalog_summary
+from psycheval.state.catalog_projection import catalog_summary, scoped_row
 from psycheval.state.catalog_summaries import CatalogSummaryCapacityError
 from psycheval.state.evaluation_report_catalog import (
     evaluation_report_location,
@@ -40,8 +41,8 @@ from psycheval.state.workspace_sources import (
     WorkspaceSources,
 )
 
-CATALOG_SCHEMA_VERSION = 22
-CATALOG_PROJECTION_VERSION = 13
+CATALOG_SCHEMA_VERSION = 23
+CATALOG_PROJECTION_VERSION = 16
 _ACTIVE_SCAN_PHASES = frozenset({"discovering", "checking", "committing"})
 DEFAULT_PAGE_SIZE = 100
 MAX_PAGE_SIZE = 100
@@ -73,8 +74,10 @@ class CatalogQuery:
     providers: tuple[str, ...] = ()
     datasets: tuple[str, ...] = ()
     include_unreadable: bool = False
+    metric_scope: str = "family"
 
     def normalized(self) -> CatalogQuery:
+        scope(self.metric_scope)
         state = str(self.state or "active").strip().lower()
         if state not in {"active", "archived", "all"}:
             raise ValueError("state must be active, archived, or all")
@@ -100,6 +103,7 @@ class CatalogQuery:
             providers=_normalized_values(self.providers),
             datasets=_normalized_values(self.datasets),
             include_unreadable=bool(self.include_unreadable),
+            metric_scope=self.metric_scope,
         )
 
 
@@ -337,6 +341,7 @@ class WorkspaceCatalog:
             )
             presence_key = (
                 "column_presence",
+                query.metric_scope,
                 self._meta(connection, "instance_id"),
                 generation,
                 where,
@@ -348,7 +353,7 @@ class WorkspaceCatalog:
                     self._query_summary_cache.move_to_end(presence_key)
             if cached_presence is None:
                 total, column_presence = _catalog_query_presence(
-                    connection, where, parameters
+                    connection, where, parameters, query.metric_scope
                 )
                 self._cache_query_summary(
                     presence_key, {"total": total, "presence": column_presence}
@@ -364,7 +369,7 @@ class WorkspaceCatalog:
                 workspace_report_source_refs,
             )
             sort_join, sort_expression, sort_parameters, effective_sort = _catalog_sort(
-                connection, query.sort
+                connection, query.sort, query.metric_scope
             )
             metric_metadata = self.metric_metadata(connection)
             metric_metadata["effective_sort"] = effective_sort
@@ -399,7 +404,9 @@ class WorkspaceCatalog:
                 CatalogRow(
                     source_key=str(record["source_key"]),
                     artifact_revision=str(record["artifact_revision"]),
-                    payload=json.loads(str(record["row_json"])),
+                    payload=scoped_row(
+                        json.loads(str(record["row_json"])), query.metric_scope
+                    ),
                 )
                 for record in records
             )
@@ -472,7 +479,7 @@ class WorkspaceCatalog:
                     normalized, normalized_any
                 )
                 sort_join, sort_expression, sort_parameters, _effective = _catalog_sort(
-                    connection, normalized.sort
+                    connection, normalized.sort, normalized.metric_scope
                 )
                 direction = (
                     "ASC"
@@ -494,7 +501,9 @@ class WorkspaceCatalog:
                 ).fetchall()
                 selected_set = set(selected)
                 rows = [
-                    json.loads(str(record["row_json"]))
+                    scoped_row(
+                        json.loads(str(record["row_json"])), normalized.metric_scope
+                    )
                     for record in records
                     if not selected or str(record["source_key"]) in selected_set
                 ]
@@ -549,7 +558,9 @@ class WorkspaceCatalog:
             summaries: list[dict[str, Any]] = []
             for name, query, group_by in normalized:
                 where, parameters = self._query_where(query)
-                rows = catalog_summaries.summary_rows(connection, where, parameters)
+                rows = catalog_summaries.summary_rows(
+                    connection, where, parameters, query.metric_scope
+                )
                 summaries.append(catalog_summaries.summarize_rows(name, group_by, rows))
         return {
             "generation": generation,
@@ -642,7 +653,9 @@ class WorkspaceCatalog:
                     **self.metric_metadata(connection),
                 }
             where, parameters = self._combined_query_where(normalized, normalized_any)
-            rows = catalog_summaries.summary_rows(connection, where, parameters)
+            rows = catalog_summaries.summary_rows(
+                connection, where, parameters, normalized.metric_scope
+            )
             metadata = self.metric_metadata(connection)
             summary = catalog_summaries.summarize_rows(
                 name,
@@ -1260,8 +1273,9 @@ class WorkspaceCatalog:
                     "DELETE FROM metric_values WHERE source_key IN (SELECT source_key FROM projected)"
                 )
                 connection.execute(
-                    """INSERT INTO metric_values SELECT p.source_key, m.key, m.value
-                       FROM projected p, json_each(p.row_json, '$.metric_values') m"""
+                    """INSERT INTO metric_values SELECT p.source_key, s.key, m.key, m.value
+                       FROM projected p, json_each(p.row_json, '$.metric_sets') s,
+                       json_each(s.value, '$.metric_values') m WHERE m.type IN ('integer','real')"""
                 )
                 connection.execute(
                     "INSERT INTO cell_search SELECT source_key, search_doc FROM projected"
@@ -1393,7 +1407,7 @@ class WorkspaceCatalog:
                 parameters.append(f"%{_escape_like(query.search)}%")
             else:
                 clauses.append(
-                    "source_key IN (SELECT source_key FROM cell_search WHERE cell_search MATCH ?)"
+                    "cells.source_key IN (SELECT source_key FROM cell_search WHERE cell_search MATCH ?)"
                 )
                 parameters.append(_fts_literal(query.search))
         if query.tags:
@@ -1592,10 +1606,10 @@ class WorkspaceCatalog:
             CREATE INDEX IF NOT EXISTS cells_dataset ON cells(dataset);
             CREATE TABLE IF NOT EXISTS metric_registry (metric_id TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS metric_values (
-                source_key TEXT NOT NULL, metric_id TEXT NOT NULL, value REAL NOT NULL,
-                PRIMARY KEY (source_key, metric_id)
+                source_key TEXT NOT NULL, metric_scope TEXT NOT NULL, metric_id TEXT NOT NULL, value REAL NOT NULL,
+                PRIMARY KEY (source_key, metric_scope, metric_id)
             );
-            CREATE INDEX IF NOT EXISTS metric_values_order ON metric_values(metric_id, value, source_key);
+            CREATE INDEX IF NOT EXISTS metric_values_order ON metric_values(metric_scope, metric_id, value, source_key);
             CREATE TABLE IF NOT EXISTS evaluation_reports (
                 report_ref TEXT PRIMARY KEY,
                 source_ref TEXT NOT NULL UNIQUE,
@@ -1842,7 +1856,7 @@ def _fts_literal(value: str) -> str:
 
 
 def _catalog_sort(
-    connection: sqlite3.Connection, sort: str
+    connection: sqlite3.Connection, sort: str, metric_scope="family"
 ) -> tuple[str, str, list[Any], str]:
     if not sort.startswith("metric:"):
         return "", _sort_expression(sort), [], sort
@@ -1855,8 +1869,8 @@ def _catalog_sort(
         is None
     ):
         return "", "last_turn_end", [], "last_turn_end"
-    join = "LEFT JOIN (SELECT source_key AS metric_source, value AS metric_sort_value FROM metric_values WHERE metric_id = ?) AS metric_sort ON metric_sort.metric_source = cells.source_key"
-    return join, "metric_sort_value", [key], sort
+    join = "LEFT JOIN (SELECT source_key AS metric_source, value AS metric_sort_value FROM metric_values WHERE metric_id = ? AND metric_scope = ?) AS metric_sort ON metric_sort.metric_source = cells.source_key"
+    return join, "metric_sort_value", [key, metric_scope], sort
 
 
 def _sort_expression(sort: str) -> str:
@@ -1922,6 +1936,7 @@ def _catalog_query_presence(
     connection: sqlite3.Connection,
     where: str,
     parameters: Sequence[Any],
+    metric_scope="family",
 ) -> tuple[int, dict[str, int]]:
     select_items = [
         "count(*) AS matched_trials",
@@ -1949,8 +1964,8 @@ def _catalog_query_presence(
     ]
     counts = dict(
         connection.execute(
-            f"SELECT metric_id, count(*) FROM metric_values WHERE source_key IN (SELECT source_key FROM cells WHERE {where}) GROUP BY metric_id",
-            parameters,
+            f"SELECT metric_id, count(*) FROM metric_values WHERE metric_scope = ? AND source_key IN (SELECT source_key FROM cells WHERE {where}) GROUP BY metric_id",
+            [metric_scope, *parameters],
         )
     )
     for key in ids:

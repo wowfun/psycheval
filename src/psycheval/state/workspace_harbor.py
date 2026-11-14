@@ -869,7 +869,32 @@ def _load_measurements(candidate, trajectory, result_json, meta):
         session = trajectory.get("session_id")
         if session and manifest.get("session_id") != session:
             raise ValueError("measurement_session_mismatch")
-        meta["native_measurements"] = calculate(manifest, records)
+        meta["native_measurement_sets"] = {
+            selection: calculate(manifest, records, selection)
+            for selection in ("root", "family")
+        }
+        meta["native_measurements"] = meta["native_measurement_sets"]["root"]
+        if trajectory.get("subagent_trajectories"):
+            from psycheval.harbor.family import trajectories
+
+            grouped = {}
+            for record in records:
+                grouped.setdefault(record.get("session_id"), []).append(record)
+            members = {}
+            for body, parent, _ in trajectories(trajectory):
+                if parent is None:
+                    continue
+                identity = body["session_id"]
+                own = [dict(row, scope="main") for row in grouped.get(identity, [])]
+                descendants = [item["session_id"] for item, _, _ in trajectories(body)]
+                family_rows = [
+                    row for member in descendants for row in grouped.get(member, [])
+                ]
+                members[identity] = {
+                    "root": calculate(manifest, own, "root"),
+                    "family": calculate(manifest, family_rows, "family"),
+                }
+            meta["_native_members"] = members
         meta["measurement_retention"] = (
             "complete" if manifest.get("complete") else "partial"
         )

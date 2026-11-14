@@ -478,3 +478,20 @@ def test_selected_excel_and_runtime_descriptor_refresh(tmp_path, catalog):
             assert value.get("t") in (None, "n") and value.findtext("{*}v") == "0"
     finally:
         runtime.close()
+
+
+def test_unknown_root_value_clears_family_scalar_without_inventing_measurement():
+    from psycheval.state.catalog_projection import scoped_row
+
+    row = {
+        "tokens": 120,
+        "metric_values": {"tokens": 120},
+        "metric_sets": {
+            "root": {"metric_values": {}, "metric_provenance": {}},
+            "family": {"metric_values": {"tokens": 120}, "metric_provenance": {}},
+        },
+    }
+    root = scoped_row(row, "root")
+    assert root["tokens"] is None
+    assert "tokens" not in root["metric_values"]
+    assert scoped_row(row, "family")["tokens"] == 120
