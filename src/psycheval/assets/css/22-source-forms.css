@@ -408,26 +408,7 @@
   font:700 12px/1.2 var(--mono);
   white-space:nowrap;
 }
-.db-session-table-wrap {
-  max-height:260px;
-  overflow:auto;
-  border:1px solid var(--rule);
-  border-radius:6px;
-  background:var(--surface);
-}
-.db-session-table {
-  width:100%;
-  border-collapse:collapse;
-}
-.db-session-table th,.db-session-table td {
-  padding:8px 9px;
-  border-top:1px solid var(--rule);
-  font-size:13px;
-}
-.db-session-table thead th {
-  border-top:0;
-  background:color-mix(in oklch,var(--surface),var(--surface-2) 38%);
-}
+.db-session-table-wrap .table-shell { --table-max-height:min(260px,42dvh); }
 .db-session-table code {
   font:12px/1.3 var(--mono);
 }

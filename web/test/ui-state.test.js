@@ -20,6 +20,7 @@ const browser = installBrowserDom(`
 `);
 
 const runtime = await import("../../src/psycheval/assets/web/modules/runtime.js");
+const leaderboardTables = await import("../../src/psycheval/assets/web/modules/leaderboard-table.js");
 const tables = await import("../../src/psycheval/assets/web/modules/data-tables.js");
 const configuration = await import("../../src/psycheval/assets/web/modules/configuration.js");
 const sourceStateControls = await import("../../src/psycheval/assets/web/modules/source-state-controls.js");
@@ -167,12 +168,12 @@ test("initial Catalog sort is shown on the corresponding browser column", () => 
   runtime.state.catalogQuery.direction = "desc";
   runtime.state.tables.leaderboard = {};
   const host = document.createElement("div");
-  host.innerHTML = tables.renderLeaderboardColumnControls([]);
+  host.innerHTML = leaderboardTables.renderLeaderboardColumnControls([]);
 
   const state = host.querySelector('[data-column-row="finished_at_ms"] .column-control-state');
   assert.match(state.textContent, /desc/);
 
-  const column = tables.leaderboardColumns().find(item => item.key === "finished_at_ms");
+  const column = leaderboardTables.leaderboardColumns().find(item => item.key === "finished_at_ms");
   host.innerHTML = `<table><thead><tr>${tables.renderTableHeader(
     "leaderboard",
     column,
@@ -190,7 +191,7 @@ test("the last visible data column remains hideable", () => {
   runtime.state.leaderboardColumnLayout = null;
 
   const host = document.createElement("div");
-  host.innerHTML = tables.renderLeaderboardColumnControls([]);
+  host.innerHTML = leaderboardTables.renderLeaderboardColumnControls([]);
 
   const visibility = host.querySelector('[data-column-visible="task_name"]');
   assert.equal(visibility.checked, true);
@@ -205,7 +206,7 @@ test("column draft actions restore focus after replacing the control panel", () 
   runtime.state.catalogPage.column_presence = { session_id: 1, task_name: 1 };
   runtime.state.leaderboardColumnDraft = null;
   runtime.state.leaderboardColumnLayout = null;
-  tables.renderLeaderboard([]);
+  leaderboardTables.renderLeaderboard([]);
 
   let details = document.querySelector("#leaderboard .column-control");
   details.open = true;
@@ -236,7 +237,7 @@ test("column draft actions restore focus after replacing the control panel", () 
   runtime.state.leaderboardColumnDraft = null;
   runtime.state.leaderboardColumnLayout = null;
   runtime.state.catalogPage.column_presence = {};
-  tables.renderLeaderboard([]);
+  leaderboardTables.renderLeaderboard([]);
   details = document.querySelector("#leaderboard .column-control");
   details.open = true;
   details.dispatchEvent(new window.Event("toggle"));

@@ -1,81 +1,15 @@
-import { metricDefinitions, formatMetric, metricSortKey, metricSearchText, metricProvenanceHint, metricCoverageStatus } from "./metric-presentation.js";
+import { bindToolbarMenus } from "./toolbar-menu.js";
+import { createRecentState } from "./recent-state.js";
 import { renderDateTime } from "./date-time.js";
-import { $, RENDER_OPTIONS, adminMode, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, modelDisplayName, statusLabel, t } from "./shared.js";
-import { columnVisibleForLayout, loadColumnLayout, moveColumn, normalizeColumnLayout, presenceForColumns, resolveColumns, saveColumnLayout } from "./leaderboard-columns.js";
+import { bindTableFilterPopup } from "./table-filter-popup.js";
+import { esc, hasMetricValue, listValue, t } from "./shared.js";
 
 const TABLE_CONTROL_SELECTOR = "input,button,a,select,textarea,label,details,[contenteditable='true'],[data-table-cell-editor],[data-workspace-report-control]";
 const tableRowActivations = new WeakMap();
+const localControls = createRecentState();
+const tableAdapters = new Map();
 
-let state = { tables: {}, rowSelection: new Set(), catalogPage: {}, catalogQuery: {} };
-let renderComparisonPanels = () => {};
-let renderReadOnlySourceCategory = () => "";
-let renderReadOnlySourceTags = () => "";
-let renderTaskAlias = () => "";
-let sessionAliasValue = row => row?.session_id || "-";
-let sourceCategoryEditValue = () => "";
-let sourceCategoryFor = () => "";
-let sourceCategoryValue = () => "";
-let sourceIdentityFor = row => row?.session_id || "-";
-let sourceTagsEditValue = () => [];
-let sourceTagsFor = () => [];
-let sourceTagsValue = () => [];
-let bindServeExportControls = () => {};
-let bindTrialSelection = () => {};
-let bindServeSourceStateControls = () => {};
-let bindLeaderboardSearchControls = () => {};
-let commitSourceCellEdit = () => Promise.resolve();
-let existingSourceCategoryOptions = () => [];
-let existingSourceTagOptions = () => [];
-let bindLeaderboardCatalogControls = () => {};
-let catalogSortKey = value => value;
-let leaderboardFilterOptions = () => [];
-let leaderboardRows = () => [];
-let renderLeaderboardPanelControls = () => "";
-let renderLeaderboardSearchControls = () => "";
-let reportRows = () => [];
-let requestCatalogFacets = () => undefined;
-let requestCatalogSort = () => undefined;
-let rowAnalysisCount = () => 0;
-let bindWorkspaceReportLeaderboardControls = () => {};
-let workspaceReportLeaderboardColumn = () => ({ key: "workspace_reports", label: "Reports", value: () => "-" });
-
-function configureLeaderboardDataTables(dependencies) {
-  if (dependencies.state) state = dependencies.state;
-  for (const [name, value] of Object.entries(dependencies)) {
-    if (name === "state" || typeof value !== "function") continue;
-    if (name === "renderComparisonPanels") renderComparisonPanels = value;
-    else if (name === "renderReadOnlySourceCategory") renderReadOnlySourceCategory = value;
-    else if (name === "renderReadOnlySourceTags") renderReadOnlySourceTags = value;
-    else if (name === "renderTaskAlias") renderTaskAlias = value;
-    else if (name === "sessionAliasValue") sessionAliasValue = value;
-    else if (name === "sourceCategoryEditValue") sourceCategoryEditValue = value;
-    else if (name === "sourceCategoryFor") sourceCategoryFor = value;
-    else if (name === "sourceCategoryValue") sourceCategoryValue = value;
-    else if (name === "sourceIdentityFor") sourceIdentityFor = value;
-    else if (name === "sourceTagsEditValue") sourceTagsEditValue = value;
-    else if (name === "sourceTagsFor") sourceTagsFor = value;
-    else if (name === "sourceTagsValue") sourceTagsValue = value;
-    else if (name === "bindServeExportControls") bindServeExportControls = value;
-    else if (name === "bindTrialSelection") bindTrialSelection = value;
-    else if (name === "bindServeSourceStateControls") bindServeSourceStateControls = value;
-    else if (name === "bindLeaderboardSearchControls") bindLeaderboardSearchControls = value;
-    else if (name === "commitSourceCellEdit") commitSourceCellEdit = value;
-    else if (name === "existingSourceCategoryOptions") existingSourceCategoryOptions = value;
-    else if (name === "existingSourceTagOptions") existingSourceTagOptions = value;
-    else if (name === "bindLeaderboardCatalogControls") bindLeaderboardCatalogControls = value;
-    else if (name === "catalogSortKey") catalogSortKey = value;
-    else if (name === "filterOptions") leaderboardFilterOptions = value;
-    else if (name === "leaderboardRows") leaderboardRows = value;
-    else if (name === "renderLeaderboardPanelControls") renderLeaderboardPanelControls = value;
-    else if (name === "renderLeaderboardSearchControls") renderLeaderboardSearchControls = value;
-    else if (name === "reportRows") reportRows = value;
-    else if (name === "requestCatalogFacets") requestCatalogFacets = value;
-    else if (name === "requestCatalogSort") requestCatalogSort = value;
-    else if (name === "rowAnalysisCount") rowAnalysisCount = value;
-    else if (name === "bindWorkspaceReportLeaderboardControls") bindWorkspaceReportLeaderboardControls = value;
-    else if (name === "workspaceReportLeaderboardColumn") workspaceReportLeaderboardColumn = value;
-  }
-}
+function configureDataTable(tableId, adapter) { tableAdapters.set(tableId, adapter); }
 
 function selectionColumn(options = {}) {
   return {
@@ -84,224 +18,10 @@ function selectionColumn(options = {}) {
     select: true,
     label: t("select_rows", "Select rows"),
     selectionKey: row => row?.trial_key || "",
-    selectionSet: () => state.rowSelection,
+    selectionSet: new Set(),
     rowAriaLabel: key => `${t("select_row_for_export", "Select row for export")}: ${key}`,
     ...options,
   };
-}
-function metricColumn(key) {
-  const definition = metricDefinitions(state).find(item => item.key === key);
-  if (!definition) return null;
-  return {
-    key: definition.column_key, label: definition.label, valueType: "number",
-    description: definition.description || "",
-    numeric: true, sortable: true, metric: true, defaultVisible: definition.column_default,
-    value: row => row.metric_values?.[key] ?? row[key],
-    cellTitle: row => `${formatMetric(definition, row.metric_values?.[key] ?? row[key])}\n${metricProvenanceHint(row.metric_provenance?.[key], key, row.family_coverage)}`,
-    ...(key === "score" ? { presence: row => row.metric_values?.score ?? row.score ?? Object.keys(row.rewards || {}) } : {}),
-    format: (value, row) => {
-      if (key === "score" && value == null) return rewardValue(row);
-      if (key === "test_pass_rate" && value != null) return `${fmtNum(row.metric_values?.tests_passed)} / ${fmtNum(row.metric_values?.tests_total)} (${fmtPct(value)})`;
-      const status = metricCoverageStatus(row.metric_provenance?.[key], row.family_coverage);
-      const suffix = value != null && status !== "complete" ? ` · ${status === "partial" ? t("coverage_partial", "partial") : t("coverage_unknown", "coverage unknown")}` : "";
-      return formatMetric(definition, value) + suffix;
-    },
-  };
-}
-function leaderboardColumns() {
-  const columns = [
-    { key: "job_name", label: t("job", "Job"), valueType: "identity", filterable: true, sortable: true, value: row => row?.job_name || "-" },
-    { key: "task_name", label: t("task_alias", "Task / Alias"), valueType: "text", filterable: true, filterValues: row => [row?.task_name].filter(Boolean), sortable: true, value: row => sessionAliasValue(row), html: row => renderTaskAlias(row), edit: adminMode() ? { value: row => String(row?.source_alias || ""), commit: (row, value) => commitSourceCellEdit(row, "alias", value) } : undefined },
-    { key: "agent", label: t("agent", "Agent"), valueType: "identity", filterable: true, value: row => agentNameFor(row) },
-    { key: "model", label: t("model", "Model"), valueType: "identity", filterable: true, value: row => row.model || "-", format: modelDisplayName, filterLabel: modelDisplayName },
-    { key: "model_provider", label: t("provider", "Provider"), valueType: "identity", defaultVisible: false, filterable: true, sortable: true, value: row => row?.model_provider || "-" },
-    metricColumn("score"),
-    { key: "status", label: t("result", "Result"), valueType: "status", filterable: true, value: row => row.status || "-", filterLabel: value => statusLabel(value), html: row => `<span class="stamp ${lower(row.status || "passed")}">${esc(statusLabel(row.status))}</span>` },
-    { key: "finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.finished_at_ms, format: (value, row) => `${lastTurnEndHint(row) ? "≈ " : ""}${fmtDate(value)}`, html: renderLastTurnEnd, cellTitle: row => `${fmtDate(row.finished_at_ms)} · ${lastTurnEndHint(row)}\n${metricProvenanceHint(row.metric_provenance?.last_turn_finished_at_ms)}` },
-    metricColumn("duration_ms"),
-    metricColumn("ttft_ms"),
-    metricColumn("tps"),
-    metricColumn("agent_steps"),
-    metricColumn("total_tool_calls"),
-    metricColumn("tool_success_rate"),
-    metricColumn("tokens"),
-    metricColumn("cache_hit_rate"),
-    metricColumn("cost_usd"),
-    { key: "analysis_count", label: t("analysis_count", "#Analysis"), valueType: "number", numeric: true, filterable: true, value: row => rowAnalysisCount(row) },
-    { key: "notes", label: t("notes", "Notes"), valueType: "markdown", value: noteSnippetFor, html: renderNotesCell, cellTitle: row => {
-      const text = notesText(row);
-      return text && text !== noteSnippetFor(row) ? text : "";
-    } },
-    { key: "session_id", label: t("session", "Session"), valueType: "identity", filterable: true, value: row => sourceIdentityFor(row), cellTitle: row => row.trial_key && row.trial_key !== sourceIdentityFor(row) ? row.trial_key : "" }
-  ];
-  const availableColumns = columns.filter(Boolean);
-  availableColumns.splice(availableColumns.findIndex(item => item.key === "analysis_count"), 0,
-    ...metricDefinitions(state).filter(item => !item.column_default).map(item => metricColumn(item.key)));
-  const serveColumns = availableColumns.map(column => ["session_id", "analysis_count"].includes(column.key)
-    ? { ...column, filterable: false }
-    : column);
-  return [
-    { key: "dataset_id", label: t("dataset", "Dataset"), valueType: "identity", filterable: true, sortable: true, value: row => row?.dataset_id || "-" },
-    { key: "source_category", label: t("category", "Category"), valueType: "text", filterable: true, filterValues: row => [sourceCategoryFor(row)].filter(Boolean), value: row => sourceCategoryValue(row), html: row => renderReadOnlySourceCategory(row), edit: adminMode() ? { value: row => sourceCategoryEditValue(row), suggestions: existingSourceCategoryOptions, commit: (row, value) => commitSourceCellEdit(row, "category", value) } : undefined },
-    { key: "source_tags", label: t("tags", "Tags"), valueType: "list", filterable: true, filterValues: row => sourceTagsFor(row), value: row => sourceTagsValue(row), html: row => renderReadOnlySourceTags(row), edit: adminMode() ? { value: row => sourceTagsEditValue(row), suggestions: existingSourceTagOptions, commit: (row, value) => commitSourceCellEdit(row, "tags", value) } : undefined },
-    ...serveColumns.slice(0, 2),
-    workspaceReportLeaderboardColumn(),
-    ...serveColumns.slice(2)
-  ];
-}
-function lastTurnEndHint(row) {
-  if (!hasMetricValue(row?.finished_at_ms)) return "";
-  if (row?.last_turn_finished_at_source === "harbor_agent_execution") return t("last_turn_end_from_agent_execution", "Approximate: Agent execution finished");
-  if (row?.last_turn_finished_at_source === "harbor_trial") return t("last_turn_end_from_trial", "Approximate: Trial finished");
-  return "";
-}
-function renderLastTurnEnd(row) {
-  const time = renderDateTime(row.finished_at_ms);
-  const hint = lastTurnEndHint(row);
-  return hint ? `<span title="${esc(hint)}">≈ <span class="sr-only">${esc(hint)}: </span>${time}</span>` : time;
-}
-function notesText(row) {
-  return String(row?.notes_markdown || "").trim();
-}
-function noteSnippetFor(row) {
-  const text = notesText(row).replace(/\s+/g, " ");
-  if (!text) return "-";
-  return text.length > 96 ? `${text.slice(0, 96)}...` : text;
-}
-function renderNotesCell(row) {
-  const summary = noteSnippetFor(row);
-  return summary === "-" ? `<span class="muted">-</span>` : `<span class="note-snippet">${esc(summary)}</span>`;
-}
-function rewardValue(row) {
-  if (hasMetricValue(row?.score)) return fmtNum(row.score);
-  const count = row?.rewards && typeof row.rewards === "object" ? Object.keys(row.rewards).length : 0;
-  return count ? `${count} ${t("reward_dimensions_short", "dims")}` : "-";
-}
-function columnStorage() {
-  if (typeof window === "undefined") return null;
-  try { return window.localStorage; } catch { return null; }
-}
-function cloneColumnLayout(layout) { return JSON.parse(JSON.stringify(layout)); }
-function leaderboardColumnLayout(columns = leaderboardColumns()) {
-  if (!state.leaderboardColumnLayout) {
-    state.leaderboardColumnLayout = loadColumnLayout(columns.map(column => column.key), {
-      workspaceId: RENDER_OPTIONS?.workspace_id,
-      storage: columnStorage(),
-    });
-  }
-  return normalizeColumnLayout(columns.map(column => column.key), state.leaderboardColumnLayout);
-}
-function currentLeaderboardColumnLayout() {
-  return cloneColumnLayout(leaderboardColumnLayout());
-}
-function leaderboardColumnContext(rows = leaderboardRows()) {
-  const columns = leaderboardColumns();
-  const layout = leaderboardColumnLayout(columns);
-  const serverPresence = state.catalogPage?.column_presence;
-  const presence = presenceForColumns(columns, rows, serverPresence);
-  return { columns, layout, presence };
-}
-function displayLeaderboardColumns(rows = leaderboardRows()) {
-  const { columns, layout, presence } = leaderboardColumnContext(rows);
-  const displayed = resolveColumns(columns, layout, presence);
-  return [selectionColumn(), ...displayed];
-}
-function renderLeaderboardColumnControls(rows = leaderboardRows()) {
-  const { columns, layout, presence } = leaderboardColumnContext(rows);
-  const draft = state.leaderboardColumnDraft
-    ? normalizeColumnLayout(columns.map(column => column.key), state.leaderboardColumnDraft)
-    : layout;
-  const ordered = draft.order.map(key => columns.find(column => column.key === key) || { key, label: key, defaultVisible: false, unavailable: true });
-  const checked = column => columnVisibleForLayout(column, draft, presence);
-  const visibleCount = ordered.filter(checked).length;
-  const rowsHtml = ordered.map((column, index) => {
-    const isChecked = checked(column);
-    const activeSort = catalogSortKey(metricSortKey(state, state.catalogQuery?.sort)) === catalogSortKey(metricSortKey(state, column.key));
-    const filtered = activeFilterValues("leaderboard", column.key).length > 0;
-    const condition = [activeSort ? state.catalogQuery?.direction : "", filtered ? t("filtered", "Filtered") : ""].filter(Boolean).join(" · ");
-    return `<li class="column-control-row${isChecked ? "" : " hidden-column"}" data-column-row="${esc(column.key)}" data-column-match="${esc(metricSearchText(column.label, column.key))}" ${metricSearchText(column.label, column.key).includes((state.leaderboardColumnSearch || "").toLocaleLowerCase()) ? "" : "hidden"}>
-      <span class="column-control-index">${String(index + 1).padStart(2, "0")}</span>
-      <label><input type="checkbox" data-column-visible="${esc(column.key)}" ${column.description ? `aria-describedby="leaderboard-column-hint-${index}"` : ""} ${isChecked ? "checked" : ""}><span>${esc(column.label)}</span></label>
-      <span class="column-control-state">${column.unavailable ? esc(t("metric_unavailable", "Currently unavailable")) : presence[column.key] ? "" : esc(t("no_data", "No data"))}${condition ? `<small>${esc(condition)}</small>` : ""}</span>
-      <span class="column-control-moves"><button type="button" data-column-move="${esc(column.key)}" data-column-direction="-1" aria-label="${esc(`${t("move_earlier", "Move earlier")}: ${column.label}`)}" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-column-move="${esc(column.key)}" data-column-direction="1" aria-label="${esc(`${t("move_later", "Move later")}: ${column.label}`)}" ${index === ordered.length - 1 ? "disabled" : ""}>↓</button></span>
-      ${column.description ? `<small class="column-description" id="leaderboard-column-hint-${index}">${esc(column.description)}</small>` : ""}
-    </li>`;
-  }).join("");
-  return `<details class="column-control" ${state.leaderboardColumnDraft ? "open" : ""}>
-    <summary class="action-button column-control-button">${esc(t("columns", "Columns"))} ${visibleCount}/${ordered.length}</summary>
-    <div class="column-control-panel">
-      <div class="column-control-head"><strong>${esc(t("columns", "Columns"))}</strong><button type="button" data-column-reset>${esc(t("reset_auto", "Reset to auto"))}</button></div>
-      <label>${esc(t("search", "Search"))}<input type="search" data-column-search value="${esc(state.leaderboardColumnSearch || "")}"></label>
-      <ol class="column-control-list">${rowsHtml}</ol>
-      <div class="column-control-foot"><span aria-live="polite">${esc(`${visibleCount} / ${ordered.length}`)}</span><button type="button" class="action-button primary" data-column-apply>${esc(t("apply", "Apply"))}</button></div>
-    </div>
-  </details>`;
-}
-function renderLeaderboardAndRestoreColumnFocus(findControl) {
-  renderLeaderboard(leaderboardRows());
-  const root = $("leaderboard");
-  let control = findControl(root);
-  if (control?.disabled) {
-    const row = control.closest("[data-column-row]");
-    row?.setAttribute("tabindex", "-1");
-    control = row;
-  }
-  control?.focus();
-}
-function bindLeaderboardColumnControls(target) {
-  const details = target?.querySelector?.(".column-control");
-  if (!details) return;
-  details.querySelector("[data-column-search]").addEventListener("input", event => {
-    state.leaderboardColumnSearch = event.target.value;
-    details.querySelectorAll("[data-column-match]").forEach(row => { row.hidden = !row.dataset.columnMatch.includes(event.target.value.toLocaleLowerCase()); });
-  });
-  details.addEventListener("toggle", () => {
-    if (details.open && !state.leaderboardColumnDraft) {
-      state.leaderboardColumnDraft = cloneColumnLayout(leaderboardColumnLayout());
-    } else if (!details.open) {
-      state.leaderboardColumnDraft = null;
-    }
-  });
-  details.addEventListener("keydown", event => {
-    if (event.key !== "Escape") return;
-    event.preventDefault();
-    state.leaderboardColumnDraft = null;
-    details.open = false;
-    details.querySelector("summary")?.focus();
-  });
-  details.querySelectorAll("[data-column-visible]").forEach(input => {
-    input.addEventListener("change", () => {
-      const columnKey = input.dataset.columnVisible;
-      const draft = state.leaderboardColumnDraft || cloneColumnLayout(leaderboardColumnLayout());
-      draft.visibility[columnKey] = input.checked ? "show" : "hide";
-      state.leaderboardColumnDraft = draft;
-      renderLeaderboardAndRestoreColumnFocus(root => Array.from(
-        root?.querySelectorAll?.("[data-column-visible]") || []
-      ).find(control => control.dataset.columnVisible === columnKey));
-    });
-  });
-  details.querySelectorAll("[data-column-move]").forEach(button => {
-    button.addEventListener("click", () => {
-      const columnKey = button.dataset.columnMove;
-      const direction = button.dataset.columnDirection;
-      const draft = state.leaderboardColumnDraft || cloneColumnLayout(leaderboardColumnLayout());
-      draft.order = moveColumn(draft.order, columnKey, Number(direction));
-      state.leaderboardColumnDraft = draft;
-      renderLeaderboardAndRestoreColumnFocus(root => Array.from(
-        root?.querySelectorAll?.("[data-column-move]") || []
-      ).find(control => control.dataset.columnMove === columnKey && control.dataset.columnDirection === direction));
-    });
-  });
-  details.querySelector("[data-column-reset]")?.addEventListener("click", () => {
-    state.leaderboardColumnDraft = normalizeColumnLayout(leaderboardColumns().map(column => column.key), null);
-    renderLeaderboardAndRestoreColumnFocus(root => root?.querySelector?.("[data-column-reset]"));
-  });
-  details.querySelector("[data-column-apply]")?.addEventListener("click", () => {
-    state.leaderboardColumnLayout = normalizeColumnLayout(leaderboardColumns().map(column => column.key), state.leaderboardColumnDraft);
-    saveColumnLayout(state.leaderboardColumnLayout, { workspaceId: RENDER_OPTIONS?.workspace_id, storage: columnStorage() });
-    state.leaderboardColumnDraft = null;
-    renderLeaderboardAndRestoreColumnFocus(root => root?.querySelector?.(".column-control > summary"));
-  });
 }
 function agentNameFor(row) {
   return row?.agent_name || row?.adapter || "-";
@@ -312,51 +32,11 @@ function rowToolSuccessRate(row) {
   if (!Number.isFinite(calls) || !Number.isFinite(errors) || calls <= 0 || errors < 0 || errors > calls) return null;
   return (calls - errors) / calls;
 }
-function renderLeaderboard(rows = leaderboardRows()) {
-  const target = $("leaderboard");
-  if (!target) return;
-  const activeMenu = target.contains(document.activeElement) ? document.activeElement.closest(".toolbar-menu") : null;
-  const focusSelector = activeMenu ? `.${activeMenu.classList.contains("toolbar-view-menu") ? "toolbar-view-menu" : "toolbar-actions-menu"} > summary` : null;
-  const columns = displayLeaderboardColumns(rows);
-  target.innerHTML = `
-    <div class="panel-head leaderboard-panel-head">
-      <div class="leaderboard-title-stack">
-        <div class="leaderboard-heading"><h2 id="leaderboard-title">${esc(t("leaderboard", "Leaderboard"))}</h2><div data-leaderboard-status></div></div>
-        ${renderLeaderboardSearchControls()}
-      </div>
-      ${renderLeaderboardPanelControls(rows)}
-    </div>
-    ${renderDataTable({
-      tableId: "leaderboard",
-      columns,
-      rows,
-      rowKey: row => row.source_key || row.trial_key,
-      filterOptionsRows: reportRows(),
-      rowClass: row => `clickable-row ${row.source_key === state.selectedSourceKey ? "selected-row" : ""}`,
-      rowAttrs: row => `data-source-key="${esc(row.source_key)}"`,
-      rowTitle: row => row.artifact_trial_key || row.trial_key,
-    })}
-`;
-  bindLeaderboardControls();
-  if (focusSelector) target.querySelector(focusSelector)?.focus({ preventScroll: true });
-}
-function renderLeaderboardExportControls() {
-  return `<div class="leaderboard-export">
-    <details class="export-menu">
-      <summary class="export-menu-button" aria-label="${esc(t("export_options", "Export options"))}">${esc(t("export", "Export"))}</summary>
-      <div class="export-menu-panel">
-        <button type="button" data-export-kind="xlsx">${esc(t("export_xlsx_table", "Table (.xlsx)"))}</button>
-        <button type="button" data-export-kind="json">${esc(t("export_json_report", "JSON report"))}</button>
-      </div>
-    </details>
-  </div>`;
-}
 function tableControls(tableId) {
-  const controls = state.tables[tableId] || {};
+  const controls = tableAdapters.get(tableId)?.controls?.() || localControls.get(tableId);
   if (!Object.prototype.hasOwnProperty.call(controls, "sort")) controls.sort = null;
   controls.direction ||= "asc";
   controls.filters ||= {};
-  state.tables[tableId] = controls;
   return controls;
 }
 function filterableColumns(columns) {
@@ -382,14 +62,9 @@ function filterLabel(column, value) {
   return column.filterLabel ? column.filterLabel(value) : value;
 }
 function applyDataTableFilters(tableId, rows, columns) {
-  const activeColumns = filterableColumns(columns);
-  return rows.filter(row => columns.every(column => {
-    if (!activeColumns.includes(column)) return true;
-    const selected = activeFilterValues(tableId, column.key);
-    if (!selected.length) return true;
-    const values = filterValues(row, column);
-    return values.some(value => selected.includes(value));
-  }));
+  const filters = filterableColumns(columns).map(column => ({ column, selected: new Set(activeFilterValues(tableId, column.key)) }))
+    .filter(filter => filter.selected.size);
+  return rows.filter(row => filters.every(({ column, selected }) => filterValues(row, column).some(value => selected.has(value))));
 }
 function setFilterValues(tableId, key, values) {
   const controls = tableControls(tableId);
@@ -419,21 +94,6 @@ function toggleDataTableSort(tableId, key) {
   }
   controls.sort = null;
   controls.direction = "asc";
-}
-function selectedStepExists(selection) {
-  if (!selection) return true;
-  const { trialKey, stepId } = selection;
-  const metas = state.view?.trajectory_meta || [];
-  const index = metas.findIndex(meta => meta.trial_key === trialKey);
-  if (index < 0) return false;
-  const steps = (state.view?.trajectory || [])[index]?.steps || [];
-  return steps.some(step => String(step.step_id) === String(stepId));
-}
-function selectedStepVisible(rows) {
-  if (!state.selectedStep) return true;
-  const { trialKey, stepId } = state.selectedStep;
-  if (!rows.some(row => row.trial_key === trialKey)) return false;
-  return selectedStepExists({ trialKey, stepId });
 }
 function compareTableValues(left, right, type, direction) {
   const leftMissing = left === null || left === undefined || left === "" || (type === "number" && Number.isNaN(Number(left)));
@@ -486,21 +146,21 @@ function tableCellContent(html) {
 function renderDataTable({ tableId, columns, rows, rowKey = null, tableClass = "", shellClass = "", rowClass = "", rowAttrs = "", rowTitle = null, emptyText = null, filterOptionsRows = rows }) {
   const controls = tableControls(tableId);
   const headers = columns.map(column => renderTableHeader(tableId, column, controls, rows, filterOptionsRows)).join("");
-  const rowOptions = { rowClass, rowAttrs, rowTitle, rowKey };
+  const metricExtents = new Map(columns.filter(column => column.metric).map(column => [column, metricExtent(column, rows)]));
+  const rowOptions = { rowClass, rowAttrs, rowTitle, rowKey, metricExtents };
   const body = rows.length
     ? rows.map(row => renderTableRow(row, columns, rows, rowOptions)).join("")
     : `<tr><td class="table-empty" colspan="${columns.length}">${esc(emptyText || t("no_matching_rows", "No matching rows"))}</td></tr>`;
-  const classes = ["data-table", tableClass].filter(Boolean).join(" ");
-  const shellClasses = ["table-shell", shellClass].filter(Boolean).join(" ");
-  return `<div class="${esc(shellClasses)}"><div class="table-wrap"><table class="${esc(classes)}" data-table-id="${esc(tableId)}"><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div></div>`;
+  return renderTableShell({ tableId, tableClass, shellClass, head: `<tr>${headers}</tr>`, body });
+}
+function renderTableShell({ tableId = "", tableClass = "", shellClass = "", head = "", body = "" }) {
+  return `<div class="table-shell ${esc(shellClass)}"><div class="table-wrap" data-workspace-scroll><table class="data-table ${esc(tableClass)}"${tableId ? ` data-table-id="${esc(tableId)}"` : ""}>${head ? `<thead>${head}</thead>` : ""}<tbody>${body}</tbody></table></div></div>`;
 }
 function renderTableHeader(tableId, column, controls, rows = [], filterOptionsRows = rows) {
   if (column.select) return renderSelectionHeader(rows, column);
-  const catalogSort = tableId === "leaderboard";
-  const active = catalogSort
-    ? catalogSortKey(metricSortKey(state, state.catalogQuery?.sort)) === catalogSortKey(metricSortKey(state, column.key))
-    : controls.sort === column.key;
-  const direction = catalogSort ? state.catalogQuery?.direction : controls.direction;
+  const adapter = tableAdapters.get(tableId);
+  const active = adapter?.isSorted ? adapter.isSorted(column.key) : controls.sort === column.key;
+  const direction = adapter?.direction ? adapter.direction() : controls.direction;
   const mark = active ? (direction === "desc" ? "&#9660;" : "&#9650;") : "&#8597;";
   const label = column.sortable
     ? `<button class="sort-button ${active ? "active" : ""}" type="button" data-table-sort="${esc(column.key)}" title="${esc(column.description || column.label)}" aria-label="${esc(t("sort", "Sort"))} ${esc(column.label)}"><span class="sort-label">${esc(column.label)}</span><span class="sort-mark">${mark}</span></button>`
@@ -513,9 +173,7 @@ function renderTableHeader(tableId, column, controls, rows = [], filterOptionsRo
 }
 function renderFilterControl(tableId, column, rows) {
   const selected = new Set(activeFilterValues(tableId, column.key));
-  const values = tableId === "leaderboard"
-    ? leaderboardFilterOptions(column, rows)
-    : rows.flatMap(row => filterValues(row, column));
+  const values = tableAdapters.get(tableId)?.filterOptions?.(column, rows) ?? rows.flatMap(row => filterValues(row, column));
   const options = Array.from(new Set([...values, ...selected]))
     .sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" }));
   const count = selected.size;
@@ -523,11 +181,11 @@ function renderFilterControl(tableId, column, rows) {
   const optionHtml = options.length
     ? options.map(value => `<label class="filter-option"><input type="checkbox" data-filter-key="${esc(column.key)}" value="${esc(value)}" ${selected.has(value) ? "checked" : ""}><span>${esc(filterLabel(column, value))}</span></label>`).join("")
     : `<p class="filter-empty">${esc(t("no_matching_rows", "No matching rows"))}</p>`;
-  return `<details class="filter-control ${count ? "active" : ""}" name="peval-table-filter" data-filter-menu="${esc(column.key)}"><summary class="filter-button" aria-label="${esc(t("filter", "Filter"))} ${esc(column.label)}"><span class="filter-icon">&#9662;</span>${countText}</summary><div class="filter-menu"><div class="filter-menu-head"><strong>${esc(column.label)}</strong><div class="filter-menu-actions"><button class="action-button compact filter-clear" type="button" data-filter-clear="${esc(column.key)}" ${count ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button><button class="action-button compact primary filter-apply" type="button" data-filter-apply="${esc(column.key)}" disabled>${esc(t("apply", "Apply"))}</button></div></div><div class="filter-options">${optionHtml}</div></div></details>`;
+  return `<details class="filter-control ${count ? "active" : ""}" name="peval-table-filter" data-filter-menu="${esc(column.key)}"><summary class="filter-button" aria-label="${esc(t("filter", "Filter"))} ${esc(column.label)}"><span class="filter-icon">&#9662;</span>${countText}</summary><div class="filter-menu" popover="manual"><div class="filter-menu-head"><strong>${esc(column.label)}</strong><div class="filter-menu-actions"><button class="action-button compact filter-clear" type="button" data-filter-clear="${esc(column.key)}" ${count ? "" : "disabled"}>${esc(t("clear", "Clear"))}</button><button class="action-button compact primary filter-apply" type="button" data-filter-apply="${esc(column.key)}" disabled>${esc(t("apply", "Apply"))}</button></div></div><div class="filter-options">${optionHtml}</div></div></details>`;
 }
 function selectionSetForColumn(column) {
   const value = typeof column?.selectionSet === "function" ? column.selectionSet() : column?.selectionSet;
-  return value instanceof Set ? value : state.rowSelection;
+  return value instanceof Set ? value : new Set();
 }
 function selectionKeyForRow(row, column) {
   if (typeof column?.selectable === "function" && !column.selectable(row)) return "";
@@ -562,9 +220,6 @@ function renderDataSelection(row, column = selectionColumn()) {
   const ariaLabel = typeof column.rowAriaLabel === "function" ? column.rowAriaLabel(key, row) : `${t("select_row_for_export", "Select row for export")}: ${key}`;
   return `<label class="select-box"><input type="checkbox" data-table-row-select="${esc(key)}" data-table-selection-column="${esc(column.key)}" ${checked ? "checked" : ""} aria-label="${esc(ariaLabel)}"><span></span></label>`;
 }
-function renderRowSelection(row) {
-  return renderDataSelection(row, selectionColumn());
-}
 function tableOptionValue(option, row, fallback = "") {
   return typeof option === "function" ? option(row) : (option || fallback);
 }
@@ -575,14 +230,14 @@ function renderTableRow(row, columns, rows, options = {}) {
   const titleAttr = title && !String(attrs).includes("title=") ? ` title="${esc(title)}"` : "";
   const rowKey = tableOptionValue(options.rowKey, row, row?.trial_key || row?.source_key || "");
   const keyAttr = rowKey ? ` data-table-row-key="${esc(rowKey)}"` : "";
-  return `<tr class="${esc(className)}"${keyAttr}${attrs ? ` ${attrs}` : ""}${titleAttr}>${columns.map(column => renderDataCell(row, column, rows)).join("")}</tr>`;
+  return `<tr class="${esc(className)}"${keyAttr}${attrs ? ` ${attrs}` : ""}${titleAttr}>${columns.map(column => renderDataCell(row, column, rows, options.metricExtents?.get(column))).join("")}</tr>`;
 }
-function renderDataCell(row, column, rows) {
+function renderDataCell(row, column, rows, extent = undefined) {
   if (column.select) return `<td class="select-col table-value-selection" data-value-type="selection">${column.html ? column.html(row) : renderDataSelection(row, column)}</td>`;
   const className = typeof column.className === "function" ? column.className(row) : column.className;
   const valueType = tableValueType(column);
   const edit = resolveTableCellEdit(column, row);
-  const classes = [column.numeric ? "num" : "", `table-value-${valueType}`, edit ? "table-cell-editable" : "", column.metric ? metricCellShade(row, column, rows) : "", className || ""].filter(Boolean).join(" ");
+  const classes = [column.numeric ? "num" : "", `table-value-${valueType}`, edit ? "table-cell-editable" : "", column.metric ? metricCellShade(row, column, rows, extent) : "", className || ""].filter(Boolean).join(" ");
   const html = column.html ? column.html(row) : valueType === "datetime" ? renderDateTime(column.value(row)) : esc(tableText(row, column));
   const fullText = tableFullText(row, column);
   const title = column.cellTitle ? (column.cellTitle(row) || fullText) : fullText;
@@ -590,19 +245,28 @@ function renderDataCell(row, column, rows) {
   const editableAttrs = edit ? ` tabindex="0" aria-keyshortcuts="Enter"` : "";
   return `<td class="${classes}" data-table-column-key="${esc(column.key)}" data-value-type="${esc(valueType)}"${attrs ? ` ${attrs}` : ""}${title ? ` title="${esc(title)}"` : ""}${fullText ? ` aria-label="${esc(fullText)}"` : ""}${editableAttrs}><div class="table-cell-content">${html}</div></td>`;
 }
-function metricCellShade(row, column, rows) {
+function metricExtent(column, rows) {
+  let min = Infinity, max = -Infinity;
+  for (const row of rows) {
+    const value = column.value(row);
+    if (!hasMetricValue(value)) continue;
+    min = Math.min(min, Number(value)); max = Math.max(max, Number(value));
+  }
+  return { min, max };
+}
+function metricCellShade(row, column, rows, extent = metricExtent(column, rows)) {
   const value = column.value(row);
   if (!hasMetricValue(value)) return "metric-cell metric-missing";
-  const values = rows.map(item => column.value(item)).filter(hasMetricValue).map(Number);
-  if (!values.length) return "metric-cell metric-missing";
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const { min, max } = extent;
+  if (min > max) return "metric-cell metric-missing";
   if (min === max) return "metric-cell metric-shade-2";
-  const bucket = Math.max(0, Math.min(4, Math.round(((Number(value) - min) / (max - min)) * 4)));
+  const scale = Math.max(Math.abs(min), Math.abs(max));
+  const bucket = Math.max(0, Math.min(4, Math.round(((Number(value) / scale - min / scale) / (max / scale - min / scale)) * 4)));
   return `metric-cell metric-shade-${bucket}`;
 }
 function bindDataTableControls(root, options = {}) {
   if (!root) return;
+  bindToolbarMenus(root);
   const config = options || {};
   const { tableId, columns = [], rows = [], rowKey = null } = config;
   if (!tableId) return;
@@ -615,8 +279,8 @@ function bindDataTableControls(root, options = {}) {
   root.querySelectorAll("[data-table-sort]").forEach(button => {
     button.addEventListener("click", event => {
       event.stopPropagation();
-      if (tableId === "leaderboard") {
-        requestCatalogSort(button.dataset.tableSort);
+      if (tableAdapters.get(tableId)?.onSort) {
+        tableAdapters.get(tableId).onSort(button.dataset.tableSort);
         return;
       }
       toggleDataTableSort(tableId, button.dataset.tableSort);
@@ -647,9 +311,9 @@ function bindDataTableControls(root, options = {}) {
       const values = dataTableFilterDraftValues(menu);
       setFilterValues(tableId, key, values);
       if (menu) menu.open = false;
-      if (tableId === "leaderboard") {
+      if (tableAdapters.get(tableId)?.onFilter) {
         setDataTableFilterApplyDisabled(root, true);
-        const request = requestCatalogFacets();
+        const request = tableAdapters.get(tableId).onFilter();
         if (request?.finally) request.finally(() => setDataTableFilterApplyDisabled(root, false));
         return;
       }
@@ -657,6 +321,7 @@ function bindDataTableControls(root, options = {}) {
     });
   });
   root.querySelectorAll("[data-filter-menu]").forEach(menu => {
+    bindTableFilterPopup(menu, () => resetDataTableFilterDraft(menu, tableId));
     menu.addEventListener("toggle", () => resetDataTableFilterDraft(menu, tableId));
     menu.addEventListener("keydown", event => {
       if (event.key !== "Escape") return;
@@ -763,6 +428,10 @@ function tableRowKey(row, rowKey) {
   const value = typeof rowKey === "function" ? rowKey(row) : row?.[rowKey] ?? row?.trial_key ?? row?.source_key;
   return String(value ?? "");
 }
+function isTableControlEvent(event, boundary) {
+  const control = event.target?.closest?.(TABLE_CONTROL_SELECTOR);
+  return control && boundary.contains(control);
+}
 function bindTableRowActivation(node, activate) {
   if (!node.hasAttribute("tabindex")) node.setAttribute("tabindex", "0");
   const scope = node.closest("[data-table-id]") || node;
@@ -774,7 +443,7 @@ function bindTableRowActivation(node, activate) {
     for (const event of ["pointerdown", "click", "dblclick", "keydown"]) scope.addEventListener(event, cancel, true);
   }
   node.addEventListener("click", event => {
-    if (event.defaultPrevented || event.target?.closest?.(TABLE_CONTROL_SELECTOR)) return;
+    if (event.defaultPrevented || isTableControlEvent(event, node)) return;
     if (event.detail > 1) return;
     if (event.target?.closest?.(".table-cell-editable")) {
       activation.pending = setTimeout(() => {
@@ -802,7 +471,7 @@ function bindDataTableEditors(root, { tableId, columns, rows, rowKey, onChange }
     const row = rowByKey.get(cell.closest("[data-table-row-key]")?.dataset?.tableRowKey || "");
     if (!row || !resolveTableCellEdit(column, row)) return;
     cell.addEventListener("dblclick", event => {
-      if (event.target?.closest?.(TABLE_CONTROL_SELECTOR)) return;
+      if (isTableControlEvent(event, cell)) return;
       event.preventDefault();
       event.stopPropagation();
       beginTableCellEdit(cell, { tableId, column, row, onChange });
@@ -1114,91 +783,5 @@ function resetDataTableFilterDraft(menu, tableId) {
 function setDataTableFilterApplyDisabled(root, disabled) {
   root?.querySelectorAll?.("[data-filter-apply]").forEach(button => { button.disabled = disabled; });
 }
-function bindLeaderboardControls() {
-  const target = $("leaderboard");
-  if (!target) return;
-  const rows = leaderboardRows();
-  bindDataTableControls(target, {
-    tableId: "leaderboard",
-    columns: displayLeaderboardColumns(rows),
-    rows,
-    rowKey: row => row.source_key || row.trial_key,
-    onChange: () => renderComparisonPanels(),
-    onSelectionChange: () => renderComparisonPanels({ trace: false }),
-  });
-  bindServeSourceStateControls(target);
-  bindServeExportControls(target);
-  bindLeaderboardSearchControls(target);
-  bindWorkspaceReportLeaderboardControls(target);
-  bindTrialSelection(target);
-  bindLeaderboardCatalogControls(target);
-  bindLeaderboardColumnControls(target);
-}
-export {
-  activeFilterValues,
-  agentNameFor,
-  applyDataTableControls,
-  sortDataTableRows,
-  applyDataTableFilters,
-  beginTableCellEdit,
-  bindDataTableControls,
-  bindDataTableSelection,
-  bindDataTableEditors,
-  bindTableRowActivation,
-  bindLeaderboardControls,
-  bindLeaderboardColumnControls,
-  clearFilter,
-  compareTableValues,
-  configureLeaderboardDataTables,
-  currentLeaderboardColumnLayout,
-  dataTableFilterDraftValues,
-  dataTableFilterMenu,
-  displayLeaderboardColumns,
-  filterLabel,
-  filterValue,
-  filterValues,
-  filterableColumns,
-  leaderboardColumns,
-  metricCellShade,
-  normalizeTableEditValue,
-  normalizeTableListValue,
-  normalizeTableScalarListValue,
-  renderDataCell,
-  renderDataSelection,
-  renderDataTable,
-  renderFilterControl,
-  renderLeaderboard,
-  renderLeaderboardColumnControls,
-  renderLeaderboardExportControls,
-  renderRowSelection,
-  renderSelectionHeader,
-  renderTableHeader,
-  renderTableRow,
-  renderTableScalarListSuggestions,
-  renderTableSuggestions,
-  resetDataTableFilterDraft,
-  resolveTableCellEdit,
-  rowToolSuccessRate,
-  sameDataTableFilterValues,
-  selectedStepExists,
-  selectedStepVisible,
-  selectionColumn,
-  selectionKeyForRow,
-  selectionSetForColumn,
-  setDataTableFilterApplyDisabled,
-  setFilterValue,
-  setFilterValues,
-  setVisibleSelection,
-  syncDataTableSelection,
-  syncDataTableFilterDraft,
-  tableControls,
-  tableCellContent,
-  tableFullText,
-  tableOptionValue,
-  tableSortType,
-  tableText,
-  tableValueType,
-  tableValueAttributes,
-  toggleDataTableSort,
-  visibleSelectionState,
-};
+
+export { renderTableShell, configureDataTable, activeFilterValues, agentNameFor, applyDataTableControls, sortDataTableRows, applyDataTableFilters, beginTableCellEdit, bindDataTableControls, bindDataTableSelection, bindDataTableEditors, bindTableRowActivation, clearFilter, compareTableValues, dataTableFilterDraftValues, dataTableFilterMenu, filterLabel, filterValue, filterValues, filterableColumns, metricCellShade, normalizeTableEditValue, normalizeTableListValue, normalizeTableScalarListValue, renderDataCell, renderDataSelection, renderDataTable, renderFilterControl, renderSelectionHeader, renderTableHeader, renderTableRow, renderTableScalarListSuggestions, renderTableSuggestions, resetDataTableFilterDraft, resolveTableCellEdit, rowToolSuccessRate, sameDataTableFilterValues, selectionColumn, selectionKeyForRow, selectionSetForColumn, setDataTableFilterApplyDisabled, setFilterValue, setFilterValues, setVisibleSelection, syncDataTableSelection, syncDataTableFilterDraft, tableControls, tableCellContent, tableFullText, tableOptionValue, tableSortType, tableText, tableValueType, tableValueAttributes, toggleDataTableSort, visibleSelectionState };

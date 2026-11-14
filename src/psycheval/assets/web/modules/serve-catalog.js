@@ -1,9 +1,11 @@
+import { bindToolbarMenus } from "./toolbar-menu.js";
 import { metricDefinitions, selectedMetricIds } from "./metric-presentation.js";
 import { preflightHomeChange } from "./home-location.js";
 import { beginFeedback } from "./action-feedback.js";
 import { watchOperation } from "./operation-feedback.js";
 import { adminMode, esc, hasMetricValue, homeDetail, isAnalysisArtifactPath, listValue, lower, normalizeServeSourceMode, render, renderComparison, renderComparisonPanels, selectedIndex, selectedKey, state, synthesizedReportRow, t } from "./runtime.js";
-import { filterValues, renderLeaderboardColumnControls, renderLeaderboardExportControls, tableControls } from "./data-tables.js";
+import { filterValues, tableControls } from "./data-tables.js";
+import { renderLeaderboardColumnControls, renderLeaderboardExportControls } from "./leaderboard-table.js";
 import { firstUserStepSelection } from "./export.js";
 import { downloadBlob } from "./download.js";
 import { closeDetailSidebar, openDetailSidebar, requestDetailSidebarLocation } from "./detail-sidebar.js";
@@ -193,21 +195,9 @@ function bindLeaderboardCatalogControls(target) {
   bindWorkspaceViewControls(target);
   target.querySelectorAll("[data-metric-scope]").forEach(input => input.addEventListener("change", async () => {
     await loadCatalogPage({ metric_scope: input.value, page: 1 });
-    renderComparisonPanels();
     document.querySelector(".toolbar-view-menu > summary")?.focus({ preventScroll: true });
   }));
-  target.querySelectorAll(".toolbar-menu").forEach(menu => {
-    menu.addEventListener("keydown", event => {
-      if (event.key !== "Escape") return;
-      event.preventDefault(); event.stopPropagation();
-      menu.open = false; menu.querySelector("summary").focus();
-    });
-    menu.addEventListener("click", event => {
-      if (!event.target.closest(".toolbar-menu-panel button")) return;
-      menu.open = false;
-      menu.querySelector("summary").focus({ preventScroll: true });
-    }, true);
-  });
+  bindToolbarMenus(target);
   target.querySelector("[data-catalog-prev]")?.addEventListener("click", event => {
     event.stopPropagation();
     loadCatalogPage({ page: Math.max(1, Number(state.catalogQuery.page || 1) - 1) });

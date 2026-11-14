@@ -1,7 +1,7 @@
 // @ts-check
 
 import { beginNotesEdit, cancelNotesEdit, saveSelectedNotes } from "./analysis-notes.js";
-import { SUBMENU_DETAILS_SELECTOR, closeOpenSubmenus, selectedKey, state } from "./runtime.js";
+import { selectedKey, state } from "./runtime.js";
 import { closeAllSidebars, closeTopmostSidebar } from "./sidebar.js";
 import { bindWorkspaceViewDialog, closeWorkspaceViewSaveDialog } from "./workspace-views.js";
 
@@ -24,9 +24,6 @@ function bindHomeControls() {
     }
   });
   document.addEventListener("click", event => {
-    closeOpenSubmenus(/** @type {Element | null} */ (event.target)?.closest?.(SUBMENU_DETAILS_SELECTOR) || null);
-  }, true);
-  document.addEventListener("click", event => {
     const target = /** @type {Element | null} */ (event.target);
     const edit = target?.closest?.("[data-notes-edit]");
     if (edit) {
@@ -46,7 +43,6 @@ function bindHomeControls() {
       saveSelectedNotes(save);
     }
   });
-  window.addEventListener("resize", () => state.timelineChart?.resize?.());
   bindWorkspaceViewDialog();
 }
 

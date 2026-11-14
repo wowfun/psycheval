@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { installBrowserDom } from "./support/browser.js";
 import { encodeWorkspaceLocation, decodeWorkspaceLocation, HOME_QUERY } from "../../src/psycheval/assets/web/app/workspace-location.js";
-import { normalizeColumnLayout } from "../../src/psycheval/assets/web/modules/leaderboard-columns.js";
+import { normalizeColumnLayout } from "../../src/psycheval/assets/web/modules/table-columns.js";
 
 const browser = installBrowserDom('<script id="peval-render-options" type="application/json">{}</script><section id="leaderboard-summary"></section>');
 const { state, agentStepCount } = await import("../../src/psycheval/assets/web/modules/runtime.js");
@@ -35,7 +35,7 @@ test("model summary labels show DSH model names without changing group identity"
   assert.equal(state.leaderboardSummary.summary.groups[0].key,key);
   assert.equal(state.leaderboardSummary.summary.groups[0].label,key);
 });
-const { radarContext } = await import("../../src/psycheval/assets/web/modules/leaderboard-radar.js");
+const { radarContext } = await import("../../src/psycheval/assets/web/modules/summary-radar.js");
 const base = JSON.parse(readFileSync(new URL("./support/metrics.json", import.meta.url), "utf8"));
 const extra = { key: "atif.extra:Energy", column_key: "atif.extra:Energy", label: "长中文能耗指标", unit: "Wh", type: "number", direction: "neutral", default: false };
 function reset() {
@@ -136,7 +136,7 @@ test("registry churn keeps metric choices and column preferences", () => {
   summary.renderLeaderboardSummary();
   assert.match(document.querySelector(".summary-metric-control").textContent, /Currently unavailable/);
   let layout = normalizeColumnLayout([extra.key, "reward"], { order: [extra.key, "reward"], visibility: { [extra.key]: "show" } });
-  layout = normalizeColumnLayout(["reward"], layout);
+  layout = normalizeColumnLayout(["reward"], layout, { retainUnknown: key => key === extra.key });
   layout = normalizeColumnLayout(["reward", extra.key], layout);
   assert.deepEqual(layout.order, [extra.key, "reward"]); assert.equal(layout.visibility[extra.key], "show");
   state.catalogPage.metric_descriptions = [...base, extra]; summary.renderLeaderboardSummary();

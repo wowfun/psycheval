@@ -1,7 +1,7 @@
 import { beginFeedback } from "./action-feedback.js";
 import { offerRefresh } from "./operation-feedback.js";
 import { $, RENDER_OPTIONS, adminMode, closeOpenSubmenus, esc, fmtNum, listValue, normalizeServeSourceMode, state, statusLabel, t } from "./runtime.js";
-import { applyDataTableControls, bindDataTableControls, bindTableRowActivation, renderDataTable, selectionColumn, tableCellContent, tableControls, tableValueAttributes } from "./data-tables.js";
+import { applyDataTableControls, bindDataTableControls, bindTableRowActivation, renderDataTable, renderTableShell, selectionColumn, tableCellContent, tableControls, tableValueAttributes } from "./data-tables.js";
 import { leaderboardSummaryGroupHeading, leaderboardSummaryGroupUnit, leaderboardSummaryStatistics, leaderboardSummaryValue, summaryNumber, visibleLeaderboardSummaryDefinitions } from "./leaderboard-summary.js";
 import { serveApi } from "./serve-effects.js";
 import { loadCatalogPage, serveDownload } from "./serve-catalog.js";
@@ -32,7 +32,6 @@ function workspaceViewSurface() {
         restoreFocus: options.restoreFocus,
         render: options.reason === "dismiss",
       }),
-      onResize: () => state.timelineChart?.resize?.(),
     });
   }
   return workspaceViewController;
@@ -978,14 +977,13 @@ function renderWorkspaceViewTable(summary, groupBy) {
   const groups = listValue(summary.groups);
   const statistics = leaderboardSummaryStatistics();
   const groupHeading = leaderboardSummaryGroupHeading(groupBy);
-  return `<div class="table-shell leaderboard-summary-shell workspace-view-table-shell"><div class="table-wrap"><table class="data-table leaderboard-summary-table workspace-view-table">
-    <thead><tr><th ${tableValueAttributes("identity", t("summary_metric", "Metric"))}>${tableCellContent(esc(t("summary_metric", "Metric")))}</th><th ${tableValueAttributes("identity", groupHeading)}>${tableCellContent(esc(groupHeading))}</th><th ${tableValueAttributes("number", t("summary_count", "Count"), "num")}>${tableCellContent(esc(t("summary_count", "Count")))}</th>${statistics.map(statistic => `<th ${tableValueAttributes("number", statistic.label, "num")}>${tableCellContent(esc(statistic.label))}</th>`).join("")}</tr></thead>
-    <tbody>${visibleLeaderboardSummaryDefinitions(groups, true).map(definition => groups.map((group, index) => {
+  return renderTableShell({ tableClass: "leaderboard-summary-table workspace-view-table", shellClass: "leaderboard-summary-shell workspace-view-table-shell",
+    head: `<tr><th ${tableValueAttributes("identity", t("summary_metric", "Metric"))}>${tableCellContent(esc(t("summary_metric", "Metric")))}</th><th ${tableValueAttributes("identity", groupHeading)}>${tableCellContent(esc(groupHeading))}</th><th ${tableValueAttributes("number", t("summary_count", "Count"), "num")}>${tableCellContent(esc(t("summary_count", "Count")))}</th>${statistics.map(statistic => `<th ${tableValueAttributes("number", statistic.label, "num")}>${tableCellContent(esc(statistic.label))}</th>`).join("")}</tr>`,
+    body: `${visibleLeaderboardSummaryDefinitions(groups, true).map(definition => groups.map((group, index) => {
       const metric = listValue(group.metrics).find(item => item?.key === definition.key);
       const groupLabel = workspaceViewGroupLabel(group, groupBy);
       return `<tr${index === 0 ? " data-summary-group-start" : ""}>${index === 0 ? `<th ${tableValueAttributes("identity", definition.label, "summary-metric-cell")} scope="rowgroup" rowspan="${groups.length}">${tableCellContent(esc(definition.label))}</th>` : ""}<th ${tableValueAttributes("identity", groupLabel, "summary-group-cell")} scope="row">${tableCellContent(`<strong>${esc(groupLabel)}</strong><span>n=${fmtNum(group.count)}</span>`)}</th><td ${tableValueAttributes("number", fmtNum(metric?.count), "num")}>${tableCellContent(fmtNum(metric?.count))}</td>${statistics.map(statistic => { const value = leaderboardSummaryValue(metric, statistic.value(metric)); return `<td ${tableValueAttributes("number", value, "num")}>${tableCellContent(esc(value))}</td>`; }).join("")}</tr>`;
-    }).join("")).join("")}</tbody>
-  </table></div></div>`;
+    }).join("")).join("")}` });
 }
 
 function toggleWorkspaceViewTable(id) {

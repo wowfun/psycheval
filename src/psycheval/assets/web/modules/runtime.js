@@ -1,8 +1,9 @@
+import { SUBMENU_DETAILS_SELECTOR, OPEN_SUBMENU_DETAILS_SELECTOR, closeOpenSubmenus } from "./toolbar-menu.js";
 import { SUMMARY_DEFAULTS } from "../app/workspace-view-contract.js";
-import { configureLeaderboardDataTables, renderLeaderboard } from "./data-tables.js";
+import { configureLeaderboardDataTables, renderLeaderboard } from "./leaderboard-table.js";
 import { bindServeExportControls, bindTrialSelection } from "./export.js";
 import { renderLeaderboardSummary } from "./leaderboard-summary.js";
-import { renderTrace, renderTrajectoryOverview } from "./trajectory-trace.js";
+import { renderTrajectoryOverview } from "./trajectory-trace.js";
 import { renderDetailSidebar } from "./detail-sidebar.js";
 import { bindHomeControls } from "./home-controls.js";
 import { bindLeaderboardCatalogControls, catalogSortKey, filterOptions, leaderboardRows, metaFor, renderLeaderboardPanelControls, renderLeaderboardSearchControls, reportRows, requestCatalogFacets, requestCatalogSort, rowAnalysisCount, sourceForTrialIndex, sourceForTrialKey, syncSelectionWithVisibleRows, trajectoryFor } from "./serve-catalog.js";
@@ -35,37 +36,37 @@ Object.defineProperty(state, "workspaceReports", {
 });
 configureLeaderboardDataTables({
   state,
-  renderComparisonPanels: (...args) => renderComparisonPanels(...args),
-  renderReadOnlySourceCategory: (...args) => renderReadOnlySourceCategory(...args),
-  renderReadOnlySourceTags: (...args) => renderReadOnlySourceTags(...args),
-  renderTaskAlias: (...args) => renderTaskAlias(...args),
-  sessionAliasValue: (...args) => sessionAliasValue(...args),
-  sourceCategoryEditValue: (...args) => sourceCategoryEditValue(...args),
-  sourceCategoryFor: (...args) => sourceCategoryFor(...args),
-  sourceCategoryValue: (...args) => sourceCategoryValue(...args),
-  sourceIdentityFor: (...args) => sourceIdentityFor(...args),
-  sourceTagsEditValue: (...args) => sourceTagsEditValue(...args),
-  sourceTagsFor: (...args) => sourceTagsFor(...args),
-  sourceTagsValue: (...args) => sourceTagsValue(...args),
-  bindServeExportControls: (...args) => bindServeExportControls(...args),
-  bindTrialSelection: (...args) => bindTrialSelection(...args),
-  bindServeSourceStateControls: (...args) => bindServeSourceStateControls(...args),
-  bindLeaderboardSearchControls: (...args) => bindLeaderboardSearchControls(...args),
-  commitSourceCellEdit: (...args) => commitSourceCellEdit(...args),
-  existingSourceCategoryOptions: (...args) => existingSourceCategoryOptions(...args),
-  existingSourceTagOptions: (...args) => existingSourceTagOptions(...args),
-  bindLeaderboardCatalogControls: (...args) => bindLeaderboardCatalogControls(...args),
-  catalogSortKey: (...args) => catalogSortKey(...args),
-  filterOptions: (...args) => filterOptions(...args),
-  leaderboardRows: (...args) => leaderboardRows(...args),
-  renderLeaderboardPanelControls: (...args) => renderLeaderboardPanelControls(...args),
-  renderLeaderboardSearchControls: (...args) => renderLeaderboardSearchControls(...args),
-  reportRows: (...args) => reportRows(...args),
-  requestCatalogFacets: (...args) => requestCatalogFacets(...args),
-  requestCatalogSort: (...args) => requestCatalogSort(...args),
-  rowAnalysisCount: (...args) => rowAnalysisCount(...args),
-  bindWorkspaceReportLeaderboardControls: (...args) => bindWorkspaceReportLeaderboardControls(...args),
-  workspaceReportLeaderboardColumn: (...args) => workspaceReportLeaderboardColumn(...args),
+  renderComparisonPanels,
+  renderReadOnlySourceCategory,
+  renderReadOnlySourceTags,
+  renderTaskAlias,
+  sessionAliasValue,
+  sourceCategoryEditValue,
+  sourceCategoryFor,
+  sourceCategoryValue,
+  sourceIdentityFor,
+  sourceTagsEditValue,
+  sourceTagsFor,
+  sourceTagsValue,
+  bindServeExportControls,
+  bindTrialSelection,
+  bindServeSourceStateControls,
+  bindLeaderboardSearchControls,
+  commitSourceCellEdit,
+  existingSourceCategoryOptions,
+  existingSourceTagOptions,
+  bindLeaderboardCatalogControls,
+  catalogSortKey,
+  filterOptions,
+  leaderboardRows,
+  renderLeaderboardPanelControls,
+  renderLeaderboardSearchControls,
+  reportRows,
+  requestCatalogFacets,
+  requestCatalogSort,
+  rowAnalysisCount,
+  bindWorkspaceReportLeaderboardControls,
+  workspaceReportLeaderboardColumn,
 });
 state.leaderboardSummaryChartType = SUMMARY_DEFAULTS.chart_type;
 state.leaderboardSummaryMetrics = null;
@@ -85,7 +86,6 @@ state.leaderboardSummaryRequestKey = null;
 state.leaderboardSummaryRequestVersion = 0;
 state.leaderboardSummaryRequestPromise = null;
 state.leaderboardSummaryCache = new Map();
-const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.column-control,.toolbar-menu";
 state.sharedViewSnapshots = [];
 state.homeLocationTarget = {};
 const homeDetail = createHomeDetailController({
@@ -93,12 +93,6 @@ const homeDetail = createHomeDetailController({
   write: target => { state.homeLocationTarget = target; },
   notify: kind => workspaceLocationChanged("home", kind),
 });
-const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.column-control[open],.toolbar-menu[open]";
-function closeOpenSubmenus(except = null) {
-  document.querySelectorAll(OPEN_SUBMENU_DETAILS_SELECTOR).forEach(details => {
-    if (details !== except) details.open = false;
-  });
-}
 function synthesizedReportRow(trajectory, meta, index = -1) {
   const metrics = trajectory?.final_metrics || {};
   const totalToolCalls = finalMetric(metrics, "total_tool_calls");

@@ -13,14 +13,46 @@ const browser = installBrowserDom(`
   <aside id="workspace-views" hidden></aside>
 `);
 
+const leaderboard = await import("../../src/psycheval/assets/web/modules/leaderboard-table.js");
 const tables = await import("../../src/psycheval/assets/web/modules/data-tables.js");
+
+test("Leaderboard configuration rejects misspelled dependencies", () => {
+  assert.throws(() => leaderboard.configureLeaderboardDataTables({ filterOptionz: () => [] }), /filterOptionz/);
+  assert.throws(() => leaderboard.configureLeaderboardDataTables({ state: {} }), /Missing or invalid Leaderboard dependency: renderComparisonPanels/);
+});
+
+test("recent presentation state retains revisited identities and evicts older ones", async () => {
+  const { createRecentState } = await import("../../src/psycheval/assets/web/modules/recent-state.js");
+  const recent = createRecentState(2);
+  recent.get("a").open = true;
+  recent.get("b").open = true;
+  assert.equal(recent.get("a").open, true);
+  recent.get("c");
+  assert.deepEqual(recent.get("b"), {});
+});
+
+test("metric shading scales linearly and recomputes ranges after data changes", () => {
+  let reads = 0;
+  const column = { key: "value", label: "Value", metric: true, value: row => { reads++; return row.value; } };
+  const rows = Array.from({ length: 100 }, (_, value) => ({ value }));
+  const root = document.createElement("div");
+  root.innerHTML = tables.renderDataTable({ tableId: "metric-cost", columns: [column], rows });
+  assert.ok(reads <= rows.length * 6, `expected linear value reads, got ${reads}`);
+  assert.match(root.querySelector("tbody td").className, /metric-shade-0/);
+  assert.match(root.querySelector("tbody tr:last-child td").className, /metric-shade-4/);
+  for (const row of rows) row.value = 5;
+  root.innerHTML = tables.renderDataTable({ tableId: "metric-cost", columns: [column], rows });
+  assert.ok([...root.querySelectorAll("tbody td")].every(cell => cell.classList.contains("metric-shade-2")));
+  root.innerHTML = tables.renderDataTable({ tableId: "metric-cost", columns: [column], rows: [{ value: -1e308 }, { value: 0 }, { value: 1e308 }, { value: null }] });
+  assert.deepEqual([...root.querySelectorAll("tbody td")].map(cell => [...cell.classList].find(name => /^metric-(shade|missing)/.test(name))), ["metric-shade-0", "metric-shade-2", "metric-shade-4", "metric-missing"]);
+});
 
 test("DSH model labels omit the encoded selector while filters keep its exact ID", async () => {
   const {modelDisplayName} = await import("../../src/psycheval/assets/web/modules/shared.js");
   const raw = '["mimo","mimo-v2.6-flash"]';
   assert.equal(modelDisplayName(raw),"mimo-v2.6-flash");
   for (const value of ["mimo/model#high","custom-local:model",'["provider"]','["provider",null]',"[broken",undefined]) assert.equal(modelDisplayName(value),value);
-  const column = tables.leaderboardColumns().find(item=>item.key === "model");
+  const column = leaderboard.leaderboardColumns().find(item=>item.key === "model");
   const row = {model:raw,agent_name:"dsh"};
   assert.equal(column.value(row),raw);
   assert.equal(column.format(column.value(row)),"mimo-v2.6-flash");
@@ -53,7 +85,7 @@ test.after(() => browser.cleanup());
 
 test("metric descriptions remain visible and associated with keyboard controls", () => {
   const root = document.getElementById("table-root");
-  root.innerHTML = tables.renderLeaderboardColumnControls([]);
+  root.innerHTML = leaderboard.renderLeaderboardColumnControls([]);
   const choice = root.querySelector('[data-column-visible="agent_steps"]');
   const hint = document.getElementById(choice.getAttribute("aria-describedby"));
   assert.match(hint.textContent, /Historical ATIF/);
@@ -64,7 +96,7 @@ test("metric descriptions remain visible and associated with keyboard controls",
 
 test("approximate Last Turn End keeps its source hint and timezone-aware timestamp", async () => {
   const dates = await import("../../src/psycheval/assets/web/modules/date-time.js");
-  const column = tables.leaderboardColumns().find(column => column.key === "finished_at_ms");
+  const column = leaderboard.leaderboardColumns().find(column => column.key === "finished_at_ms");
   const root = document.getElementById("table-root");
   dates.setDisplayTimezone("UTC");
   try {
@@ -88,7 +120,7 @@ test("approximate Last Turn End keeps its source hint and timezone-aware timesta
 test("Notes cells use their catalog row independently of the selected detail", () => {
   const previousView = runtime.state.view;
   try {
-    const column = tables.leaderboardColumns().find(column => column.key === "notes");
+    const column = leaderboard.leaderboardColumns().find(column => column.key === "notes");
     const first = { source_key: "cell-first", trial_key: "cell-first", artifact_trial_key: "trial-first", notes_markdown: "中文备注\n\n **first**\tline" };
     const second = { source_key: "cell-second", trial_key: "cell-second", artifact_trial_key: "trial-second", notes_markdown: 'Second <script>alert("x")</script> & note' };
     for (const view of [null, { annotations: { notes: [{ trial_key: "trial-first", markdown: "Unrelated detail" }] } }]) {
@@ -115,7 +147,7 @@ test("Dataset leads existing layouts and uses query-wide presence and server fac
   const previousLayout = runtime.state.leaderboardColumnLayout;
   const previousPage = runtime.state.catalogPage;
   try {
-    const columns = tables.leaderboardColumns();
+    const columns = leaderboard.leaderboardColumns();
     const dataset = columns[0];
     assert.equal(dataset.key, "dataset_id");
     assert.equal(dataset.edit, undefined);
@@ -129,29 +161,30 @@ test("Dataset leads existing layouts and uses query-wide presence and server fac
       column_presence: { dataset_id: 105 },
       facets: { datasets: [{ value: "alpha", count: 105 }, { value: "beta", count: 2 }] },
     };
-    assert.deepEqual(tables.displayLeaderboardColumns([{}]).slice(0, 2).map(column => column.key), ["__select", "dataset_id"]);
-    assert.deepEqual(tables.currentLeaderboardColumnLayout().order.slice(1), columns.slice(1).map(column => column.key).reverse());
+    assert.deepEqual(leaderboard.displayLeaderboardColumns([{}]).slice(0, 2).map(column => column.key), ["__select", "dataset_id"]);
+    assert.deepEqual(leaderboard.currentLeaderboardColumnLayout().order.slice(1), columns.slice(1).map(column => column.key).reverse());
     assert.deepEqual(catalog.filterOptions(dataset, [{}]), ["alpha", "beta"]);
     assert.equal(catalog.catalogSortKey(dataset.key), "dataset");
     runtime.state.catalogPage.column_presence.dataset_id = 0;
-    assert.equal(tables.displayLeaderboardColumns([{}]).some(column => column.key === "dataset_id"), false);
+    assert.equal(leaderboard.displayLeaderboardColumns([{}]).some(column => column.key === "dataset_id"), false);
     runtime.state.leaderboardColumnLayout.visibility.dataset_id = "show";
-    assert.equal(tables.displayLeaderboardColumns([{}])[1].key, "dataset_id");
+    assert.equal(leaderboard.displayLeaderboardColumns([{}])[1].key, "dataset_id");
   } finally {
     runtime.state.leaderboardColumnLayout = previousLayout;
     runtime.state.catalogPage = previousPage;
   }
 });
 
-test("absolute timestamps share the configured timezone across Leaderboard, Harbor evidence, and timeline", () => {
+test("absolute timestamps share the configured timezone across Leaderboard, phase timing, and timeline", async () => {
   const previousTimezone = process.env.TZ;
   process.env.TZ = "Asia/Shanghai";
   try {
     const instant = Date.parse("2026-08-12T00:00:02Z");
-    const finishedAt = tables.leaderboardColumns().find(column => column.key === "finished_at_ms");
+    const finishedAt = leaderboard.leaderboardColumns().find(column => column.key === "finished_at_ms");
     assert.equal(tables.tableText({ finished_at_ms: instant }, finishedAt), "2026-08-12 00:00:02.000 +00:00");
 
-    const evidence = selected.renderHarborEvidence({
+    const { renderPhaseTiming } = await import("../../src/psycheval/assets/web/modules/timeline-shell.js");
+    const evidence = renderPhaseTiming({
       harbor_provenance: { result_id: "result-1" },
       evaluation: {
         phase_timing: {
@@ -167,8 +200,8 @@ test("absolute timestamps share the configured timezone across Leaderboard, Harb
         },
       },
     });
-    assert.match(evidence.replace(/<[^>]+>/g, ""), /6\.0s · 2026-08-12 00:00:02\.000 \+00:00 → 2026-08-12 00:00:08\.000 \+00:00/);
-    assert.match(evidence, /not-a-timestamp → -/);
+    assert.match(evidence.replace(/<[^>]+>/g, ""), /6\.0s2026-08-12 00:00:02\.000 \+00:00 → 2026-08-12 00:00:08\.000 \+00:00/);
+    assert.match(evidence, /not-a-timestamp/);
 
     const start = timeline.timelineDetailColumns({ active_total_ms: 1 })
       .find(column => column.key === "wall_start_ms");
@@ -317,7 +350,7 @@ test("#Analysis counts Harbor and workspace origins without double-counting over
     assert.equal(catalog.rowAnalysisCount({ trial_key: "none" }), 0);
     assert.equal(catalog.rowAnalysisCount({ analysis_count: 8 }), 2);
 
-    const column = tables.leaderboardColumns().find(item => item.key === "analysis_count");
+    const column = leaderboard.leaderboardColumns().find(item => item.key === "analysis_count");
     assert.equal(column.label, "#Analysis");
     assert.equal(column.valueType, "number");
     assert.equal(column.value({ trial_key: "combined" }), 2);
@@ -348,7 +381,7 @@ test("Harbor Task display merges derived evidence without changing editable over
   assert.match(tagsHtml, /source-tag-chip derived/);
   assert.match(tagsHtml, /source-tag-chip custom/);
 
-  const columns = tables.leaderboardColumns();
+  const columns = leaderboard.leaderboardColumns();
   assert.equal(columns.at(-1)?.key, "session_id");
   const jobIndex = columns.findIndex(column => column.key === "job_name");
   const taskIndex = columns.findIndex(column => column.key === "task_name");
@@ -367,28 +400,29 @@ test("Harbor Task display merges derived evidence without changing editable over
     "Reward",
   );
 
-  const evidence = selected.renderHarborEvidence({
+  const evidence = selected.renderTrialInfo({}, {
     ...row,
     trial_name: "trial-name",
     harbor_provenance: { result_id: "result-1", task_digest: "sha256:old" },
     task_metadata: { status: "digest_mismatch", live: true, name: row.task_name, description: "Live description", live_digest: "sha256:new", keywords: row.task_keywords },
     evaluation: { phase_timing: { verifier: { duration_ms: 1000 } } },
   });
-  assert.match(evidence, /Harbor Evidence/);
-  assert.match(evidence, /digest_mismatch/);
+  assert.match(evidence, /Recorded provenance/);
+  assert.doesNotMatch(evidence, /digest_mismatch/);
   assert.match(evidence, /result-1/);
-  assert.match(evidence, /web-search/);
-  assert.match(evidence, /Live description/);
+  assert.doesNotMatch(evidence, /web-search/);
+  assert.doesNotMatch(evidence, /Live description/);
 
-  const refEvidence = selected.renderHarborEvidence({
+  const refEvidence = selected.renderTrialInfo({}, {
     ...row,
     harbor_provenance: { task_digest: "sha256:package-ref", task_digest_source: "config.ref" },
     task_metadata: { status: "resolved", live_digest: "sha256:local", digest_matches: null, digest_comparison: "not_comparable" },
   });
-  assert.match(refEvidence, /not comparable/);
+  assert.match(refEvidence, /sha256:package-ref/);
+  assert.doesNotMatch(refEvidence, /not comparable|sha256:local/);
 });
 
-test("Harbor and workspace Markdown render as ordered source blocks with legacy fallback", () => {
+test("Info preserves structured findings without repeating Markdown report readers", () => {
   const previousView = runtime.state.view;
   try {
     runtime.state.view = {
@@ -418,12 +452,7 @@ test("Harbor and workspace Markdown render as ordered source blocks with legacy 
       },
     };
     const combined = analysisRendering.renderSelectedAnalysis("trial-analysis");
-    assert.ok(combined.indexOf("Harbor Trial analysis") < combined.indexOf("Workspace analysis"));
-    assert.match(combined, /Harbor review/);
-    assert.match(combined, /Workspace review/);
-    assert.match(combined, /artifacts\/logs\/analysis\.md/);
-    assert.match(combined, /harbor\/mount\/job\/trial\/analysis\.md/);
-    assert.doesNotMatch(combined, /hidden\.md/);
+    assert.doesNotMatch(combined, /Harbor review|Workspace review|analysis\.md|hidden\.md/);
     assert.match(combined, /Structured finding remains/);
 
     runtime.state.view.annotations.analysis = [{
@@ -432,7 +461,7 @@ test("Harbor and workspace Markdown render as ordered source blocks with legacy 
       md_report: "# Legacy review",
     }];
     const legacy = analysisRendering.renderSelectedAnalysis("trial-analysis");
-    assert.match(legacy, /Legacy review/);
+    assert.equal(legacy, "");
     assert.doesNotMatch(legacy, /Harbor Trial analysis|Workspace analysis/);
 
     runtime.state.view.annotations.analysis = [{
@@ -638,6 +667,25 @@ test("a second pointer press cancels row activation before release", context => 
   cell.click();
   context.mock.timers.tick(250);
   assert.equal(activated, 1);
+});
+
+test("tables inside disclosures activate rows and edit cells while isolating controls inside the row", () => {
+  const root = document.createElement("details"); root.open = true; document.body.append(root);
+  const columns = [{ key: "name", label: "Name", value: row => row.name, edit: { commit() {} } },
+    { key: "action", label: "Action", value: () => "Action", html: () => '<button>Action</button>' }];
+  const rows = [{ key: "row", name: "Before" }];
+  root.innerHTML = tables.renderDataTable({ tableId: "nested-disclosure", rows, columns, rowKey: row => row.key });
+  tables.bindDataTableControls(root, { tableId: "nested-disclosure", rows, columns, rowKey: row => row.key });
+  let activated = 0;
+  const row = root.querySelector("tbody tr");
+  tables.bindTableRowActivation(row, () => activated++);
+  row.click(); assert.equal(activated, 1);
+  row.querySelector("button").click(); assert.equal(activated, 1);
+  const cell = row.querySelector('[data-table-column-key="name"]');
+  cell.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true }));
+  assert.ok(cell.querySelector("[data-table-cell-editor]"));
+  cell.querySelector("input").click(); assert.equal(activated, 1);
+  root.remove();
 });
 
 test("row keyboard activation is immediate and leaves editors and controls independent", () => {
@@ -855,7 +903,7 @@ test("saved views close and reopen without losing independent scroll state", asy
   runtime.state.workspaceViewSummaries = [{ name: "One", matched_count: 0, groups: [] }];
   runtime.state.workspaceViewsLoaded = true;
   runtime.state.workspaceViewsClosed = false;
-  tables.renderLeaderboard();
+  leaderboard.renderLeaderboard();
   views.renderWorkspaceViewRail();
 
   const resize = document.querySelector("#workspace-views [data-sidebar-resize]");
@@ -946,7 +994,7 @@ test("Leaderboard and saved-view adapters keep persistence behind the shared edi
   };
   window.fetch = globalThis.fetch;
 
-  const leaderboardColumns = tables.leaderboardColumns();
+  const leaderboardColumns = leaderboard.leaderboardColumns();
   const leaderboardTags = leaderboardColumns.find(column => column.key === "source_tags");
   const leaderboardCategory = leaderboardColumns.find(column => column.key === "source_category");
   assert.deepEqual(leaderboardColumns.slice(0, 3).map(column => column.key), ["dataset_id", "source_category", "source_tags"]);

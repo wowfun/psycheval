@@ -1,4 +1,5 @@
 // @ts-check
+import { renderDataTable, bindTableRowActivation } from "./data-tables.js";
 import { beginFeedback } from "./action-feedback.js";
 import { renderDateTime } from "./date-time.js";
 import { serveApi } from "./http.js";
@@ -184,11 +185,18 @@ function renderReportManagerPage() {
   const inventory = document.querySelector("[data-report-inventory]");
   if (!inventory) return;
   inventory.setAttribute("aria-busy", String(store.loading));
-  inventory.innerHTML = `<table class="report-library-grid"><thead><tr>${[t("report_name", "Report"), t("report_format", "Format"), t("report_associations", "Associations"), t("report_updated", "Updated")].map(label => `<th scope="col">${esc(label)}</th>`).join("")}</tr></thead><tbody>${store.items.map(report => `<tr class="${report.report_ref === store.activeRef ? "selected" : ""}" data-report-row="${esc(report.report_ref)}">
-    <td><button class="report-inventory-select" type="button" data-report-select="${esc(report.report_ref)}">${esc(report.title)}</button>${report.archived ? ` <span class="report-archived">${esc(t("report_state_archived", "Archived"))}</span>` : ""}</td>
-    <td>${esc(report.format.toUpperCase())}</td>
-    <td title="${esc(report.associations.map(item => `${kindLabel(item.kind)}: ${item.label}`).join("; "))}">${esc(report.associations.map(item => item.label).join(" · ") || t("report_unassociated", "Unassociated"))}</td>
-    <td>${renderDateTime(report.updated_at_ms)}</td></tr>`).join("")}</tbody></table>${store.items.length ? "" : `<p class="report-manager-empty">${esc(store.loading ? t("loading", "Loading") : t("report_no_reports", "No reports found"))}</p>`}`;
+  const columns = [
+    { key: "title", label: t("report_name", "Report"), value: report => report.title, html: report => `<button class="report-inventory-select" type="button" data-report-select="${esc(report.report_ref)}">${esc(report.title)}</button>${report.archived ? ` <span class="report-archived">${esc(t("report_state_archived", "Archived"))}</span>` : ""}` },
+    { key: "format", label: t("report_format", "Format"), value: report => report.format.toUpperCase() },
+    { key: "associations", label: t("report_associations", "Associations"), value: report => report.associations.map(item => item.label).join(" · ") || t("report_unassociated", "Unassociated"), cellTitle: report => report.associations.map(item => `${kindLabel(item.kind)}: ${item.label}`).join("; ") },
+    { key: "updated_at_ms", label: t("report_updated", "Updated"), valueType: "datetime", value: report => report.updated_at_ms, html: report => renderDateTime(report.updated_at_ms) },
+  ];
+  inventory.innerHTML = renderDataTable({ tableId: "reports", tableClass: "report-library-grid", columns, rows: store.items,
+    rowKey: report => report.report_ref, rowClass: report => `clickable-row ${report.report_ref === store.activeRef ? "selected-row" : ""}`,
+    rowAttrs: report => `tabindex="0" data-report-row="${esc(report.report_ref)}"`,
+    emptyText: store.loading ? t("loading", "Loading") : t("report_no_reports", "No reports found") });
+  const reportRows = /** @type {NodeListOf<HTMLTableRowElement>} */ (inventory.querySelectorAll("tr[data-report-row]"));
+  reportRows.forEach(row => bindTableRowActivation(row, () => openReportPreview(row.dataset.reportRow, { opener: row })));
   const pagination = document.querySelector("[data-report-pagination]");
   if (pagination) pagination.innerHTML = `<button class="action-button" type="button" data-report-prev ${store.page <= 1 ? "disabled" : ""} aria-label="${esc(t("previous", "Previous"))}">‹</button><span>${store.page} / ${Math.max(1, Math.ceil(store.total / store.pageSize))} · ${store.total}</span><button class="action-button" type="button" data-report-next ${store.page * store.pageSize >= store.total ? "disabled" : ""} aria-label="${esc(t("next", "Next"))}">›</button>`;
   document.querySelector("[data-report-import]")?.toggleAttribute("disabled", store.importing);
@@ -390,7 +398,7 @@ async function deleteReport() {
 
 function onClick(event) {
   const target = event.target;
-  const select = target.closest("[data-report-select],[data-report-row]");
+  const select = target.closest("[data-report-select]");
   if (select) openReportPreview(select.getAttribute("data-report-select") || select.getAttribute("data-report-row"), { opener: target });
   const tab = target.closest("[data-report-tab]");
   if (tab) { store.tab = tab.getAttribute("data-report-tab"); store.locationTarget = { report: store.activeRef, tab: store.tab }; renderDetail(); workspaceLocationChanged("reports"); }

@@ -9,7 +9,7 @@ import {
   presenceForColumns,
   resolveColumns,
   saveColumnLayout,
-} from "../../src/psycheval/assets/web/modules/leaderboard-columns.js";
+} from "../../src/psycheval/assets/web/modules/table-columns.js";
 
 const columns = [
   { key: "session", value: row => row.session },
@@ -109,6 +109,10 @@ test("moves columns and persists a workspace-scoped versioned layout", () => {
   );
   assert.deepEqual(
     loadColumnLayout(["session", "ttft", "cache"], { workspaceId: "workspace-b", storage }),
+    normalizeColumnLayout(["session", "ttft", "cache"], null),
+  );
+  assert.deepEqual(
+    loadColumnLayout(["session", "ttft", "cache"], { workspaceId: "workspace-a", tableId: "datasets", storage }),
     normalizeColumnLayout(["session", "ttft", "cache"], null),
   );
 });

@@ -30,7 +30,6 @@
 .toolbar-menu { position:relative; }
 .toolbar-menu > summary { display:flex; align-items:center; gap:8px; list-style:none; }
 .toolbar-menu > summary::-webkit-details-marker { display:none; }
-.toolbar-menu > summary::after { content:"⌄"; font-size:14px; }
 .toolbar-menu[open] > summary { color:var(--ink); border-color:var(--focus); background:var(--surface-2); }
 .toolbar-menu-panel {
   position:absolute; right:0; top:calc(100% + 7px); z-index:30;
@@ -55,7 +54,7 @@
 .toolbar-menu-panel .workspace-view-controls { display:block; }
 .toolbar-menu-panel :focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
 @media(max-width:600px) {
-  .toolbar-menu-panel, .toolbar-view-menu .toolbar-menu-panel { position:fixed; left:14px; right:14px; top:96px; width:auto; }
+  .toolbar-menu-panel, .toolbar-view-menu .toolbar-menu-panel { position:fixed; left:14px; right:14px; width:auto; }
   .toolbar-menu-panel button, .toolbar-menu-check { min-height:44px; }
 }
 .catalog-progress {

@@ -145,9 +145,7 @@
   margin:0;
   border:1px solid var(--rule);
 }
-.workspace-view-index-shell .table-wrap {
-  max-height:min(260px,32dvh);
-}
+.workspace-view-index-shell { --table-max-height:min(260px,32dvh); }
 .workspace-view-index-table th,
 .workspace-view-index-table td {
   padding:8px;
@@ -235,9 +233,7 @@
   padding:0 10px 10px;
   background:var(--surface);
 }
-.workspace-view-table-shell .table-wrap {
-  max-height:400px;
-}
+.workspace-view-table-shell { --table-max-height:min(400px,42dvh); }
 .workspace-view-charts {
   margin-top:12px;
 }
@@ -420,7 +416,7 @@
     flex-direction:column;
     height:100vh;
     height:100dvh;
-    padding:18px;
+    padding:var(--workspace-top-inset) 18px 18px;
     overflow:hidden;
   }
   .serve-mode.workspace-views-open .workspace-content {
@@ -445,9 +441,9 @@
     min-height:0;
     margin-bottom:14px;
   }
-  .serve-mode.workspace-views-open .leaderboard .table-wrap,
-  .serve-mode.detail-sidebar-open .leaderboard .table-wrap {
-    max-height:min(calc(45px + (48px * 10)),42dvh);
+  .serve-mode.workspace-views-open .leaderboard .table-shell,
+  .serve-mode.detail-sidebar-open .leaderboard .table-shell {
+    --table-max-height:min(525px,42dvh);
   }
   .serve-mode.workspace-views-open .workspace-side-region {
     position:relative;

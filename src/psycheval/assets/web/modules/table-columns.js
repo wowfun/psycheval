@@ -1,14 +1,13 @@
-import { validMetricId } from "../app/metric-contract.js";
 const COLUMN_LAYOUT_VERSION = 2;
 
-function normalizeColumnLayout(columnKeys, value) {
+function normalizeColumnLayout(columnKeys, value, { retainUnknown = () => false } = {}) {
   const canonical = Array.from(new Set(columnKeys.map(String)));
   const known = new Set(canonical);
   const rawOrder = Array.isArray(value?.order) ? value.order : [];
   const order = [];
   rawOrder.forEach(raw => {
     const key = String(raw || "");
-    if ((known.has(key) || key.includes(":") && validMetricId(key)) && !order.includes(key)) order.push(key);
+    if ((known.has(key) || retainUnknown(key)) && !order.includes(key)) order.push(key);
   });
   const canonicalIndexes = new Map(canonical.map((key, index) => [key, index]));
   canonical.forEach(key => {
@@ -21,29 +20,29 @@ function normalizeColumnLayout(columnKeys, value) {
   const visibility = {};
   if (value?.visibility && typeof value.visibility === "object") {
     Object.entries(value.visibility).forEach(([key, mode]) => {
-      if ((known.has(key) || key.includes(":") && validMetricId(key)) && ["show", "hide"].includes(mode)) visibility[key] = mode;
+      if ((known.has(key) || retainUnknown(key)) && ["show", "hide"].includes(mode)) visibility[key] = mode;
     });
   }
   return { version: COLUMN_LAYOUT_VERSION, order, visibility };
 }
 
-function layoutStorageKey(workspaceId) {
-  return `peval.leaderboard-columns.v${COLUMN_LAYOUT_VERSION}.${String(workspaceId || "default")}`;
+function layoutStorageKey(workspaceId, tableId = "leaderboard") {
+  return `peval.${tableId}-columns.v${COLUMN_LAYOUT_VERSION}.${String(workspaceId || "default")}`;
 }
 
-function loadColumnLayout(columnKeys, { workspaceId, storage } = {}) {
-  if (!storage) return normalizeColumnLayout(columnKeys, null);
+function loadColumnLayout(columnKeys, { workspaceId, storage, tableId, retainUnknown } = {}) {
+  if (!storage) return normalizeColumnLayout(columnKeys, null, { retainUnknown });
   try {
-    return normalizeColumnLayout(columnKeys, JSON.parse(storage.getItem(layoutStorageKey(workspaceId)) || "null"));
+    return normalizeColumnLayout(columnKeys, JSON.parse(storage.getItem(layoutStorageKey(workspaceId, tableId)) || "null"), { retainUnknown });
   } catch {
-    return normalizeColumnLayout(columnKeys, null);
+    return normalizeColumnLayout(columnKeys, null, { retainUnknown });
   }
 }
 
-function saveColumnLayout(layout, { workspaceId, storage } = {}) {
+function saveColumnLayout(layout, { workspaceId, storage, tableId } = {}) {
   if (!storage) return;
   try {
-    storage.setItem(layoutStorageKey(workspaceId), JSON.stringify(layout));
+    storage.setItem(layoutStorageKey(workspaceId, tableId), JSON.stringify(layout));
   } catch {
     // Browser storage is optional presentation state.
   }

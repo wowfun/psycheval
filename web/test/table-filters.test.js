@@ -26,7 +26,7 @@ test("local filter choices use all supplied rows before and after Home initializ
   }
   render();
   let catalogCalls = 0;
-  tables.configureLeaderboardDataTables({ filterOptions: () => { catalogCalls++; return ["server-page-2"]; } });
+  tables.configureDataTable("leaderboard", { filterOptions: () => { catalogCalls++; return ["server-page-2"]; } });
   render();
   assert.equal(catalogCalls, 0);
   root.innerHTML = tables.renderDataTable({ tableId: "leaderboard", columns: [columns[0]], rows });
@@ -42,6 +42,7 @@ test("local filters apply drafts, preserve choices after filtering, and clear th
     const rows = tables.applyDataTableControls("drafts", allRows, columns);
     root.innerHTML = tables.renderDataTable({ tableId: "drafts", columns, rows, filterOptionsRows: allRows });
     tables.bindDataTableControls(root, { tableId: "drafts", columns, rows, onChange: render });
+    assert.equal(root.querySelector(".filter-menu").hasAttribute("popover"), false, "unsupported Popover uses the absolute-position fallback");
   }
   render();
   const input = root.querySelector('input[value="completed"]');

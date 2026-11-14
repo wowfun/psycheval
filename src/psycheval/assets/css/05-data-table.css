@@ -1,28 +1,29 @@
 .table-shell {
+  --table-max-height:min(525px,60dvh);
   border:1px solid var(--rule);
   border-radius:var(--radius);
   background:color-mix(in oklch,var(--surface),var(--surface-2) 10%);
   overflow:visible;
 }
 .table-wrap {
-  overflow-x:auto;
-}
-.leaderboard .table-wrap {
-  max-height:calc(45px + (48px * 10));
+  max-height:var(--table-max-height);
+  max-width:100%;
   overflow:auto;
+  border-radius:inherit;
 }
-.leaderboard .data-table thead th {
+.data-table>thead>tr>th {
   position:sticky;
   top:0;
   z-index:5;
 }
 .data-table {
   width:100%;
-  border-collapse:collapse;
+  border-collapse:separate;
+  border-spacing:0;
   table-layout:auto;
   min-width:max-content;
 }
-th,td {
+.data-table>:where(thead,tbody)>tr>:where(th,td) {
   padding:11px 12px;
   border-top:1px solid var(--rule);
   text-align:left;
@@ -90,7 +91,7 @@ th,td {
   overflow:visible;
   white-space:normal;
 }
-th {
+.data-table th {
   color:var(--muted);
   font:700 13px/1.2 var(--mono);
   text-transform:uppercase;
@@ -99,6 +100,7 @@ th {
 .data-table thead th {
   padding:8px;
   background:color-mix(in oklch,var(--surface),var(--surface-2) 38%);
+  border-top:0;
 }
 .data-table tbody tr.clickable-row {
   cursor:pointer;
@@ -109,6 +111,10 @@ th {
 .data-table tbody tr.selected-row {
   background:color-mix(in oklch,var(--focus),var(--surface) 90%);
   box-shadow:inset 3px 0 0 var(--focus);
+}
+.data-table tbody tr[tabindex]:focus-visible {
+  outline:2px solid var(--focus);
+  outline-offset:-2px;
 }
 td.num,th.num {
   text-align:right;
@@ -386,7 +392,14 @@ td.num,th.num {
   color:var(--ink);
   font:13px/1.35 var(--sans);
 }
-th.num .filter-menu {
+.filter-menu[popover] {
+  position:fixed;
+  margin:0;
+  right:auto;
+  box-sizing:border-box;
+}
+.filter-menu[popover]:not(:popover-open) { display:none; }
+th.num .filter-menu:not([popover]) {
   right:0;
   left:auto;
 }

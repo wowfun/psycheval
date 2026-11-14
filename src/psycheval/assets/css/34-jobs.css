@@ -13,10 +13,8 @@
 .jobs-page input[type=checkbox] { accent-color:var(--focus); }
 .jobs-selection { margin-bottom:22px; }
 .job-task-list { min-width:0; margin-top:10px; }
-.job-task-list .table-wrap { max-height:360px; }
+.job-task-list .table-shell { --table-max-height:min(360px,42dvh); }
 [data-jobs-collection] { min-width:0; }
-[data-jobs-list] .table-wrap { max-height:520px; overflow:auto; }
-[data-jobs-list] thead th { position:sticky; top:0; z-index:5; }
 [data-jobs-collection] > .table-region-head { flex-wrap:wrap; gap:12px; }
 [data-job-task-count] { color:var(--muted); font:12px var(--mono); }
 .job-variant { border:1px solid var(--rule); border-left:3px solid var(--focus); border-radius:5px; padding:12px; margin-bottom:10px; }
