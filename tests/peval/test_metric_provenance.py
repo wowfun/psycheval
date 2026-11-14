@@ -117,7 +117,7 @@ def test_bad_new_evidence_never_uses_legacy_values():
         trajectory, {"measurement_error": "invalid_measurement_evidence"}
     )
     assert values["tokens"] is None and values["tool_success_rate"] is None
-    assert provenance["tokens"]["contract_version"] == 1
+    assert provenance["tokens"]["contract_version"] == 2
     assert provenance["tokens"]["missing_reason"] == "invalid_measurement_evidence"
 
 
@@ -150,10 +150,11 @@ def test_summary_discloses_legacy_denominator_and_keeps_mean_and_overflow_counts
 
 def test_default_provenance_bounds_and_missing_metadata():
     _, provenance = construct({}, {})
-    assert len(provenance) == 12
+    assert len(provenance) == 20
     assert all(len(json.dumps(item).encode()) <= 2048 for item in provenance.values())
     assert len(json.dumps(provenance).encode()) <= 32768
-    assert all(item["contract_version"] == "legacy" for item in provenance.values())
+    assert provenance["tokens"]["contract_version"] == "legacy"
+    assert provenance["execution_elapsed_ms"]["scope"] == "evaluation_entry"
 
 
 @pytest.mark.parametrize("partial,collection", [(True, "complete"), (False, "partial")])
@@ -169,9 +170,7 @@ def test_count_retention_follows_trajectory_not_measurement_collection(
     assert values["agent_steps"] == 1 and values["total_tool_calls"] == 0
     for key in ("agent_steps", "total_tool_calls"):
         assert provenance[key]["retention"] == ("partial" if partial else "complete")
-        assert provenance[key]["scope"] == (
-            "retained_main_trajectory" if partial else "main_session"
-        )
+        assert provenance[key]["scope"] == ("family")
         assert provenance[key]["basis_id"].endswith(":retained") == partial
 
 
@@ -293,9 +292,9 @@ def test_excel_keeps_structured_trial_and_summary_provenance():
         assert names == ["Leaderboard", "Metric Provenance"]
         sheet = E.fromstring(workbook.read("xl/worksheets/sheet2.xml"))
         rows = sheet.findall(".//{*}row")[1:]
-        assert len(rows) == 12
+        assert len(rows) == 20
         assert all(
-            json.loads(row[-1].findtext(".//{*}t"))["contract_version"] == "legacy"
+            json.loads(row[-1].findtext(".//{*}t"))["contract_version"] in {"legacy", 2}
             for row in rows
         )
     summary = summarize_rows(
@@ -325,3 +324,45 @@ def test_excel_keeps_structured_trial_and_summary_provenance():
             payload[0]["summary"]["trials"] == 1
             and payload[0]["summary"]["missing"] == 1
         )
+
+
+def test_family_coverage_is_once_per_scope_and_values_survive_provenance_budget():
+    from psycheval.harbor.family import retain
+    from psycheval.harbor.measurements import METRICS, encoded
+    from psycheval.report.measurements import project
+    from tests.harbor.test_family import trajectory
+
+    root = trajectory("root")
+    root["subagent_trajectories"] = [trajectory("child")]
+    native = {
+        key: measurement(3, source="s" * 700, method="m" * 700, basis="native")
+        for key in METRICS
+    }
+    result = project(
+        retain(root), {"native_measurement_sets": {"root": native, "family": native}}
+    )
+    assert (
+        len(
+            encoded(
+                {
+                    scope: value["metric_provenance"]
+                    for scope, value in result["metric_sets"].items()
+                }
+            )
+        )
+        <= 32 * 1024
+    )
+    for scope, expected in [("root", 1), ("family", 2)]:
+        selected = result["metric_sets"][scope]
+        assert selected["family_coverage"]["retained_members"] == expected
+        assert selected["metric_values"]["tokens"] == 3
+        assert selected["provenance_details_truncated"]
+        assert all(
+            "family_coverage" not in item
+            for item in selected["metric_provenance"].values()
+        )
+        assert all(
+            item["details_truncated"] for item in selected["metric_provenance"].values()
+        )
+
+

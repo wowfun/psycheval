@@ -27,7 +27,7 @@ from psycheval.report.data_ref import data_ref_for_input
 from psycheval.report.metrics import automatic_analysis_metrics
 from psycheval.report.timing import step_meta_reports
 
-VIEW_SCHEMA_VERSION = 21
+VIEW_SCHEMA_VERSION = 23
 
 
 def build_report(
@@ -277,11 +277,40 @@ def _wall_duration_ms(started: int | None, finished: int | None) -> int | None:
 
 
 def project_meta_from_atif(
-    trajectory: dict[str, Any], meta: dict[str, Any]
+    trajectory: dict[str, Any], meta: dict[str, Any], *, native_members=None
 ) -> dict[str, Any]:
     """Return the sidecar shape with portable facts mirrored from ATIF."""
 
-    projected = deepcopy(meta)
+    from .measurements import project
+
+    projected = _project_member_meta(trajectory, meta, native_members=native_members)
+    project(trajectory, projected)
+    pending = list(projected.get("subagent_meta", {}).values())
+    for child in pending:
+        child.pop("metric_provenance", None)
+        pending.extend(child.get("subagent_meta", {}).values())
+    return projected
+
+
+def _project_member_meta(trajectory, meta, *, native_members=None):
+
+    native_members = meta.get("_native_members", native_members or {})
+    projected = deepcopy(
+        {
+            key: value
+            for key, value in meta.items()
+            if key
+            not in {
+                "_native_members",
+                "subagent_meta",
+                "metric_sets",
+                "metric_values",
+                "family_coverage",
+                "metric_scope",
+                "provenance_details_truncated",
+            }
+        }
+    )
     started, finished = canonical_time_bounds(
         trajectory,
         optional_int_value(projected.get("started_at_ms")),
@@ -363,7 +392,7 @@ def project_meta_from_atif(
         for step in trajectory.get("steps") or []
     )
     children = trajectory.get("subagent_trajectories") or []
-    previous_children = projected.pop("subagent_meta", {})
+    previous_children = meta.get("subagent_meta", {})
     if not isinstance(previous_children, dict):
         previous_children = {}
     if children:
@@ -380,12 +409,28 @@ def project_meta_from_atif(
                 "adapter": projected.get("adapter", "atif"),
                 "total_events": len(child.get("steps") or []),
             }
-            projected["subagent_meta"][identifier] = project_meta_from_atif(
-                child, {**defaults, **(previous if isinstance(previous, dict) else {})}
+            projected["subagent_meta"][identifier] = _project_member_meta(
+                child,
+                {
+                    **defaults,
+                    **(previous if isinstance(previous, dict) else {}),
+                    **(
+                        {
+                            "native_measurement_sets": native_members[
+                                child.get("session_id")
+                            ],
+                            "native_measurements": native_members[
+                                child.get("session_id")
+                            ]["root"],
+                            "measurement_marker": projected.get("measurement_marker"),
+                        }
+                        if child.get("session_id") in native_members
+                        else {}
+                    ),
+                },
+                native_members=native_members,
             )
-    from .measurements import project
-
-    return project(trajectory, projected)
+    return projected
 
 
 def merge_sidecar_owned_step_fields(

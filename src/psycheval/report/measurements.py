@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from psycheval.harbor.atif import agent_step_count, iso_timestamp_ms
+from psycheval.harbor.family import coverage, scope, selected
 from psycheval.harbor.measurements import (
     METRICS,
     measurement,
     number,
+    tool_outcome,
+    trajectory_tools,
     validate_provenance,
 )
 from psycheval.report.inference import inference_row_metrics
@@ -17,11 +20,33 @@ from psycheval.report.timing import is_model_duration_source
 def summary_metrics(trajectory, meta):
     fallback = mapping(meta.get("source_metrics"))
     explicit = mapping(trajectory.get("final_metrics"))
-    return {
+    metrics = {
         **fallback,
         **explicit,
         "extra": {**mapping(fallback.get("extra")), **mapping(explicit.get("extra"))},
     }
+    steps = trajectory.get("steps") or []
+    if any(step.get("is_copied_context") for step in steps):
+        from psycheval.harbor.inference_telemetry import finalize_trajectory_metrics
+
+        execution = [step for step in steps if not step.get("is_copied_context")]
+        metrics = finalize_trajectory_metrics({"steps": execution})["final_metrics"]
+        costs = [
+            number(mapping(step.get("metrics")).get("cost_usd")) for step in execution
+        ]
+        costs = [value for value in costs if value is not None]
+        if costs:
+            metrics["total_cost_usd"] = round(sum(costs), 12)
+        metrics.setdefault("extra", {}).update(
+            total_agent_steps=sum(
+                step.get("source") in {"agent", "assistant"} for step in execution
+            ),
+            total_tool_calls=sum(
+                len(step.get("tool_calls") or []) for step in execution
+            ),
+        )
+        metrics["total_steps"] = len(execution)
+    return metrics
 
 
 def mapping(value):
@@ -40,6 +65,7 @@ def model_duration_ms(trajectory, meta):
         value = number(sidecar.get("duration_ms"))
         if (
             str(step.get("source") or "").lower() in {"agent", "assistant"}
+            and not step.get("is_copied_context")
             and is_model_duration_source(sidecar.get("duration_source"))
             and value is not None
             and value >= 0
@@ -48,13 +74,16 @@ def model_duration_ms(trajectory, meta):
     return number(sum(durations)) if durations else None
 
 
-def construct(trajectory, meta):
-    metrics = summary_metrics(trajectory, meta)
+def _construct_root(trajectory, meta, *, metrics=None):
+    copied = any(
+        step.get("is_copied_context") for step in trajectory.get("steps") or []
+    )
+    metrics = summary_metrics(trajectory, meta) if metrics is None else metrics
     marker = (trajectory.get("extra") or {}).get(
         "measurements", meta.get("measurement_marker")
     )
     new = marker is not None
-    version = 1 if new else "legacy"
+    version = mapping(marker).get("contract_version", 1) if new else "legacy"
     results = {}
     agent = trajectory.get("agent") or {}
     producer = {
@@ -116,6 +145,8 @@ def construct(trajectory, meta):
     origins = mapping(extra.get("metric_field_origins"))
 
     def origin(*fields):
+        if copied:
+            return "derived.execution_steps"
         selected = {
             origins.get(
                 field,
@@ -133,16 +164,19 @@ def construct(trajectory, meta):
             else "mixed:" + ",".join(sorted(selected))
         )
 
-    agent_steps = agent_step_count(trajectory)
+    agent_steps = agent_step_count({**trajectory, "final_metrics": metrics})
     reported_steps = (
         "total_agent_steps" in extra
+        and not copied
         and origins.get("total_agent_steps") != "derived.main_trajectory"
     )
     add(
         "agent_steps",
         agent_steps,
         origin("total_agent_steps") if reported_steps else "atif.steps",
-        "reported_main_agent_steps" if reported_steps else "count(main_agent_steps)",
+        "reported_main_agent_steps"
+        if reported_steps
+        else "count(execution_agent_steps)",
         ("final_metrics.extra.total_agent_steps",)
         if reported_steps
         else ("steps.source",),
@@ -302,7 +336,290 @@ def construct(trajectory, meta):
     }
 
 
+def construct(trajectory, meta, metric_scope="family"):
+    bodies = selected(trajectory, metric_scope)
+    inferences = []
+
+    def own(item, sidecar):
+        metrics = summary_metrics(item, sidecar)
+        inferences.append(inference_row_metrics(metrics))
+        values, provenance = _construct_root(item, sidecar, metrics=metrics)
+        tools, other = [], []
+        for step, step_meta in zip(item.get("steps") or [], sidecar.get("steps") or []):
+            if step.get("is_copied_context"):
+                continue
+            duration = number(step_meta.get("duration_ms"))
+            if (
+                step.get("source") in {"agent", "assistant"}
+                and not is_model_duration_source(step_meta.get("duration_source"))
+                and duration is not None
+            ):
+                other.append(duration)
+            tools.extend(
+                value
+                for tool in step_meta.get("tool_calls") or []
+                if (value := number(tool.get("execution_duration_ms"))) is not None
+            )
+        for key, contributions in (
+            ("tool_duration_ms", tools),
+            ("other_duration_ms", other),
+        ):
+            values[key] = sum(contributions) if contributions else None
+            provenance[key] = measurement(
+                values[key],
+                source="trajectory.duration_sources",
+                method="sum(eligible_recorded_contributions)",
+                basis="retained_duration_components_v2",
+                scope="root",
+            )["provenance"]
+        for key in (
+            "total_prompt_tokens",
+            "total_completion_tokens",
+            "total_cached_tokens",
+            "total_steps",
+            "total_tool_errors",
+        ):
+            native_component = (sidecar.get("native_measurements") or {}).get(key)
+            values[key] = (
+                native_component["value"]
+                if native_component
+                else number(final_metric(metrics, key))
+            )
+            provenance[key] = (
+                native_component["provenance"]
+                if native_component
+                else measurement(
+                    values[key],
+                    source="derived.execution_steps"
+                    if any(
+                        step.get("is_copied_context")
+                        for step in item.get("steps") or []
+                    )
+                    else "atif.final_metrics",
+                    method="retained_component",
+                    basis="retained_component",
+                    scope="root",
+                )["provenance"]
+            )
+        return values, provenance
+
+    root_meta = dict(meta)
+    native_sets = meta.get("native_measurement_sets") or {}
+    if native_sets:
+        root_meta["native_measurements"] = native_sets.get("root", {})
+    values, provenance = own(trajectory, root_meta)
+    if metric_scope == "family" and len(bodies) > 1:
+        parts = [(values, provenance)]
+
+        def visit(item, sidecar):
+            for child in item.get("subagent_trajectories") or []:
+                child_meta = (sidecar.get("subagent_meta") or {}).get(
+                    child["trajectory_id"], {}
+                )
+                parts.append(own(child, child_meta))
+                visit(child, child_meta)
+
+        visit(trajectory, meta)
+        additive = (
+            "tokens",
+            "cost_usd",
+            "agent_steps",
+            "total_tool_calls",
+            "total_tool_errors",
+            "total_steps",
+            "total_prompt_tokens",
+            "total_completion_tokens",
+            "total_cached_tokens",
+            "model_duration_ms",
+            "tool_duration_ms",
+            "other_duration_ms",
+        )
+        for key in additive:
+            known = [v[key] for v, _ in parts if v.get(key) is not None]
+            values[key] = sum(known) if known else None
+            provenance[key] = measurement(
+                values[key],
+                source="atif.family",
+                method="sum(observed_members)",
+                basis="family_components_v2",
+                scope="family",
+                coverage={
+                    "measured": len(known),
+                    "unknown": len(parts) - len(known),
+                    "total": len(parts),
+                },
+            )["provenance"]
+        # Pool sufficient statistics, never average per-member ratios.
+        for key, fields, method in (
+            (
+                "ttft_ms",
+                ("ttft_ms_sum", "ttft_sample_count"),
+                "sum(ttft_ms_sum)/sum(ttft_sample_count)",
+            ),
+            (
+                "tps",
+                ("decode_token_count", "decode_duration_ms", "decode_sample_count"),
+                "1000*sum(decode_token_count)/sum(decode_duration_ms)",
+            ),
+            (
+                "cache_hit_rate",
+                ("cache_read_tokens", "cache_prompt_tokens", "cache_sample_count"),
+                "sum(cache_read_tokens)/sum(cache_prompt_tokens)",
+            ),
+        ):
+            samples = [item for item in inferences if item[key] is not None]
+            pooled = {field: sum(item[field] for item in samples) for field in fields}
+            values[key] = inference_row_metrics({"extra": {"model_inference": pooled}})[
+                key
+            ]
+            provenance[key] = measurement(
+                values[key],
+                source="atif.family",
+                method=method,
+                basis="family_pooled_samples_v2",
+                scope="family",
+                coverage={
+                    "measured": len(samples),
+                    "unknown": len(parts) - len(samples),
+                    "total": len(parts),
+                },
+            )["provenance"]
+        outcomes = [
+            tool_outcome(tool) for body in bodies for tool in trajectory_tools(body)
+        ]
+        known = sum(outcome != "unknown" for outcome in outcomes)
+        successes = outcomes.count("success")
+        values["tool_success_rate"] = successes / known if known else None
+        provenance["tool_success_rate"] = measurement(
+            values["tool_success_rate"],
+            source="atif.family",
+            method="successes/known",
+            basis="tool_known_outcomes_v1",
+            scope="family",
+            coverage={
+                "measured": known,
+                "success": successes,
+                "failed": outcomes.count("failed"),
+                "unknown": len(outcomes) - known,
+                "total": len(outcomes),
+            },
+            missing="no_known_tool_outcomes",
+        )["provenance"]
+    native = native_sets.get(metric_scope, {})
+    if native:
+        for key, measured in native.items():
+            if key == "last_turn_finished_at_ms" and metric_scope == "family":
+                continue
+            values[key], provenance[key] = measured["value"], measured["provenance"]
+    for key, item in provenance.items():
+        item = dict(item)
+        item.pop("family_coverage", None)
+        item["scope"] = (
+            "evaluation_entry"
+            if key
+            in (
+                "duration_ms",
+                "score",
+                "last_turn_finished_at_ms",
+                "execution_elapsed_ms",
+            )
+            else metric_scope
+        )
+        validate_provenance(item)
+        provenance[key] = item
+    phase = mapping(mapping(meta.get("evaluation")).get("phase_timing")).get(
+        "agent_execution", {}
+    )
+    start, end = (
+        iso_timestamp_ms(phase.get("started_at")),
+        iso_timestamp_ms(phase.get("finished_at")),
+    )
+    values["execution_elapsed_ms"] = (
+        end - start if start is not None and end is not None and end >= start else None
+    )
+    provenance["execution_elapsed_ms"] = measurement(
+        values["execution_elapsed_ms"],
+        source="harbor.agent_execution",
+        method="finished-started",
+        basis="agent_execution_wall_clock",
+        scope="evaluation_entry",
+    )["provenance"]
+    return values, provenance
+
+
+def scoped_metrics(meta, metric_scope="family"):
+    """Select values, provenance and coverage together without mutating a source."""
+    scope(metric_scope)
+    return {
+        **(meta.get("metric_sets", {}).get(metric_scope) or {}),
+        "metric_scope": metric_scope,
+    }
+
+
 def project(trajectory, meta):
-    values, provenance = construct(trajectory, meta)
-    meta["metric_values"], meta["metric_provenance"] = values, provenance
+    source_limit = 32 * 1024
+    meta["metric_sets"] = {}
+    for selection in ("root", "family"):
+        values, provenance = construct(trajectory, meta, selection)
+        meta["metric_sets"][selection] = {
+            "metric_values": values,
+            "metric_provenance": provenance,
+            "family_coverage": coverage(trajectory, selection),
+        }
+    from psycheval.harbor.measurements import encoded
+
+    if (
+        len(
+            encoded(
+                {
+                    selection: measured["metric_provenance"]
+                    for selection, measured in meta["metric_sets"].items()
+                }
+            )
+        )
+        > source_limit
+    ):
+        for measured in meta["metric_sets"].values():
+            measured["provenance_details_truncated"] = True
+            measured["metric_provenance"] = {
+                key: {
+                    **{
+                        field: value
+                        for field, value in item.items()
+                        if field
+                        not in {"producer", "fields", "evidence", "clock", "grading"}
+                    },
+                    "details_truncated": True,
+                }
+                for key, item in measured["metric_provenance"].items()
+            }
+        if (
+            len(
+                encoded(
+                    {
+                        key: value["metric_provenance"]
+                        for key, value in meta["metric_sets"].items()
+                    }
+                )
+            )
+            > source_limit
+        ):
+            for measured in meta["metric_sets"].values():
+                measured["metric_provenance"] = {
+                    key: measurement(
+                        measured["metric_values"].get(key),
+                        source="unknown",
+                        method="retained_value_details_truncated",
+                        basis="unknown",
+                        version=item.get("contract_version", "unknown"),
+                        scope=item["scope"],
+                        quality="unknown",
+                        details_truncated=True,
+                        missing="provenance_details_limit",
+                        missing_reason="provenance_details_limit",
+                    )["provenance"]
+                    for key, item in measured["metric_provenance"].items()
+                }
+    meta.update(meta["metric_sets"]["family"])
+    meta["metric_scope"] = "family"
     return meta
