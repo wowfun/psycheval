@@ -31,12 +31,12 @@ test("child selection changes detail evidence and metrics without changing root 
   runtime.render({ trajectory: [root], trajectory_meta: [meta], annotations: {} });
   assert.equal(family.selectedTrajectoryDetail(root, meta).trajectory, child);
   assert.equal(catalog.trajectoryFor("trial").final_metrics.total_prompt_tokens, 101);
-  assert.match(document.querySelector("#trace").textContent, /child-agent/);
+  assert.match(document.querySelector("#detail-sidebar").textContent, /child-agent/);
   assert.match(document.querySelector("#detail-sidebar").textContent, /Child answer/);
   assert.doesNotMatch(document.querySelector("#detail-sidebar").textContent, /Root prompt/);
-  const rootNode = document.querySelector('#trace [data-trajectory-node][data-trajectory-id="root"]');
+  const rootNode = document.querySelector('#detail-sidebar [data-trajectory-node][data-trajectory-id="root"]');
   assert.match(rootNode.textContent, /Main session/);
-  assert.equal(document.querySelector('#trace .trajectory-tree > li > ul [data-trajectory-id="child"]').getAttribute("aria-current"), "true");
+  assert.equal(document.querySelector('#detail-sidebar .trajectory-tree > li > ul [data-trajectory-id="child"]').getAttribute("aria-current"), "true");
   rootNode.click();
   assert.match(document.querySelector("#detail-sidebar").textContent, /Root prompt/);
   assert.equal(document.activeElement.dataset.trajectoryId, "root");

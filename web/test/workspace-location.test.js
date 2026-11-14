@@ -87,3 +87,11 @@ test("older locations are rejected and root metric scope round trips in version 
   const old = new URL("https://example.test/#view=" + btoa(JSON.stringify({v:2})));
   assert.throws(() => decodeWorkspaceLocation("home", old));
 });
+
+test("Info and Timing links retain the source and child identity", () => {
+  for (const tab of ["info", "timing"]) {
+    const object = { source: "trial", trajectory: "child", tab };
+    const href = encodeWorkspaceLocation("home", { object });
+    assert.deepEqual(decodeWorkspaceLocation("home", new URL(href, "http://localhost")).object, object);
+  }
+});

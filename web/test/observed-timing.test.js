@@ -7,27 +7,20 @@ const { timelineTrace } = await import("../../src/psycheval/assets/web/modules/t
 const { renderTimelineDiagnostics } = await import("../../src/psycheval/assets/web/modules/timeline-shell.js");
 const { timelineChartOption, timelineTooltipHtml } = await import("../../src/psycheval/assets/web/modules/timeline-chart.js");
 const { renderTimelineDetailTable } = await import("../../src/psycheval/assets/web/modules/timeline-table.js");
-const { renderTrace, renderTrajectoryNode, trajectoryOverviewTimingModel } = await import("../../src/psycheval/assets/web/modules/trajectory-trace.js");
+const { renderTrajectoryNode, trajectoryOverviewTimingModel } = await import("../../src/psycheval/assets/web/modules/trajectory-trace.js");
 const { state } = await import("../../src/psycheval/assets/web/modules/runtime.js");
 const { catalogStepOutline } = await import("../../src/psycheval/assets/web/modules/serve-catalog.js");
 const { renderStep } = await import("../../src/psycheval/assets/web/modules/steps.js");
 const { timingSource, timestampFallbackAllowed } = await import("../../src/psycheval/assets/web/modules/timing-source.js");
 test.after(() => browser.cleanup());
 
-test("Trial success rate and success/total both preserve unknown or invalid counts", () => {
-  const target = document.createElement("section"); target.id = "trace"; document.body.append(target);
-  const previous = { view: state.view, selectedTrial: state.selectedTrial };
-  try {
-    for (const [calls, errors, ratio] of [[4, undefined, "-"], [undefined, 0, "-"], [4, 5, "-"], ["4", 0, "-"], [4, 1, "3/4"], [4, 4, "0/4"]]) {
-      state.selectedTrial = "counts";
-      state.view = { trajectory: [{ steps: [], final_metrics: { extra: { total_tool_calls: calls, total_tool_errors: errors } } }], trajectory_meta: [{ trial_key: "counts", steps: [] }] };
-      renderTrace();
-      const items = [...target.querySelectorAll(".info-grid > div")];
-      const text = label => items.find(item => item.querySelector("span")?.textContent === label)?.querySelector("strong")?.textContent;
-      assert.equal(text("Tool success / total"), ratio);
-      if (ratio === "-") assert.equal(text("Tool Success Rate"), "-");
-    }
-  } finally { Object.assign(state, previous); target.remove(); }
+test("tool success summaries preserve unknown and invalid counts", async () => {
+  const { toolCallRatio } = await import("../../src/psycheval/assets/web/modules/steps.js");
+  const { rowToolSuccessRate } = await import("../../src/psycheval/assets/web/modules/data-tables.js");
+  for (const [calls, errors, ratio] of [[4, undefined, "-"], [undefined, 0, "-"], [4, 5, "-"], ["4", 0, "-"], [4, 1, "3/4"], [4, 4, "0/4"]]) {
+    assert.equal(toolCallRatio(calls, errors), ratio);
+    if (ratio === "-") assert.equal(rowToolSuccessRate({ total_tool_calls: calls, total_tool_errors: errors }), null);
+  }
 });
 
 test("shared classification keeps estimated badges consistent and never guesses unknown sources", () => {
@@ -95,7 +88,7 @@ test("observed timing keeps zero, distinguishes unknown, and does not infer mode
   assert.match(html, /≈0\.000s/);
   assert.match(renderStep(trajectory.steps[1], meta, {}), /Observed output|may include waiting/);
   const unknown = renderTimelineDiagnostics(trajectory, { timestamp_semantics: "event_observed", steps: meta.steps.map(step => ({ step_id: step.step_id, timestamp_ms: step.timestamp_ms })) });
-  assert.match(unknown, /timeline-total">Cumulative active duration: —/);
+  assert.doesNotMatch(unknown, /timeline-total/);
   assert.match(unknown, /No timed step/);
   assert.doesNotMatch(unknown, /0\.000s/);
 });

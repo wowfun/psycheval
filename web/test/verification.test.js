@@ -233,7 +233,8 @@ test("the canonical summary separates execution, missing evidence and valid zero
   for (const [status, evidence, expected] of [
     ["running", "missing", "Not generated yet"], ["completed", "missing", "missing"], ["completed", "malformed", "malformed"],
   ]) assert.match(renderVerificationSummary({ status, score: 0, verifier_evidence: { status: evidence } }), new RegExp(expected));
-  const text = renderVerificationSummary({ status: "completed", score: 0, score_message: "Canonical source", verifier_evidence: { score: 1, status: "present", tests: { passed: 2, total: 4 } } });
+  const text = renderVerificationSummary({ status: "completed", score: 0, score_message: "Canonical source", rewards: { accuracy: 0 }, verifier_evidence: { score: 1, status: "present", llm_judge: { status: "passed", score: 0 }, components: { overall: 0.4 }, tests: { passed: 2, total: 4 } } });
+  assert.match(text, /LLM judge status.*passed.*LLM judge score.*0.*overall.*0\.4.*Reward dimensions.*accuracy/s);
   assert.match(text, /Run status/);
   assert.match(text, /<dd>0<\/dd>/);
   assert.match(text, /2 \/ 4/);

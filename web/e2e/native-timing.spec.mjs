@@ -19,7 +19,7 @@ test("native model and tool timings reach metrics, source hints, colored nodes a
   expect(await nodes.locator('[data-step-id="3"]').evaluate(node => getComputedStyle(node).backgroundColor)).not.toEqual(await nodes.locator('[data-step-id="4"]').evaluate(node => getComputedStyle(node).backgroundColor));
   await nodes.locator('[data-step-id="4"]').click();
   await expect(page.locator('#detail-sidebar details[data-step="4"]')).toHaveAttribute("open", "");
-  await page.locator('#detail-sidebar [data-sidebar-close]').click();
+  await page.locator('[data-trial-tab=timing]').click();
   const timeline = page.locator(".timeline-diagnostics");
   await expect(timeline).toContainText("Tool call: read_file");
   await expect(timeline).toContainText("0.000s");

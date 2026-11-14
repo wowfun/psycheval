@@ -106,7 +106,7 @@ function normalizeLocationObject(page, value = {}) {
   }
   if (result.source && result.report || page === "reports" && (result.source || result.trajectory || result.step)) invalid();
   if ((result.trajectory || result.step) && !result.source) invalid();
-  const tabs = result.source ? ["trajectory", "task", "verification"] : result.report && page === "reports" ? ["preview", "associations"] : ["preview"];
+  const tabs = result.source ? ["trajectory", "task", "verification", "info", "timing"] : result.report && page === "reports" ? ["preview", "associations"] : ["preview"];
   if (result.tab && (!result.source && !result.report || !tabs.includes(result.tab))) invalid();
   return result;
 }

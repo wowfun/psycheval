@@ -18,64 +18,13 @@ test("diagnostic trajectory notice and cleanup paths remain visible and escaped"
   assert.match(html, /C:\/owned\/&lt;runtime&gt;/);
 });
 
-test("WorkBuddy evidence renders score consistency and safe artifact controls", () => {
-  const html = selected.renderHarborEvidence({
-    harbor_provenance: { result_id: "result-1" },
-    verifier_evidence: {
-      source_key: "source-key",
-      status: "present",
-      score: 0.7,
-      score_source: "reward",
-      harbor_reward: 0.6,
-      reward_consistency: "drifted",
-      tests: { passed: 3, total: 4, status: "passed" },
-      llm_judge: { status: "completed", score: 0.5 },
-      artifacts: [
-        {
-          id: "artifact-id",
-          name: "report<unsafe>",
-          preview: { kind: "text" },
-          download_available: true,
-        },
-        {
-          id: "image-id",
-          name: "chart",
-          preview: { kind: "image" },
-          download_available: true,
-        },
-      ],
-    },
+test("Info keeps provenance but leaves verification results and artifacts to their reader", () => {
+  const html = selected.renderTrialInfo({}, {
+    trial_key: "trial", harbor_provenance: { result_id: "result<1>", task_digest: "sha256:recorded" },
+    verifier_evidence: { score: 0.7, tests: { passed: 3, total: 4 }, artifacts: [{ name: "report<unsafe>", preview: { kind: "image" } }] },
+    task_metadata: { description: "Live description" },
   });
-
-  assert.match(html, /WorkBuddy verifier/);
-  assert.match(html, /drifted/);
-  assert.match(html, /3 \/ 4/);
-  assert.match(html, /report&lt;unsafe&gt;/);
-  assert.match(
-    html,
-    /href="\/api\/harbor\/verifier-artifacts\/source-key\/artifact-id"/,
-  );
-  assert.doesNotMatch(html, /<pre>/);
-  assert.doesNotMatch(
-    html,
-    /\/api\/harbor\/verifier-artifacts\/source-key\/artifact-id\?download=true/,
-  );
-  assert.match(
-    html,
-    /src="\/api\/harbor\/verifier-artifacts\/source-key\/image-id"/,
-  );
-});
-
-test("guest score summary renders without artifact controls", () => {
-  const html = selected.renderHarborEvidence({
-    harbor_provenance: { result_id: "result-1" },
-    verifier_evidence: {
-      status: "present",
-      score: 1,
-      score_source: "reward",
-      reward_consistency: "matched",
-    },
-  });
-  assert.match(html, /WorkBuddy verifier/);
-  assert.doesNotMatch(html, /verifier-artifacts/);
+  assert.match(html, /result&lt;1&gt;/);
+  assert.match(html, /sha256:recorded/);
+  assert.doesNotMatch(html, /WorkBuddy verifier|report&lt;unsafe&gt;|Live description|0\.7|3 \/ 4/);
 });

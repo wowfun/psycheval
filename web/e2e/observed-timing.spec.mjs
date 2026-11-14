@@ -20,7 +20,7 @@ test("observed durations shade nodes, show provenance and preserve step navigati
   await expect(nodes.locator('[data-step-id="4"]')).toHaveAttribute("title", /Observed output/);
   await nodes.locator('[data-step-id="4"]').click();
   await expect(page.locator('#detail-sidebar details[data-step="4"]')).toHaveAttribute("open", "");
-  await page.locator('#detail-sidebar [data-sidebar-close]').click();
+  await page.locator('[data-trial-tab=timing]').click();
   const timeline = page.locator(".timeline-diagnostics");
   const stageLabels = timeline.locator(".timeline-stage-label");
   await expect(stageLabels).toHaveCount(5);
@@ -32,7 +32,7 @@ test("observed durations shade nodes, show provenance and preserve step navigati
   await expect(timeline.locator("[data-timeline-chart] canvas")).toBeVisible();
   const axisLabels = await page.evaluate(async () => {
     const { state } = await import("/assets/peval/modules/runtime.js");
-    return state.timelineChart.getOption().yAxis[0].data;
+    return window.echarts.getInstanceByDom(document.querySelector("[data-timeline-chart]")).getOption().yAxis[0].data;
   });
   expect(axisLabels.map(label => label.replace(/^#[\d.]+ /, ""))).toEqual(labels);
   await nodes.screenshot({ path: testInfo.outputPath("duration-nodes-desktop.png") });

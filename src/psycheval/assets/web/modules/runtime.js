@@ -27,7 +27,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-const state = { view: null, selectedTrial: null, selectedStep: null, selectedTrajectory: null, detailSidebar: { open: false, pendingOpener: null, pendingOpenerSelector: null }, rowSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: [], sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { metric_scope: "family", state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], datasets: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: reportStore.reports, reportReader: reportStore.reader, workspaceViews: [], workspaceViewSummaries: [], workspaceViewsLoaded: false, workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" } };
+const state = { view: null, selectedTrial: null, selectedStep: null, selectedTrajectory: null, detailSidebar: { open: false, pendingOpener: null, pendingOpenerSelector: null }, rowSelection: new Set(), tables: {}, boundGlobalControls: false, serveSources: [], sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { metric_scope: "family", state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], datasets: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: reportStore.reports, reportReader: reportStore.reader, workspaceViews: [], workspaceViewSummaries: [], workspaceViewsLoaded: false, workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" } };
 Object.defineProperty(state, "workspaceReports", {
   configurable: true,
   enumerable: true,
@@ -180,7 +180,7 @@ function syncSelectedSourceFromView() {
 function renderReportNotes(notes) {
   $("report-notes").innerHTML = notes.length ? `<div class="report-note-list">${notes.map(note => `<article class="report-note"><strong>${esc(note.label || t("report_note", "Report note"))}</strong><div class="note-body">${renderMarkdown(note.markdown || "")}</div></article>`).join("")}</div>` : "";
 }
-function renderComparison(options = {}) {
+function renderComparison() {
   const scrollState = comparisonScrollState();
   const rows = reportRows();
   const leaderboardRegion = $("leaderboard-region");
@@ -190,7 +190,7 @@ function renderComparison(options = {}) {
     <section class="leaderboard-summary panel" aria-labelledby="leaderboard-summary-title" id="leaderboard-summary"></section>
     <section class="trajectory-overview panel" aria-labelledby="trajectory-overview-title" id="trajectory-overview"></section>
   `;
-  renderComparisonPanels({ trace: options.trace === true }, scrollState);
+  renderComparisonPanels({ scrollState });
 }
 function notesFor(trialKey) {
   return (state.view?.annotations?.notes || []).filter(note => note.trial_key === trialKey);
@@ -200,22 +200,6 @@ function cellNoteFor(trialKey) {
 }
 function analysisFor(trialKey) {
   return (state.view?.annotations?.analysis || []).find(item => item.trial_key === trialKey) || null;
-}
-function analysisArtifactPathsFor(trialKey) {
-  const analysis = analysisFor(trialKey);
-  if (!analysis) return [];
-  const paths = [];
-  listValue(analysis.markdown_reports).forEach(report => {
-    if (typeof report?.relative_path === "string") paths.push(report.relative_path);
-  });
-  const relativePaths = analysis.relative_paths || {};
-  if (typeof relativePaths === "object") {
-    ["md", "json"].forEach(key => {
-      if (typeof relativePaths[key] === "string") paths.push(relativePaths[key]);
-    });
-  }
-  if (typeof analysis.relative_path === "string") paths.push(analysis.relative_path);
-  return paths;
 }
 function isAnalysisArtifactPath(path) {
   const normalized = String(path || "").replace(/\\/g, "/");
@@ -380,10 +364,7 @@ function searchJson(value) {
     return String(value || "");
   }
 }
-function renderComparisonPanels(
-  options = {},
-  scrollState = options.preserveScroll === false ? null : comparisonScrollState()
-) {
+function renderComparisonPanels({ scrollState = comparisonScrollState(), refreshDetail = true } = {}) {
   const rows = leaderboardRows();
   syncSelectionWithVisibleRows();
   renderLeaderboard(rows);
@@ -391,8 +372,7 @@ function renderComparisonPanels(
   renderTrajectoryOverview(rows);
   restoreComparisonScrollState(scrollState);
   bindComparisonScrollSync();
-  if (options.trace !== false) renderTrace();
-  renderDetailSidebar();
+  renderDetailSidebar({ ifChanged: !refreshDetail });
 }
 function comparisonScrollState() {
   return {
@@ -465,7 +445,6 @@ export {
   adminMode,
   adapterDefaults,
   allSearchActive,
-  analysisArtifactPathsFor,
   analysisFor,
   authenticationEnabled,
   applySessionSearch,

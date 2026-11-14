@@ -7,8 +7,21 @@ const browser = installBrowserDom('<script type="application/json" id="peval-i18
 const { timelineTrace } = await import("../../src/psycheval/assets/web/modules/timeline-model.js");
 const { timelineBarRenderItem, timelineChartOption, timelineTooltipHtml } = await import("../../src/psycheval/assets/web/modules/timeline-chart.js");
 const { timelineActivePctValue } = await import("../../src/psycheval/assets/web/modules/timeline-table.js");
-const { renderTimelineDiagnostics } = await import("../../src/psycheval/assets/web/modules/timeline-shell.js");
+const { renderTimelineDiagnostics, timingIdentity } = await import("../../src/psycheval/assets/web/modules/timeline-shell.js");
+const { state } = await import("../../src/psycheval/assets/web/modules/runtime.js");
 test.after(() => browser.cleanup());
+
+test("timing state and export share native-session fallbacks and separate metric scopes", () => {
+  const meta = { trial_key: "trial:a" };
+  const explicit = timingIdentity({trajectory_id:"trajectory", session_id:"native"}, meta, "root");
+  assert.equal(explicit.trajectoryId, "trajectory");
+  const native = timingIdentity({session_id:"native"}, meta, "root");
+  assert.equal(native.trajectoryId, "native");
+  assert.notEqual(native.key, explicit.key);
+  assert.notEqual(native.key, timingIdentity({session_id:"native"}, meta, "family").key);
+  assert.notEqual(native.key, timingIdentity({session_id:"a:native"}, {trial_key:"trial"}, "root").key);
+  assert.equal(timingIdentity(null, meta).trajectoryId, "root");
+});
 
 function fixture(intervals, markerTimes = []) {
   const tools = intervals.map(([start, duration], index) => ({
@@ -128,6 +141,26 @@ test("input, model and tool stages share one union while retaining timing hints"
   assert.match(timelineTooltipHtml(model), /Timing source/);
 });
 
+test("timing sections start expanded with phases first and honor saved disclosure choices", () => {
+  const { trajectory, meta } = fixture([[1000, 100]]);
+  meta.trial_key = "timing-sections";
+  meta.evaluation = { phase_timing: { agent_execution: { duration_ms: 100 } } };
+  const previous = state.view;
+  state.view = { annotations: { analysis: [{ trial_key: meta.trial_key, analysis_metrics: { auto: { latency: { step_duration_ms: { min: 0, max: 100 } } } } }] } };
+  try {
+    const node = document.createElement("div");
+    const options = { rootMeta: meta, isRoot: true };
+    node.innerHTML = renderTimelineDiagnostics(trajectory, meta, options);
+    assert.deepEqual([...node.querySelector(".timeline-diagnostics").children].map(section => section.classList[0]), [
+      "timeline-section", "timeline-waterfall-section", "timeline-section", "timeline-section",
+    ]);
+    assert.ok(node.querySelector(".timeline-diagnostics").firstElementChild.matches(".timeline-phases-section"));
+    assert.equal(node.querySelectorAll("details.timeline-section[open]").length, 3);
+    node.innerHTML = renderTimelineDiagnostics(trajectory, meta, { ...options, disclosure: { phases: false, table: false, distribution: false } });
+    assert.equal(node.querySelectorAll("details.timeline-section[open]").length, 0);
+  } finally { state.view = previous; }
+});
+
 test("inherited starts retain parallel placement with explicit cumulative and compressed labels", () => {
   const { trajectory, meta } = fixture([[undefined, 1250], [undefined, 1067]]);
   const trace = timelineTrace(trajectory, meta);
@@ -173,5 +206,16 @@ test("long waterfalls bound canvas allocation and retain a navigable stage windo
   assert.equal(option.series[0].data.length,1000);
   assert.equal(option.yAxis.data.length,1000);
   assert.deepEqual([option.dataZoom[0].startValue,option.dataZoom[0].endValue],[0,23]);
-  assert.match(renderTimelineDiagnostics(trajectory,meta),/height:912px/);
+  assert.match(renderTimelineDiagnostics(trajectory,meta),/height:560px/);
+});
+
+test("full image options include every stage without the interactive stage window", () => {
+  const { trajectory, meta } = fixture(Array.from({length:40}, (_, index) => [1000 + index * 10, 20]));
+  const trace = timelineTrace(trajectory, meta);
+  const full = timelineChartOption(trace, { width:1600, full:true });
+  assert.deepEqual(full.dataZoom, []);
+  assert.equal(full.series[0].data.length, 40);
+  assert.equal(full.yAxis.data.length, 40);
+  assert.deepEqual(timelineChartOption(trace).dataZoom[0].endValue, 23);
+  assert.ok(timelineChartOption(trace, { width:300 }).grid.left < 110);
 });

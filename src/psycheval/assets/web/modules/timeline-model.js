@@ -1,9 +1,11 @@
 import { hasMetricValue, lower, stepMeta, t, state } from "./runtime.js";
 import { positiveMetric } from "./analysis-metrics.js";
 import { modelDisplayName } from "./shared.js";
-import { TIMELINE_ESTIMATED_MODEL_CALL_CAP_MS, TIMELINE_INPUT_STAGE_THRESHOLD_MS } from "./timeline-shell.js";
 import { toolFailed, toolMetaFor } from "./steps.js";
 import { timingSource, timestampFallbackAllowed } from "./timing-source.js";
+
+const TIMELINE_INPUT_STAGE_THRESHOLD_MS = 50;
+const TIMELINE_ESTIMATED_MODEL_CALL_CAP_MS = 600000;
 
 function singleTimelineTrace(trajectory, meta) {
   const steps = trajectory?.steps || [];

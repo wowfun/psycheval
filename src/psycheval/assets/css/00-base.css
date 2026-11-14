@@ -57,7 +57,7 @@ h2,h3 {
   margin:7px 0 0;
   color:var(--muted);
 }
-.trace-panel,.panel {
+.panel {
   min-width:0;
   border:1px solid var(--rule);
   border-radius:var(--radius);
@@ -189,9 +189,6 @@ h2,h3 {
 .markdown-table .align-right {
   text-align:right;
 }
-.analysis-md .markdown-heading {
-  color:var(--ink);
-}
 .note-code {
   max-height:none;
   background:var(--surface-2);
@@ -211,7 +208,7 @@ h2,h3 {
 .danger {
   color:var(--fail);
 }
-.panel-head,.trace-head {
+.panel-head {
   display:grid;
   grid-template-columns:minmax(0,1fr) auto;
   gap:18px;

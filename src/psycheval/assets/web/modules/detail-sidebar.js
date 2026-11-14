@@ -1,6 +1,6 @@
 import { $, RENDER_OPTIONS, esc, homeDetail, listValue, renderComparisonPanels, state, t } from "./runtime.js";
 import { stepTimingStats } from "./analysis-metrics.js";
-import { renderIncompleteTrajectory, renderSelectedWarnings } from "./analysis-selected.js";
+import { renderIncompleteTrajectory, renderSelectedWarnings, renderTrialInfo } from "./analysis-selected.js";
 import { bindBlockCopyControls, bindStepToggle, renderStep, renderStepsHeader } from "./steps.js";
 import { cancelTrialDetailRequest, sourceKeyForTrialKey } from "./serve-catalog.js";
 import { createVerificationBrowser } from "./verification-browser.js";
@@ -9,8 +9,33 @@ import { createTaskBrowser } from "./harbor-task-browser.js";
 import { serveApi } from "./serve-effects.js";
 import { createSidebarController } from "./sidebar.js";
 import { selectedTrajectoryDetail, renderTrajectoryNavigation, bindTrajectoryNavigation } from "./trajectory-family.js";
+import { bindServeSourceStateControls } from "./source-state-controls.js";
+import { createRecentState } from "./recent-state.js";
 
 let detailSidebarController = null;
+let timingRequest = 0;
+let timingPanel = null;
+let renderedDetail = null;
+const timingDisclosures = createRecentState();
+
+function disposeTimingPanel() {
+  timingRequest += 1;
+  timingPanel?.dispose();
+  timingPanel = null;
+}
+function loadTimingPanel(target, trajectory, trial, rootMeta, depth) {
+  if (timingPanel) return;
+  const request = ++timingRequest;
+  target.innerHTML = `<p class="copy">${esc(t("loading", "Loading…"))}</p>`;
+  void import("./timeline-shell.js").then(({ mountTimingPanel, timingIdentity }) => {
+    if (request !== timingRequest || !target.isConnected || !state.detailSidebar.open || state.detailSidebar.tab !== "timing") return;
+    const { key } = timingIdentity(trajectory, trial);
+    timingPanel = mountTimingPanel(target, trajectory, trial, { rootMeta: depth ? null : rootMeta, isRoot: !depth, disclosure: timingDisclosures.get(key) });
+  }).catch(error => {
+    if (request !== timingRequest || !target.isConnected) return;
+    target.innerHTML = `<p class="copy danger" role="alert">${esc(error.message || String(error))}</p>`;
+  });
+}
 
 function detailSidebarSurface() {
   if (!detailSidebarController) {
@@ -30,7 +55,6 @@ function detailSidebarSurface() {
         render: options.reason === "dismiss",
         locationKind: options.reason === "dismiss" ? "object" : "replace",
       }),
-      onResize: () => state.timelineChart?.resize?.(),
     });
   }
   homeDetail.register("source", { cancel: cancelTrialDetailRequest, close: closeDetailSidebar });
@@ -79,6 +103,7 @@ function closeDetailSidebar(options = {}) {
   const surface = detailSidebarSurface();
   if (!sidebar.open && (!target || target.hidden)) return false;
   cancelTrialDetailRequest();
+  disposeTimingPanel();
   sidebar.open = false;
   sidebar.pendingOpener = null;
   sidebar.pendingOpenerSelector = null;
@@ -91,8 +116,20 @@ function closeDetailSidebar(options = {}) {
   return true;
 }
 
-function renderDetailSidebar() {
+function detailRenderState() {
+  return [state.view, state.selectedSourceKey, state.selectedTrial, state.selectedTrajectory?.trialKey,
+    state.selectedTrajectory?.trajectoryId, state.selectedStep?.trialKey, state.selectedStep?.stepId,
+    state.detailSidebar, state.detailSidebar?.open, state.detailSidebar?.tab, state.catalogQuery.metric_scope];
+}
+
+function renderDetailSidebar({ ifChanged = false } = {}) {
   const target = $("detail-sidebar");
+  const current = detailRenderState();
+  if (ifChanged && renderedDetail && target?.firstElementChild === renderedDetail.node
+    && current.every((value, index) => value === renderedDetail.state[index])
+    && !state.detailSidebar?.pendingOpener && !state.detailSidebar?.pendingOpenerSelector) return;
+  renderedDetail = null;
+  disposeTimingPanel();
   if (!target) return;
   const sidebar = detailSidebarState();
   const metas = listValue(state.view?.trajectory_meta);
@@ -128,7 +165,7 @@ function renderDetailSidebar() {
   const tabs = [];
   if (hasVerification) tabs.push(["verification", t("verification", "Verification")]);
   if (task) tabs.push(["task", t("task", "Task")]);
-  tabs.push(["trajectory", t("trajectory", "Trajectory")]);
+  tabs.push(["trajectory", t("trajectory", "Trajectory")], ["info", t("trial_info", "Info")], ["timing", t("trial_timing", "Timing")]);
   const tabChanged = !tabs.some(([id]) => id === sidebar.tab);
   if (tabChanged) sidebar.tab = tabs[0][0];
   if (!task) sidebar.taskBrowser?.clear();
@@ -146,16 +183,18 @@ function renderDetailSidebar() {
       <div class="detail-sidebar-tabs" role="tablist" aria-label="${esc(t("selected_trial_details", "Trial details"))}">
         ${tabs.map(([id, text]) => `<button type="button" role="tab" id="trial-tab-${id}" aria-controls="trial-panel-${id}" aria-selected="${sidebar.tab === id}" tabindex="${sidebar.tab === id ? 0 : -1}" data-trial-tab="${id}">${esc(text)}</button>`).join("")}
       </div>
+      <div class="detail-sidebar-navigation" data-trial-navigation>${renderTrajectoryNavigation(root, rootMeta)}</div>
       <div class="detail-sidebar-body">
         ${hasVerification ? `<section id="trial-panel-verification" role="tabpanel" aria-labelledby="trial-tab-verification" data-trial-panel="verification" ${sidebar.tab !== "verification" ? "hidden" : ""}>
           <div data-verification-browser></div>
         </section>` : ""}
         ${task ? `<section id="trial-panel-task" role="tabpanel" aria-labelledby="trial-tab-task" data-trial-panel="task" ${sidebar.tab !== "task" ? "hidden" : ""}>${task}</section>` : ""}
         <section id="trial-panel-trajectory" role="tabpanel" aria-labelledby="trial-tab-trajectory" data-trial-panel="trajectory" class="detail-sidebar-steps" data-detail-sidebar-steps ${sidebar.tab !== "trajectory" ? "hidden" : ""}>
-          ${renderTrajectoryNavigation(root, rootMeta)}
           ${trial.detail_unavailable ? `<p class="copy">${esc(t("verification_trajectory_unavailable", "Trajectory unavailable; retained verification files remain accessible."))}</p>` : renderStepsHeader(trajectory, { headingId: "detail-sidebar-steps-title" })}
           <div class="detail-sidebar-step-list" data-detail-sidebar-step-list>${renderIncompleteTrajectory(trajectory)}${renderSelectedWarnings(trial)}${steps.map(step => renderStep(step, trial, timingStats, { open: String(step?.step_id) === selectedStepId, childIds })).join("")}</div>
         </section>
+        <section id="trial-panel-info" role="tabpanel" aria-labelledby="trial-tab-info" data-trial-panel="info" class="trial-info" hidden>${renderTrialInfo(trajectory, rootMeta, detail.depth, trial)}</section>
+        <section id="trial-panel-timing" role="tabpanel" aria-labelledby="trial-tab-timing" data-trial-panel="timing" hidden></section>
       </div>
     </div>
   `;
@@ -169,6 +208,7 @@ function renderDetailSidebar() {
   sidebar.pendingOpenerSelector = null;
   bindStepToggle(target, "[data-detail-sidebar-step-list]");
   bindBlockCopyControls(target);
+  bindServeSourceStateControls(target);
   bindTrajectoryNavigation(target, root, rootMeta);
   if (hasVerification) {
     if (!sidebar.verificationBrowser) sidebar.verificationBrowser = createVerificationBrowser();
@@ -185,16 +225,25 @@ function renderDetailSidebar() {
     });
   });
   const activate = (id, notify = true) => {
+    if (id !== "timing") disposeTimingPanel();
     sidebar.tab = id;
     target.querySelectorAll("[data-trial-tab]").forEach(button => {
       button.setAttribute("aria-selected", String(button.dataset.trialTab === id));
       button.tabIndex = button.dataset.trialTab === id ? 0 : -1;
     });
     target.querySelectorAll("[data-trial-panel]").forEach(panel => { panel.hidden = panel.dataset.trialPanel !== id; });
+    const tablist = target.querySelector("[role=tablist]");
+    const activeTab = target.querySelector('[role=tab][aria-selected=true]');
+    const visible = tablist.getBoundingClientRect(), active = activeTab.getBoundingClientRect();
+    if (active.right > visible.right) tablist.scrollLeft += active.right - visible.right;
+    else if (active.left < visible.left) tablist.scrollLeft -= visible.left - active.left;
+    target.querySelector("[data-trial-navigation]").hidden = !["trajectory", "info", "timing"].includes(id) || !target.querySelector(".trajectory-navigation");
+    if (id === "timing") loadTimingPanel(target.querySelector("[data-trial-panel=timing]"), trajectory, trial, rootMeta, detail.depth);
     if (id === "verification") void sidebar.verificationBrowser.load(rootMeta);
     if (id === "task") bindDetailSidebarTaskBrowser(target, rootMeta);
     if (id === "trajectory") focusSelectedStep(target, selectedStepId);
     if (notify) homeDetail.position({ tab: id });
+    renderedDetail = { node: target.firstElementChild, state: detailRenderState() };
   };
   const buttons = [...target.querySelectorAll("[data-trial-tab]")];
   buttons.forEach((button, index) => {

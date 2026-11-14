@@ -27,7 +27,36 @@ function importedReport(adapter = "atif") {
   return report;
 }
 
-test("imported trajectories mount only Trajectory and never initialize or request Harbor browsers", () => {
+test("catalog-only renders retain detail DOM while data, selection and scope changes refresh it", () => {
+  runtime.state.view = importedReport();
+  runtime.state.selectedTrial = "imported-trial";
+  runtime.state.selectedSourceKey = "imported";
+  runtime.state.selectedTrajectory = null;
+  runtime.state.selectedStep = null;
+  runtime.state.detailSidebar = { open:true, tab:"info" };
+  sidebarModule.renderDetailSidebar();
+  const target = document.querySelector("#detail-sidebar");
+  let panel = target.firstElementChild;
+  sidebarModule.renderDetailSidebar({ifChanged:true});
+  assert.equal(target.firstElementChild, panel);
+  for (const change of [
+    () => { runtime.state.view = importedReport(); },
+    () => { runtime.state.catalogQuery.metric_scope = "root"; },
+    () => { runtime.state.detailSidebar.tab = "trajectory"; },
+    () => { runtime.state.selectedStep = {trialKey:"imported-trial", stepId:"2"}; },
+  ]) {
+    change();
+    sidebarModule.renderDetailSidebar({ifChanged:true});
+    assert.notEqual(target.firstElementChild, panel);
+    panel = target.firstElementChild;
+  }
+  sidebarModule.renderDetailSidebar();
+  assert.notEqual(target.firstElementChild, panel, "explicit refresh also supports in-place detail updates");
+  runtime.state.catalogQuery.metric_scope = "family";
+  sidebarModule.closeDetailSidebar({render:false});
+});
+
+test("imported trajectories mount Trajectory, Info and Timing and never initialize or request Harbor browsers", () => {
   const previousFetch = globalThis.fetch;
   const calls = [];
   globalThis.fetch = path => { calls.push(String(path)); throw new Error("must not fetch"); };
@@ -41,17 +70,17 @@ test("imported trajectories mount only Trajectory and never initialize or reques
         runtime.state.detailSidebar = { open: true, tab };
         sidebarModule.renderDetailSidebar();
         const sidebar = document.querySelector("#detail-sidebar");
-        assert.deepEqual([...sidebar.querySelectorAll("[data-trial-tab]")].map(node => node.dataset.trialTab), ["trajectory"]);
-        assert.equal(sidebar.querySelectorAll("[data-trial-panel]").length, 1);
+        assert.deepEqual([...sidebar.querySelectorAll("[data-trial-tab]")].map(node => node.dataset.trialTab), ["trajectory", "info", "timing"]);
+        assert.equal(sidebar.querySelectorAll("[data-trial-panel]").length, 3);
         assert.equal(sidebar.querySelector('[data-trial-panel="trajectory"]').hidden, false);
         const button = sidebar.querySelector('[role="tab"]');
         assert.equal(button.getAttribute("aria-selected"), "true");
         assert.equal(button.tabIndex, 0);
-        for (const key of ["ArrowLeft", "ArrowRight", "Home", "End"]) {
-          button.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true }));
-          assert.equal(document.activeElement, button);
-          assert.equal(runtime.state.detailSidebar.tab, "trajectory");
-        }
+        button.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+        assert.equal(runtime.state.detailSidebar.tab, "info");
+        document.activeElement.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+        assert.equal(document.activeElement, button);
+        assert.equal(runtime.state.detailSidebar.tab, "trajectory");
         assert.equal(runtime.state.detailSidebar.verificationBrowser, undefined);
         assert.equal(runtime.state.detailSidebar.taskBrowser, undefined);
       }
@@ -135,7 +164,7 @@ test("the selected Harbor trial renders the shared read-only browser at its curr
   const task = sidebar.querySelector("[data-detail-sidebar-task]");
   const steps = sidebar.querySelector("[data-detail-sidebar-steps]");
   assert.equal(sidebar.hidden, false);
-  assert.deepEqual([...sidebar.querySelectorAll("[data-trial-tab]")].map(node => node.dataset.trialTab), ["verification", "task", "trajectory"]);
+  assert.deepEqual([...sidebar.querySelectorAll("[data-trial-tab]")].map(node => node.dataset.trialTab), ["verification", "task", "trajectory", "info", "timing"]);
   assert.match(task.textContent, /org\/task/);
   assert.doesNotMatch(task.textContent, /Task description/);
   assert.equal(task.querySelectorAll(".harbor-file-row.kind-file").length, 2);
@@ -248,14 +277,14 @@ test("Harbor Trials without a configured Task or Task name fall back to Verifica
 
       const sidebar = document.querySelector("#detail-sidebar");
       assert.equal(sidebar.hidden, false);
-      assert.deepEqual([...sidebar.querySelectorAll("[data-trial-tab]")].map(node => node.dataset.trialTab), ["verification", "trajectory"]);
+      assert.deepEqual([...sidebar.querySelectorAll("[data-trial-tab]")].map(node => node.dataset.trialTab), ["verification", "trajectory", "info", "timing"]);
       assert.equal(sidebar.querySelector('[data-trial-panel="task"]'), null);
       assert.equal(sidebar.querySelector('[data-trial-panel="verification"]').hidden, false);
       assert.match(sidebar.querySelector(".verification-notice").textContent, /Not generated yet/);
       const verification = sidebar.querySelector('[data-trial-tab="verification"]');
       verification.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
       assert.equal(runtime.state.detailSidebar.tab, "trajectory");
-      document.activeElement.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      document.activeElement.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Home", bubbles: true }));
       assert.equal(runtime.state.detailSidebar.tab, "verification");
     }
     assert.deepEqual(calls, [
@@ -328,7 +357,7 @@ for (const tab of ["verification", "task"]) {
       await new Promise(resolve => setTimeout(resolve, 0));
       assert.equal(calls.length, 1, "stale manifests must not trigger file reads");
       assert.equal(runtime.state.detailSidebar.tab, "trajectory");
-      assert.equal(document.querySelectorAll("#detail-sidebar [data-trial-panel]").length, 1);
+      assert.equal(document.querySelectorAll("#detail-sidebar [data-trial-panel]").length, 3);
       if (tab === "task") {
         assert.equal(oldBrowser.state.detail, null);
         assert.equal(oldBrowser.state.contextKey, null);

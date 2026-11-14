@@ -1,46 +1,15 @@
 import { analysisFor, esc, fmtMs, fmtNum, fmtPct, hasMetricValue, t } from "./runtime.js";
 import { infoGrid } from "./analysis-metrics.js";
-import { renderAnalysisPaths } from "./analysis-selected.js";
 import { tableCellContent, tableValueAttributes } from "./data-tables.js";
-import { renderMarkdown } from "./markdown.js";
 
 function renderSelectedAnalysis(trialKey) {
   const analysis = analysisFor(trialKey);
   if (!analysis) return "";
   const summary = analysis.summary ? `<pre>${esc(analysis.summary)}</pre>` : "";
-  const markdown = renderAnalysisMarkdownReports(analysis);
-  const structured = renderStructuredAnalysis(analysis);
-  const paths = renderAnalysisPaths(analysis);
-  if (!summary && !markdown && !structured && !paths && analysis.status === "computed") return "";
-  return `<section class="selected-extra selected-analysis"><h3>${esc(t("analysis", "Analysis"))}</h3><article class="selected-evidence-card analysis-card">${summary}${markdown}${structured}${paths}</article></section>`;
-}
-function renderAnalysisMarkdownReports(analysis) {
-  const reports = normalizedAnalysisMarkdownReports(analysis);
-  if (!reports.length) return "";
-  return `<div class="analysis-markdown-reports">${reports.map(renderAnalysisMarkdownReport).join("")}</div>`;
-}
-function normalizedAnalysisMarkdownReports(analysis) {
-  const reports = Array.isArray(analysis?.markdown_reports)
-    ? analysis.markdown_reports.filter(report => report && typeof report === "object" && String(report.markdown || "").trim())
-    : [];
-  if (reports.length) return reports;
-  return String(analysis?.md_report || "").trim()
-    ? [{ source: "legacy", markdown: analysis.md_report }]
-    : [];
-}
-function renderAnalysisMarkdownReport(report) {
-  const source = String(report.source || "");
-  const label = analysisMarkdownSourceLabel(source);
-  const heading = source === "legacy" ? "" : `<h4>${esc(label)}</h4>`;
-  const path = report.relative_path
-    ? `<p class="copy analysis-path analysis-markdown-path"><span class="analysis-source-label">${esc(t("source", "Source"))}</span><code>${esc(report.relative_path)}</code></p>`
-    : "";
-  return `<section class="analysis-markdown-report">${heading}<div class="note-body analysis-md">${renderMarkdown(report.markdown)}</div>${path}</section>`;
-}
-function analysisMarkdownSourceLabel(source) {
-  if (source === "harbor_trial") return t("analysis_source_harbor_trial", "Harbor Trial analysis");
-  if (source === "workspace_overlay") return t("analysis_source_workspace_overlay", "Workspace analysis");
-  return t("analysis", "Analysis");
+  const structured = renderStructuredAnalysis({ ...analysis, analysis_metrics:
+    Object.fromEntries(Object.entries(analysis.analysis_metrics || {}).filter(([key]) => key !== "auto")),
+  });
+  return summary || structured ? `<section class="selected-extra selected-analysis"><h3>${esc(t("analysis", "Analysis"))}</h3>${summary}${structured}</section>` : "";
 }
 function renderStructuredAnalysis(analysis) {
   const blocks = [
@@ -93,7 +62,8 @@ function renderAnalysisMetrics(metrics) {
   if (Object.keys(imported).length) {
     blocks.push(renderAnalysisObject(t("imported_metrics", "Imported Metrics"), imported));
   }
-  return blocks.length ? `<div class="analysis-metrics">${blocks.join("")}</div>` : "";
+  const html = blocks.filter(Boolean).join("");
+  return html ? `<div class="analysis-metrics">${html}</div>` : "";
 }
 function renderAnalysisMetricGroups(autoMetrics) {
   return Object.entries(autoMetrics)
@@ -114,7 +84,7 @@ function renderAutoMetricGroup(key, metrics) {
 }
 function autoMetricScalarRows(group, metrics) {
   return Object.entries(metrics)
-    .filter(([key, value]) => isMetricScalar(value) && !autoMetricStructuredKeys(group).has(key))
+    .filter(([key, value]) => value !== null && value !== undefined && value !== "" && isMetricScalar(value) && !autoMetricStructuredKeys(group).has(key))
     .map(([key, value]) => [analysisMetricLabel(key), metricValueText(key, value)]);
 }
 function autoMetricStructuredKeys(group) {

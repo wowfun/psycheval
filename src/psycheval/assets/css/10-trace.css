@@ -10,16 +10,6 @@
   background:color-mix(in oklch,var(--focus),var(--surface) 88%);
   box-shadow:0 0 0 3px rgba(49,95,143,.24),inset 0 -3px 0 var(--duration-heat-accent);
 }
-.trace-title {
-  display:flex;
-  align-items:baseline;
-  gap:10px;
-  flex-wrap:wrap;
-}
-.trace-title code {
-  font:700 22px/1 var(--mono);
-  overflow-wrap:anywhere;
-}
 .info-grid {
   display:grid;
   grid-template-columns:repeat(4,minmax(0,1fr));

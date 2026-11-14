@@ -22,7 +22,7 @@ test("canonical tool timing reaches the catalog, waterfall and detail table", as
   await page.goto(fixture.origin);
   await page.locator(`#leaderboard tr[data-source-key="${row.source_key}"]`).click();
   await expect(page.locator("#detail-sidebar")).toBeVisible();
-  await page.locator('#detail-sidebar [data-sidebar-close]').click();
+  await page.locator('[data-trial-tab=timing]').click();
   const timeline = page.locator(".timeline-diagnostics");
   await expect(timeline).toBeVisible();
   await expect(timeline.locator("tbody tr")).toHaveCount(3);
@@ -49,7 +49,7 @@ test("canonical tool timing reaches the catalog, waterfall and detail table", as
     return canvas?.clientWidth === node.clientWidth;
   })).toBe(true);
   await timeline.screenshot({ path: testInfo.outputPath("timeline-mobile.png") });
-  for (const selector of [".timeline-waterfall-shell", ".timeline-table-shell .table-wrap"]) {
+  for (const selector of [".timeline-table-shell .table-wrap"]) {
     const scrolled = await timeline.locator(selector).evaluate(node => {
       node.scrollLeft = node.scrollWidth - node.clientWidth;
       return node.scrollLeft > 0;
@@ -75,7 +75,7 @@ test("parallel calls retain inherited and explicit starts on the compressed char
   await page.goto(fixture.origin);
   await page.locator(`#leaderboard tr[data-source-key="${row.source_key}"]`).click();
   await expect(page.locator("#detail-sidebar")).toBeVisible();
-  await page.locator('#detail-sidebar [data-sidebar-close]').click();
+  await page.locator('[data-trial-tab=timing]').click();
   const timeline = page.locator(".timeline-diagnostics");
   const chart = timeline.locator("[data-timeline-chart]");
   await expect(chart.locator("canvas")).toBeVisible();
@@ -92,7 +92,7 @@ test("parallel calls retain inherited and explicit starts on the compressed char
     await expect.poll(() => chart.evaluate(node => node.querySelector("canvas")?.clientWidth === node.clientWidth)).toBe(true);
     const rendered = await page.evaluate(async () => {
       const { state } = await import("/assets/peval/modules/runtime.js");
-      const chart = state.timelineChart;
+      const chart = window.echarts.getInstanceByDom(document.querySelector("[data-timeline-chart]"));
       const option = chart.getOption();
       return {
         max: option.xAxis[0].max,
@@ -138,8 +138,9 @@ test("parallel calls retain inherited and explicit starts on the compressed char
   await chart.scrollIntoViewIfNeeded();
   const point = await page.evaluate(async () => {
     const { state } = await import("/assets/peval/modules/runtime.js");
-    const item = state.timelineChart.getOption().series[0].data[1];
-    return state.timelineChart.convertToPixel({ gridIndex: 0 }, [(item.value[0] + item.value[1]) / 2, item.value[2]]);
+    const chart = window.echarts.getInstanceByDom(document.querySelector("[data-timeline-chart]"));
+    const item = chart.getOption().series[0].data[1];
+    return chart.convertToPixel({ gridIndex: 0 }, [(item.value[0] + item.value[1]) / 2, item.value[2]]);
   });
   const bounds = await chart.boundingBox();
   await page.mouse.move(bounds.x + point[0], bounds.y + point[1]);
@@ -147,7 +148,7 @@ test("parallel calls retain inherited and explicit starts on the compressed char
   await expect(chart.locator(".timeline-tooltip")).toContainText("24.2%");
   await page.mouse.click(bounds.x + point[0], bounds.y + point[1]);
   await expect(page.locator('#detail-sidebar details[data-step="2"]')).toHaveAttribute("open", "");
-  await page.locator('#detail-sidebar [data-sidebar-close]').click();
+  await page.locator('[data-trial-tab=timing]').click();
   await timeline.locator('tbody tr[data-timeline-step-id="5"]').first().click();
   await expect(page.locator('#detail-sidebar details[data-step="5"]')).toHaveAttribute("open", "");
   expect(errors).toEqual([]);

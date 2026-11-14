@@ -112,23 +112,24 @@ test("Claude project selection imports one family and navigates children without
   }).toBe(1);
   await page.goto(fixture.origin);
   await page.locator(`.trajectory-row[data-source-key="${source.source_key}"]`).click();
-  const trace = page.locator("#trace");
   const sidebar = page.locator("#detail-sidebar");
   const sourceRow = page.locator(`#leaderboard tbody tr[data-source-key="${source.source_key}"]`);
   const tokens = sourceRow.locator('[data-table-column-key="tokens"]');
   const duration = await sourceRow.locator('[data-table-column-key="duration_ms"]').textContent();
   const familyTokens = await tokens.textContent();
   const rootSummary = page.waitForResponse(response => response.url().endsWith('/api/catalog-summaries') && response.request().postDataJSON()?.metric_scope === 'root');
-  await page.getByRole('combobox', {name:'Metric scope'}).selectOption('root');
+  await page.locator('.toolbar-view-menu > summary').click();
+  await page.locator('[data-metric-scope][value=root]').check();
   expect((await rootSummary).ok()).toBe(true);
   await expect(tokens).not.toHaveText(familyTokens);
   await expect(sourceRow.locator('[data-table-column-key="duration_ms"]')).toHaveText(duration);
-  await page.getByRole('combobox', {name:'Metric scope'}).selectOption('family');
+  await page.locator('.toolbar-view-menu > summary').click();
+  await page.locator('[data-metric-scope][value=family]').check();
   await expect(tokens).toHaveText(familyTokens);
   await page.locator(`.trajectory-row[data-source-key="${source.source_key}"]`).click();
 
   await sidebar.getByRole("tab", { name: "Trajectory", exact: true }).click();
-  await expect(trace.locator("[data-trajectory-node]")).toHaveCount(9);
+  await expect(sidebar.locator("[data-trajectory-node]")).toHaveCount(9);
   await expect(sidebar.locator("[data-trajectory-node]")).toHaveCount(9);
   await expect(sidebar.locator("[data-trajectory-copy]")).toHaveCount(9);
   for (const id of ["claude:root-session", "claude:root-session:agent:child-0", "claude:root-session:agent:grand-0"]) {
@@ -163,23 +164,25 @@ test("Claude project selection imports one family and navigates children without
   }
   await expect(agentStep.locator(".observation-block [data-block-copy]").first()).toBeDisabled();
   await sidebar.locator('.observation-block [data-trajectory-id="claude:root-session:agent:child-0"]').click();
-  await expect(trace.locator("[data-trajectory-node][aria-current]")).toHaveAttribute("data-trajectory-id", "claude:root-session:agent:child-0");
+  await expect(sidebar.locator("[data-trajectory-node][aria-current]")).toHaveAttribute("data-trajectory-id", "claude:root-session:agent:child-0");
   await expect(sidebar.locator(".step")).toHaveCount(2);
-  await trace.locator('[data-trajectory-node][data-trajectory-id="claude:root-session:agent:grand-0"]').click();
+  await sidebar.locator('[data-trajectory-node][data-trajectory-id="claude:root-session:agent:grand-0"]').click();
   await expect(sidebar.locator('[data-trajectory-node][aria-current]')).toHaveAttribute("data-trajectory-id", "claude:root-session:agent:grand-0");
   await expect(sidebar.locator("[data-trajectory-id]").filter({ hasText: "View subagent" })).toHaveCount(0);
-  await trace.getByRole("button", { name: "Parent agent" }).click();
-  await expect(trace.locator("[data-trajectory-node][aria-current]")).toHaveAttribute("data-trajectory-id", "claude:root-session:agent:child-0");
+  await sidebar.getByRole("button", { name: "Parent agent" }).click();
+  await expect(sidebar.locator("[data-trajectory-node][aria-current]")).toHaveAttribute("data-trajectory-id", "claude:root-session:agent:child-0");
   await expect(sidebar.locator('.step[data-step="2"]')).toHaveAttribute("open", "");
   await appendFile(join(project, "root-session/subagents/agent-child-0.jsonl"), `${JSON.stringify({
     type: "user", sessionId: "root-session", agentId: "child-0", isSidechain: true,
     uuid: "child-refresh", timestamp: "2026-01-01T00:00:59.000Z",
     message: { role: "user", content: "Refreshed child evidence" },
   })}\n`);
-  await trace.getByRole("button", { name: "Refresh source", exact: true }).click();
+  await sidebar.getByRole("tab", { name: "Info", exact: true }).click();
+  await sidebar.getByRole("button", { name: "Refresh source", exact: true }).click();
+  await sidebar.getByRole("tab", { name: "Trajectory", exact: true }).click();
   await expect(sidebar.locator(".step")).toHaveCount(3);
   await expect(sidebar).toContainText("Refreshed child evidence");
-  await expect(trace.locator("[data-trajectory-node][aria-current]")).toHaveAttribute("data-trajectory-id", "claude:root-session:agent:child-0");
+  await expect(sidebar.locator("[data-trajectory-node][aria-current]")).toHaveAttribute("data-trajectory-id", "claude:root-session:agent:child-0");
   const detail = await (await page.request.get(new URL(`/api/sources/${source.source_key}`, fixture.origin).href)).json();
   expect(detail.report.trajectory).toHaveLength(1);
   expect(detail.report.trajectory[0].subagent_trajectories[0].steps).toHaveLength(3);
@@ -190,7 +193,9 @@ test("Claude project selection imports one family and navigates children without
     type: "user", sessionId: "root-session", uuid: `long-history-${index}`,
     timestamp: "2026-01-01T00:01:00.000Z", message: { role: "user", content: `History event ${index}` },
   })}\n`).join(""));
-  await trace.getByRole("button", { name: "Refresh source", exact: true }).click();
+  await sidebar.getByRole("tab", { name: "Info", exact: true }).click();
+  await sidebar.getByRole("button", { name: "Refresh source", exact: true }).click();
+  await sidebar.getByRole("tab", { name: "Trajectory", exact: true }).click();
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
     await sidebar.locator('[data-trajectory-node][data-trajectory-id="claude:root-session"]').click();

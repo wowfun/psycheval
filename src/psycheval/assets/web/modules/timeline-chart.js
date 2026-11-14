@@ -4,14 +4,14 @@ import { positiveMetric } from "./analysis-metrics.js";
 import { fmtTimelineAxis, fmtTimelineDuration, fmtTimelineMaybeEstimated } from "./timeline-table.js";
 import { openDetailSidebar } from "./detail-sidebar.js";
 
-function timelineChartOption(trace) {
+function timelineChartOption(trace, { width = 980, full = false } = {}) {
   const labels = trace.stages.map(stage => `#${stage.number} ${stage.stage}`);
-  const labelWidth = timelineYAxisLabelWidth(labels);
+  const labelWidth = Math.min(timelineYAxisLabelWidth(labels), Math.max(64, width * 0.28));
   const xAxisScale = timelineXAxisScale(trace.model.display_total_ms);
   return {
     animation: false,
-    grid: { left: labelWidth + 18, right: trace.stages.length > 24 ? 52 : 28, top: 38, bottom: 48 },
-    dataZoom: trace.stages.length > 24 ? [{
+    grid: { left: labelWidth + 18, right: !full && trace.stages.length > 24 ? 52 : 28, top: 38, bottom: 48 },
+    dataZoom: !full && trace.stages.length > 24 ? [{
       type: "slider", yAxisIndex: 0, right: 6, width: 18,
       startValue: 0, endValue: 23, filterMode: "weakFilter", showDetail: false,
     }] : [],

@@ -401,7 +401,7 @@ function prepareLeaderboardSummaryScope(payload = leaderboardSummaryQueryPayload
 
 function renderCatalogComparison() {
   if (!document.getElementById("comparison")) return;
-  if (document.getElementById("leaderboard-summary")) renderComparisonPanels({ trace: false });
+  if (document.getElementById("leaderboard-summary")) renderComparisonPanels({ refreshDetail: false });
   else renderComparison();
 }
 

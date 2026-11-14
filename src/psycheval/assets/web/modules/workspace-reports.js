@@ -23,7 +23,6 @@ function reportReaderSurface() {
       onRequestClose: options => closeWorkspaceReportReader({ restoreFocus: options.restoreFocus, locationKind: options.reason === "dismiss" ? "object" : "replace" }),
       onResize: () => {
         fitWorkspaceReportReaderPreview();
-        state.timelineChart?.resize?.();
       },
     });
   }
@@ -88,7 +87,7 @@ async function refreshWorkspaceReports(options = {}) {
         else if (!options.signal?.aborted) throw error;
       }
     }
-    if (options.renderLeaderboard !== false) renderComparisonPanels({ trace: false });
+    if (options.renderLeaderboard !== false) renderComparisonPanels();
     return workspaceReports();
   } catch (error) {
     if (options.signal?.aborted || request !== reportCatalogRequestId) return;
@@ -178,7 +177,7 @@ async function attachWorkspaceReport(button) {
     });
     applyWorkspaceReportCatalog([...workspaceReports().filter(report => report.report_id !== payload.report_id), payload]);
     state.rowSelection.clear();
-    renderComparisonPanels({ trace: false });
+    renderComparisonPanels();
     openWorkspaceReportReader(payload?.report_id, {
       opener: document.querySelector(".toolbar-actions-menu > summary")
     });

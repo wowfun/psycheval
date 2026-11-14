@@ -1,42 +1,25 @@
 import { fmtClockMs, formatUtcClock, renderDateTime } from "./date-time.js";
 import { esc, hasMetricValue, selectedKey, state, t } from "./runtime.js";
-import { applyDataTableControls, bindDataTableControls, renderDataTable } from "./data-tables.js";
-import { renderTrace } from "./trajectory-trace.js";
+import { applyDataTableControls, bindDataTableControls, bindTableRowActivation, renderDataTable } from "./data-tables.js";
 import { positiveMetric } from "./analysis-metrics.js";
-import { timelineCategoryMeta, timelineTrace } from "./timeline-model.js";
+import { timelineCategoryMeta } from "./timeline-model.js";
 import { openTimelineStep } from "./timeline-chart.js";
 
-function bindTimelineControls(trajectory, meta) {
-  const target = document.querySelector(".timeline-diagnostics");
-  if (!target) return;
-  const trace = timelineTrace(trajectory, meta);
+function bindTimelineControls(target, trace, tableId, onChange) {
   const columns = timelineDetailColumns(trace.model);
-  const rows = applyDataTableControls("timeline", trace.stages, columns, trace.stages);
+  const rows = applyDataTableControls(tableId, trace.stages, columns, trace.stages);
   bindDataTableControls(target, {
-    tableId: "timeline",
+    tableId,
     columns,
     rows,
     rowKey: row => `${row.trial_key || ""}:${row.trajectory_id || ""}:${row.step_id || ""}:${row.tool_call_id || row.kind || ""}`,
-    onChange: () => renderTrace(),
+    onChange,
   });
-  target.querySelectorAll("[data-timeline-step-id]").forEach(row => {
-    const open = event => {
-      event.stopPropagation();
-      openTimelineStep({
-        kind: "stage",
-        trial_key: row.dataset.trialKey || selectedKey(),
-        step_id: row.dataset.timelineStepId,
-        trajectory_id: row.dataset.trajectoryId,
-        opener: row,
-      });
-    };
-    row.addEventListener("click", open);
-    row.addEventListener("keydown", event => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      open(event);
-    });
-  });
+  target.querySelectorAll("[data-timeline-step-id]").forEach(row => bindTableRowActivation(row, () => openTimelineStep({
+    kind: "stage", trial_key: row.dataset.trialKey || selectedKey(), step_id: row.dataset.timelineStepId,
+    trajectory_id: row.dataset.trajectoryId, opener: row,
+  })));
+
 }
 function timelineActivePctValue(row, model) {
   return hasMetricValue(row.duration_ms) && positiveMetric(model.active_total_ms)
@@ -60,11 +43,11 @@ function timelineDetailColumns(model) {
     { key: "active_pct", label: t("timeline_col_total_pct", "Active Share"), valueType: "number", numeric: true, sortable: true, metric: true, value: row => timelineActivePctValue(row, model), format: value => hasMetricValue(value) ? `${Number(value).toFixed(1)}%` : "-", html: row => renderTimelineActiveShare(row, model), className: "active-share-cell" },
   ];
 }
-function renderTimelineDetailTable(rows, model) {
+function renderTimelineDetailTable(rows, model, tableId = "timeline") {
   const columns = timelineDetailColumns(model);
-  const visibleRows = applyDataTableControls("timeline", rows, columns, rows);
+  const visibleRows = applyDataTableControls(tableId, rows, columns, rows);
   return renderDataTable({
-    tableId: "timeline",
+    tableId,
     columns,
     rows: visibleRows,
     rowKey: row => `${row.trial_key || ""}:${row.trajectory_id || ""}:${row.step_id || ""}:${row.tool_call_id || row.kind || ""}`,
@@ -73,7 +56,7 @@ function renderTimelineDetailTable(rows, model) {
     filterOptionsRows: rows,
     rowClass: row => {
       const selected = state.selectedStep?.trialKey === row.trial_key && String(state.selectedStep?.stepId) === String(row.step_id);
-      return `timeline-detail-${row.kind} timeline-detail-row ${selected ? "timeline-detail-selected" : ""}`;
+      return `timeline-detail-${row.kind} timeline-detail-row clickable-row ${selected ? "selected-row" : ""}`;
     },
     rowAttrs: row => `data-trajectory-id="${esc(row.trajectory_id || "")}" data-timeline-step-id="${esc(row.step_id || "")}" data-trial-key="${esc(row.trial_key || "")}" tabindex="0" title="${esc(t("open_step_details", "Open step details"))}: #${esc(row.step_id || "-")}"`,
   });

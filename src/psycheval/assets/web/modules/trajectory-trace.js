@@ -1,19 +1,11 @@
-import { agentStepCount } from "./runtime.js";
-import { modelDisplayName } from "./shared.js";
-import { renderDateTime } from "./date-time.js";
+import { $, esc, hasMetricValue, lower, renderComparisonPanels, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, t } from "./runtime.js";
 import { timingSource } from "./timing-source.js";
-import { $, esc, fmtCost, fmtMs, fmtNum, fmtPct, fmtScore, hasMetricValue, listValue, lower, renderComparisonPanels, selectedKey, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, statusLabel, t } from "./runtime.js";
-import { agentNameFor, bindDataTableSelection, renderRowSelection, rowToolSuccessRate, selectionColumn } from "./data-tables.js";
-import { bindServeSourceStateControls, renderSourceRefreshControl } from "./source-state-controls.js";
-import { catalogStepOutline, leaderboardRows, metaFor, selectServeDetail, trajectoryFor } from "./serve-catalog.js";
-import { finalMetric, infoGrid, maxPositiveMetric, reasoningExposed, systemExposed, timeTitle, timingRatio, tokenTotal, trajectoryDurationHeatClass, trialWallDurationMs } from "./analysis-metrics.js";
-import { renderSelectedNotes } from "./analysis-notes.js";
-import { renderSelectedAnalysis } from "./analysis-rendering.js";
-import { renderHarborEvidence, renderSelectedEvidence, renderIncompleteTrajectory } from "./analysis-selected.js";
-import { disposeTimelineChart, initTimelineDiagnostics, renderTimelineDiagnostics } from "./timeline-shell.js";
-import { bindTimelineControls } from "./timeline-table.js";
-import { toolCallRatio, valuePreview } from "./steps.js";
-import { selectedTrajectoryDetail, renderTrajectoryNavigation, bindTrajectoryNavigation } from "./trajectory-family.js";
+import { agentNameFor, bindDataTableSelection, selectionColumn } from "./data-tables.js";
+import { renderRowSelection, leaderboardSelectionColumn } from "./leaderboard-table.js";
+import { bindServeSourceStateControls } from "./source-state-controls.js";
+import { catalogStepOutline, leaderboardRows, selectServeDetail } from "./serve-catalog.js";
+import { maxPositiveMetric, timeTitle, timingRatio, trajectoryDurationHeatClass } from "./analysis-metrics.js";
+import { valuePreview } from "./steps.js";
 
 function renderTrajectoryOverview(rows = leaderboardRows()) {
   const target = $("trajectory-overview");
@@ -73,9 +65,9 @@ function stepTitle(step, index, stepDuration = null, durationRatio = null) {
 function bindTrajectoryControls(target, rows = leaderboardRows()) {
   bindServeSourceStateControls(target);
   bindDataTableSelection(target, {
-    columns: [selectionColumn()],
+    columns: [leaderboardSelectionColumn()],
     rows,
-    onChange: () => renderComparisonPanels({ trace: false }),
+    onChange: () => renderComparisonPanels(),
   });
   target.querySelectorAll("[data-step-id]").forEach(node => {
     node.addEventListener("click", event => {
@@ -121,76 +113,10 @@ function stepPreviewText(step) {
   if (!step) return "";
   return shortText(valuePreview(step?.message).trim() || valuePreview(step?.reasoning_content).trim());
 }
-function renderTrace() {
-  const target = $("trace");
-  const rootMeta = metaFor(selectedKey());
-  if (!rootMeta?.trial_key) {
-    state.selectedTrial = null;
-    state.selectedStep = null;
-    disposeTimelineChart();
-    if (target) target.innerHTML = "";
-    return;
-  }
-  state.selectedTrial = rootMeta.trial_key;
-  const root = trajectoryFor(rootMeta.trial_key);
-  const { trajectory, meta: trial, depth } = selectedTrajectoryDetail(root, rootMeta);
-  const metrics = trajectory?.final_metrics || {};
-  const projected = (depth ? trial.metric_sets?.root : trial.metric_sets?.[state.catalogQuery?.metric_scope || "family"])?.metric_values || trial.metric_values;
-  const toolCalls = projected ? projected.total_tool_calls : finalMetric(metrics, "total_tool_calls");
-  const toolErrors = projected ? projected.total_tool_errors : finalMetric(metrics, "total_tool_errors");
-  const status = lower(trial.status || (depth ? "unknown" : "passed"));
-  const agentName = trajectory?.agent?.name || "-";
-  const model = modelDisplayName(trajectory?.agent?.model_name) || "-";
-  const runItems = [
-    [t("trial", "Trial"), trial.trial_key || "-"],
-    [t("variant", "Variant"), trial.variant_label || "-"],
-    [t("session", "Session"), trajectory?.session_id || "-"],
-    [t("agent_model", "Agent / model"), `${agentName} / ${model}`],
-    [t("time", "Time"), () => `${renderDateTime(trial.started_at_ms)} → ${renderDateTime(trial.finished_at_ms)}`],
-    [t("wall_duration", "Wall duration"), fmtMs(trialWallDurationMs(trial))],
-    [t("metric_steps", "Total steps"), projected?.total_steps ?? (trajectory?.steps || []).length],
-    [t("source_events", "Source events"), trial.total_events ?? "-"],
-    [t("system_exposed", "System exposed"), systemExposed(trajectory) ? t("yes", "yes") : t("no", "no")],
-    [t("reasoning_exposed", "Reasoning exposed"), reasoningExposed(trajectory) ? t("yes", "yes") : t("no", "no")]
-  ];
-  if (trial.source_alias) {
-    runItems.splice(3, 0, [t("source_alias", "Source alias"), trial.source_alias]);
-  }
-  disposeTimelineChart();
-  target.innerHTML = `
-    <div class="trace-head"><div><p class="eyebrow">${esc(depth ? t("current_session", "Current session") : t("selected_trial_trajectory", "selected trial trajectory"))}</p><h2 id="trace-title" class="trace-title"><span>${esc(t("selected_session_label", "session"))}</span><code>${esc(trial.trial_key || "-")}</code></h2></div><span class="status ${status}">${esc(statusLabel(status))}</span></div>
-    ${renderTrajectoryNavigation(root, rootMeta)}
-    ${renderIncompleteTrajectory(trajectory)}
-    ${renderSourceRefreshControl(rootMeta.trial_key)}
-    <h3>${esc(t("run", "Run"))}</h3>
-    ${infoGrid(runItems)}
-    <h3>${esc(t("result", "Result"))}</h3>
-    ${infoGrid([
-      [t("status", "Status"), statusLabel(trial.status || "-")],
-      [t("score", "Score"), fmtScore(trial.score)],
-      [t("evaluator", "Evaluator"), trial.score_message || "-"],
-      [t("tokens", "Tokens"), fmtNum(projected ? projected.tokens : tokenTotal(metrics))],
-      [t("agent_steps", "Agent steps"), (projected ? projected.agent_steps : agentStepCount(trajectory)) ?? "-"],
-      [t("tool_success_rate", "Tool Success Rate"), fmtPct(projected ? projected.tool_success_rate : rowToolSuccessRate({ total_tool_calls: toolCalls, total_tool_errors: toolErrors }))],
-      [t("tool_success_total", "Tool success / total"), toolCallRatio(toolCalls, toolErrors)],
-      [t("cost", "Cost"), fmtCost(projected ? projected.cost_usd : metrics.total_cost_usd)]
-    ])}
-    ${renderHarborEvidence(trial)}
-    ${depth ? "" : renderSelectedNotes(trial.trial_key)}
-    ${depth ? "" : renderSelectedAnalysis(trial.trial_key)}
-    ${renderSelectedEvidence(trajectory, trial)}
-    ${renderTimelineDiagnostics(trajectory, trial)}
-  `;
-  initTimelineDiagnostics(trajectory, trial);
-  bindTimelineControls(trajectory, trial);
-  bindTrajectoryNavigation(target, root, rootMeta);
-  bindServeSourceStateControls(target);
-}
 export {
   bindTrajectoryControls,
   firstToolName,
   overviewStepMeta,
-  renderTrace,
   renderTrajectoryNode,
   renderTrajectoryOverview,
   renderTrajectoryOverviewRow,

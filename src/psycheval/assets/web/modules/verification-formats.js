@@ -18,6 +18,13 @@ function renderVerificationSummary(meta) {
   if (evidence.status && evidence.status !== "present") entries.push([t("verification_evidence", "Evidence"), evidence.status === "missing" && ["running", "pending"].includes(meta?.status) ? t("verification_not_generated", "Not generated yet") : label(evidence.status)]);
   if (evidence.harbor_reward !== undefined) entries.push([t("harbor_reward", "Harbor reward"), evidence.harbor_reward]);
   if (evidence.reward_consistency && evidence.reward_consistency !== "matched") entries.push([t("reward_consistency", "Reward consistency"), label(evidence.reward_consistency)]);
+  if (evidence.llm_judge?.status) entries.push([t("llm_judge_status", "LLM judge status"), label(evidence.llm_judge.status)]);
+  if (number(evidence.llm_judge?.score)) entries.push([t("llm_judge_score", "LLM judge score"), evidence.llm_judge.score]);
+  for (const [key, value] of Object.entries(evidence.components || {})) {
+    if (number(value)) entries.push([label(key), value]);
+  }
+  const rewards = Object.entries(meta?.rewards || {}).filter(([, value]) => number(value));
+  if (rewards.length) entries.push([t("reward_dimensions", "Reward dimensions"), Object.fromEntries(rewards)]);
   return `<dl class="verification-summary">${entries.map(([name, value]) => `<div><dt>${esc(name)}</dt><dd>${esc(literal(value))}</dd></div>`).join("")}</dl>`;
 }
 

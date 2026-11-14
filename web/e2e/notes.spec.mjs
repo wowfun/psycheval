@@ -17,7 +17,7 @@ test("saving, editing and clearing Trial notes refreshes the Leaderboard without
     const trial = (await catalogRows(page.request, fixture.origin)).find(row => row.kind === "harbor-trial");
     expect(trial.source_key).not.toBe(trial.trial_key);
     await page.goto(fixture.origin);
-    await expect(page.locator("[data-notes-edit]")).toBeVisible();
+    await expect(page.locator("#leaderboard tbody tr").first()).toBeVisible();
     const query = { page: 1, page_size: 1, jobs: [trial.job_name], sort: "task", direction: "asc" };
     await page.evaluate(async query => {
       const { loadCatalogPage } = await import("/assets/peval/modules/serve-catalog.js");
@@ -25,7 +25,7 @@ test("saving, editing and clearing Trial notes refreshes the Leaderboard without
     }, query);
     await page.locator(`#leaderboard [data-source-key="${trial.source_key}"] [data-table-column-key="task_name"]`).click();
     await expect(page.locator("#detail-sidebar")).toBeVisible();
-    await page.locator("#detail-sidebar [data-sidebar-close]").click();
+    await page.locator("[data-trial-tab=info]").click();
 
     for (const note of ["中文备注\n\n**first**\tline", `Updated <script>alert("x")</script> ${"长".repeat(100)}`, ""]) {
       await page.locator("[data-notes-edit]").click();
@@ -42,7 +42,8 @@ test("saving, editing and clearing Trial notes refreshes the Leaderboard without
       } else {
         // Auto visibility follows non-blank notes across the complete query.
         await expect(page.locator('#leaderboard [data-table-column-key="notes"]')).toHaveCount(0);
-        await expect(page.locator(".selected-notes")).toContainText("No notes.");
+        await expect(page.locator("[data-notes-edit]")).toHaveText("Add notes");
+        await expect(page.locator(".note-list")).toHaveCount(0);
       }
       const state = await page.evaluate(async () => {
         const { state } = await import("/assets/peval/modules/runtime.js");
@@ -87,7 +88,7 @@ test("catalog notes survive detail switches, pagination, reload and guest reads"
     for (const sourceKey of notes.keys()) {
       await page.locator(`#leaderboard [data-source-key="${sourceKey}"] [data-table-column-key="task_name"]`).click();
       await expect(page.locator("#detail-sidebar")).toBeVisible();
-      await page.locator("#detail-sidebar [data-sidebar-close]").click();
+      await page.locator("[data-trial-tab=info]").click();
       await expectNotes(page);
     }
     for (let number = 1; number <= rows.length; number++) {
@@ -118,4 +119,33 @@ test("catalog notes survive detail switches, pagination, reload and guest reads"
     if (guest) await guest.close();
     await stopFixture(fixture);
   }
+});
+
+test("Info retains a note draft across tabs and exposes a retry after save failure", async ({page}, testInfo) => {
+  const fixture = await startFixture({PEVAL_E2E_VERIFICATION:"1",PYTHONPATH:process.cwd()});
+  try {
+    await page.goto(fixture.origin);
+    await page.locator("#leaderboard tbody tr").first().click();
+    await page.locator("[data-trial-tab=info]").click();
+    await page.locator("[data-notes-edit]").click();
+    await page.locator("[data-notes-editor]").fill("Pending 中文 draft");
+    await page.locator("[data-trial-tab=trajectory]").click();
+    await page.locator("[data-trial-tab=info]").click();
+    await expect(page.locator("[data-notes-editor]")).toHaveValue("Pending 中文 draft");
+    await page.route("**/api/sources/*", route => route.request().method() === "PATCH" ? route.fulfill({status:500,json:{detail:"fixture save failure"}}) : route.continue());
+    await page.locator("[data-notes-save]").click();
+    await expect(page.locator("[data-notes-editor-panel] [role=alert]")).toContainText("fixture save failure");
+    await expect(page.locator("[data-notes-editor]")).toHaveValue("Pending 中文 draft");
+    await expect(page.locator("[data-notes-save]")).toBeEnabled();
+    await page.unroute("**/api/sources/*");
+    const saved = page.waitForResponse(response => response.request().method() === "PATCH" && response.url().includes("/api/sources/"));
+    await page.locator("[data-notes-save]").click();
+    expect((await saved).ok()).toBe(true);
+    await expect(page.locator("[data-notes-editor]")).toHaveCount(0);
+    await expect(page.locator(".selected-notes")).toContainText("Pending 中文 draft");
+    await page.locator("#detail-sidebar").screenshot({path:testInfo.outputPath("trial-info-desktop.png")});
+    await page.setViewportSize({width:390,height:844});
+    await page.locator("#detail-sidebar").screenshot({path:testInfo.outputPath("trial-info-mobile.png")});
+    expect(await page.locator("[data-trial-panel=info]").evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+  } finally { await stopFixture(fixture); }
 });
