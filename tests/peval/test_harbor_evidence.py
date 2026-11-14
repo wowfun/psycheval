@@ -266,9 +266,7 @@ class HarborEvidenceTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     ValueError, "invalid Harbor source reference"
                 ):
-                    sources.read_harbor_verifier_artifact(
-                        "harbor/jobs", "a" * 24, purpose="preview"
-                    )
+                    sources.verification_file_location("harbor/jobs")
             finally:
                 store.close()
 
@@ -926,19 +924,29 @@ class HarborEvidenceTests(unittest.TestCase):
                 self.assertFalse(missing["download_available"])
                 self.assertNotIn("preview", missing)
                 self.assertNotIn("/private/source", json.dumps(meta))
-                with self.assertRaisesRegex(ValueError, "no preview representation"):
-                    catalog.sources.read_harbor_verifier_artifact(
-                        row["source_ref"], missing["id"], purpose="preview"
-                    )
-                artifact_id = meta["verifier_evidence"]["artifacts"][0]["id"]
+                from psycheval.state.verification_files import (
+                    read_verification_file,
+                    verification_file_tree,
+                )
+
+                location = catalog.sources.verification_file_location(row["source_ref"])
+                tree = verification_file_tree(*location)
+                with self.assertRaisesRegex(ValueError, "unknown verification file"):
+                    read_verification_file(*location, missing["id"])
+                artifact_id = next(
+                    item["id"]
+                    for item in tree
+                    if item["path"] == "verifier/artifact_text/report.md"
+                )
                 with patch(
                     "psycheval.state.workspace_sources.read_harbor_task_index",
                     side_effect=AssertionError("artifact lookup built a Task index"),
                 ):
-                    loaded = catalog.sources.read_harbor_verifier_artifact(
-                        row["source_ref"], artifact_id, purpose="preview"
+                    loaded = read_verification_file(
+                        *catalog.sources.verification_file_location(row["source_ref"]),
+                        artifact_id,
                     )
-                self.assertEqual(loaded.content, b"# Evidence\n")
+                self.assertEqual(loaded["content"], "# Evidence\n")
                 write_json(
                     trial / "config.json",
                     {
@@ -947,10 +955,11 @@ class HarborEvidenceTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(
-                    catalog.sources.read_harbor_verifier_artifact(
-                        row["source_ref"], artifact_id, purpose="preview"
-                    ).content,
-                    b"# Evidence\n",
+                    read_verification_file(
+                        *catalog.sources.verification_file_location(row["source_ref"]),
+                        artifact_id,
+                    )["content"],
+                    "# Evidence\n",
                 )
             finally:
                 store.close()

@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from psycheval._harbor_datasets import resolve_harbor_datasets_for_mount
 from psycheval._state.annotations import optional_str
@@ -37,11 +37,7 @@ from psycheval.state.harbor_evidence import (
     read_harbor_task_index,
 )
 from psycheval.state.harbor_verifier_evidence import (
-    HarborVerifierArtifact,
-    HarborVerifierArtifactStream,
     _assert_contained,
-    open_harbor_verifier_artifact_download,
-    read_harbor_verifier_artifact,
     read_harbor_verifier_evidence,
 )
 from psycheval.state.workspace_harbor import (
@@ -344,35 +340,6 @@ class WorkspaceSources:
             )
             completed += 1
             progress("checking", completed, total)
-
-    def read_harbor_verifier_artifact(
-        self,
-        source_ref: str,
-        artifact_id: str,
-        *,
-        purpose: Literal["preview", "download"],
-    ) -> HarborVerifierArtifact:
-        if purpose not in {"preview", "download"}:
-            raise ValueError("unsupported verifier artifact purpose")
-        data_dir, containment_root = self.verification_file_location(source_ref)
-        return read_harbor_verifier_artifact(
-            data_dir,
-            containment_root=containment_root,
-            artifact_id=artifact_id,
-            purpose=purpose,
-        )
-
-    def open_harbor_verifier_artifact_download(
-        self,
-        source_ref: str,
-        artifact_id: str,
-    ) -> HarborVerifierArtifactStream:
-        data_dir, containment_root = self.verification_file_location(source_ref)
-        return open_harbor_verifier_artifact_download(
-            data_dir,
-            containment_root=containment_root,
-            artifact_id=artifact_id,
-        )
 
     def verification_file_location(self, source_ref: str) -> tuple[Path, Path]:
         self._reject_legacy_harbor_projections()

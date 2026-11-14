@@ -236,6 +236,24 @@ def test_guest_and_admin_http_read_share_the_same_files(
         status, headers, body = request(path + "?download=true")
         assert status == 200 and body == b'{"reward":0}'
         assert headers["content-security-policy"] == "sandbox"
+        assert headers["content-disposition"].startswith("attachment;")
+        assert headers["cache-control"] == "no-store"
+        assert headers["x-content-type-options"] == "nosniff"
+        from psycheval.serve import verification
+
+        read_file = verification.read_verification_file
+
+        def hostile_filename(*args, **kwargs):
+            content = read_file(*args, **kwargs)
+            content.filename = 'report"\r\nX-Evil.md'
+            return content
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(verification, "read_verification_file", hostile_filename)
+            status, headers, body = request(path + "?download=true")
+        assert status == 200 and body == b'{"reward":0}'
+        assert 'filename="report___X-Evil.md"' in headers["content-disposition"]
+        assert "x-evil" not in headers
         assert request(path, "PUT")[0] == 405
         assert request(f"/api/verification-files/{key}/{'0' * 24}")[0] == 404
         protected = next(row for row in tree if row["path"] == "verifier/private.json")
