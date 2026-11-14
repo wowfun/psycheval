@@ -29,6 +29,7 @@ class LoginRequest(StrictRequest):
 
 
 class CatalogQueryRequest(StrictRequest):
+    metric_scope: Literal["root", "family"] = "family"
     state: str
     page: int
     page_size: int
@@ -50,6 +51,7 @@ class CatalogQueryRequest(StrictRequest):
 
 
 class CatalogSummaryRequest(StrictRequest):
+    metric_scope: Literal["root", "family"] = "family"
     state: str
     search: str
     categories: list[str]

@@ -11,6 +11,33 @@ from psycheval.state.workspace_harbor import _project_harbor_metrics
 from psycheval.state.workspace_source_models import HarborTelemetry
 
 
+def test_json_export_validates_scope_before_loading_source_data():
+    from types import SimpleNamespace
+
+    from psycheval.config import ToolConfig
+    from psycheval.serve.exports import build_serve_export
+    from psycheval.state import CatalogQuery
+
+    reads = []
+    catalog = SimpleNamespace(
+        resolve_keys=lambda keys: keys,
+        row_for_key=lambda key: {"source_key": key},
+    )
+    store = SimpleNamespace(
+        report_for_rows=lambda *args: reads.append(True) or {"trajectory_meta": []}
+    )
+    with pytest.raises(ValueError, match="metric scope"):
+        build_serve_export(
+            catalog,
+            store,
+            ToolConfig(),
+            kind="json",
+            query=CatalogQuery(metric_scope="invalid"),
+            source_keys=["source"],
+        )
+    assert reads == []
+
+
 def test_catalog_reuses_projected_value_and_source(monkeypatch):
     import psycheval.state.catalog_projection as projection
 
@@ -366,3 +393,38 @@ def test_family_coverage_is_once_per_scope_and_values_survive_provenance_budget(
         )
 
 
+def test_xlsx_uses_explicit_root_scope_and_readable_family_coverage():
+    import io
+    import zipfile
+    from xml.etree import ElementTree as E
+
+    from psycheval.serve.exports import xlsx_summary
+
+    data = xlsx_summary(
+        [
+            {
+                "family_coverage": {
+                    "status": "partial",
+                    "retained_members": 2,
+                    "known_members": 3,
+                }
+            }
+        ],
+        metric_scope="root",
+    )
+    with zipfile.ZipFile(io.BytesIO(data)) as workbook:
+        rows = E.fromstring(workbook.read("xl/worksheets/sheet1.xml")).findall(
+            ".//{*}row"
+        )
+
+        def values(row):
+            return [
+                cell.findtext(".//{*}t")
+                if cell.get("t") == "inlineStr"
+                else cell.findtext("{*}v")
+                for cell in row
+            ]
+
+        record = dict(zip(values(rows[0]), values(rows[1])))
+        assert record["Metric scope"] == "root"
+        assert record["Family coverage"] == "partial (2/3)"

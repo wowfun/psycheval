@@ -667,6 +667,7 @@ class ServeAccessHttpTests(unittest.TestCase):
                         "kind": "summary_xlsx",
                         "summary": {
                             "scope": "leaderboard",
+                            "comparison_groups": None,
                             "metrics": list(DEFAULT_METRIC_IDS),
                             "query": {
                                 key: value

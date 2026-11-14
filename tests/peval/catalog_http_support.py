@@ -37,6 +37,7 @@ def leaderboard_summary_query(**changes) -> dict:
 def summary_request(query, group_by="overall", statistic="mean"):
     return {
         "scope": "leaderboard",
+        "comparison_groups": None,
         "metrics": list(DEFAULT_METRIC_IDS),
         "query": query,
         "group_by": group_by,

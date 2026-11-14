@@ -151,6 +151,7 @@ class SummaryXlsxTests(unittest.TestCase):
         request = summary_export_payload(
             {
                 "scope": "leaderboard",
+                "comparison_groups": None,
                 "metrics": ["score", "duration_ms"],
                 "query": query,
                 "group_by": "model",
@@ -164,6 +165,7 @@ class SummaryXlsxTests(unittest.TestCase):
         category_request = summary_export_payload(
             {
                 "scope": "leaderboard",
+                "comparison_groups": None,
                 "metrics": ["score", "duration_ms"],
                 "query": query,
                 "group_by": "category",
@@ -178,6 +180,7 @@ class SummaryXlsxTests(unittest.TestCase):
         for invalid in (
             {
                 "scope": "leaderboard",
+                "comparison_groups": None,
                 "metrics": ["score", "duration_ms"],
                 "query": {**query, "page": 1},
                 "group_by": "agent",
@@ -185,6 +188,7 @@ class SummaryXlsxTests(unittest.TestCase):
             },
             {
                 "scope": "leaderboard",
+                "comparison_groups": None,
                 "metrics": ["score", "duration_ms"],
                 "query": query,
                 "group_by": "agent",
@@ -192,6 +196,7 @@ class SummaryXlsxTests(unittest.TestCase):
             },
             {
                 "scope": "leaderboard",
+                "comparison_groups": None,
                 "metrics": ["score", "duration_ms"],
                 "query": query,
                 "group_by": ["agent"],
@@ -199,6 +204,7 @@ class SummaryXlsxTests(unittest.TestCase):
             },
             {
                 "scope": "leaderboard",
+                "comparison_groups": None,
                 "metrics": ["score", "duration_ms"],
                 "query": query,
                 "group_by": "agent",
@@ -206,6 +212,7 @@ class SummaryXlsxTests(unittest.TestCase):
             },
             {
                 "scope": "leaderboard",
+                "comparison_groups": None,
                 "metrics": ["score", "duration_ms"],
                 "query": {key: value for key, value in query.items() if key != "tags"},
                 "group_by": "agent",

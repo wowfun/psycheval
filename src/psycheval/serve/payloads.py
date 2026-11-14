@@ -39,6 +39,7 @@ SUMMARY_STATISTIC_VALUES = frozenset({"mean", "min", "q1", "p50", "q3", "p95", "
 @dataclass(frozen=True)
 class SummaryExportPayload:
     scope: str
+    comparison_groups: tuple[str | None, ...] | None = None
     metrics: tuple[str, ...] = ()
     query: CatalogQuery | None = None
     query_views: tuple[str, ...] = ()
@@ -97,7 +98,14 @@ def catalog_post_query_payload(
         "views",
         "browser_views",
     }
-    optional_fields = {"tasks", "jobs", "providers", "datasets", "inline_views"}
+    optional_fields = {
+        "tasks",
+        "jobs",
+        "providers",
+        "datasets",
+        "inline_views",
+        "metric_scope",
+    }
     if not required_fields.issubset(value) or not set(value).issubset(
         required_fields | optional_fields
     ):
@@ -111,6 +119,9 @@ def catalog_post_query_payload(
     try:
         query = CatalogQuery(
             state=_required_text(value.get("state"), "query state"),
+            metric_scope=_required_text(
+                value.get("metric_scope", "family"), "metric scope"
+            ),
             page=page,
             page_size=page_size,
             search=_string_value(value.get("search"), "query search"),
@@ -147,11 +158,17 @@ def _strict_catalog_summary_query_payload(
 ]:
     if not isinstance(query_value, dict):
         raise HttpError(400, "query must be an object")
-    if set(query_value) - {"inline_views"} != _CATALOG_SUMMARY_QUERY_FIELDS:
+    if (
+        set(query_value) - {"inline_views", "metric_scope"}
+        != _CATALOG_SUMMARY_QUERY_FIELDS
+    ):
         raise HttpError(400, "catalog query fields are invalid")
     try:
         query = CatalogQuery(
             state=_required_text(query_value.get("state"), "query state"),
+            metric_scope=_required_text(
+                query_value.get("metric_scope", "family"), "metric scope"
+            ),
             page=1,
             page_size=100,
             search=_string_value(query_value.get("search"), "query search"),
@@ -185,7 +202,10 @@ def _strict_catalog_summary_query_payload(
 def catalog_summary_payload(value: Any) -> CatalogSummaryPayload:
     if not isinstance(value, dict):
         raise HttpError(400, "catalog summary must be an object")
-    if set(value) - {"inline_views"} != _CATALOG_SUMMARY_QUERY_FIELDS | {"group_by"}:
+    if set(value) - {
+        "inline_views",
+        "metric_scope",
+    } != _CATALOG_SUMMARY_QUERY_FIELDS | {"group_by"}:
         raise HttpError(400, "catalog summary fields are invalid")
     group_by = value.get("group_by")
     _validate_summary_group_by(group_by)
@@ -256,13 +276,32 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
         raise HttpError(400, "summary must be an object")
     scope = value.get("scope")
     if scope == "leaderboard":
-        expected = {"scope", "query", "group_by", "statistic", "metrics"}
+        expected = {
+            "scope",
+            "query",
+            "group_by",
+            "statistic",
+            "metrics",
+            "comparison_groups",
+        }
         if set(value) != expected:
             raise HttpError(
                 400,
-                "leaderboard summary fields must be scope, query, group_by, statistic, and metrics",
+                "leaderboard summary fields must be scope, query, group_by, statistic, metrics, and comparison_groups",
             )
         group_by = value.get("group_by")
+        groups = value["comparison_groups"]
+        if groups is not None and (
+            not isinstance(groups, list)
+            or any(
+                key is not None and (not isinstance(key, str) or not key or "\0" in key)
+                for key in groups
+            )
+        ):
+            raise HttpError(
+                400,
+                "comparison_groups must be null or an array of string/null group keys",
+            )
         statistic = value.get("statistic")
         _validate_summary_group_by(group_by)
         if not isinstance(statistic, str) or statistic not in SUMMARY_STATISTIC_VALUES:
@@ -279,6 +318,7 @@ def summary_export_payload(value: Any) -> SummaryExportPayload:
             raise HttpError(400, str(exc)) from exc
         return SummaryExportPayload(
             scope=scope,
+            comparison_groups=None if groups is None else tuple(dict.fromkeys(groups)),
             query=query,
             query_views=query_views,
             group_by=group_by,
@@ -609,23 +649,6 @@ def category_payload(payload: dict[str, Any]) -> str | None:
     if not isinstance(value, str):
         raise HttpError(400, "category must be a string")
     return value.strip() or None
-
-
-def tags_payload(payload: dict[str, Any]) -> list[str]:
-    value = payload.get("tags", payload.get("source_tags"))
-    if isinstance(value, list):
-        parts = [str(item).strip() for item in value]
-    else:
-        parts = re.split(r"[,，]", str(value or ""))
-    tags: list[str] = []
-    seen: set[str] = set()
-    for part in parts:
-        tag = part.strip()
-        if not tag or tag in seen:
-            continue
-        seen.add(tag)
-        tags.append(tag)
-    return tags
 
 
 def optional_string(value: Any) -> str | None:

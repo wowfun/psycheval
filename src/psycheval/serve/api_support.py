@@ -130,6 +130,7 @@ def catalog_query(raw_query: str) -> CatalogQuery:
     try:
         return CatalogQuery(
             state=first("state", "active"),
+            metric_scope=first("metric_scope", "family"),
             page=integer("page", 1),
             page_size=integer("page_size", 100),
             search=first("search", ""),
@@ -158,6 +159,7 @@ def catalog_query_payload(value: Any) -> CatalogQuery:
     try:
         return CatalogQuery(
             state=str(value.get("state") or "active"),
+            metric_scope=str(value.get("metric_scope") or "family"),
             page=1,
             page_size=100,
             search=str(value.get("search") or ""),

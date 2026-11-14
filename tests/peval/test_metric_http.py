@@ -30,6 +30,7 @@ def summary_export(metrics):
         "kind": "summary_xlsx",
         "summary": {
             "scope": "leaderboard",
+            "comparison_groups": None,
             "query": query,
             "group_by": "overall",
             "statistic": "mean",
@@ -70,3 +71,52 @@ def test_missing_selection_is_required_and_unavailable_ids_are_gaps(metric_serve
         status, _, body = metric_server(summary_export(ids))
         assert status == 200, body[:200]
         assert body.startswith(b"PK")
+
+
+@pytest.mark.parametrize("groups", [False, "all", [False], [1], [""], ["bad\0key"]])
+def test_invalid_comparison_groups_are_request_errors(metric_server, groups):
+    request = summary_export(["total_tool_calls"])
+    request["summary"]["comparison_groups"] = groups
+    assert metric_server(request)[0] == 400
+
+
+def test_summary_export_filters_groups_without_changing_match_count(metric_server):
+    import io
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    request = summary_export(["total_tool_calls"])
+    for keys, selected_count in (
+        (None, 1),
+        (["overall"], 1),
+        ([], 0),
+        ([None, "missing"], 0),
+    ):
+        request["summary"]["comparison_groups"] = keys
+        status, _, body = metric_server(request)
+        assert status == 200, body[:200]
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            namespace = {
+                "s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+            }
+            strings = [
+                "".join(node.itertext())
+                for node in ET.fromstring(archive.read("xl/sharedStrings.xml"))
+            ]
+            rows = ET.fromstring(archive.read("xl/worksheets/sheet1.xml")).findall(
+                ".//s:row", namespace
+            )
+            values = []
+            for row in rows:
+                values.append(
+                    [
+                        strings[int(cell.find("s:v", namespace).text)]
+                        if cell.get("t") == "s"
+                        else cell.findtext("s:v", namespaces=namespace)
+                        for cell in row
+                        if cell.find("s:v", namespace) is not None
+                    ]
+                )
+            assert ["Selected groups", str(selected_count)] in values
+            assert ["Match count", "1"] in values
+            assert any("Overall" in row for row in values) == bool(selected_count)

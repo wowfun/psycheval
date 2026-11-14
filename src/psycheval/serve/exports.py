@@ -11,6 +11,7 @@ from psycheval.config import ToolConfig
 from psycheval.i18n import messages_for
 from psycheval.metric_contract import BUILTIN_IDS, finite_number, metric_descriptions
 from psycheval.report.builder import VIEW_SCHEMA_VERSION
+from psycheval.report.measurements import scoped_metrics
 from psycheval.report.metrics import tool_success_rate
 from psycheval.serve.summary_xlsx import (
     EXCEL_CONTENT_TYPE,
@@ -65,10 +66,11 @@ def build_serve_export(
     audience: str = "admin",
 ) -> ServeExport:
     normalized_kind = str(kind or "").strip().lower()
+    query = (query or CatalogQuery()).normalized()
     if normalized_kind in {"xlsx", "table"}:
         rows = query_all_catalog_rows(
             catalog,
-            query or CatalogQuery(),
+            query,
             view_queries=view_queries,
         )
         rows = project_catalog_rows(rows, audience)
@@ -79,6 +81,7 @@ def build_serve_export(
                 rows,
                 catalog.metric_metadata()["metric_descriptions"],
                 locale=config.locale,
+                metric_scope=query.metric_scope,
             ),
         )
     if normalized_kind != "json":
@@ -97,6 +100,10 @@ def build_serve_export(
     if input_bytes > MAX_REPORT_EXPORT_INPUT_BYTES:
         raise ValueError("JSON export trajectory/meta input exceeds 50 MiB")
     report = store.report_for_rows(rows, config)
+    selection = query.metric_scope
+    report["metric_scope"] = selection
+    for meta in report.get("trajectory_meta", []):
+        meta.update(scoped_metrics(meta, selection))
     if audience != "admin":
         report = project_report(report)
     return ServeExport(
@@ -129,14 +136,30 @@ def query_all_catalog_rows(
         page_number += 1
 
 
+def _family_coverage_text(coverage):
+    status = coverage.get("status", "unknown")
+    retained, known = coverage.get("retained_members"), coverage.get("known_members")
+    return (
+        f"{status} ({retained}/{known if known is not None else '?'})"
+        if retained is not None
+        else status
+    )
+
+
 def xlsx_summary(
     rows: list[dict[str, Any]],
     descriptions: list[dict[str, Any]] | None = None,
     *,
     locale: str = "en",
+    metric_scope: str = "family",
 ) -> bytes:
     columns = [
         ("Dataset", lambda row: row.get("dataset_id")),
+        ("Metric scope", lambda row: row.get("metric_scope", metric_scope)),
+        (
+            "Family coverage",
+            lambda row: _family_coverage_text(row.get("family_coverage") or {}),
+        ),
         ("Category", lambda row: row.get("source_category")),
         ("Tags", lambda row: ", ".join(row.get("display_tags") or [])),
         ("Custom Tags", lambda row: ", ".join(row.get("source_tags") or [])),

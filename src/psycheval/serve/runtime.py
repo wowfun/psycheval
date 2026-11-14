@@ -360,6 +360,7 @@ class ServeRuntime:
         group_by: str,
         statistic: str,
         metrics: Sequence[str],
+        comparison_groups: Sequence[str | None] | None = None,
     ) -> SummaryWorksheet:
         payload = self.leaderboard_summary(
             query,
@@ -375,17 +376,22 @@ class ServeRuntime:
         selected = [descriptions[key] for key in metrics if key in descriptions]
         if not selected:
             raise ValueError("Select at least one available metric")
+        groups = summary["groups"]
+        if comparison_groups is not None:
+            keys = set(comparison_groups)
+            groups = [group for group in groups if group["key"] in keys]
         return SummaryWorksheet(
             name="Leaderboard Summary",
             metric_descriptions=selected,
             group_by=group_by,
             matched_count=int(summary["matched_count"]),
-            groups=summary["groups"],
+            groups=groups,
             statistic=statistic,
             metadata=(
                 ("Scope", "Complete Leaderboard query"),
                 ("Group", group_by),
                 ("Match count", int(summary["matched_count"])),
+                ("Selected groups", len(groups)),
                 ("Chart statistic", statistic),
             ),
         )
