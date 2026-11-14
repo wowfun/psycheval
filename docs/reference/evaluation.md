@@ -104,6 +104,44 @@ references resolve only to files inside the retained result directories.
 
 ## Deterministic and live validation
 
+### Family-scoped tool evidence
+
+The grader-wide `trajectory_scope` is `family` by default; `root` selects only
+the current execution root. Each Harbor Step evaluates its own family. Required
+calls, forbidden tools and observation queries share this selection. Final
+answers and artifacts remain owned by the root. Copied context is not execution.
+Tool identity includes trajectory identity.
+
+Ambiguous call IDs produce failed tool checks; invalid causal graphs and exhausted
+matching capacity fail the ordered checks. These results carry an
+`evidence_incomplete` reason, not verifier errors.
+Observation queries return no trusted matches for ambiguous evidence. Invalid
+grader configuration remains an error. Check diagnostics retain accepted patterns,
+observed tools and qualified witnesses without inventing execution order.
+Ordered matching discards a later state when an earlier state on its proven
+causal chain already satisfies at least the same rule dimensions; unordered
+sibling states remain independent.
+
+Tool evidence completeness is `complete`, `partial` or `unknown`, independently
+of message display truncation. Missing declarations are unknown. Known complete
+matches can satisfy required calls. Absence of forbidden tools requires complete
+evidence throughout the scope; otherwise the check fails with
+`evidence_incomplete`. Child capture is a grading dependency under family scope.
+Import never automatically regrades evidence. Historical scores remain retained.
+Standalone OpenCode exports cannot prove that every descendant was discovered;
+family absence checks therefore remain incomplete without capture evidence.
+Third-party ATIF without completeness declarations is also unknown. An explicit
+`trajectory_scope: root` selects root-only evidence, but still requires a complete
+root stream. Claude links prove dispatch when a parent tool result explicitly
+references an embedded child; they do not by themselves prove a terminal join.
+Repeated child links without per-call execution boundaries remain unordered.
+
+Ordered matching uses canonical within-session order and proven activation
+dispatch/join edges across sessions. Background dispatch is not a join. Parallel
+siblings are unordered. Matching retains feasible witnesses instead of choosing
+an arbitrary topological order. Arguments and observations belong to one call.
+
+
 Direct verifier tests use explicit trajectory, source, and artifact fixtures.
 Small synthetic Harbor Tasks test orchestration, resume, paths, artifacts, and
 reward plumbing. Neither is an Agent-quality result.

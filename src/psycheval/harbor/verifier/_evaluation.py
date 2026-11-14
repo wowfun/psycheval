@@ -26,12 +26,18 @@ def evaluate(
         return []
     required_calls = config.get("required_calls") or []
 
-    checks = required_call_checks(trajectory, required_calls)
+    checks = required_call_checks(
+        trajectory, required_calls, config.get("trajectory_scope", "family")
+    )
     forbidden_patterns = string_list(
         config.get("forbidden_tool_names"), field="forbidden_tool_names"
     )
     if forbidden_patterns:
-        checks.append(forbidden_tool_check(trajectory, forbidden_patterns))
+        checks.append(
+            forbidden_tool_check(
+                trajectory, forbidden_patterns, config.get("trajectory_scope", "family")
+            )
+        )
     checks.extend(_outcome_checks(trajectory, config, artifacts_dir))
     return checks
 

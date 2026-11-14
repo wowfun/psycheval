@@ -9,7 +9,13 @@ from typing import Any
 from ._calls import _required_branches, _validate_tool_patterns, string_list
 
 BUILTIN_FIELDS = frozenset(
-    ("required_calls", "forbidden_tool_names", "final_terms", "required_artifacts")
+    (
+        "required_calls",
+        "forbidden_tool_names",
+        "final_terms",
+        "required_artifacts",
+        "trajectory_scope",
+    )
 )
 REWARD_DIMENSIONS = (
     "required_tool",
@@ -49,6 +55,9 @@ class ScoringPlan:
 def build_scoring_plan(config: dict[str, Any]) -> ScoringPlan:
     if not isinstance(config, dict):
         raise ValueError("verifier config must be an object")
+    from ..family import scope
+
+    scope(config.get("trajectory_scope", "family"))
     unknown = sorted(set(config) - BUILTIN_FIELDS - {"custom_checks", "scoring"})
     if unknown:
         raise ValueError(

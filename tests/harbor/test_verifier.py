@@ -38,6 +38,12 @@ def test_acp_zero_calls_with_incomplete_protocol_cannot_prove_no_forbidden_tools
         agent={"name": "fixture", "version": "1"},
         steps=[{"step_id": 1, "source": "user", "message": "task"}],
     )
+    assert not forbidden_tool_check(trajectory, ["forbidden"])["passed"]
+    from psycheval.harbor.family import retain
+
+    value = trajectory.to_json_dict()
+    value["extra"] = {"tool_evidence": "complete"}
+    trajectory = Trajectory.model_validate(retain(value))
     assert forbidden_tool_check(trajectory, ["forbidden"])["passed"]
     trajectory.extra = {"acp_tool_evidence_complete": False}
     assert not forbidden_tool_check(trajectory, ["forbidden"])["passed"]
@@ -1028,6 +1034,50 @@ def test_module_cli_writes_total_and_dimension_rewards(tmp_path: Path) -> None:
         "required_artifacts": 1,
         "custom_outputs": 1,
     }
+
+
+@pytest.mark.parametrize("failure", ["duplicate", "cycle"])
+def test_module_cli_scores_unusable_tool_evidence_without_infrastructure_error(
+    tmp_path, failure
+):
+    from psycheval.harbor.family import retain
+    from tests.harbor.test_family_rules import body
+
+    root = body("root", "first", "second")
+    if failure == "duplicate":
+        root["steps"][1]["tool_calls"][0]["tool_call_id"] = "0"
+        root["steps"][1]["observation"]["results"][0]["source_call_id"] = "0"
+    else:
+        root["subagent_trajectories"] = [body("child", "read")]
+        retain(
+            root,
+            activations=[
+                {
+                    "parent_trajectory_id": "root",
+                    "child_trajectory_id": "child",
+                    "parent_call_id": "0",
+                    "first_call_id": "0",
+                    "last_call_id": "0",
+                    "joined_before_call_id": "0",
+                }
+            ],
+        )
+    agent, logs, artifacts = [
+        tmp_path / name for name in ("agent", "verifier", "artifacts")
+    ]
+    for directory in (agent, logs, artifacts):
+        directory.mkdir()
+    (agent / "trajectory.json").write_text(json.dumps(root), encoding="utf-8")
+    config = tmp_path / "grader.json"
+    config.write_text(
+        json.dumps({"required_calls": [{"any": [{"tool_names": ["*"]}]}]}),
+        encoding="utf-8",
+    )
+    completed = _run_cli(config, agent, logs, artifacts)
+    assert completed.returncode == 0, completed.stderr
+    reward = json.loads((logs / "reward.json").read_text(encoding="utf-8"))
+    assert reward["required_tool"] == 0 and reward["final_answer"] == 1
+    assert not (logs / "verifier-error.txt").exists()
 
 
 def test_module_cli_fails_fast_on_corrupt_effective_config(tmp_path: Path) -> None:

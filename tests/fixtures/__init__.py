@@ -17,6 +17,12 @@ def load_pbench_trajectory(
         (fixture_dir / "trajectory.json").read_text(encoding="utf-8")
     )
     trajectory["steps"][0]["message"] = instruction
+    # These are authored, complete synthetic captures. Absence of a family
+    # declaration in arbitrary imported ATIF does not establish completeness.
+    from psycheval.harbor.family import retain
+
+    trajectory.setdefault("extra", {})["tool_evidence"] = "complete"
+    retain(trajectory)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     source_artifacts = fixture_dir / "artifacts"
     if source_artifacts.is_dir():

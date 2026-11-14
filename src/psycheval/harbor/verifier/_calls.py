@@ -9,6 +9,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from harbor.models.trajectories import ToolCall, Trajectory
 
+from ..family import scope, tools_complete, validate
+
 _FAILURE_STATUSES = {
     "cancelled",
     "error",
@@ -20,11 +22,19 @@ _FAILURE_STATUSES = {
 }
 
 
+class _EvidenceIncomplete(ValueError):
+    pass
+
+
+MAX_MATCH_OPERATIONS = 1_000_000
+
+
 @dataclass
 class _CallEvidence:
     position: int
     call: ToolCall
     observations: list[Any]
+    owner: Trajectory
 
     @cached_property
     def argument_text(self) -> str:
@@ -33,18 +43,97 @@ class _CallEvidence:
         ).lower()
 
 
-def _indexed_calls(trajectory: Trajectory) -> list[_CallEvidence]:
-    observations: dict[str, list[Any]] = {}
-    for step in trajectory.steps:
-        for result in step.observation.results if step.observation else []:
-            if result.source_call_id:
-                observations.setdefault(result.source_call_id, []).append(result)
-    return [
-        _CallEvidence(position, call, observations.get(call.tool_call_id, []))
-        for position, call in enumerate(
-            call for step in trajectory.steps for call in (step.tool_calls or [])
+def _indexed_calls(trajectory: Trajectory, selection="family") -> list[_CallEvidence]:
+    scope(selection)
+    try:
+        validate(trajectory)
+    except ValueError as error:
+        raise _EvidenceIncomplete(f"invalid family: {error}") from error
+    result, pending, identities = [], [trajectory], set()
+    while pending:
+        owner = pending.pop()
+        observations = {}
+        for step in owner.steps:
+            if step.is_copied_context:
+                continue
+            for observation in step.observation.results if step.observation else []:
+                observations.setdefault(observation.source_call_id, []).append(
+                    observation
+                )
+        for step in owner.steps:
+            if not step.is_copied_context:
+                for call in step.tool_calls or []:
+                    identity = (
+                        owner.trajectory_id or owner.session_id,
+                        call.tool_call_id,
+                    )
+                    if identity in identities:
+                        raise _EvidenceIncomplete(
+                            "duplicate trajectory-qualified tool call identity"
+                        )
+                    identities.add(identity)
+                    result.append(
+                        _CallEvidence(
+                            len(result),
+                            call,
+                            observations.get(call.tool_call_id, []),
+                            owner,
+                        )
+                    )
+        if selection == "family":
+            pending.extend(reversed(owner.subagent_trajectories or []))
+    return result
+
+
+def _predecessors(trajectory, calls):
+    """Rule order uses local canonical order and explicitly retained activations."""
+    incoming = [set() for _ in calls]
+    by_owner, by_call = {}, {}
+    for candidate in calls:
+        owner = candidate.owner.trajectory_id or candidate.owner.session_id
+        previous = by_owner.get(owner)
+        if previous is not None:
+            incoming[candidate.position].add(previous)
+        by_owner[owner] = candidate.position
+        by_call[(owner, candidate.call.tool_call_id)] = candidate.position
+    for activation in (trajectory.extra or {}).get("family", {}).get("activations", []):
+        parent = by_call.get(
+            (activation["parent_trajectory_id"], activation.get("parent_call_id"))
         )
-    ]
+        first = by_call.get(
+            (activation["child_trajectory_id"], activation.get("first_call_id"))
+        )
+        last = by_call.get(
+            (activation["child_trajectory_id"], activation.get("last_call_id"))
+        )
+        joined = by_call.get(
+            (
+                activation["parent_trajectory_id"],
+                activation.get("joined_before_call_id"),
+            )
+        )
+        if parent is not None and first is not None:
+            incoming[first].add(parent)
+        if last is not None and joined is not None:
+            incoming[joined].add(last)
+    # Iterative topological traversal; never choose a sibling order as evidence.
+    outgoing = [[] for _ in calls]
+    indegree = [len(values) for values in incoming]
+    for node, parents in enumerate(incoming):
+        for parent in parents:
+            outgoing[parent].append(node)
+    pending = [i for i, count in enumerate(indegree) if count == 0]
+    order = []
+    while pending:
+        node = pending.pop()
+        order.append(node)
+        for child in outgoing[node]:
+            indegree[child] -= 1
+            if not indegree[child]:
+                pending.append(child)
+    if len(order) != len(calls):
+        raise _EvidenceIncomplete("cyclic family execution evidence")
+    return incoming, order
 
 
 def _canonical(trajectory: Trajectory, call: ToolCall) -> bool:
@@ -66,16 +155,21 @@ def matching_observations(trajectory: Trajectory, rule: dict[str, Any]) -> list[
 class ObservationIndex:
     """Reuse pairing and argument serialization across queries of retained ATIF."""
 
-    def __init__(self, trajectory: Trajectory):
+    def __init__(self, trajectory: Trajectory, trajectory_scope="family"):
         self._trajectory = trajectory
-        self._candidates = _indexed_calls(trajectory)
+        self.evidence_error = None
+        try:
+            self._candidates = _indexed_calls(trajectory, trajectory_scope)
+        except _EvidenceIncomplete as error:
+            self.evidence_error = str(error)
+            self._candidates = []
         self.calls = tuple(candidate.call for candidate in self._candidates)
 
     def matching(self, rule: dict[str, Any]) -> list[tuple[ToolCall, tuple[str, ...]]]:
         branches = _required_branches(rule, 1)
         matches = []
         for candidate in self._candidates:
-            if not _canonical(self._trajectory, candidate.call):
+            if not _canonical(candidate.owner, candidate.call):
                 continue
             accepted = [
                 branch
@@ -99,95 +193,166 @@ class ObservationIndex:
 
 
 def required_call_checks(
-    trajectory: Trajectory, required_calls: list[dict[str, Any]]
+    trajectory: Trajectory,
+    required_calls: list[dict[str, Any]],
+    trajectory_scope="family",
 ) -> list[dict[str, Any]]:
-    calls = _indexed_calls(trajectory)
-    checks: list[dict[str, Any]] = []
-    cursor = -1
-    for rule_number, rule in enumerate(required_calls, start=1):
-        branches = _required_branches(rule, rule_number)
-        tool_candidates = [
-            (branch, candidate)
-            for branch in branches
-            for candidate in calls
-            if candidate.position > cursor
-            and _canonical(trajectory, candidate.call)
-            and _tool_name_matches(candidate.call.function_name, branch["tool_names"])
-        ]
-        accepted_patterns = sorted(
-            {pattern for branch in branches for pattern in branch["tool_names"]}
-        )
-        checks.append(
+    branches = [_required_branches(rule, i) for i, rule in enumerate(required_calls, 1)]
+    if not branches:
+        return []
+    try:
+        return _ordered_call_checks(trajectory, branches, trajectory_scope)
+    except _EvidenceIncomplete as error:
+        return [
             _check(
-                f"required_call_{rule_number}_tool",
-                "required_tool",
-                bool(tool_candidates),
-                f"found {len(tool_candidates)} ordered call branch match(es) "
-                f"for tool patterns: {', '.join(accepted_patterns)}",
+                f"required_call_{i}_{suffix}",
+                dimension,
+                False,
+                f"evidence_incomplete: {error}",
             )
-        )
-        argument_candidates = [
-            (branch, candidate)
-            for branch, candidate in tool_candidates
-            if _arguments_match(candidate, branch)
+            for i in range(1, len(branches) + 1)
+            for suffix, dimension in zip(
+                ("tool", "arguments", "observation"),
+                ("required_tool", "required_arguments", "required_observation"),
+            )
         ]
-        checks.append(
-            _check(
-                f"required_call_{rule_number}_arguments",
-                "required_arguments",
-                bool(argument_candidates),
-                "one matched tool branch has the required argument values, terms, "
-                "and URL",
-            )
-        )
-        paired_candidates = [
-            (branch, candidate)
-            for branch, candidate in argument_candidates
-            if _has_successful_observation(candidate.observations, branch)
-        ]
-        checks.append(
-            _check(
-                f"required_call_{rule_number}_observation",
-                "required_observation",
-                bool(paired_candidates),
-                "the same call in one complete branch has a matching successful "
-                "observation",
-            )
-        )
-        if paired_candidates:
-            cursor = min(candidate.position for _branch, candidate in paired_candidates)
-    return checks
 
 
-def forbidden_tool_check(trajectory: Trajectory, patterns: list[str]) -> dict[str, Any]:
+def _ordered_call_checks(trajectory, rules, trajectory_scope):
+    calls = _indexed_calls(trajectory, trajectory_scope)
+    incoming, order = _predecessors(trajectory, calls)
+    # State keeps one best check vector per last matched call. DAG propagation
+    # finds eligible predecessors without enumerating topological permutations.
+    states = {-1: ((), ())}
+    operations = 0
+    for branches in rules:
+        next_states = {}
+        for last, (vector, witness) in states.items():
+            reachable = set()
+            for node in order:
+                operations += 1
+                if operations > MAX_MATCH_OPERATIONS:
+                    raise _EvidenceIncomplete("family_rule_matching_capacity")
+                if (
+                    last < 0
+                    or last in incoming[node]
+                    or any(p in reachable for p in incoming[node])
+                ):
+                    reachable.add(node)
+            dimensions, complete = [False, False, False], []
+            for node in sorted(reachable):
+                candidate = calls[node]
+                if not _canonical(candidate.owner, candidate.call):
+                    continue
+                for branch in branches:
+                    if not _tool_name_matches(
+                        candidate.call.function_name, branch["tool_names"]
+                    ):
+                        continue
+                    dimensions[0] = True
+                    if not _arguments_match(candidate, branch):
+                        continue
+                    dimensions[1] = True
+                    if _has_successful_observation(candidate.observations, branch):
+                        dimensions[2] = True
+                        complete.append(node)
+            choices = complete or [last]
+            for node in choices:
+                value = (
+                    vector + tuple(dimensions),
+                    witness
+                    + (
+                        (
+                            calls[node].owner.trajectory_id
+                            or calls[node].owner.session_id,
+                            calls[node].call.tool_call_id,
+                        ),
+                    )
+                    if complete
+                    else witness,
+                )
+                previous = next_states.get(node)
+                if (
+                    previous is None
+                    or value[0] > previous[0]
+                    or value[0] == previous[0]
+                    and value[1] < previous[1]
+                ):
+                    next_states[node] = value
+        # An earlier equal-or-better state can reach every future match of a
+        # later state. Keep incomparable branches, not every hit in a chain.
+        best_before = {}
+        states = {-1: next_states[-1]} if -1 in next_states else {}
+        for node in order:
+            operations += 1
+            if operations > MAX_MATCH_OPERATIONS:
+                raise _EvidenceIncomplete("family_rule_matching_capacity")
+            previous = max(
+                (best_before[p] for p in incoming[node] if p in best_before),
+                default=next_states.get(-1, ((), ()))[0],
+            )
+            current = next_states.get(node)
+            if current is not None and (not previous or current[0] > previous):
+                states[node] = current
+                previous = current[0]
+            if previous:
+                best_before[node] = previous
+    best = min(
+        states.values(),
+        key=lambda value: (tuple(-int(v) for v in value[0]), value[1]),
+    )
+    witnesses = iter(best[1])
+    details = []
+    observed = sorted({c.call.function_name for c in calls})[:8]
+    for i, branches in enumerate(rules):
+        patterns = [name for branch in branches for name in branch["tool_names"]]
+        detail = f"accepted patterns: {patterns}; observed tools: {observed}"
+        if all(best[0][3 * i : 3 * i + 3]):
+            owner, call = next(witnesses)
+            detail += f"; witness: {owner}/{call}"
+        details.extend([detail] * 3)
+    return [
+        _check(
+            f"required_call_{i // 3 + 1}_{('tool', 'arguments', 'observation')[i % 3]}",
+            ("required_tool", "required_arguments", "required_observation")[i % 3],
+            passed,
+            "matched retained causal evidence; " + details[i]
+            if passed
+            else "no matching call on a proven execution chain; " + details[i],
+        )
+        for i, passed in enumerate(best[0])
+    ]
+
+
+def forbidden_tool_check(
+    trajectory: Trajectory, patterns: list[str], trajectory_scope="family"
+) -> dict[str, Any]:
     _validate_tool_patterns(patterns, field="forbidden_tool_names")
-    # An incomplete stream cannot prove absence, including when it has no calls.
-    if (trajectory.extra or {}).get("acp_tool_evidence_complete") is False or any(
-        not _canonical(trajectory, call)
-        for step in trajectory.steps
-        for call in step.tool_calls or []
-    ):
+    try:
+        calls = _indexed_calls(trajectory, trajectory_scope)
+    except _EvidenceIncomplete as error:
         return _check(
-            "forbidden_tools",
-            "forbidden_tools",
-            False,
-            "incomplete canonical Tool identity evidence",
+            "forbidden_tools", "forbidden_tools", False, f"evidence_incomplete: {error}"
         )
     observed = sorted(
         {
-            call.function_name
-            for step in trajectory.steps
-            for call in (step.tool_calls or [])
-            if _tool_name_matches(call.function_name, patterns)
+            candidate.call.function_name
+            for candidate in calls
+            if _tool_name_matches(candidate.call.function_name, patterns)
         }
     )
+    complete = tools_complete(
+        {"extra": trajectory.extra or {}}, trajectory_scope
+    ) and all(_canonical(c.owner, c.call) for c in calls)
     return _check(
         "forbidden_tools",
         "forbidden_tools",
-        not observed,
-        "no forbidden tools were called"
-        if not observed
-        else "called: " + ", ".join(observed),
+        not observed and complete,
+        "called: " + ", ".join(observed)
+        if observed
+        else "no forbidden tools were called"
+        if complete
+        else "evidence_incomplete: cannot prove absence in selected scope",
     )
 
 
