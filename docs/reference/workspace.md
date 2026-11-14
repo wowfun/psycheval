@@ -5,7 +5,8 @@ The Leaderboard toolbar orders Refresh, Columns, View, Actions, and Export.
 View owns metric scope, the active/archived switch, Save view, and the Saved
 Views sidebar toggle. Actions owns report attachment, archive/activate, and
 deletion, with existing permissions and selection requirements. Menus share
-outside-click dismissal and Escape focus restoration. Summary's Comparison
+outside-click dismissal and Escape focus restoration. Toolbar menu buttons omit
+decorative dropdown arrows. Summary's Comparison
 groups selector precedes Metrics and controls its table, charts, and exports.
 Sorting, summaries, detail values and exports share the selection. Active
 Duration is explicitly source-scoped. Selecting a child changes session detail,
@@ -23,8 +24,19 @@ available as hover descriptions; metric selection exposes a compact, visible
 coverage summary associated with its focusable checkbox. Per-group provenance
 stays in that group's metric cells instead of being repeated in the selector.
 
-Shared table-column filter menus keep their title and Clear/Apply actions visible
-at the top. Only the option list scrolls within the menu's height limit; pointer
+Workspace data tables share a bounded viewport for both scroll directions and
+an opaque sticky column header without gaps at the viewport edge. The table owns
+scrolling; surrounding panels supply spacing and optional compact height limits.
+Rows share hover, selection, focus, and activation behavior. Content tables retain
+their reading semantics and full text. Sorting, filtering, editing, and pagination
+remain capabilities supplied by each table's domain.
+Metric shading derives its range once per column and render; filtering and
+editing do not retain stale ranges between renders.
+
+Shared table-column filter menus use the browser top layer to avoid scroll-container
+clipping, with trigger-anchored positioning when Popover is unavailable. Their
+title and Clear/Apply actions stay visible at the top. Only the option list scrolls
+within the menu's height limit; pointer
 and keyboard navigation use the same list and preserve the filtering workflow.
 Only one shared table-column filter menu may be open across the workspace.
 Opening another closes the previous menu and discards its unapplied draft while
@@ -37,14 +49,29 @@ The Psycheval workspace organizes retained sources, overlays, reports, Saved Vie
 Harbor mounts, and browser presentation without taking ownership of source
 evidence.
 
-The shared header uses the same width, inset, and navigation layout across
-Home, Datasets, Jobs, Reports, and Configuration at a fixed viewport and sidebar
-state. Changes in page height reserve scrollbar space without shifting it.
+The shared header has a compact top inset and the same width and navigation
+layout across Home, Datasets, Jobs, Reports, and Configuration at a fixed viewport
+and sidebar state. Changes in page height reserve scrollbar space without shifting it.
 
 ## Dataset and Job tables
 
-Datasets owns the Dataset registry above its Tasks table. Selecting a Task opens
-the shared resizable right sidebar; closing it returns focus to the selected row.
+Datasets owns the Dataset registry above its Tasks table. Refresh belongs to the
+Dataset registry header and checks the Dataset and Task inventory. Sync manifest
+is a separate administrator write that synchronizes `dataset.toml`.
+Dataset rows include Task, Rule, Rubric, and Scoring item totals over their active
+Tasks, independently of the lower Task table's filters. Empty Datasets have zero
+totals; an unknown Task count makes its affected total unknown. Errors appear
+beside Dataset names rather than in a Status column.
+Datasets and Leaderboard share Columns controls, including draft ordering,
+visibility, Apply, cancellation, and Reset to auto. Automatic visibility follows
+the complete filtered table result; blank Notes and zero Reports hide, while zero
+scoring counts remain meaningful. Manual visibility wins. Preferences belong to
+the workspace and table; selection checkboxes are not business columns.
+Tasks places archived visibility and scoring-item
+flattening in View; creation, manifest synchronization, archive, and deletion in
+Actions, preserving permissions and disabled states. Export remains separate.
+Selecting a Task opens the shared resizable right sidebar; closing it returns
+focus to the selected row.
 File drafts survive page navigation, and replacing a dirty Task requires the
 existing discard confirmation. Jobs uses the same Task table vocabulary, with
 checkbox selection for the run draft independent of the selected detail row.
@@ -90,6 +117,16 @@ Storage and concurrency follow [collection overlays](state-and-data.md#collectio
 
 The Dataset Tasks table shows Task keywords as Tags, the first declared step's
 Instruction (or the single-step instruction), Rules, Rubrics, and Scoring items.
+Skills and Files show counts; Prepare shows whether a Task input preparation
+script is present. Skills counts statically locatable Task-supplied Skill packages,
+excluding Job injection and ambient Skills. Files counts static input attachments
+from native `environment/data/` or a WorkBuddy workspace archive, excluding the
+declared Skills tree. It does not predict files generated by preparation.
+Prepare describes native `environment/prepare.py`, not verifier preparation hooks.
+Unresolvable or unreadable resources are unknown rather than zero. Resource cells
+open the Task sidebar at their files or a read-only resource list; archives are
+listed without extraction. Task exports and flattened scoring rows retain these
+Task-level facts. View toggles and Actions use the shared Leaderboard menu rows.
 Instruction cells render a bounded excerpt and expose the complete text on hover
 or keyboard focus. Search and exports retain the complete instruction.
 Package identity, validation status, and diagnostics belong to the Task sidebar.
@@ -121,14 +158,43 @@ no declared items retain their Task context. Selecting an item opens its actual
 source file. Manual counts never produce synthetic items; the flattened view
 discloses their unexpanded count. Selection and management remain Task-based.
 
-Task Summary follows Dataset selection, search, and Task filters, counts each
-Task once, and groups by Overall or Dataset. Unknown values leave their group
-totals blank with a missing-Task count; known Rubric totals remain available.
+Task Summary follows Dataset selection, search, and Task filters and deduplicates
+Tasks by Dataset and Task identity. It groups by Overall, Dataset, Category,
+Difficulty, or Tags. The Task table owns each row's stable Task identity and
+preserves it when flattening scoring items. Category and Difficulty come from
+Task configuration metadata; Tags come from Task keywords. Missing labels form a
+distinct unset group. A Task
+belongs to each of its distinct tags, once per group; tag-group counts cannot be
+summed to obtain the number of matching Tasks. Groups retain first-occurrence order.
+Unknown values leave their group totals unknown with a missing-Task count; known
+Rubric totals remain available.
 Flattening does not change this scope. Task exports follow the current mode,
 visible business columns, and filtered row order rather than checkbox selection.
 JSON preserves lists; Excel writes full text and multiline lists. Summary Excel
-uses the displayed grouping. Unknown values remain null or blank. Archived
+and chart PNG use the displayed grouping, comparison groups, and metric order.
+Data exports resolve Task references against current inventory instead of trusting
+client-supplied totals; PNG captures the displayed summary. Unknown values remain
+null or blank in data exports. Archived
 Tasks retain management controls but have no scoring view, export, or summary.
+
+Task and Leaderboard summaries share grouping, comparison-group and metric
+selectors, table disclosure, bar presentation, and image export primitives.
+Controls have accessible group names without visible labels above their buttons.
+Task Summary starts grouped by Dataset with all groups and its four total metrics
+selected, the table collapsed, and horizontal bars visible. Each metric has its
+own scale; unknown totals have no numeric bar and retain their missing-Task count.
+The chart control also offers pie charts, one per selected metric. Slices show
+each selected group's share of known positive totals; zero and unknown groups
+remain in the legend without fabricated slices. Percentages describe group
+memberships when grouping by overlapping tags. Pie PNG exports use the same
+selection and legend as the chart.
+Overall has no comparison chart. Changing grouping selects all groups; presentation
+choices survive in-document navigation. Task Summary has no distribution-statistic
+selector or radar chart. Empty group/metric selections disable the affected exports.
+Summary and waterfall PNG exports use one conservative canvas resource budget
+and check allocation before encoding. Summary images retain their fixed pixel
+density; waterfalls can reduce density while retaining every stage and readable
+text. Oversized exports fail without truncating content.
 
 Task `judge.yaml` and `grader.json` files open as structured previews with a
 source toggle. WorkBuddy previews retain extended metadata. Previewing a draft
@@ -137,11 +203,32 @@ Draft preview also accepts a new, contained scoring-file path without creating i
 Browsing, counting, and previewing never import Dataset plugins or run Task
 preparation, grading scripts, or model calls.
 
-The service caches scoring projections within a bounded runtime cache. It checks
-the identity, size, and timestamps of every input and missing override candidate
-before reuse, rechecks containment, and invalidates changed or unsafe paths.
-Manual count changes use a separate cache identity. Collection responses retain
-the scoring projection used by the Dataset page's Tasks table.
+The service persists Task inventory and Dataset aggregates in a disposable
+workspace cache. Startup checks sources in the background while returning the
+last valid snapshot; without one, the page shows loading. Refresh starts a shared
+incremental check. Unchanged file identities, sizes, and timestamps reuse parsed
+projections; changed and missing inputs, resources, manual counts, and Dataset
+configuration invalidate affected entries. Publication is atomic and older scans
+cannot overwrite newer changes. Failed scans retain the last valid snapshot and
+report an error. Workbench mutations invalidate in-flight observations and request
+one background publication after the complete operation, including partial batch
+failures. Task discovery never runs synchronously under the catalog writer lease.
+Unchanged Dataset snapshots remain available when another registration changes.
+Inventory rows carry resource counts; resource lists load with selected Task detail.
+Projection hits are read-only. A bounded scan reuses one guarded SQLite connection
+with WAL; closing the scan releases its file handles. Cache paths are checked when
+opening the connection, and Task paths are revalidated on every projection lookup.
+Guests may request the same cache-only Refresh as administrators; concurrent
+requests share the active scan and cannot queue redundant scans. Source writes
+and Sync manifest remain administrator-only.
+The page observes lightweight progress only while active and checking, and retains
+filters, selection, scroll and dirty drafts when results arrive. Task detail reads
+only the selected Task. File reads, exports, and writes revalidate current paths
+and revisions; the cache is never a write precondition authority.
+Checking and stale snapshots remain visibly identified. A transient status-read
+failure retries once; subsequent failure offers Check again without discarding
+the retained table or drafts. Inventory ETags identify the returned representation;
+configuration write preconditions come from the configuration resource.
 
 ## Configuration ownership
 
@@ -424,6 +511,11 @@ not reload server configuration from disk.
 
 Startup displays the last valid catalog immediately while checking sources in
 the background. Without a valid cache, the table waits for the initial build.
+Entering Home without an explicit source location leaves all rows unselected and
+does not load a Trial's detail. Catalog refreshes, filtering, and pagination do
+not choose a row automatically. User selection and explicit source links load
+the requested Trial; refreshes preserve an existing selection while it remains
+available.
 A separate progress region reports discovery counts, checked root
 Trials against the discovered total, and index publication. A multi-step Trial
 counts once, after all its entries have been processed. Unknown totals are not
@@ -618,7 +710,7 @@ The host connection controls follow controller connection state, including
 recovery initiated by the chat's Retry action.
 
 The composer places References and Prompts above the input. References follows
-the current workspace object, including automatic Home selections. A change
+the current workspace object selected by the user or an explicit location. A change
 while its picker is open invalidates that selection. Each prompt shows a
 single-line preview beside its name. Hovering the row reveals the full template.
 The add button precedes Mode and groups images and Agent commands. The model

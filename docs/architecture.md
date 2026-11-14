@@ -36,8 +36,7 @@ recognition and projection for both direct CLI paths and workspace mounts;
 decoding, and publishable file selection for both workspace state and the
 Dataset workbench. `harbor.task_scoring` owns non-executing scoring inventory and
 configuration previews, including WorkBuddy Office metadata. The serve boundary
-owns bounded reads, a runtime-scoped cache validated against scoring input
-metadata, and the workspace-configured manual rule counts; the Dataset
+owns bounded reads and the workspace-configured manual rule counts; the Dataset
 table, summary, and exports consume their shared projection.
 Workspace state owns only discovery, overlays, and derived
 catalog records. One EvaluationReports module resolves normalized Harbor and
@@ -163,6 +162,7 @@ owns filesystem access and content limits. The
 browser shares file-tree and selection primitives between Task editing and
 read-only verification; format renderers interpret selected retained documents
 without changing the canonical score projection.
+Verifier artifact previews and downloads use that Verification file boundary.
 
 The browser UI is one persistent document. The server renders every page shell
 allowed for the current role and the requested route selects the initial page;
@@ -182,9 +182,24 @@ predicates belong to the existing serve query, summary and export boundary and
 do not enter Saved View storage. See the
 [location contract](reference/state-and-data.md#shareable-workspace-locations).
 The initial browser kernel includes the pure location codec and shared query
-and presentation-state vocabulary. Chart normalization, colors and rendering
-belong to the Home modules and load with that page. The kernel never imports
+and presentation-state vocabulary. Shared table and summary primitives accept
+explicit presentation state and callbacks without importing Home runtime or
+location policy. Home owns catalog sorting, facets, metric provenance, and link
+validation; Datasets owns Task aggregation and its summary state. Both consume
+shared summary controls, bar geometry, and image rendering. The kernel never imports
 page implementations or storage repositories.
+Shared column layout and controls accept table-owned state, presence, and sort
+descriptions; storage is scoped by workspace and table. Home retains metric-ID
+admission and server presence independently of Dataset columns.
+
+`state.task_catalog` owns the disposable persistent Task inventory, atomic
+publication, and incremental projection reuse. Serve supplies safe filesystem
+readers and owns background scheduling and mutation invalidation. Harbor owns
+non-executing scoring and input-resource interpretation. Cached observations do
+not authorize file access or replace current mutation revision checks.
+Inventory storage separates Dataset rows and indexed Task conflict observations;
+Task detail never loads the complete inventory. Catalog operation completion
+hooks let Serve request derived Task refreshes after releasing the writer lease.
 Page activation receives the navigation layer's cancellation signal.
 Home's detail coordinator owns the active Trial/report identity, excludes the
 other reader, validates identity before changing reader state, and commits each
