@@ -108,9 +108,12 @@ and diagnostics by trajectory ID. A child's metrics are not added to its parent
 or counted as another evaluation source; detail navigation selects the child's
 own evidence within the root source.
 Sources with embedded children show left-aligned tree navigation for the complete
-family; sources without children omit it. The detail sidebar keeps the tree in
-its header, with bounded scrolling separate from the step list, so long histories
-and large families cannot displace either navigation or steps.
+family; sources without children omit it. The detail sidebar keeps one shared tree
+above the Trajectory, Info and Timing panels, with bounded scrolling separate from
+the step list, so long histories and large families cannot displace either
+navigation or steps.
+Local table controls and timing disclosures retain the 64 most recently visited
+identities; older presentation state is evicted during long sessions.
 Each tree row has a right-aligned Copy action for that trajectory's last Agent
 step's message, without changing the selected trajectory. It copies the original
 message text (text blocks in order for multimodal messages), excluding reasoning
@@ -303,7 +306,9 @@ derived SQLite index. Neither operation changes source artifacts.
 #### Session families and metric scope
 
 Root ATIF `extra.family` (extension schema 1) owns member identities, direct
-parentage, content/tool completeness, native execution status, activations and diagnostics. Execution status uses the recorded native terminal reason, or `unknown`; reaching file end alone does not prove completion. Member bodies
+parentage, content/tool completeness, native execution status, activations and
+diagnostics. Execution status uses the recorded native terminal reason, or
+`unknown`; reaching file end alone does not prove completion. Member bodies
 live in `subagent_trajectories`: embed once, reference N times. Missing bodies
 remain metadata-only nodes. Sidecars mirror these facts without becoming an
 authority. The family belongs to one source/Harbor Step execution window.
@@ -610,12 +615,46 @@ mutations return or produce a generation; clients reconcile by generation and
 stable key. Rebuilding a catalog or report never silently deletes original
 inputs or Harbor-owned evidence.
 
+### Trial detail presentation
+
+Home presents selected Trial evidence only in its right sidebar. Info owns usage
+and accounting breakdowns, input references, recorded provenance, editable Trial
+notes and imported structured analysis. It omits summary metrics already shown
+by the catalog or sidebar header, live Task metadata, verification artifacts and
+Markdown reports, which retain their existing readers. The shared sidebar header
+retains run status, score, evaluator message, judge status and score, and recorded
+reward dimensions. Empty fields and groups
+are omitted; measured zero remains a value. Notes and provenance belong to the
+root Trial; usage, retained session identity, source-event counts and timing follow
+the selected trajectory. Distinct-tool counts and unit Token cost belong to the
+usage group. Recorded variants remain in provenance. Trajectory is the reader for
+retained system prompts and reasoning content, without separate presence badges.
+
+Timing loads its module and constructs its model and contents only on activation.
+It presents phase timing above the responsive waterfall, followed by the
+sortable/filterable detail table and latency distributions. Sections start expanded
+and retain user disclosure choices, with headings on the left and controls on the
+right. Catalog-only interactions retain an unchanged detail surface; detail data,
+selection or metric-scope changes refresh it. Timing table controls update only
+the table, preserving the waterfall instance and zoom. Timing state and export
+identity use the same Trial, trajectory (falling back to session ID, then root)
+and metric scope. Each chart surface owns its instance and resize observation;
+leaving the surface disposes them. Late loading cannot
+replace a different Trial, trajectory or active tab. The expanded waterfall uses
+the shared modal lifecycle. Stage selection opens the matching trajectory and
+step, closing the expanded surface first.
+
+PNG export renders all stages in the selected trajectory and metric scope, with
+Trial/session identification and timing coverage notes, independently of viewport
+zoom and table filters. Export never silently truncates stages; rendering failures
+are reported and temporary rendering resources are released.
+
 ## Shareable workspace locations
 
 The browser location identifies the current page and open detail independently
 of list membership. Home uses `?source=<source_key>` for a Trial, with optional
-`trajectory`, `step`, and `tab`; reports use `?report=<report_ref>` on Home or
-Reports, with an optional Reports `tab`. Identities are stable keys, not aliases
+`trajectory`, `step`, and `tab` (including `info` and `timing`); reports use
+`?report=<report_ref>` on Home or Reports, with an optional Reports `tab`. Identities are stable keys, not aliases
 or list positions. A closed detail leaves the page's list location.
 
 `#view=<base64url>` contains a versioned UTF-8 JSON snapshot of that page's
