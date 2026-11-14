@@ -108,7 +108,7 @@ def test_corrupt_new_evidence_preserves_trial_and_other_metrics(tmp_path):
     values, provenance = construct(trajectory, meta)
     assert values["agent_steps"] == 1
     assert values["tokens"] is None
-    assert provenance["tokens"]["contract_version"] == 1
+    assert provenance["tokens"]["contract_version"] == m.CONTRACT_VERSION
 
 
 def test_dsh_capture_descendants_offsets_and_tool_hook(tmp_path):
@@ -228,7 +228,8 @@ def test_matching_samples_retry_wait_and_cancelled_ttft():
         manifest(False),
         [step(), step(id="2", first_ms=600, complete=False, end_ms=None)],
     )
-    assert result["model_duration_ms"]["value"] is None
+    assert result["model_duration_ms"]["value"] == 1000
+    assert result["model_duration_ms"]["provenance"]["retention"] == "partial"
     assert result["ttft_ms"]["value"] == 350
     assert result["tps"]["value"] == 50
     assert result["tps"]["provenance"]["coverage"]["measured"] == 1
@@ -307,7 +308,9 @@ def test_cache_same_subset_total_requires_all_and_parent_excludes_child():
         },
     ]
     result = m.calculate(manifest(), rows)
-    assert result["tokens"]["value"] is None
+    assert (
+        result["tokens"]["value"] == 140
+    )  # Observed components; missing output stays unknown.
     assert result["cache_hit_rate"]["value"] == 0.5
     rows[0]["includes_children"] = True
     rows[1]["parent_request_id"] = "a"
@@ -426,7 +429,9 @@ def test_dsh_native_retry_boundaries_and_no_sensitive_output():
     assert result["model_duration_ms"]["value"] == 1000
     assert result["ttft_ms"]["value"] == 150
     assert result["tps"]["value"] == pytest.approx(5 / 0.85)
-    assert result["tokens"]["value"] is None  # Unreported failed-attempt usage.
+    assert (
+        result["tokens"]["value"] == 105
+    )  # Observed subtotal; discarded attempt usage is unknown.
 
 
 def test_first_output_ignores_empty_role_usage_and_counts_tool_name():
@@ -513,7 +518,8 @@ def test_seeded_child_requests_exclude_inherited_history_and_main_performance():
     assert complete
     result = m.calculate(manifest(), rows)
     assert result["tokens"]["value"] == 12
-    assert result["model_duration_ms"]["value"] is None
+    assert result["model_duration_ms"]["value"] == 10
+    assert m.calculate(manifest(), rows, "root")["model_duration_ms"]["value"] is None
     with pytest.raises(ValueError, match="missing_inherited_seed_boundary"):
         normalize(events[:2], "child", main_session="root", seeded=True)
 
@@ -556,7 +562,9 @@ def test_measurement_artifact_validates_digest_and_rejects_unknown_paths(tmp_pat
     artifact = open_harbor_verifier_artifact_download(
         tmp_path, containment_root=tmp_path, artifact_id=m.artifact_id(m.MANIFEST)
     )
-    assert json.loads(b"".join(artifact.chunks))["contract_version"] == 1
+    assert (
+        json.loads(b"".join(artifact.chunks))["contract_version"] == m.CONTRACT_VERSION
+    )
     with pytest.raises(ValueError):
         open_harbor_verifier_artifact_download(
             tmp_path,

@@ -94,8 +94,8 @@ def test_truncation_keeps_valid_samples_but_not_totals(tmp_path, monkeypatch, se
     assert not manifest["complete"]
     assert measured["ttft_ms"]["value"] == 100
     assert measured["tps"]["value"] == (10 if settled else None)
-    assert measured["model_duration_ms"]["value"] is None
-    assert measured["tokens"]["value"] is None
+    assert measured["model_duration_ms"]["value"] == (600 if settled else None)
+    assert measured["tokens"]["value"] == (15 if settled else None)
 
 
 def test_unsupported_stream_keeps_native_duration(tmp_path, monkeypatch):

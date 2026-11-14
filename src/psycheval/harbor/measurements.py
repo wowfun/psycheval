@@ -12,8 +12,10 @@ import math
 import os
 from pathlib import Path
 
-EVIDENCE_SCHEMA = 1
-CONTRACT_VERSION = 1
+from .family import scope
+
+EVIDENCE_SCHEMA = 2
+CONTRACT_VERSION = 2
 MANIFEST = "measurements.json"
 EVENTS = "measurement-events.ndjson"
 MAX_EVENT_BYTES = 8 * 1024 * 1024
@@ -280,8 +282,8 @@ def read(directory, marker, *, include_raw=False):
     """Validate a linked generation. Invalid new evidence never becomes legacy."""
     if (
         not isinstance(marker, dict)
-        or marker.get("schema_version") != EVIDENCE_SCHEMA
-        or marker.get("contract_version") != CONTRACT_VERSION
+        or marker.get("schema_version") not in {1, EVIDENCE_SCHEMA}
+        or marker.get("contract_version") not in {1, CONTRACT_VERSION}
     ):
         raise ValueError("unsupported_measurement_contract")
     directory = Path(directory)
@@ -300,8 +302,8 @@ def read(directory, marker, *, include_raw=False):
     ):
         raise ValueError("invalid_measurement_manifest")
     if (
-        manifest.get("schema_version") != EVIDENCE_SCHEMA
-        or manifest.get("contract_version") != CONTRACT_VERSION
+        manifest.get("schema_version") != marker["schema_version"]
+        or manifest.get("contract_version") != marker["contract_version"]
     ):
         raise ValueError("unsupported_measurement_contract")
     descriptor = manifest["events"]
@@ -386,6 +388,8 @@ def trajectory_tools(trajectory):
     """Normalize existing structured observations without parsing output text."""
     session = trajectory.get("session_id") or "unknown"
     for step in trajectory.get("steps") or []:
+        if step.get("is_copied_context"):
+            continue
         observations = (step.get("observation") or {}).get("results") or []
         for call in step.get("tool_calls") or []:
             identity = call.get("tool_call_id")
@@ -413,7 +417,7 @@ def trajectory_tools(trajectory):
             }
 
 
-def calculate(manifest, records):
+def calculate(manifest, records, metric_scope="family"):
     """Compute native evidence metrics using matching samples and identities."""
     source = manifest["producer"]["name"]
     producer = manifest["producer"]
@@ -421,9 +425,11 @@ def calculate(manifest, records):
     complete = manifest.get("complete") is True
     evidence = [f"{MANIFEST}#{manifest['events']['sha256']}", EVENTS]
     results = {}
-    steps, conflicts = _unique(
-        (row for row in records if row.get("scope") == "main"), "step"
-    )
+    scope(metric_scope)
+    selected_records = [
+        row for row in records if metric_scope == "family" or row.get("scope") == "main"
+    ]
+    steps, conflicts = _unique(selected_records, "step")
     boundary = capabilities.get("logical_steps", {})
     timing = dict(
         start_boundary=boundary.get("start_boundary", "unverified"),
@@ -458,9 +464,7 @@ def calculate(manifest, records):
     for key, value, count, method in (
         (
             "model_duration_ms",
-            sum(durations)
-            if complete and target and len(durations) == target
-            else None,
+            sum(durations) if durations else None,
             len(durations),
             "sum(start_to_final_message_ms)",
         ),
@@ -505,7 +509,14 @@ def calculate(manifest, records):
             token_basis="final_output_includes_reasoning",
             **timing,
         )
-    requests, conflicts = _unique(records, "request")
+    requests, conflicts = _unique(selected_records, "request")
+    # Inclusive parent totals cannot establish exclusive root usage.
+    inclusive_root = metric_scope == "root" and any(
+        row.get("includes_children") for row in requests
+    )
+    if inclusive_root:
+        conflicts += sum(bool(row.get("includes_children")) for row in requests)
+        requests = [row for row in requests if not row.get("includes_children")]
     # An explicitly aggregate parent excludes its identified children, recursively.
     by_id = {(row["session_id"], row["id"]): row for row in requests}
 
@@ -526,13 +537,15 @@ def calculate(manifest, records):
 
     requests = [row for row in requests if not covered_by_parent(row)]
     totals, cache, costs = [], [], []
+    complete_usage = 0
     for row in requests:
         prompt, output, cached = (
             nonnegative(row.get(k))
             for k in ("input_tokens", "output_tokens", "cached_tokens")
         )
-        if prompt is not None and output is not None:
-            totals.append(prompt + output)
+        if prompt is not None or output is not None:
+            totals.append((prompt or 0) + (output or 0))
+        complete_usage += prompt is not None and output is not None
         if prompt is not None and cached is not None and cached <= prompt:
             cache.append((prompt, cached))
         cost = nonnegative(row.get("cost_usd"))
@@ -549,8 +562,8 @@ def calculate(manifest, records):
     for key, value, count, method, missing in (
         (
             "tokens",
-            sum(totals) if complete and target and len(totals) == target else None,
-            len(totals),
+            sum(totals) if totals else None,
+            complete_usage,
             "sum(input_including_cache+output)",
             "incomplete_request_usage",
         ),
@@ -565,7 +578,7 @@ def calculate(manifest, records):
         ),
         (
             "cost_usd",
-            sum(costs) if complete and target and len(costs) == target else None,
+            sum(costs) if costs else None,
             len(costs),
             "sum(native_request_cost)",
             "no_trustworthy_cost",
@@ -580,7 +593,6 @@ def calculate(manifest, records):
             quality="estimated"
             if key == "cost_usd" and "native_estimate" in cost_kinds
             else "reported",
-            scope="harbor_visible_trajectory_tree",
             unit="request",
             producer=producer,
             fields=("input_tokens", "output_tokens", "cached_tokens")
@@ -597,9 +609,7 @@ def calculate(manifest, records):
             background_requests="not_covered",
             **({"cost_kinds": cost_kinds} if key == "cost_usd" else {}),
         )
-    tools, conflicts = _unique(
-        (row for row in records if row.get("scope") == "main"), "tool"
-    )
+    tools, conflicts = _unique(selected_records, "tool")
     outcomes = [tool_outcome(row) for row in tools]
     successes, failures = outcomes.count("success"), outcomes.count("failed")
     known = successes + failures
@@ -648,4 +658,26 @@ def calculate(manifest, records):
                 "semantics": "native_event",
             },
         )
+    for key, field in (
+        ("total_prompt_tokens", "input_tokens"),
+        ("total_completion_tokens", "output_tokens"),
+        ("total_cached_tokens", "cached_tokens"),
+    ):
+        values = [nonnegative(row.get(field)) for row in requests]
+        known_values = [value for value in values if value is not None]
+        results[key] = measurement(
+            sum(known_values) if known_values else None,
+            source=source,
+            method="sum(observed_request_components)",
+            basis="request_components_v2",
+            coverage={
+                "measured": len(known_values),
+                "unknown": len(values) - len(known_values),
+                "total": target if complete else None,
+            },
+            evidence=evidence,
+        )
+    for result in results.values():
+        result["provenance"]["scope"] = metric_scope
+        result["provenance"]["retention"] = "complete" if complete else "partial"
     return results

@@ -565,5 +565,8 @@ def agent_step_count(trajectory: dict[str, Any]) -> int | None:
 def count_agent_steps(steps: list[dict[str, Any]]) -> int:
     """Count normalized ATIF Agent steps, independently of stored counters."""
     return sum(
-        isinstance(step, dict) and step.get("source") == "agent" for step in steps
+        isinstance(step, dict)
+        and step.get("source") == "agent"
+        and not step.get("is_copied_context")
+        for step in steps
     )

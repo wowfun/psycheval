@@ -181,7 +181,7 @@ def finalize_trajectory_metrics(trajectory: dict[str, Any]) -> dict[str, Any]:
     timing_sources: set[str] = set()
     usage_sources: set[str] = set()
     for step in trajectory.get("steps", []):
-        if not isinstance(step, Mapping):
+        if not isinstance(step, Mapping) or step.get("is_copied_context"):
             continue
         metrics = step.get("metrics")
         if not isinstance(metrics, Mapping):
@@ -201,7 +201,9 @@ def finalize_trajectory_metrics(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     existing = trajectory.get("final_metrics")
     final_metrics = dict(existing) if isinstance(existing, Mapping) else {}
-    final_metrics["total_steps"] = len(trajectory.get("steps", []))
+    final_metrics["total_steps"] = sum(
+        not step.get("is_copied_context") for step in trajectory.get("steps", [])
+    )
     session_scope = (
         isinstance(final_metrics.get("extra"), Mapping)
         and final_metrics["extra"].get("usage_scope") == "session"
