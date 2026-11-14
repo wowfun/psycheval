@@ -383,28 +383,64 @@ def test_tool_name_globs_apply_to_required_and_forbidden_calls(tmp_path: Path) -
     }
 
 
-def test_tool_name_globs_are_case_sensitive(tmp_path: Path) -> None:
+@pytest.mark.parametrize("name", ["WebFetch", "WEB-FETCH", "web_fetch", "Web_-Fetch"])
+@pytest.mark.parametrize("pattern", ["webfetch", "WEB_FETCH", "Web-Fetch", "WEB_*"])
+def test_tool_names_ignore_case_and_separators_in_all_queries(
+    tmp_path: Path, name: str, pattern: str
+) -> None:
     trajectory = Trajectory(
         **_fixture_trajectory(_WEB_FETCH_FIXTURE, "Fetch it", tmp_path)
     )
+    trajectory.steps[1].tool_calls[0].function_name = name
 
     checks = evaluate(
         trajectory,
         {
             "required_calls": [
-                _required_call(_branch("WEB_*", observation_terms=["2017-05-13"]))
+                _required_call(_branch(pattern, observation_terms=["2017-05-13"]))
             ],
+            "forbidden_tool_names": [pattern],
             "final_terms": ["2017-05-13"],
         },
         tmp_path,
     )
 
-    assert (
-        next(check for check in checks if check["id"] == "required_call_1_tool")[
-            "passed"
-        ]
-        is False
+    by_id = {check["id"]: check for check in checks}
+    assert by_id["required_call_1_tool"]["passed"] is True
+    assert by_id["required_call_1_observation"]["passed"] is True
+    assert by_id["forbidden_tools"]["passed"] is False
+    assert by_id["forbidden_tools"]["evidence"] == f"called: {name}"
+    matches = ObservationIndex(trajectory).matching(
+        {"any": [{"tool_names": [pattern]}]}
     )
+    assert [call.function_name for call, _ in matches] == [name]
+
+
+@pytest.mark.parametrize(
+    ("name", "pattern", "expected"),
+    [
+        ("WEB-M", "web_[a-z]", True),
+        ("web_z", "WEB-[!a-m]", True),
+        ("web-b", "web_[!a-m]", False),
+        ("WEB-[", "web_[[]", True),
+        ("web-]", "web_[]]", True),
+        ("web-fetch", "web_?etch", True),
+        ("Web-Fetch", "web[-_]fetch", True),
+        ("WebFetch", "web[_]fetch", True),
+        ("WebFetch", "web?fetch", False),
+        ("webXfetch", "web?fetch", True),
+        ("web[]fetch", "web[]fetch", True),
+        ("web7fetch", "web[--_]fetch", True),
+        ("custom_web_fetch_helper", "webfetch", False),
+        ("mcp.webfetch", "webfetch", False),
+    ],
+)
+def test_tool_name_normalization_preserves_globs_and_exact_boundaries(
+    name, pattern, expected
+):
+    from psycheval.harbor.verifier._calls import _tool_name_matches
+
+    assert _tool_name_matches(name, [pattern]) is expected
 
 
 def test_skill_name_in_successful_shell_call_arguments_is_required(

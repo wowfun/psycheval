@@ -3,7 +3,7 @@
     {
       "any": [
         {
-          "tool_names": ["web_fetch", "webfetch"],
+          "tool_names": ["webfetch"],
           "argument_url": "https://www.iana.org/help/example-domains",
           "observation_terms": [
             "www.iana.org/help/example-domains",
@@ -15,12 +15,11 @@
     }
   ],
   "forbidden_tool_names": [
-    "web_search",
     "websearch",
-    "exec_command",
+    "execcommand",
     "bash",
     "terminal",
-    "execute_code",
+    "executecode",
     "shell"
   ],
   "final_terms": ["2017-05-13", "www.iana.org/help/example-domains"]

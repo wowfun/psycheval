@@ -22,6 +22,23 @@ _TASK_CASES = [
 _TEMPLATE_ROOT = _REPOSITORY_ROOT / "examples" / "tasks" / "pbench-task-template"
 
 
+@pytest.mark.parametrize("grader_path", sorted(_DATASETS_ROOT.rglob("grader.json")))
+def test_dataset_tool_patterns_use_one_canonical_spelling(grader_path: Path) -> None:
+    config = json.loads(grader_path.read_text(encoding="utf-8"))
+    lists = [config.get("forbidden_tool_names", [])]
+    lists.extend(
+        branch["tool_names"]
+        for rule in config.get("required_calls", [])
+        for branch in rule["any"]
+    )
+    for names in lists:
+        assert len(names) == len(set(names))
+        assert all(
+            name == name.casefold() and "-" not in name and "_" not in name
+            for name in names
+        )
+
+
 @pytest.mark.parametrize(
     ("dataset_name", "expected_task_dirs"),
     [
@@ -91,7 +108,7 @@ def test_pbench_grader_accepts_fixture_trajectory(
         ),
     ],
 )
-def test_pbench_grader_accepts_explicit_web_tool_aliases(
+def test_pbench_grader_accepts_equivalent_web_tool_spellings(
     dataset_name: str,
     task_dir: str,
     canonical_name: str,
@@ -157,19 +174,19 @@ def test_pbench_browser_grader_accepts_harbor_computer_actions(
         (
             "pbench-v1.0",
             "web-search-01",
-            [{"web_search", "websearch"}],
+            [{"websearch"}],
         ),
         (
             "pbench-v1.0",
             "web-fetch-01",
-            [{"web_fetch", "webfetch"}],
+            [{"webfetch"}],
         ),
         (
             "pbench-v1.0-plus",
             "browser-control-01",
             [
-                {"browser_type", "computer_action"},
-                {"browser_click", "computer_action"},
+                {"browsertype", "computeraction"},
+                {"browserclick", "computeraction"},
             ],
         ),
     ],

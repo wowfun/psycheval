@@ -8,7 +8,6 @@
             "*terminal*",
             "*shell*",
             "bash",
-            "Bash",
             "pwsh"
           ],
           "argument_terms": [

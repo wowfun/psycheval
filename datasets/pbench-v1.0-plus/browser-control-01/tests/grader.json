@@ -3,12 +3,12 @@
     {
       "any": [
         {
-          "tool_names": ["browser_type"],
+          "tool_names": ["browsertype"],
           "argument_values": {"text": "Harbor eval"},
           "observation_terms": ["Harbor eval"]
         },
         {
-          "tool_names": ["computer_action"],
+          "tool_names": ["computeraction"],
           "argument_values": {"type": "type_text_at", "text": "Harbor eval"},
           "observation_terms": ["Harbor eval"]
         }
@@ -17,12 +17,12 @@
     {
       "any": [
         {
-          "tool_names": ["browser_click"],
+          "tool_names": ["browserclick"],
           "argument_terms": ["button"],
           "observation_terms": ["submitted-form.html", "received!"]
         },
         {
-          "tool_names": ["computer_action"],
+          "tool_names": ["computeraction"],
           "argument_values": {"type": "click"},
           "observation_terms": ["submitted-form.html", "received!"]
         }

@@ -24,12 +24,10 @@ HN_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
 _LITERAL = r"""(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s;&|<>]+))"""
 _READ_TOOLS = [
     "*read*",
-    "*Read*",
     "*exec*",
     "*terminal*",
     "*shell*",
     "bash",
-    "Bash",
     "pwsh",
 ]
 _EVIDENCE_BYTES = 1024 * 1024

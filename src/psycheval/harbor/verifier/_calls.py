@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from functools import cached_property
@@ -438,7 +439,28 @@ def _validate_tool_patterns(patterns: list[str], *, field: str) -> None:
 
 
 def _tool_name_matches(name: str, patterns: list[str]) -> bool:
-    return any(fnmatchcase(name, pattern) for pattern in patterns)
+    name = name.casefold().replace("-", "").replace("_", "")
+    return any(fnmatchcase(name, _tool_pattern(pattern)) for pattern in patterns)
+
+
+def _tool_pattern(pattern: str) -> str:
+    pattern = pattern.casefold()
+    if "[" not in pattern:
+        return pattern.replace("-", "").replace("_", "")
+
+    def normalize(token):
+        value = token[0]
+        if not value.startswith("["):
+            return ""
+        chars = value[1:-1]
+        # Interior '-' can form a range even when the endpoints are separators.
+        return (
+            ""
+            if chars and set(chars) <= {"-", "_"} and "-" not in chars[1:-1]
+            else value
+        )
+
+    return re.sub(r"\[!?]?[^]]*\]|[-_]+", normalize, pattern)
 
 
 def _arguments_match(candidate: _CallEvidence, rule: dict[str, Any]) -> bool:

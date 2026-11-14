@@ -40,8 +40,21 @@ Agent adapter or independent runtime telemetry; a synthetic ATIF fixture is not
 proof that an Agent performed the recorded action.
 
 The generic verifier evaluates ordered required calls, forbidden tool-name
-patterns, final-answer terms, and safe artifact-root-relative paths. Its public
-Python seams are `build_scoring_plan(config)`, `evaluate(...)`, and
+patterns, final-answer terms, and safe artifact-root-relative paths.
+
+Tool-name matching for `tool_names` and `forbidden_tool_names` ignores letter
+case and literal `-` / `_` separators in both recorded names and patterns.
+For example, `webfetch` matches `WebFetch`, `web-fetch`, and `web_fetch`.
+Glob operators and character classes retain their syntax; exact names do not
+become substring matches. A positive character class containing only literal `-`
+and `_` is an ignored separator; ranges still consume a character. `?` consumes
+one remaining character, so `web?fetch`
+matches `webXfetch` but not `webfetch`. Required calls, forbidden calls and observation queries
+use the same matcher. Argument values, URLs, observations and retained evidence
+keep their existing semantics and original text. Dataset patterns use lowercase
+names without separators or redundant spelling aliases.
+
+Public Python seams are `build_scoring_plan(config)`, `evaluate(...)`, and
 `aggregate(checks, *, plan)` in `psycheval.harbor.verifier`; the module CLI is
 `python -m psycheval.harbor.verifier`. The [Harbor contract](harbor.md#script-checks-and-weighted-scoring)
 owns custom script checks, fixed scoring items, and weighted partial credit.

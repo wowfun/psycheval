@@ -170,7 +170,7 @@ def test_trend_digest_task_contract_and_workbook(x_fetch: ModuleType) -> None:
         )
         branch = config["required_calls"][0]["any"][0]
         assert branch == {
-            "tool_names": ["*exec*", "*terminal*", "*shell*", "bash", "Bash", "pwsh"],
+            "tool_names": ["*exec*", "*terminal*", "*shell*", "bash", "pwsh"],
             "argument_terms": [skill_name],
         }
 
@@ -1391,3 +1391,17 @@ def test_github_local_read_is_not_a_source_fetch(tmp_path, verifier):
     rewards, _ = _grade(verifier, runtime, config)
     assert rewards["required_tool"] == 0
     assert rewards["required_observation"] == 0
+
+
+@pytest.mark.parametrize("tool_name", ["WebFetch", "WEB-FETCH", "web_fetch"])
+def test_webfetch_spellings_preserve_github_source_gates(tmp_path, verifier, tool_name):
+    runtime, config, _, _ = _case(tmp_path, "github")
+    path = Path(runtime.paths.agent_logs) / "trajectory.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["steps"][1]["tool_calls"][0]["function_name"] = tool_name
+    path.write_text(json.dumps(data), encoding="utf-8")
+    rewards, _ = _grade(verifier, runtime, config)
+    assert rewards["required_arguments"] == 1
+    assert rewards["required_observation"] == 1
+    assert rewards["reward"] == 1
+    assert (Path(runtime.paths.verifier_logs) / "artifact_text/sources.md").is_file()
