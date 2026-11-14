@@ -126,6 +126,9 @@ Judge and file access. `harbor.timing` owns the shared time-source metadata and
 fallback rules; report and browser presentation consume that single resource.
 `harbor.measurements` owns bounded native measurement evidence and pure
 value/provenance construction; Agent collectors normalize native events for it.
+`harbor.family` owns retained session membership, activations, bounded family
+traversal and scoped evidence selection. Its authority is versioned root ATIF
+`extra.family`; report sidecars and catalog rows remain derived projections.
 Core application modules may consume these public pure services, the session
 models/readers and conversion interfaces. The Harbor copy unit imports no other
 Psycheval module, including in type annotations or resource loading.

@@ -300,6 +300,47 @@ derived SQLite index. Neither operation changes source artifacts.
 
 ### Numeric metrics
 
+#### Session families and metric scope
+
+Root ATIF `extra.family` (extension schema 1) owns member identities, direct
+parentage, content/tool completeness, native execution status, activations and diagnostics. Execution status uses the recorded native terminal reason, or `unknown`; reaching file end alone does not prove completion. Member bodies
+live in `subagent_trajectories`: embed once, reference N times. Missing bodies
+remain metadata-only nodes. Sidecars mirror these facts without becoming an
+authority. The family belongs to one source/Harbor Step execution window.
+
+`metric_scope` is `family` (default) or `root`. Reports retain both `metric_sets`
+only at the root. Child sidecars retain member facts and display timing, without
+duplicated aggregate values or provenance. A projection constructs member facts
+once and aggregates at the root; derived stored metrics are not a read authority.
+Query, sorting, summaries and exports use the selected scope. Family sums unique
+retained work and request usage; explicitly inclusive parent usage excludes its
+covered descendants. Unknown components are not zero. Partial observed values
+participate in statistics with coverage counts and reasons. Worse capture can
+make consumption appear lower; equal scope does not imply equal coverage.
+TTFT averages valid logical steps; TPS/cache rate use matching sufficient
+statistics. Each pooled value has fresh family provenance and coverage of the
+members with usable paired statistics; incomplete fields from different members
+are never combined into a sample. Copied context never contributes work, usage
+or rule evidence.
+
+Active Duration remains source-scoped in either view, preserving aligned
+telemetry, Agent execution interval, trajectory contribution and retained-sidecar
+fallbacks; child fallback intervals are not summed. Optional execution elapsed
+time may equal Active Duration when it uses the same recorded interval.
+Per-metric provenance is bounded to 2 KiB; both scopes share 32 KiB per source.
+Family coverage is stored once per metric set, alongside metric values and
+provenance. If derived provenance exceeds its shared budget, optional details are
+compacted and explicitly marked; a final unknown-provenance summary retains the
+numeric values rather than rejecting the source. Original evidence is unchanged.
+Coverage stores counts rather than rosters. Families admit at most 1024 members,
+body depth 64 and 100000 execution nodes; one missing boundary member may identify
+an excluded branch at depth 65. ATIF reads/writes are bounded to 128 MiB.
+An indivisible historical family total cannot recover root usage. Retained
+request/session identity can. Claude family reprojection can increase displayed
+totals without modifying source ATIF or scores. Excel retains numeric cells;
+scope/coverage are metadata columns and provenance worksheet records.
+
+
 The catalog registers numeric metrics during reconciliation and indexes values
 by source and metric ID. Built-ins retain their registered ASCII names. Custom
 top-level `final_metrics.extra` scalars use `atif.extra:<key>`; verifier rewards
@@ -336,7 +377,7 @@ than assigned a single provenance; missing metadata is also counted. Numeric
 aggregation remains unchanged. The workbench exposes this information in value
 hints, and JSON catalog responses retain the structured metadata.
 
-Measurement contract 1 covers the ten Home defaults, Leaderboard Cost and Last
+Measurement contract 2 covers the ten Home defaults, Leaderboard Cost and Last
 Turn End. One constructor selects value and provenance together. Each record
 identifies producer/version, original fields, bounded evidence references,
 formula, target scope, sample unit, actual start/end boundaries, retry policy,
@@ -346,10 +387,10 @@ completeness or accuracy. Intervals use one clock; invalid or missing boundaries
 are not repaired with zero clamps, interpolation or adjacent timestamps.
 
 A logical model step generates one final assistant message, including its
-retries. Performance covers the main Session, with child performance separate.
+retries. Performance follows the selected root/family scope.
 Model call duration sums start-to-final-message intervals, including waiting
 and retry backoff, without adding subsequent tool time. Incomplete target
-boundaries make the total unknown. Avg TTFT averages complete start-to-first
+boundaries retain observed contributions with partial coverage. Avg TTFT averages complete start-to-first
 nonempty text, reasoning or tool-call output pairs; failed/cancelled steps with
 that pair qualify. Empty blocks, roles, heartbeats and usage do not.
 Decode TPS is effective output throughput including retry waiting: final-message
@@ -358,15 +399,15 @@ same complete samples. Discarded attempts add no output tokens. Reasoning tokens
 are included exactly once; unknown token basis or final usage excludes a sample.
 Agent-specific boundaries and preparation overhead remain explicit in basis IDs.
 
-Tokens and Cost cover the Harbor-visible trajectory tree, deduplicated by request
+Tokens and Cost follow the selected scope, deduplicated by request
 identity; parent totals including children cannot be added to those children.
-Missing necessary token components make totals unknown. Cache Hit uses requests
+Missing token components remain unknown; observed components contribute partial subtotals. Cache Hit uses requests
 with complete cache data and cache-inclusive input as denominator, with subset
 coverage. Hidden background requests are outside scope. Agent steps and Tool
-Calls retain main-trajectory counting; `total_turns` is ignored. Capture state,
+Calls count execution steps in the selected scope, excluding copied context; `total_turns` is ignored. Capture state,
 cancellation or truncation proves partial retention; task failure alone does not.
 Count provenance follows the ATIF retention boundary independently of native
-measurement collection. A partial ATIF reports its retained main-trajectory scope;
+measurement collection. A partial ATIF reports its retained selected scope;
 complete native timing evidence cannot relabel that trajectory as complete.
 New Tool Success Rate is successes / known outcomes, retaining failed, unknown
 and total counts. Structured exit status, error, timeout and cancellation override
@@ -381,15 +422,15 @@ component scores; configured Judge weights are only a fallback when that evidenc
 is absent. Last Turn End distinguishes native completion, observed trajectory
 boundary and Harbor fallback.
 
-New runs link evidence schema 1 / measurement contract 1 through ATIF extra or
+New runs link evidence schema 2 / measurement contract 2 through ATIF extra or
 AgentContext metadata. Damaged linked evidence is unavailable, never legacy.
 Without that marker, historical values and denominators are preserved and
 provenance is `legacy`; neither reimport date nor Agent name upgrades a record.
 Reprojection adds explanations without recalculating historical measurements.
 
 Provenance follows report `trajectory_meta`, catalog `row_json` and paginated
-Trial responses without new tables or numeric columns. Catalog schema is 22 and
-projection is 13. Manifest and evidence digests join source revision; values and
+Trial responses without new tables or numeric columns. Catalog schema is 23 and
+projection is 16. Manifest and evidence digests join source revision; values and
 provenance commit in one generation. In-memory summary, presence and registry caches
 also include the persistent catalog instance identity, so rebuilding a database
 cannot reuse an older instance's generation number. Bounds are 2 KiB and four references per
@@ -405,7 +446,7 @@ sources are distinguished from mixed bases/contracts. Legacy Tool Success Rate
 `(calls-errors)/calls` and contract-1 `successes/known` may contribute to Mean
 together; hints disclose formulas and Trial counts.
 
-Report schema is 21; export filenames derive from the same constant. Browser
+Report schema is 23; export filenames derive from the same constant. Browser
 downloads use the server's Content-Disposition filename. ATIF schema
 is independent. JSON includes structured provenance. Server-generated Excel keeps
 numeric worksheets and adds a provenance worksheet. Provenance detail is bounded
