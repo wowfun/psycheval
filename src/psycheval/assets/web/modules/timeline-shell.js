@@ -26,7 +26,7 @@ function renderTimelineSection(className, title, meta, body) {
   </details>`;
 }
 function renderTimelineWaterfall(trace) {
-  const height = Math.max(300, trace.stages.length * 34 + 96);
+  const height = Math.max(300, Math.min(trace.stages.length, 24) * 34 + 96);
   return `<div class="timeline-waterfall-shell"><div class="timeline-waterfall-chart" data-timeline-chart style="height:${esc(height)}px"></div><p class="timeline-fallback" data-timeline-fallback>${esc(t("timeline_echarts_unavailable", "ECharts did not load. Timeline Waterfall is unavailable, but the detail table is still shown."))}</p></div>`;
 }
 function initTimelineDiagnostics(trajectory, meta) {

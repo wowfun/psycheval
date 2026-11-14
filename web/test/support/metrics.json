@@ -13,8 +13,8 @@
   },
   {
     "key": "duration_ms",
-    "label": "Active Duration",
-    "message_key": "duration",
+    "label": "Active Duration (entry)",
+    "message_key": "duration_entry",
     "unit": "ms",
     "direction": "lower",
     "default": true,
@@ -72,6 +72,8 @@
     "type": "percent"
   },
   {
+    "description": "Effective assistant/agent records; Claude excludes synthetic records. Historical ATIF without a count uses agent steps. Counts follow the selected session scope.",
+    "description_message_key": "metric_agent_steps_hint",
     "key": "agent_steps",
     "label": "Agent steps",
     "message_key": "agent_steps",
@@ -81,9 +83,7 @@
     "saved_view": true,
     "column_key": "agent_steps",
     "column_default": true,
-    "type": "number",
-    "description": "Effective assistant/agent records; Claude excludes synthetic records. Historical ATIF without a count uses agent steps. Children count separately.",
-    "description_message_key": "metric_agent_steps_hint"
+    "type": "number"
   },
   {
     "key": "model_duration_ms",
@@ -252,5 +252,17 @@
     "column_key": "total_tool_errors",
     "column_default": false,
     "type": "number"
+  },
+  {
+    "key": "execution_elapsed_ms",
+    "label": "Execution elapsed",
+    "message_key": "execution_elapsed",
+    "unit": "ms",
+    "direction": "lower",
+    "default": false,
+    "saved_view": false,
+    "column_key": "execution_elapsed_ms",
+    "column_default": false,
+    "type": "duration"
   }
 ]

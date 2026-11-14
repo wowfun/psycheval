@@ -8,6 +8,7 @@ const browser = installBrowserDom(`
   <script type="application/json" id="peval-i18n">{}</script>
   <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","sources":[]}</script>
 `);
+window.HTMLCanvasElement.prototype.getContext = () => ({ font: "", measureText: text => ({ width: text.length * 6 }) });
 
 const runtime = await import("../../src/psycheval/assets/web/modules/runtime.js");
 const catalog = await import("../../src/psycheval/assets/web/modules/serve-catalog.js");
@@ -49,6 +50,7 @@ function resetSummaryState() {
   };
   runtime.state.catalogQuery = {
     state: "active",
+    metric_scope: "family",
     page: 1,
     page_size: 100,
     search: "",
@@ -70,9 +72,10 @@ function resetSummaryState() {
   runtime.state.leaderboardSummaryGroupBy = "overall";
   runtime.state.leaderboardSummaryStatistic = SUMMARY_DEFAULTS.statistic;
   runtime.state.leaderboardSummaryChartType = SUMMARY_DEFAULTS.chart_type;
-  runtime.state.leaderboardSummaryRadarGroups = SUMMARY_DEFAULTS.radar_groups;
+  runtime.state.leaderboardSummaryComparisonGroups = SUMMARY_DEFAULTS.comparison_groups;
   runtime.state.leaderboardSummaryMetrics = null;
-  runtime.state.leaderboardSummaryRadarSearch = "";
+  runtime.state.leaderboardSummaryGroupSearch = "";
+  runtime.state.leaderboardGroupDraft = null;
   runtime.state.leaderboardSummaryTableOpen = SUMMARY_DEFAULTS.table_open;
   runtime.state.leaderboardSummary = null;
   runtime.state.leaderboardSummaryLoading = false;
@@ -159,7 +162,7 @@ test("summary cache ignores pagination, sorting, and chart statistic", async () 
     assert.equal(requests.length, 1);
     assert.equal(requests[0].path, "/api/catalog-summaries");
     assert.deepEqual(Object.keys(requests[0].body).sort(), [
-      "agents", "browser_views", "categories", "datasets", "group_by", "jobs", "models",
+      "agents", "browser_views", "categories", "datasets", "group_by", "jobs", "metric_scope", "models",
       "providers", "results", "search", "state", "tags", "tasks", "views",
     ]);
     assert.equal(requests[0].body.page, undefined);
@@ -466,7 +469,7 @@ test("an oversized summary remains visible but is not retained in the browser ca
   }
 });
 
-test("radar controls enforce limits, preserve search and missing axes, and do not fetch data", () => {
+test("comparison groups share unlimited selection across table, charts and exports without fetching", () => {
   resetSummaryState();
   const target = document.createElement("section");
   target.id = "leaderboard-summary";
@@ -479,9 +482,9 @@ test("radar controls enforce limits, preserve search and missing axes, and do no
   try {
     summaryUi.renderLeaderboardSummary();
     target.querySelector("[data-summary-chart-type=radar]").click();
-    assert.equal(target.querySelectorAll("[data-radar-group]:checked").length, 5);
-    assert.equal(target.querySelectorAll("[data-radar-group]:disabled").length, 2);
-    assert.match(target.textContent, /No data:.*TTFT/);
+    assert.equal(target.querySelectorAll("[data-comparison-group]:checked").length, 7);
+    assert.equal(target.querySelectorAll("[data-comparison-group]:disabled").length, 0);
+    assert.match(target.textContent, /No data.*n=0/);
     assert.equal(target.querySelectorAll("[data-metric-id]:checked").length, 10);
     const context = radarUi.radarContext(runtime.state.leaderboardSummary.summary.groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
     const option = radarUi.radarOption(context, 600, 440);
@@ -489,27 +492,63 @@ test("radar controls enforce limits, preserve search and missing axes, and do no
     assert.ok(option.graphic.some(marker => marker.type === "group"));
     assert.equal(context.series[0].points.find(point => point.key === "ttft_ms").value, null);
     assert.equal(target.querySelector("[data-radar-fallback]").hidden, false);
-    const search = target.querySelector("[data-radar-search]");
+    const search = target.querySelector("[data-group-search]");
     search.value = "model-1";
     search.dispatchEvent(new Event("input"));
-    target.querySelector("[data-radar-group='1']").click();
-    assert.equal(target.querySelector("[data-radar-search]").value, "model-1");
-    assert.equal(target.querySelectorAll("[data-radar-group-row]:not([hidden])").length, 1);
-    assert.equal(target.querySelectorAll("[data-radar-group]:checked").length, 4);
+    target.querySelector("[data-comparison-group='1']").click();
+    assert.equal(summaryUi.leaderboardSummaryImageSnapshot().bars[0].values.length, 7);
+    target.querySelector("[data-group-apply]").click();
+    assert.equal(summaryUi.leaderboardSummaryImageSnapshot().bars[0].values.length, 6);
+    target.querySelector("[data-summary-table-toggle]").click();
+    assert.equal(target.querySelectorAll("[data-summary-metric=score]").length, 6);
+    assert.equal(target.querySelector("[data-group-search]").value, "model-1");
+    assert.equal(target.querySelectorAll("[data-group-row]:not([hidden])").length, 1);
+    assert.equal(target.querySelectorAll("[data-comparison-group]:checked").length, 6);
     for (const key of ["cache_hit_rate", "tool_success_rate", "ttft_ms"]) target.querySelector(`[data-metric-id=${key}]`).click();
     target.querySelector("[data-metric-apply]").click();
-    assert.equal(target.querySelector("[data-radar-search]").value, "model-1");
+    assert.equal(target.querySelector("[data-group-search]").value, "model-1");
     assert.equal(target.querySelectorAll("[data-metric-id]:checked").length, 7);
     assert.equal(target.querySelectorAll("[data-metric-id]:disabled").length, 0);
     target.querySelector("[data-summary-chart-type=bar]").click();
     assert.equal(target.querySelector("[data-summary-radar]"), null);
     target.querySelector("[data-summary-chart-type=radar]").click();
-    assert.equal(target.querySelector("[data-radar-search]").value, "model-1");
-    assert.equal(target.querySelectorAll("[data-radar-group]:checked").length, 4);
+    assert.equal(target.querySelector("[data-group-search]").value, "model-1");
+    assert.equal(target.querySelectorAll("[data-comparison-group]:checked").length, 6);
   } finally {
     globalThis.fetch = previousFetch;
     target.remove();
   }
+});
+
+test("comparison drafts cancel, unavailable keys remain removable, and empty selection disables exports", async () => {
+  resetSummaryState();
+  const target = document.createElement("section"); target.id = "leaderboard-summary"; document.body.append(target);
+  runtime.state.leaderboardSummaryGroupBy = "model";
+  runtime.state.leaderboardSummary = envelope(7, 2);
+  runtime.state.leaderboardSummary.summary.groups = ["a", "b"].map(key => ({ key, label: key, count: 1, metrics: [{ key: "score", count: 1, mean: 1 }] }));
+  runtime.state.leaderboardSummaryComparisonGroups = ["a", "removed"];
+  try {
+    summaryUi.renderLeaderboardSummary();
+    const details = target.querySelector(".summary-group-control");
+    assert.match(details.textContent, /Outside the current results/);
+    details.open = true;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    target.querySelector('[data-group-action="none"]').click();
+    details.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(runtime.state.leaderboardSummaryComparisonGroups, ["a", "removed"]);
+    assert.equal(runtime.state.leaderboardGroupDraft, null);
+    assert.equal(document.activeElement, details.querySelector("summary"));
+    target.querySelector('[data-group-action="none"]').click();
+    target.querySelector("[data-group-apply]").click();
+    assert.deepEqual(runtime.state.leaderboardSummaryComparisonGroups, []);
+    assert.match(target.textContent, /Select at least one comparison group/);
+    assert.ok([...target.querySelectorAll("[data-summary-export]")].every(button => button.disabled));
+    target.querySelector('[data-group-action="all"]').click();
+    target.querySelector("[data-group-apply]").click();
+    assert.equal(runtime.state.leaderboardSummaryComparisonGroups, null);
+    assert.equal(summaryUi.leaderboardSummaryImageSnapshot().bars[0].values.length, 2);
+  } finally { target.remove(); }
 });
 
 test("radar presentation changes preserve the open table and search at 1000 groups", () => {
@@ -519,20 +558,23 @@ test("radar presentation changes preserve the open table and search at 1000 grou
   runtime.state.leaderboardSummary.summary.groups = Array.from({ length: 1000 }, (_, i) => ({ key: `group-${i}`, label: `group-${i}`, count: 1, metrics: [{ key: "score", count: 1, mean: i }] }));
   runtime.state.leaderboardSummaryChartType = "radar";
   runtime.state.leaderboardSummaryGroupBy = "model";
-  runtime.state.leaderboardSummaryRadarGroups = ["group-0"];
+  runtime.state.leaderboardSummaryComparisonGroups = ["group-0"];
   runtime.state.leaderboardSummaryTableOpen = true;
   try {
     summaryUi.renderLeaderboardSummary();
     const table = target.querySelector(".leaderboard-summary-table");
-    assert.equal(table.tBodies[0].rows.length, 1000);
-    const search = target.querySelector("[data-radar-search]"); search.value = "group-999"; search.dispatchEvent(new Event("input"));
-    for (const selector of ["[data-radar-group='999']", "[data-summary-statistic=p95]"]) {
-      target.querySelector(selector).click();
-      assert.equal(target.querySelector(".leaderboard-summary-table"), table);
-      assert.equal(target.querySelector("[data-radar-search]").value, "group-999");
-      assert.equal(target.querySelectorAll("[data-radar-group-row]:not([hidden])").length, 1);
-    }
-    assert.ok([...table.querySelectorAll("[data-summary-stat='p95']")].every(cell => cell.classList.contains("summary-selected-stat")));
+    assert.equal(table.tBodies[0].rows.length, 1);
+    const search = target.querySelector("[data-group-search]"); search.value = "group-999"; search.dispatchEvent(new Event("input"));
+    target.querySelector("[data-comparison-group='999']").click();
+    assert.equal(table.tBodies[0].rows.length, 1);
+    target.querySelector("[data-group-apply]").click();
+    const selectedTable = target.querySelector(".leaderboard-summary-table");
+    assert.equal(selectedTable.tBodies[0].rows.length, 2);
+    target.querySelector("[data-summary-statistic=p95]").click();
+    assert.equal(target.querySelector(".leaderboard-summary-table"), selectedTable);
+    assert.equal(target.querySelector("[data-group-search]").value, "group-999");
+    assert.equal(target.querySelectorAll("[data-group-row]:not([hidden])").length, 1);
+    assert.ok([...selectedTable.querySelectorAll("[data-summary-stat='p95']")].every(cell => cell.classList.contains("summary-selected-stat")));
   } finally { radarUi.disposeLeaderboardRadar(); target.remove(); }
 });
 
@@ -553,8 +595,8 @@ test("detached radar controls cannot dispatch into disposed or replacement chart
   } };
   try {
     summaryUi.renderLeaderboardSummary();
-    const old = target.querySelector("[data-radar-group-row]");
-    old.querySelector("input").focus();
+    const old = target.querySelector("[data-radar-legend]");
+    old.focus();
     summaryUi.renderLeaderboardSummary();
     assert.equal(instances[0].disposed, true);
     const actions = instances[1].actions;
@@ -601,22 +643,22 @@ test("radar resize skips unchanged sizes, coalesces notifications and cancels pe
   } finally { radarUi.disposeLeaderboardRadar(); Object.assign(globalThis, previous); delete window.echarts; target.remove(); }
 });
 
-test("selected group colors follow summary order and unselected groups are neutral", () => {
+test("group colors stay stable when comparison selection changes", () => {
   resetSummaryState();
   const groups = ["group-0", "group-4", "group-8", "group-12", "group-16"].map(key => ({ key, label: key, count: 1, metrics: [] }));
   const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
   assert.equal(new Set(context.series.map(item => item.color)).size, 5);
   const html = radarUi.renderLeaderboardRadar(context);
   for (const item of context.series) assert.ok(html.includes(`--radar-color:${item.color}`));
-  runtime.state.leaderboardSummaryRadarGroups = [groups[3].key, groups[1].key];
+  runtime.state.leaderboardSummaryComparisonGroups = [groups[3].key, groups[1].key];
   const changed = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
   assert.deepEqual(changed.series.map(item => item.group.key), [groups[1].key, groups[3].key]);
-  assert.deepEqual(changed.series.map(item => item.color), context.series.slice(0, 2).map(item => item.color));
-  assert.match(radarUi.renderLeaderboardRadar(changed), /--radar-color:var\(--rule\)/);
-  runtime.state.leaderboardSummaryRadarGroups = groups.filter((_, index) => index !== 2).map(group => group.key);
+  assert.deepEqual(changed.series.map(item => item.color), [context.series[1].color, context.series[3].color]);
+  assert.equal(changed.series.length, 2);
+  runtime.state.leaderboardSummaryComparisonGroups = groups.filter((_, index) => index !== 2).map(group => group.key);
   const middleRemoved = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
   assert.equal(middleRemoved.series[2].group.key, groups[3].key);
-  assert.equal(middleRemoved.series[2].color, context.series[2].color);
+  assert.equal(middleRemoved.series[2].color, context.series[3].color);
 });
 
 test("duplicate radar metric labels include metric identities", () => {
@@ -631,11 +673,13 @@ test("duplicate radar metric labels include metric identities", () => {
 test("missing annotations identify individual axes and groups without covering measured zero", () => {
   resetSummaryState();
   const groups = [{ key: "a", label: "a", count: 1, metrics: [{ key: "score", count: 1, mean: 0 }] }, { key: "b", label: "b", count: 1, metrics: [{ key: "score", count: 1, mean: 1 }] }];
+  groups.push(...Array.from({ length: 6 }, (_, index) => ({ key: `extra-${index}`, label: `extra-${index}`, count: 1, metrics: [] })));
   const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
   const option = radarUi.radarOption(context, 600, 440);
   const missing = option.graphic.filter(marker => marker.type === "group");
   assert.equal(new Set(missing.map(marker => `${marker.x},${marker.y}`)).size, missing.length);
   assert.ok(missing.every(marker => Math.hypot(marker.x - 300, marker.y - 220) > 11.5));
+  assert.ok(missing.every(marker => Math.hypot(marker.x - 300, marker.y - 220) <= 32.01));
   assert.ok(option.graphic.some(marker => marker.type === "circle" && marker.shape.cx === 300 && marker.shape.cy === 220));
   assert.equal(context.series[0].points[1].value, null);
   assert.equal(option.series[0].data[0].value[1], 0);
@@ -652,7 +696,7 @@ test("an unavailable metric definition retains a readable key rather than breaki
 test("a measured polygon collapsed to the origin is identified separately from wholly missing data", () => {
   resetSummaryState();
   const groups = [{ key: "a", label: "a", count: 1, metrics: [{ key: "score", count: 1, mean: 0 }] }, { key: "b", label: "b", count: 1, metrics: [{ key: "score", count: 1, mean: 1 }] }];
-  runtime.state.leaderboardSummaryRadarGroups = ["a"];
+  runtime.state.leaderboardSummaryComparisonGroups = ["a"];
   const context = radarUi.radarContext(groups, summaryUi.leaderboardSummaryDefinitions(), summaryUi.leaderboardSummaryStatistics()[0], summaryUi.leaderboardSummaryValue);
   const html = radarUi.renderLeaderboardRadar(context);
   assert.match(html, /Measured relative values are all 0; the outline is at the origin/);
@@ -746,4 +790,27 @@ test("catalog and detail reads preserve independent errors without scheduling ca
     globalThis.fetch = previousFetch; globalThis.setTimeout = previousTimeout;
     Object.assign(runtime.state, previous);
   }
+});
+
+
+test("summary caches keep family and root responses separate", async () => {
+  resetSummaryState();
+  const previousFetch = globalThis.fetch;
+  const scopes = [];
+  globalThis.fetch = async (_path, options) => {
+    const body = JSON.parse(options.body);
+    scopes.push(body.metric_scope);
+    return response(envelope(runtime.state.catalogPage.generation, body.metric_scope === "root" ? 3 : 8));
+  };
+  try {
+    await catalog.loadLeaderboardSummary();
+    assert.equal(runtime.state.leaderboardSummary.summary.matched_count,8);
+    runtime.state.catalogQuery.metric_scope = "root";
+    await catalog.loadLeaderboardSummary();
+    assert.equal(runtime.state.leaderboardSummary.summary.matched_count,3);
+    runtime.state.catalogQuery.metric_scope = "family";
+    await catalog.loadLeaderboardSummary();
+    assert.equal(runtime.state.leaderboardSummary.summary.matched_count,8);
+    assert.deepEqual(scopes,["family","root"]);
+  } finally { globalThis.fetch = previousFetch; }
 });

@@ -7,12 +7,11 @@ import { filterValues, renderLeaderboardColumnControls, renderLeaderboardExportC
 import { firstUserStepSelection } from "./export.js";
 import { downloadBlob } from "./download.js";
 import { closeDetailSidebar, openDetailSidebar, requestDetailSidebarLocation } from "./detail-sidebar.js";
-import { renderServeSourceStateControls } from "./source-state-controls.js";
+import { renderSourceStateActions, renderSourceStateToggle } from "./source-state-controls.js";
 import { emptyServeReport, reloadExpiredAdminSession, serveApi, setServeStatus } from "./serve-effects.js";
 import { refreshWorkspaceReports, renderAttachWorkspaceReportAction } from "./workspace-reports.js";
-import { clearWorkspaceViewConditions, refreshWorkspaceViews, workspaceViewQueryPayload, workspaceViews } from "./workspace-views.js";
+import { bindWorkspaceViewControls, renderWorkspaceViewControls, clearWorkspaceViewConditions, refreshWorkspaceViews, workspaceViewQueryPayload, workspaceViews } from "./workspace-views.js";
 import { refreshWorkspace, workspaceLocationChanged } from "../app/workspace-runtime.js";
-import { bindWorkspaceLinkButtons, workspaceLinkButton } from "./workspace-links.js";
 import { selectedTrajectoryDetail, trajectoryFamily } from "./trajectory-family.js";
 import { catalogSortKey, tableSortKey } from "../app/catalog-sort.js";
 
@@ -149,7 +148,7 @@ function renderLeaderboardPanelControls(rows) {
   const selectedCount = state.rowSelection.size;
   const progress = catalogProgressText();
   return `<div class="leaderboard-actions">
-    <div class="leaderboard-action-row">${workspaceLinkButton()}${adminMode() ? `<button class="action-button" type="button" data-catalog-refresh ${state.workspaceWriteBusy ? 'disabled aria-busy="true" data-busy-previous-disabled="false"' : ""}>${esc(t("serve_refresh", "Refresh"))}</button>` : ""}${renderServeSourceStateControls(rows)}${renderAttachWorkspaceReportAction(rows)}${renderLeaderboardColumnControls(rows)}${renderLeaderboardExportControls()}</div>
+    <div class="leaderboard-action-row">${adminMode() ? `<button class="action-button" type="button" data-catalog-refresh ${state.workspaceWriteBusy ? 'disabled aria-busy="true" data-busy-previous-disabled="false"' : ""}>${esc(t("serve_refresh", "Refresh"))}</button>` : ""}${renderLeaderboardColumnControls(rows)}${renderLeaderboardViewMenu()}${adminMode() ? `<details class="toolbar-menu toolbar-actions-menu"><summary class="action-button">${esc(t("actions", "Actions"))}</summary><div class="toolbar-menu-panel">${renderAttachWorkspaceReportAction(rows)}${renderSourceStateActions(rows)}</div></details>` : ""}${renderLeaderboardExportControls()}</div>
     <p class="copy catalog-progress" data-catalog-progress ${progress ? "" : "hidden"}>${esc(progress)}</p>
     <span class="sr-only" data-catalog-phase role="status">${esc(catalogPhaseText())}</span>
     <div class="catalog-page-controls" data-catalog-page-controls>
@@ -160,6 +159,14 @@ function renderLeaderboardPanelControls(rows) {
       <button type="button" class="action-button" data-catalog-clear-conditions ${leaderboardConditionsAreDefault() ? "disabled" : ""}>${esc(t("clear_conditions", "Clear conditions"))}</button>
     </div>
   </div>`;
+}
+
+function renderLeaderboardViewMenu() {
+  const scope = state.catalogQuery?.metric_scope || "family";
+  return `<details class="toolbar-menu toolbar-view-menu"><summary class="action-button">${esc(t("view_options", "View"))}</summary><div class="toolbar-menu-panel">
+    <fieldset><legend>${esc(t("metric_scope", "Metric scope"))}</legend>${[["family", t("scope_family", "Main and sub-sessions")], ["root", t("scope_root", "Main session")]].map(([value, label]) => `<label class="toolbar-menu-check"><input type="radio" name="metric-scope" data-metric-scope value="${value}" ${scope === value ? "checked" : ""}><span>${esc(label)}</span></label>`).join("")}</fieldset>
+    ${renderSourceStateToggle()}<hr>${renderWorkspaceViewControls()}
+  </div></details>`;
 }
 
 function renderLeaderboardSearchControls() {
@@ -183,7 +190,24 @@ function catalogPageLabel() {
 function bindLeaderboardCatalogControls(target) {
   if (!target) return;
   target.querySelector("[data-catalog-refresh]")?.addEventListener("click", () => refreshServeSourcesFromServer());
-  bindWorkspaceLinkButtons(target, "home");
+  bindWorkspaceViewControls(target);
+  target.querySelectorAll("[data-metric-scope]").forEach(input => input.addEventListener("change", async () => {
+    await loadCatalogPage({ metric_scope: input.value, page: 1 });
+    renderComparisonPanels();
+    document.querySelector(".toolbar-view-menu > summary")?.focus({ preventScroll: true });
+  }));
+  target.querySelectorAll(".toolbar-menu").forEach(menu => {
+    menu.addEventListener("keydown", event => {
+      if (event.key !== "Escape") return;
+      event.preventDefault(); event.stopPropagation();
+      menu.open = false; menu.querySelector("summary").focus();
+    });
+    menu.addEventListener("click", event => {
+      if (!event.target.closest(".toolbar-menu-panel button")) return;
+      menu.open = false;
+      menu.querySelector("summary").focus({ preventScroll: true });
+    }, true);
+  });
   target.querySelector("[data-catalog-prev]")?.addEventListener("click", event => {
     event.stopPropagation();
     loadCatalogPage({ page: Math.max(1, Number(state.catalogQuery.page || 1) - 1) });
@@ -281,7 +305,8 @@ function catalogQueryString(surface = "leaderboard") {
     search: query.search || "",
     sort: catalogSortKey(query.sort),
     direction: query.direction || "desc",
-    surface
+    surface,
+    metric_scope: query.metric_scope || "family"
   });
   listValue(query.categories).forEach(value => params.append("category", value));
   listValue(query.tags).forEach(value => params.append("tag", value));
@@ -301,6 +326,7 @@ function leaderboardSummaryQueryPayload(groupBy = state.leaderboardSummaryGroupB
   const applied = workspaceViewQueryPayload();
   return {
     state: normalizeServeSourceMode(query.state),
+    metric_scope: query.metric_scope || "family",
     search: String(query.search || ""),
     categories: listValue(query.categories),
     tags: listValue(query.tags),
@@ -384,7 +410,9 @@ function prepareLeaderboardSummaryScope(payload = leaderboardSummaryQueryPayload
 }
 
 function renderCatalogComparison() {
-  if (document.getElementById("comparison")) renderComparison();
+  if (!document.getElementById("comparison")) return;
+  if (document.getElementById("leaderboard-summary")) renderComparisonPanels({ trace: false });
+  else renderComparison();
 }
 
 async function loadLeaderboardSummary() {
@@ -599,6 +627,7 @@ async function loadCatalogPage(changes = {}, options = {}) {
           search: state.catalogQuery.search || "",
           sort: catalogSortKey(state.catalogQuery.sort),
           direction: state.catalogQuery.direction || "desc",
+          metric_scope: state.catalogQuery.metric_scope || "family",
           categories: listValue(state.catalogQuery.categories),
           tags: listValue(state.catalogQuery.tags),
           agents: listValue(state.catalogQuery.agents),
@@ -932,7 +961,7 @@ function setWorkspaceWriteControlsDisabled(disabled, root = document) {
 
 async function refreshServeSourcesFromServer() {
   if (!adminMode() || state.workspaceWriteBusy) return;
-  const feedback = beginFeedback("#leaderboard .leaderboard-action-row", { page: "home", key: "home:rescan" });
+  const feedback = beginFeedback("#leaderboard [data-leaderboard-status]", { page: "home", key: "home:rescan", compact: true, errorTarget: "#leaderboard .leaderboard-action-row" });
   feedback.pending(t("serve_index_check_phase", "Checking trajectories"));
   try {
     await submitCatalogWrite("/api/source-discovery-operations", {}, { feedback, discovery: true });
@@ -958,7 +987,7 @@ function exportCurrentScope(kind) {
     beginFeedback("#leaderboard .leaderboard-action-row", { key: "home:export", page: "home" }).error(t("serve_export_cell_limit", "JSON export is limited to 100 cells"));
     return;
   }
-  serveDownload(kind, { kind, source_keys: keys });
+  serveDownload(kind, { kind, source_keys: keys, query:{metric_scope:state.catalogQuery.metric_scope || "family"} });
 }
 
 function exportLeaderboardSummary() {
@@ -971,7 +1000,8 @@ function exportLeaderboardSummary() {
       query,
       group_by: state.leaderboardSummaryGroupBy,
       statistic: state.leaderboardSummaryStatistic,
-      metrics: selectedMetricIds(state)
+      metrics: selectedMetricIds(state),
+      comparison_groups: state.leaderboardSummaryComparisonGroups
     }
   }, "peval-leaderboard-summary.xlsx");
 }

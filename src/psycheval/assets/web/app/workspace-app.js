@@ -53,7 +53,6 @@ const INVALIDATION_PAGES = Object.freeze({
  *   navigate: (page: WorkspacePage, options?: NavigateOptions) => Promise<void>,
  *   invalidate: (changes: InvalidationDomain | Iterable<InvalidationDomain>) => void,
  *   locationChanged: (page: WorkspacePage, kind?: string) => void,
- *   shareLink: (page: WorkspacePage) => string,
  *   destroy: () => void,
  * }} WorkspaceApp
  */
@@ -249,18 +248,6 @@ function createWorkspaceApp({ platform, initialPage, pageLoaders, publishSnapsho
         window.dispatchEvent(new window.Event("peval:workspace-context"));
       }
       catch (error) { markStale(page, error); }
-    },
-
-    shareLink(page) {
-      if (page !== activePage || navigating) throw new Error(workspaceMessage(messages, "shared_link_loading", "Workspace location is still loading"));
-      if (roots.get(page)?.querySelector("[data-workspace-load-error]")) throw new Error(workspaceMessage(messages, "shared_link_unrestored", "Workspace location could not be restored"));
-      const controller = controllers.get(page);
-      if (!controller?.captureLocation) throw new Error(workspaceMessage(messages, "shared_link_unavailable", "This page cannot be shared"));
-      let href;
-      try { href = encodeWorkspaceLocation(page, controller.captureLocation(), window.location.origin); }
-      catch (error) { throw new Error(localizedErrorMessage(error)); }
-      commitLocation(page, href, "replace");
-      return href;
     },
 
     invalidate(changes) {

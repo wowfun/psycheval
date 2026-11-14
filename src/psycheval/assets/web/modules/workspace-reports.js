@@ -4,7 +4,6 @@ import { serveApi } from "./serve-effects.js";
 import { leaderboardRows, visibleSelectedSourceKeys } from "./serve-catalog.js";
 import { applyReportCatalog, normalizedReports, reportForId, reportStore } from "./report-store.js";
 import { createReportSidebarAdapter } from "./report-sidebar.js";
-import { bindWorkspaceLinkButtons, workspaceLinkButton } from "./workspace-links.js";
 
 function reportMessage(key, fallback, values = {}) {
   let message = String(t(key, fallback));
@@ -181,7 +180,7 @@ async function attachWorkspaceReport(button) {
     state.rowSelection.clear();
     renderComparisonPanels({ trace: false });
     openWorkspaceReportReader(payload?.report_id, {
-      opener: document.querySelector("[data-report-manager-open]")
+      opener: document.querySelector(".toolbar-actions-menu > summary")
     });
     feedback.set(t("report_attached", "Report attached"));
   } catch (error) {
@@ -235,7 +234,7 @@ function renderWorkspaceReportReader(options = {}) {
       </div>
       <div class="report-reader-actions">
         ${openTab}
-        ${workspaceLinkButton()}
+
         <button class="action-button compact" type="button" data-sidebar-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
       </div>
     </header>
@@ -252,7 +251,6 @@ function renderWorkspaceReportReader(options = {}) {
     } : {}),
   });
   observeWorkspaceReportReaderPreview(target);
-  bindWorkspaceLinkButtons(target, "home");
 }
 
 function reportReaderPreviewGeometry(viewportWidth, viewportHeight) {

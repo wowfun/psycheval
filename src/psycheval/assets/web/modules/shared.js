@@ -30,6 +30,15 @@ function statusLabel(value) {
   const raw = String(value || "-");
   return t(`status.${lower(raw)}`, raw);
 }
+function modelDisplayName(value) {
+  if (typeof value !== "string" || !value.trimStart().startsWith("[")) return value;
+  try {
+    const parts = JSON.parse(value);
+    return Array.isArray(parts) && parts.length === 2 && parts.every(part => typeof part === "string" && part.length > 0) ? parts[1] : value;
+  } catch {
+    return value;
+  }
+}
 const fmtNum = value => value === null || value === undefined ? "-" : Number(value).toLocaleString();
 function fmtMs(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
@@ -70,6 +79,7 @@ export {
   hasMetricValue,
   listValue,
   lower,
+  modelDisplayName,
   scriptJson,
   statusLabel,
   t,

@@ -50,9 +50,9 @@ test("radar selection, missing values, links, resize and chart cleanup", async (
     expect(initialGeometry.missing).toBeGreaterThan(0);
     expect(initialGeometry.distinctMissing).toBe(initialGeometry.missing);
     expect(initialGeometry.maxError).toBeLessThan(0.5);
-    expect(initialGeometry.colors).toBe(5);
-    await expect(page.locator("[data-radar-group]:checked")).toHaveCount(5);
-    await expect(page.locator("[data-radar-group]:disabled")).toHaveCount(2);
+    expect(initialGeometry.colors).toBe(7);
+    await expect(page.locator("[data-comparison-group]:checked")).toHaveCount(7);
+    await expect(page.locator("[data-comparison-group]:disabled")).toHaveCount(0);
     await expect(page.locator("[data-radar-detail]")).toContainText("No data · n=0");
     await expect(page.locator("[data-radar-detail]")).toContainText("No group difference");
     const outline = () => plot.evaluate(node => {
@@ -61,26 +61,29 @@ test("radar selection, missing values, links, resize and chart cleanup", async (
       const area = instance.getModel().getSeriesByIndex(1).getData().getItemGraphicEl(0).childAt(1);
       return { stroke: line.style.stroke, fill: area.style.fill, opacity: line.style.opacity ?? 1, ignored: line.ignore, invisible: line.invisible, states: line.currentStates };
     });
-    await page.locator("[data-radar-group-row='1']").hover();
+    await page.locator("[data-radar-legend='1']").hover();
     await expect.poll(outline).toMatchObject({ stroke: expect.any(String), fill: expect.any(String), opacity: 1, ignored: false, invisible: false });
-    await page.locator("[data-radar-search]").hover();
+    await page.locator("#leaderboard-summary-title").hover();
     await expect.poll(outline).toMatchObject({ stroke: expect.any(String), fill: expect.any(String), opacity: 1, ignored: false, invisible: false });
     const requestCount = requests;
     const oldInstance = await plot.getAttribute("_echarts_instance_");
-    await page.locator("[data-radar-group='0']").uncheck();
-    await page.locator("[data-radar-group='5']").check();
-    await page.locator("[data-radar-search]").fill("model-5");
-    await expect(page.locator("[data-radar-group-row]:visible")).toHaveCount(1);
-    await page.locator("[data-radar-group='5']").focus();
+    await page.locator(".summary-group-control > summary").click();
+    await page.locator("[data-comparison-group='0']").uncheck();
+    await page.locator("[data-comparison-group='5']").check();
+    await page.locator("[data-group-search]").fill("model-5");
+    await expect(page.locator("[data-group-row]:visible")).toHaveCount(1);
+    await page.locator("[data-comparison-group='5']").focus();
+    await page.locator("[data-group-apply]").click();
+    await page.locator("[data-radar-legend='4']").focus();
     await expect(page.locator("[data-radar-detail]")).toContainText("model-5");
     await page.locator(".summary-metric-control > summary").click();
     await page.locator("[data-metric-id=model_duration_ms]").check();
     await page.locator("[data-metric-apply]").click();
-    await expect(page.locator("[data-radar-search]")).toHaveValue("model-5");
+    await expect(page.locator("[data-group-search]")).toHaveValue("model-5");
     const href = page.url();
     const saved = decodeWorkspaceLocation("home", new URL(href)).state.summary;
     expect(saved.chart_type).toBe("radar");
-    expect(saved.radar_groups).toEqual(["model-1", "model-2", "model-3", "model-4", "model-5"]);
+    expect(saved.comparison_groups).toEqual(["model-1", "model-2", "model-3", "model-4", "model-5", "model-6"]);
     expect(saved.metrics).toContain("model_duration_ms");
     expect(requests).toBe(requestCount);
     expect(await page.evaluate(id => window.echarts.getInstanceById(id), oldInstance)).toBeUndefined();
@@ -88,6 +91,18 @@ test("radar selection, missing values, links, resize and chart cleanup", async (
       await page.setViewportSize({ width, height: 900 });
       await expect.poll(async () => plot.evaluate(node => Math.round(window.echarts.getInstanceByDom(node).getWidth()) === node.clientWidth)).toBe(true);
       await expect.poll(async () => (await geometry()).maxError).toBeLessThan(0.5);
+      await expect.poll(() => plot.evaluate(node => {
+        const instance = window.echarts.getInstanceByDom(node);
+        const view = instance.getViewOfComponentModel(instance.getModel().getComponent("radar"));
+        const labels = [];
+        view.group.traverse(element => {
+          if (element.type !== "text" || element.anid !== "name") return;
+          const bounds = element.getBoundingRect().clone();
+          bounds.applyTransform(element.getComputedTransform());
+          labels.push(bounds.x >= -1 && bounds.y >= -1 && bounds.x + bounds.width <= node.clientWidth + 1 && bounds.y + bounds.height <= node.clientHeight + 1);
+        });
+        return labels.length > 0 && labels.every(Boolean);
+      })).toBe(true);
       await page.screenshot({ path: testInfo.outputPath(`radar-${width}.png`), fullPage: true });
       const box = await plot.boundingBox();
       expect(box.x).toBeGreaterThanOrEqual(0);
@@ -99,7 +114,7 @@ test("radar selection, missing values, links, resize and chart cleanup", async (
       await recipient.route("**/api/catalog-summaries", summary);
       await recipient.goto(href);
       await expect(recipient.locator("[data-summary-radar] canvas")).toHaveCount(1);
-      await expect(recipient.locator("[data-radar-group]:checked")).toHaveCount(5);
+      await expect(recipient.locator("[data-comparison-group]:checked")).toHaveCount(6);
       await recipient.reload();
       await expect(recipient.locator("[data-metric-id=model_duration_ms]")).toBeChecked();
       await expect(recipient.locator("[data-catalog-clear-conditions]")).toBeDisabled();
@@ -113,8 +128,8 @@ test("radar selection, missing values, links, resize and chart cleanup", async (
     await page.locator("[data-summary-chart-type=bar]").click();
     await expect(plot).toHaveCount(0);
     await page.locator("[data-summary-chart-type=radar]").click();
-    await expect(page.locator("[data-radar-search]")).toHaveValue("model-5");
-    await expect(page.locator("[data-radar-group]:checked")).toHaveCount(5);
+    await expect(page.locator("[data-group-search]")).toHaveValue("model-5");
+    await expect(page.locator("[data-comparison-group]:checked")).toHaveCount(6);
     expect(errors).toEqual([]);
   } finally { await stopFixture(fixture); }
 });

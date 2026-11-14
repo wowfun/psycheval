@@ -38,7 +38,7 @@ test("conditions replace history; object opening and closing push; hidden pages 
     const href = window.location.href;
     home.update({ object: { source: "background" } }); app.locationChanged("home", "object");
     assert.equal(window.location.href, href);
-    assert.equal(app.shareLink("reports"), href);
+    assert.equal(window.location.href, href);
   } finally { app.destroy(); browser.cleanup(); }
 });
 
@@ -50,7 +50,7 @@ test("history restores query before activation and preserves unsaved page DOM", 
   try {
     await app.start();
     document.querySelector("[data-report-draft]").checked = true;
-    await app.navigate("home", { search: "?source=outside-page", hash: "#view=" + btoa('{"v":2,"query":{"search":"old conditions"}}').replace(/=+$/, ""), restore: true });
+    await app.navigate("home", { search: "?source=outside-page", hash: "#view=" + btoa('{"v":4,"query":{"search":"old conditions"}}').replace(/=+$/, ""), restore: true });
     const shared = window.location.href;
     await app.navigate("reports");
     window.history.replaceState({}, "", shared); window.dispatchEvent(new window.PopStateEvent("popstate"));
@@ -143,8 +143,7 @@ test("a refresh during restoration reapplies even the same domain after the old 
 test("invalid links and capture limits display localized errors without rejecting start", async () => {
   const browser = installBrowserDom(workspaceShell() + `<script id="peval-i18n" type="application/json">{
     "shared_link_invalid":"工作台链接无效或版本不受支持",
-    "shared_link_too_large":"工作台链接超过 64 KiB 限制",
-    "shared_link_loading":"工作台定位仍在加载"
+    "shared_link_too_large":"工作台链接超过 64 KiB 限制"
   }</script>`);
   const home = locationAdapter("home");
   const app = createWorkspaceApp({ platform: createBrowserPlatform(window), initialPage: "home", pageLoaders: { home: () => home } });
@@ -158,7 +157,8 @@ test("invalid links and capture limits display localized errors without rejectin
     await app.navigate("home", { history: false });
     assert.equal(window.location.href, href);
     assert.match(document.querySelector("[data-workspace-page=home]").dataset.workspaceStaleMessage, /工作台链接超过/);
-    assert.throws(() => app.shareLink("home"), /工作台链接超过/);
+    app.locationChanged("home");
+    assert.match(document.querySelector("[data-workspace-page=home]").dataset.workspaceStaleMessage, /工作台链接超过/);
   } finally { app.destroy(); browser.cleanup(); }
 });
 

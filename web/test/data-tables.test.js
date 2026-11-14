@@ -15,6 +15,25 @@ const browser = installBrowserDom(`
 
 const tables = await import("../../src/psycheval/assets/web/modules/data-tables.js");
 
+test("DSH model labels omit the encoded selector while filters keep its exact ID", async () => {
+  const {modelDisplayName} = await import("../../src/psycheval/assets/web/modules/shared.js");
+  const raw = '["mimo","mimo-v2.6-flash"]';
+  assert.equal(modelDisplayName(raw),"mimo-v2.6-flash");
+  for (const value of ["mimo/model#high","custom-local:model",'["provider"]','["provider",null]',"[broken",undefined]) assert.equal(modelDisplayName(value),value);
+  const column = tables.leaderboardColumns().find(item=>item.key === "model");
+  const row = {model:raw,agent_name:"dsh"};
+  assert.equal(column.value(row),raw);
+  assert.equal(column.format(column.value(row)),"mimo-v2.6-flash");
+  assert.equal(column.filterLabel(raw),"mimo-v2.6-flash");
+  assert.deepEqual(tables.filterValues(row,column),[raw]);
+  assert.equal(row.model,raw);
+  const target = document.getElementById("table-root");
+  target.innerHTML = tables.renderDataTable({tableId:"model-display",columns:[column],rows:[row]});
+  assert.equal(target.querySelector('tbody td').textContent,"mimo-v2.6-flash");
+  assert.equal(target.querySelector('[data-filter-key="model"]').value,raw);
+  assert.equal(target.querySelector('.filter-option span').textContent,"mimo-v2.6-flash");
+});
+
 test("tool success rate preserves unknowns and valid zero rates", () => {
   for (const [calls, errors, expected] of [[4, 0, 1], [4, 1, 0.75], [4, 4, 0], [0, 0, null], [4, undefined, null], [4, -1, null], [4, 5, null]]) {
     assert.equal(tables.rowToolSuccessRate({ total_tool_calls: calls, total_tool_errors: errors }), expected);
@@ -831,10 +850,12 @@ test("pending and failed saves preserve the editor value, error, and focus", asy
 });
 
 test("saved views close and reopen without losing independent scroll state", async () => {
+  const toolbar = document.createElement("section"); toolbar.id = "leaderboard"; document.body.append(toolbar);
   runtime.state.workspaceViews = [{ name: "One", filters: {}, group_by: "agent", notes: "" }];
   runtime.state.workspaceViewSummaries = [{ name: "One", matched_count: 0, groups: [] }];
   runtime.state.workspaceViewsLoaded = true;
   runtime.state.workspaceViewsClosed = false;
+  tables.renderLeaderboard();
   views.renderWorkspaceViewRail();
 
   const resize = document.querySelector("#workspace-views [data-sidebar-resize]");
@@ -856,9 +877,9 @@ test("saved views close and reopen without losing independent scroll state", asy
   assert.equal(document.querySelector("#workspace-views").hidden, true);
   assert.equal(document.body.classList.contains("workspace-views-open"), false);
   assert.deepEqual(runtime.state.workspaceViewScroll, { analysisTop: 31, indexTop: 17, indexLeft: 9, cardsTop: 23 });
-  assert.ok(document.querySelector("[data-workspace-views-open]"));
+  assert.ok(document.querySelector("[data-workspace-views-toggle]"));
 
-  document.querySelector("[data-workspace-views-open]").click();
+  document.querySelector("[data-workspace-views-toggle]").click();
   assert.equal(runtime.state.workspaceViewsClosed, false);
   assert.equal(document.querySelector("#workspace-views").hidden, false);
   assert.equal(document.body.classList.contains("workspace-views-open"), true);
@@ -866,6 +887,7 @@ test("saved views close and reopen without losing independent scroll state", asy
   assert.equal(document.querySelector("#workspace-views [data-workspace-view-list]").scrollTop, 23);
   await new Promise(resolve => window.requestAnimationFrame(resolve));
   assert.equal(document.activeElement, document.querySelector("#workspace-views [data-sidebar-close]"));
+  toolbar.remove();
 });
 
 test("Saved View cells navigate on single click and edit on double click", context => {

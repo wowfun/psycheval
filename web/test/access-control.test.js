@@ -75,8 +75,8 @@ test("guest surfaces keep browsing controls and omit every workspace mutation", 
   assert.equal(notes.renderNotesAction("trial"), "");
   assert.equal(reports.renderAttachWorkspaceReportAction([]), "");
 
-  const sourceControls = sourceState.renderServeSourceStateControls([]);
-  assert.match(sourceControls, /data-source-state-toggle/);
+  const sourceControls = sourceState.renderSourceStateActions([]);
+  assert.match(sourceState.renderSourceStateToggle(), /data-source-state-toggle/);
   assert.doesNotMatch(sourceControls, /data-source-state-action/);
 
   runtime.state.workspaceViews = [

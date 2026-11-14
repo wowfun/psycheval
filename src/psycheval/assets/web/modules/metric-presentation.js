@@ -37,7 +37,7 @@ function metricSearchText(label, key) {
   try { decoded = decodeURIComponent(key); } catch { /* Non-metric column identity. */ }
   return `${label} ${key} ${decoded}`.toLocaleLowerCase();
 }
-function metricProvenanceHint(provenance, key = "") {
+function metricProvenanceHint(provenance, key = "", familyCoverage = null) {
   if (!provenance) return t("measurement_missing_provenance", "Measurement source not recorded");
   const unknown = t("measurement_unknown", "unknown");
   const lines = [];
@@ -59,11 +59,16 @@ function metricProvenanceHint(provenance, key = "") {
     const c = provenance.coverage;
     lines.push(`${t("measurement_coverage", "Coverage")}: ${c.measured ?? "?"}/${c.total ?? "?"} ${t("measurement_measured", "measured")}; ${c.unknown ?? "?"} ${t("measurement_unknown", "unknown")}`);
   }
+  if (familyCoverage) {
+    const c = familyCoverage;
+    lines.push(`${t("family_coverage", "Family coverage")}: ${c.status}; ${c.retained_members}/${c.known_members ?? "?"}`);
+  }
   if (provenance.clock && Object.keys(provenance.clock).length) {
     const c = provenance.clock;
     lines.push(`${t("measurement_clock", "Clock")}: ${[c.id, c.type, c.semantics, c.precision_ms != null ? `${c.precision_ms} ms` : ""].filter(Boolean).join(" · ")}`);
   }
   if (provenance.missing_reason) lines.push(missingMeasurementReason(provenance.missing_reason));
+  if (provenance.details_truncated) lines.push(t("measurement_other", "Other sources (details truncated)"));
   if (provenance.evidence?.length) lines.push(`${t("measurement_evidence", "Evidence")}: ${provenance.evidence.join(", ")}`);
   return lines.join("\n");
 }
@@ -87,3 +92,10 @@ function metricSelectionHint(groups, key) {
   return hints.join(" · ");
 }
 export { metricDefinitions, selectedMetricIds, selectedMetricDefinitions, formatMetric, metricSortKey, metricSearchText, metricProvenanceHint, metricSelectionHint };
+
+function metricCoverageStatus(provenance, familyCoverage = null) {
+  if (!provenance || provenance.scope === "evaluation_entry") return "complete";
+  if (provenance.retention === "partial" || Number(provenance.coverage?.unknown || 0) > 0 || familyCoverage?.status === "partial") return "partial";
+  return familyCoverage?.status === "unknown" ? "unknown" : "complete";
+}
+export { metricCoverageStatus };

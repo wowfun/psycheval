@@ -1,5 +1,6 @@
 import { esc, homeDetail, renderComparisonPanels, state, t } from "./runtime.js";
 import { bindCopyButton } from "./clipboard.js";
+import { modelDisplayName } from "./shared.js";
 
 function trajectoryFamily(trajectory, meta, depth = 0, parent = null) {
   const entry = { trajectory, meta, depth, parent };
@@ -32,7 +33,8 @@ function lastAgentMessage(trajectory) {
 
 function renderTrajectoryNavigation(trajectory, meta) {
   const entries = trajectoryFamily(trajectory, meta);
-  if (entries.length < 2) return "";
+  const missing = (trajectory?.extra?.family?.members || []).filter(member => member.content_status === "missing");
+  if (entries.length < 2 && !missing.length) return "";
   const selected = selectedTrajectoryDetail(trajectory, meta);
   const parent = selected.parent;
   const parentStep = parent?.trajectory?.steps?.find(step =>
@@ -48,15 +50,17 @@ function renderTrajectoryNavigation(trajectory, meta) {
   const renderBranch = entry => {
     const label = trajectoryLabel(entry);
     const descendants = children.get(entry) || [];
+    const member = (trajectory.extra?.family?.members || []).find(item => item.trajectory_id === entry.trajectory.trajectory_id);
+    const details = [entry.trajectory.agent?.name, modelDisplayName(entry.trajectory.agent?.model_name), member?.execution_status, member?.content_status].filter(Boolean).join(" · ");
     const canCopy = Boolean(lastAgentMessage(entry.trajectory).trim());
     const copyLabel = canCopy ? t("copy_last_agent_message", "Copy last Agent message") : t("no_agent_message_to_copy", "No Agent message to copy");
     return `<li><div class="trajectory-tree-row">
-      <button type="button" data-trajectory-node data-trajectory-id="${esc(entry.trajectory.trajectory_id || "")}"${entry.trajectory === selected.trajectory ? ' aria-current="true"' : ""} title="${esc(label)}">${esc(label)}</button>
+      <button type="button" data-trajectory-node data-trajectory-id="${esc(entry.trajectory.trajectory_id || "")}"${entry.trajectory === selected.trajectory ? ' aria-current="true"' : ""} title="${esc([label, details].filter(Boolean).join(" · "))}">${esc(label)}${details ? `<small class="trajectory-member-details">${esc(details)}</small>` : ""}</button>
       <button type="button" data-trajectory-copy="${esc(entry.trajectory.trajectory_id || "")}" title="${esc(copyLabel)}" aria-label="${esc(`${copyLabel}: ${label}`)}" aria-live="polite"${canCopy ? "" : " disabled"}>${esc(t("copy", "Copy"))}</button>
       </div>${descendants.length ? `<ul>${descendants.map(renderBranch).join("")}</ul>` : ""}</li>`;
   };
   return `<nav class="trajectory-navigation" aria-label="${esc(t("trajectory", "Trajectory"))}">
-    <ul class="trajectory-tree">${renderBranch(entries[0])}</ul>${back}</nav>`;
+    <ul class="trajectory-tree">${renderBranch(entries[0])}${missing.map(member => `<li class="copy">${esc(member.session_id || member.trajectory_id)} · ${esc(t("family_member_missing", "Evidence missing"))}</li>`).join("")}</ul>${back}</nav>`;
 }
 
 function bindTrajectoryNavigation(target, trajectory, meta) {

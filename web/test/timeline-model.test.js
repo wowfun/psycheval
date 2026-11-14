@@ -140,3 +140,38 @@ test("inherited starts retain parallel placement with explicit cumulative and co
   assert.match(tooltip, /Compressed time offset:<\/span> 0\.000s/);
   assert.match(tooltip, /Active Share:<\/span> 46\.1%/);
 });
+
+
+test("family lanes share aligned offsets and keep identity separate from step numbers", async () => {
+  const {state} = await import("../../src/psycheval/assets/web/modules/runtime.js");
+  const root = fixture([[1000,1000]],[1200]);
+  const child = fixture([[1500,1000]],[1600]);
+  root.trajectory.trajectory_id = root.trajectory.session_id = "root";
+  child.trajectory.trajectory_id = child.trajectory.session_id = "child";
+  root.trajectory.subagent_trajectories = [child.trajectory];
+  root.meta.subagent_meta = {child:child.meta};
+  state.catalogQuery.metric_scope = "family";
+  const family = timelineTrace(root.trajectory,root.meta);
+  assert.equal(family.stages.length,2);
+  assert.deepEqual(family.stages.map(stage=>stage.trajectory_id),["root","child"]);
+  assert.deepEqual(family.stages.map(stage=>stage.display_start_ms),[0,500]);
+  assert.deepEqual(family.markers.map(marker=>marker.display_offset_ms),[200,600]);
+  assert.equal(new Set(family.stages.map(stage=>stage.ref)).size,2);
+  state.catalogQuery.metric_scope = "root";
+  assert.equal(timelineTrace(root.trajectory,root.meta).stages.length,1);
+  state.catalogQuery.metric_scope = "family";
+  child.meta.timestamp_semantics = "order_only";
+  const unaligned = timelineTrace(root.trajectory,root.meta);
+  assert.equal(unaligned.stages.length,1);
+  assert.equal(unaligned.partial,true);
+});
+
+test("long waterfalls bound canvas allocation and retain a navigable stage window", () => {
+  const {trajectory,meta} = fixture(Array.from({length:1000},(_,index)=>[1000+index,10]));
+  const trace = timelineTrace(trajectory,meta);
+  const option = timelineChartOption(trace);
+  assert.equal(option.series[0].data.length,1000);
+  assert.equal(option.yAxis.data.length,1000);
+  assert.deepEqual([option.dataZoom[0].startValue,option.dataZoom[0].endValue],[0,23]);
+  assert.match(renderTimelineDiagnostics(trajectory,meta),/height:912px/);
+});

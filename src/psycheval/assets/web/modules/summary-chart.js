@@ -1,7 +1,24 @@
 // @ts-check
-import { RADAR_GROUP_LIMIT } from "../app/workspace-view-contract.js";
 
 const measured = value => typeof value === "number" && Number.isFinite(value) ? value : null;
+
+function wrappedLines(measureText, text, width) {
+  return String(text).split("\n").flatMap(paragraph => {
+    const lines = [];
+    let line = "";
+    for (const character of paragraph) {
+      while (line && measureText(line + character) > width) {
+        const boundary = line.lastIndexOf(" ");
+        const end = boundary < 0 ? line.length : boundary + 1;
+        lines.push(line.slice(0, end));
+        line = line.slice(end);
+      }
+      line += character;
+    }
+    lines.push(line);
+    return lines;
+  });
+}
 
 function relativePosition(value, minimum, maximum) {
   if (maximum === minimum) return 50;
@@ -42,18 +59,19 @@ function radarPoints(group, axes, statistic) {
 }
 
 /** @param {any[]} groups @param {(string | null)[] | null} keys */
-function radarSelection(groups, keys) {
-  return keys === null ? groups.slice(0, RADAR_GROUP_LIMIT) : groups.filter(group => keys.includes(group.key));
+function comparisonGroups(groups, keys) {
+  if (keys === null) return groups;
+  const selected = new Set(keys);
+  return groups.filter(group => selected.has(group.key));
 }
 
-// Five categorical slots, with dark enough strokes for the workspace's light
-// surface and white PNGs. Color is reinforced by the comparison labels/details.
+// Stable slots in complete-summary order; selection never shifts colors.
 const RADAR_COLORS = Object.freeze(["#0072b2", "#c6344f", "#009e73", "#7b3294", "#ad7a00"]);
 
 /** @param {number} count */
 function radarColors(count) {
-  if (!Number.isInteger(count) || count < 0 || count > RADAR_GROUP_LIMIT || RADAR_COLORS.length !== RADAR_GROUP_LIMIT) throw new RangeError("Radar colors require an integer count between zero and five.");
-  return RADAR_COLORS.slice(0, count);
+  if (!Number.isInteger(count) || count < 0) throw new RangeError("Radar color count must be a nonnegative integer.");
+  return Array.from({ length: count }, (_, index) => RADAR_COLORS[index] || `hsl(${((index - RADAR_COLORS.length) * 137.508 + 23) % 360} 65% 36%)`);
 }
 
-export { radarAxes, radarPoints, radarSelection, radarColors, relativePosition };
+export { radarAxes, radarPoints, comparisonGroups, radarColors, relativePosition, wrappedLines };

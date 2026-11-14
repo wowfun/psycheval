@@ -8,7 +8,6 @@ import { createSidebarController } from "./sidebar.js";
 import { adminMode, esc, t } from "./shared.js";
 import { RENDER_OPTIONS } from "../app/render-options.js";
 import { workspaceLocationChanged } from "../app/workspace-runtime.js";
-import { bindWorkspaceLinkButtons, workspaceLinkButton } from "./workspace-links.js";
 
 let generation = 0;
 let selectionVersion = 0;
@@ -43,7 +42,7 @@ function renderToolbar() {
   const root = document.querySelector("[data-report-toolbar]");
   if (!root) return;
   root.innerHTML = `<div class="report-library-toolbar">
-    ${workspaceLinkButton()}
+
     ${adminMode() ? `<button class="action-button primary" type="button" data-report-import>${esc(t("report_import", "Import report"))}</button>` : ""}
     <button class="action-button" type="button" data-report-manager-reload>${esc(t("serve_reload", "Refresh"))}</button>
     <label class="report-binding-search report-state-filter"><span>${esc(t("report_state", "Status"))}</span><select data-report-state>${["active", "archived", "all"].map(value => `<option value="${value}" ${store.stateFilter === value ? "selected" : ""}>${esc(t(`report_state_${value}`, { active: "Active", archived: "Archived", all: "All" }[value]))}</option>`).join("")}</select></label>
@@ -52,7 +51,6 @@ function renderToolbar() {
     ${["dataset", "job"].map(kind => `<details class="report-filter" data-report-filter="${kind}"><summary>${kindLabel(kind)} <span data-filter-count="${kind}"></span></summary><div data-filter-picker="${kind}"></div></details>`).join("")}
     </div><div data-report-filter-summary class="report-filter-summary"></div>`;
   bindFilterMenus(root);
-  bindWorkspaceLinkButtons(root, "reports");
   root.querySelector("[data-report-state]").addEventListener("change", event => {
     store.stateFilter = /** @type {HTMLSelectElement} */ (event.target).value;
     void loadReportManagerPage({ page: 1, locationChange: true }).catch(() => {});
@@ -242,7 +240,7 @@ function renderDetail() {
     picker?.destroy();
     picker = null;
     detailIdentity = identity;
-    root.innerHTML = `<div class="report-library-detail-panel"><header class="report-reader-head"><h2>${esc(report.title)}</h2><div class="report-reader-actions">${workspaceLinkButton()}<a class="action-button compact" href="${reportPath(report.report_ref)}/reader" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a><button class="action-button compact" type="button" data-sidebar-close>${esc(t("close", "Close"))}</button></div><div class="report-management-actions" data-report-management></div></header>
+    root.innerHTML = `<div class="report-library-detail-panel"><header class="report-reader-head"><h2>${esc(report.title)}</h2><div class="report-reader-actions"><a class="action-button compact" href="${reportPath(report.report_ref)}/reader" target="_blank" rel="noopener">${esc(t("report_open_new_tab", "Open in new tab"))}</a><button class="action-button compact" type="button" data-sidebar-close>${esc(t("close", "Close"))}</button></div><div class="report-management-actions" data-report-management></div></header>
       <div class="report-detail-tabs" role="tablist">${["preview", "associations"].map(tab => `<button type="button" class="action-button" role="tab" aria-selected="${store.tab === tab}" data-report-tab="${tab}">${esc(t(`report_${tab}`, tab === "preview" ? "Preview" : "Associations"))}</button>`).join("")}</div>
       ${store.tab === "preview" ? `<div class="report-reader-frame-viewport" role="tabpanel"><iframe class="report-reader-frame" src="${reportPath(report.report_ref)}/preview" title="${esc(report.title)}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></div>` : `<div class="report-associations-pane" role="tabpanel"><div data-association-summary></div>${canEditAssociations(report) ? `<label class="report-binding-search"><span>${esc(t("report_add_association", "Add associations"))}</span><select data-binding-kind>${(report.origin === "imported" ? ["session", "dataset", "job"] : ["dataset", "job"]).map(kind => `<option value="${kind}">${kindLabel(kind)}</option>`).join("")}</select></label><div data-binding-picker></div>` : ""}</div>`}</div>`;
     if (store.tab === "associations" && canEditAssociations(report)) {
@@ -251,7 +249,6 @@ function renderDetail() {
       openBindingPicker(report.report_ref, select.value);
     }
     sidebar?.sync();
-    bindWorkspaceLinkButtons(root, "reports");
   }
   renderAssociationSummary();
 }

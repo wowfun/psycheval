@@ -13,7 +13,7 @@ function captureHomeLocation() {
   return { object, state: {
     query: { ...Object.fromEntries(Object.keys(HOME_QUERY).map(key => [key, state.catalogQuery[key]])), sort: catalogSortKey(state.catalogQuery.sort) },
     views: captureAppliedViewSnapshots(),
-    summary: { group_by: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table_open: state.leaderboardSummaryTableOpen, chart_type: state.leaderboardSummaryChartType, metrics: state.leaderboardSummaryMetrics === null ? null : [...state.leaderboardSummaryMetrics], radar_groups: state.leaderboardSummaryRadarGroups === null ? null : [...state.leaderboardSummaryRadarGroups] },
+    summary: { group_by: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table_open: state.leaderboardSummaryTableOpen, chart_type: state.leaderboardSummaryChartType, metrics: state.leaderboardSummaryMetrics === null ? null : [...state.leaderboardSummaryMetrics], comparison_groups: state.leaderboardSummaryComparisonGroups === null ? null : [...state.leaderboardSummaryComparisonGroups] },
   } };
 }
 function restoreHomeLocation(location) {
@@ -34,7 +34,8 @@ function restoreHomeLocation(location) {
   state.leaderboardSummaryTableOpen = location.state.summary.table_open;
   state.leaderboardSummaryChartType = location.state.summary.chart_type;
   state.leaderboardSummaryMetrics = location.state.summary.metrics === null ? null : [...location.state.summary.metrics];
-  state.leaderboardSummaryRadarGroups = location.state.summary.radar_groups === null ? null : [...location.state.summary.radar_groups];
+  state.leaderboardSummaryComparisonGroups = location.state.summary.comparison_groups === null ? null : [...location.state.summary.comparison_groups];
+  state.leaderboardGroupDraft = null;
   const controls = tableControls("leaderboard");
   controls.filters = Object.fromEntries(Object.entries(FILTER_KEYS).map(([key, field]) => [key, [...query[field]]]));
   controls.sort = tableSortKey(query.sort);

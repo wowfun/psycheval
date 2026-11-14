@@ -16,7 +16,7 @@ function bindTimelineControls(trajectory, meta) {
     tableId: "timeline",
     columns,
     rows,
-    rowKey: row => `${row.trial_key || ""}:${row.step_id || ""}`,
+    rowKey: row => `${row.trial_key || ""}:${row.trajectory_id || ""}:${row.step_id || ""}:${row.tool_call_id || row.kind || ""}`,
     onChange: () => renderTrace(),
   });
   target.querySelectorAll("[data-timeline-step-id]").forEach(row => {
@@ -26,6 +26,7 @@ function bindTimelineControls(trajectory, meta) {
         kind: "stage",
         trial_key: row.dataset.trialKey || selectedKey(),
         step_id: row.dataset.timelineStepId,
+        trajectory_id: row.dataset.trajectoryId,
         opener: row,
       });
     };
@@ -66,7 +67,7 @@ function renderTimelineDetailTable(rows, model) {
     tableId: "timeline",
     columns,
     rows: visibleRows,
-    rowKey: row => `${row.trial_key || ""}:${row.step_id || ""}`,
+    rowKey: row => `${row.trial_key || ""}:${row.trajectory_id || ""}:${row.step_id || ""}:${row.tool_call_id || row.kind || ""}`,
     tableClass: "timeline-table",
     shellClass: "timeline-table-shell",
     filterOptionsRows: rows,
@@ -74,7 +75,7 @@ function renderTimelineDetailTable(rows, model) {
       const selected = state.selectedStep?.trialKey === row.trial_key && String(state.selectedStep?.stepId) === String(row.step_id);
       return `timeline-detail-${row.kind} timeline-detail-row ${selected ? "timeline-detail-selected" : ""}`;
     },
-    rowAttrs: row => `data-timeline-step-id="${esc(row.step_id || "")}" data-trial-key="${esc(row.trial_key || "")}" tabindex="0" title="${esc(t("open_step_details", "Open step details"))}: #${esc(row.step_id || "-")}"`,
+    rowAttrs: row => `data-trajectory-id="${esc(row.trajectory_id || "")}" data-timeline-step-id="${esc(row.step_id || "")}" data-trial-key="${esc(row.trial_key || "")}" tabindex="0" title="${esc(t("open_step_details", "Open step details"))}: #${esc(row.step_id || "-")}"`,
   });
 }
 function renderTimelineStageLabel(row) {

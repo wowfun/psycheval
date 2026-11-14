@@ -513,7 +513,13 @@ The Trial's success/total display follows the same validity rule and does not
 infer zero errors from an absent count.
 
 The Home summary offers bar and radar views of the same complete-query data.
-Its ordered selection controls tables, both charts and all summary exports, with
+Comparison groups defaults to all groups, without a five-group limit, and filters
+the summary table, both charts, and all summary exports. Search only filters the
+selector options; Apply commits a draft, while closing discards it. Group
+selection changes neither the Leaderboard query nor per-group aggregation. The
+complete-query match count remains visible. An empty selection shows an empty
+state and disables summary export. Overall hides the group selector.
+The Metrics control's ordered selection applies to tables, both charts and all summary exports, with
 at most 32 IDs. The default selection retains the original ten metrics: Reward,
 Active Duration, Avg TTFT, Decode TPS, Tokens, Cache Hit, Agent steps, Model Call Duration,
 Tool Calls and Tool Success Rate. Restore defaults restores this selection.
@@ -529,6 +535,8 @@ Radar axes use a shared statistic and independently normalize against all groups
 in the current query, including unselected groups. Min–max scaling maps each axis
 to 0–100, reversed for metrics configured as lower-is-better so that larger radii
 mean better performance.
+On-screen radar labels wrap to measured text widths and reserve room inside the
+canvas when the workspace narrows.
 Equal measured values map to 50 and are identified as having no group difference.
 Changing comparison groups does not change these bounds. Tokens, Agent steps, and tool
 call counts default to neutral direction; configuring a direction admits them
@@ -543,10 +551,10 @@ missing-data labels; these offsets do not encode a measured radius. They remain
 unknown in the data and never contribute numeric values to scaling, statistics,
 or spreadsheet exports. Ordinary
 markers identify measured values, including those normalized to the origin.
-Selected groups use a distinct five-color palette in summary order; unselected
-groups use a neutral color. Colors are shared by the chart, comparison list and
-export legend. Adding, removing or reordering groups can reassign colors to other
-groups because palette slots follow the selected summary order. Their search
+Groups use an extensible palette assigned in complete-summary order; selecting
+or deselecting groups does not reassign the remaining groups' colors. Colors are
+shared by the chart, selector and export legend. Missing-value annotation offsets
+remain bounded regardless of group count. Their search
 filter stays in page memory through presentation changes and navigation, but is
 not part of a shared location. Chart interactions preserve an open summary table.
 Radar selections affect presentation only; Saved View and spreadsheet charts
@@ -554,15 +562,18 @@ remain bar charts.
 The Home summary export menu offers its existing Excel workbook, one PNG combining
 all bar-chart metrics in two columns, and a radar PNG with a color legend for
 selected groups. The group legend follows the plot without a separate metric list.
-Images use the current complete-query summary, grouping and statistic; radar
-images also use the selected axes and groups, independently of the visible chart
+Images use the current complete-query summary, grouping, statistic and selected
+groups; radar images also use the selected axes, independently of the visible chart
 type or comparison-list search. Radar images display complete metric names,
 configured units and directions at the axis vertices, expanding the image to avoid
 overlapping or clipped labels. Duplicate axis names include their metric IDs. Oversized radar
 images advise selecting fewer metrics or shortening their names; images are
 checked against canvas capacity before allocation. Exporting does not change
 presentation or the URL.
-Summary Excel requests require the ordered metric selection. Malformed IDs,
+Summary Excel requests require the ordered metric selection and comparison group
+selection (`null` for all, an array of string/null group keys for explicit groups).
+The server intersects explicit keys with the current summary in summary order.
+Malformed IDs,
 duplicates and capacity violations are request errors. Syntactically valid but
 unavailable IDs remain gaps; requests require at least one registered metric.
 An empty query can produce a workbook with no metric rows; the UI disables export
@@ -611,16 +622,16 @@ or list positions. A closed detail leaves the page's list location.
 query and presentation state. It preserves search, facets, ordering, pagination
 and page size, plus Home's applied View conditions and aggregate grouping,
 statistic, table disclosure, chart type, ordered metric IDs, and comparison group keys.
-Locations use version 2 without a version-1 conversion. The pure codec validates
-ID syntax and selection bounds (zero to 32), not registry membership. Unavailable
+Locations use version 4 without conversion from earlier versions. The pure codec validates
+metric ID syntax and metric selection bounds (zero to 32), not registry membership. Unavailable
 selected metrics remain in the location. A removed sort metric falls back to the
 default ordering with a notice and normalized location; no values in the current
 filter does not remove a registered sort.
 Registry-based fallback waits for a valid projection. Invalid metric syntax and
 unsupported non-metric sort names are request errors, rather than unavailable
 registered identities.
-Radar defaults select the first five groups in summary order; explicit selections
-are limited to five and may be empty. Changing the grouping resets group selection;
+The `comparison_groups` field defaults to `null` (all groups); explicit selections
+have no count limit and may be empty. Changing the grouping resets group selection;
 query changes retain surviving explicit keys without filling vacated positions,
 and identify unavailable selections. Defaults are omitted deterministically. Applied
 server and browser Views become transient snapshots with labels and actual

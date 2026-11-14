@@ -10,7 +10,11 @@ function timelineChartOption(trace) {
   const xAxisScale = timelineXAxisScale(trace.model.display_total_ms);
   return {
     animation: false,
-    grid: { left: labelWidth + 18, right: 28, top: 38, bottom: 48 },
+    grid: { left: labelWidth + 18, right: trace.stages.length > 24 ? 52 : 28, top: 38, bottom: 48 },
+    dataZoom: trace.stages.length > 24 ? [{
+      type: "slider", yAxisIndex: 0, right: 6, width: 18,
+      startValue: 0, endValue: 23, filterMode: "weakFilter", showDetail: false,
+    }] : [],
     tooltip: {
       trigger: "item",
       confine: true,
@@ -188,6 +192,7 @@ function timelineTooltipHtml(item) {
 function openTimelineStep(item) {
   if (!item || !item.step_id) return;
   state.selectedTrial = item.trial_key || selectedKey();
+  if (item.trajectory_id) state.selectedTrajectory = {trialKey:state.selectedTrial, trajectoryId:item.trajectory_id};
   openDetailSidebar({
     trialKey: state.selectedTrial,
     stepId: item.step_id,

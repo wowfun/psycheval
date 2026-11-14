@@ -79,3 +79,11 @@ test("default arrays are isolated and duplicate view conditions preserve their a
   const many = Array.from({ length: 1001 }, (_, index) => `model${index}`);
   assert.equal(decodeWorkspaceLocation("home", new URL(encodeWorkspaceLocation("home", { state: { query: { models: many } } }), "http://localhost")).state.query.models.length, many.length);
 });
+
+
+test("older locations are rejected and root metric scope round trips in version 4", () => {
+  const href = encodeWorkspaceLocation("home", {state:{query:{metric_scope:"root"}}}, "https://example.test");
+  assert.equal(decodeWorkspaceLocation("home", new URL(href)).state.query.metric_scope, "root");
+  const old = new URL("https://example.test/#view=" + btoa(JSON.stringify({v:2})));
+  assert.throws(() => decodeWorkspaceLocation("home", old));
+});

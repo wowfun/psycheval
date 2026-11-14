@@ -26,7 +26,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-const state = { view: null, selectedTrial: null, selectedStep: null, selectedTrajectory: null, detailSidebar: { open: false, pendingOpener: null, pendingOpenerSelector: null }, rowSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: [], sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], datasets: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: reportStore.reports, reportReader: reportStore.reader, workspaceViews: [], workspaceViewSummaries: [], workspaceViewsLoaded: false, workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" } };
+const state = { view: null, selectedTrial: null, selectedStep: null, selectedTrajectory: null, detailSidebar: { open: false, pendingOpener: null, pendingOpenerSelector: null }, rowSelection: new Set(), tables: {}, timelineChart: null, boundGlobalControls: false, serveSources: [], sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { metric_scope: "family", state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], datasets: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: reportStore.reports, reportReader: reportStore.reader, workspaceViews: [], workspaceViewSummaries: [], workspaceViewsLoaded: false, workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" } };
 Object.defineProperty(state, "workspaceReports", {
   configurable: true,
   enumerable: true,
@@ -71,8 +71,9 @@ state.leaderboardSummaryChartType = SUMMARY_DEFAULTS.chart_type;
 state.leaderboardSummaryMetrics = null;
 state.leaderboardMetricDraft = null;
 state.leaderboardMetricSearch = "";
-state.leaderboardSummaryRadarGroups = SUMMARY_DEFAULTS.radar_groups;
-state.leaderboardSummaryRadarSearch = "";
+state.leaderboardSummaryComparisonGroups = SUMMARY_DEFAULTS.comparison_groups;
+state.leaderboardGroupDraft = null;
+state.leaderboardSummaryGroupSearch = "";
 state.leaderboardSummaryGroupBy = SUMMARY_DEFAULTS.group_by;
 state.leaderboardSummaryTableOpen = SUMMARY_DEFAULTS.table_open;
 state.leaderboardSummaryStatistic = SUMMARY_DEFAULTS.statistic;
@@ -84,7 +85,7 @@ state.leaderboardSummaryRequestKey = null;
 state.leaderboardSummaryRequestVersion = 0;
 state.leaderboardSummaryRequestPromise = null;
 state.leaderboardSummaryCache = new Map();
-const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.column-control";
+const SUBMENU_DETAILS_SELECTOR = ".export-menu,.filter-control,.column-control,.toolbar-menu";
 state.sharedViewSnapshots = [];
 state.homeLocationTarget = {};
 const homeDetail = createHomeDetailController({
@@ -92,7 +93,7 @@ const homeDetail = createHomeDetailController({
   write: target => { state.homeLocationTarget = target; },
   notify: kind => workspaceLocationChanged("home", kind),
 });
-const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.column-control[open]";
+const OPEN_SUBMENU_DETAILS_SELECTOR = ".export-menu[open],.filter-control[open],.column-control[open],.toolbar-menu[open]";
 function closeOpenSubmenus(except = null) {
   document.querySelectorAll(OPEN_SUBMENU_DETAILS_SELECTOR).forEach(details => {
     if (details !== except) details.open = false;
@@ -138,6 +139,8 @@ function synthesizedReportRow(trajectory, meta, index = -1) {
       ? { analysis_count: source.analysis_count }
       : {}),
     ...inferenceRowMetrics(metrics),
+    ...(meta?.metric_sets?.[state.catalogQuery?.metric_scope || "family"]?.metric_values || meta?.metric_values || {}),
+    metric_provenance: meta?.metric_sets?.[state.catalogQuery?.metric_scope || "family"]?.metric_provenance || meta?.metric_provenance,
   };
 }
 function selectedKey() {

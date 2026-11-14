@@ -2,13 +2,6 @@ import { expect, test } from "@playwright/test";
 import { startFixture, stopFixture } from "./fixture-process.mjs";
 import { encodeWorkspaceLocation, decodeWorkspaceLocation } from "../../src/psycheval/assets/web/app/workspace-location.js";
 
-async function copied(page, button) {
-  await button.click();
-  await expect(button).toHaveText("Copied");
-  const href = await page.evaluate(() => navigator.clipboard.readText());
-  expect(href).toBe(page.url());
-  return href;
-}
 async function screenshots(page, testInfo, name, selector) {
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
@@ -19,19 +12,20 @@ async function screenshots(page, testInfo, name, selector) {
     expect(box.x + box.width).toBeLessThanOrEqual(width + 1);
     if (width === 390) expect((await page.locator(".workspace-header").boundingBox()).width).toBeGreaterThan(330);
     if (name === "home-report" && width === 1440) {
-      const configure = await page.locator('#leaderboard a[data-workspace-route="jobs"]').boundingBox();
-      const copy = await page.locator("#leaderboard [data-workspace-copy-link]").boundingBox();
-      expect(configure.x + configure.width <= copy.x || copy.x + copy.width <= configure.x || configure.y + configure.height <= copy.y || copy.y + copy.height <= configure.y).toBe(true);
+      const boxes = await page.locator("#leaderboard .leaderboard-action-row > *").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()).filter(rect => rect.width && rect.height).map(({x,y,width,height}) => ({x,y,width,height})));
+      for (let index = 1; index < boxes.length; index++) {
+        const previous = boxes[index - 1], current = boxes[index];
+        expect(previous.x + previous.width <= current.x + 1 || previous.y + previous.height <= current.y + 1).toBe(true);
+      }
     }
   }
   await page.setViewportSize({ width: 1440, height: 900 });
 }
 
-test("Saved View conditions survive deletion in a fresh guest context; Trial location is independent of the list", async ({ page, context, browser }, testInfo) => {
+test("Saved View conditions survive deletion in a fresh guest context; Trial location is independent of the list", async ({ page, browser }, testInfo) => {
   const fixture = await startFixture({ PEVAL_E2E_LINKS: "1", PEVAL_E2E_PASSWORD: "fixture-secret", PYTHONPATH: process.cwd() });
-  const fresh = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
+  const fresh = await browser.newContext();
   try {
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     const headers = { Origin: fixture.origin };
     expect((await page.request.post(`${fixture.origin}/api/session`, { headers, data: { password: "fixture-secret" } })).status()).toBe(200);
     const viewPath = `${fixture.origin}/api/views/${encodeURIComponent("Original 中文")}`;
@@ -41,6 +35,7 @@ test("Saved View conditions survive deletion in a fresh guest context; Trial loc
     await expect(viewRow).toBeVisible();
     await page.locator("[data-leaderboard-search-input]").fill("link-target");
     await expect(page.locator(".trajectory-row")).toHaveCount(1);
+    await page.locator(".toolbar-view-menu > summary").click();
     await page.locator("[data-view-save]").click();
     await page.locator("[data-view-name-input]").fill("Local 快照");
     await page.locator('[name="view_location"][value="browser"]').locator("..").click();
@@ -54,7 +49,7 @@ test("Saved View conditions survive deletion in a fresh guest context; Trial loc
     await page.locator("[data-summary-group-by=model]").click();
     await page.locator("[data-summary-statistic=p95]").click();
     await page.locator("[data-summary-table-toggle]").click();
-    const href = await copied(page, page.locator("#leaderboard [data-workspace-copy-link]"));
+    const href = page.url();
     const state = decodeWorkspaceLocation("home", new URL(href)).state;
     expect(state.views.find(view => view.name === "Original 中文")).toMatchObject({ filters: { agents: ["link-target"] } });
     expect(state.views.find(view => view.name === "Local 快照")).toMatchObject({ filters: { search: "link-target" } });
@@ -74,8 +69,8 @@ test("Saved View conditions survive deletion in a fresh guest context; Trial loc
     await expect(recipient.locator("[data-summary-table-toggle]")).toHaveAttribute("aria-expanded", "true");
     expect(await recipient.evaluate(() => Object.keys(localStorage).filter(key => /view/i.test(key)))).toEqual([]);
     expect((await (await recipient.request.get(`${fixture.origin}/api/session`)).json()).role).toBe("guest");
-    await copied(recipient, recipient.locator("#leaderboard [data-workspace-copy-link]"));
-    await screenshots(recipient, testInfo, "leaderboard", "#leaderboard [data-workspace-copy-link]");
+    await expect(recipient.locator("[data-workspace-copy-link]")).toHaveCount(0);
+    await screenshots(recipient, testInfo, "leaderboard", "#leaderboard .toolbar-view-menu > summary");
     const catalog = await (await page.request.get(`${fixture.origin}/api/catalog?state=all`)).json();
     const target = catalog.items.find(row => row.agent_name === "psychevo");
     expect(target).toBeTruthy();
@@ -87,8 +82,8 @@ test("Saved View conditions survive deletion in a fresh guest context; Trial loc
     await expect(sidebar.locator('.step[data-step="2"]')).toHaveAttribute("open", "");
     await expect(sidebar).toContainText("Child response");
     await expect(recipient.locator(`.trajectory-row[data-source-key="${target.source_key}"]`)).toHaveCount(0);
-    await copied(recipient, sidebar.locator("[data-workspace-copy-link]"));
-    await screenshots(recipient, testInfo, "trial", "#detail-sidebar [data-workspace-copy-link]");
+    await expect(recipient.locator("[data-workspace-copy-link]")).toHaveCount(0);
+    await screenshots(recipient, testInfo, "trial", "#detail-sidebar [data-sidebar-close]");
     await recipient.reload();
     await expect(sidebar.locator('.step[data-step="2"]')).toHaveAttribute("open", "");
     const open = recipient.url();
@@ -106,11 +101,10 @@ test("Saved View conditions survive deletion in a fresh guest context; Trial loc
   } finally { try { await fresh.close(); } finally { await stopFixture(fixture); } }
 });
 
-test("archived reports restore through both readers, retain filters and unsaved association drafts", async ({ page, context, browser }, testInfo) => {
+test("archived reports restore through both readers, retain filters and unsaved association drafts", async ({ page, browser }, testInfo) => {
   const fixture = await startFixture({ PEVAL_E2E_REPORTS: "1", PEVAL_E2E_PASSWORD: "fixture-secret", PYTHONPATH: process.cwd() });
-  const guest = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
+  const guest = await browser.newContext();
   try {
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     const headers = { Origin: fixture.origin };
     await page.request.post(`${fixture.origin}/api/session`, { headers, data: { password: "fixture-secret" } });
     const config = await (await page.request.get(`${fixture.origin}/api/config`)).json();
@@ -126,7 +120,7 @@ test("archived reports restore through both readers, retain filters and unsaved 
     await expect(page.locator("[data-report-search]")).toHaveValue("not-in-list");
     await expect(page.locator('[data-report-kind="dataset"]')).toBeChecked();
     await expect(page.locator("[data-report-row]")).toHaveCount(0);
-    const shared = await copied(page, detail.locator("[data-workspace-copy-link]"));
+    const shared = page.url();
     await detail.locator("[data-binding-kind]").selectOption("dataset");
     await detail.locator('[data-target-key="empty-library"]').check();
     await page.locator('[data-workspace-route="home"]').first().click();
@@ -140,18 +134,18 @@ test("archived reports restore through both readers, retain filters and unsaved 
     await expect(recipient.locator("#report-library-detail")).toBeVisible();
     await expect(recipient.locator("[data-report-save]")).toHaveCount(0);
     await expect(recipient.locator('[data-report-tab="associations"]')).toHaveAttribute("aria-selected", "true");
-    await screenshots(recipient, testInfo, "report-associations", "#report-library-detail [data-workspace-copy-link]");
+    await screenshots(recipient, testInfo, "report-associations", "#report-library-detail [data-sidebar-close]");
     await recipient.reload();
     await expect(recipient.locator("#report-library-detail")).toBeVisible();
     const homeHref = encodeWorkspaceLocation("home", { object: { report: report.report_ref }, state: { query: { search: "no-trials" } } }, fixture.origin);
     await recipient.goto(homeHref);
     await expect(recipient.locator("[data-leaderboard-search-input]")).toHaveValue("no-trials");
-    await expect(recipient.locator("#leaderboard [data-workspace-copy-link]")).toBeVisible();
+    await expect(recipient.locator("#leaderboard .toolbar-view-menu > summary")).toBeVisible();
     const reader = recipient.locator("#workspace-report-reader");
     await expect(reader).toBeVisible();
     await expect(reader.locator("iframe")).toHaveAttribute("src", `${new URL(path).pathname}/preview`);
-    await copied(recipient, reader.locator("[data-workspace-copy-link]"));
-    await screenshots(recipient, testInfo, "home-report", "#workspace-report-reader [data-workspace-copy-link]");
+    await expect(recipient.locator("[data-workspace-copy-link]")).toHaveCount(0);
+    await screenshots(recipient, testInfo, "home-report", "#workspace-report-reader [data-sidebar-close]");
     await recipient.reload();
     await expect(reader).toBeVisible();
   } finally { try { await guest.close(); } finally { await stopFixture(fixture); } }

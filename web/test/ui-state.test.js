@@ -629,7 +629,7 @@ test("Leaderboard disables permanent deletion for a selected linked Harbor Trial
   runtime.state.rowSelection.clear();
   runtime.state.rowSelection.add("linked-harbor");
   const host = document.createElement("div");
-  host.innerHTML = sourceStateControls.renderServeSourceStateControls([{
+  host.innerHTML = sourceStateControls.renderSourceStateActions([{
     source_key: "linked-harbor",
     kind: "harbor-trial",
   }]);

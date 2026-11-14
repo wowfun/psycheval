@@ -9,7 +9,6 @@ import { createTaskBrowser } from "./harbor-task-browser.js";
 import { serveApi } from "./serve-effects.js";
 import { createSidebarController } from "./sidebar.js";
 import { selectedTrajectoryDetail, renderTrajectoryNavigation, bindTrajectoryNavigation } from "./trajectory-family.js";
-import { bindWorkspaceLinkButtons, workspaceLinkButton } from "./workspace-links.js";
 
 let detailSidebarController = null;
 
@@ -139,7 +138,7 @@ function renderDetailSidebar() {
       <div class="detail-sidebar-head">
         <div><p class="eyebrow">${esc(t("selected_trial_details", "Selected trial details"))}</p><h2 id="detail-sidebar-title">${esc(rootMeta.trial_key || "-")}</h2></div>
         <div class="detail-sidebar-actions">
-          ${workspaceLinkButton()}
+
           <button class="action-button compact" type="button" data-sidebar-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
         </div>
         ${renderVerificationSummary(rootMeta)}
@@ -177,7 +176,6 @@ function renderDetailSidebar() {
     sidebar.verificationBrowser.setSource(sourceKey, rootMeta.verifier_evidence?.revision || rootMeta.evidence_revision || state.catalogPage?.generation);
     sidebar.verificationBrowser.attach(target.querySelector("[data-verification-browser]"));
   }
-  bindWorkspaceLinkButtons(target, "home");
   target.querySelectorAll("[data-detail-sidebar-step-list] .step > summary").forEach(summary => {
     summary.addEventListener("click", event => {
       if (event.target.closest("button,a,input,select")) return;

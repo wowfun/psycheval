@@ -4,6 +4,58 @@ import { installBrowserDom, pointerClick, submitActionForm } from "./support/bro
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
+for (const [kind, duration] of [["success", 5000], ["info", 5000], ["error", 10000]]) {
+  test(`${kind} feedback expires without Close and preserves the editor draft`, async () => {
+    const browser = installBrowserDom('<div id="feedback"></div><input id="draft" value="unsaved">');
+    try {
+      const timers = new Map(); let serial = 0;
+      window.setTimeout = (run, delay) => { timers.set(++serial, { run, delay }); return serial; };
+      window.clearTimeout = id => timers.delete(id);
+      const { beginFeedback } = await import("../../src/psycheval/assets/web/modules/action-feedback.js");
+      const feedback = beginFeedback("#feedback");
+      feedback[kind]("Result");
+      assert.ok([...document.querySelectorAll(".action-feedback button")].every(button => button.textContent !== "Close"));
+      assert.equal([...timers.values()][0].delay, duration);
+      const node = document.querySelector("#feedback .action-feedback");
+      node.tabIndex = 0; node.focus();
+      assert.equal(timers.size, 0);
+      document.querySelector("#draft").focus();
+      assert.equal(timers.size, 1);
+      Object.defineProperty(document, "hidden", { configurable: true, value: true });
+      document.dispatchEvent(new window.Event("visibilitychange"));
+      assert.equal(timers.size, 0);
+      Object.defineProperty(document, "hidden", { configurable: true, value: false });
+      document.dispatchEvent(new window.Event("visibilitychange"));
+      [...timers.values()][0].run();
+      assert.equal(feedback.signal.aborted, true);
+      assert.equal(document.querySelector(".action-feedback"), null);
+      assert.equal(document.querySelector("#draft").value, "unsaved");
+    } finally { browser.cleanup(); }
+  });
+}
+
+test("retry suspends expiry and compact refresh success has no duplicate toast", async () => {
+  const browser = installBrowserDom('<div id="heading"></div><div id="errors"></div>');
+  try {
+    const timers = new Map(); let serial = 0;
+    window.setTimeout = (run, delay) => { timers.set(++serial, { run, delay }); return serial; };
+    window.clearTimeout = id => timers.delete(id);
+    const { beginFeedback } = await import("../../src/psycheval/assets/web/modules/action-feedback.js");
+    const feedback = beginFeedback("#heading", { compact: true, errorTarget: "#errors" });
+    feedback.pending("Checking");
+    assert.equal(timers.size, 0);
+    feedback.error("Read failed", { action: { label: "Retry", run: () => feedback.pending("Checking again") } });
+    assert.match(document.querySelector("#errors").textContent, /Read failed/);
+    document.querySelector("#errors button").click();
+    assert.equal(timers.size, 0);
+    assert.match(document.querySelector("#heading").textContent, /Checking again/);
+    feedback.success();
+    assert.equal(document.querySelector(".action-toast"), null);
+    assert.equal(document.querySelector("#heading button"), null);
+    assert.equal([...timers.values()][0].delay, 5000);
+  } finally { browser.cleanup(); }
+});
+
 test("an already aborted operation observer releases the caller's busy state", async () => {
   const browser = installBrowserDom('<div id="aborted-operation"></div>', { fetch: () => assert.fail("aborted observers must not poll") });
   try {

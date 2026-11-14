@@ -1,5 +1,23 @@
 # Evaluation Workspace Reference
 
+Home defaults to complete-family metric scope, with a root-session switch.
+The Leaderboard toolbar orders Refresh, Columns, View, Actions, and Export.
+View owns metric scope, the active/archived switch, Save view, and the Saved
+Views sidebar toggle. Actions owns report attachment, archive/activate, and
+deletion, with existing permissions and selection requirements. Menus share
+outside-click dismissal and Escape focus restoration. Summary's Comparison
+groups selector precedes Metrics and controls its table, charts, and exports.
+Sorting, summaries, detail values and exports share the selection. Active
+Duration is explicitly source-scoped. Selecting a child changes session detail,
+not evaluation identity or score. Family timelines group by session and leave
+incomparable clocks unaligned. Missing members and partial coverage stay visible.
+Long waterfalls use a bounded canvas and a vertical stage window; the detail
+table remains paginated. Hidden stages retain their original time coordinates.
+Leaderboard and trajectory model labels show the model component of DSH's
+encoded provider/model ID. Retained IDs, run configuration and filter values
+remain unchanged.
+
+
 Metric cells retain concise accessible value names. Measurement explanations are
 available as hover descriptions; metric selection exposes a compact, visible
 coverage summary associated with its focusable checkbox. Per-group provenance
@@ -338,8 +356,15 @@ Page loading, scan progress, source-mode text, and shell failures have their own
 feedback scopes. Neutral page status stays inline without completion notifications. Notifications
 outside the visible action region provide a summary and a return action without
 automatically scrolling or taking focus. Errors and actionable notifications
-remain until resolved or dismissed; transient success feedback expires, releasing
-its state, and pauses while read. Independent actions retain independent results.
+expire automatically: ordinary and successful messages after five seconds,
+errors after ten seconds. Feedback has no Close button. Expiry pauses while
+hovered, focused, or the document is hidden, and restarts when reading resumes.
+Pending operations remain visible until they settle. View, retry, and diagnostic
+actions remain available during the message lifetime; retry suspends expiry.
+Expiry releases feedback resources without discarding drafts or changing the
+server operation's result. Independent actions retain independent lifetimes.
+Home refresh progress and success appear beside the Leaderboard heading, without
+a duplicate completion toast; failures use the ordinary transient error surface.
 These rules do not replace Copilot's transcript-owned notices.
 
 Input dialogs keep a failed draft open and prevent duplicate submissions.

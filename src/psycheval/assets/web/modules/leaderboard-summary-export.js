@@ -1,6 +1,7 @@
 import { fmtNum, t } from "./shared.js";
 import { downloadBlob } from "./download.js";
 import { originNote, radarMetricLabel, radarOption } from "./leaderboard-radar.js";
+import { wrappedLines } from "./summary-chart.js";
 
 const WIDTH = 1000, SCALE = 2, MARGIN = 32, GAP = 24;
 const INK = "#292c36", MUTED = "#596171", RULE = "#dadce2";
@@ -16,22 +17,6 @@ function checkImageSize(width, height, kind = "bar") {
   if (width * SCALE > 16384 || height * SCALE > 16384 || width * height * SCALE ** 2 > 32_000_000) throw imageTooLarge(kind);
 }
 
-// Measure and wrap before allocating the output canvas; no label is truncated.
-function wrappedLines(context, text, width) {
-  return String(text).split("\n").flatMap(paragraph => {
-    const lines = [];
-    let line = "";
-    for (const character of paragraph) {
-      if (line && context.measureText(line + character).width > width) {
-        lines.push(line); line = "";
-      }
-      line += character;
-    }
-    lines.push(line);
-    return lines;
-  });
-}
-
 // Place labels just beyond their axis endpoints and expand the plot until their
 // measured rectangles fit without overlap. The same geometry drives ECharts.
 function radarImagePlot(radar, context) {
@@ -39,7 +24,7 @@ function radarImagePlot(radar, context) {
   const labels = radar.axes.map(axis => {
     const definition = radar.definitions.find(item => item.key === axis.key);
     const unit = definition?.unit ? ` (${definition.unit})` : "";
-    const lines = wrappedLines(context, `${radarMetricLabel(radar, axis.key)}${unit} ${axis.direction > 0 ? "↑" : "↓"}`, 180);
+    const lines = wrappedLines(text => context.measureText(text).width, `${radarMetricLabel(radar, axis.key)}${unit} ${axis.direction > 0 ? "↑" : "↓"}`, 180);
     return { lines, width: Math.max(...lines.map(line => context.measureText(line).width)), height: lines.length * 21 };
   });
   for (let radius = 190; ; radius += 32) {
@@ -72,7 +57,7 @@ function summaryImageLayout(kind, snapshot, context) {
   const imageWidth = radarPlot ? radarPlot.width + 2 * MARGIN : WIDTH;
   const text = (value, x, y, width, size = 14, color = INK, bold = false) => {
     context.font = font(size, bold);
-    const lines = wrappedLines(context, value, width);
+    const lines = wrappedLines(text => context.measureText(text).width, value, width);
     const lineHeight = Math.ceil(size * 1.5);
     const height = lines.length * lineHeight;
     checkImageSize(imageWidth, y + height + MARGIN, kind);
@@ -119,7 +104,7 @@ function summaryImageLayout(kind, snapshot, context) {
       commands.push({ type: "text", lines: label.lines, x: plot.x + label.x + offset, y: plot.y + label.y, align: label.align, lineHeight: 21, font: font(14), color: INK });
     }
     y += plot.height + GAP;
-    y += text(t("summary_radar_groups", "Comparison groups"), MARGIN, y, innerWidth, 17, INK, true) + 12;
+    y += text(t("summary_comparison_groups", "Comparison groups"), MARGIN, y, innerWidth, 17, INK, true) + 12;
     for (const item of snapshot.radar.series) {
       rect(MARGIN, y + 8, 26, 4, item.color);
       y += text(`${item.group.label} · n=${fmtNum(item.group.count)}`, MARGIN + 40, y, innerWidth - 40, 14, INK, true);

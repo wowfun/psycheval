@@ -18,8 +18,8 @@ function setup() {
     workspaceViews: [], workspaceAppliedViewNames: new Set(),
     leaderboardSummaryLoading: false, leaderboardSummaryError: null,
     leaderboardSummaryGroupBy: "model", leaderboardSummaryChartType: "bar", leaderboardSummaryStatistic: "mean",
-    leaderboardSummaryTableOpen: false, leaderboardSummaryRadarGroups: null,
-    leaderboardSummaryMetrics: ["score", "duration_ms", "tps"], leaderboardSummaryRadarSearch: "",
+    leaderboardSummaryTableOpen: false, leaderboardSummaryComparisonGroups: null,
+    leaderboardSummaryMetrics: ["score", "duration_ms", "tps"], leaderboardSummaryGroupSearch: "",
     leaderboardSummary: { generation: 7, checking: false, summary: { matched_count: 9, groups: Array.from({ length: 6 }, (_, i) => ({
       key: `g${i}`, label: i === 0 ? "长中文模型名称".repeat(15) : `model-${i}`, count: i + 1,
       metrics: [
@@ -38,13 +38,13 @@ test("image layouts retain every group, current statistic, missing values, and c
   const target = setup();
   try {
     state.leaderboardSummaryStatistic = "p95";
-    state.leaderboardSummaryRadarGroups = ["g0", "g2", "g3", "g4", "g5"];
-    state.leaderboardSummaryRadarSearch = "model-2";
+    state.leaderboardSummaryComparisonGroups = ["g0", "g2", "g3", "g4", "g5"];
+    state.leaderboardSummaryGroupSearch = "model-2";
     const snapshot = summary.leaderboardSummaryImageSnapshot();
     assert.equal(snapshot.subtitle, "P95 · Model");
     assert.match(snapshot.scope, /9 matching/);
     assert.deepEqual(snapshot.bars.map(bar => bar.definition.key), ["score", "duration_ms", "tps"]);
-    assert.equal(snapshot.bars[0].values.length, 6);
+    assert.equal(snapshot.bars[0].values.length, 5);
     assert.equal(snapshot.bars[0].values[0].value, 10);
     assert.equal(snapshot.bars[2].values[0].value, null);
     assert.equal(snapshot.bars[2].values[0].formatted, "-");
@@ -52,7 +52,7 @@ test("image layouts retain every group, current statistic, missing values, and c
     const radar = images.summaryImageLayout("radar", snapshot, measure);
     const text = layout => layout.commands.filter(command => command.type === "text").map(command => command.lines.join("")).join("\n");
     assert.match(text(bar), /- = No data/);
-    for (const group of state.leaderboardSummary.summary.groups) assert.ok(text(bar).includes(group.label));
+    for (const group of state.leaderboardSummary.summary.groups) assert.equal(text(bar).includes(group.label), state.leaderboardSummaryComparisonGroups.includes(group.key));
     assert.ok(bar.commands.some(command => command.x > bar.width / 2));
     assert.equal(snapshot.radar.series.length, 5);
     for (const item of snapshot.radar.series) {
@@ -80,11 +80,12 @@ test("export menu updates availability with presentation and closes with Escape"
     summary.renderLeaderboardSummary();
     assert.equal(target.querySelectorAll("[data-summary-export]").length, 3);
     for (const kind of ["xlsx", "bar", "radar"]) assert.equal(button(kind).disabled, false);
-    state.leaderboardSummaryRadarGroups = [];
+    state.leaderboardSummaryComparisonGroups = [];
     summary.setLeaderboardSummaryStatistic("p95");
     assert.equal(button("radar").disabled, true);
-    assert.equal(button("bar").disabled, false);
-    assert.match(target.querySelector("#summary-export-help").textContent, /Select up to five/);
+    assert.equal(button("bar").disabled, true);
+    assert.match(target.querySelector("#summary-export-help").textContent, /Select at least one comparison group/);
+    state.leaderboardSummaryComparisonGroups = null;
     state.leaderboardSummaryGroupBy = "overall";
     summary.renderLeaderboardSummary();
     assert.equal(button("xlsx").disabled, false);
@@ -105,7 +106,7 @@ test("export menu updates availability with presentation and closes with Escape"
     state.catalogPage.total = 0;
     summary.renderLeaderboardSummary();
     for (const kind of ["xlsx", "bar", "radar"]) assert.equal(button(kind).disabled, true);
-    const menu = target.querySelector("details"); menu.open = true;
+    const menu = target.querySelector(".leaderboard-summary-export"); menu.open = true;
     menu.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     assert.equal(menu.open, false);
     assert.equal(document.activeElement, menu.querySelector("summary"));
@@ -162,7 +163,7 @@ test("offscreen radar uses current selection without fetching or replacing the p
     const blob = await images.summaryImageBlob("radar", snapshot);
     assert.equal(blob.type, "image/png");
     assert.equal(mock.charts.length, 1);
-    assert.equal(mock.charts[0].option.series.length, 5);
+    assert.equal(mock.charts[0].option.series.length, 6);
     assert.equal(mock.charts[0].option.series[0].lineStyle.color, snapshot.radar.series[0].color);
     assert.equal(mock.charts[0].option.radar.axisName.show, false);
     const layout = images.summaryImageLayout("radar", snapshot, measure);

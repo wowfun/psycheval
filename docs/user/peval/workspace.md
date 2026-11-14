@@ -195,8 +195,8 @@ filesystem changes; a related mutation made in another page refreshes the stale
 page when it is next activated. Reloading or closing the browser still warns
 before discarding an unsaved draft.
 
-Use **Copy link** on the Leaderboard or a Trial/report reader to share its current
-location. The address bar follows opened details and current conditions; links
+Copy the address-bar URL to share the current location. The address bar follows
+opened details and current conditions; links
 restore filtering, sorting, pagination, aggregate display and the selected
 trajectory, step or report tab. Applied Saved Views carry their actual conditions,
 including browser-local Views, so recipients need no matching saved definition.

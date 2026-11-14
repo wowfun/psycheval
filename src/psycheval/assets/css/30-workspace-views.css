@@ -31,7 +31,6 @@
   min-width:0;
   flex-wrap:wrap;
 }
-.leaderboard-summary-save:focus-visible,
 .workspace-view-index button:focus-visible,
 .workspace-view-index input:focus-visible,
 .workspace-view-index td[tabindex]:focus-visible,

@@ -49,8 +49,8 @@ test('JSON download uses the server schema filename and retains provenance',asyn
     await download.saveAs(path);
     const report=JSON.parse(await readFile(path,'utf8'));
     expect(download.suggestedFilename()).toBe(`peval-report-v${report.schema_version}.json`);
-    expect(report.schema_version).toBe(21);
+    expect(report.schema_version).toBe(23);
     expect(report.trajectory_meta).toHaveLength(2);
-    expect(report.trajectory_meta.every(meta=>Object.keys(meta.metric_provenance).length===12)).toBe(true);
+    expect(report.trajectory_meta.every(meta=>Object.keys(meta.metric_provenance).length===20)).toBe(true);
   } finally {await stopFixture(fixture);}
 });

@@ -1,11 +1,11 @@
 import { validMetricId, validMetricSelection } from "./metric-contract.js";
 // @ts-check
 import { SORT_KEYS as SORTS } from "./catalog-sort.js";
-import { BROWSER_VIEW_LIMIT, VIEW_NAME_MAX_CHARS, VIEW_GROUPS as GROUPS, SUMMARY_DEFAULTS, RADAR_GROUP_LIMIT } from "./workspace-view-contract.js";
+import { BROWSER_VIEW_LIMIT, VIEW_NAME_MAX_CHARS, VIEW_GROUPS as GROUPS, SUMMARY_DEFAULTS } from "./workspace-view-contract.js";
 
 const MAX_LOCATION_BYTES = 64 * 1024;
 const FACETS = ["categories", "tags", "agents", "models", "tasks", "jobs", "providers", "datasets", "results"];
-const HOME_QUERY = Object.freeze({ state: "active", search: "", page: 1, page_size: 100, sort: "last_turn_end", direction: "desc", ...Object.fromEntries(FACETS.map(key => [key, []])) });
+const HOME_QUERY = Object.freeze({ state: "active", search: "", page: 1, page_size: 100, sort: "last_turn_end", direction: "desc", metric_scope: "family", ...Object.fromEntries(FACETS.map(key => [key, []])) });
 const REPORT_QUERY = Object.freeze({ state: "active", search: "", page: 1, page_size: 50, kinds: [], datasets: [], jobs: [] });
 const SUMMARY = SUMMARY_DEFAULTS;
 const STATS = new Set(["mean", "min", "q1", "p50", "q3", "p95", "max"]);
@@ -35,6 +35,7 @@ function queryState(page, value = {}) {
   if (!["active", "archived", "all"].includes(result.state) || typeof result.search !== "string" || result.search.includes("\0")) invalid();
   if (!Number.isSafeInteger(result.page) || result.page < 1 || !Number.isSafeInteger(result.page_size) || result.page_size < 1 || result.page_size > 100) invalid();
   if (page === "home" && (!(SORTS.has(result.sort) || result.sort.startsWith("metric:") && validMetricId(result.sort.slice(7))) || !["asc", "desc"].includes(result.direction))) invalid();
+  if (page === "home" && !["root", "family"].includes(result.metric_scope)) invalid();
   if (page === "reports" && result.kinds.some(key => !["session", "dataset", "job", "unassociated"].includes(key))) invalid();
   return result;
 }
@@ -45,9 +46,9 @@ function summaryState(value = {}) {
   if (!["bar", "radar"].includes(result.chart_type)) invalid();
   if (result.metrics !== null && !validMetricSelection(result.metrics)) invalid();
   if (result.metrics !== null) result.metrics = [...result.metrics];
-  if (result.radar_groups !== null) {
-    if (!Array.isArray(result.radar_groups) || result.radar_groups.length > RADAR_GROUP_LIMIT || result.radar_groups.some(key => key !== null && (typeof key !== "string" || !key || key.includes("\0")))) invalid();
-    result.radar_groups = [...new Set(result.radar_groups)].sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0);
+  if (result.comparison_groups !== null) {
+    if (!Array.isArray(result.comparison_groups) || result.comparison_groups.some(key => key !== null && (typeof key !== "string" || !key || key.includes("\0")))) invalid();
+    result.comparison_groups = [...new Set(result.comparison_groups)].sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0);
   }
   return result;
 }
@@ -82,7 +83,7 @@ function normalizeLocationState(page, value = {}) {
 function encodePayload(page, value) {
   const state = normalizeLocationState(page, value);
   const query = differences(state.query, page === "home" ? HOME_QUERY : REPORT_QUERY);
-  const payload = { v: 2 };
+  const payload = { v: 4 };
   if (Object.keys(query).length) payload.query = query;
   if (page === "home") {
     if (state.views.length) payload.views = state.views.map(view => ({ ...view, filters: differences(view.filters, HOME_QUERY) }));
@@ -134,7 +135,7 @@ function decodeWorkspaceLocation(page, location) {
       payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     } catch { invalid(); }
     object(payload, ["v", "query", "views", "summary"]);
-    if (payload.v !== 2) invalid();
+    if (payload.v !== 4) invalid();
   }
   const { v: _version, ...state } = payload;
   return { object: normalizeLocationObject(page, target), state: normalizeLocationState(page, state) };

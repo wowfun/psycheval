@@ -8,11 +8,32 @@ import { normalizeColumnLayout } from "../../src/psycheval/assets/web/modules/le
 const browser = installBrowserDom('<script id="peval-render-options" type="application/json">{}</script><section id="leaderboard-summary"></section>');
 const { state, agentStepCount } = await import("../../src/psycheval/assets/web/modules/runtime.js");
 const summary = await import("../../src/psycheval/assets/web/modules/leaderboard-summary.js");
-const { selectedMetricDefinitions, metricProvenanceHint } = await import("../../src/psycheval/assets/web/modules/metric-presentation.js");
+const { selectedMetricDefinitions, metricProvenanceHint, metricCoverageStatus } = await import("../../src/psycheval/assets/web/modules/metric-presentation.js");
+
+test("metric cells use shared scope coverage without duplicating it into provenance", () => {
+  const provenance = {scope:"family", source:"native", coverage:{measured:1,unknown:0,total:1}};
+  const family = {status:"partial",retained_members:2,known_members:3};
+  assert.equal(metricCoverageStatus(provenance,family),"partial");
+  assert.match(metricProvenanceHint(provenance,"tokens",family),/partial; 2\/3/);
+  assert.equal(metricCoverageStatus({...provenance,scope:"evaluation_entry"},family),"complete");
+  assert.equal(metricCoverageStatus(provenance,{status:"unknown"}),"unknown");
+  assert.equal("family_coverage" in provenance,false);
+});
 
 test("partial metric provenance has readable unknowns instead of JavaScript values", () => {
   for (const provenance of [{}, { variants: [{}] }]) assert.doesNotMatch(metricProvenanceHint(provenance), /undefined/);
   assert.doesNotMatch(metricProvenanceHint({ missing_reason: "plugin_not_loaded" }), /plugin_not_loaded/);
+});
+
+test("model summary labels show DSH model names without changing group identity", () => {
+  reset();
+  state.leaderboardSummaryGroupBy = "model";
+  const key = '["mimo","mimo-v2.6-flash"]';
+  state.leaderboardSummary.summary.groups = [{key,label:key,count:1,metrics:[{key:"score",count:1,mean:1}]}];
+  summary.renderLeaderboardSummary();
+  assert.equal(document.querySelector('.leaderboard-summary-bar-label').textContent,"mimo-v2.6-flash");
+  assert.equal(state.leaderboardSummary.summary.groups[0].key,key);
+  assert.equal(state.leaderboardSummary.summary.groups[0].label,key);
 });
 const { radarContext } = await import("../../src/psycheval/assets/web/modules/leaderboard-radar.js");
 const base = JSON.parse(readFileSync(new URL("./support/metrics.json", import.meta.url), "utf8"));

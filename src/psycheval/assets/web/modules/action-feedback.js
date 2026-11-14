@@ -40,8 +40,9 @@ function feedbackStore() {
 }
 
 function targetFor(entry) {
-  return typeof entry.target === "function" ? entry.target()
-    : typeof entry.target === "string" ? document.querySelector(entry.target) : entry.target;
+  const target = entry.error && entry.errorTarget ? entry.errorTarget : entry.target;
+  return typeof target === "function" ? target()
+    : typeof target === "string" ? document.querySelector(target) : target;
 }
 
 function inView(node) {
@@ -94,7 +95,7 @@ function removeInline(entry) {
 
 function makeContent(entry, toast = false) {
   const node = document.createElement("section");
-  node.className = `action-feedback${entry.error ? " danger" : ""}${toast ? " action-toast" : ""}`;
+  node.className = `action-feedback${entry.error ? " danger" : ""}${entry.compact && !entry.error ? " action-feedback-compact" : ""}${toast ? " action-toast" : ""}`;
   node.dataset.actionFeedback = entry.key;
   node.setAttribute("role", "status");
   node.setAttribute("aria-live", "polite");
@@ -130,10 +131,6 @@ function makeContent(entry, toast = false) {
     target?.focus?.({ preventScroll: true });
     removeNotification(entry);
   }));
-  if (!entry.pending) node.append(button(t("close", "Close"), () => {
-    if (toast && entry.error) removeNotification(entry);
-    else entry.dispose();
-  }));
   return node;
 }
 
@@ -147,7 +144,7 @@ function positionNotifications(store) {
 
 function showNotification(entry, store) {
   removeNotification(entry);
-  if (!entry.message || entry.pending || entry.notify === false || targetFor(entry)?.closest('[aria-modal="true"]:not([hidden])') || inView(entry.node)) return;
+  if (!entry.message || entry.pending || entry.notify === false || entry.compact && !entry.error || targetFor(entry)?.closest('[aria-modal="true"]:not([hidden])') || inView(entry.node)) return;
   if (!store.host?.isConnected) {
     store.host = document.createElement("aside");
     store.host.className = "action-notifications";
@@ -169,8 +166,8 @@ function removeNotification(entry) {
   if (host && !host.childElementCount) host.remove();
 }
 
-function expireSuccess(entry) {
-  if (entry.pending || entry.error || entry.notify === false) return;
+function expireFeedback(entry) {
+  if (entry.pending) return;
   const owner = document, view = window;
   const nodes = [entry.node, entry.toast].filter(Boolean);
   let timer;
@@ -178,7 +175,7 @@ function expireSuccess(entry) {
   const resume = () => {
     pause();
     if (!owner.hidden && !nodes.some(node => node.isConnected && node.matches(":hover, :focus-within"))) {
-      timer = view.setTimeout(entry.dispose, 5000);
+      timer = view.setTimeout(entry.dispose, entry.error ? 10000 : 5000);
     }
   };
   for (const node of nodes) {
@@ -228,7 +225,7 @@ function beginFeedback(target, options = {}) {
     entry.node = makeContent(entry);
     renderInline(entry);
     showNotification(entry, store);
-    expireSuccess(entry);
+    expireFeedback(entry);
   };
   return {
     signal: controller.signal,

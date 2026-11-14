@@ -1,9 +1,10 @@
 import { agentStepCount } from "./runtime.js";
+import { modelDisplayName } from "./shared.js";
 import { renderDateTime } from "./date-time.js";
 import { timingSource } from "./timing-source.js";
 import { $, esc, fmtCost, fmtMs, fmtNum, fmtPct, fmtScore, hasMetricValue, listValue, lower, renderComparisonPanels, selectedKey, sourceAliasFor, sourceDisplayFor, sourceIdentityFor, state, statusLabel, t } from "./runtime.js";
 import { agentNameFor, bindDataTableSelection, renderRowSelection, rowToolSuccessRate, selectionColumn } from "./data-tables.js";
-import { bindServeSourceStateControls, renderServeSourceStateControls, renderSourceRefreshControl } from "./source-state-controls.js";
+import { bindServeSourceStateControls, renderSourceRefreshControl } from "./source-state-controls.js";
 import { catalogStepOutline, leaderboardRows, metaFor, selectServeDetail, trajectoryFor } from "./serve-catalog.js";
 import { finalMetric, infoGrid, maxPositiveMetric, reasoningExposed, systemExposed, timeTitle, timingRatio, tokenTotal, trajectoryDurationHeatClass, trialWallDurationMs } from "./analysis-metrics.js";
 import { renderSelectedNotes } from "./analysis-notes.js";
@@ -21,7 +22,7 @@ function renderTrajectoryOverview(rows = leaderboardRows()) {
     ? rows.map(row => renderTrajectoryOverviewRow(row)).join("")
     : `<div class="trajectory-empty">${esc(t("no_matching_rows", "No matching rows"))}</div>`;
   target.innerHTML = `
-    <div class="panel-head"><h2 id="trajectory-overview-title">${esc(t("trajectory_overview", "Trajectory Overview"))}</h2>${renderServeSourceStateControls(rows)}</div>
+    <div class="panel-head"><h2 id="trajectory-overview-title">${esc(t("trajectory_overview", "Trajectory Overview"))}</h2></div>
     <div class="trajectory-overview-list">${body}</div>
   `;
   bindTrajectoryControls(target);
@@ -134,11 +135,12 @@ function renderTrace() {
   const root = trajectoryFor(rootMeta.trial_key);
   const { trajectory, meta: trial, depth } = selectedTrajectoryDetail(root, rootMeta);
   const metrics = trajectory?.final_metrics || {};
-  const toolCalls = finalMetric(metrics, "total_tool_calls");
-  const toolErrors = finalMetric(metrics, "total_tool_errors");
-  const status = lower(trial.status || "passed");
+  const projected = (depth ? trial.metric_sets?.root : trial.metric_sets?.[state.catalogQuery?.metric_scope || "family"])?.metric_values || trial.metric_values;
+  const toolCalls = projected ? projected.total_tool_calls : finalMetric(metrics, "total_tool_calls");
+  const toolErrors = projected ? projected.total_tool_errors : finalMetric(metrics, "total_tool_errors");
+  const status = lower(trial.status || (depth ? "unknown" : "passed"));
   const agentName = trajectory?.agent?.name || "-";
-  const model = trajectory?.agent?.model_name || "-";
+  const model = modelDisplayName(trajectory?.agent?.model_name) || "-";
   const runItems = [
     [t("trial", "Trial"), trial.trial_key || "-"],
     [t("variant", "Variant"), trial.variant_label || "-"],
@@ -146,7 +148,7 @@ function renderTrace() {
     [t("agent_model", "Agent / model"), `${agentName} / ${model}`],
     [t("time", "Time"), () => `${renderDateTime(trial.started_at_ms)} → ${renderDateTime(trial.finished_at_ms)}`],
     [t("wall_duration", "Wall duration"), fmtMs(trialWallDurationMs(trial))],
-    [t("metric_steps", "Total steps"), (trajectory?.steps || []).length],
+    [t("metric_steps", "Total steps"), projected?.total_steps ?? (trajectory?.steps || []).length],
     [t("source_events", "Source events"), trial.total_events ?? "-"],
     [t("system_exposed", "System exposed"), systemExposed(trajectory) ? t("yes", "yes") : t("no", "no")],
     [t("reasoning_exposed", "Reasoning exposed"), reasoningExposed(trajectory) ? t("yes", "yes") : t("no", "no")]
@@ -156,7 +158,7 @@ function renderTrace() {
   }
   disposeTimelineChart();
   target.innerHTML = `
-    <div class="trace-head"><div><p class="eyebrow">${esc(t("selected_trial_trajectory", "selected trial trajectory"))}</p><h2 id="trace-title" class="trace-title"><span>${esc(t("selected_session_label", "session"))}</span><code>${esc(trial.trial_key || "-")}</code></h2></div><span class="status ${status}">${esc(statusLabel(status))}</span></div>
+    <div class="trace-head"><div><p class="eyebrow">${esc(depth ? t("current_session", "Current session") : t("selected_trial_trajectory", "selected trial trajectory"))}</p><h2 id="trace-title" class="trace-title"><span>${esc(t("selected_session_label", "session"))}</span><code>${esc(trial.trial_key || "-")}</code></h2></div><span class="status ${status}">${esc(statusLabel(status))}</span></div>
     ${renderTrajectoryNavigation(root, rootMeta)}
     ${renderIncompleteTrajectory(trajectory)}
     ${renderSourceRefreshControl(rootMeta.trial_key)}
@@ -167,11 +169,11 @@ function renderTrace() {
       [t("status", "Status"), statusLabel(trial.status || "-")],
       [t("score", "Score"), fmtScore(trial.score)],
       [t("evaluator", "Evaluator"), trial.score_message || "-"],
-      [t("tokens", "Tokens"), fmtNum(tokenTotal(metrics))],
-      [t("agent_steps", "Agent steps"), agentStepCount(trajectory) ?? "-"],
-      [t("tool_success_rate", "Tool Success Rate"), fmtPct(rowToolSuccessRate({ total_tool_calls: toolCalls, total_tool_errors: toolErrors }))],
+      [t("tokens", "Tokens"), fmtNum(projected ? projected.tokens : tokenTotal(metrics))],
+      [t("agent_steps", "Agent steps"), (projected ? projected.agent_steps : agentStepCount(trajectory)) ?? "-"],
+      [t("tool_success_rate", "Tool Success Rate"), fmtPct(projected ? projected.tool_success_rate : rowToolSuccessRate({ total_tool_calls: toolCalls, total_tool_errors: toolErrors }))],
       [t("tool_success_total", "Tool success / total"), toolCallRatio(toolCalls, toolErrors)],
-      [t("cost", "Cost"), fmtCost(metrics.total_cost_usd)]
+      [t("cost", "Cost"), fmtCost(projected ? projected.cost_usd : metrics.total_cost_usd)]
     ])}
     ${renderHarborEvidence(trial)}
     ${depth ? "" : renderSelectedNotes(trial.trial_key)}

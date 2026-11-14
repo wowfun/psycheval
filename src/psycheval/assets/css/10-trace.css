@@ -173,3 +173,5 @@
   opacity:.5;
   cursor:default;
 }
+
+.trajectory-member-details { display:block; overflow:hidden; text-overflow:ellipsis; color:var(--muted); font:12px/1.4 system-ui; }

@@ -114,6 +114,19 @@ test("Claude project selection imports one family and navigates children without
   await page.locator(`.trajectory-row[data-source-key="${source.source_key}"]`).click();
   const trace = page.locator("#trace");
   const sidebar = page.locator("#detail-sidebar");
+  const sourceRow = page.locator(`#leaderboard tbody tr[data-source-key="${source.source_key}"]`);
+  const tokens = sourceRow.locator('[data-table-column-key="tokens"]');
+  const duration = await sourceRow.locator('[data-table-column-key="duration_ms"]').textContent();
+  const familyTokens = await tokens.textContent();
+  const rootSummary = page.waitForResponse(response => response.url().endsWith('/api/catalog-summaries') && response.request().postDataJSON()?.metric_scope === 'root');
+  await page.getByRole('combobox', {name:'Metric scope'}).selectOption('root');
+  expect((await rootSummary).ok()).toBe(true);
+  await expect(tokens).not.toHaveText(familyTokens);
+  await expect(sourceRow.locator('[data-table-column-key="duration_ms"]')).toHaveText(duration);
+  await page.getByRole('combobox', {name:'Metric scope'}).selectOption('family');
+  await expect(tokens).toHaveText(familyTokens);
+  await page.locator(`.trajectory-row[data-source-key="${source.source_key}"]`).click();
+
   await sidebar.getByRole("tab", { name: "Trajectory", exact: true }).click();
   await expect(trace.locator("[data-trajectory-node]")).toHaveCount(9);
   await expect(sidebar.locator("[data-trajectory-node]")).toHaveCount(9);
@@ -135,7 +148,7 @@ test("Claude project selection imports one family and navigates children without
   await page.evaluate(() => { delete navigator.clipboard; });
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("Working");
   await expect(sidebar.locator(".step")).toHaveCount(2);
-  await sidebar.locator('.step[data-step="2"] summary').click();
+  if (!await sidebar.locator('.step[data-step="2"]').evaluate(node => node.open)) await sidebar.locator('.step[data-step="2"] summary').click();
   const agentStep = sidebar.locator('.step[data-step="2"]');
   for (const [selector, expected] of [
     [".message-block", "Working"],

@@ -8,11 +8,15 @@ function renderSourceRefreshControl(trialKey) {
   return `<button class="action-button" type="button" data-source-refresh-action data-source-key="${esc(source.source_key)}" ${state.workspaceWriteBusy ? 'disabled aria-busy="true" data-busy-previous-disabled="false"' : ""}>${esc(t("serve_refresh_source", "Refresh source"))}</button>`;
 }
 
-function renderServeSourceStateControls(rows = leaderboardRows()) {
+function renderSourceStateToggle() {
+  const mode = currentServeSourceMode();
+  return `<label class="toolbar-menu-check"><input type="checkbox" data-source-state-toggle ${mode !== "active" ? "checked" : ""} ${mode === "all" ? "disabled" : ""}><span>${esc(t("show_archived", "Show archived"))}</span></label>`;
+}
+
+function renderSourceStateActions(rows = leaderboardRows()) {
   const mode = currentServeSourceMode();
   const allMode = mode === "all";
   const archived = mode === "archived";
-  const toggleDisabled = allMode ? "disabled" : "";
   const selectedCount = visibleSelectedSourceKeys(rows).length;
   const actionLabel = archived
     ? t("activate_selected", "Activate selected")
@@ -25,13 +29,7 @@ function renderServeSourceStateControls(rows = leaderboardRows()) {
   const deleteAction = adminMode()
     ? `<button class="action-button danger" type="button" data-source-delete-action ${selectedCount && !includesLinkedHarbor ? "" : "disabled"} ${includesLinkedHarbor ? `title="${esc(t("serve_linked_harbor_delete_disabled", "Linked Harbor Trials cannot be deleted; archive them instead."))}"` : ""}>${esc(t("delete_selected", "Delete selected"))}</button>`
     : "";
-  return `<div class="source-state-controls" data-source-state-controls>
-    <label class="source-state-toggle">
-      <input type="checkbox" data-source-state-toggle ${archived || allMode ? "checked" : ""} ${toggleDisabled}>
-      <span>${esc(t("show_archived", "Show archived"))}</span>
-    </label>
-    ${action}${deleteAction}
-  </div>`;
+  return action ? `${action}<hr>${deleteAction}` : "";
 }
 
 function bindServeSourceStateControls(target) {
@@ -112,6 +110,7 @@ export {
   firstReadableSourceKeyFrom,
   deleteVisibleServeSources,
   mutateVisibleServeSourceState,
-  renderServeSourceStateControls,
+  renderSourceStateToggle,
+  renderSourceStateActions,
   renderSourceRefreshControl,
 };

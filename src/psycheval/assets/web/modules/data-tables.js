@@ -1,6 +1,6 @@
-import { metricDefinitions, formatMetric, metricSortKey, metricSearchText, metricProvenanceHint } from "./metric-presentation.js";
+import { metricDefinitions, formatMetric, metricSortKey, metricSearchText, metricProvenanceHint, metricCoverageStatus } from "./metric-presentation.js";
 import { renderDateTime } from "./date-time.js";
-import { $, RENDER_OPTIONS, adminMode, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, statusLabel, t } from "./shared.js";
+import { $, RENDER_OPTIONS, adminMode, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, modelDisplayName, statusLabel, t } from "./shared.js";
 import { columnVisibleForLayout, loadColumnLayout, moveColumn, normalizeColumnLayout, presenceForColumns, resolveColumns, saveColumnLayout } from "./leaderboard-columns.js";
 
 const TABLE_CONTROL_SELECTOR = "input,button,a,select,textarea,label,details,[contenteditable='true'],[data-table-cell-editor],[data-workspace-report-control]";
@@ -97,12 +97,14 @@ function metricColumn(key) {
     description: definition.description || "",
     numeric: true, sortable: true, metric: true, defaultVisible: definition.column_default,
     value: row => row.metric_values?.[key] ?? row[key],
-    cellTitle: row => `${formatMetric(definition, row.metric_values?.[key] ?? row[key])}\n${metricProvenanceHint(row.metric_provenance?.[key], key)}`,
+    cellTitle: row => `${formatMetric(definition, row.metric_values?.[key] ?? row[key])}\n${metricProvenanceHint(row.metric_provenance?.[key], key, row.family_coverage)}`,
     ...(key === "score" ? { presence: row => row.metric_values?.score ?? row.score ?? Object.keys(row.rewards || {}) } : {}),
     format: (value, row) => {
       if (key === "score" && value == null) return rewardValue(row);
       if (key === "test_pass_rate" && value != null) return `${fmtNum(row.metric_values?.tests_passed)} / ${fmtNum(row.metric_values?.tests_total)} (${fmtPct(value)})`;
-      return formatMetric(definition, value);
+      const status = metricCoverageStatus(row.metric_provenance?.[key], row.family_coverage);
+      const suffix = value != null && status !== "complete" ? ` · ${status === "partial" ? t("coverage_partial", "partial") : t("coverage_unknown", "coverage unknown")}` : "";
+      return formatMetric(definition, value) + suffix;
     },
   };
 }
@@ -111,7 +113,7 @@ function leaderboardColumns() {
     { key: "job_name", label: t("job", "Job"), valueType: "identity", filterable: true, sortable: true, value: row => row?.job_name || "-" },
     { key: "task_name", label: t("task_alias", "Task / Alias"), valueType: "text", filterable: true, filterValues: row => [row?.task_name].filter(Boolean), sortable: true, value: row => sessionAliasValue(row), html: row => renderTaskAlias(row), edit: adminMode() ? { value: row => String(row?.source_alias || ""), commit: (row, value) => commitSourceCellEdit(row, "alias", value) } : undefined },
     { key: "agent", label: t("agent", "Agent"), valueType: "identity", filterable: true, value: row => agentNameFor(row) },
-    { key: "model", label: t("model", "Model"), valueType: "identity", filterable: true, value: row => row.model || "-" },
+    { key: "model", label: t("model", "Model"), valueType: "identity", filterable: true, value: row => row.model || "-", format: modelDisplayName, filterLabel: modelDisplayName },
     { key: "model_provider", label: t("provider", "Provider"), valueType: "identity", defaultVisible: false, filterable: true, sortable: true, value: row => row?.model_provider || "-" },
     metricColumn("score"),
     { key: "status", label: t("result", "Result"), valueType: "status", filterable: true, value: row => row.status || "-", filterLabel: value => statusLabel(value), html: row => `<span class="stamp ${lower(row.status || "passed")}">${esc(statusLabel(row.status))}</span>` },
@@ -313,11 +315,13 @@ function rowToolSuccessRate(row) {
 function renderLeaderboard(rows = leaderboardRows()) {
   const target = $("leaderboard");
   if (!target) return;
+  const activeMenu = target.contains(document.activeElement) ? document.activeElement.closest(".toolbar-menu") : null;
+  const focusSelector = activeMenu ? `.${activeMenu.classList.contains("toolbar-view-menu") ? "toolbar-view-menu" : "toolbar-actions-menu"} > summary` : null;
   const columns = displayLeaderboardColumns(rows);
   target.innerHTML = `
     <div class="panel-head leaderboard-panel-head">
       <div class="leaderboard-title-stack">
-        <h2 id="leaderboard-title">${esc(t("leaderboard", "Leaderboard"))}</h2>
+        <div class="leaderboard-heading"><h2 id="leaderboard-title">${esc(t("leaderboard", "Leaderboard"))}</h2><div data-leaderboard-status></div></div>
         ${renderLeaderboardSearchControls()}
       </div>
       ${renderLeaderboardPanelControls(rows)}
@@ -334,6 +338,7 @@ function renderLeaderboard(rows = leaderboardRows()) {
     })}
 `;
   bindLeaderboardControls();
+  if (focusSelector) target.querySelector(focusSelector)?.focus({ preventScroll: true });
 }
 function renderLeaderboardExportControls() {
   return `<div class="leaderboard-export">

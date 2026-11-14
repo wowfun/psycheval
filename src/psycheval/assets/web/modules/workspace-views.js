@@ -2,7 +2,7 @@ import { beginFeedback } from "./action-feedback.js";
 import { offerRefresh } from "./operation-feedback.js";
 import { $, RENDER_OPTIONS, adminMode, closeOpenSubmenus, esc, fmtNum, listValue, normalizeServeSourceMode, state, statusLabel, t } from "./runtime.js";
 import { applyDataTableControls, bindDataTableControls, bindTableRowActivation, renderDataTable, selectionColumn, tableCellContent, tableControls, tableValueAttributes } from "./data-tables.js";
-import { leaderboardSummaryGroupHeading, leaderboardSummaryGroupUnit, leaderboardSummaryStatistics, leaderboardSummaryValue, renderLeaderboardSummary, summaryNumber, visibleLeaderboardSummaryDefinitions } from "./leaderboard-summary.js";
+import { leaderboardSummaryGroupHeading, leaderboardSummaryGroupUnit, leaderboardSummaryStatistics, leaderboardSummaryValue, summaryNumber, visibleLeaderboardSummaryDefinitions } from "./leaderboard-summary.js";
 import { serveApi } from "./serve-effects.js";
 import { loadCatalogPage, serveDownload } from "./serve-catalog.js";
 import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
@@ -181,23 +181,26 @@ function workspaceViewMessage(key, fallback, values = {}) {
   return message;
 }
 
+function saveViewDisabledReason() {
+  if (state.workspaceAppliedViewNames.size > 0 || state.sharedViewSnapshots.length > 0) return t("clear_conditions_before_saving_view", "Clear applied views before saving a new view.");
+  return state.workspaceViewsLoaded ? "" : t("view_directory_required", "Load Saved Views before saving.");
+}
+
 function renderWorkspaceViewControls() {
-  const compositeApplied = state.workspaceAppliedViewNames.size > 0 || state.sharedViewSnapshots.length > 0;
-  const reopen = state.workspaceViewsClosed && workspaceViews().length
-    ? `<button type="button" class="action-button" data-workspace-views-open>${esc(t("saved_views", "Saved views"))}</button>`
-    : "";
-  const save = `<button type="button" class="action-button leaderboard-summary-save" data-view-save ${compositeApplied || !state.workspaceViewsLoaded ? `disabled title="${esc(compositeApplied ? t("clear_conditions_before_saving_view", "Clear applied views before saving a new view.") : t("view_directory_required", "Load Saved Views before saving."))}"` : ""}>${esc(t("save_view", "Save view"))}</button>`;
-  return reopen || save ? `<div class="workspace-view-controls" data-workspace-view-control>${reopen}${save}</div>` : "";
+  const hasViews = workspaceViews().length > 0;
+  const visibility = `<label class="toolbar-menu-check"><input type="checkbox" data-workspace-views-toggle ${hasViews && !state.workspaceViewsClosed ? "checked" : ""} ${hasViews ? "" : `disabled title="${esc(t("no_saved_views", "No saved views yet"))}"`}><span>${esc(t("show_saved_views", "Show saved views"))}</span></label>`;
+  const reason = saveViewDisabledReason();
+  const save = `<button type="button" class="action-button" data-view-save ${reason ? `disabled title="${esc(reason)}"` : ""}>${esc(t("save_view", "Save view"))}</button>`;
+  return `<div class="workspace-view-controls" data-workspace-view-control>${save}${visibility}</div>`;
 }
 
 function bindWorkspaceViewControls(target) {
   if (!target?.querySelectorAll) return;
-  const columns = workspaceViewColumns();
-  const rows = workspaceViewRows();
-  bindDataTableControls(target, {
+  const table = target.querySelector('[data-table-id="workspace-views"]');
+  if (table) bindDataTableControls(table, {
     tableId: "workspace-views",
-    columns,
-    rows,
+    columns: workspaceViewColumns(),
+    rows: workspaceViewRows(),
     rowKey: view => view.id,
     onChange: renderWorkspaceViewRail,
     onSelectionChange: renderWorkspaceViewRail,
@@ -205,13 +208,15 @@ function bindWorkspaceViewControls(target) {
   target.querySelectorAll("[data-view-save]").forEach(button => {
     button.addEventListener("click", event => {
       event.preventDefault();
-      openWorkspaceViewSaveDialog(button);
+      openWorkspaceViewSaveDialog(button.closest(".toolbar-menu")?.querySelector("summary") || button);
     });
   });
-  target.querySelectorAll("[data-workspace-views-open]").forEach(button => {
-    button.addEventListener("click", event => {
-      event.preventDefault();
-      openWorkspaceViewRail(button);
+  target.querySelectorAll("[data-workspace-views-toggle]").forEach(input => {
+    input.addEventListener("change", () => {
+      const menu = input.closest(".toolbar-menu");
+      if (menu) menu.open = false;
+      if (input.checked) openWorkspaceViewRail(menu?.querySelector("summary") || input);
+      else closeWorkspaceViewRail();
     });
   });
   target.querySelectorAll("[data-view-apply-selected]").forEach(button => {
@@ -461,7 +466,6 @@ async function refreshWorkspaceViewData() {
         const appliedBefore = new Set(state.workspaceAppliedViewNames);
         pruneWorkspaceViewState();
         renderWorkspaceViewRail();
-        if ($("leaderboard-summary")) renderLeaderboardSummary();
         if (Array.from(appliedBefore).some(id => !state.workspaceAppliedViewNames.has(id))) {
           if (state.workspaceAppliedViewNames.size) await reloadAppliedWorkspaceViews();
           else await clearWorkspaceViewConditions();
@@ -519,6 +523,16 @@ function renderWorkspaceViewRail() {
   const views = workspaceViewRows();
   if (!allViews.length) state.workspaceViewsClosed = false;
   const visible = allViews.length >= 1 && !state.workspaceViewsClosed;
+  const saveReason = saveViewDisabledReason();
+  document.querySelectorAll("[data-view-save]").forEach(button => {
+    button.disabled = Boolean(saveReason);
+    button.title = saveReason;
+  });
+  document.querySelectorAll("[data-workspace-views-toggle]").forEach(input => {
+    input.checked = visible;
+    input.disabled = !allViews.length;
+    input.title = allViews.length ? "" : t("no_saved_views", "No saved views yet");
+  });
   if (!visible) {
     surface.close({ restoreFocus: false });
     target.innerHTML = "";
@@ -531,7 +545,7 @@ function renderWorkspaceViewRail() {
   </div>`;
   const pending = workspaceViewOpenOptions;
   surface.open({
-    openerSelector: "[data-workspace-views-open]",
+    openerSelector: ".toolbar-view-menu > summary",
     ...(pending ? {
       opener: pending.opener,
       focusTarget: target.querySelector("[data-sidebar-close]"),
@@ -578,7 +592,6 @@ function closeWorkspaceViewRail(options = {}) {
   surface.close({ restoreFocus: options.restoreFocus });
   if (options.render !== false) {
     renderWorkspaceViewRail();
-    renderLeaderboardSummary();
   }
   return true;
 }
@@ -588,7 +601,6 @@ function openWorkspaceViewRail(opener = null) {
   state.workspaceViewsClosed = false;
   workspaceViewOpenOptions = { opener: opener || document.activeElement || null };
   renderWorkspaceViewRail();
-  renderLeaderboardSummary();
   restoreWorkspaceViewScrollState();
   return true;
 }

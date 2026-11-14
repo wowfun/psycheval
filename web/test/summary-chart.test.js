@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { radarAxes, radarPoints, radarSelection, radarColors, relativePosition } from "../../src/psycheval/assets/web/modules/summary-chart.js";
+import { radarAxes, radarPoints, comparisonGroups, radarColors, relativePosition, wrappedLines } from "../../src/psycheval/assets/web/modules/summary-chart.js";
+
+test("chart labels wrap measured Unicode text without dropping characters or explicit line breaks", () => {
+  const measure = text => [...text].reduce((width, char) => width + (char === "界" ? 12 : 6), 0);
+  const lines = wrappedLines(measure, "Duration界😀\n↓", 18);
+  assert.equal(lines.slice(0, -1).join(""), "Duration界😀");
+  assert.equal(lines.at(-1), "↓");
+  assert.ok(lines.every(line => measure(line) <= 18));
+  assert.deepEqual(wrappedLines(measure, "Active Duration", 48), ["Active ", "Duration"]);
+  assert.ok(wrappedLines(measure, " 界界", 20).every(line => measure(line) <= 20));
+});
 const definitions = JSON.parse(readFileSync(new URL("./support/metrics.json", import.meta.url), "utf8"));
 const axesFor = (groups, keys, statistic) => radarAxes(groups, keys.map(key => definitions.find(item => item.key === key)), statistic);
 import { encodeWorkspaceLocation, decodeWorkspaceLocation } from "../../src/psycheval/assets/web/app/workspace-location.js";
@@ -19,7 +29,7 @@ test("radar compares against all query groups and reverses durations, including 
   const groups = [group("a", { score: -2, duration_ms: 0 }), group("b", { score: 0, duration_ms: 10 }), group("c", { score: 6, duration_ms: 20 })];
   const axes = axesFor(groups, ["score", "duration_ms"], mean);
   assert.deepEqual(radarPoints(groups[1], axes, mean).map(point => point.normalized), [25, 50]);
-  const selected = radarSelection(groups, ["a", "b"]);
+  const selected = comparisonGroups(groups, ["a", "b"]);
   assert.deepEqual(radarPoints(selected[1], axes, mean).map(point => point.normalized), [25, 50]);
   assert.equal(radarPoints(groups[0], axes, mean)[1].normalized, 100);
 });
@@ -39,28 +49,28 @@ test("missing values use the origin without becoming measurements; equal values 
   assert.equal(measuredOrigin.value, -1);
 });
 
-test("automatic selection uses the first five; explicit empty and nullable group keys keep their identity", () => {
+test("automatic selection includes every group; explicit empty and nullable group keys keep their identity", () => {
   const groups = [group(null, {}), ...Array.from({ length: 6 }, (_, index) => group(String(index), {}))];
-  assert.equal(radarSelection(groups, null).length, 5);
-  assert.deepEqual(radarSelection(groups, []), []);
-  assert.deepEqual(radarSelection(groups, [null]), [groups[0]]);
-  for (let count = 1; count <= 5; count++) {
+  assert.equal(comparisonGroups(groups, null).length, 7);
+  assert.deepEqual(comparisonGroups(groups, []), []);
+  assert.deepEqual(comparisonGroups(groups, [null]), [groups[0]]);
+  for (let count = 1; count <= 12; count++) {
     const colors = radarColors(count);
     assert.equal(new Set(colors).size, count);
-    assert.deepEqual(colors, radarColors(5).slice(0, count));
+    assert.deepEqual(colors, radarColors(12).slice(0, count));
   }
   assert.deepEqual(radarColors(0), []);
-  for (const invalid of [-1, 1.5, NaN, Infinity, 6]) assert.throws(() => radarColors(invalid), RangeError);
+  for (const invalid of [-1, 1.5, NaN, Infinity]) assert.throws(() => radarColors(invalid), RangeError);
 });
 
 test("radar configuration shares canonical axes and explicit nullable keys, and rejects invalid selections", () => {
-  const summary = { chart_type: "radar", metrics: ["tps", "score", "duration_ms"], radar_groups: ["中文", null, "a"] };
+  const summary = { chart_type: "radar", metrics: ["tps", "score", "duration_ms"], comparison_groups: ["中文", null, "a"] };
   const href = encodeWorkspaceLocation("home", { state: { summary } });
   const decoded = decodeWorkspaceLocation("home", new URL(href, "http://localhost"));
   assert.deepEqual(decoded.state.summary.metrics, ["tps", "score", "duration_ms"]);
-  assert.deepEqual(new Set(decoded.state.summary.radar_groups), new Set(summary.radar_groups));
+  assert.deepEqual(new Set(decoded.state.summary.comparison_groups), new Set(summary.comparison_groups));
   assert.equal(encodeWorkspaceLocation("home", decoded), href);
-  for (const invalid of [{ chart_type: "wrong" }, { metrics: ["score", "score", "tps"] }, { radar_groups: Array.from({ length: 6 }, (_, index) => String(index)) }, { radar_groups: [false] }]) {
+  for (const invalid of [{ chart_type: "wrong" }, { metrics: ["score", "score", "tps"] }, { comparison_groups: [false] }]) {
     assert.throws(() => encodeWorkspaceLocation("home", { state: { summary: invalid } }));
   }
   const defaults = decodeWorkspaceLocation("home", new URL("http://localhost"));

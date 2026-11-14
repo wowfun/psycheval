@@ -1,10 +1,11 @@
-import { hasMetricValue, lower, stepMeta, t } from "./runtime.js";
+import { hasMetricValue, lower, stepMeta, t, state } from "./runtime.js";
 import { positiveMetric } from "./analysis-metrics.js";
+import { modelDisplayName } from "./shared.js";
 import { TIMELINE_ESTIMATED_MODEL_CALL_CAP_MS, TIMELINE_INPUT_STAGE_THRESHOLD_MS } from "./timeline-shell.js";
 import { toolFailed, toolMetaFor } from "./steps.js";
 import { timingSource, timestampFallbackAllowed } from "./timing-source.js";
 
-function timelineTrace(trajectory, meta) {
+function singleTimelineTrace(trajectory, meta) {
   const steps = trajectory?.steps || [];
   const stepMetas = meta?.steps || [];
   const origin = timelineOriginMs(meta, stepMetas);
@@ -140,6 +141,42 @@ function timelineTrace(trajectory, meta) {
   const expected = steps.filter(step => ["agent", "assistant"].includes(lower(step?.source))).length + steps.reduce((count, step) => count + (step?.tool_calls || []).length, 0);
   return { stages: displayStages, markers: displayMarkers, model, partial: stages.filter(stage => stage.kind === "agent" || stage.kind === "tool").length < expected };
 }
+
+function timelineTrace(trajectory, meta) {
+  if (state.catalogQuery?.metric_scope === "root" || !trajectory?.subagent_trajectories?.length) return singleTimelineTrace(trajectory, meta);
+  const members = [];
+  const visit = (body, sidecar) => {
+    members.push({ body, sidecar });
+    (body.subagent_trajectories || []).forEach(child => visit(child, sidecar?.subagent_meta?.[child.trajectory_id] || {}));
+  };
+  visit(trajectory, meta);
+  const origin = timelineOriginMs(meta, meta?.steps);
+  const stages = [], markers = [];
+  let partial = false;
+  for (const [lane, { body, sidecar }] of members.entries()) {
+    const trace = singleTimelineTrace(body, { ...sidecar, trial_key: meta?.trial_key });
+    partial ||= trace.partial;
+    if (body !== trajectory && !["event_observed", "utc_epoch_milliseconds"].includes(sidecar.timestamp_semantics)) { partial = true; continue; }
+    for (const stage of trace.stages) {
+      const start = hasMetricValue(stage.wall_start_ms) ? Number(stage.wall_start_ms) - origin : null;
+      if (start === null || start < 0) { partial = true; continue; }
+      stages.push({ ...stage, stage: `${body.agent?.name || body.trajectory_id} · ${String(body.session_id || body.trajectory_id).slice(0, 8)} · ${stage.stage}`,
+        trajectory_id: body.trajectory_id, lane, ref: `${body.trajectory_id}:${stage.ref}`,
+        start_offset_ms: start, end_offset_ms: start + stage.duration_ms });
+    }
+    markers.push(...trace.markers.map(marker => ({...marker, trajectory_id:body.trajectory_id,
+      start_offset_ms:Number(marker.wall_start_ms)-origin})).filter(marker => marker.start_offset_ms >= 0));
+  }
+  const ordered = stages.sort(timelineStageSort);
+  const scale = timelineDisplayScale(ordered);
+  const model = {active_total_ms:ordered.length ? ordered.reduce((sum,s) => sum+s.duration_ms,0) : null, display_total_ms:scale.total_ms};
+  const lanes = members.map(() => []);
+  for (const stage of ordered) lanes[stage.lane].push(stage);
+  const grouped = lanes.flat();
+  return {stages:grouped.map((stage,index) => ({...stage,sequence_index:index+1, active_total_ms:model.active_total_ms,
+    display_start_ms:scale.offset(stage.start_offset_ms),display_end_ms:scale.offset(stage.end_offset_ms)})),markers:markers.map((marker,index) => ({...marker,sequence_index:index+1,display_offset_ms:scale.offset(marker.start_offset_ms)})),model,partial};
+}
+
 function timelineAssignStepNumbers(items) {
   const counts = {};
   items.forEach((item, index) => {
@@ -226,7 +263,7 @@ function timelineStage({ kind, stage, status, category, wallStart, wallEnd, dura
   };
 }
 function timelineModelStageLabel(trajectory) {
-  const model = trajectory?.agent?.model_name;
+  const model = modelDisplayName(trajectory?.agent?.model_name);
   return model ? `Model: ${model}` : t("timeline_stage_model", "Model");
 }
 function timelineEstimatedModelCall(stepMeta, step, stepStart, previousTimestamp) {

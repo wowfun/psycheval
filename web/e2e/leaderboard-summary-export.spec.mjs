@@ -97,9 +97,11 @@ test("summary menu downloads Excel and complete PNG charts with legend without c
     await expect(page.locator("[data-summary-radar]")).toHaveCount(0);
     await page.locator("[data-summary-chart-type=radar]").click();
     await expect(page.locator("[data-summary-radar] canvas")).toHaveCount(1);
-    await page.locator("[data-radar-group='4']").uncheck();
-    await page.locator("[data-radar-group='6']").check();
-    await page.locator("[data-radar-search]").fill("model-6");
+    await page.locator(".summary-group-control > summary").click();
+    await page.locator("[data-comparison-group='4']").uncheck();
+    await page.locator("[data-comparison-group='6']").check();
+    await page.locator("[data-group-search]").fill("model-6");
+    await page.locator("[data-group-apply]").click();
     const radarHref = page.url();
     const instance = await page.locator("[data-summary-radar]").getAttribute("_echarts_instance_");
     await download("bar");
@@ -107,8 +109,8 @@ test("summary menu downloads Excel and complete PNG charts with legend without c
     expect(page.url()).toBe(radarHref);
     expect(summaryRequests).toBe(requestCount);
     await expect(page.locator("[data-summary-radar]")).toHaveAttribute("_echarts_instance_", instance);
-    await expect(page.locator("[data-radar-search]")).toHaveValue("model-6");
-    await expect(page.locator("[data-radar-group]:checked")).toHaveCount(5);
+    await expect(page.locator("[data-group-search]")).toHaveValue("model-6");
+    await expect(page.locator("[data-comparison-group]:checked")).toHaveCount(6);
     await expect(page.locator('#leaderboard .action-feedback').filter({ hasText: /活跃快照|已归档快照|全部 sessions/ })).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally { await stopFixture(fixture); }
@@ -131,7 +133,7 @@ test("32 radar axes use real font bounds and stay attached to the exported chart
       }));
       state.catalogPage = { total: 2, metric_descriptions: definitions };
       state.leaderboardSummaryMetrics = definitions.map(item => item.key);
-      state.leaderboardSummaryRadarGroups = null;
+      state.leaderboardSummaryComparisonGroups = null;
       state.leaderboardSummary = { summary: { matched_count: 2, groups: [0, 1].map(index => ({
         key: `group-${index}`, label: `Group ${index}`, count: 1,
         metrics: definitions.map(item => ({ key: item.key, count: 1, mean: index })),
