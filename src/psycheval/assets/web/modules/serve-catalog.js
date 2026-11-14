@@ -711,12 +711,8 @@ async function resolveCatalogSelections(signal) {
 
 async function ensureCatalogDetail(generationChanged = false, signal) {
   if (state.homeLocationTarget.report) return;
-  let sourceKey = state.homeLocationTarget.source || state.selectedSourceKey;
+  const sourceKey = state.homeLocationTarget.source || state.selectedSourceKey;
   const selectedRow = state.catalogRows.find(row => row.source_key === sourceKey);
-  if (!sourceKey) {
-    const failed = state.catalogRows.find(row => lower(row.status) !== "passed");
-    sourceKey = (failed || state.catalogRows[0])?.source_key || null;
-  }
   if (!sourceKey) {
     state.view = emptyServeReport();
     state.selectedTrial = null;

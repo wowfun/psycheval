@@ -83,6 +83,65 @@ test("leaderboard search publishes one debounced location with the final input",
 });
 const trajectory = { trajectory: [{ trajectory_id: "root", session_id: "session", agent: { name: "agent" }, steps: [{ step_id: 1, source: "user", message: "request" }], final_metrics: {} }], trajectory_meta: [{ trial_key: "trial", adapter: "psychevo", steps: [{ step_id: 1 }] }], annotations: {} };
 
+test("Home stays unselected until explicit selection and does not replace it on catalog refresh", async () => {
+  const previousFetch = globalThis.fetch;
+  const empty = { trajectory: [], trajectory_meta: [], annotations: {} };
+  const location = locationCodec.decodeWorkspaceLocation("home", new URL(window.location.origin));
+  const items = [
+    { source_key: "first", trial_key: "trial-first", status: "passed", artifact_revision: "r1" },
+    { source_key: "failed", trial_key: "trial", status: "failed", artifact_revision: "r1" },
+  ];
+  const detailRequests = [];
+  let generation = 1;
+  try {
+    state.workspaceViewsLoaded = true;
+    restoreHomeLocation(location);
+    state.catalogRows = []; state.catalogPage = { generation: 0 };
+    render(empty);
+    globalThis.fetch = async path => {
+      const url = new URL(path, window.location.origin);
+      if (url.pathname === "/api/catalog") return response({ generation, items, total: 2, page: 1, page_size: 100 });
+      if (url.pathname === "/api/catalog/summary") return response({ generation, summary: { matched_count: 2, groups: [] } });
+      if (url.pathname === "/api/source-key-resolutions") return response({ source_keys: ["first", "failed"] });
+      if (url.pathname.startsWith("/api/sources/")) {
+        detailRequests.push(url.pathname);
+        return response({ report: trajectory, artifact_revision: "r1" });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    };
+    const expectUnselected = () => {
+      assert.equal(state.selectedSourceKey, null);
+      assert.equal(state.selectedTrial, null);
+      assert.equal(state.selectedStep, null);
+      assert.equal(state.rowSelection.size, 0);
+      assert.equal(document.querySelectorAll("#leaderboard .selected-row").length, 0);
+      assert.equal(state.detailSidebar.open, false);
+    };
+    await catalog.loadCatalogPage({}, { force: true, throwOnError: true });
+    expectUnselected();
+    generation++;
+    await catalog.loadCatalogPage({ search: "filtered", page: 2 }, { force: true, throwOnError: true });
+    expectUnselected();
+    assert.deepEqual(detailRequests, []);
+    await catalog.selectServeDetail("failed", { openSidebar: true, throwOnError: true });
+    generation++;
+    await catalog.loadCatalogPage({}, { force: true, throwOnError: true });
+    assert.equal(state.selectedSourceKey, "failed");
+    assert.equal(state.selectedTrial, "trial");
+    assert.equal(state.detailSidebar.open, true);
+    assert.deepEqual(detailRequests, ["/api/sources/failed"]);
+    restoreHomeLocation(location);
+    expectUnselected();
+    await catalog.loadCatalogPage({}, { force: true, throwOnError: true });
+    expectUnselected();
+    assert.deepEqual(detailRequests, ["/api/sources/failed"]);
+  } finally {
+    catalog.cancelHomeLocationRequests();
+    restoreHomeLocation(location);
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("a default non-Harbor selection never publishes an inapplicable tab", async () => {
   const { setWorkspaceApp } = await import("../../src/psycheval/assets/web/app/workspace-runtime.js");
   const previousFetch = globalThis.fetch;

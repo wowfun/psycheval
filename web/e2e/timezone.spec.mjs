@@ -52,7 +52,7 @@ test("server timezone updates loaded time surfaces without reloading data or dra
   await expect(prompt).toBeEnabled();
   await prompt.fill("unsaved timezone regression draft");
   const times = await page.locator("time[data-display-time]").count();
-  expect(times).toBeGreaterThan(4);
+  await expect(page.locator("#timezone-tooltip time")).toHaveCount(2);
   const otherDocument = await page.context().newPage();
   await otherDocument.goto(fixture.origin);
   await expect(otherDocument.locator("#leaderboard time").first()).toContainText("+08:00");

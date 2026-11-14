@@ -9,7 +9,7 @@ test.afterAll(async () => { await stopFixture(fixture); });
 
 test("Home editable cells activate the row on click and edit on double click", async ({ page }) => {
   await page.goto(fixture.origin);
-  await expect(page.locator("[data-notes-edit]")).toBeVisible();
+  await expect(page.locator("#leaderboard tbody tr").first()).toBeVisible();
   const row = page.locator('#leaderboard tbody tr').filter({ hasText: 'office-one' });
   const sourceKey = await row.getAttribute('data-source-key');
   const cell = page.locator(`#leaderboard [data-source-key="${sourceKey}"] [data-table-column-key="task_name"]`);
@@ -46,7 +46,7 @@ test("Dataset Task cells keep single-click selection and double-click editing se
 
 test("Dataset is the first data column and filters and sorts the complete catalog", async ({ page }) => {
   await page.goto(fixture.origin);
-  await expect(page.locator("[data-notes-edit]")).toBeVisible();
+  await expect(page.locator("#leaderboard tbody tr").first()).toBeVisible();
   const table = page.locator('#leaderboard table');
   await expect(table.locator('thead th').nth(1)).toContainText('Dataset');
   await expect(table.locator('tbody [data-table-column-key="dataset_id"]').filter({ hasText: 'office' })).toHaveCount(1);

@@ -22,6 +22,42 @@ async function screenshots(page, testInfo, name, selector) {
   await page.setViewportSize({ width: 1440, height: 900 });
 }
 
+test("Home opens without a selected row or detail read and honors an explicit Trial link", async ({ page }) => {
+  const fixture = await startFixture({ PYTHONPATH: process.cwd() });
+  const detailReads = [];
+  page.on("request", request => { if (new URL(request.url()).pathname.startsWith("/api/sources/")) detailReads.push(request.url()); });
+  try {
+    const expectUnselected = async () => {
+      await expect(page.locator("#leaderboard tbody tr[data-source-key]").first()).toBeVisible();
+      await expect.poll(() => page.evaluate(async () => (await import("/assets/peval/modules/runtime.js")).state.catalogLoading)).toBe(false);
+      await expect(page.locator("#leaderboard .selected-row")).toHaveCount(0);
+      await expect(page.locator("#leaderboard [data-table-row-select]:checked")).toHaveCount(0);
+      await expect(page.locator("#detail-sidebar")).toBeHidden();
+      expect(await page.evaluate(async () => {
+        const { state } = await import("/assets/peval/modules/runtime.js");
+        return [state.selectedSourceKey, state.selectedTrial, state.selectedStep];
+      })).toEqual([null, null, null]);
+    };
+    await page.goto(fixture.origin);
+    await expectUnselected();
+    await page.reload();
+    await expectUnselected();
+    expect(detailReads).toEqual([]);
+    const row = page.locator("#leaderboard tbody tr[data-source-key]").first();
+    const source = await row.getAttribute("data-source-key");
+    await row.click();
+    await expect(page.locator("#detail-sidebar")).toBeVisible();
+    await expect(row).toHaveClass(/selected-row/);
+    const located = page.url();
+    expect(new URL(located).searchParams.get("source")).toBe(source);
+    await page.goBack();
+    await expectUnselected();
+    await page.goto(located);
+    await expect(page.locator("#detail-sidebar")).toBeVisible();
+    await expect(page.locator(`#leaderboard tr[data-source-key="${source}"]`)).toHaveClass(/selected-row/);
+  } finally { await stopFixture(fixture); }
+});
+
 test("Saved View conditions survive deletion in a fresh guest context; Trial location is independent of the list", async ({ page, browser }, testInfo) => {
   const fixture = await startFixture({ PEVAL_E2E_LINKS: "1", PEVAL_E2E_PASSWORD: "fixture-secret", PYTHONPATH: process.cwd() });
   const fresh = await browser.newContext();

@@ -152,14 +152,10 @@ function render(view) {
   state.view = view;
   renderWorkspaceDescription();
   state.serveReportCache[currentServeSourceMode()] = view;
-  if (!state.selectedTrial) {
-    const firstFailed = reportRows().find(row => lower(row.status) !== "passed");
-    state.selectedTrial = (firstFailed || reportRows()[0])?.trial_key || view.trajectory_meta?.[0]?.trial_key || null;
-  }
   syncSelectedSourceFromView();
   bindHomeControls();
   renderReportNotes(view.annotations?.report_notes || []);
-  renderComparison({ trace: true });
+  renderComparison();
   window.dispatchEvent(new window.Event("peval:workspace-context"));
   if (!state.workspaceViewsLoaded) refreshWorkspaceViews();
 }
