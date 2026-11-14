@@ -5,7 +5,7 @@ import { installBrowserDom } from "./support/browser.js";
 
 const browser = installBrowserDom('<script type="application/json" id="peval-i18n">{}</script><script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin"}</script>');
 const { taskColumns, flattenTaskRows, renderTaskTable, taskSearchText } = await import("../../src/psycheval/assets/web/modules/task-table.js");
-const { taskSummary, renderTaskSummary } = await import("../../src/psycheval/assets/web/modules/task-summary.js");
+const { taskSummary, renderTaskSummary, createTaskSummaryState, taskSummaryExportColumns } = await import("../../src/psycheval/assets/web/modules/task-summary.js");
 const { selectionColumn } = await import("../../src/psycheval/assets/web/modules/data-tables.js");
 test.after(() => browser.cleanup());
 
@@ -35,16 +35,59 @@ test("summary follows filtered tasks and counts disjoint unknowns accurately", (
   const result = taskSummary(tasks, "dataset")[0];
   assert.equal(result.task_count, 2); assert.equal(result.rule_count, null); assert.equal(result.rubric_count, 2);
   const root = document.createElement("div");
-  renderTaskSummary(root, [tasks[1], row("bad", { rule_count: 1, rubric_count: null, scoring_item_count: null })], { groupBy: "overall", open: true, onGroup() {}, onToggle() {}, onExport() {} });
+  renderTaskSummary(root, [tasks[1], row("bad", { rule_count: 1, rubric_count: null, scoring_item_count: null })], { ...createTaskSummaryState(), groupBy: "overall", open: true }, { onChange() {}, onExport() {} });
   assert.match(root.querySelector('td[data-table-column-key="scoring_item_count"]').title, /2 Tasks/);
-  assert.deepEqual(taskColumns({ scoring: true }).map(c => c.key), ["dataset", "task", "tags", "instruction", "rule_count", "rubric_count", "scoring_item_count"]);
+  assert.deepEqual(taskColumns({ scoring: true }).map(c => c.key), ["dataset", "task", "tags", "instruction", "skill_count", "input_file_count", "has_prepare", "rule_count", "rubric_count", "scoring_item_count"]);
   assert.deepEqual(taskColumns().map(c => c.key), ["dataset", "task", "package", "status", "diagnostics"]);
 });
 
 test("browser summary matches the shared export contract", () => {
   const fixture = JSON.parse(readFileSync(new URL("../../tests/fixtures/task_summary.json", import.meta.url), "utf8"));
   const rows = fixture.tasks.map((task, i) => ({ ...row(String(i), task), datasetId: task.dataset }));
-  for (const grouping of ["overall", "dataset"]) assert.deepEqual(taskSummary(rows, grouping).map(({ key, ...values }) => ({ group: key, ...values })), fixture[grouping]);
+  for (const grouping of ["overall", "dataset", "category", "difficulty", "tags"]) assert.deepEqual(taskSummary(rows, grouping).map(({ key, ...values }) => ({ group: key, ...values })), fixture[grouping]);
+});
+
+test("Task identity survives flattening and keeps identically named Tasks in distinct Datasets", () => {
+  const rows = ["a", "b"].map(datasetId => ({ ...tasks[0], datasetId, key: `dataset:${datasetId}|task:one` }));
+  const flattened = flattenTaskRows(rows);
+  flattened[1].taskName = "presentation-only-alias";
+  assert.equal(taskSummary(flattened, "overall")[0].task_count, 2);
+  assert.throws(() => taskSummary([{ kind: "task", task: tasks[0].task }], "overall"), /identity/i);
+});
+
+test("Task Summary shares group selection, metric ordering and empty states across views", () => {
+  const root = document.createElement("section"); document.body.append(root);
+  const state = createTaskSummaryState();
+  const rows = [row("one", { tags: ["one", "two", "one"], category: "coding", difficulty: "hard", rule_count: 0, rubric_count: 0, scoring_item_count: 0 }), tasks[1]];
+  const render = () => renderTaskSummary(root, rows, state, { onChange: render, onExport() {} });
+  render();
+  assert.equal(root.querySelectorAll("table").length, 0);
+  assert.equal(root.querySelectorAll("[data-summary-chart]").length, 4);
+  assert.equal(root.querySelectorAll(".leaderboard-summary-control > span").length, 0);
+  root.querySelector('[data-task-summary-group="tags"]').click();
+  assert.match(root.textContent, /group counts may overlap/);
+  assert.equal(taskSummary([...rows, rows[0]], "tags")[0].task_count, 1);
+  root.querySelector('[data-group-action="none"]').click();
+  root.querySelector('[data-comparison-group="2"]').click();
+  root.querySelector('[data-group-apply]').click();
+  assert.deepEqual(state.groups, [null]);
+  root.querySelector('[data-task-summary-toggle]').click();
+  assert.equal(root.querySelector('td[data-table-column-key="group"]').textContent, "Unset");
+  assert.equal(root.querySelector('td[data-table-column-key="rule_count"]').textContent, "Unknown");
+  root.querySelector('[data-metric-action="none"]').click();
+  root.querySelector('[data-metric-id="rubric_count"]').click();
+  root.querySelector('[data-metric-id="task_count"]').click();
+  root.querySelector('[data-metric-apply]').click();
+  assert.deepEqual([...root.querySelectorAll('[data-summary-chart]')].map(node => node.dataset.summaryChart), ["rubric_count", "task_count"]);
+  assert.deepEqual(taskSummaryExportColumns(state).map(column => column.key), ["group", "rubric_count", "task_count", "missing_rubric_count"]);
+  root.querySelector('[data-group-action="none"]').click();
+  root.querySelector('[data-group-apply]').click();
+  assert.match(root.textContent, /Select at least one comparison group/);
+  assert.ok([...root.querySelectorAll('[data-summary-export]')].every(button => button.disabled));
+  root.querySelector('[data-task-summary-group="difficulty"]').click();
+  assert.equal(state.groups, null);
+  assert.deepEqual(state.metrics, ["rubric_count", "task_count"]);
+  root.remove();
 });
 
 test("large instructions stay out of row HTML until hover or keyboard focus", () => {

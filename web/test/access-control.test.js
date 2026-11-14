@@ -21,7 +21,7 @@ const browser = installBrowserDom(`
   <aside id="workspace-report-reader" hidden></aside>
   <section data-harbor-workbench>
     <section data-dataset-collections></section>
-    <button data-harbor-reload>Reload</button>
+    <div data-task-view-options></div>
     <input data-harbor-search type="search">
     <span data-harbor-overview-count></span>
     <div data-harbor-overview></div>
@@ -50,6 +50,7 @@ const browser = installBrowserDom(`
 `);
 
 const runtime = await import("../../src/psycheval/assets/web/modules/runtime.js");
+const leaderboardTables = await import("../../src/psycheval/assets/web/modules/leaderboard-table.js");
 const tables = await import("../../src/psycheval/assets/web/modules/data-tables.js");
 const notes = await import("../../src/psycheval/assets/web/modules/analysis-notes.js");
 const sourceState = await import("../../src/psycheval/assets/web/modules/source-state-controls.js");
@@ -68,7 +69,7 @@ test("guest surfaces keep browsing controls and omit every workspace mutation", 
   assert.equal(runtime.adminMode(), false);
   assert.equal(runtime.authenticationEnabled(), true);
 
-  const columns = tables.leaderboardColumns();
+  const columns = leaderboardTables.leaderboardColumns();
   assert.equal(columns.find(column => column.key === "task_name").edit, undefined);
   assert.equal(columns.find(column => column.key === "source_category").edit, undefined);
   assert.equal(columns.find(column => column.key === "source_tags").edit, undefined);

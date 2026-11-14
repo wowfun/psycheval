@@ -1,11 +1,14 @@
+import { createColumnControl } from "./column-control.js";
+import { loadColumnLayout, normalizeColumnLayout, presenceForColumns, resolveColumns } from "./table-columns.js";
+import { bindToolbarMenus } from "./toolbar-menu.js";
 import { noteColumn, reportsColumn, createCollectionSidebar } from "./collection-ui.js";
 import { createRegistryManager } from "./registry-manager.js";
 import { taskColumns, taskSearchText, renderTaskTable, flattenTaskRows } from "./task-table.js";
-import { renderTaskSummary, exportTasks } from "./task-summary.js";
+import { createTaskSummaryState, renderTaskSummary, exportTasks, exportTaskSummaryImage, taskSummaryExportColumns } from "./task-summary.js";
 import { beginFeedback, pageFeedback, savedContentPreview } from "./action-feedback.js";
 import { openActionForm } from "./action-form.js";
 import { watchOperation } from "./operation-feedback.js";
-import { adminMode, esc, listValue, t } from "./shared.js";
+import { RENDER_OPTIONS, adminMode, esc, listValue, t } from "./shared.js";
 import { applyDataTableControls, applyDataTableFilters, sortDataTableRows, bindDataTableControls, bindTableRowActivation, renderDataTable, selectionColumn, tableControls } from "./data-tables.js";
 import { serveApi, serveEtag } from "./http.js";
 import { createTaskBrowser } from "./harbor-task-browser.js";
@@ -18,6 +21,7 @@ let taskSidebar = null, registryManager = null;
 
 const workbenchState = {
   inventory: null,
+  datasetColumns: { layout: null, draft: null, search: "" },
   datasetId: null,
   datasetFilter: null,
   taskName: null,
@@ -31,8 +35,7 @@ const workbenchState = {
   tableSnapshot: null,
   taskRequestId: 0,
   flattened: false,
-  summaryGroupBy: "overall",
-  summaryOpen: true,
+  summary: createTaskSummaryState(),
   displayRows: [],
 };
 
@@ -54,18 +57,37 @@ function renderDatasetRegistry(force = false) {
   const datasets = listValue(workbenchState.inventory?.datasets);
   const registryColumns = registryManager.datasetColumns();
   const publicStart = registryColumns.findIndex(column => column.key === "id") + 1;
-  const columns = [...registryColumns.slice(0, publicStart),
-    { key: "tasks", label: "Tasks", valueType: "number", sortable: true, value: row => row.task_count },
-    { key: "status", label: t("status", "Status"), valueType: "status", value: row => row.error ? t("harbor_status_unavailable", "Unavailable") : row.read_only ? t("read_only", "Read-only") : t("editable", "Editable") },
+  const allColumns = [...registryColumns.slice(0, publicStart),
+    { key: "tasks", label: t("tasks", "Tasks"), valueType: "number", sortable: true, value: row => row.task_count },
+    ...[["rule_count", "task_rules", "Rules"], ["rubric_count", "task_rubrics", "Rubrics"], ["scoring_item_count", "task_scoring_items", "Scoring items"]].map(([key, label, fallback]) => ({ key, label: t(label, fallback), valueType: "number", sortable: true, value: row => row[key], format: value => value ?? "" })),
     noteColumn("dataset", saved => {
       const current = datasetForId(saved.id);
       if (current) Object.assign(current, { note: saved.note, collection_revision: saved.collection_revision });
     }), reportsColumn("dataset"), ...registryColumns.slice(publicStart)];
+  const identity = allColumns.find(column => column.key === "id");
+  const identityHtml = identity.html;
+  identity.html = row => `${identityHtml ? identityHtml(row) : esc(row.id)}${row.error ? `<span class="harbor-status-rail conflict" title="${esc(row.error)}">${esc(t("harbor_status_unavailable", "Unavailable"))}</span>` : ""}`;
+  allColumns.find(column => column.key === "reports").presence = row => row.report_count > 0 ? row.report_count : null;
   const searched = datasets.filter(row => !workbenchState.registrySearch || `${row.id} ${row.note || ""}`.toLowerCase().includes(workbenchState.registrySearch.toLowerCase()));
-  const rows = applyDataTableControls("harbor-dataset-registry", searched, columns, datasets);
-  root.innerHTML = `<header class="table-region-head"><div class="table-region-title-stack"><h2>${esc(t("harbor_datasets", "Datasets"))}</h2><input type="search" data-dataset-search aria-label="${esc(t("collection_search_datasets", "Search Datasets"))}" placeholder="${esc(t("collection_search_datasets", "Search Datasets"))}" value="${esc(workbenchState.registrySearch)}"></div><div class="table-region-actions">${workbenchState.datasetFilter ? `<button class="action-button" data-dataset-clear>${esc(t("clear_filters", "Clear filters"))}: ${esc(workbenchState.datasetFilter)}</button>` : ""}${adminMode() && registryManager.ready ? `<button class="action-button" data-harbor-add-dataset>${esc(t("harbor_add_dataset", "New Dataset"))}</button><button class="action-button" data-harbor-register-dataset>${esc(t("harbor_register_dataset", "Register existing"))}</button><button class="action-button danger" data-harbor-unregister-datasets ${registryManager.selectedDatasets.size ? "" : "disabled"}>${esc(t("harbor_unregister_selected", "Unregister selected"))}</button>` : ""}</div></header><div data-harbor-dataset-registry>${renderDataTable({ tableId: "harbor-dataset-registry", columns, rows, rowKey: row => row.id, filterOptionsRows: datasets,
+  const rows = applyDataTableControls("harbor-dataset-registry", searched, allColumns, datasets);
+  const businessColumns = allColumns.filter(column => !column.select);
+  let storage; try { storage = window.localStorage; } catch { storage = null; }
+  const options = { workspaceId: RENDER_OPTIONS?.workspace_id, tableId: "datasets", storage };
+  const columnState = workbenchState.datasetColumns;
+  columnState.layout ||= loadColumnLayout(businessColumns.map(column => column.key), options);
+  const layout = normalizeColumnLayout(businessColumns.map(column => column.key), columnState.layout);
+  const presence = presenceForColumns(businessColumns, rows);
+  const columns = [...allColumns.filter(column => column.select), ...resolveColumns(businessColumns, layout, presence)];
+  const columnControl = createColumnControl({ id: "datasets", state: columnState, options,
+    context: () => ({ columns: businessColumns, layout, presence }),
+    conditionText: column => { const controls = tableControls("harbor-dataset-registry"); return [controls.sort === column.key ? controls.direction : "", controls.filters?.[column.key]?.length ? t("filtered", "Filtered") : ""].filter(Boolean).join(" · "); },
+    onRender: () => { renderDatasetRegistry(true); return root; },
+  });
+  root.innerHTML = `<header class="table-region-head"><div class="table-region-title-stack"><h2>${esc(t("harbor_datasets", "Datasets"))}</h2><input type="search" data-dataset-search aria-label="${esc(t("collection_search_datasets", "Search Datasets"))}" placeholder="${esc(t("collection_search_datasets", "Search Datasets"))}" value="${esc(workbenchState.registrySearch)}"></div><div class="table-region-actions"><button class="action-button" type="button" data-harbor-refresh>${esc(t("serve_refresh", "Refresh"))}</button>${columnControl.render()}${workbenchState.datasetFilter ? `<button class="action-button" data-dataset-clear>${esc(t("clear_filters", "Clear filters"))}: ${esc(workbenchState.datasetFilter)}</button>` : ""}${adminMode() && registryManager.ready ? `<button class="action-button" data-harbor-add-dataset>${esc(t("harbor_add_dataset", "New Dataset"))}</button><button class="action-button" data-harbor-register-dataset>${esc(t("harbor_register_dataset", "Register existing"))}</button><button class="action-button danger" data-harbor-unregister-datasets ${registryManager.selectedDatasets.size ? "" : "disabled"}>${esc(t("harbor_unregister_selected", "Unregister selected"))}</button>` : ""}</div></header><div data-harbor-dataset-registry>${renderDataTable({ tableId: "harbor-dataset-registry", columns, rows, rowKey: row => row.id, filterOptionsRows: datasets,
     rowClass: row => row.id === workbenchState.datasetFilter ? "selected-row" : "", rowAttrs: row => `tabindex="0" data-dataset-row="${esc(row.id)}"`, emptyText: t("harbor_dataset_empty", "No Datasets registered") })}</div>`;
   bindDataTableControls(root, { tableId: "harbor-dataset-registry", columns, rows, rowKey: row => row.id, onChange: () => renderDatasetRegistry(true), onSelectionChange: renderDatasetRegistry });
+  columnControl.bind(root);
+  root.querySelector("[data-harbor-refresh]").addEventListener("click", () => refreshHarborInventory({ check: true }));
   async function selectDataset(id) {
     if (!confirmDiscard()) return;
     workbenchState.datasetFilter = id;
@@ -203,6 +225,8 @@ function harborColumns({ flattened = workbenchState.flattened } = {}) {
           const count = text ? Number(text) : null;
           const saved = await writeCount(count);
           Object.assign(row.task, saved.task);
+          const current = datasetForId(row.datasetId)?.tasks?.find(task => task.directory === row.taskName);
+          if (current && current !== row.task) Object.assign(current, saved.task);
         },
       };
     },
@@ -249,6 +273,7 @@ function reconcileOverviewSelection(rows) {
   const currentKey = selectedOverviewKey();
   const current = rows.find(row => overviewRowKey(row) === currentKey) || null;
   if (current) return { row: current, changed: false };
+  if (isHarborDirty()) return { row: null, changed: false };
   const row = rows[0] || null;
   setOverviewSelection(row);
   return { row, changed: true };
@@ -257,6 +282,12 @@ function reconcileOverviewSelection(rows) {
 function renderHarborOverview(surface, rows) {
   const container = surface.querySelector("[data-harbor-overview]");
   if (!container) return;
+  const loading = workbenchState.inventory?.checking && !workbenchState.inventory?.generation;
+  if (loading) {
+    container.innerHTML = `<p role="status">${esc(t("loading", "Loading…"))}</p>`;
+    surface.querySelector("[data-task-summary]")?.setAttribute("hidden", "");
+    return;
+  }
   const columns = harborColumns();
   const allRows = overviewRows();
   const flattened = workbenchState.flattened && !workbenchState.showTrash;
@@ -273,6 +304,8 @@ function renderHarborOverview(surface, rows) {
 
 function scoringPath(row, column) {
   if (workbenchState.showTrash || row?.kind !== "task") return null;
+  const resources = { skill_count: "skills", input_file_count: "files", has_prepare: "prepare" };
+  if (resources[column]) return { resource: resources[column] };
   if (row.scoringItem) return row.scoringItem.path;
   const kind = column === "rule_count" ? "rule" : ["rubric_count", "scoring_item_count"].includes(column) ? "rubric" : null;
   return kind ? row.task.scoring_paths?.[kind] || row.task.instruction_path || "instruction.md" : null;
@@ -285,9 +318,13 @@ function renderScoringControls(surface, rows) {
     (surface.querySelector(".harbor-workbench-tools") || surface.querySelector(".harbor-overview-head"))?.append(actions);
   }
   actions.hidden = workbenchState.showTrash;
-  actions.innerHTML = `<button type="button" class="action-button" data-task-flatten aria-pressed="${workbenchState.flattened}">${esc(t(workbenchState.flattened ? "task_show_tasks" : "task_flatten", workbenchState.flattened ? "Show Tasks" : "Flatten scoring items"))}</button>
-    <details class="export-menu"><summary class="export-menu-button">${esc(t("export", "Export"))}</summary><div class="export-menu-panel"><button type="button" data-task-export="xlsx">${esc(t("export_excel", "Export Excel"))}</button><button type="button" data-task-export="json">${esc(t("export_json", "Export JSON"))}</button></div></details>`;
-  actions.querySelector("[data-task-flatten]").addEventListener("click", () => { workbenchState.flattened = !workbenchState.flattened; renderHarborWorkbench(); });
+  const viewOptions = surface.querySelector("[data-task-view-options]");
+  if (viewOptions) {
+    viewOptions.hidden = workbenchState.showTrash;
+    viewOptions.innerHTML = `<label class="toolbar-menu-check"><input type="checkbox" data-task-flatten ${workbenchState.flattened ? "checked" : ""}><span>${esc(t("task_flatten", "Flatten scoring items"))}</span></label>`;
+    viewOptions.querySelector("[data-task-flatten]").addEventListener("change", event => { workbenchState.flattened = event.target.checked; renderHarborWorkbench(); });
+  }
+  actions.innerHTML = `<details class="export-menu"><summary class="export-menu-button">${esc(t("export", "Export"))}</summary><div class="export-menu-panel"><button type="button" data-task-export="xlsx">${esc(t("export_excel", "Export Excel"))}</button><button type="button" data-task-export="json">${esc(t("export_json", "Export JSON"))}</button></div></details>`;
   actions.querySelectorAll("[data-task-export]").forEach(button => {
     button.disabled = !rows.some(row => row.kind === "task");
     button.addEventListener("click", () => { button.closest("details").open = false; downloadTaskTable(button.dataset.taskExport); });
@@ -305,25 +342,31 @@ function renderScoringControls(surface, rows) {
     (surface.querySelector("[data-harbor-overview]")?.closest(".harbor-overview-panel") || surface.querySelector("[data-harbor-overview]"))?.after(summary);
   }
   summary.hidden = workbenchState.showTrash;
-  if (!summary.hidden) renderTaskSummary(summary, rows, {
-    groupBy: workbenchState.summaryGroupBy, open: workbenchState.summaryOpen,
-    onGroup: value => { workbenchState.summaryGroupBy = value; renderScoringControls(surface, visibleOverviewRows()); },
-    onToggle: () => { workbenchState.summaryOpen = !workbenchState.summaryOpen; renderScoringControls(surface, visibleOverviewRows()); },
-    onExport: () => downloadTaskTable("xlsx", true),
+  if (!summary.hidden) renderTaskSummary(summary, rows, workbenchState.summary, {
+    onChange: () => renderScoringControls(surface, visibleOverviewRows()),
+    onExport: kind => downloadTaskTable(kind, true),
   });
+  bindToolbarMenus(surface);
 }
 
 async function downloadTaskTable(kind, summary = false) {
-  const feedback = beginFeedback(workbenchRoot().querySelector("[data-task-scoring-actions]"), { page: "datasets", key: "datasets:export" });
+  const surface = workbenchRoot();
+  const settings = workbenchState.summary;
+  if (summary && settings.exporting) return;
+  const rows = summary ? visibleOverviewRows() : workbenchState.displayRows;
+  const feedback = beginFeedback(surface.querySelector(summary ? "[data-task-summary]" : "[data-task-scoring-actions]"), { page: "datasets", key: "datasets:export" });
   try {
-    await exportTasks({ kind, mode: summary ? "summary" : workbenchState.flattened ? "items" : "tasks",
-      rows: summary ? visibleOverviewRows() : workbenchState.displayRows,
-      columns: summary ? [] : harborColumns(), groupBy: workbenchState.summaryGroupBy });
+    if (summary) { settings.exporting = true; renderScoringControls(surface, rows); }
+    if (summary && ["bar", "pie"].includes(kind)) await exportTaskSummaryImage(rows, settings, kind);
+    else await exportTasks({ kind, mode: summary ? "summary" : workbenchState.flattened ? "items" : "tasks",
+      rows, columns: summary ? taskSummaryExportColumns(settings) : harborColumns(),
+      groupBy: settings.groupBy, groups: summary ? settings.groups : null });
     feedback.success();
   } catch (error) { feedback.error(error); }
+  finally { if (summary) { settings.exporting = false; renderScoringControls(surface, visibleOverviewRows()); } }
 }
 
-function renderHarborWorkbench() {
+function renderHarborWorkbench({ preserveEditors = false } = {}) {
   const surface = workbenchRoot();
   if (!surface) return { row: null, changed: false };
   const availableKeys = new Set(overviewRows()
@@ -333,8 +376,9 @@ function renderHarborWorkbench() {
     if (!availableKeys.has(key)) workbenchState.taskSelection.delete(key);
   });
   const rows = visibleOverviewRows();
-  const selection = reconcileOverviewSelection(rows);
-  renderHarborOverview(surface, rows);
+  const editing = preserveEditors && surface.querySelector("[data-harbor-overview] [data-table-cell-editor]");
+  const selection = editing ? { row: rows.find(row => overviewRowKey(row) === selectedOverviewKey()), changed: false } : reconcileOverviewSelection(rows);
+  if (!editing) renderHarborOverview(surface, rows);
   renderContextControls(surface);
   renderSelectedTaskHeading(taskDetailRoot());
   renderFileTree(taskDetailRoot());
@@ -361,13 +405,12 @@ function renderContextControls(surface) {
   setDisabled(surface, "[data-harbor-state-selected]", workbenchState.busy || workbenchState.taskSelection.size < 1);
   setDisabled(surface, "[data-harbor-delete-selected]", workbenchState.busy || workbenchState.taskSelection.size < 1);
   setDisabled(surface, "[data-harbor-show-trash]", workbenchState.busy || !listValue(workbenchState.inventory?.datasets).length);
-  surface.querySelector("[data-harbor-show-trash]")?.classList.toggle("active", workbenchState.showTrash);
   const stateButton = surface.querySelector("[data-harbor-state-selected]");
   if (stateButton) stateButton.textContent = workbenchState.showTrash
     ? t("restore_selected", "Restore selected")
     : t("archive_selected", "Archive selected");
   const archivedToggle = surface.querySelector("[data-harbor-show-trash]");
-  if (archivedToggle) archivedToggle.setAttribute("aria-pressed", workbenchState.showTrash ? "true" : "false");
+  if (archivedToggle) archivedToggle.checked = workbenchState.showTrash;
 }
 
 function setWorkbenchBusy(busy) {
@@ -440,7 +483,7 @@ function renderDiagnostics(surface = taskDetailRoot()) {
   if (!container) return;
   container.replaceChildren();
   const task = workbenchState.taskDetail?.task || selectedTask();
-  [...listValue(task?.diagnostics), ...listValue(task?.scoring_diagnostics)].forEach(diagnostic => container.append(textNode("p", diagnostic)));
+  [...listValue(task?.diagnostics), ...listValue(task?.scoring_diagnostics), ...listValue(task?.resource_diagnostics)].forEach(diagnostic => container.append(textNode("p", diagnostic)));
 }
 
 async function selectOverviewRow(row, opener, preferredPath = null) {
@@ -460,6 +503,7 @@ async function selectOverviewRow(row, opener, preferredPath = null) {
 async function openSelectedPath(preferredPath) {
   const detail = workbenchState.taskDetail;
   if (!detail) return;
+  if (preferredPath?.resource) { workbenchTaskBrowser()?.showResources(preferredPath.resource); return; }
   const path = detail.tree.some(item => item.kind === "file" && item.path === preferredPath) ? preferredPath : detail.default_file_path;
   if (path && workbenchTaskBrowser()?.currentFile()?.path !== path) await workbenchTaskBrowser()?.openPath(path);
 }
@@ -491,11 +535,14 @@ async function loadSelectedTask(preferredPath = null) {
     const detail = await serveApi(`/api/harbor/datasets/${encodeURIComponent(datasetId)}/tasks/${encodeURIComponent(taskName)}`);
     if (requestId !== workbenchState.taskRequestId || datasetId !== workbenchState.datasetId || taskName !== workbenchState.taskName) return;
     workbenchState.taskDetail = detail;
-    renderHarborWorkbench();
+    renderSelectedTaskHeading(taskDetailRoot());
+    renderFileTree(taskDetailRoot());
+    renderDiagnostics(taskDetailRoot());
     await workbenchTaskBrowser()?.setTaskDetail(detail, {
       taskRef: { dataset_id: datasetId, task: taskName },
-      preferredPath,
+      preferredPath: preferredPath?.resource ? null : preferredPath,
     });
+    if (preferredPath?.resource) workbenchTaskBrowser()?.showResources(preferredPath.resource);
   } catch (error) {
     if (requestId === workbenchState.taskRequestId) feedback.error(error);
   }
@@ -514,21 +561,92 @@ async function refreshOverviewAfterControls(options = {}) {
   if (selection.changed && selection.row?.kind === "task") await loadSelectedTask();
 }
 
+let inventoryObserver = null, inventoryTimer = null, inventoryRequest = 0, inventoryFailures = 0;
+function renderTaskInventoryStatus(error = null) {
+  const root = workbenchRoot();
+  if (!root) return;
+  let notice = root.querySelector("[data-task-inventory-status]");
+  if (!notice) {
+    notice = document.createElement("p");
+    notice.dataset.taskInventoryStatus = ""; notice.className = "copy"; notice.setAttribute("role", "status");
+    root.querySelector("[data-harbor-workbench-status]")?.after(notice);
+  }
+  const status = workbenchState.inventory || {};
+  const failure = error?.message || error || status.error;
+  const message = failure ? [status.generation ? t("task_inventory_stale", "Showing the last saved Task inventory.") : "", failure].filter(Boolean).join(" ")
+    : status.checking ? t(status.generation ? "task_inventory_checking" : "loading", status.generation ? "Checking Tasks; showing the last saved inventory." : "Loading…") : "";
+  notice.replaceChildren(); notice.hidden = !message;
+  if (message) notice.append(document.createTextNode(message));
+  if (failure) {
+    const retry = document.createElement("button");
+    retry.type = "button"; retry.textContent = t("feedback_retry", "Check again");
+    retry.addEventListener("click", () => {
+      pauseTaskInventory(); resumeTaskInventory();
+      void refreshHarborInventory({ check: true, skipGuard: true, skipTaskReload: true });
+    });
+    notice.append(" ", retry);
+  }
+}
+function pauseTaskInventory() {
+  inventoryObserver?.abort(); inventoryObserver = null;
+  window.clearTimeout(inventoryTimer); inventoryTimer = null;
+}
+function resumeTaskInventory() {
+  if (inventoryObserver) return;
+  inventoryObserver = new AbortController();
+  inventoryFailures = 0;
+  scheduleTaskInventory();
+}
+function scheduleTaskInventory() {
+  if (!inventoryObserver || inventoryTimer) return;
+  const observer = inventoryObserver;
+  inventoryTimer = window.setTimeout(async () => {
+    inventoryTimer = null;
+    try {
+      const status = await serveApi("/api/collections/datasets/status", { signal: observer.signal });
+      if (observer !== inventoryObserver) return;
+      if (status.generation !== workbenchState.inventory?.generation) {
+        const payload = await refreshHarborInventory({ quiet: true, skipGuard: true, skipTaskReload: true, signal: observer.signal });
+        if (!payload && !observer.signal.aborted) throw new Error(t("feedback_refresh_failed", "Workspace refresh failed"));
+      }
+      else if (workbenchState.inventory) {
+        Object.assign(workbenchState.inventory, status);
+        if (!status.generation && !status.checking) renderHarborWorkbench({ preserveEditors: true });
+      }
+      if (observer !== inventoryObserver) return;
+      inventoryFailures = 0;
+      renderTaskInventoryStatus();
+      if (status.checking) scheduleTaskInventory();
+    } catch (error) {
+      if (observer.signal.aborted) return;
+      renderTaskInventoryStatus(error);
+      if (++inventoryFailures === 1) scheduleTaskInventory();
+    }
+  }, 500);
+}
 async function refreshHarborInventory(options = {}) {
   if (!options.skipGuard && !confirmDiscard()) return null;
   const feedback = options.quiet ? null : pageFeedback("[data-harbor-workbench-status]");
   feedback?.pending(t("serve_loading_sources", "Loading…"));
   try {
-    const payload = await serveApi("/api/collections/datasets");
+    const request = ++inventoryRequest;
+    if (options.check) await serveApi("/api/collections/datasets/refresh", { method: "POST", body: {} });
+    const payload = await serveApi("/api/collections/datasets", { signal: options.signal });
+    if (request !== inventoryRequest || options.signal?.aborted) return payload;
+    const positions = Array.from(workbenchRoot()?.querySelectorAll("[data-workspace-scroll]") || []).map(node => [node.scrollLeft, node.scrollTop]);
     workbenchState.inventory = payload;
     if (!payload.datasets.some(row => row.id === workbenchState.datasetFilter)) workbenchState.datasetFilter = null;
     renderDatasetRegistry();
-    const selection = renderHarborWorkbench();
+    const selection = renderHarborWorkbench({ preserveEditors: true });
+    Array.from(workbenchRoot()?.querySelectorAll("[data-workspace-scroll]") || []).forEach((node, index) => { if (positions[index]) [node.scrollLeft, node.scrollTop] = positions[index]; });
     if (selection.row?.kind === "task" && !options.skipTaskReload) await loadSelectedTask();
     feedback?.clear();
+    inventoryFailures = 0;
+    renderTaskInventoryStatus();
+    if (payload.checking) scheduleTaskInventory();
     return payload;
   } catch (error) {
-    feedback?.error(error);
+    if (!options.signal?.aborted) { feedback?.clear(); renderTaskInventoryStatus(error); }
     return null;
   }
 }
@@ -966,14 +1084,13 @@ function bindHarborWorkbench() {
   const surface = workbenchRoot();
   if (!surface || surface.dataset.bound === "true") return;
   surface.dataset.bound = "true";
-  surface.querySelector("[data-harbor-reload]")?.addEventListener("click", () => refreshHarborInventory());
   surface.querySelector("[data-harbor-create-task]")?.addEventListener("click", createTask);
   surface.querySelector("[data-harbor-sync-manifest]")?.addEventListener("click", syncManifest);
   surface.querySelector("[data-harbor-state-selected]")?.addEventListener("click", mutateSelectedTaskState);
   surface.querySelector("[data-harbor-delete-selected]")?.addEventListener("click", deleteSelectedTasks);
-  surface.querySelector("[data-harbor-show-trash]")?.addEventListener("click", () => {
-    if (!confirmDiscard()) return;
-    workbenchState.showTrash = !workbenchState.showTrash;
+  surface.querySelector("[data-harbor-show-trash]")?.addEventListener("change", event => {
+    if (!confirmDiscard()) { event.target.checked = workbenchState.showTrash; return; }
+    workbenchState.showTrash = event.target.checked;
     workbenchState.taskSelection.clear();
     setOverviewSelection(null);
     renderHarborWorkbench();
@@ -1020,6 +1137,8 @@ function textNode(tag, value) {
 
 export {
   resumeTaskSidebar,
+  resumeTaskInventory,
+  pauseTaskInventory,
   bindHarborWorkbench,
   confirmDiscard,
   createFile,

@@ -82,7 +82,6 @@ def render_serve_home() -> str:
       <div class="workspace-main-scroll" data-workspace-main-scroll>
         <section class="panel-stack workspace-leaderboard-region" id="leaderboard-region"></section>
         <section class="panel-stack" id="comparison"></section>
-        <section class="trace-panel" id="trace"></section>
       </div>
     </main>
     <div class="workspace-side-region" id="workspace-side-region">
@@ -349,15 +348,16 @@ def render_source_add_form(
 
 def render_harbor_dataset_page(messages: dict[str, str], *, role: str = "admin") -> str:
     admin_task_actions = ""
+    admin_task_view = ""
     admin_file_actions = ""
     admin_editor_actions = ""
     if role == "admin":
-        admin_task_actions = f"""
-        <button class="action-button" type="button" data-harbor-show-trash aria-pressed="false" disabled>{escape(messages["show_archived"])}</button>
-        <button class="action-button primary" type="button" data-harbor-create-task disabled>{escape(messages["harbor_create_task"])}</button>
-        <button class="action-button" type="button" data-harbor-sync-manifest disabled>{escape(messages["harbor_sync_manifest"])}</button>
-        <button class="action-button" type="button" data-harbor-state-selected disabled>{escape(messages["archive_selected"])}</button>
-        <button class="action-button danger" type="button" data-harbor-delete-selected disabled>{escape(messages["delete_selected"])}</button>"""
+        admin_task_view = f'<label class="toolbar-menu-check"><input type="checkbox" data-harbor-show-trash disabled><span>{escape(messages["show_archived"])}</span></label>'
+        admin_task_actions = f"""<details class="toolbar-menu toolbar-actions-menu"><summary class="action-button">{escape(messages["actions"])}</summary><div class="toolbar-menu-panel">
+        <button type="button" data-harbor-create-task disabled>{escape(messages["harbor_create_task"])}</button>
+        <button type="button" data-harbor-sync-manifest disabled>{escape(messages["harbor_sync_manifest"])}</button>
+        <button type="button" data-harbor-state-selected disabled>{escape(messages["archive_selected"])}</button>
+        <hr><button class="danger" type="button" data-harbor-delete-selected disabled>{escape(messages["delete_selected"])}</button></div></details>"""
         admin_file_actions = f"""
           <div class="harbor-file-actions" data-harbor-file-actions hidden>
             <button class="action-button compact" type="button" data-harbor-new-file>{escape(messages["harbor_new_file"])}</button>
@@ -384,8 +384,8 @@ def render_harbor_dataset_page(messages: dict[str, str], *, role: str = "admin")
             "EDITOR": escape(messages["harbor_editor"]),
             "TASK_ACTIONS": f"""
       <div class="harbor-workbench-tools">
+        <details class="toolbar-menu toolbar-view-menu"><summary class="action-button">{escape(messages["view_options"])}</summary><div class="toolbar-menu-panel">{admin_task_view}<div data-task-view-options></div></div></details>
         {admin_task_actions}
-        <button class="action-button" type="button" data-harbor-reload>{escape(messages["serve_reload"])}</button>
       </div>""",
             "ADMIN_FILE_ACTIONS": admin_file_actions,
             "ADMIN_EDITOR_ACTIONS": admin_editor_actions,

@@ -155,7 +155,9 @@
 
 /* Live workspace pages share one restrained, route-aware header. */
 .serve-mode .workspace {
+  --workspace-top-inset:8px;
   max-width:1500px;
+  padding-top:var(--workspace-top-inset);
 }
 .serve-page-datasets .workspace,
 .serve-page-reports .workspace,

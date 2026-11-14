@@ -1,4 +1,4 @@
-import { listValue, t } from "./shared.js";
+import { esc, listValue, t } from "./shared.js";
 import { bindFilePreviewToggle, createFileMarkdown, createFileRead, formatBytes, renderFileTree, selectFile, showFileText } from "./file-browser.js";
 import { createScoringPreview } from "./task-file-preview.js";
 import { serveApi } from "./http.js";
@@ -289,6 +289,21 @@ function createTaskBrowser(options = {}) {
     else editor.value = "";
     const preview = node("[data-harbor-markdown]");
     const toggle = node("[data-file-preview-toggle]");
+    let resources = node("[data-task-resources]");
+    if (!resources) { resources = document.createElement("section"); resources.dataset.taskResources = ""; resources.className = "task-resource-list"; editor.before(resources); }
+    resources.hidden = browser.previewStatus !== "resources";
+    if (!resources.hidden) {
+      editor.hidden = true;
+      if (preview) preview.hidden = true;
+      if (toggle) toggle.hidden = true;
+      const kind = browser.resourceKind;
+      const entries = listValue(browser.detail?.task?.resources?.[kind]);
+      if (path) path.textContent = t(`task_${kind}`, kind);
+      resources.innerHTML = `<ul>${entries.map((entry, index) => `<li>${entry.path ? `<button type="button" class="action-button compact" data-resource-index="${index}">${esc(entry.name)}</button>` : `<span>${esc(entry.name)}</span>`}${entry.archive ? `<small>${esc(entry.archive)}</small>` : ""}</li>`).join("")}</ul>${!entries.length ? `<p>${esc(t("task_resources_empty", "No statically available resources"))}</p>` : ""}`;
+      resources.querySelectorAll("[data-resource-index]").forEach(button => button.addEventListener("click", () => openPath(entries[Number(button.dataset.resourceIndex)].path)));
+      const notice = node("[data-task-preview-error]"); if (notice) notice.hidden = true;
+      return;
+    }
     const markdown = browser.previewStatus === "ready" ? createFileMarkdown(browser.filePath, browser.draftText) : null;
     const scoring = browser.previewStatus === "ready" && isScoringFile();
     const structured = scoring && browser.structuredText === browser.draftText ? createScoringPreview(browser.structured) : null;
@@ -392,6 +407,13 @@ function createTaskBrowser(options = {}) {
   }
 
   const api = {
+    showResources(kind) {
+      if (browser.dirty && !window.confirm(t("harbor_discard_changes", "Discard unsaved file changes?"))) return;
+      fileRead.invalidate(); clearStructuredPreview();
+      browser.filePath = null; browser.fileRevision = null; browser.savedText = ""; browser.draftText = "";
+      setDirty(false); browser.previewStatus = "resources"; browser.resourceKind = kind;
+      render();
+    },
     rebindTask(taskRef) {
       fileRead.invalidate();
       browser.structuredRequest += 1;

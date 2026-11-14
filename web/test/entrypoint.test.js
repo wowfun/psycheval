@@ -18,7 +18,7 @@ function workspaceShell() {
       <strong data-source-count></strong>
       <span data-source-status></span>
       <section data-harbor-workbench>
-        <button data-harbor-reload>Reload</button>
+        <div data-task-view-options></div>
         <input data-harbor-search type="search">
         <span data-harbor-overview-count></span>
         <div data-harbor-overview></div>

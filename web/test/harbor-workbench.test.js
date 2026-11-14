@@ -9,12 +9,12 @@ const browser = installBrowserDom(`
   <script type="application/json" id="peval-render-options">{"mode":"serve","role":"admin","sources":[]}</script>
   <section data-harbor-workbench>
     <section data-dataset-collections></section>
-      <button data-harbor-reload>Reload</button>
+      <div data-task-view-options></div>
       <button data-harbor-create-task>New Task</button>
       <button data-harbor-sync-manifest>Sync</button>
       <button data-harbor-state-selected>Archive selected</button>
       <button data-harbor-delete-selected>Delete selected</button>
-      <button data-harbor-show-trash>Show archived</button>
+      <label><input type="checkbox" data-harbor-show-trash>Show archived</label>
       <p data-harbor-workbench-status hidden></p>
       <div class="harbor-overview-head"></div>
       <input data-harbor-search type="search">
@@ -44,7 +44,7 @@ const harbor = await import("../../src/psycheval/assets/web/modules/harbor-workb
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 harbor.bindHarborWorkbench();
 
-test.after(() => browser.cleanup());
+test.after(() => { harbor.pauseTaskInventory(); browser.cleanup(); });
 test.afterEach(() => {
   document.querySelectorAll(".action-feedback button").forEach(button => {
     if (button.textContent === "Close") button.click();
@@ -834,4 +834,94 @@ test("repeated failures loading one Task replace that action's feedback", async 
       .filter(node => node.textContent.includes("Task read failed"));
     assert.equal(errors.length, 1);
   } finally { globalThis.fetch = previousFetch; }
+});
+
+test("background inventory publication retains a dirty Task draft and pauses observation on departure", async () => {
+  const previous = globalThis.fetch, timers = inventoryTimers();
+  let generation = 1, statusReads = 0;
+  globalThis.fetch = async path => {
+    if (path === "/api/collections/datasets/status") { statusReads++; return new Response(JSON.stringify({ generation: 2, checking: false })); }
+    if (path === "/api/collections/datasets") return new Response(JSON.stringify({ ...inventory, generation, checking: false, datasets: inventory.datasets.map(dataset => ({ ...dataset, tasks: generation === 1 ? dataset.tasks : dataset.tasks.slice(1) })) }));
+    if (String(path).includes("/files/")) return new Response(JSON.stringify({ path: "instruction.md", content: "Original", revision: "file-r1" }));
+    return new Response(JSON.stringify(detail));
+  };
+  try {
+    harbor.workbenchState.showTrash = false; harbor.workbenchState.search = "";
+    await harbor.refreshHarborInventory({ skipGuard: true });
+    const editor = document.querySelector("[data-harbor-editor]");
+    editor.value = "Unsaved Task draft"; editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+    generation = 2; harbor.resumeTaskInventory();
+    await timers.tick();
+    assert.equal(harbor.workbenchState.inventory.generation, 2);
+    assert.equal(harbor.workbenchState.taskName, "valid-task");
+    assert.equal(editor.value, "Unsaved Task draft");
+    assert.equal(harbor.isHarborDirty(), true);
+    harbor.pauseTaskInventory();
+    assert.equal(timers.pending(), 0);
+    assert.equal(statusReads, 1);
+    editor.value = "Original"; editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+  } finally { harbor.pauseTaskInventory(); timers.restore(); globalThis.fetch = previous; }
+});
+
+function inventoryTimers() {
+  harbor.pauseTaskInventory();
+  const set = window.setTimeout, clear = window.clearTimeout, pending = new Map();
+  let next = -1;
+  window.setTimeout = (callback, delay, ...args) => {
+    if (delay !== 500) return set.call(window, callback, delay, ...args);
+    const id = next--; pending.set(id, callback); return id;
+  };
+  window.clearTimeout = id => pending.delete(id) || clear.call(window, id);
+  return {
+    pending: () => pending.size,
+    async tick() { const [id, callback] = pending.entries().next().value || []; assert.ok(callback, "inventory timer scheduled"); pending.delete(id); await callback(); },
+    restore() { window.setTimeout = set; window.clearTimeout = clear; },
+  };
+}
+
+test("inventory polling retries a transient failure and retains scan errors until recovery", async () => {
+  const previous = globalThis.fetch, timers = inventoryTimers();
+  let reads = 0, fail = true;
+  harbor.workbenchState.inventory = { ...inventory, generation: 1, checking: true };
+  globalThis.fetch = async path => {
+    if (path.endsWith("/status")) { reads++; if (fail) throw new Error("Connection interrupted"); return new Response(JSON.stringify({ generation: 1, checking: false, stale: true, error: "Dataset unavailable" })); }
+    return new Response(JSON.stringify({ ...inventory, generation: 1, checking: false, stale: true, error: "Dataset unavailable" }));
+  };
+  try {
+    harbor.resumeTaskInventory();
+    await timers.tick(); assert.equal(timers.pending(), 1);
+    await timers.tick(); assert.equal(timers.pending(), 0);
+    const notice = document.querySelector("[data-task-inventory-status]");
+    assert.match(notice.textContent, /last saved.*Connection interrupted.*Check again/);
+    fail = false;
+    notice.querySelector("button").click(); await tick();
+    await timers.tick(); assert.equal(reads, 3);
+    assert.match(notice.textContent, /last saved.*Dataset unavailable/);
+    await harbor.refreshHarborInventory({ quiet: true, skipGuard: true, skipTaskReload: true });
+    assert.match(notice.textContent, /Dataset unavailable/);
+    globalThis.fetch = async () => new Response(JSON.stringify({ ...inventory, generation: 2, checking: false, stale: false }));
+    await harbor.refreshHarborInventory({ quiet: true, skipGuard: true, skipTaskReload: true });
+    assert.equal(notice.hidden, true);
+  } finally { harbor.pauseTaskInventory(); timers.restore(); globalThis.fetch = previous; }
+});
+
+test("a delayed Task detail read preserves the overview DOM and current scroll", async () => {
+  const previous = globalThis.fetch;
+  let release, entered;
+  const requested = new Promise(resolve => { entered = resolve; });
+  globalThis.fetch = async path => {
+    if (path === "/api/collections/datasets") return new Response(JSON.stringify(inventory));
+    if (path.endsWith("/tasks/valid-task")) { entered(); return new Promise(resolve => { release = () => resolve(new Response(JSON.stringify(detail))); }); }
+    return new Response(JSON.stringify({ path: "instruction.md", content: "Original", revision: "file-r1" }));
+  };
+  try {
+    harbor.workbenchState.datasetId = "pbench"; harbor.workbenchState.taskName = "valid-task";
+    const reading = harbor.refreshHarborInventory({ skipGuard: true });
+    await requested;
+    const table = document.querySelector("[data-harbor-overview] .table-wrap");
+    table.scrollTop = 240;
+    release(); await reading;
+    assert.equal(document.querySelector("[data-harbor-overview] .table-wrap"), table);
+    assert.equal(table.scrollTop, 240);
+  } finally { globalThis.fetch = previous; }
 });

@@ -16,6 +16,8 @@ function taskColumns({ selection, rename, scoring = false, flattened = false, ed
     { key: "instruction", label: t("task_instruction", "Instruction"), valueType: "text", value: row => row.task?.instruction || "",
       format: value => value.length > INSTRUCTION_EXCERPT_LENGTH ? `${value.slice(0, INSTRUCTION_EXCERPT_LENGTH)}…` : value,
       fullText: () => "", cellAttrs: 'tabindex="0" data-task-instruction' },
+    ...[["skill_count", "task_skills", "Skills"], ["input_file_count", "task_files", "Files"]].map(([key, label, fallback]) => ({ key, label: t(label, fallback), valueType: "number", sortable: true, value: row => row.task?.[key], format: value => value ?? "" })),
+    { key: "has_prepare", label: t("task_prepare", "Prepare"), valueType: "status", sortable: true, filterable: true, value: row => row.task?.has_prepare == null ? "" : row.task.has_prepare ? t("yes", "Yes") : t("no", "No") },
     ...(flattened ? scoringItemColumns() : [
       { key: "rule_count", label: t("task_rules", "Rules"), description: t("task_rules_description", "Deterministic scoring rules"), valueType: "number", sortable: true, value: row => row.task?.rule_count, format: value => value ?? "", edit: editRuleCount,
         cellTitle: row => row.task?.rule_count_source === "manual" ? t("task_rules_manual", "Manually entered") : row.dataset?.format === "workbuddy.v1" ? (canEditRuleCount?.(row) ? t("task_rules_edit", "Double-click to enter a rule count") : t("task_rules_unknown", "Rule count unknown")) : t("task_rules_description", "Deterministic scoring rules") },
@@ -48,10 +50,19 @@ function scoringText(value) {
   return value !== null && typeof value === "object" ? JSON.stringify(value) : String(value ?? "");
 }
 
+function taskRowIdentity(row) {
+  const key = row.taskKey ?? row.key;
+  if (typeof key !== "string" || !key) throw new TypeError("Task row identity is required");
+  return key;
+}
+
 function flattenTaskRows(rows) {
-  return rows.flatMap(row => (row.task?.scoring_items?.length ? row.task.scoring_items : [null]).map(item => ({
-    ...row, taskKey: row.key, key: item ? `${row.key}|item:${encodeURIComponent(item.key)}` : row.key, scoringItem: item,
-  })));
+  return rows.flatMap(row => {
+    const taskKey = taskRowIdentity(row);
+    return (row.task?.scoring_items?.length ? row.task.scoring_items : [null]).map(item => ({
+      ...row, taskKey, key: item ? `${taskKey}|item:${encodeURIComponent(item.key)}` : taskKey, scoringItem: item,
+    }));
+  });
 }
 
 function taskSearchText(row) {
@@ -69,7 +80,7 @@ function renderTaskTable({ root, tableId, allRows, columns, search = "", selecte
   const rows = suppliedRows ?? applyDataTableControls(tableId, search ? allRows.filter(row => taskSearchText(row).includes(search.trim().toLowerCase())) : allRows, columns, allRows);
   root.innerHTML = renderDataTable({ tableId, columns, rows, rowKey: row => row.key,
     tableClass: "harbor-overview-table", shellClass: "harbor-overview-table-shell",
-    rowClass: row => `harbor-overview-row status-${esc(row.status)} ${(row.taskKey || row.key) === selectedKey ? "selected-row" : ""}`,
+    rowClass: row => `harbor-overview-row status-${esc(row.status)} ${taskRowIdentity(row) === selectedKey ? "selected-row" : ""}`,
     rowAttrs: row => `${rowAttribute} tabindex="0" data-task-row-key="${esc(row.key)}" data-task-row-token="${encodeURIComponent(row.key)}"`,
     filterOptionsRows: allRows, emptyText: t("harbor_task_empty", "No Tasks"),
   });
@@ -91,4 +102,4 @@ function renderTaskTable({ root, tableId, allRows, columns, search = "", selecte
   return rows;
 }
 
-export { taskColumns, taskSearchText, renderTaskTable, flattenTaskRows, scoringText };
+export { taskColumns, taskSearchText, taskRowIdentity, renderTaskTable, flattenTaskRows, scoringText };

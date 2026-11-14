@@ -5,6 +5,8 @@ import {
   isHarborDirty,
   refreshHarborInventory,
   resumeTaskSidebar,
+  resumeTaskInventory,
+  pauseTaskInventory,
   workbenchState,
 } from "../modules/harbor-workbench.js";
 
@@ -13,6 +15,7 @@ function createDatasetsPage(_context) {
   let initialized = false;
   return {
     async activate(changes) {
+      resumeTaskInventory();
       if (!initialized) {
         const loaded = await initializeHarborWorkbench();
         if (loaded === null) throw new Error("Dataset inventory is stale");
@@ -39,7 +42,8 @@ function createDatasetsPage(_context) {
         dirty: isHarborDirty(),
       };
     },
-    destroy() {},
+    deactivate() { pauseTaskInventory(); },
+    destroy() { pauseTaskInventory(); },
   };
 }
 
