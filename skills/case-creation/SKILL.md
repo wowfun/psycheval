@@ -134,6 +134,10 @@ relying on a small scoring weight to enforce delivery.
 
 Grade acceptable outcomes without forcing an incidental filename, exact wording,
 tool sequence, or implementation unless it is part of the public requirement.
+Accept ordinary presentation variations without changing fact identity:
+Markdown delimiters are not part of a URL, and emphasis or bilingual labels do
+not change the associated value. Keep source, item, and value matching strict
+when normalizing that presentation.
 For retrieval/extraction, consider both omissions and false additions, source
 binding, revisions, and deduplication. Match claims to expected items at the
 required granularity: one row containing every keyword must not earn credit for
