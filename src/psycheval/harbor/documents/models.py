@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from functools import cached_property
+from types import MappingProxyType
 
 from ..evidence import SourceSnapshot
 from ._limits import DocumentLimits, bounded_markdown
@@ -242,3 +244,163 @@ class DocxReport:
             return parts
 
         return bounded_markdown(render(self.blocks), self.text_limit)
+
+
+@dataclass(frozen=True)
+class HtmlNode:
+    id: int
+    parent_id: int | None
+    tag: str
+    attributes: tuple[tuple[str, str], ...]
+    content: tuple[str | int, ...]
+
+    @property
+    def text(self):
+        return "".join(part for part in self.content if isinstance(part, str))
+
+
+@dataclass(frozen=True)
+class HtmlHeading:
+    node_id: int
+    level: int
+    text: str
+
+
+@dataclass(frozen=True)
+class HtmlLink:
+    node_id: int
+    href: str
+    text: str
+
+
+@dataclass(frozen=True)
+class HtmlCell:
+    node_id: int
+    row_id: int | None
+    row_span: int | None
+    column_span: int | None
+    text: str
+
+
+@dataclass(frozen=True)
+class HtmlTable:
+    node_id: int
+    cells: tuple[HtmlCell, ...]
+
+
+@dataclass(frozen=True)
+class CssDeclaration:
+    name: str
+    value: str
+    important: bool
+
+
+@dataclass(frozen=True)
+class CssRule:
+    source_node_id: int
+    kind: str
+    prelude: str
+    declarations: tuple[CssDeclaration, ...] = ()
+    children: tuple[CssRule, ...] = ()
+    errors: tuple[str, ...] = ()
+
+
+def _html_text(by_id, node_id, text_limit):
+    if node_id not in by_id:
+        raise ValueError(f"Unknown HTML node ID: {node_id}")
+    blocks = {
+        "p",
+        "div",
+        "li",
+        "section",
+        "article",
+        "header",
+        "footer",
+        "main",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "table",
+        "tr",
+        "td",
+        "th",
+        "br",
+        "hr",
+    }
+    pending, parts = [node_id], []
+    while pending:
+        part = pending.pop()
+        if isinstance(part, str):
+            parts.append(part)
+            continue
+        node = by_id[part]
+        tag = node.tag.rsplit("}", 1)[-1]
+        if tag in {"script", "style", "template"}:
+            continue
+        if tag in blocks:
+            parts.append("\n")
+            pending.append("\n")
+        pending.extend(reversed(node.content))
+    return bounded_markdown(("".join(parts).strip(),), text_limit)
+
+
+@dataclass(frozen=True)
+class HtmlReport:
+    source: SourceSnapshot
+    decoded_source: str
+    encoding: str
+    nodes: tuple[HtmlNode, ...]
+    body_id: int
+    headings: tuple[HtmlHeading, ...]
+    links: tuple[HtmlLink, ...]
+    tables: tuple[HtmlTable, ...]
+    styles: tuple[CssRule, ...]
+    diagnostics: tuple[str, ...] = ()
+    text_limit: int = DocumentLimits().text_bytes
+
+    @cached_property
+    def _nodes_by_id(self):
+        return MappingProxyType({node.id: node for node in self.nodes})
+
+    def text_content(self, node_id: int):
+        return _html_text(self._nodes_by_id, node_id, self.text_limit)
+
+    @property
+    def text(self):
+        return self.text_content(self.body_id)
+
+    def to_markdown(self):
+        return bounded_markdown(
+            [
+                self.text,
+                *(f"Link at node {link.node_id}: {link.href}" for link in self.links),
+            ],
+            self.text_limit,
+        )
+
+
+@dataclass(frozen=True)
+class ImageReport:
+    source: SourceSnapshot
+    width: int
+    height: int
+    mode: str
+    extrema: tuple[tuple[int, int], ...]
+    means: tuple[float, ...]
+    variances: tuple[float, ...]
+    nonopaque_fraction: float
+    transparent_fraction: float
+    text_limit: int = DocumentLimits().text_bytes
+
+    def to_markdown(self):
+        return bounded_markdown(
+            [
+                f"Image: {self.width} x {self.height} pixels; mode {self.mode}",
+                f"RGBA extrema: {self.extrema}\nRGBA means: {self.means}\nRGBA variances: {self.variances}",
+                f"Nonopaque fraction: {self.nonopaque_fraction}\nTransparent fraction: {self.transparent_fraction}",
+            ],
+            self.text_limit,
+        )

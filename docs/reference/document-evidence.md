@@ -6,8 +6,9 @@ facts; Tasks own thresholds, required content, checks, and rewards. Both documen
 inspection and `psycheval.harbor.evidence` remain relocatable with the Harbor
 subtree and do not import workspace, UI, model, or WorkBuddy execution code.
 
-Install `psycheval[pdf]`, `[pptx]`, `[xlsx]`, or `[docx]` for one format, or
-`psycheval[documents]` for all four. Parser imports are deferred until inspection;
+Install `psycheval[pdf]`, `[pptx]`, `[xlsx]`, `[docx]`, `[html]`, or `[image]` for
+one format family, or `psycheval[documents]` for all of them. HTML uses html5lib
+and tinycss2; PNG/JPEG use Pillow. Parser imports are deferred until inspection;
 evidence publication only uses the standard library. Missing optional dependencies
 raise `MissingDocumentDependency` with the extra name, rather than failing a Task
 check. Transitive import failures also name the missing module. Dependencies must
@@ -23,6 +24,9 @@ regular files, excludes symbolic links, Windows reparse points and Office lock
 files, and deduplicates overlapping roots. Explicit
 `excluded_roots` are omitted together with their descendants before traversal.
 Markdown uses `format="md"` and the `.md` extension.
+HTML uses `format="html"` with `.html`/`.htm`; image selection uses `format="png"`
+or `format="jpeg"` (`.jpeg`/`.jpg`). Inspection also accepts the `htm` and `jpg`
+format aliases.
 Matching preferred stems form the
 selection pool when present; otherwise all candidates participate. One candidate
 is selected without reading its contents. Multiple candidates are treated as one
@@ -70,6 +74,8 @@ converted into failed document checks.
 | XLSX | Sheet order/visibility, nonempty cells and addresses, merged ranges; formulas and cached results are separate. |
 | DOCX | Body paragraphs and tables in document order, nested table content, run text, heading styles and numbering definitions; merged cells retain spans. |
 | Markdown | Decoded source text, top-level blocks with zero-based, end-exclusive line ranges, pipe and HTML table facts. |
+| HTML | Parsed node relationships, text, headings, links, table cells, attributes and CSS syntax facts; no rendered visibility or layout. |
+| PNG/JPEG | Stored pixel dimensions, original mode, alpha statistics and RGBA channel extrema/means/variances; no completeness or visual-quality judgment. |
 
 Markdown inspection uses the runtime dependency `markdown-it-py`, imported only
 when requested. It accepts UTF-8 (with optional BOM), or BOM-marked UTF-16/32,
@@ -134,6 +140,36 @@ Absent level uses level zero; absent start/restart values remain `None` rather
 than inventing sequence values. Missing definitions, cyclic styles and unsupported
 numbering-style links retain diagnostics without losing body text. This interface
 does not calculate counters, rendered labels, continuity or chapter restarts.
+
+`HtmlReport` retains decoded source, the selected encoding and document-order
+nodes with stable integer IDs and parent IDs. The original bytes, markup and
+decoded source are governed by `source_bytes`, with encoding-dependent memory
+expansion; they are not charged again as extracted text. `text_bytes` bounds
+extracted text, CSS syntax text and diagnostics. The report builds its immutable
+node lookup once and reuses it for subsequent `text_content` calls.
+Node text is direct text, including
+child tails in order; `text_content(node_id)` returns descendant text, excluding
+script/style/template contents. The report's body text follows the same rule.
+Heading, link, table and cell records refer to those node IDs. Cell row IDs refer
+to parsed `tr` nodes, including rows inserted by the HTML parser; table spans retain
+authored values and are not a rendered grid. Attributes include `hidden`, class
+and ID without declaring computed visibility. CSS rules retain their source node,
+selector or at-rule prelude, declarations (including `!important`) and nesting.
+External stylesheet URLs and other resource references remain attributes only.
+CSS variables and media/container conditions are not evaluated. Stylesheet parse
+errors are diagnostics, not silent successful declarations. HTML parsing uses
+html5lib's byte-input encoding detection and tree recovery, retaining parse
+diagnostics; it never executes scripts, reads linked files or fetches URLs.
+
+`ImageReport` describes a single PNG or JPEG. Animated/multiframe images are
+unsupported. Dimensions describe stored pixels without EXIF rotation. Pixel
+statistics use decoded RGBA channels in the 0..255 range without color-profile
+conversion: extrema, means and population variances, plus the fraction of pixels
+whose alpha is below 255 and the fraction whose alpha is zero. These are facts,
+not blankness, truncation or fidelity verdicts. `DocumentLimits.image_pixels`
+defaults to 64 million and is checked before full pixel decoding; Pillow's own
+decompression-bomb errors also fail inspection. Pixel memory and parser execution
+still require the verifier's process controls.
 
 Text extraction preserves page/shape/paragraph, sheet/cell or body-block
 boundaries. It does not substitute notes, document properties, agent answers,

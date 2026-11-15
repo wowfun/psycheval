@@ -20,6 +20,7 @@ class DocumentLimits:
     facts: int = 100000
     text_bytes: int = 4 * 1024 * 1024
     color_operations: int = 100000
+    image_pixels: int = 64_000_000
 
     def __post_init__(self):
         for field in fields(self):

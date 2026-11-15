@@ -47,7 +47,15 @@ def test_copied_harbor_runs_without_the_original_package(
     copied_harbor: Path, scenario: str
 ) -> None:
     if scenario == "documents":
-        for dependency in ("pypdf", "pptx", "openpyxl", "docx"):
+        for dependency in (
+            "pypdf",
+            "pptx",
+            "openpyxl",
+            "docx",
+            "html5lib",
+            "tinycss2",
+            "PIL",
+        ):
             pytest.importorskip(dependency)
     if scenario == "host" and sys.platform != "linux":
         pytest.skip("synthetic host command uses Linux shell quoting")

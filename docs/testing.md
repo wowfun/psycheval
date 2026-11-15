@@ -51,7 +51,7 @@ Optional document inspection uses synthetic files and local Judge fixtures:
 
 ```console
 uv sync --extra documents
-uv run --no-sync pytest tests/harbor/test_documents.py tests/harbor/test_docx_numbering.py tests/harbor/test_markdown.py tests/harbor/test_evidence.py tests/harbor/test_vendoring.py
+uv run --no-sync pytest tests/harbor/test_documents.py tests/harbor/test_docx_numbering.py tests/harbor/test_html.py tests/harbor/test_images.py tests/harbor/test_markdown.py tests/harbor/test_evidence.py tests/harbor/test_vendoring.py
 ```
 
 The base suite skips parser-dependent tests when extras are absent. CI runs the full

@@ -70,6 +70,9 @@ def imports(root: Path) -> None:
                 "pptx",
                 "openpyxl",
                 "docx",
+                "html5lib",
+                "tinycss2",
+                "PIL",
             }:
                 raise ModuleNotFoundError("optional runtime is unavailable")
             return None
@@ -101,6 +104,7 @@ def documents(root: Path) -> None:
     import openpyxl
     import pptx
     import pypdf
+    from PIL import Image
 
     workdir = root / "workdir"
     workdir.mkdir()
@@ -111,13 +115,19 @@ def documents(root: Path) -> None:
     openpyxl.Workbook().save(workdir / "input.xlsx")
     docx.Document().save(workdir / "input.docx")
     (workdir / "input.md").write_text("| A |\n| --- |\n| B |\n", encoding="utf-8")
+    (workdir / "input.html").write_text(
+        "<!doctype html><p>HTML facts</p>", encoding="utf-8"
+    )
+    with Image.new("RGB", (4, 2), "white") as image:
+        image.save(workdir / "input.png")
+        image.save(workdir / "input.jpeg")
     api, evidence = module("documents"), module("evidence")
     mirror = root / "mirror"
     mirror.mkdir()
-    for kind in ("pdf", "pptx", "xlsx", "docx", "md"):
+    for kind in ("pdf", "pptx", "xlsx", "docx", "md", "html", "png", "jpeg"):
         (mirror / f"input.{kind}").write_bytes((workdir / f"input.{kind}").read_bytes())
     with evidence.EvidenceWriter(root / "evidence") as writer:
-        for kind in ("pdf", "pptx", "xlsx", "docx", "md"):
+        for kind in ("pdf", "pptx", "xlsx", "docx", "md", "html", "png", "jpeg"):
             selection = api.select_document([workdir, mirror], format=kind)
             assert selection.selected is not None and len(selection.candidates) == 2
             source = writer.capture(f"source_{kind}", selection.selected)

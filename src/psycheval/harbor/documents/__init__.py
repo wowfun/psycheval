@@ -15,12 +15,26 @@ from ..evidence import EvidenceLimitError, SourceSnapshot, _check_path, is_link
 from ._limits import DocumentLimitError, DocumentLimits, DocumentParseError
 from .models import (  # noqa: F401
     DocxReport,
+    HtmlReport,
+    ImageReport,
     MarkdownReport,
     PdfReport,
     PptxOptions,
     PptxReport,
     XlsxReport,
 )
+
+_ALIASES = {"htm": "html", "jpg": "jpeg"}
+_EXTENSIONS = {
+    "pdf": {".pdf"},
+    "pptx": {".pptx"},
+    "xlsx": {".xlsx"},
+    "docx": {".docx"},
+    "md": {".md"},
+    "html": {".html", ".htm"},
+    "png": {".png"},
+    "jpeg": {".jpg", ".jpeg"},
+}
 
 
 class MissingDocumentDependency(ImportError):
@@ -121,7 +135,8 @@ def select_document(
     max_depth: int = 64,
     max_compare_bytes: int = 256 * 1024 * 1024,
 ):
-    if format not in {"pdf", "pptx", "xlsx", "docx", "md"}:
+    format = _ALIASES.get(format, format)
+    if format not in _EXTENSIONS:
         raise ValueError(f"Unsupported document format: {format}")
     if type(max_entries) is not int or max_entries < 1:
         raise ValueError("max_entries must be a positive integer")
@@ -153,7 +168,7 @@ def select_document(
             scans.append((os.scandir(entry), depth))
         elif (
             stat.S_ISREG(info.st_mode)
-            and entry.suffix.lower() == f".{format}"
+            and entry.suffix.lower() in _EXTENSIONS[format]
             and not entry.name.startswith("~$")
         ):
             found[identity] = entry
@@ -235,23 +250,40 @@ def inspect_document(
     if len(snapshot.content) > limits.source_bytes:
         raise DocumentLimitError("Document exceeds source byte limit")
     kind = format or snapshot.path.suffix.lower().lstrip(".")
-    if kind not in {"pdf", "pptx", "xlsx", "docx", "md"}:
+    kind = _ALIASES.get(kind, kind)
+    if kind not in _EXTENSIONS:
         raise DocumentParseError(f"Unsupported document format: {kind}")
     if kind == "md":
         from ._markdown import inspect
 
         return inspect(snapshot, limits)
-    module_name = {"pdf": "pypdf", "pptx": "pptx", "xlsx": "openpyxl", "docx": "docx"}[
-        kind
-    ]
+    modules = {
+        "pdf": ("pypdf",),
+        "pptx": ("pptx",),
+        "xlsx": ("openpyxl",),
+        "docx": ("docx",),
+        "html": ("html5lib", "tinycss2"),
+        "png": ("PIL.Image",),
+        "jpeg": ("PIL.Image",),
+    }[kind]
+    extra = "image" if kind in {"png", "jpeg"} else kind
     try:
-        backend = importlib.import_module(module_name)
+        backends = tuple(importlib.import_module(name) for name in modules)
     except ModuleNotFoundError as error:
-        missing = error.name or module_name
+        missing = error.name or modules[0]
         raise MissingDocumentDependency(
-            f"Missing dependency {missing!r}; install or repair psycheval[{kind}] before inspection"
+            f"Missing dependency {missing!r}; install or repair psycheval[{extra}] before inspection"
         ) from error
+    backend = backends[0]
     try:
+        if kind == "html":
+            from ._html import inspect
+
+            return inspect(snapshot, backend, backends[1], limits)
+        if kind in {"png", "jpeg"}:
+            from ._image import inspect
+
+            return inspect(snapshot, backend, kind, limits)
         if kind != "pdf":
             with zipfile.ZipFile(io.BytesIO(snapshot.content)) as archive:
                 members = archive.infolist()
