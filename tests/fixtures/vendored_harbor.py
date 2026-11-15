@@ -731,9 +731,10 @@ def project(root: Path) -> None:
     (task_context / "data").mkdir()
     (task_context / "data/task.txt").write_text("task input")
     (task_context / "prepare.py").write_text(
-        "from pathlib import Path\ndef prepare(workdir):\n"
+        "from pathlib import Path\ndef prepare(workdir, state_dir):\n"
         "    source = Path(__file__).parent / 'data/task.txt'\n"
         "    (Path(workdir) / 'task.txt').write_text(source.read_text())\n"
+        "    return ['task.txt']\n"
     )
     paths = TrialPaths(root / "trial__YfQLWrD")
     paths.mkdir()
@@ -754,6 +755,12 @@ def project(root: Path) -> None:
         try:
             assert environment.work_dir == root / "copies" / "task_YfQLWrD"
             assert environment.work_dir == environment.native_path(".")
+            context = module("runtime_config").load_effective_runtime_config(
+                environment.runtime_config_env()["PEVAL_CONFIG"]
+            )
+            inputs = Path(context.paths.inputs)
+            assert (inputs / "task.txt").read_text() == "task input"
+            assert not (inputs / "input.txt").exists()
             result = await environment.exec_argv(
                 [
                     sys.executable,

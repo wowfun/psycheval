@@ -7,6 +7,171 @@ import pytest
 from psycheval.harbor.evidence import EvidenceWriter, SourceSnapshot
 
 
+@pytest.mark.parametrize(
+    "roots",
+    [
+        ("work", "state", "work/evidence"),
+        ("work/sub", "state", "work"),
+        ("work", "work/state", "evidence"),
+        ("state/work", "state", "evidence"),
+        ("work", "state", "state/evidence"),
+        ("work", "evidence/state", "evidence"),
+        ("work", "work", "evidence"),
+    ],
+)
+def test_input_evidence_roots_must_be_disjoint_before_copy(
+    tmp_path, roots, monkeypatch
+):
+    from psycheval.harbor import evidence
+    from psycheval.harbor.evidence import _capture_input_evidence
+
+    def forbidden_stage(**kwargs):
+        pytest.fail("overlapping roots must be rejected before allocating a stage")
+
+    monkeypatch.setattr(evidence.tempfile, "mkdtemp", forbidden_stage)
+    workdir, state, destination = (tmp_path / name for name in roots)
+    for root in (workdir, state):
+        root.mkdir(parents=True, exist_ok=True)
+    (state / "keep.txt").write_text("retained")
+    with pytest.raises(ValueError, match="overlap"):
+        _capture_input_evidence(
+            workdir, [], state, destination, check_cancel=lambda: None
+        )
+    assert (state / "keep.txt").read_text() == "retained"
+    assert not list(tmp_path.rglob(".input-evidence-*"))
+
+
+@pytest.mark.parametrize("tree", ["inputs", "preparation_state"])
+def test_missing_initial_evidence_names_the_source_tree(tmp_path, tree):
+    from psycheval.harbor.evidence import _capture_input_evidence
+
+    workdir, state, destination = (
+        tmp_path / name for name in ("work", "state", "evidence")
+    )
+    workdir.mkdir()
+    if tree == "inputs":
+        state.mkdir()
+    label = (
+        "prepared input.*missing.txt"
+        if tree == "inputs"
+        else "preparation state.*state"
+    )
+    with pytest.raises(ValueError, match=label):
+        _capture_input_evidence(
+            workdir,
+            ["missing.txt"] if tree == "inputs" else [],
+            state,
+            destination,
+            check_cancel=lambda: None,
+        )
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".input-evidence-*"))
+
+
+@pytest.mark.parametrize("tree", ["inputs", "preparation_state"])
+def test_input_evidence_rejects_git_metadata_in_both_trees(tmp_path, tree):
+    from psycheval.harbor.evidence import _capture_input_evidence
+
+    workdir, state, destination = (
+        tmp_path / name for name in ("work", "state", "evidence")
+    )
+    workdir.mkdir()
+    state.mkdir()
+    source = workdir if tree == "inputs" else state
+    (source / "reference/.git").mkdir(parents=True)
+    (source / "reference/.git/config").write_text("keep")
+    with pytest.raises(ValueError, match=r"cannot include \.git"):
+        _capture_input_evidence(
+            workdir,
+            ["reference"] if tree == "inputs" else [],
+            state,
+            destination,
+            check_cancel=lambda: None,
+        )
+    assert (source / "reference/.git/config").read_text() == "keep"
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize("failure", ["short_read", "changed_source"])
+def test_snapshot_rejects_incomplete_or_changing_reads(tmp_path, monkeypatch, failure):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    source = tmp_path / "input.txt"
+    source.write_bytes(b"original")
+    original_open = Path.open
+
+    @contextmanager
+    def unstable_open(path, *args, **kwargs):
+        with original_open(path, *args, **kwargs) as stream:
+            if path != source or args != ("rb",):
+                yield stream
+                return
+
+            def read(limit):
+                content = stream.read(limit)
+                if failure == "short_read":
+                    return content[:-1]
+                with original_open(source, "wb") as changed:
+                    changed.write(b"longer replacement")
+                return content
+
+            yield SimpleNamespace(fileno=stream.fileno, read=read)
+
+    monkeypatch.setattr(Path, "open", unstable_open)
+    with pytest.raises(OSError, match="Source changed while reading"):
+        SourceSnapshot.read(source)
+
+
+@pytest.mark.parametrize("rollback_fails", [False, True])
+def test_failed_input_publication_preserves_previous_copy(
+    tmp_path, monkeypatch, rollback_fails
+):
+    from psycheval.harbor.evidence import _capture_input_evidence
+
+    workdir, state = tmp_path / "workdir", tmp_path / "state"
+    workdir.mkdir()
+    state.mkdir()
+    source = workdir / "input.txt"
+    source.write_bytes(b"original")
+    destination = tmp_path / "trial/input_evidence"
+
+    def capture():
+        _capture_input_evidence(
+            workdir, ["input.txt"], state, destination, check_cancel=lambda: None
+        )
+
+    capture()
+    manifest = (destination / "manifest.json").read_bytes()
+    source.write_bytes(b"replacement")
+    rename = Path.rename
+
+    def fail_publication(path, target):
+        if path.name.startswith(".input-evidence-"):
+            if path.name.endswith("-previous"):
+                if rollback_fails:
+                    raise PermissionError("rollback blocked")
+            else:
+                raise PermissionError("publication blocked")
+        return rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", fail_publication)
+    with pytest.raises(PermissionError, match="publication blocked") as failure:
+        capture()
+    remaining = list(destination.parent.glob(".input-evidence-*"))
+    if rollback_fails:
+        assert len(remaining) == 1 and remaining[0].name.endswith("-previous")
+        retained = remaining[0]
+        assert str(retained) in failure.value.__notes__[0]
+        assert "rollback blocked" in failure.value.__notes__[0]
+        assert not destination.exists()
+    else:
+        assert remaining == []
+        retained = destination
+    assert (retained / "manifest.json").read_bytes() == manifest
+    assert (retained / "inputs/input.txt").read_bytes() == b"original"
+
+
 def test_mirrored_presentation_produces_raw_and_text_evidence(tmp_path):
     pptx = pytest.importorskip("pptx")
     from psycheval.harbor.documents import inspect_document, select_document

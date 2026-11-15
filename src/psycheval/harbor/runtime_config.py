@@ -10,7 +10,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 PEVAL_CONFIG_ENV = "PEVAL_CONFIG"
-RUNTIME_SCHEMA_VERSION = 1
+RUNTIME_SCHEMA_VERSION = 2
 HARNESS_PROTOCOL_VERSION = 2
 DEFAULT_WORKDIR_ROOT = "~/workspaces"
 
@@ -37,6 +37,8 @@ class RuntimePaths:
     agent_logs: str
     verifier_logs: str
     artifacts: str
+    inputs: str | None = None
+    preparation_state: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,8 @@ class EffectiveRuntimeConfig:
                 "agent_logs": self.paths.agent_logs,
                 "verifier_logs": self.paths.verifier_logs,
                 "artifacts": self.paths.artifacts,
+                "inputs": self.paths.inputs,
+                "preparation_state": self.paths.preparation_state,
             },
             "executables": {"python": self.python},
         }
@@ -180,7 +184,14 @@ def load_effective_runtime_config(
     _reject_unknown(data, {"schema_version", "harbor", "paths", "executables"}, "")
 
     raw_paths = _object(data.get("paths"), "paths")
-    path_fields = {"workdir", "tests", "agent_logs", "verifier_logs", "artifacts"}
+    nullable_paths = {"inputs", "preparation_state"}
+    path_fields = {
+        "workdir",
+        "tests",
+        "agent_logs",
+        "verifier_logs",
+        "artifacts",
+    } | nullable_paths
     _reject_unknown(raw_paths, path_fields, "paths")
     missing_paths = sorted(path_fields - set(raw_paths))
     if missing_paths:
@@ -189,9 +200,13 @@ def load_effective_runtime_config(
         )
     paths = RuntimePaths(
         **{
-            key: _nonempty_string(raw_paths.get(key), f"paths.{key}")
-            for key in path_fields
-        }
+            key: _nonempty_string(raw_paths[key], f"paths.{key}")
+            for key in path_fields - nullable_paths
+        },
+        **{
+            key: _optional_string(raw_paths[key], f"paths.{key}")
+            for key in nullable_paths
+        },
     )
 
     raw_harbor = _object(data.get("harbor"), "harbor")

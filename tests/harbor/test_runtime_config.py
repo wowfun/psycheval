@@ -155,6 +155,25 @@ def test_effective_runtime_config_round_trip_without_harness(tmp_path: Path) -> 
     assert load_effective_runtime_config(path) == expected
 
 
+def test_runtime_input_paths_round_trip_and_old_schema_is_rejected(tmp_path):
+    from dataclasses import replace
+
+    config = runtime_config()
+    config = replace(
+        config,
+        paths=replace(
+            config.paths, inputs="/retained/inputs", preparation_state="/retained/state"
+        ),
+    )
+    path = write_effective_runtime_config(tmp_path / "runtime.json", config)
+    assert load_effective_runtime_config(path) == config
+    value = config.to_dict()
+    value["schema_version"] = 1
+    path.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(RuntimeConfigError, match="schema_version"):
+        load_effective_runtime_config(path)
+
+
 def test_effective_runtime_config_rejects_unknown_and_old_protocol(
     tmp_path: Path,
 ) -> None:
@@ -179,6 +198,8 @@ def test_effective_runtime_config_rejects_unknown_and_old_protocol(
         (("harbor",), "host"),
         (("harbor", "host"), "workspace"),
         (("executables",), "python"),
+        (("paths",), "inputs"),
+        (("paths",), "preparation_state"),
     ],
 )
 def test_effective_runtime_config_requires_fixed_schema_fields(

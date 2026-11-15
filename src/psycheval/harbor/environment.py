@@ -4,6 +4,7 @@ import asyncio
 import codecs
 import fnmatch
 import getpass
+import json
 import math
 import os
 import platform
@@ -30,6 +31,7 @@ from harbor.utils.scripts import quote_windows_shell_arg
 
 from . import host_files, windows
 from .diagnostics import cleanup_warning, warning_text
+from .evidence import SourceSnapshot, _capture_input_evidence
 from .paths import HostPathMapper, split_virtual_path, trial_short_uuid
 from .runtime_config import (
     DEFAULT_WORKDIR_ROOT,
@@ -428,6 +430,8 @@ class HostEnvironment(BaseEnvironment):
             )
         self._workspace_baseline = workspace_baseline
         self._runtime_root: Path | None = None
+        self._input_evidence: Path | None = None
+        self._initial_input_files: list[str] = []
         self._short_runtime_dirs: dict[str, Path] = {}
         self._termination_graces: dict[asyncio.subprocess.Process, float] = {}
         self._termination_tasks: dict[asyncio.subprocess.Process, asyncio.Task] = {}
@@ -738,10 +742,38 @@ class HostEnvironment(BaseEnvironment):
             return
         assert self._runtime_root is not None
         script = self._runtime_root / "preparation" / "prepare.py"
-        if not script.is_file():
-            return
-        self._require_process_access()
         workdir = self._context_target(self._runtime_dirs())
+        state_dir = self._runtime_root / "preparation-state"
+        state_dir.mkdir()
+        selected = self._initial_input_files
+        if script.is_file():
+            selection_path = self._runtime_root / "prepared-inputs.json"
+            await self._execute_preparation(script, workdir, state_dir, selection_path)
+            selected = json.loads(
+                SourceSnapshot.read(selection_path, max_bytes=1024 * 1024).content
+            )
+        destination = self.trial_paths.trial_dir / "input_evidence"
+        await _await_owned_task(
+            asyncio.create_task(
+                asyncio.to_thread(
+                    _capture_input_evidence,
+                    workdir,
+                    selected,
+                    state_dir,
+                    destination,
+                    check_cancel=lambda: host_files._check_filesystem_cancel(
+                        self._initialization_cancel
+                    ),
+                )
+            ),
+            on_cancel=self._initialization_cancel.set,
+        )
+        self._input_evidence = destination
+
+    async def _execute_preparation(
+        self, script, workdir, state_dir, selection_path
+    ) -> None:
+        self._require_process_access()
         log_path = self.trial_paths.trial_dir / "prepare.log"
         with log_path.open("w", encoding="utf-8", errors="backslashreplace") as log:
 
@@ -758,6 +790,8 @@ class HostEnvironment(BaseEnvironment):
                             str(Path(__file__).with_name("_prepare.py")),
                             str(script),
                             str(workdir),
+                            str(state_dir),
+                            str(selection_path),
                         ],
                         cwd=str(workdir),
                         env={"PYTHONIOENCODING": "utf-8"},
@@ -776,6 +810,8 @@ class HostEnvironment(BaseEnvironment):
 
     def _initialize_context(self) -> None:
         cancel = self._initialization_cancel
+        self._input_evidence = None
+        self._initial_input_files = []
         host_files._check_filesystem_cancel(cancel)
         self._prepare_automatic_workspace()
         mappings = self._create_runtime_directories()
@@ -836,6 +872,7 @@ class HostEnvironment(BaseEnvironment):
                 context_target,
                 cancel=cancel,
                 overwrite=self._workspace is not None and not self._workspace.owned,
+                copied_files=self._initial_input_files,
             )
 
     def _copy_environment_context(
@@ -1319,6 +1356,12 @@ class HostEnvironment(BaseEnvironment):
                 agent_logs=str(agent_logs or paths[_VIRTUAL_AGENT_LOGS]),
                 verifier_logs=str(paths[_VIRTUAL_VERIFIER_LOGS]),
                 artifacts=str(paths[_VIRTUAL_ARTIFACTS]),
+                inputs=str(self._input_evidence / "inputs")
+                if self._input_evidence
+                else None,
+                preparation_state=str(self._input_evidence / "preparation_state")
+                if self._input_evidence
+                else None,
             ),
             workdir_root=str(root) if root is not None else None,
             workspace=str(workspace) if workspace is not None else None,

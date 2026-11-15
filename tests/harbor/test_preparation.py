@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
 from psycheval.harbor.environment import HostProcessAccessError
+from psycheval.harbor.runtime_config import load_effective_runtime_config
 from tests.harbor.environment_support import make_environment
 
 
@@ -37,6 +39,15 @@ def test_data_only_and_preparation_materials_stay_outside_workspace(tmp_path):
             assert not (host.work_dir / "data").exists()
             assert not (host.work_dir / "Dockerfile").exists()
             assert not (host.work_dir / "helper.txt").exists()
+            config = load_effective_runtime_config(
+                host.runtime_config_env()["PEVAL_CONFIG"]
+            )
+            inputs = Path(config.paths.inputs)
+            assert inputs.parent.parent == host.trial_paths.trial_dir
+            assert (inputs / "input.txt").read_text(encoding="utf-8") == "原始数据"
+            assert Path(config.paths.preparation_state).is_dir()
+            (host.work_dir / "input.txt").write_text("changed")
+            assert (inputs / "input.txt").read_text(encoding="utf-8") == "原始数据"
         finally:
             await host.stop(True)
 
@@ -51,7 +62,7 @@ def test_prepare_owns_copy_has_helpers_baseline_and_idempotent_start(
         tmp_path / "中文 space",
         """from pathlib import Path
 from helper import transform
-def prepare(workdir):
+def prepare(workdir, state_dir):
     target = Path(workdir)
     assert target.is_absolute()
     assert not (target / 'input.txt').exists()
@@ -59,6 +70,8 @@ def prepare(workdir):
     source = Path(__file__).parent / 'data/input.txt'
     (target / 'prepared.txt').write_text(transform(source.read_text(encoding='utf-8')), encoding='utf-8')
     print('准备完成')
+    (Path(state_dir) / 'reference.txt').write_text('reference', encoding='utf-8')
+    return ['prepared.txt']
 """,
     )
     (host.environment_dir / "helper.py").write_text(
@@ -81,8 +94,19 @@ def prepare(workdir):
                 encoding="utf-8"
             )
             output.write_text("agent change")
+            config = load_effective_runtime_config(
+                host.runtime_config_env()["PEVAL_CONFIG"]
+            )
+            inputs = Path(config.paths.inputs)
+            state = Path(config.paths.preparation_state)
+            assert (inputs / "prepared.txt").read_text(
+                encoding="utf-8"
+            ) == "原始数据 converted"
+            assert (state / "reference.txt").read_text() == "reference"
+            manifest = (inputs.parent / "manifest.json").read_bytes()
             await host.stop(False)
             await host.start(False)
+            assert (inputs.parent / "manifest.json").read_bytes() == manifest
             assert output.read_text() == "agent change"
             assert not (host.work_dir / "prepare.py").exists()
             assert before == {
@@ -100,9 +124,10 @@ def prepare(workdir):
     "script",
     [
         "",
-        "def prepare(path): raise ValueError('broken')",
-        "async def prepare(path): pass",
-        "def prepare(path): return 5",
+        "def prepare(workdir, state_dir): raise ValueError('broken')",
+        "async def prepare(workdir, state_dir): pass",
+        "def prepare(workdir, state_dir): return 5",
+        "def prepare(workdir): return []",
         "import absent_task_dependency",
     ],
 )
@@ -129,9 +154,10 @@ def test_preparation_excludes_judge_settings_but_preserves_task_environment(
     host = make_host(
         tmp_path,
         """import os
-def prepare(workdir):
+def prepare(workdir, state_dir):
     assert not any(key.upper().startswith('PEVAL_JUDGE_') for key in os.environ)
     assert os.environ['TASK_PREP_VALUE'] == 'available'
+    return []
 """,
         workspace_baseline="none",
     )
@@ -158,7 +184,7 @@ def test_preparation_output_limit_cleans_descendants_and_keeps_log(
         tmp_path,
         f"""import subprocess, sys, json, os
 from pathlib import Path
-def prepare(workdir):
+def prepare(workdir, state_dir):
     child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
     Path({str(marker)!r}).write_text(json.dumps([os.getpid(), child.pid]))
     for _ in range(100):
@@ -191,7 +217,7 @@ def test_preparation_cancellation_cleans_child_tree_and_owned_workspace(
     # PID evidence lives outside the workspace so it survives cleanup.
     script = f"""import subprocess, sys, time, json, os
 from pathlib import Path
-def prepare(workdir):
+def prepare(workdir, state_dir):
     child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
     Path({str(marker)!r}).write_text(json.dumps([os.getpid(), child.pid]))
     print('started', flush=True)
@@ -250,7 +276,7 @@ def test_prepare_failure_does_not_delete_borrowed_workspace(tmp_path):
         ],
     )
     (host.environment_dir / "prepare.py").write_text(
-        "def prepare(workdir): raise RuntimeError('broken')\n"
+        "def prepare(workdir, state_dir): raise RuntimeError('broken')\n"
     )
 
     async def run():
@@ -297,10 +323,11 @@ def test_preparation_can_modify_project_and_reruns_for_recreated_workspace(tmp_p
     host = make_host(
         tmp_path,
         """from pathlib import Path
-def prepare(workdir):
+def prepare(workdir, state_dir):
     target = Path(workdir) / 'project.txt'
     assert target.read_text() == 'source'
     target.write_text('prepared')
+    return ['project.txt']
 """,
         workspace_source=project,
     )
@@ -347,5 +374,182 @@ def test_default_copy_rejects_linked_directory_in_borrowed_workspace(tmp_path):
             await host.stop(True)
         assert not (outside / "input.txt").exists()
         assert workspace.exists()
+
+    asyncio.run(run())
+
+
+def test_default_snapshot_excludes_merged_project_and_survives_workspace_cleanup(
+    tmp_path,
+):
+    project = tmp_path / "project"
+    (project / "shared").mkdir(parents=True)
+    (project / "shared/code.py").write_text("project code")
+    host = make_host(tmp_path, workspace_source=project)
+    (host.environment_dir / "data/shared").mkdir()
+    (host.environment_dir / "data/shared/source.txt").write_text("initial")
+
+    async def run():
+        await host.start(False)
+        context = load_effective_runtime_config(
+            host.runtime_config_env()["PEVAL_CONFIG"]
+        )
+        inputs = Path(context.paths.inputs)
+        try:
+            assert (host.work_dir / "shared/code.py").exists()
+            assert not (inputs / "shared/code.py").exists()
+            assert (inputs / "shared/source.txt").read_text() == "initial"
+        finally:
+            await host.stop(True)
+        assert (inputs / "shared/source.txt").read_text() == "initial"
+
+    asyncio.run(run())
+
+
+def test_selected_directories_are_deduplicated_and_failed_rebuild_preserves_snapshot(
+    tmp_path,
+):
+    import hashlib
+
+    host = make_host(
+        tmp_path,
+        """from pathlib import Path
+def prepare(workdir, state_dir):
+    target = Path(workdir) / 'selected'
+    target.mkdir()
+    (target / 'one.txt').write_text('original')
+    (Path(workdir) / 'unselected.txt').write_text('omit')
+    (Path(state_dir) / 'seed.txt').write_text('42')
+    return ['selected/one.txt', 'selected', 'selected']
+""",
+    )
+
+    async def run():
+        await host.start(False)
+        context = load_effective_runtime_config(
+            host.runtime_config_env()["PEVAL_CONFIG"]
+        )
+        root = Path(context.paths.inputs).parent
+        original = (root / "manifest.json").read_bytes()
+        assert json.loads(original)["inputs"] == [
+            {
+                "path": "selected/one.txt",
+                "bytes": 8,
+                "sha256": hashlib.sha256(b"original").hexdigest(),
+            }
+        ]
+        assert not (root / "inputs/unselected.txt").exists()
+        await host.stop(True)
+        (host.environment_dir / "prepare.py").write_text(
+            "def prepare(workdir, state_dir): return ['missing.txt']\n"
+        )
+        with pytest.raises(ValueError, match="prepared input.*missing.txt"):
+            await host.start(False)
+        assert (root / "manifest.json").read_bytes() == original
+        assert not list(root.parent.glob(".input-evidence-*"))
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "selected", ["../escape", "/absolute", "C:/file", "a\\b", ".git", "a/../b", ".", ""]
+)
+def test_prepared_input_selection_rejects_unsafe_paths(tmp_path, selected):
+    host = make_host(
+        tmp_path, f"def prepare(workdir, state_dir): return [{selected!r}]\n"
+    )
+
+    async def run():
+        with pytest.raises(ValueError, match="prepared input path"):
+            await host.start(False)
+        assert not (host.trial_paths.trial_dir / "input_evidence").exists()
+
+    asyncio.run(run())
+
+
+def test_snapshot_cancellation_leaves_no_publication(tmp_path, monkeypatch):
+    import threading
+
+    from psycheval.harbor.evidence import SourceSnapshot
+
+    entered, release = threading.Event(), threading.Event()
+    read = SourceSnapshot.read
+
+    def wait_read(path, **kwargs):
+        result = read(path, **kwargs)
+        entered.set()
+        assert release.wait(10)
+        return result
+
+    monkeypatch.setattr(SourceSnapshot, "read", wait_read)
+    host = make_host(tmp_path)
+
+    async def run():
+        task = asyncio.create_task(host.start(False))
+        try:
+            assert await asyncio.to_thread(entered.wait, 10)
+            task.cancel()
+            await asyncio.sleep(0)
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not (host.trial_paths.trial_dir / "input_evidence").exists()
+        assert not list(host.trial_paths.trial_dir.glob(".input-evidence-*"))
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("location", ["inputs", "state"])
+def test_snapshot_rejects_linked_inputs_and_state_without_touching_target(
+    tmp_path, location
+):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep")
+    host = make_host(
+        tmp_path,
+        f"""import sys
+from pathlib import Path
+def prepare(workdir, state_dir):
+    root = Path(state_dir if {location!r} == 'state' else workdir)
+    link = root / 'linked'
+    if sys.platform == 'win32':
+        import _winapi
+        _winapi.CreateJunction({str(outside)!r}, str(link))
+    else:
+        link.symlink_to({str(outside)!r}, target_is_directory=True)
+    return ['linked'] if {location!r} == 'inputs' else []
+""",
+    )
+
+    async def run():
+        with pytest.raises(ValueError, match="Linked evidence"):
+            await host.start(False)
+        assert not (host.trial_paths.trial_dir / "input_evidence").exists()
+        assert (outside / "keep.txt").read_text() == "keep"
+
+    asyncio.run(run())
+
+
+def test_two_trials_have_independent_input_snapshots(tmp_path):
+    hosts = [make_host(tmp_path / name) for name in ("first", "second")]
+    for index, host in enumerate(hosts):
+        (host.environment_dir / "data/input.txt").write_text(str(index))
+
+    async def run():
+        try:
+            await asyncio.gather(*(host.start(False) for host in hosts))
+            inputs = [
+                Path(
+                    load_effective_runtime_config(
+                        host.runtime_config_env()["PEVAL_CONFIG"]
+                    ).paths.inputs
+                )
+                for host in hosts
+            ]
+            assert inputs[0] != inputs[1]
+            assert [(path / "input.txt").read_text() for path in inputs] == ["0", "1"]
+        finally:
+            await asyncio.gather(*(host.stop(True) for host in hosts))
 
     asyncio.run(run())

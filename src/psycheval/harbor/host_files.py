@@ -317,6 +317,7 @@ def _copy_project_tree(
     *,
     cancel: threading.Event | None = None,
     overwrite: bool = False,
+    copied_files: list[str] | None = None,
 ) -> None:
     _check_filesystem_cancel(cancel)
     if not stat.S_ISDIR(_workspace_entry_info(source).st_mode):
@@ -341,6 +342,8 @@ def _copy_project_tree(
             target.mkdir(exist_ok=True)
             pending.append((entry.iterdir(), target))
         else:
+            if copied_files is not None:
+                copied_files.append(target.relative_to(destination).as_posix())
             if target.exists():
                 if not overwrite or not stat.S_ISREG(target.stat().st_mode):
                     raise ValueError(f"workspace merge conflict: {target}")

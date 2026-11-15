@@ -147,6 +147,14 @@ readable by the Office shared Judge; it does not change either scoring protocol.
 `source_path` describes provenance, not a downloadable verifier path. Consumers
 resolve only `verifier_raw_path` and `text_path` under their allowlisted roots.
 
+Tasks can capture sources from the Native Host's initial-input snapshot (see
+[input preparation](harbor.md#native-task-input-preparation)), then publish selected
+excerpts with `add_text(..., source_id=...)`. Include the source's paragraph, line
+or time range in the excerpt text. Each rubric's existing `artifact_refs` selects
+its evidence IDs; paired output/source excerpts can describe dynamic item bindings.
+The Task owns locator interpretation. The Judge still reads only published
+verifier evidence, never the input directory or an original `source_path` directly.
+
 `DocumentLimits` bounds source bytes, OOXML archive entries and expanded bytes,
 logical pages (PDF/PPTX pages or XLSX sheets), report facts, and extracted UTF-8
 text. Facts include shapes (including groups), paragraphs, runs, tables, cells

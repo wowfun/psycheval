@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
-def prepare(workdir: str) -> None:
+def prepare(workdir: str, state_dir: str) -> list[str]:
     data = Path(__file__).parent / "data"
     spec = importlib.util.spec_from_file_location(
         "trend_watchlist", data / "skills/x-daily/scripts/fetch.py"
@@ -43,9 +43,8 @@ def prepare(workdir: str) -> None:
             target / name,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
-    snapshots = target / ".trend-digest"
-    snapshots.mkdir()
-    (snapshots / "preparation.json").write_text(
+    (target / ".trend-digest").mkdir()
+    (Path(state_dir) / "preparation.json").write_text(
         json.dumps(
             {
                 "prepared_at": prepared_at.isoformat(),
@@ -58,3 +57,4 @@ def prepare(workdir: str) -> None:
         + "\n",
         encoding="utf-8",
     )
+    return ["input", "skills"]

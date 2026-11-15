@@ -855,8 +855,14 @@ preparation materials and are neither copied into the workspace nor executed.
 
 An optional `environment/prepare.py` takes full responsibility for input
 preparation instead of the default data copy. It must define the synchronous
-function `prepare(workdir: str) -> None`. The argument is an existing native
-absolute directory. The environment materials are staged outside the workspace;
+function `prepare(workdir: str, state_dir: str) -> list[str]`. Both arguments are
+existing native absolute directories. The return value selects workspace-relative
+files or directories to retain as initial inputs; `[]` selects none. Paths use
+forward slashes, cannot escape the workspace, and cannot select links or `.git`.
+The returned selection JSON is bounded independently at 1 MiB; selecting a
+directory avoids listing each of its files individually.
+The script may write Task-owned reference facts into `state_dir`.
+The environment materials are staged outside the workspace;
 the function runs in a separate process using the current Python interpreter.
 Use `__file__` to locate sibling data and helpers. Dependencies must already be
 installed. Task sources are not modified by the framework. Time-dependent
@@ -867,8 +873,7 @@ explicit credentials needed by the Task; it is not a secret-isolation boundary.
 Judge-specific `PEVAL_JUDGE_*` settings are excluded from these script children.
 
 Preparation runs after copying `workspace_source`, before the Git baseline and
-Agent setup. Repeated starts of a retained Host do not rerun preparation; a new
-workspace does. Borrowed workspaces are never baseline-initialized or deleted.
+Agent setup. Borrowed workspaces are never baseline-initialized or deleted.
 The default copy rejects file collisions; scripts explicitly control their own
 workspace changes. Filesystem-only Hosts can copy data, but scripts require
 process access. Missing functions, import errors, and execution failures abort
@@ -880,6 +885,35 @@ fails preparation and terminates its process tree while retaining the log prefix
 
 WorkBuddy and separate verifier environments retain their own preparation
 contracts and do not invoke this input hook.
+
+After successful preparation and before the baseline or Agent setup, the ordinary
+Native Host retains selected files under the Trial's `input_evidence/inputs/`
+and preparation state under `input_evidence/preparation_state/`. Without a hook,
+only files copied from `environment/data` are selected; project files are not
+implicitly included. An empty selection still produces an available empty snapshot.
+`input_evidence/manifest.json` records each file's relative path, byte count and
+SHA-256 digest for both trees. Empty directories are retained in the snapshot.
+Publication is staged; failed or cancelled copies never
+publish a partial snapshot. Limits are 64 MiB per file, 256 MiB total and 100000
+entries, shared across the two trees. Linked paths, special files and detected
+source changes fail preparation. Both selected input trees and preparation state
+reject `.git` entries rather than silently retaining incomplete directory copies;
+the default environment/project copy separately excludes repository metadata.
+Missing paths identify whether the failure concerns a prepared input or
+preparation state. Workspace, state and retained-evidence roots must be disjoint.
+Directories and overlapping selections are
+deduplicated. Snapshots survive workspace deletion. A newly created workspace
+runs preparation and replaces the retained snapshot only after success; retained
+Host restarts reuse their existing snapshot without rerunning preparation.
+If replacing a snapshot fails, publication restores the previous snapshot. If
+the filesystem also rejects restoration, the previous copy stays at the backup
+path recorded in the exception rather than being discarded during cleanup.
+
+Runtime `paths.inputs` and `paths.preparation_state` expose these directories to
+trusted verifiers and harnesses. Both are nullable; container and WorkBuddy
+execution leave them unavailable, with no fallback to the writable workspace.
+After publication the framework treats both trees as read-only. They are outside
+the Agent workspace, but this does not add a security sandbox to native execution.
 
 The [prepared-files example](../../examples/tasks/native-prepared-files/README.md)
 combines static source data, a preparation transform, GT comparison, and weighted
@@ -895,7 +929,8 @@ require a trajectory. Registration and preview never execute Task code.
 
 The script runs as native Python argv with `--context <path>` and
 `--output <path>`. Context uses the runtime JSON protocol's `paths`: `workdir`,
-`tests`, `artifacts`, `agent_logs`, and `verifier_logs`. It can read the current
+`tests`, `artifacts`, `agent_logs`, `verifier_logs`, and nullable `inputs` and
+`preparation_state`. It can read the current
 step's ATIF from `agent_logs/trajectory.json` when available. GT and helpers live
 beside the staged script, outside the Agent workspace. Each verification resets
 its uploaded test context before applying Harbor's shared/step overlay rules.
@@ -1204,7 +1239,7 @@ scripts finish, without following links.
 Ordinary child commands receive no automatic `PEVAL_CONFIG`. Control components
 explicitly request effective runtime configuration through the Host protocol;
 external harnesses supply their invocation document, and verifier launchers use
-`HostEnvironment.runtime_config_env()`. The generated document contains native
+`HostEnvironment.runtime_config_env()`. The generated version-2 document contains native
 paths, Python, and optional harness protocol version 2 with `run` or `resume`.
 Harnesses remove evaluation control variables before launching actual Agents.
 Generated runtime directories use neutral names. Agent homes and active state

@@ -135,9 +135,10 @@ def test_synthetic_host_trial_selects_native_verifier_entrypoint(
         (task_root / "environment/data").mkdir()
         (task_root / "environment/data/source.txt").write_text("prepared input")
         (task_root / "environment/prepare.py").write_text(
-            "from pathlib import Path\ndef prepare(workdir):\n"
+            "from pathlib import Path\ndef prepare(workdir, state_dir):\n"
             "    data = (Path(__file__).parent / 'data/source.txt').read_text()\n"
             "    (Path(workdir) / 'prepared.txt').write_text(data)\n"
+            "    return ['prepared.txt']\n"
         )
         grader_path = task_root / "tests/grader.json"
         grader = json.loads(grader_path.read_text())
@@ -463,7 +464,9 @@ def test_preparation_failure_is_recorded_without_aborting_other_trials(tmp_path)
             config.read_text().replace("fixtures/harbor-multi-step", f"fixtures/{name}")
         )
     script = dataset / "bad/environment/prepare.py"
-    script.write_text("def prepare(workdir): raise RuntimeError('broken input')\n")
+    script.write_text(
+        "def prepare(workdir, state_dir): raise RuntimeError('broken input')\n"
+    )
     original = script.read_bytes()
     jobs = tmp_path / "jobs"
     workspaces = tmp_path / "workspaces"

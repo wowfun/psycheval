@@ -1,4 +1,4 @@
-"""Immutable source reads and attempt-scoped evidence publication (stdlib only)."""
+"""Immutable source reads, initial inputs and verifier evidence (stdlib only)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,11 @@ import shutil
 import stat
 import tempfile
 from dataclasses import dataclass
+from itertools import combinations
 from pathlib import Path
+
+_INPUT_EVIDENCE_ENTRY_LIMIT = 100_000
+_INPUT_EVIDENCE_TOTAL_LIMIT = 256 * 1024 * 1024
 
 
 class EvidenceLimitError(ValueError):
@@ -79,12 +83,142 @@ class SourceSnapshot:
             raise ValueError(f"Source is not a regular file: {path}")
         with path.open("rb") as stream:
             opened = os.fstat(stream.fileno())
-            if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+            if not os.path.samestat(before, opened) or (
+                before.st_size,
+                before.st_mtime_ns,
+            ) != (opened.st_size, opened.st_mtime_ns):
                 raise OSError("Source changed while opening")
             content = stream.read(max_bytes + 1)
+            after = os.fstat(stream.fileno())
         if len(content) > max_bytes:
             raise EvidenceLimitError(f"Source exceeds {max_bytes} bytes")
+        current = path.lstat()
+        if (
+            len(content) != opened.st_size
+            or (after.st_size, after.st_mtime_ns)
+            != (opened.st_size, opened.st_mtime_ns)
+            or not os.path.samestat(opened, current)
+            or (current.st_size, current.st_mtime_ns)
+            != (opened.st_size, opened.st_mtime_ns)
+        ):
+            raise OSError("Source changed while reading")
         return cls(path, content)
+
+
+def _capture_input_evidence(workdir, selected, state_dir, destination, *, check_cancel):
+    """Freeze selected initial inputs and private preparation state as one publication."""
+    if not isinstance(selected, list) or not all(isinstance(p, str) for p in selected):
+        raise ValueError("prepared inputs must be a list of relative paths")
+    for name in selected:
+        if (
+            not name
+            or "\\" in name
+            or ":" in name
+            or "\x00" in name
+            or any(
+                part in {"", ".", ".."} or part.lower() == ".git"
+                for part in name.split("/")
+            )
+        ):
+            raise ValueError(f"invalid prepared input path: {name!r}")
+    for root in (workdir, state_dir, destination):
+        _check_path(root)
+    roots = {
+        "workspace": workdir,
+        "preparation state": state_dir,
+        "input evidence": destination,
+    }
+    for (first_name, first), (second_name, second) in combinations(roots.items(), 2):
+        if first.is_relative_to(second) or second.is_relative_to(first):
+            raise ValueError(f"{first_name} and {second_name} overlap")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".input-evidence-", dir=destination.parent))
+    backup = stage.with_name(stage.name + "-previous")
+    entries = total = 0
+    manifest = {}
+
+    def capture_tree(source, names, target, label):
+        nonlocal entries, total
+        target.mkdir()
+        seen, records = set(), []
+        pending = [iter(source / name for name in names)]
+        try:
+            while pending:
+                check_cancel()
+                path = next(pending[-1], None)
+                if path is None:
+                    pending.pop()
+                    continue
+                relative = path.relative_to(source)
+                identity = os.path.normcase(str(relative))
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                entries += 1
+                if entries > _INPUT_EVIDENCE_ENTRY_LIMIT:
+                    raise EvidenceLimitError(
+                        "initial input evidence exceeds 100000 entries"
+                    )
+                if any(part.lower() == ".git" for part in relative.parts):
+                    raise ValueError("initial input evidence cannot include .git")
+                info = path.lstat()
+                output = target / relative
+                if stat.S_ISDIR(info.st_mode):
+                    _check_path(path)
+                    output.mkdir(parents=True, exist_ok=True)
+                    pending.append(path.iterdir())
+                    continue
+                snapshot = SourceSnapshot.read(path)
+                total += len(snapshot.content)
+                if total > _INPUT_EVIDENCE_TOTAL_LIMIT:
+                    raise EvidenceLimitError("initial input evidence exceeds 256 MiB")
+                check_cancel()
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(snapshot.content)
+                records.append(
+                    {
+                        "path": relative.as_posix(),
+                        "bytes": len(snapshot.content),
+                        "sha256": snapshot.sha256,
+                    }
+                )
+        except FileNotFoundError as error:
+            raise ValueError(f"missing {label} path: {error.filename}") from error
+        finally:
+            for iterator in pending:
+                close = getattr(iterator, "close", None)
+                if close:
+                    close()
+        return sorted(records, key=lambda item: item["path"])
+
+    try:
+        manifest["inputs"] = capture_tree(
+            workdir, selected, stage / "inputs", "prepared input"
+        )
+        manifest["preparation_state"] = capture_tree(
+            state_dir, ["."], stage / "preparation_state", "preparation state"
+        )
+        (stage / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        check_cancel()
+        _check_path(destination)
+        if destination.exists():
+            destination.rename(backup)
+        try:
+            stage.rename(destination)
+        except BaseException as error:
+            if backup.exists():
+                try:
+                    backup.rename(destination)
+                except OSError as restore_error:
+                    error.add_note(
+                        f"Previous input evidence retained at {backup}: {restore_error}"
+                    )
+            raise
+        _clear_output(backup)
+    finally:
+        _clear_output(stage)
 
 
 class EvidenceWriter:

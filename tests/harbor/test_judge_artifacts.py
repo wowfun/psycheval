@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from psycheval.harbor.evidence import EvidenceWriter
 from psycheval.harbor.verifier import JudgeSettings, _judge_evidence, run_verifier
 from psycheval.harbor.verifier._judge import (
     clear_judge_outputs,
@@ -92,6 +93,35 @@ def test_source_field_is_rejected(source):
     value["artifacts"][0]["source"] = source
     with pytest.raises(ValueError, match="fields"):
         parse_judge_config(yaml.safe_dump(value))
+
+
+def test_task_publishes_only_selected_source_excerpt_for_rubric(tmp_path):
+    context = runtime(tmp_path)
+    logs = Path(context.paths.verifier_logs)
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    source = inputs / "transcript.txt"
+    source.write_text(
+        "irrelevant opening\n[00:12] selected source\nunrelated ending",
+        encoding="utf-8",
+    )
+    with EvidenceWriter(logs) as writer:
+        snapshot = writer.capture("source", source)
+        writer.add_text(
+            "report",
+            "transcript.txt, line 2:\n" + snapshot.content.decode().splitlines()[1],
+            source_id="source",
+        )
+    source.write_text("changed after extraction", encoding="utf-8")
+    result, requests = assess(context)
+    assert result["checks"][0]["passed"]
+    prompt = requests[0]["messages"][-1]["content"]
+    assert "[00:12] selected source" in prompt
+    assert (
+        "irrelevant opening" not in prompt and "changed after extraction" not in prompt
+    )
+    record = json.loads((logs / "artifact_manifest.json").read_text())["artifacts"][1]
+    assert record["source_artifact_id"] == "source"
 
 
 def test_thirty_six_office_declarations_load_without_conversion():
