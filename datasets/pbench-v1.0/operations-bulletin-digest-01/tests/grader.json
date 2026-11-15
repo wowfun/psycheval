@@ -1,0 +1,3 @@
+{
+  "custom_checks": ["source_bound_selection"]
+}

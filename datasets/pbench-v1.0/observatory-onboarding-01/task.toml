@@ -1,0 +1,21 @@
+schema_version = "1.4"
+
+[task]
+name = "pbench-v1.0/observatory-onboarding-01"
+description = "Turn an observatory's internal night-shift concepts into a faithful four-slide onboarding deck."
+keywords = ["pptx", "source-fidelity", "onboarding", "paired-concepts"]
+
+[metadata]
+difficulty = "medium"
+category = "ppt-processing"
+
+[environment]
+workdir = "/app"
+network_mode = "public"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 300.0
+environment_mode = "shared"

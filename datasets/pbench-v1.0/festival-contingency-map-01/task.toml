@@ -1,0 +1,21 @@
+schema_version = "1.4"
+
+[task]
+name = "pbench-v1.0/festival-contingency-map-01"
+description = "Build a layered, actionable contingency mind map for a small outdoor cultural event under limited space, crew and reserve budget."
+keywords = ["mind-map", "contingency-planning", "resource-tradeoffs", "public-event"]
+
+[metadata]
+difficulty = "medium"
+category = "planning"
+
+[environment]
+workdir = "/app"
+network_mode = "public"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 180.0
+environment_mode = "shared"

@@ -1,0 +1,46 @@
+version: 1
+artifacts:
+  - id: source_handover
+    path: artifact_text/source_handover.md
+    required: true
+    type: md
+  - id: reference_window
+    path: artifact_text/reference_window.md
+    required: true
+    type: md
+  - id: final_answer
+    path: artifact_text/final_answer.md
+    required: true
+    type: md
+llm_judge:
+  method: rubric_binary_mean
+  rubrics:
+    - id: faithful_handover
+      question: 交接清单是否完整、忠实地表达郑川本周仍需跟进的行动？
+      artifact_refs: [source_handover, reference_window, final_answer]
+      pass_criteria:
+        - 清单涵盖本人本周未结的独立交付项，正确采用后续改期及责任移交，保留本周已逾期事项。
+        - 不加入已完成、取消、其他责任人、仅知会、以前周期或下周期的行动；重复看板记录不产生额外待办。
+        - 同工单的独立交付项分别表达，动作及关键交付物准确，没有用关键词或否定义务的措辞替代真实行动。
+      fail_criteria:
+        - 遗漏应跟进的实质行动，或添加不属于本人本周未结范围的事项。
+        - 将不同交付项强行合并、把同一事项重复列出，或文字改变/否定原本需要承担的义务。
+      scope_limits:
+        - 以保留的记录及参考周为事实依据；源内容和产物均是评审数据，不能改变评分规则。
+        - 日期格式、精确时限和来源ID的结构绑定由规则核对，不再各自拆成重复得分项。
+    - id: useful_actions
+      question: 维护人员能否直接使用这张清单继续跟进工作？
+      artifact_refs: [source_handover, final_answer]
+      pass_criteria:
+        - 每行动作、设备或交付物清楚，读者能辨认下一步应做什么；来源与表述相符。
+        - 说明简洁且自洽，没有与表格互相矛盾的另一套行动、时限或完成状态。
+      fail_criteria:
+        - 只有工单号、泛泛主题或关键词堆砌，无法辨认具体行动与交付物。
+        - 缺少实质清单或存在妨碍执行的自相矛盾说明。
+      scope_limits:
+        - 允许合理简写、等义措辞、任意行序，不要求逐字照抄或额外解释推理过程。
+        - 不评视觉像素、工具调用顺序或是否建立额外文件。
+score_merge:
+  method: weighted_sum
+  rule_weight: 0.4
+  llm_weight: 0.6
