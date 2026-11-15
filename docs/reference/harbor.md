@@ -394,8 +394,13 @@ are checked through required files and native bootstrap capabilities.
 Harbor owns artifact retention and transfer. The pinned Harbor 0.24 collects
 task-, run-, and step-level `artifacts` together with the automatic convention
 directory (`/logs/artifacts` on POSIX), after the Agent phase and before
-verification. Host maps the convention directory to the Trial's retained
-artifact root. Separate verifiers receive collected files at their source
+verification. On an ordinary shared native Host, `paths.artifacts` maps the
+convention directory to `<trial>/artifacts/logs/artifacts/` (or the current
+step's corresponding directory). An explicit `destination` is relative to that
+Trial or step's artifact root, so `destination = "output.json"` is not beneath
+`paths.artifacts`. Use the declared collection mapping for each output rather
+than treating the convention directory as the root of every collected artifact.
+Separate verifiers receive collected files at their source
 locations; an artifact's `destination` changes only its retained host path.
 
 Harbor does not discover arbitrary outputs throughout the workspace.

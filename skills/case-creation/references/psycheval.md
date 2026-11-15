@@ -69,6 +69,12 @@ separate verifier, explicitly collect the required artifacts and inspect those
 retained paths; the full Agent workspace is not automatically transferred.
 Declare only the platform entrypoints required by the target.
 
+Resolve each output through its declared
+[artifact collection mapping](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor.md#artifact-collection).
+Explicit destinations and the automatic convention directory can have different
+retained roots; `paths.artifacts` is not a universal base for both. Reject an
+ambiguous mapping rather than searching the workspace for a replacement.
+
 ## Invoke the shared verifier
 
 A Linux `tests/test.sh` can locate its sibling configuration independently of cwd:
