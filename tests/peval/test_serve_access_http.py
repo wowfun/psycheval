@@ -288,7 +288,15 @@ class ServeAccessHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 200)
                 harbor_inventory = json.loads(body)
-                self.assertEqual(harbor_inventory, {"datasets": []})
+                self.assertEqual(harbor_inventory["datasets"], [])
+                self.assertEqual(
+                    set(harbor_inventory),
+                    {"datasets", "generation", "checking", "stale"},
+                )
+                self.assertIs(type(harbor_inventory["generation"]), int)
+                self.assertGreaterEqual(harbor_inventory["generation"], 0)
+                self.assertIsInstance(harbor_inventory["checking"], bool)
+                self.assertIsInstance(harbor_inventory["stale"], bool)
                 self.assertNotIn("revision", harbor_inventory)
                 status, _headers, datasets_shell = self.request(
                     server, "GET", "/datasets"

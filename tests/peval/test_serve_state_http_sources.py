@@ -658,8 +658,10 @@ class PevalServeStateHttpSourceTests(unittest.TestCase):
 
                 status, _, html = request_text(port, "/config")
                 self.assertEqual(status, 200)
-                self.assertIn("data-harbor-mount-config", html)
-                self.assertIn("data-harbor-dataset-registry", html)
+                self.assertNotIn("data-harbor-mount-config", html)
+                self.assertNotIn("data-harbor-dataset-registry", html)
+                self.assertIn("data-dataset-collections", html)
+                self.assertIn("data-jobs-page", html)
                 self.assertNotIn('value="pbench-jobs"', html)
                 self.assertNotIn(str(dataset), html)
 
