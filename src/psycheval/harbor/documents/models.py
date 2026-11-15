@@ -32,11 +32,24 @@ class TextRun:
 
 
 @dataclass(frozen=True)
+class ParagraphNumbering:
+    num_id: int | None
+    level: int | None = None
+    abstract_num_id: int | None = None
+    num_format: str | None = None
+    level_text: str | None = None
+    start: int | None = None
+    restart: int | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class Paragraph:
     index: int
     text: str
     runs: tuple[TextRun, ...] = ()
     style: str | None = None
+    numbering: ParagraphNumbering | None = None
 
 
 @dataclass(frozen=True)

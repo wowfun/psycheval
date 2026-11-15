@@ -129,11 +129,14 @@ def inspect_docx(snapshot, backend, limits):
     from docx.table import _Cell
     from docx.text.paragraph import Paragraph as BackendParagraph
 
+    from ._docx_numbering import Numbering
+
     try:
         document = backend.Document(io.BytesIO(snapshot.content))
     except OpcError as error:
         raise DocumentParseError(f"Cannot read DOCX package: {error}") from error
     budget = InspectionBudget(limits)
+    numbering = Numbering(document, budget)
     if document.element.body is None:
         raise DocumentParseError("DOCX has no document body")
 
@@ -160,6 +163,7 @@ def inspect_docx(snapshot, backend, limits):
                         paragraph.text,
                         tuple(runs),
                         paragraph.style.name if paragraph.style else None,
+                        numbering.read(paragraph),
                     )
                 )
             elif tag == "tbl":

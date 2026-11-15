@@ -68,7 +68,7 @@ converted into failed document checks.
 | PDF | Page order, extracted text and page dimensions; empty pages remain present. |
 | PPTX | Presentation dimensions in EMU, slides, recursive leaf shapes, bounds, fill types/colors, paragraphs, runs, table cells, effective font sizes/colors, selected title and background colors. |
 | XLSX | Sheet order/visibility, nonempty cells and addresses, merged ranges; formulas and cached results are separate. |
-| DOCX | Body paragraphs and tables in document order, nested table content, run text and heading styles; merged cells retain spans. |
+| DOCX | Body paragraphs and tables in document order, nested table content, run text, heading styles and numbering definitions; merged cells retain spans. |
 | Markdown | Decoded source text, top-level blocks with zero-based, end-exclusive line ranges, pipe and HTML table facts. |
 
 Markdown inspection uses the runtime dependency `markdown-it-py`, imported only
@@ -121,6 +121,19 @@ they are not transparent successes. Palettes are possible RGB candidates, not
 pixel distributions. Bounds are transformed bounding boxes, not visible filled
 areas; overlap, clipping and later occlusion prevent treating summed box areas
 as rendered decoration coverage. Font-family resolution is not provided.
+
+DOCX `Paragraph.numbering` is absent when no numbering properties apply.
+Otherwise it retains `num_id`, `level`, `abstract_num_id`, `num_format`,
+`level_text`, `start`, `restart` and an independent `error`. Paragraph properties
+inherit through paragraph styles; style-associated levels resolve through the
+abstract definition's `pStyle` binding when the paragraph has no explicit level.
+An unbound style-level declaration is reported as unresolved rather than claiming
+Word rendering equivalence. Concrete `lvl` overrides replace the abstract level;
+`startOverride` takes precedence over that level's start. `num_id=0` records explicit cancellation.
+Absent level uses level zero; absent start/restart values remain `None` rather
+than inventing sequence values. Missing definitions, cyclic styles and unsupported
+numbering-style links retain diagnostics without losing body text. This interface
+does not calculate counters, rendered labels, continuity or chapter restarts.
 
 Text extraction preserves page/shape/paragraph, sheet/cell or body-block
 boundaries. It does not substitute notes, document properties, agent answers,
