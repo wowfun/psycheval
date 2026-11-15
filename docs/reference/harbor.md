@@ -916,8 +916,9 @@ After publication the framework treats both trees as read-only. They are outside
 the Agent workspace, but this does not add a security sandbox to native execution.
 
 The [prepared-files example](../../examples/tasks/native-prepared-files/README.md)
-combines static source data, a preparation transform, GT comparison, and weighted
-script checks using only the Python standard library.
+demonstrates preparation, private GT comparison, weighted script checks and
+published input/output evidence with the installed base Psycheval package. It
+requires no format-specific optional dependencies.
 
 ### Script checks and weighted scoring
 

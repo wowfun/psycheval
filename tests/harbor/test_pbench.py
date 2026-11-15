@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from harbor.models.task.config import TaskOS
+from harbor.models.task.paths import TaskPaths
 from harbor.models.task.task import Task
 from harbor.models.trajectories import Trajectory
 
@@ -243,9 +244,9 @@ def test_pbench_grader_declares_atomic_custom_checks(
 def test_pbench_tasks_ship_thin_linux_and_windows_verifier_entrypoints(
     task_root: Path,
 ) -> None:
-    task = Task(task_root)
-    linux_entrypoint = task.paths.test_path_for(TaskOS.LINUX)
-    windows_entrypoint = task.paths.test_path_for(TaskOS.WINDOWS)
+    paths = TaskPaths(task_root)
+    linux_entrypoint = paths.test_path_for(TaskOS.LINUX)
+    windows_entrypoint = paths.test_path_for(TaskOS.WINDOWS)
 
     assert linux_entrypoint.is_file()
     assert windows_entrypoint.is_file()

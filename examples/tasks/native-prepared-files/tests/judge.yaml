@@ -1,0 +1,28 @@
+version: 1
+artifacts:
+  - {id: prepared_input, path: artifact_text/prepared_input.md, required: true, type: md}
+  - {id: output_text, path: artifact_text/output_text.md, required: true, type: md}
+  - {id: validation_facts, path: artifact_text/validation_facts.md, required: true, type: md}
+  - {id: verified_output, path: artifact_text/verified_output.md, required: true, type: md}
+  - {id: final_answer, path: artifact_text/final_answer.md, required: true, type: md}
+llm_judge:
+  method: rubric_binary_mean
+  rubrics:
+    - id: supported_explanation
+      question: Does the final reply briefly explain the calculation and date source faithfully?
+      artifact_refs: [prepared_input, output_text, validation_facts, verified_output, final_answer]
+      pass_criteria:
+        - Both deterministic checks passed according to validation_facts.
+        - The reply explains that the total was obtained by adding the input values, consistently with the actual values and submitted total.
+        - The reply says the as_of date was copied unchanged from input.json, consistently with the retained input and output.
+      fail_criteria:
+        - Either deterministic check failed, or there is no retained final reply.
+        - The reply only asserts completion or gives results without a calculation and date-source explanation.
+        - The reply contradicts the retained inputs or claims a fresh date lookup instead of copying the input date.
+      scope_limits:
+        - One or two sentences can fully satisfy the explanation; do not require lengthy prose or particular wording.
+        - Evaluate the submitted explanation against these published sources; do not infer tool use or read outside the artifacts.
+score_merge:
+  method: weighted_sum
+  rule_weight: 0.9
+  llm_weight: 0.1

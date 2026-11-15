@@ -1,4 +1,24 @@
 schema_version = "1.4"
+# Runnable Native Host authoring example, separate from Dataset membership.
+# Install a matching Psycheval in the Host before running; no container setup is supplied.
+# Runtime contract: https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor.md
+artifacts = [{ source = "notice.md", destination = "notice.md" }]
+
+[task]
+name = "examples/pbench-task-template"
+description = "Write a concise session notice from a local operations note."
+keywords = ["local-source", "writing"]
+
+[metadata]
+difficulty = "easy"
+category = "writing"
 
 [environment]
 workdir = "/app"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 300.0
+environment_mode = "shared"

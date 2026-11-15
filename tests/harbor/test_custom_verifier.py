@@ -313,7 +313,55 @@ time.sleep(60)
     asyncio.run(run())
 
 
+def test_prepared_files_example_rejects_inconsistent_gt(tmp_path, monkeypatch):
+    import runpy
+    import sys
+
+    example = (
+        Path(__file__).resolve().parents[2] / "examples/tasks/native-prepared-files"
+    )
+    task = tmp_path / "task"
+    shutil.copytree(example, task)
+    inputs, state = tmp_path / "inputs", tmp_path / "state"
+    inputs.mkdir()
+    state.mkdir()
+    runpy.run_path(str(task / "environment/prepare.py"))["prepare"](
+        str(inputs), str(state)
+    )
+    (task / "tests/gt/expected.json").write_text(
+        '{"total": -1, "as_of": "2026-09-17"}', encoding="utf-8"
+    )
+    context = tmp_path / "context.json"
+    context.write_text(
+        json.dumps(
+            {
+                "paths": {
+                    "inputs": str(inputs),
+                    "preparation_state": str(state),
+                    "workdir": str(inputs),
+                    "tests": str(task / "tests"),
+                    "artifacts": str(tmp_path / "artifacts/logs/artifacts"),
+                    "agent_logs": str(tmp_path / "agent"),
+                    "verifier_logs": str(tmp_path / "verifier"),
+                }
+            }
+        )
+    )
+    output = tmp_path / "result.json"
+    script = task / "tests/test_outputs.py"
+    monkeypatch.setattr(
+        sys, "argv", [str(script), "--context", str(context), "--output", str(output)]
+    )
+    with pytest.raises(ValueError, match="prepared inputs.*GT"):
+        runpy.run_path(str(script), run_name="__main__")
+    assert not output.exists()
+
+
 def test_prepared_files_example_scores_partial_credit_end_to_end(tmp_path):
+    import logging
+
+    from harbor.trial.artifact_handler import ArtifactHandler
+
     host = make_environment(
         tmp_path / "host", environment_kwargs={"workdir_root": tmp_path / "workspaces"}
     )
@@ -331,10 +379,20 @@ def test_prepared_files_example_scores_partial_credit_end_to_end(tmp_path):
             )
             assert data["as_of"] == "2026-09-17"
             (host.work_dir / "output.json").write_text(
-                json.dumps({"total": sum(data["values"]), "as_of": "wrong date"})
+                json.dumps({"total": sum(data["values"]), "as_of": "wrong date"}),
+                encoding="utf-8",
             )
+            task = Task(task_dir)
+            await ArtifactHandler(
+                artifacts=task.config.artifacts, logger=logging.getLogger(__name__)
+            ).download_artifacts(
+                host,
+                host.trial_paths.artifacts_dir,
+                source_artifacts_dir="/logs/artifacts",
+            )
+            (host.work_dir / "output.json").unlink()
             result = await HostVerifier(
-                task=Task(task_dir), trial_paths=host.trial_paths, environment=host
+                task=task, trial_paths=host.trial_paths, environment=host
             ).verify()
             assert result.rewards["reward"] == 0.75
             assert not (host.work_dir / "gt").exists()

@@ -1,7 +1,15 @@
 schema_version = "1.4"
 
+[[artifacts]]
+source = "output.json"
+destination = "output.json"
+
+[agent]
+timeout_sec = 900
+
 [environment]
 workdir = "/app"
 
 [verifier]
-timeout_sec = 60
+timeout_sec = 120
+environment_mode = "shared"
