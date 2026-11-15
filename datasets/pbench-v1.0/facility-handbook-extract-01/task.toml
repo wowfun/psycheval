@@ -1,0 +1,21 @@
+schema_version = "1.4"
+
+[task]
+name = "pbench-v1.0/facility-handbook-extract-01"
+description = "Extract the scoped operational tables from a venue handbook into a faithful Markdown handoff."
+keywords = ["docx", "content-extraction", "table-binding", "markdown"]
+
+[metadata]
+difficulty = "medium"
+category = "content-extraction"
+
+[environment]
+workdir = "/app"
+network_mode = "public"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 300.0
+environment_mode = "shared"

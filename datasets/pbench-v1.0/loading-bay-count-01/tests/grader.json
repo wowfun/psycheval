@@ -1,0 +1,9 @@
+{
+  "custom_checks": ["correct_total", "correct_region_bindings"],
+  "scoring": {
+    "weights": {
+      "custom:correct_total": 3,
+      "custom:correct_region_bindings": 4
+    }
+  }
+}

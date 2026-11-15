@@ -1,0 +1,10 @@
+{
+  "custom_checks": ["decision_content", "wide_canvas", "decision_panel"],
+  "scoring": {
+    "weights": {
+      "custom:decision_content": 3,
+      "custom:wide_canvas": 1,
+      "custom:decision_panel": 2
+    }
+  }
+}

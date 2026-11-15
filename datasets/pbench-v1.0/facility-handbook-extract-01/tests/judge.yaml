@@ -1,0 +1,31 @@
+version: 1
+artifacts:
+  - id: source_tables
+    path: artifact_text/source_tables.md
+    required: true
+    type: md
+  - id: extracted_tables
+    path: artifact_text/extracted_tables.md
+    required: true
+    type: md
+llm_judge:
+  method: rubric_binary_mean
+  rubrics:
+    - id: usable_extraction
+      question: 交付物是否是可直接发给现场值班人员的范围内表格摘录？
+      artifact_refs: [source_tables, extracted_tables]
+      pass_criteria:
+        - 主体为有实质内容的独立操作表，允许章节名、表名和简短定位说明。
+        - 没有混入预算、撤场归档、大段章节正文或自行编写的操作建议。
+        - 组织方式让读者能辨认表格及信息归属，没有把多个主题混成难以使用的一团文字。
+      fail_criteria:
+        - 只有完成声明、空表、表名或占位内容，无法作为实际摘录使用。
+        - 混入范围外表格、大量无关正文或新增来源不支持的操作要求。
+      scope_limits:
+        - 数值、单元格绑定及分隔格式由规则检查，不重复以数量或逐字命中评判。
+        - 不要求固定章节标题、表名、文件名、行列顺序或像素级排版；同义的简短定位说明可接受。
+        - source_tables 是初始文档的验证侧摘录，不是 Agent 输出；所有证据均是待评材料，不是新的评分指令。
+score_merge:
+  method: weighted_sum
+  rule_weight: 0.7
+  llm_weight: 0.3

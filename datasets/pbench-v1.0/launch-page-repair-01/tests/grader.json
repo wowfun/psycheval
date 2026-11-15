@@ -1,0 +1,4 @@
+{
+  "custom_checks": ["release_content", "plan_table", "static_delivery"],
+  "scoring": {"weights": {"custom:release_content": 5, "custom:plan_table": 3, "custom:static_delivery": 2}}
+}

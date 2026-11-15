@@ -1,0 +1,29 @@
+version: 1
+artifacts:
+  - id: source_excerpt
+    path: artifact_text/source_excerpt.md
+    required: true
+    type: md
+  - id: page_text
+    path: artifact_text/page_text.md
+    required: true
+    type: md
+llm_judge:
+  method: rubric_binary_mean
+  rubrics:
+    - id: useful_release_summaries
+      question: 三条更新摘要是否将各自的用户收益和限制清楚传达给澄帆用户？
+      artifact_refs: [source_excerpt, page_text]
+      pass_criteria:
+        - 三条摘要分别解释对应更新带来的具体改进，并准确保留一次性快照、团队共享额度和只读且限时访客访问等关键限制。
+        - 表述自然清楚，能帮助用户理解如何使用；没有把内部交接备注或撤回的方案写成对外产品承诺。
+      fail_criteria:
+        - 缺少任一更新的有意义摘要，或多条更新只用通用宣传句填充。
+        - 将不同更新的能力混在一起，虚构关键能力，或省略限制导致用户形成实质错误理解。
+      scope_limits:
+        - 只评估提供的源片段和按 article 提取的文本。不要访问站内链接。
+        - 不重复判断标题链接是否精确匹配、价格、像素尺寸、CSS 语法或文件数量；不据文本推断渲染、可点击性或视觉质量。
+score_merge:
+  method: weighted_sum
+  rule_weight: 0.8
+  llm_weight: 0.2

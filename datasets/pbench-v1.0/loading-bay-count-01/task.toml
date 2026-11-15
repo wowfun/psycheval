@@ -1,0 +1,21 @@
+schema_version = "1.4"
+
+[task]
+name = "pbench-v1.0/loading-bay-count-01"
+description = "Count staged pallet loads in a loading-bay image while excluding empty pallets and quarantined goods."
+keywords = ["image-qa", "visual-counting", "category-exclusion"]
+
+[metadata]
+difficulty = "easy"
+category = "image-qa"
+
+[environment]
+workdir = "/app"
+network_mode = "public"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 180.0
+environment_mode = "shared"

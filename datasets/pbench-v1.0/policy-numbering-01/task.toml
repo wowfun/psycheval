@@ -1,0 +1,21 @@
+schema_version = "1.4"
+
+[task]
+name = "pbench-v1.0/policy-numbering-01"
+description = "Revise a release-approval DOCX while preserving its structured numbering and using an execution-owned effective date."
+keywords = ["docx", "document-editing", "numbering", "source-fidelity"]
+
+[metadata]
+difficulty = "medium"
+category = "document-editing"
+
+[environment]
+workdir = "/app"
+network_mode = "public"
+
+[agent]
+timeout_sec = 900
+
+[verifier]
+timeout_sec = 180
+environment_mode = "shared"

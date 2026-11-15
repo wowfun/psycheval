@@ -1,0 +1,21 @@
+schema_version = "1.4"
+
+[task]
+name = "pbench-v1.0/launch-page-repair-01"
+description = "Repair a local release page with source-bound HTML content, a plan table, explicit CSS declarations and an opaque PNG banner."
+keywords = ["html", "image", "source-binding", "static-document"]
+
+[metadata]
+difficulty = "medium"
+category = "document-editing"
+
+[environment]
+workdir = "/app"
+network_mode = "public"
+
+[agent]
+timeout_sec = 480.0
+
+[verifier]
+timeout_sec = 180.0
+environment_mode = "shared"

@@ -1,0 +1,4 @@
+{
+  "custom_checks": ["policy_revision", "numbering_structure"],
+  "scoring": {"weights": {"custom:policy_revision": 2, "custom:numbering_structure": 1}}
+}

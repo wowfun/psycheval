@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from harbor.models.task.config import TaskOS
 from harbor.models.task.paths import TaskPaths
-from harbor.models.task.task import Task
 from harbor.models.trajectories import Trajectory
 
 from psycheval.harbor.runtime_config import (
@@ -15,6 +14,7 @@ from psycheval.harbor.runtime_config import (
     RuntimePaths,
     VerifierInvocation,
 )
+from psycheval.harbor.tasks import load_harbor_task
 from psycheval.harbor.verifier import (
     JudgeSettings,
     build_scoring_plan,
@@ -95,7 +95,17 @@ def test_dataset_tool_patterns_use_one_canonical_spelling(grader_path: Path) -> 
     [
         (
             "pbench-v1.0",
-            {"web-search-01", "web-fetch-01", "trend-digest-01"},
+            {
+                "web-search-01",
+                "web-fetch-01",
+                "trend-digest-01",
+                "briefing-panel-01",
+                "launch-page-repair-01",
+                "policy-numbering-01",
+                "facility-handbook-extract-01",
+                "loading-bay-count-01",
+                "restoration-handbook-edit-01",
+            },
         ),
         ("pbench-v1.0-plus", {"browser-control-01"}),
     ],
@@ -113,8 +123,8 @@ def test_pbench_dataset_exposes_direct_named_harbor_tasks(
     assert task_names == expected_task_dirs
 
     for task_dir in expected_task_dirs:
-        task = Task(dataset_root / task_dir)
-        assert task.name == f"{dataset_name}/{task_dir}"
+        task = load_harbor_task(dataset_root / task_dir, read_bytes=Path.read_bytes)
+        assert task.config.task.name == f"{dataset_name}/{task_dir}"
 
 
 @pytest.mark.parametrize(

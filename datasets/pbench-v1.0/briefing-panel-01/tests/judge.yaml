@@ -1,0 +1,32 @@
+version: 1
+artifacts:
+  - id: presentation
+    path: artifact_text/presentation.md
+    required: true
+    type: md
+  - id: source_excerpt
+    path: artifact_text/source_excerpt.md
+    required: true
+    type: md
+llm_judge:
+  method: rubric_binary_mean
+  rubrics:
+    - id: decision_reasoning
+      question: 简报是否以试点证据解释继续受控试点的决策及其取舍？
+      artifact_refs: [presentation, source_excerpt]
+      pass_criteria:
+        - 简报明确连接效率改善与异常率恶化，解释为什么目前只适合受控试点。
+        - 不把夜班、峰值订单、异常响应和回退方案等待验证或待落实的事项描述为已经完成。
+        - 对两条线、五个工作日的观察范围有明确限定，表达适合业务负责人理解。
+      fail_criteria:
+        - 仅堆砌指标，没有解释相反信号与下一步决策之间的关系。
+        - 将受控试点夸大为全量投产已经证明安全或已完成必要保障。
+        - 增加来源不支持的指标、结果或其他关键事实。
+        - 未交付实质简报内容，或与项目来源无关。
+      scope_limits:
+        - 只根据提供的文本和来源切片评价推理与表达，不从文本推断实际视觉排版、可读性或颜色效果。
+        - 不重新评判尺寸、面板几何、颜色和逐项指标的确定性检查。
+score_merge:
+  method: weighted_sum
+  rule_weight: 0.8
+  llm_weight: 0.2

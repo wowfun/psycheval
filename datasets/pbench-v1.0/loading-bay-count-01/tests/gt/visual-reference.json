@@ -1,0 +1,285 @@
+{
+  "image_filename": "loading-bay.png",
+  "image_sha256": "f07b2000b265da1dffdc452b120e2348b6c8b7a983e1a8f6bfe0dff08370aaa4",
+  "width": 1536,
+  "height": 1080,
+  "regions": [
+    "西侧暂存区",
+    "中央集货区",
+    "东侧月台边"
+  ],
+  "objects": [
+    {
+      "region": "西侧暂存区",
+      "category": "ready",
+      "bbox": [
+        110,
+        215,
+        222,
+        314
+      ]
+    },
+    {
+      "region": "西侧暂存区",
+      "category": "ready",
+      "bbox": [
+        245,
+        200,
+        357,
+        299
+      ]
+    },
+    {
+      "region": "西侧暂存区",
+      "category": "ready",
+      "bbox": [
+        380,
+        235,
+        492,
+        334
+      ]
+    },
+    {
+      "region": "西侧暂存区",
+      "category": "ready",
+      "bbox": [
+        125,
+        365,
+        237,
+        464
+      ]
+    },
+    {
+      "region": "西侧暂存区",
+      "category": "ready",
+      "bbox": [
+        275,
+        365,
+        387,
+        464
+      ]
+    },
+    {
+      "region": "西侧暂存区",
+      "category": "ready",
+      "bbox": [
+        385,
+        475,
+        497,
+        574
+      ]
+    },
+    {
+      "region": "西侧暂存区",
+      "category": "ready",
+      "bbox": [
+        110,
+        545,
+        222,
+        644
+      ]
+    },
+    {
+      "region": "西侧暂存区",
+      "category": "empty",
+      "bbox": [
+        275,
+        565,
+        387,
+        610
+      ]
+    },
+    {
+      "region": "西侧暂存区",
+      "category": "quarantine",
+      "bbox": [
+        115,
+        725,
+        227,
+        824
+      ]
+    },
+    {
+      "region": "西侧暂存区",
+      "category": "quarantine",
+      "bbox": [
+        310,
+        725,
+        422,
+        824
+      ]
+    },
+    {
+      "region": "中央集货区",
+      "category": "ready",
+      "bbox": [
+        598,
+        205,
+        710,
+        304
+      ]
+    },
+    {
+      "region": "中央集货区",
+      "category": "ready",
+      "bbox": [
+        848,
+        230,
+        960,
+        329
+      ]
+    },
+    {
+      "region": "中央集货区",
+      "category": "ready",
+      "bbox": [
+        603,
+        390,
+        715,
+        489
+      ]
+    },
+    {
+      "region": "中央集货区",
+      "category": "ready",
+      "bbox": [
+        743,
+        375,
+        855,
+        474
+      ]
+    },
+    {
+      "region": "中央集货区",
+      "category": "ready",
+      "bbox": [
+        878,
+        400,
+        990,
+        499
+      ]
+    },
+    {
+      "region": "中央集货区",
+      "category": "empty",
+      "bbox": [
+        628,
+        565,
+        740,
+        610
+      ]
+    },
+    {
+      "region": "中央集货区",
+      "category": "empty",
+      "bbox": [
+        868,
+        550,
+        980,
+        595
+      ]
+    },
+    {
+      "region": "中央集货区",
+      "category": "quarantine",
+      "bbox": [
+        723,
+        725,
+        835,
+        824
+      ]
+    },
+    {
+      "region": "东侧月台边",
+      "category": "ready",
+      "bbox": [
+        1081,
+        210,
+        1193,
+        309
+      ]
+    },
+    {
+      "region": "东侧月台边",
+      "category": "ready",
+      "bbox": [
+        1226,
+        195,
+        1338,
+        294
+      ]
+    },
+    {
+      "region": "东侧月台边",
+      "category": "ready",
+      "bbox": [
+        1361,
+        225,
+        1473,
+        324
+      ]
+    },
+    {
+      "region": "东侧月台边",
+      "category": "ready",
+      "bbox": [
+        1101,
+        380,
+        1213,
+        479
+      ]
+    },
+    {
+      "region": "东侧月台边",
+      "category": "ready",
+      "bbox": [
+        1316,
+        400,
+        1428,
+        499
+      ]
+    },
+    {
+      "region": "东侧月台边",
+      "category": "ready",
+      "bbox": [
+        1231,
+        545,
+        1343,
+        644
+      ]
+    },
+    {
+      "region": "东侧月台边",
+      "category": "empty",
+      "bbox": [
+        1086,
+        565,
+        1198,
+        610
+      ]
+    },
+    {
+      "region": "东侧月台边",
+      "category": "empty",
+      "bbox": [
+        1371,
+        560,
+        1483,
+        605
+      ]
+    },
+    {
+      "region": "东侧月台边",
+      "category": "quarantine",
+      "bbox": [
+        1216,
+        725,
+        1328,
+        824
+      ]
+    }
+  ],
+  "counting_unit": "one pallet load, not individual cartons",
+  "legend_excluded": true
+}

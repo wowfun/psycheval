@@ -1,0 +1,44 @@
+version: 1
+artifacts:
+  - id: policy_text
+    path: artifact_text/policy_text.md
+    required: true
+    type: md
+  - id: source_excerpt
+    path: artifact_text/source_excerpt.md
+    required: true
+    type: md
+  - id: change_excerpt
+    path: artifact_text/change_excerpt.md
+    required: true
+    type: md
+llm_judge:
+  method: rubric_binary_mean
+  rubrics:
+    - id: revision_fidelity
+      question: 修订后的流程是否完整、忠实地落实变更单，并保留未变更的职责和要求？
+      artifact_refs: [policy_text, source_excerpt, change_excerpt]
+      pass_criteria:
+        - 新的时间、审批责任和回滚条件与变更单一致；没有把旧要求保留为另一个有效选项。
+        - 未变更的检查内容、延期处理、通知和记录要求仍然可辨认，且没有新增未经授权的例外或豁免。
+      fail_criteria:
+        - 遗漏关键义务，出现新旧要求冲突，或加入来源没有支持的关键豁免。
+        - 未提供可读的修订正文。
+      scope_limits:
+        - 仅依据所给原始段落、变更单和交付正文，不访问外部资源。
+        - 不推断 Word 显示编号、分页、排版或字体效果；编号定义另由规则检查。
+    - id: operational_clarity
+      question: 修订说明与流程措辞是否让执行者清楚知道责任、触发条件和下一步？
+      artifact_refs: [policy_text, change_excerpt]
+      pass_criteria:
+        - 正文清晰区分发布负责人、数据负责人、安全负责人、回滚负责人和值班负责人的职责。
+        - 修订说明将具体变更与风险控制相联系，避免只有“加强管理”等空话。
+      fail_criteria:
+        - 关键动作责任模糊、条件互相矛盾，或没有有信息量的修订说明。
+        - 未提供可读的修订正文。
+      scope_limits:
+        - 评估内容清晰性和解释，不根据抽取文字判断视觉效果。
+score_merge:
+  method: weighted_sum
+  rule_weight: 0.75
+  llm_weight: 0.25

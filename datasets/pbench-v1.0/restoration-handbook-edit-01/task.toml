@@ -1,0 +1,21 @@
+schema_version = "1.4"
+
+[task]
+name = "pbench-v1.0/restoration-handbook-edit-01"
+description = "Restructure a substantial mixed-up workshop operations manuscript into a faithful, readable Markdown handbook with correctly bound tables."
+keywords = ["document-editing", "content-preservation", "table-binding", "operations-handbook"]
+
+[metadata]
+difficulty = "medium"
+category = "report-writing"
+
+[environment]
+workdir = "/app"
+network_mode = "public"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 180.0
+environment_mode = "shared"

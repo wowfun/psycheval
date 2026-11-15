@@ -1,0 +1,20 @@
+schema_version = "1.4"
+
+[task]
+name = "pbench-v1.0/briefing-panel-01"
+description = "Revise a delivery decision deck using source-bound metrics and a separate dark decision panel."
+keywords = ["pptx", "document-editing", "source-evidence"]
+
+[metadata]
+difficulty = "medium"
+category = "document-editing"
+
+[environment]
+workdir = "/app"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 180.0
+environment_mode = "shared"

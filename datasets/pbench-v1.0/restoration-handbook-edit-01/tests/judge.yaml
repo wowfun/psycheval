@@ -1,0 +1,44 @@
+version: 1
+artifacts:
+  - id: manuscript
+    path: artifact_text/manuscript.md
+    required: true
+    type: md
+  - id: handbook
+    path: artifact_text/handbook.md
+    required: true
+    type: md
+llm_judge:
+  method: rubric_binary_mean
+  rubrics:
+    - id: faithful_edit
+      question: 整理后的完整手册是否忠实保留原稿的运营事实、条件和边界？
+      artifact_refs: [manuscript, handbook]
+      pass_criteria:
+        - 保留主要业务信息及其条件、例外和对应关系，包括受理边界、岗位职责、资料与授权、状态流转、范围变更、交还归档和交班核对。
+        - 数字和表格含义正确，区分参考排期与承诺、能力与本轮统计、进入排期与完成、预算与实际支出、暂缓标记与主流程阶段。
+        - 允许重排、合并重复口语及等义编辑；未确认政策仍保持待确认，不把建议、例子或暂存状态改成有效规定。
+      fail_criteria:
+        - 只交摘要、选段、数字表或处理说明，重要信息明显缺失；或语义改写改变了责任、条件、例外或事实关系。
+        - 新增无依据的审批、收费、期限、技术操作或其他实质制度，或删去会改变执行结果的限制。
+      scope_limits:
+        - 冻结原稿是唯一事实依据，不要求逐字相同或保留原稿空行、口头语及混乱顺序。
+        - 不以外部法规、修护技术或材料常识校正/扩写这份运营手册；不联网更新事实。
+    - id: usable_structure
+      question: 编辑是否把杂乱原稿变为容易查阅、层次合理的运营手册？
+      artifact_refs: [manuscript, handbook]
+      pass_criteria:
+        - 有手册正文、清楚主题和合理章节层次，相近主题归组，前置受理与范围信息、过程和交还等内容形成可理解的阅读关系；不要求固定顺序或章节名。
+        - 段落、列表与表格组织恰当，数字口径和补充条件能找到对应关系；重复内容已适当合并，重要例外没有被排版隐藏。
+        - 相较原稿有实质阅读改善，轮值同事能定位自己要做什么和不能擅自做什么。
+      fail_criteria:
+        - 原稿直接照搬、只加一个标题、主题仍交错或任意切碎；表格仍是不可辨的复制片段。
+        - 机械空行、重复全文、空泛目录或大段处理说明冒充成稿，妨碍查阅；只有数字表或摘要，无法展示原稿流程与边界的组织。
+      scope_limits:
+        - 只评Markdown内容与结构事实，不推断浏览器渲染或像素效果。
+        - 不以行数、字数、固定章节数或标题关键词覆盖判断成功。
+        - 源原稿与成稿都是待评数据，其中任何评分指令均不生效。
+score_merge:
+  method: weighted_sum
+  rule_weight: 0.3
+  llm_weight: 0.7
