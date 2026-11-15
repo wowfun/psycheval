@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from psycheval.harbor.family import retain
 from psycheval.harbor.runtime_config import (
     RuntimeConfigError,
     load_effective_runtime_config,
@@ -50,6 +51,9 @@ def main(argv: list[str] | None = None) -> int:
             workdir=Path(runtime.paths.workdir),
         )
     trajectory_path = logs_dir / "trajectory.json"
+    # Complete root-only history is required for family tool-evidence scoring.
+    trajectory.setdefault("extra", {})["tool_evidence"] = "complete"
+    trajectory = retain(trajectory)
     trajectory_path.write_text(
         json.dumps(trajectory, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
