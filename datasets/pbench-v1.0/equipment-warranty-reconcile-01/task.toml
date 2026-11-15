@@ -1,0 +1,21 @@
+schema_version = "1.4"
+
+[task]
+name = "pbench-v1.0/equipment-warranty-reconcile-01"
+description = "Restore omitted field equipment to a maintenance ledger without overwriting protected service decisions."
+keywords = ["data-processing", "xlsx", "record-reconciliation", "protected-updates"]
+
+[metadata]
+difficulty = "medium"
+category = "data-processing"
+
+[environment]
+workdir = "/app"
+network_mode = "public"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 180.0
+environment_mode = "shared"

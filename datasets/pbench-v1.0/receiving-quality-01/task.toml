@@ -1,0 +1,21 @@
+schema_version = "1.4"
+
+[task]
+name = "pbench-v1.0/receiving-quality-01"
+description = "Reconcile revised receiving records, apply package-size defaults and summarize supplier quality with weighted defect rates."
+keywords = ["data-analysis", "revision-resolution", "weighted-aggregation", "xlsx"]
+
+[metadata]
+difficulty = "medium"
+category = "data-analysis"
+
+[environment]
+workdir = "/app"
+network_mode = "public"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 180.0
+environment_mode = "shared"

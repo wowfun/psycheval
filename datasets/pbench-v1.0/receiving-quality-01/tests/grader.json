@@ -1,0 +1,4 @@
+{
+  "custom_checks": ["effective_receipts", "supplier_aggregation"],
+  "scoring": {"weights": {"custom:effective_receipts": 2, "custom:supplier_aggregation": 3}}
+}

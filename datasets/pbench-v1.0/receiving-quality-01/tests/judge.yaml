@@ -1,0 +1,39 @@
+version: 1
+artifacts:
+  - id: products_excerpt
+    path: artifact_text/products_excerpt.md
+    required: true
+    type: md
+  - id: receipts_excerpt
+    path: artifact_text/receipts_excerpt.md
+    required: true
+    type: md
+  - id: workbook
+    path: artifact_text/workbook.md
+    required: true
+    type: md
+  - id: final_answer
+    path: artifact_text/final_answer.md
+    required: true
+    type: md
+llm_judge:
+  method: rubric_binary_mean
+  rubrics:
+    - id: procurement_advice
+      question: 采购复盘建议是否由本批验收证据支持，并给出适度、可执行的后续动作？
+      artifact_refs: [products_excerpt, receipts_excerpt, workbook, final_answer]
+      pass_criteria:
+        - 最终回复根据本批各供应商加权不合格率和工作簿中的实际分母，选择应优先复盘的供应商，依据与数据相符。
+        - 提出一个具体核查动作，例如复核相关批次、验收记录或抽样信息；不只是笼统要求改善。
+        - 结论限定于本批记录，不把观察率差异当成已证明的长期品质差异或确定根因。
+      fail_criteria:
+        - 选择依据为逐单百分比的简单平均，或建议与交付工作簿和来源记录相矛盾。
+        - 只有套话或数字堆砌，没有明确的优先复盘对象及证据联系。
+        - 未提供可评审的实际工作簿，或无依据断言供应商长期不合格、已查明根因。
+      scope_limits:
+        - 只评审建议与证据的联系、行动可执行性和结论边界；逐行数值与版本选择由规则核对，不再重复打分。
+        - 不要求固定措辞、特定工具、图表、联网或因果分析。
+score_merge:
+  method: weighted_sum
+  rule_weight: 0.8
+  llm_weight: 0.2

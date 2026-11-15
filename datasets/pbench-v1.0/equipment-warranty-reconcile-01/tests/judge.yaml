@@ -1,0 +1,36 @@
+version: 1
+artifacts:
+  - id: reconciliation_reference
+    path: artifact_text/reconciliation_reference.md
+    required: true
+    type: md
+  - id: workbook_text
+    path: artifact_text/workbook_text.md
+    required: true
+    type: md
+  - id: final_answer
+    path: artifact_text/final_answer.md
+    required: true
+    type: md
+llm_judge:
+  method: rubric_binary_mean
+  rubrics:
+    - id: restored_service_count
+      question: 最终回复是否准确说明本次补回设备中符合延长现场服务窗口的台数？
+      artifact_refs: [reconciliation_reference, workbook_text, final_answer]
+      pass_criteria:
+        - 明确给出 reconciliation_reference 中的 restored_extended_count 所指台数，表述对象是本次新补回且符合窗口的设备，允许汉字数字和等义表达。
+        - 回复没有把遗漏总数、全部设备总数或全部已享受延长服务的设备总数当作所问数量，也没有矛盾说法。
+        - 对补回结果的说明与交付工作簿中的实际新增记录相符，不能仅猜中基准数量而声称已经补全。
+      fail_criteria:
+        - 数量错误、缺失或统计对象错位，仅说“完成”而不回答所问台数。
+        - 缺少实质工作簿，仅猜数量；或回复给出互相矛盾的数量。
+        - 声称已补回符合窗口的设备，但工作簿中没有对应的补入记录。
+      scope_limits:
+        - 只评最终说明的统计对象和数量；工作簿逐行数据、既有记录保护及字段类型由确定性规则核对，不重复打分。
+        - 不要求逐台列名、处理步骤、遗漏总数、固定措辞或特定工具。
+        - reconciliation_reference 是由保留的初始输入计算的验证基准，不是 Agent 产物；不能把它视为 Agent 完成证明。
+score_merge:
+  method: weighted_sum
+  rule_weight: 0.8
+  llm_weight: 0.2

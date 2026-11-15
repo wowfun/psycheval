@@ -1,0 +1,21 @@
+schema_version = "1.4"
+
+[task]
+name = "pbench-v1.0/museum-attendance-review-01"
+description = "Audit a museum publicity draft against primary quarterly operating records and deliver a data-first HTML review."
+keywords = ["report-writing", "html", "source-audit", "denominator-reasoning"]
+
+[metadata]
+difficulty = "medium"
+category = "report-writing"
+
+[environment]
+workdir = "/app"
+network_mode = "public"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 180.0
+environment_mode = "shared"

@@ -1,0 +1,4 @@
+{
+  "custom_checks": ["existing_preserved", "omitted_restored"],
+  "scoring": {"weights": {"custom:existing_preserved": 2, "custom:omitted_restored": 3}}
+}

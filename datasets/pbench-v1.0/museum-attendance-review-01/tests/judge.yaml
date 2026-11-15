@@ -1,0 +1,66 @@
+version: 1
+
+artifacts:
+  - {id: stats_2025_text, path: artifact_text/stats_2025_text.md, required: true, type: md}
+  - {id: stats_2026_text, path: artifact_text/stats_2026_text.md, required: true, type: md}
+  - {id: survey_text, path: artifact_text/survey_text.md, required: true, type: md}
+  - {id: notices_text, path: artifact_text/notices_text.md, required: true, type: md}
+  - {id: draft_text, path: artifact_text/draft_text.md, required: true, type: md}
+  - {id: calculation_reference, path: artifact_text/calculation_reference.md, required: true, type: md}
+  - {id: report_text, path: artifact_text/report_text.md, required: true, type: md}
+
+llm_judge:
+  method: rubric_binary_mean
+  rubrics:
+    - id: primary_data_before_interpretation
+      question: 报告是否先展示可靠、可定位的原始数据，再展开解释？
+      artifact_refs: [stats_2025_text, stats_2026_text, survey_text, notices_text, draft_text, calculation_reference, report_text]
+      pass_criteria:
+        - 报告实际交付了两个季度的客观对照数据，使用正式修订数据，时期、单位、统计口径与源材料相符。
+        - 关键数据与结论能通过具体表、字段、行号或机构公告编号定位到主资料，二手稿仅作为核查对象。
+        - 按提取正文顺序先有集中数据，再有实质解释；允许简短开篇摘要。
+      fail_criteria:
+        - 空报告、只列标题或关键词，或没有实质数据和解释。
+        - 把过期快报、宣传稿或不存在的外部核验当作关键数据依据。
+        - 来源与数据没有具体对应、数值或口径明显错误，或分析先行而缺少前置数据。
+      scope_limits:
+        - 这是给定资料内分析；不要求外部 URL，不联网或假定未提供的网页内容。
+        - report_text 是 HTML 静态正文、节点关联表格和链接事实，不据此断言浏览器可见性或视觉效果。
+    - id: substantive_claim_audit
+      question: 报告是否以正确分母和版本逐项核查宣传稿的四项实质断言？
+      artifact_refs: [stats_2025_text, stats_2026_text, survey_text, notices_text, draft_text, calculation_reference, report_text]
+      pass_criteria:
+        - 区分旧快报与正式数据，算清同比总量增长及按实际开放日、开放小时归一化后的变化。
+        - 对所谓更拥挤、九成线上与增长全来自夜场均作实质核对，提供支持结论的计算、对应主资料及合理改写。
+        - 区分预约发出与实际核销、夜场包含于总量，以及到馆人次与去重观众。
+        - 计算及其解释条件相互自洽，所用统计版本、分子分母和假设足以导出声称的结果；不仅核对最终数表或结论。
+      fail_criteria:
+        - 只复述四项说法，堆放数字或仅笼统说“口径不同”而未完成资料支持的计算与判断。
+        - 沿用错误增长率、将不同分母混用或将夜场重复相加，或漏核查重要断言。
+        - 把同比平均流量变化直接认定为同时在馆拥挤程度变化。
+        - 分析中的算式或所述必要条件不能导出相应结果，即使另一处数表或最终结论正确也不能抵销该实质错误。
+      scope_limits:
+        - 允许正常舍入与同义表达；不强制指定章节名、精确小数位或固定改写措辞。
+        - calculation_reference 是来自原始资料的评分参考，不是报告已完成分析的证明，必须核对实际交付内容。
+    - id: analytical_limits
+      question: 报告是否明确资料能支持与不能支持的判断，并提出有依据的后续建议？
+      artifact_refs: [stats_2025_text, stats_2026_text, survey_text, notices_text, draft_text, calculation_reference, report_text]
+      pass_criteria:
+        - 解释平均入馆流量无法单独代表高峰在馆密度，问卷为自愿样本且只能描述答卷者反馈。
+        - 不把更多开放时间、夜场与展览同步变化认定为已识别的单一增长原因；建议与当前证据和缺口相连。
+        - 事实、假设及无法判断的事项界限清楚，结论仍完成可算结果与宣传修订。
+        - 将某时段人次占总量或增量的比例解释为时段构成，不能据此识别运营措施的因果贡献或因果贡献上界。
+      fail_criteria:
+        - 没有实质分析，或用无法确认笼统替代可核算的结果。
+        - 宣称已证明夜场是唯一原因、问卷代表全体观众或馆内实际更不拥挤，或编造测量/外部调查。
+        - 建议空泛且与被审断言或资料缺口无关。
+        - 将时段构成的算术比例认作措施的因果贡献或因果上界；后文泛称“无法因果归因”不能消除前文明确相反的断言。
+      scope_limits:
+        - 不要求因果模型、统计显著性检验或资料中没有的高峰分时数据。
+        - 不评估截图、可点击性、响应式生效、实际颜色或渲染布局。
+        - 结合上下文区分纯算术构成与政策因果解释，不因单独出现“贡献”或“上限”字样机械判错；明确的因果上界仍须有资料支持。
+
+score_merge:
+  method: weighted_sum
+  rule_weight: 0.35
+  llm_weight: 0.65
