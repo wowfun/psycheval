@@ -189,11 +189,16 @@ results move together. Do this statically during authoring. This workflow stops
 at file delivery: do not start task environments, execute the task/grader, run an
 Oracle, or call evaluation models unless separately requested.
 
+When execution or scoring validation is also in scope, follow
+[runtime validation](references/psycheval.md#validate-execution-when-requested).
+
 In the delivery reply, identify the task location, needed runtime dependencies,
 important assumptions or synthetic adaptations, capability gaps, and validation
-actually performed. State that runtime/scoring validation is outstanding. Do not
-create another file just to carry that handoff or claim the task passed an
-evaluation because its files were generated.
+actually performed. For file-only delivery, state that runtime/scoring validation
+is outstanding. Otherwise report the layers exercised and separate local
+fixtures from live Agent/model results. Do not create another file just to carry
+that handoff or claim the task passed an evaluation because its files were
+generated.
 
 ## Continuous Learning
 

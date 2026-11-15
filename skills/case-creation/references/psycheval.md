@@ -282,3 +282,29 @@ or incomplete model assessment retains the rule score, so that score alone
 cannot establish that quality was assessed. See the
 [YAML Judge contract](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor.md#yaml-llm-judge)
 for configuration and failure semantics.
+
+## Validate execution when requested
+
+Keep the default authoring workflow static. When runtime/scoring validation is
+in scope, choose checks that exercise the actual integration boundary:
+
+- For retained-file grading, use an isolated fixture to run the real artifact
+  collector, remove its mutable workspace output, and verify that the public
+  verifier reads the intended retained file. Hand-built `RuntimePaths` alone
+  cannot establish that collection and grading agree. Confirm that referenced
+  source excerpts reach the Judge.
+- For continuation, exercise successful, failed, and missing delivery through
+  the public verifier and a multi-step Trial. Check which later steps run as
+  well as the quality score; a gate result alone does not prove control flow.
+- Pair accepted formatting variations with wrong-value and cross-source
+  negatives. For supporting sources, include unrelated and prefix-matching
+  identities so broader evidence coverage does not admit unrelated facts.
+- If a runtime offers direct tool exposure as an alternative to opaque dispatch,
+  inspect its effective behavior in a separate opt-in run. A requested setting
+  alone is not proof it took effect. Preserve the original result and distinguish
+  retained-evidence reassessment from a new Agent execution.
+
+Use isolated local fixtures for deterministic checks. Live validation uses the
+requested Agent, model, and Judge configuration and must retain evidence of the
+settings that actually took effect. It is not implied by file authoring or by
+passing local fixtures.
