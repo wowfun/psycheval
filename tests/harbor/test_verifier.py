@@ -665,7 +665,7 @@ def test_browser_input_text_must_match_exactly(tmp_path: Path) -> None:
         for step in trajectory.steps
         if step.tool_calls and step.tool_calls[0].function_name == "browser_type"
     )
-    type_call.arguments["text"] = "Harbor eval with extra text"
+    type_call.arguments["text"] = "Morning briefing with extra text"
     checks = evaluate(trajectory, _browser_config(), tmp_path)
     by_id = {check["id"]: check["passed"] for check in checks}
     assert by_id["required_call_1_arguments"] is False
@@ -771,7 +771,7 @@ def test_browser_computer_action_branches_are_accepted(tmp_path: Path) -> None:
     calls[0].function_name = "computer_action"
     calls[0].arguments = {
         "type": "type_text_at",
-        "text": "Harbor eval",
+        "text": "Morning briefing",
         "coordinate": [100, 200],
     }
     calls[1].function_name = "computer_action"
@@ -1207,16 +1207,16 @@ def _browser_config() -> dict:
                 "any": [
                     _branch(
                         "browser_type",
-                        argument_values={"text": "Harbor eval"},
-                        observation_terms=["Harbor eval"],
+                        argument_values={"text": "Morning briefing"},
+                        observation_terms=["Morning briefing"],
                     ),
                     _branch(
                         "computer_action",
                         argument_values={
                             "type": "type_text_at",
-                            "text": "Harbor eval",
+                            "text": "Morning briefing",
                         },
-                        observation_terms=["Harbor eval"],
+                        observation_terms=["Morning briefing"],
                     ),
                 ]
             },
