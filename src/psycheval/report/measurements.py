@@ -527,9 +527,8 @@ def construct(trajectory, meta, metric_scope="family"):
         )
         validate_provenance(item)
         provenance[key] = item
-    phase = mapping(mapping(meta.get("evaluation")).get("phase_timing")).get(
-        "agent_execution", {}
-    )
+    phases = mapping(mapping(meta.get("evaluation")).get("phase_timing"))
+    phase = mapping(phases.get("agent_execution"))
     start, end = (
         iso_timestamp_ms(phase.get("started_at")),
         iso_timestamp_ms(phase.get("finished_at")),

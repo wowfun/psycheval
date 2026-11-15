@@ -301,6 +301,9 @@ class HarborTrialTests(unittest.TestCase):
             None,
             [],
             {"agent_execution": []},
+            {"agent_execution": None},
+            {"agent_execution": False},
+            {"agent_execution": "unknown"},
             {"overall": {"finished_at": "bad"}},
             {"overall": {"started_at": "2026-01-01T00:00:00Z"}},
         ):
