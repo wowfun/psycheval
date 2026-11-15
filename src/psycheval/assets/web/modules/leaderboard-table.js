@@ -33,19 +33,28 @@ function leaderboardSelectionColumn() { return selectionColumn({ selectionSet: (
 function metricColumn(key) {
   const definition = metricDefinitions(deps.state).find(item => item.key === key);
   if (!definition) return null;
+  const valueFor = row => row.metric_values?.[key] ?? row[key];
+  const format = (value, row) => {
+    if (key === "score" && value == null) return rewardValue(row);
+    if (key === "test_pass_rate" && value != null) return `${fmtNum(row.metric_values?.tests_passed)} / ${fmtNum(row.metric_values?.tests_total)} (${fmtPct(value)})`;
+    const status = metricCoverageStatus(row.metric_provenance?.[key], row.family_coverage);
+    const suffix = value == null || status === "complete" ? "" : status === "partial" ? "*" : ` · ${t("coverage_unknown", "coverage unknown")}`;
+    return formatMetric(definition, value) + suffix;
+  };
   return {
     key: definition.column_key, label: definition.label, valueType: "number",
     description: definition.description || "",
     numeric: true, sortable: true, metric: true, defaultVisible: definition.column_default,
-    value: row => row.metric_values?.[key] ?? row[key],
+    value: valueFor,
     cellTitle: row => `${formatMetric(definition, row.metric_values?.[key] ?? row[key])}\n${metricProvenanceHint(row.metric_provenance?.[key], key, row.family_coverage)}`,
     ...(key === "score" ? { presence: row => row.metric_values?.score ?? row.score ?? Object.keys(row.rewards || {}) } : {}),
-    format: (value, row) => {
-      if (key === "score" && value == null) return rewardValue(row);
-      if (key === "test_pass_rate" && value != null) return `${fmtNum(row.metric_values?.tests_passed)} / ${fmtNum(row.metric_values?.tests_total)} (${fmtPct(value)})`;
+    format,
+    html: row => {
+      const value = valueFor(row);
       const status = metricCoverageStatus(row.metric_provenance?.[key], row.family_coverage);
-      const suffix = value != null && status !== "complete" ? ` · ${status === "partial" ? t("coverage_partial", "partial") : t("coverage_unknown", "coverage unknown")}` : "";
-      return formatMetric(definition, value) + suffix;
+      const hint = value != null && key !== "test_pass_rate" && status === "partial"
+        ? `<span class="sr-only"> ${esc(t("coverage_partial", "partial coverage"))}</span>` : "";
+      return esc(format(value, row)) + hint;
     },
   };
 }

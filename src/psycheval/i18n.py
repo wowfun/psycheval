@@ -130,7 +130,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "summary_group_select": "Select at least one comparison group.",
         "summary_group_link_limit": "The link is too large. Select fewer groups or use Select all.",
         "scope_root": "Main session",
-        "coverage_partial": "partial",
+        "coverage_partial": "partial coverage",
         "coverage_unknown": "coverage unknown",
         "family_coverage": "Family coverage",
         "family_member_missing": "Evidence missing",

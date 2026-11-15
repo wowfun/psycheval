@@ -94,6 +94,31 @@ test("metric descriptions remain visible and associated with keyboard controls",
   assert.equal(choice.closest("label").textContent, "Agent steps");
 });
 
+test("Leaderboard partial metrics keep a visible asterisk and accessible coverage text", () => {
+  const column = leaderboard.leaderboardColumns().find(item => item.key === "agent_steps");
+  const provenance = {scope:"root",source:"fixture",retention:"partial",coverage:{measured:2,unknown:1,total:3}};
+  const row = {metric_values:{agent_steps:0},metric_provenance:{agent_steps:provenance}};
+  const root = document.getElementById("table-root");
+  root.innerHTML = tables.renderDataTable({tableId:"coverage-marker",columns:[column],rows:[row]});
+  const cell = root.querySelector("td");
+  assert.equal(cell.querySelector(".sr-only")?.textContent," partial coverage");
+  const visible = cell.cloneNode(true);
+  visible.querySelector(".sr-only").remove();
+  assert.equal(visible.textContent,"0*");
+  assert.match(root.querySelector("td").title,/2\/3 measured; 1 unknown/);
+  assert.match(root.querySelector("td").title,/fixture/);
+  assert.equal(column.format(null,row),"-");
+  const complete = {metric_provenance:{agent_steps:{...provenance,retention:"complete",coverage:{measured:3,unknown:0,total:3}}}};
+  assert.equal(column.format(3,complete),"3");
+  assert.equal(column.format(3,{...complete,family_coverage:{status:"partial"}}),"3*");
+  assert.equal(column.format(3,{...complete,family_coverage:{status:"unknown"}}),"3 · coverage unknown");
+  for (const value of [null,3]) {
+    const sample = { ...complete,metric_values:{agent_steps:value} };
+    root.innerHTML = tables.renderDataTable({tableId:"coverage-marker",columns:[column],rows:[sample]});
+    assert.equal(root.querySelector(".sr-only"),null);
+  }
+});
+
 test("approximate Last Turn End keeps its source hint and timezone-aware timestamp", async () => {
   const dates = await import("../../src/psycheval/assets/web/modules/date-time.js");
   const column = leaderboard.leaderboardColumns().find(column => column.key === "finished_at_ms");
