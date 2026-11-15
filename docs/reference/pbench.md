@@ -3,22 +3,22 @@
 PBench is Psycheval's maintained set of Harbor Tasks for generic Agent
 capabilities.
 
-`datasets/pbench-v1.0` contains `web-search-01`, `web-fetch-01`, and the
-three-step `trend-digest-01`. `datasets/pbench-v1.0-plus` contains
-`browser-control-01`. Immediate child directories are Harbor Tasks; the
-authoring scaffold under `examples/tasks/pbench-task-template` is not a Dataset
-member.
+Maintained Task packages live under `datasets/pbench-v1.0` and
+`datasets/pbench-v1.0-plus`. Immediate child directories are Harbor Tasks.
+`examples/tasks/pbench-task-template` is a runnable authoring example for copying
+and adaptation, separate from maintained Dataset membership.
 
-Search, fetch, and browser control use the shared verifier's ordered call,
-same-call observation, forbidden-tool, final-answer, and artifact rules. Trend
-Digest adds task-owned dynamic source, freshness, coverage, and format checks
-while reusing the shared verifier for calls and artifacts. Each multi-step
-invocation is scored only from that step's trajectory and artifacts.
+Each Task's instruction and scoring configuration define its observable outcome
+and weights. Task-owned checks reuse the shared verifier and evidence interfaces;
+tool checks apply when performing the action is part of the capability.
+Evidence-grounded Judge rubrics assess only published material. Each multi-step
+invocation is scored from that step's trajectory and artifacts, with supporting
+sources selected by the Task's contract.
 
 Task shell and Batch entrypoints invoke the installed verifier and do not use
-repository-relative source paths. The manifests remain Linux-targeted;
-HostEnvironment selects the native entrypoint, which is distinct from claiming
-Windows container support.
+repository-relative source paths. Native Host and container setup remain
+different execution contracts; a Dockerfile does not prepare a Native Host.
+The [Harbor reference](harbor.md) owns their runtime and artifact semantics.
 
 See the [PBench user guide](../user/pbench/index.md) for running a Dataset and
 [Scoring](../user/pbench/scoring.md) for author-facing evidence rules.
