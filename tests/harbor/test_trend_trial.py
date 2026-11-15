@@ -13,6 +13,7 @@ import pytest
 from harbor.models.task.config import TaskOS
 from harbor.utils.scripts import quote_shell_arg
 
+from psycheval.harbor.verifier import build_scoring_plan
 from tests.fixtures.judge_server import judge_server
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +28,10 @@ def hashes(root):
     }
 
 
-@pytest.mark.parametrize("mode", ["partial", "source_failure", "delivery_failure"])
+@pytest.mark.parametrize(
+    "mode",
+    ["partial", "source_failure", "delivery_failure", "x_outage", "x_false_success"],
+)
 def test_three_step_native_trial_with_local_judge(tmp_path, mode):
     task = tmp_path / "中文 task"
     shutil.copytree(TASK, task, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -107,20 +111,52 @@ def test_three_step_native_trial_with_local_judge(tmp_path, mode):
             step.get("exception_info") is None for step in details["step_results"]
         ), details["step_results"]
         step_dirs = list((trial / "steps").iterdir())
+        continues = mode in {"partial", "x_outage", "x_false_success"}
         assert {step.name for step in step_dirs} == (
-            {"github", "x", "hacker-news"} if mode == "partial" else {"github"}
+            {"github", "x", "hacker-news"} if continues else {"github"}
         )
         gh = json.loads((trial / "steps/github/verifier/reward.json").read_text())
-        if mode == "partial":
-            assert gh["rule_score"] == 22 / 23
-            assert gh["llm_score"] == 0 and gh["reward"] == pytest.approx(0.8 * 22 / 23)
-            assert len(server["requests"]) == 9
+        if continues:
+            config = json.loads((TASK / "steps/github/tests/grader.json").read_text())
+            total_weight = sum(item.weight for item in build_scoring_plan(config).items)
+            expected_gh = 1 - (1 / total_weight if mode == "partial" else 0)
+            assert gh["rule_score"] == pytest.approx(expected_gh)
+            assert gh["llm_score"] == 0 and gh["reward"] == pytest.approx(
+                0.35 * expected_gh
+            )
+            assert len(server["requests"]) == (7 if mode.startswith("x_") else 9)
             assert {
                 request["messages"][-1]["content"]
                 .split("## Step name\n", 1)[1]
                 .split("\n\n", 1)[0]
                 for request in server["requests"]
             } == {"github", "x", "hacker-news"}
+            if mode.startswith("x_"):
+                x_logs = trial / "steps/x/verifier"
+                x_reward = json.loads((x_logs / "reward.json").read_text())
+                assert x_reward["required_observation"] == 0
+                assert all(
+                    x_reward[name] == 1
+                    for name in (
+                        "required_tool",
+                        "required_arguments",
+                        "required_artifacts",
+                        "final_answer",
+                    )
+                )
+                x_score = json.loads(
+                    (x_logs / "score.json").read_text(encoding="utf-8")
+                )
+                checks = {
+                    item["item_id"]: item for item in x_score["judges"][0]["verdicts"]
+                }
+                assert (checks["custom:x_status_sama"]["status"] == "pass") is (
+                    mode == "x_outage"
+                )
+                assert checks["custom:x_fetched_sama"]["status"] == "fail"
+                assert checks["custom:x_posts_sama"]["status"] == "fail"
+                assert x_reward["rule_score"] < 0.25
+                assert x_reward["reward"] < 0.09
         else:
             gate = (
                 "required_observation" if mode == "source_failure" else "final_answer"
@@ -129,3 +165,21 @@ def test_three_step_native_trial_with_local_judge(tmp_path, mode):
         assert hashes(task) == before
         assert not any(workspaces.iterdir())
         assert (trial / "prepare.log").exists()
+        initial = trial / "input_evidence"
+        manifest = json.loads((initial / "manifest.json").read_text(encoding="utf-8"))
+        assert {item["path"].split("/")[0] for item in manifest["inputs"]} == {
+            "input",
+            "skills",
+        }
+        assert [item["path"] for item in manifest["preparation_state"]] == [
+            "preparation.json"
+        ]
+        preparation = json.loads(
+            (initial / "preparation_state/preparation.json").read_text(encoding="utf-8")
+        )
+        assert len(preparation["watchlist"]) == 11
+        for tree, files in manifest.items():
+            for item in files:
+                content = (initial / tree / item["path"]).read_bytes()
+                assert len(content) == item["bytes"]
+                assert hashlib.sha256(content).hexdigest() == item["sha256"]

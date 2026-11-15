@@ -44,5 +44,32 @@
     "github_repository_08",
     "github_repository_09",
     "github_repository_10"
-  ]
+  ],
+  "scoring": {
+    "weights": {
+      "required_call_1_tool": 1,
+      "required_call_1_arguments": 1,
+      "required_call_1_observation": 1,
+      "required_artifacts": 0.05,
+      "final_answer": 0.05,
+      "custom:report_unique": 0.05,
+      "custom:report_filename": 0.05,
+      "custom:report_timestamp": 0.05,
+      "custom:report_platform": 0.05,
+      "custom:report_source": 0.05,
+      "custom:report_chinese": 0,
+      "custom:report_current": 0.05,
+      "custom:github_weekly": 1,
+      "custom:github_repository_01": 1,
+      "custom:github_repository_02": 1,
+      "custom:github_repository_03": 1,
+      "custom:github_repository_04": 1,
+      "custom:github_repository_05": 1,
+      "custom:github_repository_06": 1,
+      "custom:github_repository_07": 1,
+      "custom:github_repository_08": 1,
+      "custom:github_repository_09": 1,
+      "custom:github_repository_10": 1
+    }
+  }
 }

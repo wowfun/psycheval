@@ -5,6 +5,7 @@ import json
 import shutil
 import sys
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from pathlib import Path
@@ -28,6 +29,13 @@ from tests.fixtures import trend_digest as trend_fixtures
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _TASK_ROOT = _REPOSITORY_ROOT / "datasets" / "pbench-v1.0" / "trend-digest-01"
 _NOW = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+
+
+def _score_without(config, *failed_ids):
+    items = build_scoring_plan(config).items
+    return sum(item.weight for item in items if item.id not in failed_ids) / sum(
+        item.weight for item in items
+    )
 
 
 def _load_module(name: str, path: Path) -> ModuleType:
@@ -122,7 +130,11 @@ def test_trend_digest_task_contract_and_workbook(x_fetch: ModuleType) -> None:
     }
     assert [step.min_reward for step in steps] == [
         required_reward,
-        required_reward,
+        {
+            key: value
+            for key, value in required_reward.items()
+            if key != "required_observation"
+        },
         None,
     ]
     assert [step.verifier.environment_mode for step in steps] == [
@@ -439,6 +451,28 @@ def _grade(verifier, runtime, config, *, now=_NOW):
 
 
 @pytest.mark.parametrize("platform", ["github", "x", "hacker-news"])
+@pytest.mark.parametrize("available", [False, True], ids=["unavailable", "available"])
+def test_trend_schema_v2_optional_input_paths(tmp_path, verifier, platform, available):
+    runtime, config, _, _ = _case(tmp_path, platform)
+    if available:
+        roots = [tmp_path / name for name in ("inputs", "preparation_state")]
+        for root in roots:
+            root.mkdir()
+        runtime = replace(
+            runtime,
+            paths=replace(
+                runtime.paths, inputs=str(roots[0]), preparation_state=str(roots[1])
+            ),
+        )
+    context = runtime.to_dict()
+    assert context["schema_version"] == 2
+    assert (context["paths"]["inputs"] is not None) is available
+    assert (context["paths"]["preparation_state"] is not None) is available
+    checks = verifier.check_outputs(context, config, now=_NOW)
+    assert checks and all(check["passed"] for check in checks)
+
+
+@pytest.mark.parametrize("platform", ["github", "x", "hacker-news"])
 def test_trend_verifier_accepts_complete_current_step(platform, tmp_path, verifier):
     runtime, config, report, _ = _case(tmp_path, platform)
     rewards, checks = _grade(verifier, runtime, config)
@@ -450,13 +484,35 @@ def test_trend_verifier_accepts_complete_current_step(platform, tmp_path, verifi
     manifest = json.loads(
         (evidence.parent / "artifact_manifest.json").read_text(encoding="utf-8")
     )
-    assert [
-        (item["id"], item["type"], item["extract_status"])
-        for item in manifest["artifacts"]
-    ] == [
-        ("report", "md", "ok"),
-        ("sources", "md", "ok"),
-    ]
+    records = {item["id"]: item for item in manifest["artifacts"]}
+    source_id = "retained_trajectory" if platform == "github" else "fetch_snapshot"
+    expected = {"report_file", source_id, "report", "sources"}
+    if platform == "hacker-news":
+        expected |= {"retained_trajectory", "supporting_sources"}
+    elif platform == "x":
+        expected.add("successful_sources")
+    assert set(records) == expected
+    assert all(item["extract_status"] == "ok" for item in records.values())
+    assert records["report"]["source_artifact_id"] == "report_file"
+    assert records["sources"]["source_artifact_id"] == source_id
+    if platform == "hacker-news":
+        assert (
+            records["supporting_sources"]["source_artifact_id"] == "retained_trajectory"
+        )
+        assert "No retained successful source observation" in (
+            evidence / "supporting_sources.md"
+        ).read_text(encoding="utf-8")
+    assert (
+        evidence.parent / records["report_file"]["verifier_raw_path"]
+    ).read_bytes() == report.read_bytes()
+    source = (
+        Path(runtime.paths.agent_logs) / "trajectory.json"
+        if platform == "github"
+        else Path(runtime.paths.workdir) / f".trend-digest/{platform}.json"
+    )
+    assert (
+        evidence.parent / records[source_id]["verifier_raw_path"]
+    ).read_bytes() == source.read_bytes()
 
 
 def test_direct_trend_grading_clears_old_evidence(tmp_path, verifier):
@@ -474,12 +530,18 @@ def test_direct_trend_grading_clears_old_evidence(tmp_path, verifier):
     assert not (logs / "artifact_text/sources.md").exists()
     assert (logs / "keep.log").read_text() == "preserve"
     records = json.loads((logs / "artifact_manifest.json").read_text())["artifacts"]
-    assert {item["id"] for item in records} == {"report", "sources"}
-    assert all(item["extract_status"] == "missing" for item in records)
+    assert {item["id"] for item in records} == {
+        "retained_trajectory",
+        "report",
+        "sources",
+    }
+    assert all(
+        item["extract_status"] == "missing" for item in records if item["type"] == "md"
+    )
 
 
 @pytest.mark.parametrize("platform", ["github", "hacker-news"])
-def test_report_text_is_normalized_once_for_repeated_coverage_checks(
+def test_report_coverage_does_not_repeat_full_report_normalization(
     platform, tmp_path, verifier, monkeypatch
 ):
     runtime, config, report, _ = _case(tmp_path, platform)
@@ -495,7 +557,7 @@ def test_report_text_is_normalized_once_for_repeated_coverage_checks(
 
     monkeypatch.setattr(verifier, "normalize", tracked)
     assert _grade(verifier, runtime, config)[0]["reward"] == 1
-    assert count == 1
+    assert count <= 1
 
 
 @pytest.mark.parametrize("platform", ["x", "hacker-news"])
@@ -528,7 +590,7 @@ def test_final_answer_failure_preserves_other_rule_credit(platform, tmp_path, ve
     rewards, checks = _grade(verifier, runtime, config)
     # Intentional contract: one failed item, no global multiplication by zero.
     assert rewards["final_answer"] == 0
-    assert rewards["reward"] == (len(checks) - 1) / len(checks)
+    assert rewards["reward"] == pytest.approx(_score_without(config, "final_answer"))
     assert all(item["passed"] for key, item in checks.items() if key != "final_answer")
 
 
@@ -642,16 +704,101 @@ def test_x_failures_preserve_fixed_watchlist_and_honest_status_credit(
     rewards, checks = _grade(verifier, runtime, config)
     assert checks["custom:x_status_sama"]["passed"]
     assert not checks["custom:x_fetched_sama"]["passed"]
+    assert not checks["custom:x_posts_sama"]["passed"]
     assert checks["custom:x_snapshot"]["passed"]
-    assert rewards["reward"] == (len(checks) - count) / len(checks)
+    failures = [
+        f"custom:{prefix}_{handle.casefold()}"
+        for handle, _ in trend_fixtures.USERS[:count]
+        for prefix in ("x_fetched", "x_posts")
+    ]
+    assert rewards["reward"] == pytest.approx(_score_without(config, *failures))
     assert len(checks) == 48
-    # Actual total fetch outages return nonzero: the builtin observation gate stops the Trial.
+    # Outages lose source credit. X deliberately leaves this dimension out of its
+    # continuation gate so an honest report can proceed to the independent HN step.
     if total:
         trajectory_path = Path(runtime.paths.agent_logs) / "trajectory.json"
         trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
         trajectory["steps"][1]["observation"]["results"][0]["extra"]["exit_code"] = 1
         trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
         assert _grade(verifier, runtime, config)[0]["required_observation"] == 0
+
+
+@pytest.mark.parametrize("successful_accounts", [0, 1, 11])
+def test_x_substantive_judge_requires_validated_successful_source(
+    tmp_path, monkeypatch, successful_accounts
+):
+    import asyncio
+
+    from psycheval.harbor.verifier import JudgeSettings, run_verifier
+    from tests.fixtures.judge_server import judge_server
+
+    runtime, config, report, snapshot = _case(tmp_path, "x")
+    failed = 11 - successful_accounts
+    for account in snapshot["accounts"][:failed]:
+        account.update(status="fetch_failed", source_instance=None)
+    (Path(runtime.paths.workdir) / ".trend-digest/x.json").write_text(
+        json.dumps(snapshot), encoding="utf-8"
+    )
+    report.write_text(
+        report.read_text(encoding="utf-8").replace(
+            "状态：近 24 小时无新推文", "状态：抓取失败", failed
+        ),
+        encoding="utf-8",
+    )
+    tests = tmp_path / "isolated tests"
+    shutil.copytree(_TASK_ROOT / "tests", tests)
+    shutil.copytree(_TASK_ROOT / "steps/x/tests", tests, dirs_exist_ok=True)
+    runtime = replace(runtime, paths=replace(runtime.paths, tests=str(tests)))
+    monkeypatch.setenv("PBENCH_TREND_NOW", _NOW.isoformat())
+    with judge_server() as server:
+        result = asyncio.run(
+            run_verifier(
+                tests / "grader.json",
+                runtime=runtime,
+                judge_settings=JudgeSettings(True, server["url"], "fixture"),
+            )
+        )
+        reward = json.loads(
+            (Path(runtime.paths.verifier_logs) / "reward.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert len(server["requests"]) == (3 if successful_accounts else 1)
+        if successful_accounts:
+            assert reward["llm_score"] == 1
+        else:
+            assert reward["llm_score"] == pytest.approx(1 / 3)
+            assert reward["reward"] == pytest.approx(
+                0.35 * reward["rule_score"] + 0.65 / 3
+            )
+            assert reward["reward"] <= 0.306971
+            verdicts = {
+                item["item_id"]: item for item in result["judges"][1]["verdicts"]
+            }
+            for name in ("summary_faithfulness", "information_value"):
+                assert verdicts[f"llm:{name}"]["status"] == "fail"
+                assert "successful_sources" in verdicts[f"llm:{name}"]["reason"]
+            assert verdicts["llm:clear_chinese"]["status"] == "pass"
+            prompt = server["requests"][0]["messages"][-1]["content"]
+            assert "fetch_failed" in prompt and "抓取失败" in prompt
+    logs = Path(runtime.paths.verifier_logs)
+    records = {
+        item["id"]: item
+        for item in json.loads(
+            (logs / "artifact_manifest.json").read_text(encoding="utf-8")
+        )["artifacts"]
+    }
+    record = records["successful_sources"]
+    assert record["extract_status"] == ("ok" if successful_accounts else "missing")
+    if successful_accounts:
+        assert record["source_artifact_id"] == "fetch_snapshot"
+        successful = json.loads(
+            (logs / "artifact_text/successful_sources.md").read_text(encoding="utf-8")
+        )
+        assert len(successful["accounts"]) == successful_accounts
+        assert {account["status"] for account in successful["accounts"]} == {
+            "no_updates"
+        }
 
 
 @pytest.mark.parametrize(
@@ -661,6 +808,7 @@ def test_x_failures_preserve_fixed_watchlist_and_honest_status_credit(
         "outside_window",
         "wrong_window",
         "duplicate_account",
+        "duplicate_post",
         "bad_status",
         "invalid_json",
     ],
@@ -668,7 +816,7 @@ def test_x_failures_preserve_fixed_watchlist_and_honest_status_credit(
 def test_x_snapshot_validation_and_fixed_post_checks(tmp_path, verifier, failure):
     runtime, config, report, snapshot = _case(tmp_path, "x")
     account = snapshot["accounts"][0]
-    if failure in {"missing_post", "outside_window"}:
+    if failure in {"missing_post", "outside_window", "duplicate_post"}:
         account["status"] = "success"
         account["posts"] = [
             {
@@ -684,6 +832,8 @@ def test_x_snapshot_validation_and_fixed_post_checks(tmp_path, verifier, failure
             report.read_text(encoding="utf-8").replace("近 24 小时无新推文", "成功", 1),
             encoding="utf-8",
         )
+        if failure == "duplicate_post":
+            account["posts"] *= 2
     elif failure == "wrong_window":
         snapshot["window_start"] = trend_fixtures.format_utc(_NOW - timedelta(hours=12))
     elif failure == "duplicate_account":
@@ -726,10 +876,475 @@ def test_hn_fixed_twelve_story_checks(tmp_path, verifier, failure):
     rewards, checks = _grade(verifier, runtime, config)
     assert len(checks) == 27
     if failure == "missing_link":
-        assert rewards["reward"] == 26 / 27
+        assert rewards["reward"] == pytest.approx(
+            _score_without(config, "custom:hn_story_01")
+        )
         assert not checks["custom:hn_story_01"]["passed"]
     else:
         assert not checks["custom:hn_snapshot"]["passed"]
+
+
+@pytest.mark.parametrize("platform", ["github", "hacker-news"])
+@pytest.mark.parametrize("layout", ["table", "ordered_list"])
+def test_independent_item_formats_bind_sources_without_heading_templates(
+    tmp_path, verifier, platform, layout
+):
+    runtime, config, report, snapshot = _case(tmp_path, platform)
+    intro = report.read_text(encoding="utf-8").split("## ", 1)[0]
+    if platform == "github":
+        rows = [
+            [
+                str(rank),
+                repository,
+                f"https://github.com/{repository}",
+                "当前来源中的仓库。",
+            ]
+            for rank, repository in enumerate(snapshot["repositories"], 1)
+        ]
+        headers = ["排名", "仓库", "链接", "摘要"]
+    else:
+        headers = ["排名", "标题", "原文", "讨论", "score", "comments", "摘要"]
+        rows = [
+            [
+                str(story["rank"]),
+                story["title"],
+                story["url"],
+                story["discussion_url"],
+                str(story["score"]),
+                str(story["comment_count"]),
+                "当前来源中的具体条目。",
+            ]
+            for story in snapshot["stories"]
+        ]
+    if layout == "table":
+        body = "\n".join(
+            [
+                "| " + " | ".join(headers) + " |",
+                "| " + " | ".join(["---"] * len(headers)) + " |",
+            ]
+            + ["| " + " | ".join(row) + " |" for row in rows]
+        )
+    else:
+        body = "\n".join(
+            f"{rank}. "
+            + "; ".join(
+                f"{label}: {value}" for label, value in zip(headers, row, strict=True)
+            )
+            for rank, row in enumerate(rows, 1)
+        )
+    report.write_text(intro + body + "\n", encoding="utf-8")
+    assert _grade(verifier, runtime, config)[0]["reward"] == 1
+
+
+@pytest.mark.parametrize("platform", ["github", "hacker-news"])
+@pytest.mark.parametrize("defect", ["merged", "duplicate", "swapped"])
+def test_repository_and_story_credit_requires_distinct_ordered_units(
+    tmp_path, verifier, platform, defect
+):
+    runtime, config, report, _ = _case(tmp_path, platform)
+    intro, *sections = report.read_text(encoding="utf-8").split("## ")
+    if defect == "merged":
+        text = (
+            intro
+            + "## 所有来源\n"
+            + "\n".join(section.split("\n", 1)[1] for section in sections)
+        )
+    else:
+        if defect == "duplicate":
+            sections.append(sections[0])
+        else:
+            sections[0], sections[1] = sections[1], sections[0]
+        text = intro + "".join("## " + section for section in sections)
+    report.write_text(text, encoding="utf-8")
+    _, checks = _grade(verifier, runtime, config)
+    prefix = "custom:github_repository_" if platform == "github" else "custom:hn_story_"
+    slots = [item for key, item in checks.items() if key.startswith(prefix)]
+    assert not slots[0]["passed"] and not slots[1]["passed"]
+    assert sum(item["passed"] for item in slots) == (
+        len(slots) - 2 if defect == "swapped" else 0
+    )
+
+
+def test_hn_metrics_must_match_their_own_story(tmp_path, verifier):
+    runtime, config, report, _ = _case(tmp_path, "hacker-news")
+    report.write_text(
+        report.read_text(encoding="utf-8").replace(
+            "score: 99; comments: 1", "score: 98; comments: 2", 1
+        ),
+        encoding="utf-8",
+    )
+    _, checks = _grade(verifier, runtime, config)
+    assert not checks["custom:hn_story_01"]["passed"]
+    assert checks["custom:hn_story_02"]["passed"]
+
+
+@pytest.mark.parametrize("style", ["bold", "emphasis", "code", "reversed_bilingual"])
+def test_hn_metrics_accept_bilingual_labels_and_markdown_emphasis(
+    tmp_path, verifier, style
+):
+    runtime, config, report, snapshot = _case(tmp_path, "hacker-news")
+    content = report.read_text(encoding="utf-8")
+    for story in snapshot["stories"]:
+        score, comments = story["score"], story["comment_count"]
+        old = f"score: {score}; comments: {comments}"
+        new = {
+            "bold": f"**得分（score）**：{score}; **评论数（comment_count）**：{comments}",
+            "emphasis": f"__得分(score)__: {score}; __评论数(comment_count)__: {comments}",
+            "code": f"`score`: `{score}`; `comment_count`: `{comments}`",
+            "reversed_bilingual": f"**score（得分）**：{score}; **comment_count（评论数）**：{comments}",
+        }[style]
+        content = content.replace(old, new, 1)
+    report.write_text(content, encoding="utf-8")
+    assert _grade(verifier, runtime, config)[0]["reward"] == 1
+
+
+@pytest.mark.parametrize("defect", ["wrong_value", "other_story"])
+def test_hn_bilingual_metrics_still_require_the_source_value_in_its_story(
+    tmp_path, verifier, defect
+):
+    runtime, config, report, _ = _case(tmp_path, "hacker-news")
+    content = report.read_text(encoding="utf-8")
+    content = content.replace(
+        "score: 99; comments: 1",
+        "**得分（score）**：99; **评论数（comment_count）**：1",
+        1,
+    )
+    if defect == "wrong_value":
+        content = content.replace("**得分（score）**：99", "**得分（score）**：98", 1)
+    else:
+        content = content.replace(
+            "- **得分（score）**：99; **评论数（comment_count）**：1\n", "", 1
+        )
+        content = content.replace(
+            "## 2. Fixture Hacker News story 2",
+            "## 2. Fixture Hacker News story 2\n\n- **得分（score）**：99; **评论数（comment_count）**：1",
+            1,
+        )
+    report.write_text(content, encoding="utf-8")
+    _, checks = _grade(verifier, runtime, config)
+    assert not checks["custom:hn_story_01"]["passed"]
+    assert checks["custom:hn_story_02"]["passed"]
+
+
+def _hn_supporting_case(tmp_path):
+    runtime, config, report, snapshot = _case(tmp_path, "hacker-news")
+    path = Path(runtime.paths.agent_logs) / "trajectory.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    story = snapshot["stories"][0]
+
+    def step(number, call_id, name, arguments, content):
+        return {
+            "step_id": number,
+            "source": "agent",
+            "message": "",
+            "tool_calls": [
+                {"tool_call_id": call_id, "function_name": name, "arguments": arguments}
+            ],
+            "observation": {
+                "results": [
+                    {
+                        "source_call_id": call_id,
+                        "content": content,
+                        "extra": {"exit_code": 0},
+                    }
+                ]
+            },
+        }
+
+    data["steps"][-1]["step_id"] = 6
+    data["steps"][-1:-1] = [
+        step(
+            3,
+            "story-original",
+            "web_fetch",
+            {"url": story["url"]},
+            "Specific retained original fact.",
+        ),
+        step(
+            4,
+            "story-discussion-fetch",
+            "pwsh",
+            {"command": f'curl "{story["discussion_url"]}" -o "/tmp/discussion.html"'},
+            "Saved discussion page",
+        ),
+        step(
+            5,
+            "story-discussion-read",
+            "pwsh",
+            {"command": 'Get-Content "/tmp/discussion.html"'},
+            "Specific retained discussion fact.",
+        ),
+    ]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return runtime, config, report, path, data
+
+
+def test_hn_supporting_sources_bind_original_and_linked_discussion_to_story(
+    tmp_path, verifier
+):
+    runtime, config, _, path, _ = _hn_supporting_case(tmp_path)
+    assert _grade(verifier, runtime, config)[0]["reward"] == 1
+    logs = Path(runtime.paths.verifier_logs)
+    text = (logs / "artifact_text/supporting_sources.md").read_text(encoding="utf-8")
+    assert (
+        "Story rank: 1\nStory ID: 1001\nSource kind: original\nSource URL: https://example.com/story-1"
+        in text
+    )
+    assert "Fetch call: story-original\nEvidence call: story-original" in text
+    assert (
+        "Fetch call: story-discussion-fetch\nEvidence call: story-discussion-read"
+        in text
+    )
+    assert (
+        "Specific retained original fact." in text
+        and "Specific retained discussion fact." in text
+    )
+    assert (
+        "Story ID: 1002" in text and "No retained successful source observation" in text
+    )
+    assert (
+        logs / "raw_artifacts/retained_trajectory.json"
+    ).read_bytes() == path.read_bytes()
+
+
+def _hn_repository_case(tmp_path):
+    runtime, config, report, path, data = _hn_supporting_case(tmp_path)
+    snapshot_path = Path(runtime.paths.workdir) / ".trend-digest/hacker-news.json"
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    snapshot["stories"][0]["url"] = "https://github.com/fixture/selected"
+    snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+    report.write_text(
+        report.read_text(encoding="utf-8").replace(
+            "https://example.com/story-1", "https://github.com/fixture/selected", 1
+        ),
+        encoding="utf-8",
+    )
+    data["steps"][2]["tool_calls"][0]["arguments"] = {
+        "url": "https://raw.githubusercontent.com/fixture/selected/main/README.md"
+    }
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return runtime, config, report, path, data
+
+
+@pytest.mark.parametrize("source_form", ["direct", "linked_read", "family"])
+def test_hn_github_story_includes_same_repository_readme(
+    tmp_path, verifier, source_form
+):
+    runtime, config, _, path, data = _hn_repository_case(tmp_path)
+    source = data["steps"][2]
+    if source_form == "linked_read":
+        source["tool_calls"][0].update(
+            function_name="pwsh",
+            arguments={
+                "command": 'curl "https://raw.githubusercontent.com/fixture/selected/main/README.md" -o /tmp/selected.md'
+            },
+        )
+        source["observation"]["results"][0]["content"] = "Saved README"
+        read = data["steps"][4]
+        read["tool_calls"][0]["arguments"] = {"command": "cat /tmp/selected.md"}
+        read["observation"]["results"][0]["content"] = (
+            "Specific retained original fact."
+        )
+    elif source_form == "family":
+        child_source = json.loads(json.dumps(source))
+        child_source["step_id"] = 1
+        data["subagent_trajectories"] = [
+            {
+                "schema_version": "ATIF-v1.7",
+                "trajectory_id": "readme-child",
+                "agent": {"name": "fixture-child", "version": "1"},
+                "steps": [child_source],
+            }
+        ]
+        data["steps"].remove(source)
+        for number, step in enumerate(data["steps"], 1):
+            step["step_id"] = number
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert _grade(verifier, runtime, config)[0]["reward"] == 1
+    text = (
+        Path(runtime.paths.verifier_logs) / "artifact_text/supporting_sources.md"
+    ).read_text(encoding="utf-8")
+    assert "Story rank: 1\nStory ID: 1001\nSource kind: repository_support" in text
+    assert "Repository: https://github.com/fixture/selected" in text
+    assert "Specific retained original fact." in text
+
+
+@pytest.mark.parametrize(
+    "defect", ["longer_raw", "other_owner", "longer_github", "failed", "copied"]
+)
+def test_hn_github_story_rejects_invalid_repository_support(tmp_path, verifier, defect):
+    runtime, config, _, path, data = _hn_repository_case(tmp_path)
+    source = data["steps"][2]
+    if defect == "failed":
+        source["observation"]["results"][0]["extra"]["exit_code"] = 1
+    elif defect == "copied":
+        source["is_copied_context"] = True
+    else:
+        source["tool_calls"][0]["arguments"]["url"] = {
+            "longer_raw": "https://raw.githubusercontent.com/fixture/selected-longer/main/README.md",
+            "other_owner": "https://raw.githubusercontent.com/other/selected/main/README.md",
+            "longer_github": "https://github.com/fixture/selected-other/blob/main/README.md",
+        }[defect]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert _grade(verifier, runtime, config)[0]["reward"] == 1
+    text = (
+        Path(runtime.paths.verifier_logs) / "artifact_text/supporting_sources.md"
+    ).read_text(encoding="utf-8")
+    assert "Specific retained original fact." not in text
+    assert "Source kind: repository_support" not in text
+
+
+@pytest.mark.parametrize(
+    "defect", ["failed", "copied", "url_prefix", "unrelated_file", "read_failed"]
+)
+def test_hn_supporting_sources_reject_unrelated_or_failed_evidence(
+    tmp_path, verifier, defect
+):
+    runtime, config, _, path, data = _hn_supporting_case(tmp_path)
+    original, _, read = data["steps"][2:5]
+    marker = "Specific retained original fact."
+    if defect == "failed":
+        original["observation"]["results"][0]["extra"]["exit_code"] = 1
+    elif defect == "copied":
+        original["is_copied_context"] = True
+    elif defect == "url_prefix":
+        original["tool_calls"][0]["arguments"]["url"] += "-unrelated"
+    elif defect == "unrelated_file":
+        original["tool_calls"][0].update(
+            function_name="read_file", arguments={"path": "/tmp/unrelated.json"}
+        )
+    else:
+        read["observation"]["results"][0]["extra"]["exit_code"] = 1
+        marker = "Specific retained discussion fact."
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert _grade(verifier, runtime, config)[0]["reward"] == 1
+    text = (
+        Path(runtime.paths.verifier_logs) / "artifact_text/supporting_sources.md"
+    ).read_text(encoding="utf-8")
+    assert marker not in text
+    assert "No retained successful source observation" in text
+
+
+@pytest.mark.parametrize("oversized", [False, True])
+@pytest.mark.parametrize("repository", [False, True])
+def test_hn_supporting_sources_reach_judge_with_one_shared_budget(
+    tmp_path, monkeypatch, oversized, repository
+):
+    import asyncio
+
+    from psycheval.harbor.verifier import JudgeSettings, run_verifier
+    from tests.fixtures.judge_server import judge_server
+
+    runtime, config, report, path, data = (
+        _hn_repository_case if repository else _hn_supporting_case
+    )(tmp_path)
+    if oversized:
+        data["steps"][2]["observation"]["results"][0]["content"] = "x" * (
+            1024 * 1024 - 8000
+        )
+        path.write_text(json.dumps(data), encoding="utf-8")
+    tests = tmp_path / "isolated tests"
+    shutil.copytree(_TASK_ROOT / "tests", tests)
+    shutil.copytree(_TASK_ROOT / "steps/hacker-news/tests", tests, dirs_exist_ok=True)
+    runtime = replace(runtime, paths=replace(runtime.paths, tests=str(tests)))
+    monkeypatch.setenv("PBENCH_TREND_NOW", _NOW.isoformat())
+    with judge_server() as server:
+        result = asyncio.run(
+            run_verifier(
+                tests / "grader.json",
+                runtime=runtime,
+                judge_settings=JudgeSettings(True, server["url"], "fixture"),
+            )
+        )
+        reward = json.loads(
+            (Path(runtime.paths.verifier_logs) / "reward.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert reward["rule_score"] == 1
+        if oversized:
+            assert reward["llm_score"] == 0 and result["reward"] == pytest.approx(0.35)
+            assert server["requests"] == []
+        else:
+            assert result["reward"] == 1 and len(server["requests"]) == 3
+            for request in server["requests"]:
+                prompt = request["messages"][-1]["content"]
+                assert (
+                    "Specific retained original fact." in prompt
+                    and "Specific retained discussion fact." in prompt
+                )
+                assert "Story ID: 1001" in prompt and "story-discussion-read" in prompt
+                if repository:
+                    assert "Source kind: repository_support" in prompt
+    logs = Path(runtime.paths.verifier_logs)
+    records = {
+        item["id"]: item
+        for item in json.loads(
+            (logs / "artifact_manifest.json").read_text(encoding="utf-8")
+        )["artifacts"]
+    }
+    supporting = records["supporting_sources"]
+    assert supporting["extract_status"] == ("error" if oversized else "ok")
+    if oversized:
+        assert "remaining" in supporting["reason"] and "budget" in supporting["reason"]
+        assert (logs / "artifact_text/report.md").read_bytes() == report.read_bytes()
+        assert (logs / "artifact_text/sources.md").exists()
+    else:
+        assert supporting["source_artifact_id"] == "retained_trajectory"
+        assert (
+            sum(item["bytes"] for item in records.values() if item["type"] == "md")
+            <= 1024 * 1024
+        )
+
+
+@pytest.mark.parametrize("defect", ["duplicate_section", "unsupported_post"])
+def test_x_report_cannot_reuse_account_sections_or_invent_posts(
+    tmp_path, verifier, defect
+):
+    runtime, config, report, _ = _case(tmp_path, "x")
+    content = report.read_text(encoding="utf-8")
+    if defect == "duplicate_section":
+        content += "## Sam Altman (@sama)\n- 状态：近 24 小时无新推文\n"
+    else:
+        content = content.replace(
+            "## Andrej Karpathy",
+            "https://x.com/sama/status/123\n\n## Andrej Karpathy",
+            1,
+        )
+    report.write_text(content, encoding="utf-8")
+    _, checks = _grade(verifier, runtime, config)
+    assert not checks["custom:x_posts_sama"]["passed"]
+    assert checks["custom:x_fetched_sama"]["passed"]
+    assert checks["custom:x_status_sama"]["passed"] is (defect != "duplicate_section")
+
+
+@pytest.mark.parametrize("platform", ["github", "x", "hacker-news"])
+def test_published_evidence_uses_the_bytes_that_were_graded(
+    tmp_path, verifier, monkeypatch, platform
+):
+    runtime, config, report, _ = _case(tmp_path, platform)
+    report_bytes = report.read_bytes()
+    source = (
+        Path(runtime.paths.agent_logs) / "trajectory.json"
+        if platform == "github"
+        else Path(runtime.paths.workdir) / f".trend-digest/{platform}.json"
+    )
+    source_bytes = source.read_bytes()
+    enter = verifier.EvidenceWriter.__enter__
+
+    def mutate_after_inspection(writer):
+        report.write_text("changed after inspection", encoding="utf-8")
+        source.write_text("changed after inspection", encoding="utf-8")
+        return enter(writer)
+
+    monkeypatch.setattr(verifier.EvidenceWriter, "__enter__", mutate_after_inspection)
+    checks = verifier.check_outputs(runtime.to_dict(), config, now=_NOW)
+    assert all(check["passed"] for check in checks)
+    logs = Path(runtime.paths.verifier_logs)
+    assert (logs / "raw_artifacts/report_file.md").read_bytes() == report_bytes
+    source_id = "retained_trajectory" if platform == "github" else "fetch_snapshot"
+    assert (logs / f"raw_artifacts/{source_id}.json").read_bytes() == source_bytes
+    assert (logs / "artifact_text/report.md").read_bytes() == report_bytes
 
 
 def test_chinese_summary_does_not_require_a_literal_summary_label(tmp_path, verifier):
@@ -825,6 +1440,134 @@ def test_github_saved_page_parse_supplies_ranked_source_evidence(
     ).read_text(encoding="utf-8")
     assert source in evidence and "read-page" in evidence and "call-1" in evidence
     assert "parse(h)" not in evidence and "Stdout:" not in evidence
+
+
+@pytest.mark.parametrize("path_kind", ["literal", "environment"])
+def test_github_node_fetch_and_linked_rank_wrapper(tmp_path, verifier, path_kind):
+    runtime, config, path, data, _ = _github_saved_page(tmp_path, source_format="json")
+    fetch, read = data["steps"][1:3]
+    target = (
+        '"trending.html"'
+        if path_kind == "literal"
+        else 'process.env.TEMP + "/trending.html"'
+    )
+    fetch["tool_calls"][0]["arguments"] = {
+        "command": f'const url = "{trend_fixtures.GITHUB_URL}"; fetch(url).then(r => r.text()).then(t => fs.writeFileSync({target}, t, "utf8"));'
+    }
+    read["tool_calls"][0]["arguments"] = {
+        "command": f'const html = fs.readFileSync({target}, "utf8"); parse(html);'
+    }
+    source = json.dumps(
+        {
+            "total": 11,
+            "top10": [
+                {
+                    "rank": rank,
+                    "repo": f"fixture-org-{rank}/fixture-repo-{rank}",
+                    "description": f"Source fact {rank}",
+                }
+                for rank in range(1, 11)
+            ],
+        }
+    )
+    read["observation"]["results"][0]["content"] = source
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert _grade(verifier, runtime, config)[0]["reward"] == 1
+    evidence = (
+        Path(runtime.paths.verifier_logs) / "artifact_text/sources.md"
+    ).read_text(encoding="utf-8")
+    assert (
+        source in evidence
+        and "Fetch call: call-1" in evidence
+        and "Evidence call: read-page" in evidence
+    )
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "no_fetch",
+        "failed_fetch",
+        "unrelated_path",
+        "symbolic_suffix",
+        "computed_path",
+        "before_fetch",
+        "partial",
+        "conflicting_identity",
+        "bad_rank",
+        "multiple_arrays",
+        "nested_wrapper",
+        "bad_total",
+    ],
+)
+def test_github_node_wrapper_does_not_bypass_source_or_rank_validation(
+    tmp_path, verifier, defect
+):
+    runtime, config, path, data, _ = _github_saved_page(tmp_path, source_format="json")
+    fetch, read = data["steps"][1:3]
+    fetch["tool_calls"][0]["arguments"] = {
+        "command": f'fetch("{trend_fixtures.GITHUB_URL}").then(r=>r.text()).then(t=>fs.writeFileSync("trending.html",t));'
+    }
+    read["tool_calls"][0]["arguments"] = {
+        "command": 'parse(fs.readFileSync("trending.html","utf8"));'
+    }
+    rows = [
+        {"rank": rank, "repo": f"fixture-org-{rank}/fixture-repo-{rank}"}
+        for rank in range(1, 11)
+    ]
+    wrapper = {"total": 11, "top10": rows}
+    if defect == "no_fetch":
+        fetch["tool_calls"][0]["arguments"]["command"] = (
+            f'console.log("{trend_fixtures.GITHUB_URL}"); fs.writeFileSync("trending.html", "invented");'
+        )
+    elif defect == "failed_fetch":
+        fetch["observation"]["results"][0]["extra"]["exit_code"] = 1
+    elif defect == "unrelated_path":
+        read["tool_calls"][0]["arguments"]["command"] = (
+            'parse(fs.readFileSync("other.html","utf8"));'
+        )
+    elif defect == "symbolic_suffix":
+        fetch["tool_calls"][0]["arguments"]["command"] = (
+            f'fetch("{trend_fixtures.GITHUB_URL}").then(t=>fs.writeFileSync(process.env.TEMP+"/trending.html",t));'
+        )
+        read["tool_calls"][0]["arguments"]["command"] = (
+            'parse(fs.readFileSync(process.env.TEMP+"/other.html","utf8"));'
+        )
+    elif defect == "computed_path":
+        fetch["tool_calls"][0]["arguments"]["command"] = (
+            f'fetch("{trend_fixtures.GITHUB_URL}").then(t=>fs.writeFileSync("trending.html"+suffix,t));'
+        )
+    elif defect == "before_fetch":
+        data["steps"][1:3] = [read, fetch]
+        read["step_id"], fetch["step_id"] = 2, 3
+    elif defect == "partial":
+        wrapper["top10"] = rows[:5]
+        later = json.loads(json.dumps(read))
+        later["step_id"] = 4
+        later["tool_calls"][0]["tool_call_id"] = "read-second-half"
+        later["observation"]["results"][0].update(
+            source_call_id="read-second-half",
+            content=json.dumps({"total": 11, "top10": rows[5:]}),
+        )
+        data["steps"].insert(3, later)
+        data["steps"][-1]["step_id"] = 5
+    elif defect == "conflicting_identity":
+        rows[0]["url"] = "https://github.com/other/repository"
+    elif defect == "bad_rank":
+        rows[1]["rank"] = 1
+    elif defect == "multiple_arrays":
+        wrapper["other"] = rows
+    elif defect == "nested_wrapper":
+        wrapper = {"data": wrapper}
+    elif defect == "bad_total":
+        wrapper["total"] = 9
+    read["observation"]["results"][0]["content"] = json.dumps(wrapper)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    _, checks = _grade(verifier, runtime, config)
+    assert not any(
+        checks[f"custom:github_repository_{rank:02}"]["passed"] for rank in range(1, 11)
+    )
+    assert not (Path(runtime.paths.verifier_logs) / "artifact_text/sources.md").exists()
 
 
 @pytest.mark.parametrize("field", ["name", "repo"])
@@ -1168,7 +1911,9 @@ def test_github_linked_source_reaches_xml_judge_and_is_regenerated(
         )
         assert result["test_pass_rate"] == 1
         assert result["metadata"]["score_merge"]["applied"] is not incomplete
-        assert result["reward"] == pytest.approx(1 if incomplete else 0.8 + 0.2 * 2 / 3)
+        assert result["reward"] == pytest.approx(
+            1 if incomplete else 0.35 + 0.65 * 2 / 3
+        )
         sources = Path(runtime.paths.verifier_logs) / "artifact_text/sources.md"
         text = sources.read_bytes().decode("utf-8")
         assert len(server["requests"]) == 3
@@ -1239,7 +1984,7 @@ def test_oversized_github_sources_are_explicit_unavailable_evidence(
         )
         assert result["test_pass_rate"] == 1
         assert result["metadata"]["score_merge"]["applied"] is True
-        assert result["reward"] == pytest.approx(0.8)
+        assert result["reward"] == pytest.approx(0.35)
         assert server["requests"] == []
     logs = Path(runtime.paths.verifier_logs)
     manifest = json.loads((logs / "artifact_manifest.json").read_text(encoding="utf-8"))
@@ -1277,11 +2022,8 @@ def test_trend_cli_publishes_current_step_partial_credit(
     logs = Path(runtime.paths.verifier_logs)
     reward = json.loads((logs / "reward.json").read_text(encoding="utf-8"))
     checks = json.loads((logs / "score.json").read_text(encoding="utf-8"))
-    assert (
-        reward["reward"]
-        == reward["rule_score"]
-        == (checks["tests_total"] - 1) / checks["tests_total"]
-    )
+    assert reward["reward"] == reward["rule_score"]
+    assert reward["rule_score"] == pytest.approx(_score_without(config, "final_answer"))
     assert reward["final_answer"] == 0
     assert checks["judges"][1]["metadata"]["judge_status"] == "disabled"
     assert (logs / "artifact_text/report.md").read_bytes() == report.read_bytes()
@@ -1316,6 +2058,9 @@ def test_invalid_empty_x_window_is_not_judge_evidence(tmp_path, verifier):
     _, checks = _grade(verifier, runtime, config)
     assert not checks["custom:x_window"]["passed"]
     assert not (Path(runtime.paths.verifier_logs) / "artifact_text/sources.md").exists()
+    assert not (
+        Path(runtime.paths.verifier_logs) / "artifact_text/successful_sources.md"
+    ).exists()
 
 
 def test_chinese_front_matter_alone_is_not_a_summary(tmp_path, verifier):
@@ -1355,6 +2100,8 @@ def test_preparation_excludes_caches_and_records_fixed_input_digest(
     (cache / "local.pyc").write_bytes(b"local interpreter cache")
     workdir = tmp_path / "workdir"
     workdir.mkdir()
+    state_dir = tmp_path / "preparation_state"
+    state_dir.mkdir()
     monkeypatch.setenv("PBENCH_TREND_NOW", _NOW.isoformat())
     before = {
         p.relative_to(staged): p.read_bytes() for p in staged.rglob("*") if p.is_file()
@@ -1363,13 +2110,13 @@ def test_preparation_excludes_caches_and_records_fixed_input_digest(
     try:
         previous = sys.dont_write_bytecode
         sys.dont_write_bytecode = True
-        module.prepare(str(workdir))
+        selected = module.prepare(str(workdir), str(state_dir))
     finally:
         sys.dont_write_bytecode = previous
         sys.modules.pop("trend_prepare_review", None)
-    metadata = json.loads(
-        (workdir / ".trend-digest/preparation.json").read_text(encoding="utf-8")
-    )
+    metadata = json.loads((state_dir / "preparation.json").read_text(encoding="utf-8"))
+    assert selected == ["input", "skills"]
+    assert not list((workdir / ".trend-digest").iterdir())
     assert datetime.fromisoformat(metadata["prepared_at"]) == _NOW
     assert not list(workdir.rglob("*.pyc"))
     assert not any("__pycache__" in name for name in metadata["sha256"])

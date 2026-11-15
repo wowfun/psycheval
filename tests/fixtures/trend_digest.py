@@ -168,6 +168,7 @@ def hacker_news(
                 f"## {story['rank']}. {story['title']}",
                 f"- url: {story['url']}",
                 f"- hn: {story['discussion_url']}",
+                f"- score: {story['score']}; comments: {story['comment_count']}",
                 "- 摘要：这是当前 Hacker News 热门列表中的条目。",
             ]
         )

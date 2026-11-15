@@ -15,13 +15,16 @@ from psycheval.harbor.runtime_config import load_effective_runtime_config
 
 def main():
     runtime = load_effective_runtime_config(require_harness=True)
+    mode = os.environ.get("TREND_FIXTURE_MODE", "partial")
+    x_outage = mode in {"x_outage", "x_false_success"}
     instruction = sys.stdin.buffer.read().decode("utf-8")
+    first_line = instruction.splitlines()[0]
     step = (
         "github"
-        if "GitHub" in instruction
-        else "hacker-news"
-        if "Hacker News" in instruction
+        if "GitHub" in first_line
         else "x"
+        if "x-daily" in first_line
+        else "hacker-news"
     )
     now = datetime.fromisoformat("2026-08-15T12:00:00+00:00")
     workspace, artifacts, logs = (
@@ -30,7 +33,10 @@ def main():
     )
     artifacts.mkdir(exist_ok=True, parents=True)
     logs.mkdir(exist_ok=True, parents=True)
-    assert (workspace / ".trend-digest/preparation.json").is_file()
+    assert (workspace / ".trend-digest").is_dir()
+    assert not (workspace / ".trend-digest/preparation.json").exists()
+    assert runtime.paths.preparation_state is not None
+    assert (Path(runtime.paths.preparation_state) / "preparation.json").is_file()
     assert not (workspace / "Dockerfile").exists()
     assert Path(os.environ["TREND_ARTIFACTS_DIR"]) == artifacts
     if step == "github":
@@ -45,8 +51,11 @@ def main():
         with tempfile.TemporaryDirectory() as temporary:
             fixtures = Path(temporary)
             if step == "x":
-                for handle, _ in trend_digest.USERS:
-                    (fixtures / f"{handle}-1.xml").write_text("<rss><channel/></rss>")
+                if not x_outage:
+                    for handle, _ in trend_digest.USERS:
+                        (fixtures / f"{handle}-1.xml").write_text(
+                            "<rss><channel/></rss>"
+                        )
                 script = workspace / "skills/x-daily/scripts/fetch.py"
                 extra_args = ["--users", str(workspace / "input/x-users.xlsx")]
             else:
@@ -77,12 +86,12 @@ def main():
                 now.isoformat(),
                 *extra_args,
             ]
-            fetched = subprocess.run(
-                argv, capture_output=True, encoding="utf-8", check=True
+            fetched = subprocess.run(argv, capture_output=True, encoding="utf-8")
+            assert fetched.returncode == (1 if step == "x" and x_outage else 0), (
+                fetched.stderr
             )
-            arguments, observation = {"cmd": argv}, fetched.stdout
+            arguments, observation = {"cmd": argv}, fetched.stdout + fetched.stderr
     report = trend_digest.report_path(artifacts, step, now)
-    mode = os.environ.get("TREND_FIXTURE_MODE", "partial")
     if mode == "partial" and step == "github":
         report.write_text(
             report.read_text(encoding="utf-8").replace(
@@ -92,7 +101,20 @@ def main():
             ),
             encoding="utf-8",
         )
-    extra = {"exit_code": 1 if mode == "source_failure" and step == "github" else 0}
+    if mode == "x_outage" and step == "x":
+        report.write_text(
+            report.read_text(encoding="utf-8")
+            .replace("状态：近 24 小时无新推文", "状态：抓取失败")
+            .replace(
+                "当前窗口没有可报告的新内容。", "来源不可用，无法核实当前窗口的新内容。"
+            ),
+            encoding="utf-8",
+        )
+    extra = {
+        "exit_code": 1
+        if (mode == "source_failure" and step == "github") or (x_outage and step == "x")
+        else 0
+    }
     trajectory = {
         "schema_version": "ATIF-v1.7",
         "trajectory_id": "trend-fixture-" + step,

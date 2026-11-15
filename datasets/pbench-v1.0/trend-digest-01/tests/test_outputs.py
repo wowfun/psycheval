@@ -16,7 +16,8 @@ from urllib.parse import urlsplit
 
 from harbor.models.trajectories import Trajectory
 
-from psycheval.harbor.evidence import EvidenceLimitError, EvidenceWriter
+from psycheval.harbor.documents import inspect_document
+from psycheval.harbor.evidence import EvidenceLimitError, EvidenceWriter, SourceSnapshot
 from psycheval.harbor.verifier import ObservationIndex
 
 GITHUB_URL = "https://github.com/trending?since=weekly"
@@ -33,9 +34,9 @@ _READ_TOOLS = [
 _EVIDENCE_BYTES = 1024 * 1024
 
 
-def _source_evidence(observations, max_bytes):
+def _source_evidence(observations, max_bytes, *, source_url=GITHUB_URL):
     """Retain complete distinct bodies and every provenance within one budget."""
-    prefix = f"Source: {GITHUB_URL}"
+    prefix = f"Source: {source_url}"
     size = len(prefix.encode("utf-8"))
     bodies = {}
     for provenance, text in observations:
@@ -102,10 +103,32 @@ def _call_cwd(arguments, default):
     return _path(_literal(change), cwd) if change and cwd else cwd
 
 
+def _node_paths(command, cwd, method):
+    literal = r"""(?:"([^"\r\n]+)"|'([^'\r\n]+)')"""
+    call = rf"\b{re.escape(method)}\s*\(\s*"
+    end = r"\s*(?=,|\))"
+    paths = {
+        _path(_literal(match), cwd)
+        for match in re.finditer(call + literal + end, command)
+    }
+    for match in re.finditer(
+        call + rf"process\.env\.([A-Za-z_]\w*)\s*\+\s*{literal}" + end,
+        command,
+    ):
+        suffix = next(value for value in match.groups()[1:] if value is not None)
+        paths.add(_path(f"$env:{match[1]}{suffix}", cwd))
+    return paths - {None}
+
+
 def _download_paths(arguments, cwd):
     command = _command(arguments)
     if not cwd:
         return set()
+    paths = (
+        _node_paths(command, cwd, "fs.writeFileSync")
+        if re.search(r"\bfetch\s*\(", command)
+        else set()
+    )
     if re.search(r"\bcurl(?:\.exe)?\b", command, re.IGNORECASE):
         option = r"(?:\s-o\s+|\s--output(?:=|\s+))"
     elif re.search(r"\bwget\b", command, re.IGNORECASE):
@@ -116,8 +139,8 @@ def _download_paths(arguments, cwd):
             r"(?:-Encoding\s+\w+\s+)?(?:-FilePath\s+)?)"
         )
     else:
-        return set()
-    return {
+        return paths
+    return paths | {
         path
         for match in re.finditer(option + _LITERAL, command)
         if (path := _path(_literal(match), cwd))
@@ -136,18 +159,12 @@ def _read_paths(call, cwd):
     patterns = [
         rf"""\bopen\s*\(\s*{_LITERAL}(?=\s*(?:\)|,\s*(?:encoding\s*=|(?:mode\s*=\s*)?['"]r[bt]?['"])))""",
         rf"\bPath\s*\(\s*{_LITERAL}\s*\)\.read_(?:text|bytes)\s*\(",
-        rf"\breadFileSync\s*\(\s*{_LITERAL}",
         rf"\b(?:cat|Get-Content|type)\s+(?:(?:-LiteralPath|-Path)\s+)?{_LITERAL}",
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, command):
             paths.add(_path(_literal(match), cwd))
-    for match in re.finditer(
-        rf"\breadFileSync\s*\(\s*process\.env\.([A-Za-z_]\w*)\s*\+\s*{_LITERAL}",
-        command,
-    ):
-        suffix = next(value for value in match.groups()[1:] if value is not None)
-        paths.add(_path(f"$env:{match[1]}{suffix}", cwd))
+    paths.update(_node_paths(command, cwd, "readFileSync"))
     return paths - {None}
 
 
@@ -249,6 +266,74 @@ def github_supporting_sources(index, rule, workdir, repositories):
             )
 
 
+def _argument_url(value, url):
+    if isinstance(value, str):
+        return _contains_normalized_value(normalize(value), url)
+    if isinstance(value, dict):
+        return any(_argument_url(item, url) for item in value.values())
+    if isinstance(value, list):
+        return any(_argument_url(item, url) for item in value)
+    return False
+
+
+def hn_supporting_sources(index, workdir, stories):
+    tools = [
+        "*fetch*",
+        "*browse*",
+        "*web*",
+        "*crawl*",
+        "*http*",
+        "*exec*",
+        "*terminal*",
+        "*shell*",
+        "bash",
+        "pwsh",
+    ]
+    for story in stories:
+        for kind, key in (("original", "url"), ("discussion", "discussion_url")):
+            url = story[key]
+            rule = {"any": [{"tool_names": tools, "argument_terms": [url]}]}
+            fetch_ids = {
+                call.tool_call_id
+                for call in index.calls
+                if _argument_url(call.arguments, url)
+            }
+            observations = list(
+                github_sources(index, rule, workdir, fetch_ids=fetch_ids)
+            )
+            provenance = (
+                f"Story rank: {story['rank']}\nStory ID: {story['id']}\n"
+                f"Source kind: {kind}\nSource URL: {url}"
+            )
+            if not observations:
+                yield (
+                    provenance,
+                    "No retained successful source observation. Only snapshot metadata is available for this source.",
+                )
+            for fetch_id, read_id, text in observations:
+                yield (
+                    f"{provenance}\nFetch call: {fetch_id}\nEvidence call: {read_id}",
+                    text,
+                )
+        repository = re.fullmatch(
+            r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/?",
+            story["url"],
+            flags=re.IGNORECASE,
+        )
+        if repository:
+            for provenance, text in github_supporting_sources(
+                index,
+                {"any": [{"tool_names": tools}]},
+                workdir,
+                [f"https://github.com/{repository[1]}"],
+            ):
+                yield (
+                    f"Story rank: {story['rank']}\nStory ID: {story['id']}\n"
+                    f"Source kind: repository_support\nStory URL: {story['url']}\n{provenance}",
+                    text,
+                )
+
+
 def _ranked_repositories(text):
     try:
         rows = json.loads(text)
@@ -261,6 +346,15 @@ def _ranked_repositories(text):
             ]
         except ValueError:
             return []
+    if isinstance(rows, dict):
+        arrays = [value for value in rows.values() if isinstance(value, list)]
+        if len(arrays) != 1 or any(isinstance(value, dict) for value in rows.values()):
+            return []
+        if "total" in rows and (
+            type(rows["total"]) is not int or rows["total"] < len(arrays[0])
+        ):
+            return []
+        rows = arrays[0]
     if not isinstance(rows, list) or not rows:
         return []
     names, seen = [], set()
@@ -383,7 +477,7 @@ def _contains_normalized_value(content: str, value: str) -> bool:
     )
 
 
-def _read(path: Path, root: Path, *, limit_mib: int = 4) -> str:
+def _snapshot(path: Path, root: Path, *, limit_mib: int = 4) -> SourceSnapshot:
     if not path.is_relative_to(root):
         raise ValueError("input escaped its root")
     for part in (
@@ -395,11 +489,7 @@ def _read(path: Path, root: Path, *, limit_mib: int = 4) -> str:
     ):
         if part.is_symlink() or part.is_junction():
             raise ValueError("linked input is not supported")
-    with path.open("rb") as stream:
-        raw = stream.read(limit_mib * 1024 * 1024 + 1)
-    if len(raw) > limit_mib * 1024 * 1024:
-        raise ValueError(f"input exceeds {limit_mib} MiB")
-    return raw.decode("utf-8")
+    return SourceSnapshot.read(path, max_bytes=limit_mib * 1024 * 1024)
 
 
 def _parse_report(content: str) -> tuple[dict, str]:
@@ -443,11 +533,113 @@ def _url(value) -> bool:
         return False
 
 
+def _item_units(body, identity):
+    """Read independent Markdown sections/list entries/table rows, not global hits."""
+    report = inspect_document(
+        SourceSnapshot(Path("report.md"), body.encode()), format="md"
+    )
+    lines = report.text.splitlines()
+    units = []
+    headings = []
+    for block in report.blocks:
+        if block.kind == "heading":
+            match = re.match(r"^(#{1,6})\s+(.+?)\s*#*\s*$", lines[block.start_line])
+            if match:
+                headings.append((block.start_line, len(match[1]), match[2]))
+    for position, (start, level, label) in enumerate(headings):
+        if level == 1:
+            continue
+        end = next(
+            (n for n, depth, _ in headings[position + 1 :] if depth <= level),
+            len(lines),
+        )
+        text = "\n".join(lines[start:end])
+        ranked = re.match(r"\s*(?:第\s*)?\d{1,2}\s*(?:[.)、：:]|名|位|\s)", label)
+        if ranked or len(identity(text)) == 1:
+            if not any(left <= start and end <= right for left, right, _ in units):
+                units.append((start, end, text))
+    for block in report.blocks:
+        if any(left <= block.start_line < right for left, right, _ in units):
+            continue
+        if block.table is not None:
+            rows = {}
+            for cell in block.table.cells:
+                if cell.row_span != 1 or cell.column_span != 1:
+                    rows = {}
+                    break
+                rows.setdefault(cell.row, {})[cell.column] = " ".join(
+                    p.text for p in cell.blocks if hasattr(p, "text")
+                )
+            ordered = [row for _, row in sorted(rows.items())]
+            if len(ordered) < 2:
+                continue
+            headers = ordered[0]
+            entries = [
+                "\n".join(
+                    f"{headers.get(column, '')}: {value}"
+                    for column, value in sorted(row.items())
+                )
+                for row in ordered[1:]
+            ]
+            if any(identity(text) for text in entries):
+                units.extend(
+                    (block.start_line, block.end_line, text) for text in entries
+                )
+        elif block.kind == "ordered_list":
+            starts = [
+                index
+                for index in range(block.start_line, block.end_line)
+                if re.match(r"^ {0,3}\d+[.)]\s+", lines[index])
+            ]
+            entries = [
+                (
+                    start,
+                    starts[index + 1] if index + 1 < len(starts) else block.end_line,
+                )
+                for index, start in enumerate(starts)
+            ]
+            if any(identity("\n".join(lines[start:end])) for start, end in entries):
+                units.extend(
+                    (start, end, "\n".join(lines[start:end])) for start, end in entries
+                )
+    return sorted(units, key=lambda item: item[0])
+
+
+def _github_identities(text):
+    return {
+        url.rstrip(".,").casefold()
+        for url in re.findall(
+            r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", text, re.IGNORECASE
+        )
+    }
+
+
+def _hn_identities(text):
+    return set(re.findall(r"https://news\.ycombinator\.com/item\?id=\d+", text))
+
+
+def _metric_in_item(text, value, labels):
+    if type(value) is not int or value < 0:
+        return False
+    number = rf"(?<![\d]){value:,}(?![\d])|(?<![\d]){value}(?![\d])"
+    emphasis = r"(?:\*\*|__|`)?"
+    after_label = rf"\s*[)）]?\s*{emphasis}\s*[：:=]?\s*{emphasis}\s*"
+    return bool(
+        re.search(
+            rf"(?:{labels}){after_label}(?:{number})|(?:{number})\s*{emphasis}\s*(?:{labels})",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
 def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
     platform = context["harbor"]["verifier"]["step_name"]
     if platform not in {"github", "x", "hacker-news"}:
         raise ValueError("Trend Digest requires a known current step_name")
-    paths = {name: Path(path) for name, path in context["paths"].items()}
+    paths = {
+        name: Path(path) for name, path in context["paths"].items() if path is not None
+    }
     declared = config["custom_checks"]
     checks = []
 
@@ -456,14 +648,15 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
 
     entries = list(paths["artifacts"].iterdir()) if paths["artifacts"].is_dir() else []
     content = ""
+    report_snapshot = source_snapshot = trajectory_snapshot = None
     report = entries[0] if len(entries) == 1 else None
     if report is not None:
         try:
-            content = _read(report, paths["artifacts"])
+            report_snapshot = _snapshot(report, paths["artifacts"])
+            content = report_snapshot.content.decode("utf-8")
         except (OSError, ValueError):
             report = None
     meta, body = _parse_report(content)
-    normalized_report = normalize(content)
     match = (
         re.fullmatch(rf"{platform}-(\d{{8}}T\d{{6}}Z)\.md", report.name)
         if report
@@ -485,8 +678,8 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
     check("report_source", bool(meta.get("source")), "source is present")
     check(
         "report_chinese",
-        len(re.findall(r"[\u4e00-\u9fff]", body)) >= 8,
-        "basic Chinese summary is present",
+        bool(re.search(r"[\u4e00-\u9fff]", body)),
+        "Chinese body text is present; semantic quality is Judge-owned",
     )
     check(
         "report_current",
@@ -494,16 +687,13 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
         "report time within one hour, with five-minute future tolerance",
     )
     sources = sources_problem = None
+    supporting = supporting_problem = None
+    successful_sources = None
     if platform == "github":
-        trajectory = Trajectory(
-            **json.loads(
-                _read(
-                    paths["agent_logs"] / "trajectory.json",
-                    paths["agent_logs"],
-                    limit_mib=128,
-                )
-            )
+        trajectory_snapshot = _snapshot(
+            paths["agent_logs"] / "trajectory.json", paths["agent_logs"], limit_mib=128
         )
+        trajectory = Trajectory(**json.loads(trajectory_snapshot.content))
         index = ObservationIndex(
             trajectory.model_copy(
                 update={
@@ -552,21 +742,27 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
             meta.get("source") == GITHUB_URL and meta.get("window") == "weekly",
             "report identifies the weekly source",
         )
+        units = _item_units(body, _github_identities)
+        identity_counts = Counter(
+            url for _, _, text in units for url in _github_identities(text)
+        )
         for index in range(10):
             url = repositories[index] if index < len(repositories) else ""
+            unit = units[index][2] if index < len(units) else ""
             check(
                 f"github_repository_{index + 1:02}",
-                _contains_normalized_value(normalized_report, url),
-                url or "source repository slot missing",
+                bool(url)
+                and len(units) == 10
+                and _github_identities(unit) == {url.casefold()}
+                and identity_counts[url.casefold()] == 1,
+                f"source rank {index + 1}: {url or 'missing'}; independent report units={len(units)}",
             )
     else:
         try:
-            snapshot = json.loads(
-                _read(
-                    paths["workdir"] / f".trend-digest/{platform}.json",
-                    paths["workdir"],
-                )
+            source_snapshot = _snapshot(
+                paths["workdir"] / f".trend-digest/{platform}.json", paths["workdir"]
             )
+            snapshot = json.loads(source_snapshot.content)
             if not isinstance(snapshot, dict):
                 snapshot = {}
         except (OSError, ValueError):
@@ -592,6 +788,11 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
                 for account in accounts
                 if isinstance(account, dict)
             }
+            account_counts = Counter(
+                str(account.get("handle", "")).casefold()
+                for account in accounts
+                if isinstance(account, dict)
+            )
             start, end = (
                 _time(snapshot.get("window_start")),
                 _time(snapshot.get("window_end")),
@@ -616,27 +817,45 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
                 status = account.get("status")
                 if not isinstance(status, str):
                     status = None
-                posts_valid = isinstance(posts, list) and all(
-                    isinstance(post, dict)
-                    and isinstance(post.get("text"), str)
-                    and bool(post["text"].strip())
-                    and _url(post.get("url"))
-                    and _time(post.get("published_at"))
-                    and window
-                    and start <= _time(post["published_at"]) <= end
-                    for post in posts
+                posts_valid = (
+                    isinstance(posts, list)
+                    and len(
+                        {
+                            post.get("url")
+                            for post in posts
+                            if isinstance(post, dict)
+                            and isinstance(post.get("url"), str)
+                        }
+                    )
+                    == len(posts)
+                    and all(
+                        isinstance(post, dict)
+                        and isinstance(post.get("text"), str)
+                        and bool(post["text"].strip())
+                        and _url(post.get("url"))
+                        and _time(post.get("published_at"))
+                        and window
+                        and start <= _time(post["published_at"]) <= end
+                        for post in posts
+                    )
                 )
-                account_valid = posts_valid and (
-                    (status == "success" and bool(posts))
-                    or (status in {"no_updates", "fetch_failed"} and not posts)
+                account_valid = (
+                    account_counts[handle] == 1
+                    and posts_valid
+                    and (
+                        (status == "success" and bool(posts))
+                        or (status in {"no_updates", "fetch_failed"} and not posts)
+                    )
                 )
                 valid = bool(valid and account_valid)
-                section_match = re.search(
-                    rf"^##[^\n]*@{re.escape(handle)}(?![A-Za-z0-9_])[^\n]*\n(.*?)(?=\n##|\Z)",
-                    content,
-                    flags=re.IGNORECASE | re.DOTALL | re.MULTILINE,
+                section_matches = list(
+                    re.finditer(
+                        rf"^##[^\n]*@{re.escape(handle)}(?![A-Za-z0-9_])[^\n]*\n(.*?)(?=\n##|\Z)",
+                        content,
+                        flags=re.IGNORECASE | re.DOTALL | re.MULTILINE,
+                    )
                 )
-                section = section_match[1] if section_match else ""
+                section = section_matches[0][1] if len(section_matches) == 1 else ""
                 normalized_section = normalize(section)
                 status_text = {
                     "success": "状态：成功",
@@ -650,12 +869,24 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
                 )
                 check(
                     f"x_status_{handle}",
-                    account_valid and status_text and status_text in section,
+                    account_valid
+                    and status_text
+                    and status_text in section
+                    and len(section_matches) == 1,
                     f"@{handle}: report explains {status}",
                 )
                 check(
                     f"x_posts_{handle}",
                     account_valid
+                    and status != "fetch_failed"
+                    and len(section_matches) == 1
+                    and set(
+                        re.findall(
+                            r"https://(?:x|twitter)\.com/[A-Za-z0-9_]+/status/\d+",
+                            section,
+                        )
+                    )
+                    == {post["url"] for post in posts}
                     and all(
                         _contains_normalized_value(normalized_section, post["url"])
                         and normalize(post["text"]) in normalized_section
@@ -682,6 +913,17 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
                 sources = json.dumps(
                     {**snapshot, "accounts": validated}, ensure_ascii=False, indent=2
                 )
+                successful = [
+                    account
+                    for account in validated
+                    if account["status"] in {"success", "no_updates"}
+                ]
+                if successful:
+                    successful_sources = json.dumps(
+                        {**snapshot, "accounts": successful},
+                        ensure_ascii=False,
+                        indent=2,
+                    )
         else:
             stories = snapshot.get("stories", [])
             stories = stories if isinstance(stories, list) else []
@@ -691,17 +933,32 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
                 and snapshot.get("source_url") == HN_URL
                 and len(stories) == 12
             )
-            valid = valid and all(
-                isinstance(story, dict)
-                and type(story.get("rank")) is int
-                and story["rank"] == index
-                and isinstance(story.get("title"), str)
-                and bool(story["title"].strip())
-                and type(story.get("id")) is int
-                and _url(story.get("url"))
-                and story.get("discussion_url")
-                == f"https://news.ycombinator.com/item?id={story['id']}"
-                for index, story in enumerate(stories, 1)
+            valid = (
+                valid
+                and len(
+                    {
+                        story.get("id")
+                        for story in stories
+                        if isinstance(story, dict) and type(story.get("id")) is int
+                    }
+                )
+                == len(stories)
+                and all(
+                    isinstance(story, dict)
+                    and type(story.get("rank")) is int
+                    and story["rank"] == index
+                    and isinstance(story.get("title"), str)
+                    and bool(story["title"].strip())
+                    and type(story.get("id")) is int
+                    and all(
+                        type(story.get(field)) is int and story[field] >= 0
+                        for field in ("score", "comment_count")
+                    )
+                    and _url(story.get("url"))
+                    and story.get("discussion_url")
+                    == f"https://news.ycombinator.com/item?id={story['id']}"
+                    for index, story in enumerate(stories, 1)
+                )
             )
             check(
                 "hn_snapshot",
@@ -715,6 +972,10 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
                 and _time(meta.get("snapshot_at")) == generated,
                 "report source and snapshot timestamp match",
             )
+            units = _item_units(body, _hn_identities)
+            identity_counts = Counter(
+                url for _, _, text in units for url in _hn_identities(text)
+            )
             for index in range(12):
                 story = (
                     stories[index]
@@ -723,15 +984,64 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
                 )
                 check(
                     f"hn_story_{index + 1:02}",
-                    all(
+                    bool(valid)
+                    and len(units) == 12
+                    and index < len(units)
+                    and _hn_identities(units[index][2]) == {story.get("discussion_url")}
+                    and identity_counts[story.get("discussion_url")] == 1
+                    and _metric_in_item(
+                        units[index][2],
+                        story.get("score"),
+                        r"score|points?|得分|积分|分数|赞",
+                    )
+                    and _metric_in_item(
+                        units[index][2],
+                        story.get("comment_count"),
+                        r"comment_count|comments?|评论数?|讨论数?",
+                    )
+                    and all(
                         isinstance(story.get(key), str)
-                        and _contains_normalized_value(normalized_report, story[key])
+                        and _contains_normalized_value(
+                            normalize(units[index][2]), story[key]
+                        )
                         for key in ("title", "url", "discussion_url")
                     ),
                     f"story slot {index + 1}: title, original and discussion links",
                 )
             if valid:
                 sources = json.dumps(snapshot, ensure_ascii=False, indent=2)
+                try:
+                    trajectory_snapshot = _snapshot(
+                        paths["agent_logs"] / "trajectory.json",
+                        paths["agent_logs"],
+                        limit_mib=128,
+                    )
+                    trajectory = Trajectory(**json.loads(trajectory_snapshot.content))
+                    index = ObservationIndex(
+                        trajectory.model_copy(
+                            update={
+                                "steps": [
+                                    step
+                                    for step in trajectory.steps
+                                    if step.source == "agent"
+                                    and not step.is_copied_context
+                                ]
+                            }
+                        )
+                    )
+                    supporting = _source_evidence(
+                        hn_supporting_sources(index, paths["workdir"], stories),
+                        _EVIDENCE_BYTES,
+                        source_url=HN_URL,
+                    )
+                except EvidenceLimitError as error:
+                    supporting_problem = str(error)
+                except (OSError, ValueError) as error:
+                    supporting = f"No usable retained trajectory for supporting observations: {error}"
+            else:
+                supporting = (
+                    "No valid story snapshot for associating supporting observations."
+                )
     if len(checks) != len(declared) or {check["id"] for check in checks} != set(
         declared
     ):
@@ -740,14 +1050,41 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
     with EvidenceWriter(
         paths["verifier_logs"], max_text_bytes=_EVIDENCE_BYTES
     ) as evidence:
-        for name, text in (
+        if report_snapshot is not None:
+            evidence.capture("report_file", report_snapshot, max_bytes=4 * 1024 * 1024)
+        if trajectory_snapshot is not None:
+            evidence.capture(
+                "retained_trajectory", trajectory_snapshot, max_bytes=128 * 1024 * 1024
+            )
+        if source_snapshot is not None:
+            evidence.capture(
+                "fetch_snapshot", source_snapshot, max_bytes=4 * 1024 * 1024
+            )
+        texts = [
             ("report", content if report is not None else None),
             ("sources", sources),
-        ):
-            if name == "sources" and sources_problem:
-                evidence.unavailable(name, sources_problem, status="error")
+        ]
+        if platform == "hacker-news":
+            texts.append(("supporting_sources", supporting))
+        elif platform == "x":
+            texts.append(("successful_sources", successful_sources))
+        for name, text in texts:
+            problem = (
+                sources_problem
+                if name == "sources"
+                else supporting_problem
+                if name == "supporting_sources"
+                else None
+            )
+            if problem:
+                evidence.unavailable(name, problem, status="error")
             elif text is None:
-                evidence.unavailable(name, "No validated current-step evidence")
+                evidence.unavailable(
+                    name,
+                    "No validated successfully fetched X account; substantive-summary evidence is unavailable"
+                    if name == "successful_sources"
+                    else "No validated current-step evidence",
+                )
             elif len(text.encode("utf-8")) > remaining:
                 evidence.unavailable(
                     name,
@@ -755,7 +1092,20 @@ def check_outputs(context: dict, config: dict, *, now: datetime) -> list[dict]:
                     status="error",
                 )
             else:
-                evidence.add_text(name, text)
+                source_id = (
+                    "report_file"
+                    if name == "report"
+                    else "retained_trajectory"
+                    if platform == "github"
+                    else "fetch_snapshot"
+                )
+                if name == "supporting_sources":
+                    source_id = (
+                        "retained_trajectory"
+                        if trajectory_snapshot is not None
+                        else None
+                    )
+                evidence.add_text(name, text, source_id=source_id)
                 remaining -= len(text.encode("utf-8"))
     return checks
 
