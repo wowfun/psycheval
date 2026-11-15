@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from functools import cached_property
 from itertools import chain
 
+from ._limits import DocumentLimitError
+
 NS = {
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
     "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
@@ -218,12 +220,19 @@ class Styles:
 
         return inherited(0)
 
-    def shape_fill(self, shape, backs):
+    def _cached_fill(self, shape):
         key = shape._element
         if key not in self._fills:
             self._fills[key] = self._shape_fill(shape)
-        fill, placeholder = self._fills[key]
+        return self._fills[key]
+
+    def shape_fill(self, shape, backs):
+        fill, placeholder = self._cached_fill(shape)
         return self.fill(fill, backs, placeholder)
+
+    def shape_fill_type(self, shape):
+        fill, _ = self._cached_fill(shape)
+        return local(fill) if fill is not None else "noFill"
 
     def _shape_fill(self, shape):
         # Missing placeholder fills inherit; explicit noFill is transparent.
@@ -575,6 +584,8 @@ class Backgrounds:
 
     @cached_property
     def page(self):
+        if any(value is None or value <= 0 for value in self.canvas[2:]):
+            raise StyleError("missing or invalid presentation dimensions")
         canvas_area = self.canvas[2] * self.canvas[3]
         colors = self.base
         for entry in [*self.inherited, *self.own[: self.first_text]]:
@@ -593,8 +604,16 @@ class Backgrounds:
 
     def region(self, target):
         if target.order not in self._regions:
-            self._regions[target.order] = self._region(target)
-        return self._regions[target.order]
+            try:
+                self._regions[target.order] = (self._region(target), None)
+            except DocumentLimitError:
+                raise
+            except ValueError as error:
+                self._regions[target.order] = ((), str(error))
+        result, error = self._regions[target.order]
+        if error is not None:
+            raise StyleError(error)
+        return result
 
     def _region(self, target):
         region = target.bounds

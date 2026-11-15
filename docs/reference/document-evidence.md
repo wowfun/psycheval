@@ -66,7 +66,7 @@ converted into failed document checks.
 | Format | Facts and faithful text |
 | --- | --- |
 | PDF | Page order, extracted text and page dimensions; empty pages remain present. |
-| PPTX | Slides, recursive leaf shapes, bounds, paragraphs, runs, table cells, effective font sizes/colors, selected title and background colors. |
+| PPTX | Presentation dimensions in EMU, slides, recursive leaf shapes, bounds, fill types/colors, paragraphs, runs, table cells, effective font sizes/colors, selected title and background colors. |
 | XLSX | Sheet order/visibility, nonempty cells and addresses, merged ranges; formulas and cached results are separate. |
 | DOCX | Body paragraphs and tables in document order, nested table content, run text and heading styles; merged cells retain spans. |
 | Markdown | Decoded source text, top-level blocks with zero-based, end-exclusive line ranges, pipe and HTML table facts. |
@@ -105,6 +105,22 @@ overlapping transparent shape. Incomplete or degenerate group transforms retain
 their leaf text with `bounds=None` and a `geometry_error`; dependent spatial
 style facts remain unresolved. Title and background diagnostics are independent:
 an unresolvable title font does not prevent inspection of the page background.
+`PptxReport.slide_width_emu` and `slide_height_emu` retain the presentation's
+integer dimensions, or `None` when absent. Inspection never invents a slide size;
+spatial styles that require missing dimensions remain unresolved. Tasks own
+aspect-ratio tolerances and coverage thresholds.
+
+Each `PptxShape` exposes `fill_type` (effective OOXML fill element name),
+`fill_colors` and an independent `fill_error`. Missing fills and explicit
+`noFill` report `noFill` with an empty palette. Other supported fills use the
+same region composition as title backgrounds, including the shape's own fill.
+If the effective fill type cannot be resolved, `fill_type` is `None` and
+`fill_error` explains the failure.
+Unsupported fills retain their type and diagnostic with an empty palette;
+they are not transparent successes. Palettes are possible RGB candidates, not
+pixel distributions. Bounds are transformed bounding boxes, not visible filled
+areas; overlap, clipping and later occlusion prevent treating summed box areas
+as rendered decoration coverage. Font-family resolution is not provided.
 
 Text extraction preserves page/shape/paragraph, sheet/cell or body-block
 boundaries. It does not substitute notes, document properties, agent answers,

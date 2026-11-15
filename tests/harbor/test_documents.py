@@ -1115,6 +1115,117 @@ def test_pptx_reports_body_title_and_independent_unknown_colors(tmp_path):
     assert inspect_document(report.source).to_markdown() == report.to_markdown()
 
 
+@pytest.mark.parametrize("size", [(12192000, 6858000), (9144000, 6858000), None])
+def test_pptx_presentation_dimensions_are_facts(tmp_path, size):
+    pptx = pytest.importorskip("pptx")
+    deck = pptx.Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    slide.shapes.add_textbox(0, 0, 100, 100).text = "Body"
+    if size is None:
+        deck._element.remove(deck._element.sldSz)
+    else:
+        deck.slide_width, deck.slide_height = size
+    path = tmp_path / "dimensions.pptx"
+    deck.save(path)
+    report = inspect_document(path)
+    assert (report.slide_width_emu, report.slide_height_emu) == (size or (None, None))
+    assert "Body" in report.to_markdown()
+    if size is None:
+        assert "dimensions" in report.slides[0].background_error
+
+
+def test_pptx_failed_regions_are_resolved_once_and_keep_diagnostics(
+    tmp_path, monkeypatch
+):
+    pptx = pytest.importorskip("pptx")
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.oxml.xmlchemy import OxmlElement
+
+    from psycheval.harbor.documents._pptx_styles import Backgrounds
+
+    deck = pptx.Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, 1000, 1000)
+    shape.text = "Unresolved fill retains text"
+    shape._element.spPr.append(OxmlElement("a:blipFill"))
+    path = tmp_path / "unsupported.pptx"
+    deck.save(path)
+    calls = []
+    resolve = Backgrounds._region
+
+    def counted(self, target):
+        calls.append(target.shape.shape_id)
+        return resolve(self, target)
+
+    monkeypatch.setattr(Backgrounds, "_region", counted)
+    report = inspect_document(path)
+    page = report.slides[0]
+    assert "unsupported fill" in page.shapes[0].fill_error
+    assert "unsupported fill" in page.background_error
+    assert shape.text in report.to_markdown()
+    assert calls == [shape.shape_id]
+
+
+def test_pptx_unresolved_fill_type_is_not_reported_as_transparent(tmp_path):
+    pptx = pytest.importorskip("pptx")
+    from pptx.enum.shapes import MSO_SHAPE
+
+    deck = pptx.Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, 1000, 1000)
+    shape.text = "Unresolved fill retains body text"
+    shape._element.xpath("p:style/a:fillRef")[0].set("idx", "9999")
+    path = tmp_path / "unresolved-fill.pptx"
+    deck.save(path)
+    report = inspect_document(path)
+    fact = report.slides[0].shapes[0]
+    assert fact.fill_type is None and fact.fill_colors == ()
+    assert "invalid theme fill reference" in fact.fill_error
+    assert shape.text in report.to_markdown()
+
+
+def test_pptx_fill_facts_include_late_panels_and_distinguish_transparency_and_unsupported(
+    tmp_path,
+):
+    pptx = pytest.importorskip("pptx")
+    from pptx.dml.color import RGBColor
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.oxml.xmlchemy import OxmlElement
+
+    deck = pptx.Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    slide.shapes.add_textbox(0, 0, 100, 100).text = "Title before panel"
+    panel = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 100, 1000, 1000)
+    panel.fill.solid()
+    panel.fill.fore_color.rgb = RGBColor(0, 0, 0)
+    overlay = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 100, 1000, 1000)
+    overlay.fill.solid()
+    overlay.fill.fore_color.rgb = RGBColor(255, 255, 255)
+    alpha = OxmlElement("a:alpha")
+    alpha.set("val", "50000")
+    overlay.fill.fore_color._color._xClr.append(alpha)
+    transparent = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 100, 1000, 1000)
+    transparent.fill.background()
+    unsupported = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 100, 1000, 1000)
+    unsupported._element.spPr.append(OxmlElement("a:blipFill"))
+    path = tmp_path / "fills.pptx"
+    deck.save(path)
+    page = inspect_document(path).slides[0]
+    title, dark, blended, empty, unknown = page.shapes
+    assert title.fill_type == "noFill" and title.fill_colors == ()
+    assert dark.fill_type == "solidFill" and dark.fill_colors == ((0, 0, 0),)
+    assert dark.fill_error is None
+    assert all(127 <= component <= 128 for component in blended.fill_colors[0])
+    assert (
+        empty.fill_type == "noFill"
+        and empty.fill_colors == ()
+        and empty.fill_error is None
+    )
+    assert unknown.fill_type == "blipFill" and unknown.fill_colors == ()
+    assert "unsupported fill" in unknown.fill_error
+    assert page.background_colors == ((255, 255, 255),)
+
+
 @pytest.mark.parametrize("decoration", ["01", "07.", "１２", "•", "—"])
 def test_pptx_text_heading_precedes_larger_decorative_labels(tmp_path, decoration):
     pptx = pytest.importorskip("pptx")

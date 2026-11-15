@@ -81,6 +81,9 @@ class PptxShape:
     paragraphs: tuple[Paragraph, ...]
     table: Table | None = None
     geometry_error: str | None = None
+    fill_type: str | None = None
+    fill_colors: Colors = ()
+    fill_error: str | None = None
 
     @property
     def has_text(self):
@@ -116,6 +119,8 @@ class PptxReport:
     source: SourceSnapshot
     slides: tuple[PptxSlide, ...]
     text_limit: int = DocumentLimits().text_bytes
+    slide_width_emu: int | None = None
+    slide_height_emu: int | None = None
 
     def to_markdown(self):
         parts = []

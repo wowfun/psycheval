@@ -47,7 +47,13 @@ def inspect(snapshot, backend, options, limits):
         )
     except (XMLSyntaxError, InvalidXmlError) as error:
         raise DocumentParseError(f"Invalid PPTX XML: {error}") from error
-    return PptxReport(snapshot, slides, limits.text_bytes)
+    return PptxReport(
+        snapshot,
+        slides,
+        limits.text_bytes,
+        presentation.slide_width,
+        presentation.slide_height,
+    )
 
 
 def read_slide(presentation, slide, number, options, budget):
@@ -120,7 +126,15 @@ def read_slide(presentation, slide, number, options, budget):
     for index, entry in enumerate(entries, 1):
         shape = entry.shape
         backs = []
-        if styles.paragraphs(shape):
+        fill_type, fill_error, fill_colors = None, None, ()
+        try:
+            fill_type = resolver.shape_fill_type(shape)
+            if fill_type != "noFill":
+                backs = backgrounds.region(entry)
+                fill_colors = colors(backs, budget)
+        except ValueError as error:
+            fill_error = style_diagnostic(error)
+        if fill_error is None and styles.paragraphs(shape) and not backs:
             try:
                 backs = backgrounds.region(entry)
             except ValueError as error:
@@ -147,7 +161,15 @@ def read_slide(presentation, slide, number, options, budget):
             table = Table(index, tuple(cells))
         shapes.append(
             PptxShape(
-                index, shape.shape_id, entry.bounds, text, table, entry.geometry_error
+                index,
+                shape.shape_id,
+                entry.bounds,
+                text,
+                table,
+                entry.geometry_error,
+                fill_type,
+                fill_colors,
+                fill_error,
             )
         )
     return PptxSlide(
