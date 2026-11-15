@@ -110,6 +110,8 @@ def main():
             ),
             encoding="utf-8",
         )
+    if mode == "missing_artifact" and step == "github":
+        report.unlink()
     extra = {
         "exit_code": 1
         if (mode == "source_failure" and step == "github") or (x_outage and step == "x")

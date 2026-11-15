@@ -121,22 +121,23 @@ def test_trend_digest_task_contract_and_workbook(x_fetch: ModuleType) -> None:
         "x",
         "hacker-news",
     ]
-    required_reward = {
-        "required_tool": 1.0,
-        "required_arguments": 1.0,
-        "required_observation": 1.0,
-        "required_artifacts": 1.0,
-        "final_answer": 1.0,
-    }
     assert [step.min_reward for step in steps] == [
-        required_reward,
-        {
-            key: value
-            for key, value in required_reward.items()
-            if key != "required_observation"
-        },
+        {"continuation": 1.0},
+        {"continuation": 1.0},
         None,
     ]
+    for step in steps[:2]:
+        config = json.loads(
+            (_TASK_ROOT / "steps" / step.name / "tests/grader.json").read_text()
+        )
+        assert set(build_scoring_plan(config).continuation_checks) == {
+            "required_call_1_tool",
+            "required_call_1_arguments",
+            "required_artifacts",
+            "final_answer",
+        } | ({"required_call_1_observation"} if step.name == "github" else set())
+        assert config["scoring"]["weights"]["required_artifacts"] == 0
+        assert config["scoring"]["weights"]["final_answer"] == 0
     assert [step.verifier.environment_mode for step in steps] == [
         VerifierEnvironmentMode.SHARED,
         VerifierEnvironmentMode.SHARED,
@@ -588,8 +589,14 @@ def test_final_answer_failure_preserves_other_rule_credit(platform, tmp_path, ve
     trajectory["steps"][-1]["message"] = "previous-step.md"
     trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
     rewards, checks = _grade(verifier, runtime, config)
-    # Intentional contract: one failed item, no global multiplication by zero.
-    assert rewards["final_answer"] == 0
+    assert checks["final_answer"]["passed"] is False
+    if platform == "hacker-news":
+        assert rewards["final_answer"] == 0
+        assert "continuation" not in rewards
+    else:
+        assert rewards["final_answer"] == 1  # Zero-weight dimension, not a gate.
+        assert rewards["continuation"] == 0
+        assert rewards["reward"] == 1
     assert rewards["reward"] == pytest.approx(_score_without(config, "final_answer"))
     assert all(item["passed"] for key, item in checks.items() if key != "final_answer")
 
@@ -713,14 +720,16 @@ def test_x_failures_preserve_fixed_watchlist_and_honest_status_credit(
     ]
     assert rewards["reward"] == pytest.approx(_score_without(config, *failures))
     assert len(checks) == 48
-    # Outages lose source credit. X deliberately leaves this dimension out of its
+    # Outages lose source credit. X deliberately leaves this check out of its
     # continuation gate so an honest report can proceed to the independent HN step.
     if total:
         trajectory_path = Path(runtime.paths.agent_logs) / "trajectory.json"
         trajectory = json.loads(trajectory_path.read_text(encoding="utf-8"))
         trajectory["steps"][1]["observation"]["results"][0]["extra"]["exit_code"] = 1
         trajectory_path.write_text(json.dumps(trajectory), encoding="utf-8")
-        assert _grade(verifier, runtime, config)[0]["required_observation"] == 0
+        failed = _grade(verifier, runtime, config)[0]
+        assert failed["required_observation"] == 0
+        assert failed["continuation"] == 1
 
 
 @pytest.mark.parametrize("successful_accounts", [0, 1, 11])
@@ -2024,7 +2033,12 @@ def test_trend_cli_publishes_current_step_partial_credit(
     checks = json.loads((logs / "score.json").read_text(encoding="utf-8"))
     assert reward["reward"] == reward["rule_score"]
     assert reward["rule_score"] == pytest.approx(_score_without(config, "final_answer"))
-    assert reward["final_answer"] == 0
+    assert reward["final_answer"] == (0 if platform == "hacker-news" else 1)
+    if platform != "hacker-news":
+        assert reward["continuation"] == 0
+        assert checks["metadata"]["continuation"]["failed_check_ids"] == [
+            "final_answer"
+        ]
     assert checks["judges"][1]["metadata"]["judge_status"] == "disabled"
     assert (logs / "artifact_text/report.md").read_bytes() == report.read_bytes()
 

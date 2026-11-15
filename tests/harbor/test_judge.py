@@ -892,14 +892,127 @@ def test_default_prompt_without_optional_runtime_or_scope(tmp_path):
 
 def test_public_api_propagates_errors_without_stale_reward(tmp_path):
     grader, context = api_task(tmp_path)
+    grader.write_text(
+        json.dumps(
+            {"custom_checks": ["valid"], "continuation_checks": ["custom:valid"]}
+        ),
+        encoding="utf-8",
+    )
     settings = JudgeSettings(enabled=False)
-    asyncio.run(run_verifier(grader, runtime=context, judge_settings=settings))
+    result = asyncio.run(run_verifier(grader, runtime=context, judge_settings=settings))
+    logs = Path(context.paths.verifier_logs)
+    assert result["metadata"]["continuation"]["passed"] is True
+    assert (
+        json.loads((logs / "reward.json").read_text(encoding="utf-8"))["continuation"]
+        == 1
+    )
     (grader.parent / "judge.yaml").write_text(YAML + "version: 1\n", encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate"):
         asyncio.run(run_verifier(grader, runtime=context, judge_settings=settings))
-    logs = Path(context.paths.verifier_logs)
     assert not (logs / "reward.json").exists()
+    assert not (logs / "score.json").exists()
     assert "duplicate" in (logs / "verifier-error.txt").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "delivery", [True, False, None], ids=["pass", "fail", "missing"]
+)
+@pytest.mark.parametrize("judge_status", ["complete", "incomplete", "disabled"])
+def test_public_verifier_keeps_continuation_separate_from_judge(
+    tmp_path, delivery, judge_status
+):
+    grader, context = api_task(tmp_path)
+    grader.write_text(
+        json.dumps(
+            {
+                "custom_checks": ["valid", "delivery"],
+                "scoring": {"weights": {"custom:delivery": 0}},
+                "continuation_checks": ["custom:delivery"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    checks = [{"id": "valid", "passed": True}]
+    if delivery is not None:
+        checks.append(
+            {"id": "delivery", "passed": delivery, "evidence": "delivery result"}
+        )
+    (grader.parent / "test_outputs.py").write_text(
+        "import sys\nfrom pathlib import Path\n"
+        f"Path(sys.argv[-1]).write_text({json.dumps({'checks': checks})!r}, encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    with judge_server() as server:
+        if judge_status == "incomplete":
+            server["behavior"] = {"fidelity": {"content": "invalid response"}}
+        settings = JudgeSettings(judge_status != "disabled", server["url"], "fixture")
+        result = asyncio.run(
+            run_verifier(grader, runtime=context, judge_settings=settings)
+        )
+        assert len(server["requests"]) == (0 if judge_status == "disabled" else 1)
+        for request in server["requests"]:
+            prompt = request["messages"][0]["content"]
+            assert json.loads(
+                prompt.split("## Rule reward\n", 1)[1].split(
+                    "\n\n## Artifact evidence", 1
+                )[0]
+            ) == {"reward": 1}
+    logs = Path(context.paths.verifier_logs)
+    rewards = json.loads((logs / "reward.json").read_text(encoding="utf-8"))
+    assert rewards["reward"] == rewards["rule_score"] == 1
+    assert rewards["continuation"] == float(delivery is True)
+    assert ("llm_score" in rewards) is (judge_status == "complete")
+    assert result == json.loads((logs / "score.json").read_text(encoding="utf-8"))
+    assert result["tests_total"] == 2
+    assert result["metadata"]["continuation"] == {
+        "passed": delivery is True,
+        "check_ids": ["custom:delivery"],
+        "failed_check_ids": [] if delivery is True else ["custom:delivery"],
+        "missing_check_ids": ["custom:delivery"] if delivery is None else [],
+    }
+    assert result["judges"][1]["metadata"]["judge_status"] == judge_status
+
+
+def test_failed_zero_weight_dimension_is_not_sent_to_judge(tmp_path):
+    grader, context = api_task(tmp_path)
+    grader.write_text(
+        json.dumps(
+            {
+                "final_terms": ["delivered"],
+                "custom_checks": ["valid"],
+                "scoring": {"weights": {"final_answer": 0}},
+                "continuation_checks": ["final_answer"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (Path(context.paths.agent_logs) / "trajectory.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "ATIF-v1.7",
+                "trajectory_id": "fixture",
+                "agent": {"name": "fixture", "version": "1"},
+                "steps": [{"step_id": 1, "source": "agent", "message": "wrong answer"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with judge_server() as server:
+        result = asyncio.run(
+            run_verifier(
+                grader,
+                runtime=context,
+                judge_settings=JudgeSettings(True, server["url"], "fixture"),
+            )
+        )
+        prompt = server["requests"][0]["messages"][0]["content"]
+    assert result["judges"][0]["scores"]["final_answer"] == 1
+    assert result["verdicts"][0]["status"] == "fail"
+    assert result["metadata"]["continuation"]["passed"] is False
+    assert result["reward"] == 1
+    assert json.loads(
+        prompt.split("## Rule reward\n", 1)[1].split("\n\n## Artifact evidence", 1)[0]
+    ) == {"reward": 1}
 
 
 @pytest.mark.parametrize("total", [None, 0, 0.25])

@@ -113,6 +113,13 @@ verifier aggregates them. `scoring.weights` can weight IDs such as
 `build_scoring_plan(config)` validates that plan without executing checks;
 `evaluate(...)` evaluates only built-in checks, not custom scripts.
 
+Declare `continuation_checks` using deterministic check IDs from the same plan
+and set the step's `min_reward = { continuation = 1.0 }`. Zero-weight checks can
+still be required. Read the individual step's condition; the root Trial's
+numeric average is not a whole-Trial gate result. The
+[continuation checks contract](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor.md#continuation-checks)
+owns validation and publication semantics.
+
 Missing or incorrect deliverables should fail the relevant check. Dependency,
 configuration, and grader failures must remain verifier errors. See
 [script checks and weighted scoring](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor.md#script-checks-and-weighted-scoring)

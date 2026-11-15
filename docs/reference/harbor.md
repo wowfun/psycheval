@@ -953,9 +953,49 @@ nonnegative weights, defaulting to one; total weight must be positive. For
 example, `{"custom_checks":["values","format"],"scoring":{"weights":
 {"custom:values":3,"custom:format":1}}}` awards 0.75 when only values passes.
 `aggregate(checks, *, plan)` computes `sum(weight * passed) / sum(weight)` over
-the complete plan. Dimension scores use the same rule; empty dimensions score
-one. `evaluate` only evaluates built-in checks and never executes Task code.
+the complete plan. Dimension scores use the same rule; dimensions with no
+positive weight score one, including dimensions containing only zero-weight
+checks. These values do not establish that those checks passed. `evaluate` only
+evaluates built-in checks and never executes Task code.
 Dataset-owned scorers and WorkBuddy scoring retain their own policies.
+
+#### Continuation checks
+
+`grader.json` may declare `continuation_checks`, a nonempty list of unique
+deterministic check IDs from the same scoring plan, including `custom:<id>`.
+Unknown IDs, duplicate IDs, empty lists, and LLM rubric references are
+configuration errors. Check weights do not affect this condition; zero-weight
+checks are allowed, while total scoring weight must still be positive.
+
+When configured, `aggregate` also returns `continuation`: one only when every
+referenced check passed, otherwise zero. A normally completed script that omits
+a referenced check fails the condition. Without the declaration, the key is
+absent. Script and configuration errors remain verifier errors with no current
+reward. The condition neither adds a scoring item nor changes quality rewards,
+dimension scores, check counts, or `test_status`.
+
+Use Harbor's existing step setting `min_reward = { continuation = 1.0 }` to
+stop subsequent steps when this condition fails. Gate decisions use each step's
+own result. Harbor's `mean` strategy averages every numeric reward key; a root
+Trial's averaged `continuation` is not a whole-Trial pass/fail decision. A missing
+gated key or verifier result cannot pass the threshold; globally disabled
+verification skips Harbor's threshold check.
+
+`reward.json` publishes the numeric condition unchanged by Judge merging.
+`score.json` records `metadata.continuation` with `passed`, ordered `check_ids`,
+`failed_check_ids`, and `missing_check_ids`. Failed IDs include missing checks;
+their existing deterministic verdicts retain the reasons. No additional verdict
+or rubric is created. Quality success and permission to continue are separate:
+even a quality score of one cannot override a failed continuation condition.
+Task previews expose the referenced IDs without counting them as extra checks.
+
+For example, a delivery-only continuation condition can reference
+`["required_artifacts", "final_answer"]` while those checks have zero scoring
+weight and a substantive custom check carries the quality score. Allowing an
+independent next step after an upstream outage does not grant coverage or
+substantive quality credit for the failed retrieval.
+
+#### Score publication
 
 `reward.json` contains numeric results. `score.json` uses the Office score
 envelope: final `reward` and `overall`, `test_status`, unweighted
@@ -967,6 +1007,12 @@ group's `scores.pass_rate` has the same meaning; its `scores.overall` and
 Status follows Office's finalizer: `full_pass` for
 reward one, `partial_pass` for a positive reward below one, and `no_pass` for zero.
 Values retain their full precision.
+These statuses describe the quality score, not permission to execute another
+step. A `full_pass` may coexist with a failed zero-weight delivery check and
+`metadata.continuation.passed=false`; inspect the
+[continuation condition](#continuation-checks) for control flow. Neither
+`test_status` nor a dimension's neutral zero-weight score establishes that all
+required checks passed.
 
 Each deterministic check has an Office-shaped verdict with its existing
 `item_id`, binary `status` and `score`, `reason` from check evidence,
@@ -1109,7 +1155,7 @@ the step name when present, the current weighted rule total before LLM merging,
 referenced artifacts with read metadata and faithful text, and the rubric's
 question, pass/fail criteria, and scope limits when present. Its `Rule reward`
 context includes only `reward`, or an empty object when no
-rule total was supplied. It omits dimension scores (including
+rule total was supplied. It omits continuation, dimension scores (including
 neutral zero-weight dimensions), and LLM scores. The total summarizes the
 configured quality weights; it is not proof of delivery or of any individual
 check passing. This projection applies to normal verification and prepared
@@ -1207,8 +1253,9 @@ Results finishing after the Judge total deadline remain incomplete, even when
 all rubric responses are available after synchronous diagnostic I/O; they do not
 enable score merging.
 
-`reward.json` contains the final reward, rule dimensions, `rule_score`, and, only
-when complete, `llm_score`. `score.json` adds `llm_judge_component_score` only
+`reward.json` contains the final reward, rule dimensions, `rule_score`, the
+optional [continuation condition](#continuation-checks), and, only when complete,
+`llm_score`. `score.json` adds `llm_judge_component_score` only
 when the Judge completes. Its `llm_judge` group (type `llm_judge`, family `llm`)
 contains one verdict per rubric with `llm:<id>`, evidence references, and rubric
 criteria in metadata. Unassessed rubrics use `abstain` with a null score;

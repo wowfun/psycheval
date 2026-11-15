@@ -65,8 +65,9 @@ also uses `window: weekly`, X uses the snapshot's `window_start` and
 step's final answer must name that file exactly.
 
 The step-local `grader.json` owns deterministic weights. Three source-call checks
-each carry weight 1; artifact existence and final-answer names each carry only
-0.05 while remaining delivery gates. Report metadata checks each carry only
+each carry weight 1. GitHub and X artifact existence and final-answer names have
+zero quality weight and remain required continuation checks; the last HN step
+retains their 0.05 delivery weights. Report metadata checks each carry only
 0.05, while Chinese-presence is diagnostic-only. GitHub repository slots each
 carry weight 1, and weekly-source identification carries 1. Hacker News story
 slots each carry 1, with snapshot validity, source and freshness at 0.5 each.
@@ -136,13 +137,17 @@ oversized-input fallback. The original observations remain in the trajectory.
 These provenance links identify recorded tool
 results; they do not make agent-authored parsing code or source content trusted.
 
-GitHub continues only when `required_tool`, `required_arguments`,
-`required_observation`, `required_artifacts`, and `final_answer` each score 1.
-X requires the same dimensions except `required_observation`, allowing a correctly
+GitHub and X use the shared
+[continuation contract](../../../docs/reference/harbor.md#continuation-checks)
+with `min_reward = { continuation = 1.0 }`. GitHub requires
+`required_call_1_tool`, `required_call_1_arguments`,
+`required_call_1_observation`, `required_artifacts`, and `final_answer` to pass.
+X requires the same checks except `required_call_1_observation`, allowing a correctly
 reported upstream outage to continue without hiding its failed coverage.
 Other checks award partial credit without independently blocking continuation.
-Harbor averages step rewards. A failed final answer is a failed item and
-continuation gate; it does not multiply all other scores by zero.
+Harbor averages step quality rewards. Each step's own `continuation` controls
+execution; its root Trial average is not a pass/fail status. A failed GitHub or
+X final answer stops continuation without changing other quality credit.
 
 Each step's `tests/judge.yaml` adds three equally weighted rubrics: faithful
 summaries, concrete information value, and clear Chinese with honest statements

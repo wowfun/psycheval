@@ -53,6 +53,75 @@ def test_weights_span_builtin_and_custom_checks_and_allow_zero_weight():
     assert result["reward"] == 0.25
     assert result["final_answer"] == 0
     assert result["custom_outputs"] == 1
+    assert "continuation" not in result
+
+
+@pytest.mark.parametrize("weight", [0, 0.05, 1])
+@pytest.mark.parametrize("quality", [False, True])
+@pytest.mark.parametrize(
+    ("answer", "delivery"),
+    [(True, True), (False, True), (None, True), (True, False), (True, None)],
+)
+def test_continuation_uses_check_results_independently_of_weights(
+    weight, quality, answer, delivery
+):
+    config = {
+        "final_terms": ["done"],
+        "custom_checks": ["quality", "delivery"],
+        "scoring": {"weights": {"final_answer": weight, "custom:delivery": weight}},
+    }
+    checks = [
+        {"id": key, "passed": value}
+        for key, value in (
+            ("final_answer", answer),
+            ("custom:quality", quality),
+            ("custom:delivery", delivery),
+        )
+        if value is not None
+    ]
+    original = aggregate(checks, plan=build_scoring_plan(config))
+    plan = build_scoring_plan(
+        {**config, "continuation_checks": ["final_answer", "custom:delivery"]}
+    )
+    actual = aggregate(checks, plan=plan)
+    assert actual.pop("continuation") == float(answer is True and delivery is True)
+    assert actual == original
+    if weight == 0:
+        assert actual["reward"] == float(quality)
+        assert actual["final_answer"] == 1  # A neutral dimension is not a gate.
+
+
+@pytest.mark.parametrize(
+    "references",
+    [
+        None,
+        [],
+        "custom:x",
+        {},
+        True,
+        [1],
+        [[]],
+        [""],
+        ["x"],
+        ["llm:x"],
+        ["custom:unknown"],
+        ["custom:x", "custom:x"],
+    ],
+)
+def test_invalid_continuation_references(references):
+    with pytest.raises(ValueError, match="continuation_checks"):
+        build_scoring_plan({"custom_checks": ["x"], "continuation_checks": references})
+
+
+def test_continuation_still_requires_positive_quality_weight():
+    with pytest.raises(ValueError, match="total scoring weight"):
+        build_scoring_plan(
+            {
+                "custom_checks": ["delivery"],
+                "scoring": {"weights": {"custom:delivery": 0}},
+                "continuation_checks": ["custom:delivery"],
+            }
+        )
 
 
 @pytest.mark.parametrize(

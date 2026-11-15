@@ -26,14 +26,14 @@ timeout_sec = 180.0
 
 [[steps]]
 name = "github"
-min_reward = { required_tool = 1.0, required_arguments = 1.0, required_observation = 1.0, required_artifacts = 1.0, final_answer = 1.0 }
+min_reward = { continuation = 1.0 }
 
 [steps.verifier]
 environment_mode = "shared"
 
 [[steps]]
 name = "x"
-min_reward = { required_tool = 1.0, required_arguments = 1.0, required_artifacts = 1.0, final_answer = 1.0 }
+min_reward = { continuation = 1.0 }
 
 [steps.verifier]
 environment_mode = "shared"

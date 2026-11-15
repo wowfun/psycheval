@@ -6,7 +6,7 @@ from collections import Counter
 from typing import Any
 
 from ._judge_config import JudgeConfig
-from ._scoring import REWARD_DIMENSIONS
+from ._scoring import REWARD_DIMENSIONS, ScoringPlan
 
 
 def _verdict(
@@ -64,6 +64,8 @@ def score_payload(
     judge_config: JudgeConfig | None,
     judge: dict[str, Any],
     merge: dict[str, Any],
+    *,
+    plan: ScoringPlan,
 ) -> dict[str, Any]:
     """Serialize completed scoring without recalculating or rounding rewards."""
     rule_verdicts = [
@@ -166,6 +168,20 @@ def score_payload(
     counts = Counter(verdict["status"] for verdict in verdicts)
     if "llm_score" in rewards:
         merge_metadata["llm_score"] = rewards["llm_score"]
+    metadata = {"scoring_policy": "weighted_mean", "score_merge": merge_metadata}
+    if plan.continuation_checks:
+        by_id = {check["id"]: check for check in checks}
+        required = [by_id[check_id] for check_id in plan.continuation_checks]
+        metadata["continuation"] = {
+            "passed": rewards["continuation"] == 1,
+            "check_ids": list(plan.continuation_checks),
+            "failed_check_ids": [
+                check["id"] for check in required if not check["passed"]
+            ],
+            "missing_check_ids": [
+                check["id"] for check in required if check["missing"]
+            ],
+        }
     reward = rewards["reward"]
     return {
         "reward": reward,
@@ -199,5 +215,5 @@ def score_payload(
             },
             "evidence": {"records": records, "metadata": {}},
         },
-        "metadata": {"scoring_policy": "weighted_mean", "score_merge": merge_metadata},
+        "metadata": metadata,
     }

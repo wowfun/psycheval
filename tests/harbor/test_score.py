@@ -39,13 +39,18 @@ GROUP_FIELDS = {
 }
 
 
-def publish(config=None, judge=None):
+def publish(config=None, judge=None, *, continuation_checks=None):
     plan = build_scoring_plan(
         {
             "custom_checks": ["pass", "fail", "missing"],
             "scoring": {
                 "weights": {"custom:pass": 2, "custom:fail": 1, "custom:missing": 0}
             },
+            **(
+                {"continuation_checks": continuation_checks}
+                if continuation_checks
+                else {}
+            ),
         }
     )
     checks = [
@@ -55,7 +60,7 @@ def publish(config=None, judge=None):
     judge = judge or {"status": "absent", "reason": "no judge.yaml", "checks": []}
     rewards, merge = merge_scores(aggregate(checks, plan=plan), config, judge)
     return score_payload(
-        normalize_checks(checks, plan=plan), rewards, config, judge, merge
+        normalize_checks(checks, plan=plan), rewards, config, judge, merge, plan=plan
     )
 
 
@@ -87,6 +92,7 @@ def test_rule_score_schema_counts_order_and_precision():
     assert result["test_pass_rate"] == 1 / 3
     assert result["tests_passed"] == 1 and result["tests_total"] == 3
     assert result["test_status"] == "partial_pass"
+    assert "continuation" not in result["metadata"]
     assert len(result["judges"]) == 1
     group = result["judges"][0]
     assert group["scores"]["pass_rate"] == 1 / 3
@@ -182,6 +188,35 @@ def test_status_follows_final_office_reward_even_when_rule_rate_is_below_one():
     assert result["test_status"] == "full_pass"
     assert result["test_pass_rate"] == 1 / 3
     assert result["reward"] == 1
+
+
+@pytest.mark.parametrize("status", ["complete", "incomplete", "disabled"])
+def test_continuation_diagnostics_survive_judge_without_inflating_counts(status):
+    config = replace(two_rubrics(), rule_weight=0, llm_weight=1)
+    judge = {
+        "status": status,
+        "reason": "fixture",
+        "checks": [
+            {"id": name, "passed": True, "reason": "confirmed"}
+            for name in ("fidelity", "quality")
+        ]
+        if status == "complete"
+        else [],
+    }
+    baseline = publish(config, judge)
+    gated = publish(
+        config,
+        judge,
+        continuation_checks=["custom:missing", "custom:pass", "custom:fail"],
+    )
+    assert gated["metadata"].pop("continuation") == {
+        "passed": False,
+        "check_ids": ["custom:missing", "custom:pass", "custom:fail"],
+        "failed_check_ids": ["custom:missing", "custom:fail"],
+        "missing_check_ids": ["custom:missing"],
+    }
+    assert gated == baseline
+    assert gated["reward"] == (1 if status == "complete" else 2 / 3)
 
 
 @pytest.mark.parametrize("status", ["disabled", "incomplete"])

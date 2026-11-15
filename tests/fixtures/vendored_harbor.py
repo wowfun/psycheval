@@ -281,6 +281,24 @@ def verifier(root: Path) -> None:
         ]
         == 0.5
     )
+    grader.write_text(
+        json.dumps(
+            {
+                "custom_checks": ["value", "missing"],
+                "scoring": {"weights": {"custom:missing": 0}},
+                "continuation_checks": ["custom:missing"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_module("verifier", str(grader))
+    gated = json.loads((root / "verifier/reward.json").read_text(encoding="utf-8"))
+    assert gated["reward"] == 1 and gated["continuation"] == 0
+    metadata = json.loads((root / "verifier/score.json").read_text(encoding="utf-8"))[
+        "metadata"
+    ]
+    assert metadata["continuation"]["missing_check_ids"] == ["custom:missing"]
+    grader.write_text(json.dumps({"custom_checks": ["value", "missing"]}))
     import yaml
 
     (root / "judge.yaml").write_text(

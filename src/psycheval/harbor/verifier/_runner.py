@@ -195,6 +195,7 @@ async def run_verifier(
             judge_config,
             judge,
             merge,
+            plan=plan,
         )
         await run_blocking(_write_json, verifier_logs / "score.json", result)
         await run_blocking(_write_json, verifier_logs / "reward.json", rewards)

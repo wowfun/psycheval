@@ -45,13 +45,20 @@
     "github_repository_09",
     "github_repository_10"
   ],
+  "continuation_checks": [
+    "required_call_1_tool",
+    "required_call_1_arguments",
+    "required_call_1_observation",
+    "required_artifacts",
+    "final_answer"
+  ],
   "scoring": {
     "weights": {
       "required_call_1_tool": 1,
       "required_call_1_arguments": 1,
       "required_call_1_observation": 1,
-      "required_artifacts": 0.05,
-      "final_answer": 0.05,
+      "required_artifacts": 0,
+      "final_answer": 0,
       "custom:report_unique": 0.05,
       "custom:report_filename": 0.05,
       "custom:report_timestamp": 0.05,

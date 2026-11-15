@@ -114,6 +114,34 @@ def test_missing_is_zero_but_malformed_is_unknown(tmp_path):
     assert value["scoring_diagnostics"]
 
 
+def test_continuation_preview_preserves_references_without_extra_scoring_items(
+    tmp_path,
+):
+    task(tmp_path)
+    config = {
+        "custom_checks": ["content", "delivery"],
+        "scoring": {"weights": {"custom:delivery": 0}},
+        "continuation_checks": ["custom:delivery"],
+    }
+    content = json.dumps(config)
+    write(tmp_path, "tests/grader.json", content)
+    preview = scoring_file_preview("tests/grader.json", content)
+    assert preview["config"] == config
+    assert [item["id"] for item in preview["items"]] == [
+        "custom:content",
+        "custom:delivery",
+    ]
+    assert preview["items"][1]["weight"] == 0
+    value = inventory(tmp_path)
+    assert value["rule_count"] == value["scoring_item_count"] == 2
+    assert not value["scoring_diagnostics"]
+    config["continuation_checks"] = ["custom:unknown"]
+    write(tmp_path, "tests/grader.json", json.dumps(config))
+    value = inventory(tmp_path)
+    assert value["rule_count"] is None
+    assert "continuation_checks" in value["scoring_diagnostics"][0]
+
+
 def test_office_extended_metadata_is_read_without_executing_any_code(tmp_path):
     task(tmp_path)
     write(

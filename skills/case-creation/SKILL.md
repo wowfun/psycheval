@@ -126,6 +126,12 @@ prerequisites; score them separately only when they measure a substantive task
 requirement. Avoid counting the same achievement repeatedly or letting these
 auxiliary items outweigh correctness.
 
+For multi-step tasks, define continuation requirements separately from quality
+weights. Allowing an independent later step after an honestly reported upstream
+outage must not grant retrieval coverage or substantive quality credit for the
+failed step. Use the integration reference's continuation mechanism rather than
+relying on a small scoring weight to enforce delivery.
+
 Grade acceptable outcomes without forcing an incidental filename, exact wording,
 tool sequence, or implementation unless it is part of the public requirement.
 For retrieval/extraction, consider both omissions and false additions, source

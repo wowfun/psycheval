@@ -30,13 +30,32 @@ def hashes(root):
 
 @pytest.mark.parametrize(
     "mode",
-    ["partial", "source_failure", "delivery_failure", "x_outage", "x_false_success"],
+    [
+        "partial",
+        "source_failure",
+        "delivery_failure",
+        "missing_artifact",
+        "missing_gate",
+        "verifier_crash",
+        "judge_incomplete",
+        "x_outage",
+        "x_false_success",
+    ],
 )
 def test_three_step_native_trial_with_local_judge(tmp_path, mode):
     task = tmp_path / "中文 task"
     shutil.copytree(TASK, task, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     # Every step's complete YAML replaces this shared declaration, not a field merge.
     (task / "tests/judge.yaml").write_text("shared_only: must not survive\n")
+    if mode == "missing_gate":
+        grader = task / "steps/github/tests/grader.json"
+        config = json.loads(grader.read_text())
+        del config["continuation_checks"]
+        grader.write_text(json.dumps(config), encoding="utf-8")
+    elif mode == "verifier_crash":
+        (task / "steps/github/tests/test_outputs.py").write_text(
+            "raise RuntimeError('continuation fixture crash')\n", encoding="utf-8"
+        )
     before = hashes(task)
     jobs = tmp_path / "jobs"
     workspaces = tmp_path / "workspaces"
@@ -47,7 +66,11 @@ def test_three_step_native_trial_with_local_judge(tmp_path, mode):
     )
     with judge_server() as server:
         server["behavior"] = {
-            name: {"passed": False}
+            name: (
+                {"content": "invalid response"}
+                if mode == "judge_incomplete"
+                else {"passed": mode == "delivery_failure"}
+            )
             for name in ("summary_faithfulness", "information_value", "clear_chinese")
         }
         args = [
@@ -106,24 +129,47 @@ def test_three_step_native_trial_with_local_judge(tmp_path, mode):
         assert len(trials) == 1
         trial = trials[0].parent
         details = json.loads(trials[0].read_text(encoding="utf-8"))
-        assert details.get("exception_info") is None, details
-        assert all(
-            step.get("exception_info") is None for step in details["step_results"]
-        ), details["step_results"]
+        if mode == "verifier_crash":
+            assert details["step_results"][0].get("exception_info") is not None
+        else:
+            assert details.get("exception_info") is None, details
+            assert all(
+                step.get("exception_info") is None for step in details["step_results"]
+            ), details["step_results"]
         step_dirs = list((trial / "steps").iterdir())
-        continues = mode in {"partial", "x_outage", "x_false_success"}
+        continues = mode in {
+            "partial",
+            "judge_incomplete",
+            "x_outage",
+            "x_false_success",
+        }
         assert {step.name for step in step_dirs} == (
             {"github", "x", "hacker-news"} if continues else {"github"}
         )
-        gh = json.loads((trial / "steps/github/verifier/reward.json").read_text())
+        gh_logs = trial / "steps/github/verifier"
+        gh = (
+            json.loads((gh_logs / "reward.json").read_text())
+            if mode != "verifier_crash"
+            else {}
+        )
         if continues:
+            assert gh["continuation"] == 1
             config = json.loads((TASK / "steps/github/tests/grader.json").read_text())
             total_weight = sum(item.weight for item in build_scoring_plan(config).items)
             expected_gh = 1 - (1 / total_weight if mode == "partial" else 0)
             assert gh["rule_score"] == pytest.approx(expected_gh)
-            assert gh["llm_score"] == 0 and gh["reward"] == pytest.approx(
-                0.35 * expected_gh
-            )
+            if mode == "judge_incomplete":
+                assert "llm_score" not in gh
+                assert gh["reward"] == expected_gh
+            else:
+                assert gh["llm_score"] == 0 and gh["reward"] == pytest.approx(
+                    0.35 * expected_gh
+                )
+            # Harbor averages every key, including the absent final-step gate as 0.
+            # This root value does not decide whether any step may execute.
+            assert details["verifier_result"]["rewards"][
+                "continuation"
+            ] == pytest.approx(2 / 3)
             assert len(server["requests"]) == (7 if mode.startswith("x_") else 9)
             assert {
                 request["messages"][-1]["content"]
@@ -134,6 +180,7 @@ def test_three_step_native_trial_with_local_judge(tmp_path, mode):
             if mode.startswith("x_"):
                 x_logs = trial / "steps/x/verifier"
                 x_reward = json.loads((x_logs / "reward.json").read_text())
+                assert x_reward["continuation"] == 1
                 assert x_reward["required_observation"] == 0
                 assert all(
                     x_reward[name] == 1
@@ -157,11 +204,45 @@ def test_three_step_native_trial_with_local_judge(tmp_path, mode):
                 assert checks["custom:x_posts_sama"]["status"] == "fail"
                 assert x_reward["rule_score"] < 0.25
                 assert x_reward["reward"] < 0.09
+        elif mode == "verifier_crash":
+            assert not (gh_logs / "reward.json").exists()
+            assert (gh_logs / "verifier-error.txt").is_file()
+        elif mode == "missing_gate":
+            assert "continuation" not in gh
         else:
-            gate = (
-                "required_observation" if mode == "source_failure" else "final_answer"
+            assert gh["continuation"] == 0
+            score = json.loads((gh_logs / "score.json").read_text(encoding="utf-8"))
+            failed = score["metadata"]["continuation"]["failed_check_ids"]
+            expected = {
+                "source_failure": "required_call_1_observation",
+                "delivery_failure": "final_answer",
+                "missing_artifact": "required_artifacts",
+            }[mode]
+            assert expected in failed
+            if mode == "delivery_failure":
+                # Passing quality and a complete positive Judge cannot rescue delivery.
+                assert (
+                    gh["final_answer"]
+                    == gh["rule_score"]
+                    == gh["llm_score"]
+                    == gh["reward"]
+                    == 1
+                )
+                assert score["test_status"] == "full_pass"
+            if mode == "missing_artifact":
+                assert gh["required_artifacts"] == 1
+        for request in server["requests"]:
+            prompt = request["messages"][-1]["content"]
+            name = prompt.split("## Step name\n", 1)[1].split("\n\n", 1)[0]
+            prompt_rewards = json.loads(
+                prompt.split("## Rule reward\n", 1)[1].split(
+                    "\n\n## Artifact evidence", 1
+                )[0]
             )
-            assert gh[gate] == 0
+            published = json.loads(
+                (trial / "steps" / name / "verifier/reward.json").read_text()
+            )
+            assert prompt_rewards == {"reward": published["rule_score"]}
         assert hashes(task) == before
         assert not any(workspaces.iterdir())
         assert (trial / "prepare.log").exists()

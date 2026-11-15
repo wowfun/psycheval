@@ -38,6 +38,7 @@ class ScoringItem:
 @dataclass(frozen=True)
 class ScoringPlan:
     items: tuple[ScoringItem, ...]
+    continuation_checks: tuple[str, ...] = ()
 
     @property
     def custom_ids(self) -> tuple[str, ...]:
@@ -58,7 +59,11 @@ def build_scoring_plan(config: dict[str, Any]) -> ScoringPlan:
     from ..family import scope
 
     scope(config.get("trajectory_scope", "family"))
-    unknown = sorted(set(config) - BUILTIN_FIELDS - {"custom_checks", "scoring"})
+    unknown = sorted(
+        set(config)
+        - BUILTIN_FIELDS
+        - {"custom_checks", "scoring", "continuation_checks"}
+    )
     if unknown:
         raise ValueError(
             "verifier config contains unsupported fields: " + ", ".join(unknown)
@@ -99,6 +104,17 @@ def build_scoring_plan(config: dict[str, Any]) -> ScoringPlan:
     items.extend(ScoringItem(f"custom:{name}", "custom_outputs") for name in custom)
     if not items:
         raise ValueError("verifier config requires at least one non-empty constraint")
+    continuation = config.get("continuation_checks", [])
+    if "continuation_checks" in config and (
+        not isinstance(continuation, list)
+        or not continuation
+        or not all(isinstance(check_id, str) for check_id in continuation)
+        or len(continuation) != len(set(continuation))
+        or set(continuation) - {item.id for item in items}
+    ):
+        raise ValueError(
+            "continuation_checks must be a nonempty list of unique declared check IDs"
+        )
     scoring = config.get("scoring", {})
     if not isinstance(scoring, dict) or set(scoring) - {"weights"}:
         raise ValueError("scoring must be an object containing only weights")
@@ -123,7 +139,7 @@ def build_scoring_plan(config: dict[str, Any]) -> ScoringPlan:
         raise ValueError("total scoring weight must be finite") from exc
     if not math.isfinite(total) or total <= 0:
         raise ValueError("total scoring weight must be finite and positive")
-    return ScoringPlan(tuple(items))
+    return ScoringPlan(tuple(items), tuple(continuation))
 
 
 def normalize_checks(
@@ -178,7 +194,7 @@ def aggregate(checks: list[dict[str, Any]], *, plan: ScoringPlan) -> dict[str, f
             else 1.0
         )
 
-    return {
+    rewards = {
         "reward": weighted(normalized),
         **{
             dimension: weighted(
@@ -187,3 +203,9 @@ def aggregate(checks: list[dict[str, Any]], *, plan: ScoringPlan) -> dict[str, f
             for dimension in REWARD_DIMENSIONS
         },
     }
+    if plan.continuation_checks:
+        by_id = {check["id"]: check for check in normalized}
+        rewards["continuation"] = float(
+            all(by_id[check_id]["passed"] for check_id in plan.continuation_checks)
+        )
+    return rewards
