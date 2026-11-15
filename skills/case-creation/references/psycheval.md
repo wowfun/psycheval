@@ -33,7 +33,8 @@ required.
 
 For ordinary native Host tasks, put static workspace inputs in
 `environment/data/`. When transformation is necessary,
-`environment/prepare.py` can implement `prepare(workdir: str) -> None` and locate
+`environment/prepare.py` can implement `prepare(workdir, state_dir) -> list[str]`
+and select prepared input paths for the Host snapshot. Locate
 its own source material through `__file__`. This hook replaces the default data
 copy. Dependencies must already be installed; Dockerfiles are not executed by
 native preparation. Keep gold and grading code in `tests/`, outside prepared
@@ -41,14 +42,15 @@ Agent inputs. Host execution is trusted native execution, not a sandbox.
 
 For execution-relative information, use preparation to resolve a timezone-aware
 run clock once and construct the dependent inputs. The native preparation hook
-does not receive a framework-provided clock, generation seed, or private
-verifier-state directory. Supply these through the task's actual preparation
-and harness design rather than assuming fields exist in the runtime protocol.
+does not receive a framework-provided clock or generation seed. Store Task-resolved
+reference facts in its `state_dir`; the ordinary Native Host retains them for
+verification through `paths.preparation_state` and selected inputs through
+`paths.inputs`. Other runtimes may leave these paths unavailable.
 Keep the authored source immutable: do not overwrite `tests/` gold in the source
 task for each attempt or share mutable generated state across concurrent trials.
 
-Retain the resolved reference and necessary initial-input snapshot through a
-run-owned mechanism that the Agent cannot rewrite as grading truth. Derive
+Retain the resolved reference and necessary initial-input snapshot in run-owned
+storage outside the Agent workspace. Derive
 expectations from that retained state; do not independently call `now()` in the
 grader or read expected values from Agent output. A public timestamp may also
 appear in normal task context, but it is not an independently trusted copy.
@@ -112,7 +114,8 @@ three-slide PPTX in `output/`. Its minimal `grader.json` is:
 ```
 
 `test_outputs.py` receives `--context` and `--output`. Context supplies
-`paths.workdir`, `tests`, `artifacts`, `agent_logs`, and `verifier_logs`. Return
+`paths.workdir`, `tests`, `artifacts`, `agent_logs`, `verifier_logs`, and nullable
+`inputs`/`preparation_state`. Return
 UTF-8 JSON checks with the declared IDs and boolean `passed` values; the shared
 verifier aggregates them. `scoring.weights` can weight IDs such as
 `custom:presentation` when multiple checks warrant different weights.
