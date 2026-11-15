@@ -42,10 +42,9 @@ def evaluate(
     return checks
 
 
-def _outcome_checks(
-    trajectory: Trajectory, config: dict[str, Any], artifacts_dir: Path
-) -> list[dict[str, Any]]:
-    final_answer = next(
+def final_answer_text(trajectory: Trajectory) -> str:
+    """Return the last nonempty retained Agent message in this trajectory only."""
+    return next(
         (
             content_text(step.message)
             for step in reversed(trajectory.steps)
@@ -53,6 +52,12 @@ def _outcome_checks(
         ),
         "",
     )
+
+
+def _outcome_checks(
+    trajectory: Trajectory, config: dict[str, Any], artifacts_dir: Path
+) -> list[dict[str, Any]]:
+    final_answer = final_answer_text(trajectory)
     final_terms = string_list(config.get("final_terms"))
     required_artifacts = string_list(
         config.get("required_artifacts"), field="required_artifacts"

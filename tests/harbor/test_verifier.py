@@ -19,6 +19,7 @@ from psycheval.harbor.verifier import (
     aggregate,
     build_scoring_plan,
     evaluate,
+    final_answer_text,
     matching_observations,
 )
 from tests.fixtures import load_pbench_trajectory as _fixture_trajectory
@@ -947,6 +948,41 @@ def test_final_answer_uses_only_the_last_nonempty_agent_message(tmp_path: Path) 
 
     assert by_id["required_artifacts"]["passed"] is True
     assert by_id["final_answer"]["passed"] is False
+
+
+def test_final_answer_helper_uses_retained_message_blocks_in_current_trajectory(
+    tmp_path,
+):
+    trajectory = Trajectory(
+        schema_version="ATIF-v1.7",
+        trajectory_id="parent",
+        agent={"name": "fixture", "version": "1"},
+        steps=[
+            {"step_id": 1, "source": "user", "message": "instruction"},
+            {"step_id": 2, "source": "agent", "message": "old answer"},
+            {
+                "step_id": 3,
+                "source": "agent",
+                "message": [
+                    {"type": "text", "text": "第一段"},
+                    {"type": "text", "text": "second"},
+                ],
+                "reasoning_content": "private reasoning",
+                "tool_calls": [
+                    {"tool_call_id": "one", "function_name": "read", "arguments": {}}
+                ],
+            },
+            {"step_id": 4, "source": "agent", "message": "  "},
+        ],
+    )
+    child = trajectory.model_copy(deep=True)
+    child.steps[-1].message = "child answer"
+    trajectory.subagent_trajectories = [child]
+    assert final_answer_text(trajectory) == "第一段\nsecond"
+    checks = evaluate(trajectory, {"final_terms": ["第一段", "second"]}, tmp_path)
+    assert next(check for check in checks if check["id"] == "final_answer")["passed"]
+    trajectory.steps = trajectory.steps[:1]
+    assert final_answer_text(trajectory) == ""
 
 
 @pytest.mark.parametrize(

@@ -1040,6 +1040,13 @@ or silent truncation. Custom scripts can read the current-step ATIF from their
 `agent_logs` runtime path and publish final answers and source material in
 `verifier_logs/artifact_text/`, directly or through a manifest. Scripts own
 refreshing evidence outside the framework-managed directories below.
+`final_answer_text(trajectory)` returns the last nonempty Agent message in the
+supplied trajectory, including messages with tool calls. Text blocks are joined
+with newlines; reasoning, observations and child trajectories are not searched.
+Built-in final-answer checks use this same helper. This is retained trajectory
+text, not a guarantee of a complete, unredacted original or a terminal response.
+Custom checks may publish it as `final_answer` using their own `EvidenceWriter`;
+the framework does not open another writer or publish an implicit artifact.
 `matching_observations(trajectory, rule)` returns successful observation text
 for one required-call rule using the same call/argument/success predicates as
 built-in checks, without assigning another score.

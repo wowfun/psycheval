@@ -1,7 +1,7 @@
 """Evaluate Harbor trajectories through Psycheval's observable-evidence rules."""
 
 from ._calls import ObservationIndex, matching_observations
-from ._evaluation import evaluate
+from ._evaluation import evaluate, final_answer_text
 from ._judge import PreparedJudge, prepare_judge, run_judge
 from ._judge_config import JudgeConfig, load_judge_config, parse_judge_config
 from ._judge_settings import JudgeSettings
@@ -22,6 +22,7 @@ __all__ = [
     "aggregate",
     "build_scoring_plan",
     "evaluate",
+    "final_answer_text",
     "matching_observations",
     "run_verifier",
 ]
