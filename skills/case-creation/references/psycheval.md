@@ -131,6 +131,26 @@ configuration, and grader failures must remain verifier errors. See
 [script checks and weighted scoring](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor.md#script-checks-and-weighted-scoring)
 for the complete protocol.
 
+## Bind retained tool and source evidence
+
+Use `ObservationIndex` or `matching_observations` for canonical tool evidence
+within the task's permitted trajectory scope. Dispatch wrappers may retain an
+operation in raw logs while leaving canonical identity or protocol evidence
+incomplete. Report that limitation separately from the Agent not performing the
+operation; it does not justify granting tool credit. Do not reconstruct trusted
+nested calls by interpreting arbitrary Agent-written code. The
+[permission and evidence contract](https://github.com/wowfun/psycheval/blob/main/docs/reference/harbor.md#permissions-and-evidence)
+owns adapter admission rules.
+
+When publishing source evidence, include legitimate supporting sources from the
+permitted retained trajectory family, beyond exact article-URL matches. Define
+narrow relationships to the selected items: a fetched README may support a story
+about that exact repository, while a longer repository-name prefix or another
+owner cannot.
+Preserve source identity and call provenance when publishing excerpts. A child's
+summary is not proof that it retrieved the claimed source. Do not fetch new
+external content during grading to repair missing retained evidence.
+
 ## Inspect documents and publish evidence
 
 Install the selected version of `psycheval[pdf]`, `[pptx]`, `[xlsx]`, or `[docx]`
