@@ -2,6 +2,7 @@ schema_version = "1.4"
 
 [task]
 name = "pbench-v1.0/web-search-01"
+description = "Find IANA's documentation-domain explanation through Web Search and give a source-supported answer."
 keywords = ["web-agent", "web-search"]
 
 [metadata]
@@ -10,3 +11,11 @@ category = "web-search"
 
 [environment]
 workdir = "/app"
+network_mode = "public"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 300.0
+environment_mode = "shared"

@@ -1,34 +1,9 @@
 {
-  "required_calls": [
-    {
-      "any": [
-        {
-          "tool_names": ["browsertype"],
-          "argument_values": {"text": "Harbor eval"},
-          "observation_terms": ["Harbor eval"]
-        },
-        {
-          "tool_names": ["computeraction"],
-          "argument_values": {"type": "type_text_at", "text": "Harbor eval"},
-          "observation_terms": ["Harbor eval"]
-        }
-      ]
-    },
-    {
-      "any": [
-        {
-          "tool_names": ["browserclick"],
-          "argument_terms": ["button"],
-          "observation_terms": ["submitted-form.html", "received!"]
-        },
-        {
-          "tool_names": ["computeraction"],
-          "argument_values": {"type": "click"},
-          "observation_terms": ["submitted-form.html", "received!"]
-        }
-      ]
+  "custom_checks": ["submitted_form", "submitted_screenshot"],
+  "scoring": {
+    "weights": {
+      "custom:submitted_form": 2,
+      "custom:submitted_screenshot": 1
     }
-  ],
-  "final_terms": ["submitted-form.html", "received!"],
-  "required_artifacts": ["web-form-submitted.png"]
+  }
 }

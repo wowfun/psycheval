@@ -1,26 +1,3 @@
 {
-  "required_calls": [
-    {
-      "any": [
-        {
-          "tool_names": ["websearch"],
-          "argument_terms": ["iana", "example domains"],
-          "observation_terms": [
-            "www.iana.org/help/example-domains",
-            "example.com",
-            "example.org"
-          ]
-        }
-      ]
-    }
-  ],
-  "forbidden_tool_names": [
-    "webfetch",
-    "execcommand",
-    "bash",
-    "terminal",
-    "executecode",
-    "shell"
-  ],
-  "final_terms": ["example.com", "example.org", "www.iana.org/help/example-domains"]
+  "custom_checks": ["search_backed_answer"]
 }

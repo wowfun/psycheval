@@ -19,7 +19,7 @@
         "results": [
           {
             "source_call_id": "search-1",
-            "content": "{\"items\": [{\"snippet\": \"IANA maintains example.com and example.org for documentation purposes.\", \"title\": \"Example Domains\", \"url\": \"https://www.iana.org/help/example-domains\"}]}",
+            "content": "{\"items\": [{\"snippet\": \"IANA maintains example.com and example.org for documentation purposes. They are not available for registration or transfer.\", \"title\": \"Example Domains\", \"url\": \"https://www.iana.org/help/example-domains\"}]}",
             "extra": {"is_error": false, "status": "completed"}
           }
         ]
@@ -28,7 +28,7 @@
     {
       "step_id": 3,
       "source": "agent",
-      "message": "example.com and example.org — https://www.iana.org/help/example-domains"
+      "message": "IANA maintains example.com and example.org for documentation purposes. They are not available for registration or transfer. Source: https://www.iana.org/help/example-domains"
     }
   ]
 }

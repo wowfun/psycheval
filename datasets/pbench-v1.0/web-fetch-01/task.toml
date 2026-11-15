@@ -2,6 +2,7 @@ schema_version = "1.4"
 
 [task]
 name = "pbench-v1.0/web-fetch-01"
+description = "Directly fetch IANA's page and report the revision date supported by the retained response."
 keywords = ["web-agent", "web-fetch"]
 
 [metadata]
@@ -10,3 +11,11 @@ category = "web-fetch"
 
 [environment]
 workdir = "/app"
+network_mode = "public"
+
+[agent]
+timeout_sec = 900.0
+
+[verifier]
+timeout_sec = 180.0
+environment_mode = "shared"
