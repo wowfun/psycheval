@@ -147,12 +147,18 @@ def _default_user_prompt(
         {"id": rubric.id, "passed": True, "reason": "Brief explanation"},
         ensure_ascii=False,
     )
+    # Control decisions and neutral dimensions are not evidence of quality.
+    rule_context = (
+        {"reward": rule_rewards["reward"]}
+        if rule_rewards is not None and "reward" in rule_rewards
+        else {}
+    )
     return (
         "You are a LLM-as-Judge evaluator. Judge the single rubric only from the "
         "evidence provided below. Do not guess content that does not appear in the artifacts.\n\n"
         "## Task instruction\n<task_instruction>\n"
         f"{escape(instruction, quote=False)}\n</task_instruction>{step_section}\n\n"
-        f"## Rule reward\n{json.dumps(rule_rewards or {}, ensure_ascii=False, indent=2)}\n\n"
+        f"## Rule reward\n{json.dumps(rule_context, ensure_ascii=False, indent=2)}\n\n"
         "## Artifact evidence\n" + "\n".join(artifacts) + "\n\n"
         f"## Rubric\nID: {rubric.id}\nQuestion: {rubric.question}\n"
         f"Pass criteria:\n{criteria(rubric.pass_criteria)}\n"

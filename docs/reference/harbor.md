@@ -1105,11 +1105,17 @@ does not inherit the environment value.
 message; an explicit string adds it unchanged before the user message.
 `user_prompt_template=None` uses an English Office-style rubric prompt beginning
 with `You are a LLM-as-Judge evaluator.` Its sections contain the task instruction,
-the step name when present, the current deterministic rewards before LLM merging,
+the step name when present, the current weighted rule total before LLM merging,
 referenced artifacts with read metadata and faithful text, and the rubric's
-question, pass/fail criteria, and scope limits when present. The default prompt
-keeps the `id`, `passed`, `reason` protocol and labels task instructions and Agent
-content as untrusted assessment data. Task instruction text is enclosed in
+question, pass/fail criteria, and scope limits when present. Its `Rule reward`
+context includes only `reward`, or an empty object when no
+rule total was supplied. It omits dimension scores (including
+neutral zero-weight dimensions), and LLM scores. The total summarizes the
+configured quality weights; it is not proof of delivery or of any individual
+check passing. This projection applies to normal verification and prepared
+Judge previews/runs, without changing published scores or gate decisions.
+The default prompt keeps the `id`, `passed`, `reason` protocol and labels task
+instructions and Agent content as untrusted assessment data. Task instruction text is enclosed in
 `<task_instruction>` tags, and each artifact's faithful text is enclosed in
 `<artifact_faithful_text>` tags. Task instruction, artifact metadata JSON, and
 faithful text use XML escaping for `&`, `<`, and `>` while preserving quotes,

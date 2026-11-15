@@ -18,7 +18,12 @@ from psycheval.harbor.runtime_config import (
     load_effective_runtime_config,
     write_effective_runtime_config,
 )
-from psycheval.harbor.verifier import JudgeSettings, run_verifier
+from psycheval.harbor.verifier import (
+    JudgeSettings,
+    prepare_judge,
+    run_judge,
+    run_verifier,
+)
 from psycheval.harbor.verifier.__main__ import main
 from psycheval.harbor.verifier._judge import (
     _default_user_prompt,
@@ -859,10 +864,7 @@ def test_default_prompts_use_each_calls_current_rule_rewards(tmp_path):
             )
             result = results[0 if request["model"] == "first" else 1]
             assert rewards == {
-                **{
-                    key: result["judges"][0]["scores"][key] for key in REWARD_DIMENSIONS
-                },
-                "reward": result["test_pass_rate"],
+                "reward": result["metadata"]["score_merge"]["rule_score"]
             }
     assert results[0]["reward"] == 0.8
     assert results[1]["reward"] == 0
@@ -898,6 +900,39 @@ def test_public_api_propagates_errors_without_stale_reward(tmp_path):
     logs = Path(context.paths.verifier_logs)
     assert not (logs / "reward.json").exists()
     assert "duplicate" in (logs / "verifier-error.txt").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("total", [None, 0, 0.25])
+def test_prepared_judge_projects_only_supplied_rule_total(tmp_path, total):
+    context = runtime(tmp_path)
+    rewards = {
+        "continuation": 0,
+        "final_answer": 1,
+        "required_artifacts": 1,
+        "llm_score": 0.9,
+        "rule_score": 0.8,
+    }
+    if total is not None:
+        rewards["reward"] = total
+    original = rewards.copy()
+    with judge_server() as server:
+        prepared = prepare_judge(
+            parse_judge_config(YAML),
+            evidence_root=Path(context.paths.verifier_logs),
+            settings=JudgeSettings(True, server["url"], "fixture"),
+            context=context.verifier,
+            rule_rewards=rewards,
+        )
+        preview = prepared.to_dict()["messages"]["fidelity"]
+        assert json.loads(
+            preview[0]["content"]
+            .split("## Rule reward\n", 1)[1]
+            .split("\n\n## Artifact evidence", 1)[0]
+        ) == ({} if total is None else {"reward": total})
+        result = asyncio.run(run_judge(prepared))
+        assert result["status"] == "complete"
+        assert server["requests"][0]["messages"] == preview
+    assert rewards == original
 
 
 @pytest.mark.parametrize(

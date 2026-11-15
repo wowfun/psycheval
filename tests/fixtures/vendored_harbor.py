@@ -376,7 +376,7 @@ def verifier(root: Path) -> None:
                         "\n\n## Artifact evidence", 1
                     )[0]
                 )
-                assert rewards["reward"] == 0.5 and "llm_score" not in rewards
+                assert rewards == {"reward": 0.5}
             return 200, json.dumps(
                 {
                     "choices": [
