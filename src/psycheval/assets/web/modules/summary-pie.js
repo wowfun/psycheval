@@ -23,7 +23,22 @@ function renderSummaryPieChart(metric) {
     const point = angle => `${100 + Math.cos(angle) * 88} ${100 + Math.sin(angle) * 88}`;
     return `<path d="M 100 100 L ${point(item.start)} A 88 88 0 ${item.share > .5 ? 1 : 0} 1 ${point(item.end)} Z" fill="${item.color}"><title>${title}</title></path>`;
   }).join("");
-  return `<section class="leaderboard-summary-chart" data-summary-chart="${esc(pie.definition.key)}"><div class="leaderboard-summary-chart-card-head"><h4>${esc(pie.definition.label)}</h4></div><div class="summary-pie"><svg viewBox="0 0 200 200" role="img" aria-label="${esc(`${pie.definition.label}: ${t("summary_pie", "Pie chart")}`)}">${sectors || '<circle cx="100" cy="100" r="88" fill="none" stroke="var(--rule)" stroke-width="1" />'}</svg>${pie.empty ? `<p>${esc(t("summary_pie_empty", "No positive values to plot"))}</p>` : ""}<ul>${pie.values.map(item => `<li data-pie-group="${esc(JSON.stringify(item.group.key))}"><i style="background:${item.color}" aria-hidden="true"></i><span>${esc(item.group.label)}</span><strong>${esc(item.formatted)}${item.percentage ? ` · ${esc(item.percentage)}` : ""}</strong>${item.valueHint ? `<small>${esc(item.valueHint)}</small>` : ""}</li>`).join("")}</ul></div></section>`;
+  const legend = pie.values.map(item => {
+    const hint = esc(item.hint || "");
+    return `<li data-pie-group="${esc(JSON.stringify(item.group.key))}"${hint ? ` aria-description="${hint}"` : ""}>
+      <i style="background:${item.color}" aria-hidden="true"></i>
+      <span>${esc(item.group.label)}</span>
+      <strong${hint ? ` title="${hint}"` : ""}>${esc(item.formatted)}${item.percentage ? ` · ${esc(item.percentage)}` : ""}</strong>
+    </li>`;
+  }).join("");
+  return `<section class="leaderboard-summary-chart" data-summary-chart="${esc(pie.definition.key)}">
+    <div class="leaderboard-summary-chart-card-head"><h4>${esc(pie.definition.label)}</h4></div>
+    <div class="summary-pie">
+      <svg viewBox="0 0 200 200" role="img" aria-label="${esc(`${pie.definition.label}: ${t("summary_pie", "Pie chart")}`)}">${sectors || '<circle cx="100" cy="100" r="88" fill="none" stroke="var(--rule)" stroke-width="1" />'}</svg>
+      ${pie.empty ? `<p>${esc(t("summary_pie_empty", "No positive values to plot"))}</p>` : ""}
+      <ul>${legend}</ul>
+    </div>
+  </section>`;
 }
 
 export { summaryPieData, renderSummaryPieChart };

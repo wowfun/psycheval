@@ -3,6 +3,7 @@ import { fmtNum, t } from "./shared.js";
 import { downloadBlob } from "./download.js";
 import { originNote, radarMetricLabel, radarOption } from "./summary-radar.js";
 import { wrappedLines } from "./summary-chart.js";
+import { summaryBarScaleNote } from "./summary-ui.js";
 import { canvasImageScale, canvasPngBlob } from "./canvas-image.js";
 
 const WIDTH = 1000, SCALE = 2, MARGIN = 32, GAP = 24;
@@ -73,7 +74,7 @@ function summaryImageLayout(kind, snapshot, context) {
   y += text(snapshot.subtitle, MARGIN, y, innerWidth, 16, INK, true) + 4;
   y += text(snapshot.scope, MARGIN, y, innerWidth, 13, MUTED) + 12;
   const note = kind === "pie" ? t("summary_pie_note", "Each pie shows selected groups’ shares of known positive totals. Unknown values have no slice.") : kind === "bar"
-    ? `${t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric.")} - = ${t("summary_no_data", "No data")}`
+    ? summaryBarScaleNote()
     : t("summary_radar_scale", "Relative to all groups in the current query · farther out is better. × = no data (offset near the origin for readability).");
   y += text(note, MARGIN, y, innerWidth, 13, MUTED) + GAP;
   let plot = null;
@@ -88,7 +89,7 @@ function summaryImageLayout(kind, snapshot, context) {
         rowY += text(metric.definition.label, x, rowY, cardWidth, 17, INK, true) + 12;
         for (const item of metric.values) {
           const labelHeight = text(item.group.label, x, rowY, cardWidth - 146, 13);
-          const valueHeight = text(`${item.formatted} · n=${fmtNum(item.count)}${item.valueHint ? ` · ${item.valueHint}` : ""}`, x + cardWidth - 130, rowY, 130, 13, MUTED);
+          const valueHeight = text(`${item.formatted} · n=${fmtNum(item.count)}`, x + cardWidth - 130, rowY, 130, 13, MUTED);
           rowY += Math.max(labelHeight, valueHeight) + 6;
           rect(x, rowY, cardWidth, 8, "#edf0f4");
           rect(x + cardWidth * (item.zero || 0) / 100, rowY - 2, 1, 12, MUTED);
@@ -110,7 +111,7 @@ function summaryImageLayout(kind, snapshot, context) {
       if (pie.empty) legendY += text(t("summary_pie_empty", "No positive values to plot"), MARGIN + 230, legendY, innerWidth - 230, 13, MUTED) + 8;
       for (const item of pie.values) {
         rect(MARGIN + 230, legendY + 5, 12, 12, item.color);
-        legendY += text(`${item.group.label}: ${item.formatted}${item.percentage ? ` · ${item.percentage}` : ""}${item.valueHint ? ` · ${item.valueHint}` : ""}`, MARGIN + 255, legendY, innerWidth - 255, 14) + 8;
+        legendY += text(`${item.group.label}: ${item.formatted}${item.percentage ? ` · ${item.percentage}` : ""}`, MARGIN + 255, legendY, innerWidth - 255, 14) + 8;
       }
       y = Math.max(y + 200, legendY) + GAP;
     }

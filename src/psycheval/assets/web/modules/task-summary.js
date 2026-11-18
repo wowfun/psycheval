@@ -6,7 +6,7 @@ import { reloadExpiredAdminSession } from "./http.js";
 import { renderSummaryGroupControl, bindSummaryGroupControl } from "./summary-groups.js";
 import { renderSummaryMetricControl, bindSummaryMetricControl } from "./summary-metrics.js";
 import { comparisonGroups } from "./summary-chart.js";
-import { renderSummarySegments, renderSummaryHeader, renderSummaryDisclosure, renderSummaryExportMenu, summaryBarData, renderSummaryBarChart } from "./summary-ui.js";
+import { renderSummarySegments, renderSummaryHeader, renderSummaryDisclosure, renderSummaryExportMenu, summaryBarData, summaryBarScaleNote, renderSummaryBarChart } from "./summary-ui.js";
 import { downloadSummaryImage } from "./summary-image.js";
 import { bindToolbarMenus } from "./toolbar-menu.js";
 import { renderSummaryPieChart } from "./summary-pie.js";
@@ -63,8 +63,8 @@ function summaryModel(rows, state) {
   const palette = radarColors(allGroups.length);
   const colors = new Map(allGroups.map((group, index) => [group.key, palette[index]]));
   const bars = definitions.map(definition => summaryBarData(definition, groups.map(group => ({ group, color: colors.get(group.key),
-    row: { count: group.task_count }, value: group[definition.key], hint: missingCountText(group, definition.key), valueHint: missingCountText(group, definition.key),
-  })), value => value == null ? t("task_count_unknown", "Unknown") : fmtNum(value)));
+    row: { count: group.task_count }, value: group[definition.key], hint: missingCountText(group, definition.key),
+  })), fmtNum));
   return { allGroups, groups, definitions, bars };
 }
 function taskSummaryScope(rows, state) {
@@ -85,11 +85,24 @@ function renderTaskSummary(root, rows, state, { onChange, onExport }) {
     + renderSummarySegments(t("summary_chart_type", "Chart"), [{ key: "bar", label: t("summary_bar", "Bar chart") }, { key: "pie", label: t("summary_pie", "Pie chart") }], state.chartType, "data-task-summary-chart")
     + renderSummaryGroupControl(state, allGroups) + renderSummaryMetricControl(state, options)
     + renderSummaryExportMenu({ id: state.id, kinds: [{ key: "xlsx", label: t("export_excel", "Export Excel") }, { key: "bar", label: t("summary_export_bar", "Bar chart (.png)") }, { key: "pie", label: t("summary_export_pie", "Pie chart (.png)") }], disabledReason });
-  const columns = [{ key: "group", label: groupLabel, valueType: "identity", value: row => row.label }, ...definitions.map(definition => ({ ...definition, numeric: true, valueType: "number", value: row => row[definition.key], format: value => value == null ? t("task_count_unknown", "Unknown") : fmtNum(value), cellTitle: row => missingCountText(row, definition.key) }))];
+  const columns = [
+    { key: "group", label: groupLabel, valueType: "identity", value: row => row.label },
+    ...definitions.map(definition => {
+      const hint = row => missingCountText(row, definition.key);
+      return {
+        ...definition, numeric: true, valueType: "number", value: row => row[definition.key], format: fmtNum,
+        cellTitle: hint,
+        cellAttrs: row => {
+          const description = hint(row);
+          return description ? `aria-description="${esc(description)}"` : "";
+        },
+      };
+    }),
+  ];
   const empty = !allGroups.length ? t("harbor_task_empty", "No Tasks") : !groups.length ? t("summary_group_select", "Select at least one comparison group.") : !definitions.length ? t("metric_select", "Select at least one available metric with data.") : "";
   root.innerHTML = renderSummaryHeader({ id: state.id, title: t("task_summary", "Task Summary"), scope: taskSummaryScope(rows, state), actions })
     + (empty ? `<p class="leaderboard-summary-empty">${esc(empty)}</p>` : renderSummaryDisclosure({ id: "task-summary-table-region", open: state.open, summary: `${definitions.length} ${t("summary_metrics", "metrics")} · ${groups.length} ${groupLabel}`, attribute: "data-task-summary-toggle", table: state.open ? renderDataTable({ tableId: "task-summary", columns, rows: groups, rowKey: row => JSON.stringify(row.key) }) : "" })
-      + (state.groupBy === "overall" ? "" : `<section class="leaderboard-summary-chart-panel" aria-label="${esc(state.chartType === "pie" ? t("summary_pie", "Pie chart") : t("summary_bar", "Bar chart"))}"><div class="leaderboard-summary-chart-head"><div><h3>${esc(groupLabel)}</h3><p>${esc(state.chartType === "pie" ? t("summary_pie_note", "Each pie shows selected groups’ shares of known positive totals. Unknown values have no slice.") : t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric."))}</p></div></div><div class="leaderboard-summary-chart-grid">${bars.map(bar => state.chartType === "pie" ? renderSummaryPieChart(bar) : renderSummaryBarChart(bar, t("task_summary_total", "Total"))).join("")}</div></section>`));
+      + (state.groupBy === "overall" ? "" : `<section class="leaderboard-summary-chart-panel" aria-label="${esc(state.chartType === "pie" ? t("summary_pie", "Pie chart") : t("summary_bar", "Bar chart"))}"><div class="leaderboard-summary-chart-head"><div><h3>${esc(groupLabel)}</h3><p>${esc(state.chartType === "pie" ? t("summary_pie_note", "Each pie shows selected groups’ shares of known positive totals. Unknown values have no slice.") : summaryBarScaleNote())}</p></div></div><div class="leaderboard-summary-chart-grid">${bars.map(bar => state.chartType === "pie" ? renderSummaryPieChart(bar) : renderSummaryBarChart(bar, t("task_summary_total", "Total"))).join("")}</div></section>`));
   const change = selector => { onChange(); if (selector) root.querySelector(selector)?.focus({ preventScroll: true }); };
   bindSummaryGroupControl(root, state, allGroups, onChange);
   bindSummaryMetricControl(root, state, onChange, options);

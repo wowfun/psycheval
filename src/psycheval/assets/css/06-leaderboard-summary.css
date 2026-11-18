@@ -422,11 +422,9 @@
   }
 }
 
-.summary-bar-note { grid-column:1/-1; color:var(--muted); font:12px/1.4 var(--mono); }
 .summary-pie svg { display:block; width:min(100%, 240px); margin:0 auto; }
 .summary-pie ul { list-style:none; padding:0; margin:12px 0 0; display:grid; gap:8px; }
 .summary-pie li { display:grid; grid-template-columns:10px minmax(0,1fr) auto; gap:8px; align-items:baseline; font-size:12px; }
 .summary-pie li i { width:8px; height:8px; border-radius:50%; }
 .summary-pie li span { overflow-wrap:anywhere; }
-.summary-pie li small { grid-column:2 / -1; color:var(--muted); }
 .summary-pie p { text-align:center; color:var(--muted); }

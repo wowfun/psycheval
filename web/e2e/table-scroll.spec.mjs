@@ -91,6 +91,18 @@ test("Task Summary groups metadata, exports chosen metrics and survives page nav
     const summary = page.locator("[data-task-summary]");
     await expect(summary.locator("[data-summary-chart]")).toHaveCount(4);
     expect(loaded.some(url => /\/(runtime|leaderboard-summary|home-location)\.js/.test(url))).toBe(false);
+    const rules = summary.locator('[data-summary-chart="rule_count"]');
+    const unknown = "1 Tasks have an unknown count";
+    await expect(rules.getByRole("img", { name: /^office;/ })).toHaveAccessibleDescription(unknown);
+    await summary.locator("[data-task-summary-toggle]").click();
+    const office = summary.getByRole("row").filter({ has: page.getByRole("cell", { name: "office", exact: true }) });
+    await expect(office.getByRole("cell", { name: "-", exact: true }).first()).toHaveAccessibleDescription(unknown);
+    await summary.locator("[data-task-summary-toggle]").click();
+    await summary.locator('[data-task-summary-chart="pie"]').click();
+    const officeLegend = rules.getByRole("listitem").filter({ hasText: "office" });
+    await expect(officeLegend).toHaveAccessibleName("");
+    await expect(officeLegend).toHaveAccessibleDescription(unknown);
+    await summary.locator('[data-task-summary-chart="bar"]').click();
     await summary.screenshot({ path: testInfo.outputPath("task-summary-default.png") });
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

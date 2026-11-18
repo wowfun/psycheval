@@ -29,8 +29,24 @@ function summaryBarData(definition, items, format) {
   })) };
 }
 
-function renderSummaryBarChart({ definition, values }, statistic = "") {
-  return `<section class="leaderboard-summary-chart" data-summary-chart="${esc(definition.key)}"><div class="leaderboard-summary-chart-card-head"><h4>${esc(definition.label)}</h4><span>${esc(statistic)}</span></div><div class="leaderboard-summary-bar-list">${values.map(item => `<div class="leaderboard-summary-bar" role="img" aria-label="${esc(`${item.group.label}; ${definition.label}; ${statistic} ${item.formatted}; n=${item.count}${item.valueHint ? `; ${item.valueHint}` : ""}`)}" title="${esc(item.hint || "")}"><span class="leaderboard-summary-bar-label" title="${esc(item.group.label)}">${esc(item.group.label)}</span><span class="leaderboard-summary-bar-track"><b style="left:${item.zero}%"></b><i style="left:${item.start}%;width:${Number(item.width.toFixed(2))}%"></i></span><span class="leaderboard-summary-bar-value"><strong>${esc(item.formatted)}</strong><small>n=${fmtNum(item.count)}</small></span>${item.valueHint ? `<small class="summary-bar-note">${esc(item.valueHint)}</small>` : ""}</div>`).join("")}</div></section>`;
+function summaryBarScaleNote() {
+  return `${t("summary_scale_note", "Each metric has its own scale. Compare bars only within a metric.")} - = ${t("summary_no_data", "No data")}`;
 }
 
-export { renderSummarySegments, renderSummaryHeader, renderSummaryDisclosure, renderSummaryExportMenu, summaryBarData, renderSummaryBarChart };
+function renderSummaryBarChart({ definition, values }, statistic = "") {
+  const bars = values.map(item => {
+    const label = esc(`${item.group.label}; ${definition.label}; ${statistic} ${item.formatted}; n=${item.count}`);
+    const hint = esc(item.hint || "");
+    return `<div class="leaderboard-summary-bar" role="img" aria-label="${label}"${hint ? ` title="${hint}" aria-description="${hint}"` : ""}>
+      <span class="leaderboard-summary-bar-label" title="${esc(item.group.label)}">${esc(item.group.label)}</span>
+      <span class="leaderboard-summary-bar-track"><b style="left:${item.zero}%"></b><i style="left:${item.start}%;width:${Number(item.width.toFixed(2))}%"></i></span>
+      <span class="leaderboard-summary-bar-value"><strong>${esc(item.formatted)}</strong><small>n=${fmtNum(item.count)}</small></span>
+    </div>`;
+  }).join("");
+  return `<section class="leaderboard-summary-chart" data-summary-chart="${esc(definition.key)}">
+    <div class="leaderboard-summary-chart-card-head"><h4>${esc(definition.label)}</h4><span>${esc(statistic)}</span></div>
+    <div class="leaderboard-summary-bar-list">${bars}</div>
+  </section>`;
+}
+
+export { renderSummarySegments, renderSummaryHeader, renderSummaryDisclosure, renderSummaryExportMenu, summaryBarData, summaryBarScaleNote, renderSummaryBarChart };

@@ -183,7 +183,9 @@ selectors, table disclosure, bar presentation, and image export primitives.
 Controls have accessible group names without visible labels above their buttons.
 Task Summary starts grouped by Dataset with all groups and its four total metrics
 selected, the table collapsed, and horizontal bars visible. Each metric has its
-own scale; unknown totals have no numeric bar and retain their missing-Task count.
+own scale. Unknown totals display `-` in the table and charts, with a key on the
+bar chart. Hover hints and accessible descriptions give the missing-Task count
+for each unknown total.
 The chart control also offers pie charts, one per selected metric. Slices show
 each selected group's share of known positive totals; zero and unknown groups
 remain in the legend without fabricated slices. Percentages describe group
