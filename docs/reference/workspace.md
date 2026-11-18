@@ -8,6 +8,7 @@ deletion, with existing permissions and selection requirements. Menus share
 outside-click dismissal and Escape focus restoration. Toolbar menu buttons omit
 decorative dropdown arrows. Summary's Comparison
 groups selector precedes Metrics and controls its table, charts, and exports.
+Radar tooltips stay within the chart viewport, including when the chart is resized.
 Sorting, summaries, detail values and exports share the selection. Active
 Duration is explicitly source-scoped. Selecting a child changes session detail,
 not evaluation identity or score. Family timelines group by session and leave

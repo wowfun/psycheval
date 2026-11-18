@@ -77,7 +77,14 @@ function radarOption(context, width, height, palette = null, measureText = null)
   }));
   return {
     animation: false,
-    tooltip: { trigger: "item", confine: true, formatter: params => groupDetails(series[params.seriesIndex], context) },
+    tooltip: {
+      trigger: "item",
+      confine: true,
+      enterable: true,
+      className: "summary-radar-tooltip",
+      extraCssText: "white-space:normal;",
+      formatter: params => groupDetails(series[params.seriesIndex], context),
+    },
     radar: { center, radius, startAngle: 90, splitNumber: 4,
       indicator: axes.map(axis => {
         const label = radarMetricLabel(context, axis.key);

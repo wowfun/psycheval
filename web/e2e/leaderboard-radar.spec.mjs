@@ -1,6 +1,62 @@
 import { expect, test } from "@playwright/test";
 import { startFixture, stopFixture } from "./fixture-process.mjs";
-import { decodeWorkspaceLocation } from "../../src/psycheval/assets/web/app/workspace-location.js";
+import { decodeWorkspaceLocation, encodeWorkspaceLocation } from "../../src/psycheval/assets/web/app/workspace-location.js";
+
+test.describe("radar tooltip layout", () => {
+  let fixture;
+  test.beforeAll(async () => { fixture = await startFixture(); });
+  test.afterAll(async () => { await stopFixture(fixture); });
+
+  test("long tooltip content stays inside the chart and preserves Home scroll bounds", async ({ page }) => {
+    const label = "LongModelName".repeat(22);
+    const definitions = Array.from({ length: 32 }, (_, index) => ({
+      key: `reward:metric-${index}`, label: `Metric ${index}`, type: "number", direction: "higher",
+    }));
+    await page.route(/\/api\/catalog(?:-summaries)?(?:\?|$)/, async route => {
+      const response = await route.fetch();
+      const envelope = await response.json();
+      envelope.metric_descriptions = definitions;
+      if (envelope.summary) {
+        envelope.summary.groups = [0, 1].map(index => ({
+          key: `model-${index}`, label: index === 1 ? label : "Baseline", count: 1,
+          metrics: definitions.map(({ key }) => ({ key, count: 1, mean: index + 1 })),
+        }));
+      }
+      await route.fulfill({ response, json: envelope });
+    });
+    await page.goto(encodeWorkspaceLocation("home", {
+      state: { summary: { group_by: "model", chart_type: "radar", metrics: definitions.map(({ key }) => key) } },
+    }, fixture.origin));
+    const plot = page.locator("[data-summary-radar]");
+    const tooltip = plot.locator(":scope > div").filter({ hasText: label });
+    const overview = page.locator("#trajectory-overview");
+    const pageOverflow = () => overview.evaluate(node => {
+      const root = document.documentElement;
+      const workspace = node.closest(".workspace");
+      return {
+        right: Math.max(0, root.scrollWidth - root.clientWidth),
+        bottom: Math.max(0, root.scrollHeight - Math.max(root.clientHeight, Math.round(workspace.getBoundingClientRect().bottom + scrollY))),
+      };
+    });
+
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await plot.locator("canvas").waitFor();
+      await expect.poll(() => plot.evaluate(node => window.echarts.getInstanceByDom(node).getWidth())).toBeCloseTo((await plot.boundingBox()).width, 0);
+      await plot.hover({ position: { x: (await plot.boundingBox()).width / 2 + 12, y: (await plot.boundingBox()).height / 2 + 8 } });
+      await expect(tooltip).toBeVisible();
+      expect(await pageOverflow()).toEqual({ right: 0, bottom: 0 });
+      const chart = await plot.boundingBox(), hint = await tooltip.boundingBox();
+      expect(hint.x).toBeGreaterThanOrEqual(chart.x - 1);
+      expect(hint.x + hint.width).toBeLessThanOrEqual(chart.x + chart.width + 1);
+      expect(hint.y).toBeGreaterThanOrEqual(chart.y - 1);
+      expect(hint.y + hint.height).toBeLessThanOrEqual(chart.y + chart.height + 1);
+      await overview.locator("h2").hover();
+      await expect(tooltip).toBeHidden();
+      expect(await pageOverflow()).toEqual({ right: 0, bottom: 0 });
+    }
+  });
+});
 
 test("radar selection, missing values, links, resize and chart cleanup", async ({ page, browser }, testInfo) => {
   const fixture = await startFixture();

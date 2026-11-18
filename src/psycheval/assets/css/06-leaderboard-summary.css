@@ -245,7 +245,14 @@
   min-width:0; padding:12px; border:1px solid var(--rule);
   border-radius:6px; background:var(--surface);
 }
-[data-summary-radar] { width:100%; height:440px; }
+[data-summary-radar] { width:100%; height:440px; overflow:clip; }
+.summary-radar-tooltip {
+  max-width:min(100%,36rem);
+  max-height:100%;
+  overflow:auto;
+  overflow-wrap:anywhere;
+  overscroll-behavior:contain;
+}
 .summary-radar-warning { font-size:12px; overflow-wrap:anywhere; }
 .summary-radar-legend { display:flex; flex-wrap:wrap; gap:6px 12px; padding:10px 0; }
 .summary-radar-legend button {
@@ -269,18 +276,21 @@
   font:12px/1.5 var(--mono);
   overflow-wrap:anywhere;
 }
-.summary-radar-detail dl {
+.summary-radar-detail dl,
+.summary-radar-tooltip dl {
   display:grid;
   gap:5px;
   margin:8px 0 0;
 }
-.summary-radar-detail dl>div {
+.summary-radar-detail dl>div,
+.summary-radar-tooltip dl>div {
   display:flex;
   flex-wrap:wrap;
   justify-content:space-between;
   gap:0 12px;
 }
-.summary-radar-detail dd {
+.summary-radar-detail dd,
+.summary-radar-tooltip dd {
   margin:0;
   color:var(--muted);
 }
