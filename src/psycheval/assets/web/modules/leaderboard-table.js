@@ -1,6 +1,6 @@
 import { createColumnControl } from "./column-control.js";
 import { validMetricId } from "../app/metric-contract.js";
-import { metricDefinitions, formatMetric, metricSortKey, metricSearchText, metricProvenanceHint, metricCoverageStatus } from "./metric-presentation.js";
+import { metricDefinitions, formatMetric, metricSortKey, metricSearchText, metricProvenanceHint, hasPartialMetricCoverage } from "./metric-presentation.js";
 import { renderDateTime } from "./date-time.js";
 import { $, RENDER_OPTIONS, adminMode, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, modelDisplayName, statusLabel, t } from "./shared.js";
 import { loadColumnLayout, normalizeColumnLayout, presenceForColumns, resolveColumns } from "./table-columns.js";
@@ -34,11 +34,12 @@ function metricColumn(key) {
   const definition = metricDefinitions(deps.state).find(item => item.key === key);
   if (!definition) return null;
   const valueFor = row => row.metric_values?.[key] ?? row[key];
+  const showPartialCoverage = (value, row) => value != null && key !== "test_pass_rate"
+    && hasPartialMetricCoverage(row.metric_provenance?.[key], row.family_coverage);
   const format = (value, row) => {
     if (key === "score" && value == null) return rewardValue(row);
     if (key === "test_pass_rate" && value != null) return `${fmtNum(row.metric_values?.tests_passed)} / ${fmtNum(row.metric_values?.tests_total)} (${fmtPct(value)})`;
-    const status = metricCoverageStatus(row.metric_provenance?.[key], row.family_coverage);
-    const suffix = value == null || status === "complete" ? "" : status === "partial" ? "*" : ` · ${t("coverage_unknown", "coverage unknown")}`;
+    const suffix = showPartialCoverage(value, row) ? "*" : "";
     return formatMetric(definition, value) + suffix;
   };
   return {
@@ -51,8 +52,7 @@ function metricColumn(key) {
     format,
     html: row => {
       const value = valueFor(row);
-      const status = metricCoverageStatus(row.metric_provenance?.[key], row.family_coverage);
-      const hint = value != null && key !== "test_pass_rate" && status === "partial"
+      const hint = showPartialCoverage(value, row)
         ? `<span class="sr-only"> ${esc(t("coverage_partial", "partial coverage"))}</span>` : "";
       return esc(format(value, row)) + hint;
     },

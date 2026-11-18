@@ -8,15 +8,15 @@ import { normalizeColumnLayout } from "../../src/psycheval/assets/web/modules/ta
 const browser = installBrowserDom('<script id="peval-render-options" type="application/json">{}</script><section id="leaderboard-summary"></section>');
 const { state, agentStepCount } = await import("../../src/psycheval/assets/web/modules/runtime.js");
 const summary = await import("../../src/psycheval/assets/web/modules/leaderboard-summary.js");
-const { selectedMetricDefinitions, metricProvenanceHint, metricCoverageStatus } = await import("../../src/psycheval/assets/web/modules/metric-presentation.js");
+const { selectedMetricDefinitions, metricProvenanceHint, hasPartialMetricCoverage } = await import("../../src/psycheval/assets/web/modules/metric-presentation.js");
 
 test("metric cells use shared scope coverage without duplicating it into provenance", () => {
   const provenance = {scope:"family", source:"native", coverage:{measured:1,unknown:0,total:1}};
   const family = {status:"partial",retained_members:2,known_members:3};
-  assert.equal(metricCoverageStatus(provenance,family),"partial");
+  assert.equal(hasPartialMetricCoverage(provenance, family), true);
   assert.match(metricProvenanceHint(provenance,"tokens",family),/partial; 2\/3/);
-  assert.equal(metricCoverageStatus({...provenance,scope:"evaluation_entry"},family),"complete");
-  assert.equal(metricCoverageStatus(provenance,{status:"unknown"}),"unknown");
+  assert.equal(hasPartialMetricCoverage({ ...provenance, scope: "evaluation_entry" }, family), false);
+  assert.equal(hasPartialMetricCoverage(provenance, { status: "unknown" }), false);
   assert.equal("family_coverage" in provenance,false);
 });
 

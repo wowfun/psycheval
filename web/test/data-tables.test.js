@@ -111,12 +111,28 @@ test("Leaderboard partial metrics keep a visible asterisk and accessible coverag
   const complete = {metric_provenance:{agent_steps:{...provenance,retention:"complete",coverage:{measured:3,unknown:0,total:3}}}};
   assert.equal(column.format(3,complete),"3");
   assert.equal(column.format(3,{...complete,family_coverage:{status:"partial"}}),"3*");
-  assert.equal(column.format(3,{...complete,family_coverage:{status:"unknown"}}),"3 · coverage unknown");
   for (const value of [null,3]) {
     const sample = { ...complete,metric_values:{agent_steps:value} };
     root.innerHTML = tables.renderDataTable({tableId:"coverage-marker",columns:[column],rows:[sample]});
     assert.equal(root.querySelector(".sr-only"),null);
   }
+});
+
+test("Leaderboard unknown coverage stays in cell hints without a value suffix", () => {
+  const column = leaderboard.leaderboardColumns().find(item => item.key === "agent_steps");
+  const row = {
+    metric_values:{agent_steps:3},
+    metric_provenance:{agent_steps:{scope:"family",source:"fixture",retention:"complete"}},
+    family_coverage:{status:"unknown",retained_members:1,known_members:null},
+  };
+  const root = document.getElementById("table-root");
+  root.innerHTML = tables.renderDataTable({tableId:"coverage-unknown",columns:[column],rows:[row]});
+  const cell = root.querySelector("td");
+  assert.equal(column.value(row),3);
+  assert.equal(column.format(3,row),"3");
+  assert.equal(cell.textContent,"3");
+  assert.equal(cell.querySelector(".sr-only"),null);
+  assert.match(cell.title,/Family coverage: unknown; 1\/\?/);
 });
 
 test("approximate Last Turn End keeps its source hint and timezone-aware timestamp", async () => {

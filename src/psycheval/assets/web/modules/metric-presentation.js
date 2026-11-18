@@ -93,9 +93,10 @@ function metricSelectionHint(groups, key) {
 }
 export { metricDefinitions, selectedMetricIds, selectedMetricDefinitions, formatMetric, metricSortKey, metricSearchText, metricProvenanceHint, metricSelectionHint };
 
-function metricCoverageStatus(provenance, familyCoverage = null) {
-  if (!provenance || provenance.scope === "evaluation_entry") return "complete";
-  if (provenance.retention === "partial" || Number(provenance.coverage?.unknown || 0) > 0 || familyCoverage?.status === "partial") return "partial";
-  return familyCoverage?.status === "unknown" ? "unknown" : "complete";
+function hasPartialMetricCoverage(provenance, familyCoverage = null) {
+  if (!provenance || provenance.scope === "evaluation_entry") return false;
+  return provenance.retention === "partial"
+    || Number(provenance.coverage?.unknown || 0) > 0
+    || familyCoverage?.status === "partial";
 }
-export { metricCoverageStatus };
+export { hasPartialMetricCoverage };

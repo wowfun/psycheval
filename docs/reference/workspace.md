@@ -375,7 +375,7 @@ calculation basis, scope, coverage and missing reasons from the
 [measurement contract](state-and-data.md#numeric-metrics). Leaderboard values
 with partial coverage carry a compact `*`; their cell hints retain the coverage
 counts and provenance, and screen-reader text identifies partial coverage.
-Missing cells and
+Unknown coverage appears only in cell hints. Missing cells and
 all-empty metric choices also explain unavailable evidence. Decode TPS hints
 identify contract-1 effective output throughput including retry waiting, while
 explicitly preserving the recorded basis for legacy values. Summary hints
