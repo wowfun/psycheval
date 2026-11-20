@@ -79,13 +79,13 @@ class TaskCatalog:
 
     def _initialize(self):
         with self._connection() as db:
-            if db.execute("PRAGMA user_version").fetchone()[0] != 2:
+            if db.execute("PRAGMA user_version").fetchone()[0] != 3:
                 db.executescript("""
                     DROP TABLE IF EXISTS projections;
                     DROP TABLE IF EXISTS inventory;
                     DROP TABLE IF EXISTS dataset_inventory;
                     DROP TABLE IF EXISTS task_conflicts;
-                    PRAGMA user_version=2;
+                    PRAGMA user_version=3;
                 """)
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS projections (

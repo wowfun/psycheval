@@ -1,3 +1,5 @@
+import sqlite3
+from contextlib import closing
 from threading import Event
 from unittest.mock import patch
 
@@ -47,6 +49,23 @@ def test_persistent_cache_rechecks_safety_and_stable_reads(tmp_path):
         cache.project("task", signature=signature, load=unstable)
     assert cache.project("task", signature=signature, load=load) == {"items": [3]}
     assert len(calls) == 3
+    cache.close()
+
+
+def test_old_task_cache_drops_inventory_and_cached_projections(tmp_path):
+    path = tmp_path / "cache.sqlite3"
+    config = {"one": "config"}
+    cache = TaskCatalog(path)
+    cache.project("scoring", signature=lambda: 1, load=lambda: {"items": []})
+    cache.publish(config, {"datasets": [{"id": "one"}]})
+    cache.close()
+    with closing(sqlite3.connect(path)) as db:
+        db.execute("PRAGMA user_version=2")
+
+    cache = TaskCatalog(path)
+    assert cache.snapshot(config)["generation"] == 0
+    scored = {"items": [{"id": "custom:one", "question": "Check the output."}]}
+    assert cache.project("scoring", signature=lambda: 1, load=lambda: scored) == scored
     cache.close()
 
 
