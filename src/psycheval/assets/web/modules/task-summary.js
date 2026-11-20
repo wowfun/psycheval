@@ -127,7 +127,7 @@ async function exportTaskSummaryImage(rows, state, kind = state.chartType || "ba
 async function exportTasks({ kind, mode, rows, columns, groupBy = "overall", groups = null }) {
   const response = await fetch("/api/harbor/task-exports", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ kind, mode, group_by: groupBy, comparison_groups: groups, columns: columns.filter(column => !column.select).map(column => column.key),
-      rows: rows.filter(row => row.kind === "task").map(row => ({ dataset_id: row.datasetId, task: row.taskName, item_key: row.scoringItem?.key || null })) }),
+      rows: rows.filter(row => row.kind === "task").map(row => ({ dataset_id: row.datasetId, task: row.taskName, item_key: mode === "items" ? row.scoringItem?.key || null : null })) }),
   });
   if (!response.ok) {
     reloadExpiredAdminSession(response);
@@ -138,4 +138,4 @@ async function exportTasks({ kind, mode, rows, columns, groupBy = "overall", gro
   const filename = response.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] || `peval-task-${mode}.${kind}`;
   downloadBlob(filename, blob.type, blob);
 }
-export { createTaskSummaryState, taskSummary, renderTaskSummary, exportTasks, exportTaskSummaryImage, taskSummaryExportColumns };
+export { createTaskSummaryState, taskSummary, renderTaskSummary, exportTasks, exportTaskSummaryImage, taskSummaryExportColumns, uniqueTasks };

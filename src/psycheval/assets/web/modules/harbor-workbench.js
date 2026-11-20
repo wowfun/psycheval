@@ -3,8 +3,8 @@ import { loadColumnLayout, normalizeColumnLayout, presenceForColumns, resolveCol
 import { bindToolbarMenus } from "./toolbar-menu.js";
 import { noteColumn, reportsColumn, createCollectionSidebar } from "./collection-ui.js";
 import { createRegistryManager } from "./registry-manager.js";
-import { taskColumns, taskSearchText, renderTaskTable, flattenTaskRows } from "./task-table.js";
-import { createTaskSummaryState, renderTaskSummary, exportTasks, exportTaskSummaryImage, taskSummaryExportColumns } from "./task-summary.js";
+import { taskColumns, taskRowIdentity, taskSearchText, renderTaskTable, flattenTaskRows } from "./task-table.js";
+import { createTaskSummaryState, renderTaskSummary, exportTasks, exportTaskSummaryImage, taskSummaryExportColumns, uniqueTasks } from "./task-summary.js";
 import { beginFeedback, pageFeedback, savedContentPreview } from "./action-feedback.js";
 import { openActionForm } from "./action-form.js";
 import { watchOperation } from "./operation-feedback.js";
@@ -209,11 +209,11 @@ function rowDiagnostics(row) {
   return listValue(row.task?.diagnostics).filter(Boolean).join(" · ");
 }
 
-function harborColumns({ flattened = workbenchState.flattened } = {}) {
+function harborColumns() {
   const canEditRuleCount = row => adminMode() && registryManager?.ready && row.kind === "task" && row.dataset.format === "workbuddy.v1";
   return taskColumns({
     scoring: !workbenchState.showTrash,
-    flattened,
+    flattened: workbenchState.flattened,
     canEditRuleCount,
     editRuleCount: row => {
       if (!canEditRuleCount(row)) return null;
@@ -239,14 +239,18 @@ function harborColumns({ flattened = workbenchState.flattened } = {}) {
   });
 }
 
-function visibleOverviewRows() {
-  const columns = harborColumns({ flattened: false });
+function visibleOverviewRows(rows = overviewRows(), columns = harborColumns()) {
   const query = String(workbenchState.search || "").trim().toLowerCase();
-  const rows = overviewRows();
   const searched = query ? rows.filter(row => taskSearchText(row).includes(query)) : rows;
   return workbenchState.flattened && !workbenchState.showTrash
-    ? applyDataTableFilters(HARBOR_TABLE_ID, searched, columns)
+    ? applyDataTableFilters(HARBOR_TABLE_ID, flattenTaskRows(searched), columns)
     : applyDataTableControls(HARBOR_TABLE_ID, searched, columns, rows);
+}
+
+function overviewTable() {
+  const allRows = overviewRows();
+  const columns = harborColumns();
+  return { allRows, columns, rows: visibleOverviewRows(allRows, columns) };
 }
 
 function selectedOverviewKey() {
@@ -279,7 +283,7 @@ function reconcileOverviewSelection(rows) {
   return { row, changed: true };
 }
 
-function renderHarborOverview(surface, rows) {
+function renderHarborOverview(surface, { allRows, columns, rows }) {
   const container = surface.querySelector("[data-harbor-overview]");
   if (!container) return;
   const loading = workbenchState.inventory?.checking && !workbenchState.inventory?.generation;
@@ -288,17 +292,18 @@ function renderHarborOverview(surface, rows) {
     surface.querySelector("[data-task-summary]")?.setAttribute("hidden", "");
     return;
   }
-  const columns = harborColumns();
-  const allRows = overviewRows();
   const flattened = workbenchState.flattened && !workbenchState.showTrash;
-  const displayRows = flattened ? sortDataTableRows(HARBOR_TABLE_ID, flattenTaskRows(rows), columns) : rows;
+  const displayRows = flattened ? sortDataTableRows(HARBOR_TABLE_ID, rows, columns) : rows;
   workbenchState.displayRows = displayRows;
   renderTaskTable({ root: container, tableId: HARBOR_TABLE_ID, allRows, columns, rows: displayRows,
     selectedKey: selectedOverviewKey(), rowAttribute: "data-harbor-overview-row",
     onActivate: (row, node, column) => selectOverviewRow(row, node, scoringPath(row, column)),
-    onChange: () => refreshOverviewAfterControls({ restoreTable: true }), onSelectionChange: renderHarborWorkbench });
+    onChange: () => refreshOverviewAfterControls(() => {
+      restoreTableControls();
+      renderHarborWorkbench();
+    }), onSelectionChange: renderHarborWorkbench });
   const count = surface.querySelector("[data-harbor-overview-count]");
-  if (count) count.textContent = `${rows.length} / ${overviewRows().length}`;
+  if (count) count.textContent = `${new Set(rows.map(taskRowIdentity)).size} / ${allRows.length}`;
   renderScoringControls(surface, rows);
 }
 
@@ -312,6 +317,7 @@ function scoringPath(row, column) {
 }
 
 function renderScoringControls(surface, rows) {
+  const tasks = uniqueTasks(rows);
   let actions = surface.querySelector("[data-task-scoring-actions]");
   if (!actions) {
     actions = document.createElement("div"); actions.dataset.taskScoringActions = ""; actions.className = "table-region-actions task-scoring-actions";
@@ -326,13 +332,13 @@ function renderScoringControls(surface, rows) {
   }
   actions.innerHTML = `<details class="export-menu"><summary class="export-menu-button">${esc(t("export", "Export"))}</summary><div class="export-menu-panel"><button type="button" data-task-export="xlsx">${esc(t("export_excel", "Export Excel"))}</button><button type="button" data-task-export="json">${esc(t("export_json", "Export JSON"))}</button></div></details>`;
   actions.querySelectorAll("[data-task-export]").forEach(button => {
-    button.disabled = !rows.some(row => row.kind === "task");
+    button.disabled = !tasks.length;
     button.addEventListener("click", () => { button.closest("details").open = false; downloadTaskTable(button.dataset.taskExport); });
   });
   let note = surface.querySelector("[data-task-unexpanded]");
   if (!note) { note = document.createElement("p"); note.dataset.taskUnexpanded = ""; note.className = "copy task-unexpanded"; surface.querySelector("[data-harbor-overview]")?.before(note); }
-  const manual = rows.filter(row => row.task?.rule_count_source === "manual").reduce((total, row) => total + row.task.rule_count, 0);
-  const unknown = rows.filter(row => row.kind === "task" && row.task?.rule_count == null).length;
+  const manual = tasks.filter(row => row.task?.rule_count_source === "manual").reduce((total, row) => total + row.task.rule_count, 0);
+  const unknown = tasks.filter(row => row.task?.rule_count == null).length;
   note.hidden = workbenchState.showTrash || !workbenchState.flattened || !manual && !unknown;
   note.textContent = [manual ? t("task_unexpanded_rules", "Manually counted rules without item details: {count}.").replace("{count}", String(manual)) : "",
     unknown ? t("task_unknown_rules", "Tasks with an unknown rule count: {count}.").replace("{count}", String(unknown)) : ""].filter(Boolean).join(" ");
@@ -342,8 +348,8 @@ function renderScoringControls(surface, rows) {
     (surface.querySelector("[data-harbor-overview]")?.closest(".harbor-overview-panel") || surface.querySelector("[data-harbor-overview]"))?.after(summary);
   }
   summary.hidden = workbenchState.showTrash;
-  if (!summary.hidden) renderTaskSummary(summary, rows, workbenchState.summary, {
-    onChange: () => renderScoringControls(surface, visibleOverviewRows()),
+  if (!summary.hidden) renderTaskSummary(summary, tasks, workbenchState.summary, {
+    onChange: () => renderScoringControls(surface, rows),
     onExport: kind => downloadTaskTable(kind, true),
   });
   bindToolbarMenus(surface);
@@ -353,7 +359,7 @@ async function downloadTaskTable(kind, summary = false) {
   const surface = workbenchRoot();
   const settings = workbenchState.summary;
   if (summary && settings.exporting) return;
-  const rows = summary ? visibleOverviewRows() : workbenchState.displayRows;
+  const rows = summary ? uniqueTasks(visibleOverviewRows()) : workbenchState.displayRows;
   const feedback = beginFeedback(surface.querySelector(summary ? "[data-task-summary]" : "[data-task-scoring-actions]"), { page: "datasets", key: "datasets:export" });
   try {
     if (summary) { settings.exporting = true; renderScoringControls(surface, rows); }
@@ -366,19 +372,20 @@ async function downloadTaskTable(kind, summary = false) {
   finally { if (summary) { settings.exporting = false; renderScoringControls(surface, visibleOverviewRows()); } }
 }
 
-function renderHarborWorkbench({ preserveEditors = false } = {}) {
+function renderHarborWorkbench({ preserveEditors = false, table } = {}) {
   const surface = workbenchRoot();
   if (!surface) return { row: null, changed: false };
-  const availableKeys = new Set(overviewRows()
+  const overview = table ?? overviewTable();
+  const { allRows, rows } = overview;
+  const availableKeys = new Set(allRows
     .filter(row => row.kind !== "empty" && !datasetIsReadOnly(row.dataset))
     .map(overviewRowKey));
   Array.from(workbenchState.taskSelection).forEach(key => {
     if (!availableKeys.has(key)) workbenchState.taskSelection.delete(key);
   });
-  const rows = visibleOverviewRows();
   const editing = preserveEditors && surface.querySelector("[data-harbor-overview] [data-table-cell-editor]");
   const selection = editing ? { row: rows.find(row => overviewRowKey(row) === selectedOverviewKey()), changed: false } : reconcileOverviewSelection(rows);
-  if (!editing) renderHarborOverview(surface, rows);
+  if (!editing) renderHarborOverview(surface, overview);
   renderContextControls(surface);
   renderSelectedTaskHeading(taskDetailRoot());
   renderFileTree(taskDetailRoot());
@@ -548,16 +555,17 @@ async function loadSelectedTask(preferredPath = null) {
   }
 }
 
-async function refreshOverviewAfterControls(options = {}) {
-  const currentVisible = visibleOverviewRows().some(row => overviewRowKey(row) === selectedOverviewKey());
-  if (!options.skipGuard && !currentVisible && !confirmDiscard()) {
-    if (options.restoreTable) {
-      restoreTableControls();
-      renderHarborWorkbench();
+async function refreshOverviewAfterControls(onCancel) {
+  const table = overviewTable();
+  const selectedKey = selectedOverviewKey();
+  if (isHarborDirty() && !table.rows.some(row => taskRowIdentity(row) === selectedKey)) {
+    if (!confirmDiscard()) {
+      onCancel();
+      return;
     }
-    return;
+    clearEditor();
   }
-  const selection = renderHarborWorkbench();
+  const selection = renderHarborWorkbench({ table });
   if (selection.changed && selection.row?.kind === "task") await loadSelectedTask();
 }
 
@@ -1098,13 +1106,10 @@ function bindHarborWorkbench() {
   surface.querySelector("[data-harbor-search]")?.addEventListener("input", event => {
     const previous = workbenchState.search;
     workbenchState.search = String(event.target.value || "");
-    const currentVisible = visibleOverviewRows().some(row => overviewRowKey(row) === selectedOverviewKey());
-    if (!currentVisible && !confirmDiscard()) {
+    refreshOverviewAfterControls(() => {
       workbenchState.search = previous;
       event.target.value = previous;
-      return;
-    }
-    refreshOverviewAfterControls({ skipGuard: true });
+    });
   });
   taskDetailRoot().querySelector("[data-harbor-new-file]")?.addEventListener("click", () => createFile("file"));
   taskDetailRoot().querySelector("[data-harbor-new-directory]")?.addEventListener("click", () => createFile("directory"));

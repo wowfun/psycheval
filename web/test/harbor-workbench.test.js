@@ -41,6 +41,7 @@ const browser = installBrowserDom(`
 `);
 
 const harbor = await import("../../src/psycheval/assets/web/modules/harbor-workbench.js");
+const { tableControls } = await import("../../src/psycheval/assets/web/modules/data-tables.js");
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 harbor.bindHarborWorkbench();
 
@@ -346,6 +347,65 @@ test("dirty guard protects navigation and Archived is a separate overview", asyn
   }
 });
 
+test("Type filtering keeps a draft on cancel and replaces the Task on discard", async () => {
+  const state = harbor.workbenchState;
+  const previous = { ...state };
+  const previousFetch = globalThis.fetch, previousConfirm = window.confirm;
+  const controls = tableControls("harbor-datasets");
+  const previousControls = structuredClone(controls);
+  const scoredInventory = {
+    ...inventory,
+    datasets: inventory.datasets.map(dataset => ({
+      ...dataset,
+      tasks: dataset.tasks.map((task, index) => ({
+        ...task,
+        scoring_items: [{ key: "one", id: "one", type: index ? "rule" : "rubric" }],
+      })),
+    })),
+  };
+  globalThis.fetch = async path => {
+    if (path === "/api/config") return new Response(JSON.stringify({ datasets: inventory.datasets, mounts: [] }));
+    if (path === "/api/collections/datasets") return new Response(JSON.stringify(scoredInventory));
+    if (String(path).includes("/files/")) return new Response(JSON.stringify({ path: "instruction.md", content: "Original", revision: "file-r1" }));
+    const name = String(path).endsWith("/draft-task") ? "draft-task" : "valid-task";
+    return new Response(JSON.stringify({ ...detail, task: task(name, "valid") }));
+  };
+  const chooseRules = () => {
+    const menu = document.querySelector('[data-filter-menu="type"]');
+    menu.querySelector('input[value="rule"]').click();
+    menu.querySelector("[data-filter-apply]").click();
+  };
+  try {
+    Object.assign(state, {
+      datasetId: "pbench", taskName: "valid-task", datasetFilter: null,
+      showTrash: false, flattened: true, search: "", taskSelection: new Set(),
+    });
+    controls.filters = {};
+    await harbor.openHarborWorkbench();
+    const editor = document.querySelector("[data-harbor-editor]");
+    editor.value = "My draft";
+    editor.dispatchEvent(new window.Event("input", { bubbles: true }));
+
+    window.confirm = () => false;
+    chooseRules();
+    assert.equal(state.taskName, "valid-task");
+    assert.equal(editor.value, "My draft");
+    assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 2);
+
+    window.confirm = () => true;
+    chooseRules();
+    assert.equal(state.taskName, "draft-task");
+    await tick();
+    assert.equal(harbor.isHarborDirty(), false);
+    assert.equal(editor.value, "Original");
+  } finally {
+    Object.assign(state, previous);
+    Object.assign(controls, previousControls);
+    window.confirm = previousConfirm;
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("the latest overlapping Task selection owns the file tree", async () => {
   const previousFetch = globalThis.fetch;
   const pending = new Map();
@@ -529,6 +589,54 @@ test("cross-field search coordinates selection and keeps empty Datasets visible"
   assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 0);
   assert.equal(harbor.workbenchState.datasetId, null);
   assert.equal(document.querySelectorAll(".harbor-file-row").length, 0);
+});
+
+test("flattened search and Type filters project each scoring item once per update", () => {
+  const state = harbor.workbenchState;
+  const previous = { ...state };
+  const controls = tableControls("harbor-datasets");
+  const previousControls = structuredClone(controls);
+  const search = document.querySelector("[data-harbor-search]");
+  const previousSearch = search.value;
+  const count = document.querySelector("[data-harbor-overview-count]");
+  let projected = 0;
+  const scoredTask = {
+    ...detail.task, rule_count: 2, rubric_count: 1, scoring_item_count: 3,
+    scoring_items: ["rule", "rule", "rubric"].map((type, index) => ({
+      get key() { projected++; return String(index); },
+      id: String(index), type,
+    })),
+  };
+  try {
+    Object.assign(state, {
+      inventory: { datasets: [{ id: "pbench", tasks: [scoredTask] }, { id: "empty", tasks: [] }] },
+      datasetId: "pbench", taskName: scoredTask.directory, datasetFilter: null,
+      showTrash: false, flattened: true, search: "", taskSelection: new Set(),
+      summary: { ...state.summary, groupBy: "overall", open: true, groups: null },
+    });
+    controls.filters = {};
+    harbor.renderHarborWorkbench();
+    assert.equal(count.textContent, "2 / 2");
+
+    projected = 0;
+    search.value = scoredTask.directory;
+    search.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(projected, 3, "search builds one projection per matching item");
+    assert.equal(count.textContent, "1 / 2");
+
+    const typeMenu = document.querySelector('[data-filter-menu="type"]');
+    assert.deepEqual([...typeMenu.querySelectorAll("input")].map(input => input.value).sort(), ["rubric", "rule"]);
+    projected = 0;
+    typeMenu.querySelector('input[value="rule"]').click();
+    typeMenu.querySelector("[data-filter-apply]").click();
+    assert.equal(projected, 3, "filtering reuses the projection from the selection guard");
+    assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 2);
+    assert.equal(document.querySelector('[data-task-summary] td[data-table-column-key="scoring_item_count"]').textContent, "3");
+  } finally {
+    Object.assign(state, previous);
+    Object.assign(controls, previousControls);
+    search.value = previousSearch;
+  }
 });
 
 test("Task batches span Datasets, restore edited archive names, and retain only failures", async () => {

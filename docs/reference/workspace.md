@@ -154,13 +154,14 @@ Clicking Rules selects the first effective `grader.json`; clicking Rubrics or
 Scoring items selects the first effective `judge.yaml`. Missing files fall back
 to the Task's default Instruction. Flatten scoring items replaces the count
 columns with step, ID, type, question, pass/fail criteria, scope limits, and
-artifact references. Rule rows show their
+artifact references. Filter Type to show rule rows, Rubric rows, or both.
+Rule rows show their
 [declared description](harbor.md#script-checks-and-weighted-scoring) in Question,
 with a blank cell when omitted. Rows with no declared items retain their Task
-context. Selecting an item opens its actual source file. The `grader.json`
-preview shows each description under its rule ID. Manual counts never produce
-synthetic items; the flattened view discloses their unexpanded count. Selection
-and management remain Task-based.
+context when Type is unfiltered. Selecting an item opens its actual source file.
+The `grader.json` preview shows each description under its rule ID. The flattened
+view discloses manual counts separately from the declared rows. Selection and
+management remain Task-based.
 
 Task Summary follows Dataset selection, search, and Task filters and deduplicates
 Tasks by Dataset and Task identity. It groups by Overall, Dataset, Category,
@@ -172,7 +173,8 @@ belongs to each of its distinct tags, once per group; tag-group counts cannot be
 summed to obtain the number of matching Tasks. Groups retain first-occurrence order.
 Unknown values leave their group totals unknown with a missing-Task count; known
 Rubric totals remain available.
-Flattening does not change this scope. Task exports follow the current mode,
+With a Type filter, the summary includes each matching Task once and uses its
+Task-level totals. Task exports follow the current mode,
 visible business columns, and filtered row order rather than checkbox selection.
 JSON preserves lists; Excel writes full text and multiline lists. Summary Excel
 and chart PNG use the displayed grouping, comparison groups, and metric order.

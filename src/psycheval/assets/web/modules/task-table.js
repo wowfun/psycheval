@@ -35,13 +35,20 @@ function taskColumns({ selection, rename, scoring = false, flattened = false, ed
 }
 
 function scoringItemColumns() {
+  const typeLabel = value => value ? t(`task_scoring_${value}`, value) : "";
   return [
     ["step", "task_scoring_step", "Step"], ["id", "task_scoring_id", "ID"],
     ["type", "task_scoring_type", "Type"], ["question", "task_scoring_question", "Question"],
     ["pass_criteria", "task_scoring_pass", "Pass criteria"], ["fail_criteria", "task_scoring_fail", "Fail criteria"],
     ["scope_limits", "task_scoring_scope", "Scope limits"], ["artifact_refs", "task_scoring_artifacts", "Artifact refs"],
-  ].map(([key, label, fallback]) => ({ key, label: t(label, fallback), valueType: "text", sortable: ["step", "id", "type"].includes(key),
-    value: row => row.scoringItem?.[key] ?? "", format: value => key === "type" && value ? t(`task_scoring_${value}`, value) : scoringText(value),
+  ].map(([key, label, fallback]) => ({
+    key, label: t(label, fallback), valueType: "text", sortable: ["step", "id", "type"].includes(key),
+    value: row => row.scoringItem?.[key] ?? "",
+    ...(key === "type" ? {
+      filterable: true, filterLabel: typeLabel, format: typeLabel,
+      // The filter menu derives options from unflattened Tasks.
+      filterValues: row => row.scoringItem ? [row.scoringItem.type] : row.task?.scoring_items?.map(item => item.type) || [],
+    } : { format: scoringText }),
   }));
 }
 
