@@ -1,4 +1,10 @@
 {
   "custom_checks": ["existing_preserved", "omitted_restored"],
-  "scoring": {"weights": {"custom:existing_preserved": 2, "custom:omitted_restored": 3}}
+  "scoring": {
+    "weights": {"custom:existing_preserved": 2, "custom:omitted_restored": 3},
+    "descriptions": {
+      "custom:existing_preserved": "补全后的导入表是否逐条保留原服务台账的设备记录，并准确填写延长现场服务标记？",
+      "custom:omitted_restored": "补全后的导入表是否找回所有漏录的已投运设备，且各字段及延长现场服务标记与投运档案和规则一致？"
+    }
+  }
 }

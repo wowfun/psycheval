@@ -1,3 +1,8 @@
 {
-  "custom_checks": ["scoped_tables"]
+  "custom_checks": ["scoped_tables"],
+  "scoring": {
+    "descriptions": {
+      "custom:scoped_tables": "是否保留原手册，并在单份 Markdown 中完整摘录指定三个章节及子节的表格，保持表头和单元格对应关系，每两张表之间用分隔线隔开？"
+    }
+  }
 }

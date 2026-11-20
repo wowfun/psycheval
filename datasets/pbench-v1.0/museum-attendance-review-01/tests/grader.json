@@ -1,3 +1,8 @@
 {
-  "custom_checks": ["verified_comparison_data"]
+  "custom_checks": ["verified_comparison_data"],
+  "scoring": {
+    "descriptions": {
+      "custom:verified_comparison_data": "HTML 报告表格中的各项一季度比较数据，是否同时覆盖两个年份并与原始统计和调查数据一致？"
+    }
+  }
 }

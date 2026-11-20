@@ -1,3 +1,8 @@
 {
-  "custom_checks": ["search_backed_answer"]
+  "custom_checks": ["search_backed_answer"],
+  "scoring": {
+    "descriptions": {
+      "custom:search_backed_answer": "Does a permitted search result link to IANA’s help page and support both requested examples, and does the final answer cite that page and identify both examples?"
+    }
+  }
 }

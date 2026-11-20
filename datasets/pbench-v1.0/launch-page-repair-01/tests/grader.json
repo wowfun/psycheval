@@ -1,4 +1,11 @@
 {
   "custom_checks": ["release_content", "plan_table", "static_delivery"],
-  "scoring": {"weights": {"custom:release_content": 5, "custom:plan_table": 3, "custom:static_delivery": 2}}
+  "scoring": {
+    "weights": {"custom:release_content": 5, "custom:plan_table": 3, "custom:static_delivery": 2},
+    "descriptions": {
+      "custom:release_content": "页面是否仅保留获准发布的三条更新，并将每条摘要和详情链接对应到正确的更新？",
+      "custom:plan_table": "页面是否有且只有一张方案表，三档方案的每席位月费和文件空间是否与发布简报一致？",
+      "custom:static_delivery": "页面是否用纯静态 HTML 和 CSS 实现指定标题、响应式网格和隐藏备注，并配有符合尺寸与像素要求的本地 PNG 页眉图？"
+    }
+  }
 }

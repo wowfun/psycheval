@@ -4,6 +4,10 @@
     "weights": {
       "custom:correct_total": 3,
       "custom:correct_region_bindings": 4
+    },
+    "descriptions": {
+      "custom:correct_total": "可装车的整托总数是否与图像参考标注一致，且回复中给出的任何分区数字都正确？",
+      "custom:correct_region_bindings": "各分区的可装车整托数是否均与参考标注相符？若回复给出了总数，该数字是否也正确？"
     }
   }
 }

@@ -73,6 +73,35 @@
       "custom:hn_story_10": 1,
       "custom:hn_story_11": 1,
       "custom:hn_story_12": 1
+    },
+    "descriptions": {
+      "required_call_1_tool": "轨迹中是否调用了可以运行 hackernews-daily 的执行工具？",
+      "required_call_1_arguments": "匹配的执行工具调用参数中是否含 hackernews-daily？",
+      "required_call_1_observation": "调用 hackernews-daily 的合规工具调用是否有成功返回的观察记录？",
+      "final_answer": "最终回复是否非空，并写出已找到的 Hacker News 报告文件路径？",
+      "required_artifacts": "产物目录中是否存在符合命名模式的 Hacker News 报告？",
+      "custom:report_unique": "产物目录是否只有一份可读取的 UTF-8 报告文件？",
+      "custom:report_filename": "报告文件名是否以本步骤的平台开头，并包含规定格式的 UTC 时间戳？",
+      "custom:report_timestamp": "报告文件名中的 UTC 时间戳是否与文首元数据的生成时间一致？",
+      "custom:report_platform": "报告文首元数据中的 platform 是否与当前步骤一致？",
+      "custom:report_source": "报告文首元数据是否填写了来源？",
+      "custom:report_chinese": "报告正文是否含有中文文字？",
+      "custom:report_current": "报告生成时间是否在核验时间前一小时至后五分钟的范围内？",
+      "custom:snapshot_current": "快照生成时间是否在当前有效范围内，且报告生成于快照之后的十五分钟以内？",
+      "custom:hn_snapshot": "Hacker News 快照结构与来源是否正确，且包含十二条有序、唯一、带指标和链接的新闻？",
+      "custom:hn_source": "报告文首的来源是否为指定 Hacker News 来源，且 snapshot_at 与快照生成时间一致？",
+      "custom:hn_story_01": "报告是否分成十二条，并在第 1 条按快照顺序列对该新闻的标题、得分、评论数、原文和唯一的讨论链接？",
+      "custom:hn_story_02": "报告是否分成十二条，并在第 2 条按快照顺序列对该新闻的标题、得分、评论数、原文和唯一的讨论链接？",
+      "custom:hn_story_03": "报告是否分成十二条，并在第 3 条按快照顺序列对该新闻的标题、得分、评论数、原文和唯一的讨论链接？",
+      "custom:hn_story_04": "报告是否分成十二条，并在第 4 条按快照顺序列对该新闻的标题、得分、评论数、原文和唯一的讨论链接？",
+      "custom:hn_story_05": "报告是否分成十二条，并在第 5 条按快照顺序列对该新闻的标题、得分、评论数、原文和唯一的讨论链接？",
+      "custom:hn_story_06": "报告是否分成十二条，并在第 6 条按快照顺序列对该新闻的标题、得分、评论数、原文和唯一的讨论链接？",
+      "custom:hn_story_07": "报告是否分成十二条，并在第 7 条按快照顺序列对该新闻的标题、得分、评论数、原文和唯一的讨论链接？",
+      "custom:hn_story_08": "报告是否分成十二条，并在第 8 条按快照顺序列对该新闻的标题、得分、评论数、原文和唯一的讨论链接？",
+      "custom:hn_story_09": "报告是否分成十二条，并在第 9 条按快照顺序列对该新闻的标题、得分、评论数、原文和唯一的讨论链接？",
+      "custom:hn_story_10": "报告是否分成十二条，并在第 10 条按快照顺序列对该新闻的标题、得分、评论数、原文和唯一的讨论链接？",
+      "custom:hn_story_11": "报告是否分成十二条，并在第 11 条按快照顺序列对该新闻的标题、得分、评论数、原文和唯一的讨论链接？",
+      "custom:hn_story_12": "报告是否分成十二条，并在第 12 条按快照顺序列对该新闻的标题、得分、评论数、原文和唯一的讨论链接？"
     }
   }
 }

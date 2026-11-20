@@ -1,3 +1,8 @@
 {
-  "custom_checks": ["verified_fetch"]
+  "custom_checks": ["verified_fetch"],
+  "scoring": {
+    "descriptions": {
+      "custom:verified_fetch": "Does a successful permitted fetch of IANA’s help page establish one revision date, and does the final answer cite the page and report that date consistently?"
+    }
+  }
 }

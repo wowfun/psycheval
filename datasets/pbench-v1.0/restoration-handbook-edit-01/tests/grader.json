@@ -1,3 +1,8 @@
 {
-  "custom_checks": ["key_table_bindings"]
+  "custom_checks": ["key_table_bindings"],
+  "scoring": {
+    "descriptions": {
+      "custom:key_table_bindings": "手册中的容量与排期、登记与排期状态、预算三张表，是否将各字段和值准确对应到原稿中的项目？"
+    }
+  }
 }

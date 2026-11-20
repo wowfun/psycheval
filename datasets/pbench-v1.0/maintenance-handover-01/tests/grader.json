@@ -1,3 +1,8 @@
 {
-  "custom_checks": ["current_action_bindings"]
+  "custom_checks": ["current_action_bindings"],
+  "scoring": {
+    "descriptions": {
+      "custom:current_action_bindings": "交接表是否逐行列齐郑川本周仍需跟进的行动，并为每项行动配对正确的工单、截止时间和来源记录？"
+    }
+  }
 }

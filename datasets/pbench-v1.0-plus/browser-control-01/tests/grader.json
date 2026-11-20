@@ -4,6 +4,10 @@
     "weights": {
       "custom:submitted_form": 2,
       "custom:submitted_screenshot": 1
+    },
+    "descriptions": {
+      "custom:submitted_form": "Does the retained browser history confirm that the specified value was entered in the target form and submitted successfully?",
+      "custom:submitted_screenshot": "Does a successful screenshot action on the confirmed submission result correspond to the required, decodable PNG file?"
     }
   }
 }

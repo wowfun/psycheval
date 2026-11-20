@@ -1,4 +1,10 @@
 {
   "custom_checks": ["policy_revision", "numbering_structure"],
-  "scoring": {"weights": {"custom:policy_revision": 2, "custom:numbering_structure": 1}}
+  "scoring": {
+    "weights": {"custom:policy_revision": 2, "custom:numbering_structure": 1},
+    "descriptions": {
+      "custom:policy_revision": "修订后的流程是否按变更单更新各项职责和审批要求，保留既有要求，并包含修订说明和本次生效日期？",
+      "custom:numbering_structure": "通过内容核验的 DOCX 是否使用真实的 Word 编号定义来组织主条款、子条款和例外，且普通说明段落保持无编号？"
+    }
+  }
 }

@@ -1,3 +1,8 @@
 {
-  "custom_checks": ["source_bound_selection"]
+  "custom_checks": ["source_bound_selection"],
+  "scoring": {
+    "descriptions": {
+      "custom:source_bound_selection": "回复是否写明上海参考日期和 15:00 截点，并为每件范围内的事项单独列出一条提醒，引用相应的有效通告？"
+    }
+  }
 }

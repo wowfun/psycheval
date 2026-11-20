@@ -1,1 +1,8 @@
-{"custom_checks": ["deck_contract"]}
+{
+  "custom_checks": ["deck_contract"],
+  "scoring": {
+    "descriptions": {
+      "custom:deck_contract": "培训 PPTX 是否按分组在四页列齐八个概念，并符合 16:9 画布、夜间配色和图形边界要求？"
+    }
+  }
+}

@@ -1,3 +1,8 @@
 {
-  "custom_checks": ["minimum_hierarchy"]
+  "custom_checks": ["minimum_hierarchy"],
+  "scoring": {
+    "descriptions": {
+      "custom:minimum_hierarchy": "最终回复中的导图是否有一个中心节点、至少三个名称不同的一级分支，并为每个一级分支列出子节点？"
+    }
+  }
 }

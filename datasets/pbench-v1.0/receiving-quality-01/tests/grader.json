@@ -1,4 +1,10 @@
 {
   "custom_checks": ["effective_receipts", "supplier_aggregation"],
-  "scoring": {"weights": {"custom:effective_receipts": 2, "custom:supplier_aggregation": 3}}
+  "scoring": {
+    "weights": {"custom:effective_receipts": 2, "custom:supplier_aggregation": 3},
+    "descriptions": {
+      "custom:effective_receipts": "验收明细是否逐单采用最高修订号的已验收记录，并在独立工作表中准确列出供应商、SKU、箱规和验收及不合格件数？",
+      "custom:supplier_aggregation": "供应商汇总是否在独立工作表中按有效验收记录算对验收件数、不合格件数和不合格率？"
+    }
+  }
 }

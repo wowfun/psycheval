@@ -5,6 +5,11 @@
       "custom:decision_content": 3,
       "custom:wide_canvas": 1,
       "custom:decision_panel": 2
+    },
+    "descriptions": {
+      "custom:decision_content": "两页简报是否写明试点决策所需条件，并在第二页分别列出处理耗时、异常率和人工复核量的正确对比？",
+      "custom:wide_canvas": "交付的 PPTX 是否恰有两页，画布尺寸符合指定宽屏规格？",
+      "custom:decision_panel": "简报内容通过核验后，首页右侧的深色面板是否符合尺寸要求，并列出异常响应、责任分工和回退等实施前提？"
     }
   }
 }

@@ -90,6 +90,13 @@ def test_dataset_tool_patterns_use_one_canonical_spelling(grader_path: Path) -> 
         )
 
 
+@pytest.mark.parametrize("grader_path", sorted(_DATASETS_ROOT.rglob("grader.json")))
+def test_each_dataset_rule_has_a_description(grader_path: Path) -> None:
+    config = json.loads(grader_path.read_text(encoding="utf-8"))
+    plan = build_scoring_plan(config)
+    assert all(item.description for item in plan.items)
+
+
 @pytest.mark.parametrize(
     ("dataset_name", "expected_task_dirs"),
     [
