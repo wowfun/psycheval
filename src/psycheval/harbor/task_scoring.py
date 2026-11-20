@@ -191,27 +191,27 @@ def task_scoring_inventory(
                 if result[f"{kind}_count"] is not None:
                     result[f"{kind}_count"] += len(items)
                 for item in items:
-                    result["scoring_items"].append(
-                        {
-                            "key": json.dumps(
-                                [step, kind, item["id"]],
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
-                            "id": item["id"],
-                            "type": kind,
-                            "step": step,
-                            "path": path,
-                            **(
-                                {
-                                    key: item.get(key, [] if key != "question" else "")
-                                    for key in RUBRIC_FIELDS
-                                }
-                                if kind == "rubric"
-                                else {}
-                            ),
-                        }
-                    )
+                    row = {
+                        "key": json.dumps(
+                            [step, kind, item["id"]],
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        "id": item["id"],
+                        "type": kind,
+                        "step": step,
+                        "path": path,
+                    }
+                    if kind == "rubric":
+                        row.update(
+                            {
+                                key: item.get(key, [] if key != "question" else "")
+                                for key in RUBRIC_FIELDS
+                            }
+                        )
+                    elif item["description"] is not None:
+                        row["question"] = item["description"]
+                    result["scoring_items"].append(row)
                 break
     if result["rule_count"] is not None and result["rubric_count"] is not None:
         result["scoring_item_count"] = result["rule_count"] + result["rubric_count"]

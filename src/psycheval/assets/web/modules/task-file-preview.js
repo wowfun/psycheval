@@ -19,6 +19,7 @@ function createScoringPreview(preview) {
     const article = document.createElement("section"); article.className = "task-scoring-preview-item";
     text(article, "h3", item.id);
     if (preview.kind === "grader") {
+      if (item.description) text(article, "p", item.description);
       text(article, "p", `${item.dimension} · ${t("task_scoring_weight", "Weight")}: ${item.weight}`);
     } else {
       const list = document.createElement("dl");

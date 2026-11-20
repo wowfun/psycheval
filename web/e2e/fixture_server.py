@@ -148,7 +148,18 @@ def main() -> None:
             )
             (scored / "tests/judge.yaml").write_text(YAML, encoding="utf-8")
             (scored / "tests/grader.json").write_text(
-                '{"custom_checks":["answer","output"]}', encoding="utf-8"
+                json.dumps(
+                    {
+                        "custom_checks": ["answer", "output"],
+                        "scoring": {
+                            "descriptions": {
+                                "custom:answer": "核对答案 <value> & 来源。"
+                            }
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
             )
             bundle = _write_workbuddy_bundle(root / "office")
             (bundle / "tasks/office-one/tests/judge.yaml").write_text(

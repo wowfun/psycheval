@@ -154,10 +154,13 @@ Clicking Rules selects the first effective `grader.json`; clicking Rubrics or
 Scoring items selects the first effective `judge.yaml`. Missing files fall back
 to the Task's default Instruction. Flatten scoring items replaces the count
 columns with step, ID, type, question, pass/fail criteria, scope limits, and
-artifact references. Rule rows contain only their identity and type; rows with
-no declared items retain their Task context. Selecting an item opens its actual
-source file. Manual counts never produce synthetic items; the flattened view
-discloses their unexpanded count. Selection and management remain Task-based.
+artifact references. Rule rows show their
+[declared description](harbor.md#script-checks-and-weighted-scoring) in Question,
+with a blank cell when omitted. Rows with no declared items retain their Task
+context. Selecting an item opens its actual source file. The `grader.json`
+preview shows each description under its rule ID. Manual counts never produce
+synthetic items; the flattened view discloses their unexpanded count. Selection
+and management remain Task-based.
 
 Task Summary follows Dataset selection, search, and Task filters and deduplicates
 Tasks by Dataset and Task identity. It groups by Overall, Dataset, Category,

@@ -286,6 +286,39 @@ def test_export_uses_declared_items_and_manual_totals_without_synthetic_rules(of
         assert "fidelity" in text and "report" in text and "中文" in text
 
 
+def test_rule_description_refreshes_and_exports_in_the_question_column(tmp_path):
+    from tests.harbor.test_task_scoring import task, write
+
+    config_path = tmp_path / "peval.toml"
+    config_path.write_text("", encoding="utf-8")
+    task_dir = tmp_path / "dataset" / "example"
+    task(task_dir)
+    config = {"custom_checks": ["values"]}
+    path = "tests/grader.json"
+    write(task_dir, path, json.dumps(config))
+    dataset = HarborDataset(id="native", path=str(task_dir.parent))
+    write_workspace_harbor_config(config_path, (dataset,), ())
+
+    service = library(config_path)
+    initial = service.task_scoring("native", "example")["scoring_items"][0]
+    assert "question" not in initial
+    description = "核对值是否与输入一致。"
+    config["scoring"] = {"descriptions": {"custom:values": description}}
+    write(task_dir, path, json.dumps(config))
+
+    request = TaskExport(
+        kind="xlsx",
+        mode="items",
+        rows=[TaskRowRef(dataset_id="native", task="example", item_key=initial["key"])],
+        columns=["question"],
+    )
+    rows = task_export_rows(service, request, "guest")
+    assert rows[0]["question"] == description
+    content, _, _ = build_task_export(rows, request, "zh-CN")
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        assert description in archive.read("xl/sharedStrings.xml").decode("utf-8")
+
+
 def test_unknown_summary_is_not_silently_zero():
     rows = [
         {

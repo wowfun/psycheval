@@ -52,6 +52,9 @@ def test_declared_rule_items_match_scoring_and_preserve_rubric_lists(tmp_path):
             {
                 "required_calls": [{"any": [{"tool_names": ["web_search"]}]}],
                 "custom_checks": ["answer"],
+                "scoring": {
+                    "descriptions": {"custom:answer": "核对最终回复中的结论。"}
+                },
             }
         ),
     )
@@ -73,12 +76,25 @@ def test_declared_rule_items_match_scoring_and_preserve_rubric_lists(tmp_path):
     ]
     assert value["scoring_items"][-1]["artifact_refs"] == ["report"]
     assert "question" not in value["scoring_items"][0]
+    assert value["scoring_items"][-2]["question"] == "核对最终回复中的结论。"
+    path = "tests/grader.json"
+    preview = scoring_file_preview(path, (tmp_path / path).read_text(encoding="utf-8"))
+    assert preview["items"][-1]["description"] == "核对最终回复中的结论。"
+    assert preview["items"][0]["description"] is None
 
 
 def test_steps_override_whole_files_and_shared_items_count_per_step(tmp_path):
     task(tmp_path, ("second", "first", "last"))
-    write(tmp_path, "tests/grader.json", '{"custom_checks":["shared"]}')
-    write(tmp_path, "steps/first/tests/grader.json", '{"custom_checks":["one","two"]}')
+    write(
+        tmp_path,
+        "tests/grader.json",
+        '{"custom_checks":["shared"], "scoring":{"descriptions":{"custom:shared":"Shared rule"}}}',
+    )
+    write(
+        tmp_path,
+        "steps/first/tests/grader.json",
+        '{"custom_checks":["shared","two"], "scoring":{"descriptions":{"custom:shared":"Step rule"}}}',
+    )
     write(tmp_path, "tests/judge.yaml", YAML)
     reads = []
 
@@ -94,6 +110,11 @@ def test_steps_override_whole_files_and_shared_items_count_per_step(tmp_path):
         value["scoring_item_count"],
     ) == (4, 3, 7)
     assert len({item["key"] for item in value["scoring_items"]}) == 7
+    assert {
+        item["step"]: item["question"]
+        for item in value["scoring_items"]
+        if item["id"] == "custom:shared"
+    } == {"second": "Shared rule", "first": "Step rule", "last": "Shared rule"}
     assert reads.count(tmp_path / "tests/judge.yaml") == 1
     assert value["scoring_paths"]["rule"] == "tests/grader.json"
     write(tmp_path, "steps/second/tests/judge.yaml", "bad: config")

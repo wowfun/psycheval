@@ -16,6 +16,7 @@ for (const locale of ["en", "zh-CN"]) for (const role of ["admin", "guest"]) {
       const cell = (name, key) => row(name).locator(`td[data-table-column-key="${key}"]`);
       const sum = key => summary.locator(`td[data-table-column-key="${key}"]`);
       const sidebar = page.locator('[data-sidebar-id="dataset-task"]');
+      const description = "核对答案 <value> & 来源。";
       await expect(rows).toHaveCount(3);
       const registry = page.locator("[data-dataset-collections]");
       await expect(registry.locator('th[data-table-column="status"]')).toHaveCount(0);
@@ -74,6 +75,9 @@ for (const locale of ["en", "zh-CN"]) for (const role of ["admin", "guest"]) {
       await cell("scored", "rule_count").click();
       await expect(sidebar.locator("[data-harbor-editor-path]")).toHaveText("tests/grader.json");
       await expect(sidebar.locator(".task-scoring-preview h3")).toHaveText(["custom:answer", "custom:output"]);
+      const rulesPreview = sidebar.locator(".task-scoring-preview-item");
+      await expect(rulesPreview.first().locator("h3 + p")).toHaveText(description);
+      await expect(rulesPreview.nth(1).locator("p")).toHaveCount(1);
       await cell("scored", "rubric_count").click();
       await expect(sidebar.locator("[data-harbor-editor-path]")).toHaveText("tests/judge.yaml");
       await expect(sidebar.locator(".task-scoring-preview h3")).toHaveText("fidelity");
@@ -114,6 +118,12 @@ for (const locale of ["en", "zh-CN"]) for (const role of ["admin", "guest"]) {
       await page.locator(".harbor-workbench-tools > .toolbar-menu").first().locator("summary").click();
       await page.locator("[data-task-flatten]").click();
       await expect(rows).toHaveCount(5);
+      const questionFor = id => row("scored").filter({
+        has: page.locator('td[data-table-column-key="id"]', { hasText: id }),
+      }).locator('td[data-table-column-key="question"]');
+      await expect(questionFor("custom:answer")).toHaveText(description);
+      await expect(questionFor("custom:output")).toBeEmpty();
+      await expect(questionFor("fidelity")).not.toBeEmpty();
       await expect(row("office-one")).toHaveCount(1);
       await expect(cell("office-one", "type")).toHaveText("Rubric");
       await expect(cell("empty", "id")).toHaveText("");
