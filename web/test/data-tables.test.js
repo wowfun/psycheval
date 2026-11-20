@@ -15,6 +15,7 @@ const browser = installBrowserDom(`
 
 const leaderboard = await import("../../src/psycheval/assets/web/modules/leaderboard-table.js");
 const tables = await import("../../src/psycheval/assets/web/modules/data-tables.js");
+const runtime = await import("../../src/psycheval/assets/web/modules/runtime.js");
 
 test("Leaderboard configuration rejects misspelled dependencies", () => {
   assert.throws(() => leaderboard.configureLeaderboardDataTables({ filterOptionz: () => [] }), /filterOptionz/);
@@ -71,7 +72,6 @@ test("tool success rate preserves unknowns and valid zero rates", () => {
     assert.equal(tables.rowToolSuccessRate({ total_tool_calls: calls, total_tool_errors: errors }), expected);
   }
 });
-const runtime = await import("../../src/psycheval/assets/web/modules/runtime.js");
 const views = await import("../../src/psycheval/assets/web/modules/workspace-views.js");
 const summaries = await import("../../src/psycheval/assets/web/modules/leaderboard-summary.js");
 const selected = await import("../../src/psycheval/assets/web/modules/analysis-selected.js");
