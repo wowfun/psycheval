@@ -56,6 +56,55 @@ def test_weights_span_builtin_and_custom_checks_and_allow_zero_weight():
     assert "continuation" not in result
 
 
+def test_descriptions_are_optional_metadata_for_builtin_and_custom_checks():
+    config = {
+        "final_terms": ["done"],
+        "custom_checks": ["content", "delivery"],
+        "scoring": {"weights": {"custom:delivery": 0}},
+        "continuation_checks": ["custom:delivery"],
+    }
+    descriptions = {
+        "final_answer": "最终回复是否包含所需文字？",
+        "custom:delivery": "Check that the artifact was delivered.",
+    }
+    original = build_scoring_plan(config)
+    plan = build_scoring_plan(
+        {**config, "scoring": {**config["scoring"], "descriptions": descriptions}}
+    )
+    assert {item.id: item.description for item in plan.items} == {
+        **descriptions,
+        "custom:content": None,
+    }
+    checks = [
+        {"id": "final_answer", "passed": True},
+        {"id": "custom:content", "passed": True},
+        {"id": "custom:delivery", "passed": False},
+    ]
+    assert aggregate(checks, plan=plan) == aggregate(checks, plan=original)
+
+
+@pytest.mark.parametrize(
+    "descriptions",
+    [
+        None,
+        [],
+        "description",
+        {"x": "Use the declared ID"},
+        {"llm:x": "Judge question"},
+        {"custom:x": False},
+        {"custom:x": None},
+        {"custom:x": ""},
+        {"custom:x": " \n\t "},
+        {"custom:x": "\ud800"},
+    ],
+)
+def test_invalid_scoring_descriptions(descriptions):
+    with pytest.raises(ValueError, match=r"scoring\.descriptions"):
+        build_scoring_plan(
+            {"custom_checks": ["x"], "scoring": {"descriptions": descriptions}}
+        )
+
+
 @pytest.mark.parametrize("weight", [0, 0.05, 1])
 @pytest.mark.parametrize("quality", [False, True])
 @pytest.mark.parametrize(
@@ -129,6 +178,7 @@ def test_continuation_still_requires_positive_quality_weight():
     [
         {"custom_checks": ["x", "x"]},
         {"custom_checks": [""]},
+        {"custom_checks": ["\ud800"]},
         *(
             {"custom_checks": ["x"], "scoring": {"weights": {"custom:x": value}}}
             for value in [-1, 0, True, "1", float("inf"), float("nan")]

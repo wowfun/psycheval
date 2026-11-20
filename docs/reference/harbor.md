@@ -929,9 +929,9 @@ requires no format-specific optional dependencies.
 
 The ordinary verifier CLI accepts `grader.json` through the existing `test.sh`
 and `test.bat` entrypoints. `custom_checks` declares a list of unique nonempty
-check IDs implemented by a sibling `test_outputs.py`. The script and declaration
-must either both exist or both be absent. Custom-only configurations do not
-require a trajectory. Registration and preview never execute Task code.
+UTF-8 check IDs implemented by a sibling `test_outputs.py`. The script and
+declaration must either both exist or both be absent. Custom-only configurations
+do not require a trajectory. Registration and preview never execute Task code.
 
 The script runs as native Python argv with `--context <path>` and
 `--output <path>`. Context uses the runtime JSON protocol's `paths`: `workdir`,
@@ -957,6 +957,13 @@ the `custom_outputs` dimension. `scoring.weights` maps declared IDs to finite
 nonnegative weights, defaulting to one; total weight must be positive. For
 example, `{"custom_checks":["values","format"],"scoring":{"weights":
 {"custom:values":3,"custom:format":1}}}` awards 0.75 when only values passes.
+
+Optional `scoring.descriptions` maps the same declared check IDs to nonblank
+UTF-8 text describing what each rule checks. For example,
+`{"custom:values":"Check output values against the reference data."}` describes
+the `values` script check. Authors may describe any subset of the plan. The
+descriptions are review metadata used by the Task inventory and previews.
+
 `aggregate(checks, *, plan)` computes `sum(weight * passed) / sum(weight)` over
 the complete plan. Dimension scores use the same rule; dimensions with no
 positive weight score one, including dimensions containing only zero-weight

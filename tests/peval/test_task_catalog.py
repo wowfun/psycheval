@@ -154,6 +154,31 @@ def test_failed_scan_keeps_last_good_dataset_and_totals(tmp_path):
         inventory.close()
 
 
+def test_invalid_custom_check_id_is_a_task_diagnostic(tmp_path):
+    config_path, config = fixture(tmp_path)
+    grader = tmp_path / "dataset/first/tests/grader.json"
+    inventory = TaskInventory(config_path, config)
+    try:
+        inventory.reconcile()
+        grader.write_text(r'{"custom_checks":["\ud800"]}', encoding="utf-8")
+        inventory.reconcile()
+        snapshot = inventory.snapshot()
+        assert not snapshot["error"]
+        tasks = {row["directory"]: row for row in snapshot["datasets"][0]["tasks"]}
+        assert tasks["first"]["rule_count"] is None
+        assert "custom_checks" in tasks["first"]["scoring_diagnostics"][0]
+        assert tasks["second"]["rule_count"] == 1
+
+        grader.write_text(r'{"custom_checks":["\ud83d\udccb"]}', encoding="utf-8")
+        inventory.reconcile()
+        tasks = inventory.snapshot()["datasets"][0]["tasks"]
+        first = next(row for row in tasks if row["directory"] == "first")
+        assert first["scoring_diagnostics"] == []
+        assert first["scoring_items"][0]["id"] == "custom:📋"
+    finally:
+        inventory.close()
+
+
 def test_corrupt_disposable_cache_is_rebuilt(tmp_path):
     path = tmp_path / "cache.sqlite3"
     path.write_bytes(b"broken sqlite")

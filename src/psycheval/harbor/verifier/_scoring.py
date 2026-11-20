@@ -33,6 +33,7 @@ class ScoringItem:
     id: str
     dimension: str
     weight: float = 1.0
+    description: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,13 @@ class ScoringPlan:
     @property
     def requires_trajectory(self) -> bool:
         return any(item.dimension != "custom_outputs" for item in self.items)
+
+
+def _validate_utf8(text: str, field: str) -> None:
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field} must be valid UTF-8 text") from exc
 
 
 def build_scoring_plan(config: dict[str, Any]) -> ScoringPlan:
@@ -101,25 +109,30 @@ def build_scoring_plan(config: dict[str, Any]) -> ScoringPlan:
     custom = string_list(config.get("custom_checks"), field="custom_checks")
     if any(not name.strip() for name in custom) or len(custom) != len(set(custom)):
         raise ValueError("custom_checks must contain unique nonempty IDs")
+    for name in custom:
+        _validate_utf8(name, "custom_checks IDs")
     items.extend(ScoringItem(f"custom:{name}", "custom_outputs") for name in custom)
     if not items:
         raise ValueError("verifier config requires at least one non-empty constraint")
+    declared_ids = {item.id for item in items}
     continuation = config.get("continuation_checks", [])
     if "continuation_checks" in config and (
         not isinstance(continuation, list)
         or not continuation
         or not all(isinstance(check_id, str) for check_id in continuation)
         or len(continuation) != len(set(continuation))
-        or set(continuation) - {item.id for item in items}
+        or set(continuation) - declared_ids
     ):
         raise ValueError(
             "continuation_checks must be a nonempty list of unique declared check IDs"
         )
     scoring = config.get("scoring", {})
-    if not isinstance(scoring, dict) or set(scoring) - {"weights"}:
-        raise ValueError("scoring must be an object containing only weights")
+    if not isinstance(scoring, dict) or set(scoring) - {"weights", "descriptions"}:
+        raise ValueError(
+            "scoring must be an object containing only weights and descriptions"
+        )
     weights = scoring.get("weights", {})
-    if not isinstance(weights, dict) or set(weights) - {item.id for item in items}:
+    if not isinstance(weights, dict) or set(weights) - declared_ids:
         raise ValueError("scoring.weights must map declared check IDs to weights")
     for weight in weights.values():
         if (
@@ -129,8 +142,24 @@ def build_scoring_plan(config: dict[str, Any]) -> ScoringPlan:
             or weight < 0
         ):
             raise ValueError("scoring weights must be finite nonnegative numbers")
+    descriptions = scoring.get("descriptions", {})
+    if not isinstance(descriptions, dict) or set(descriptions) - declared_ids:
+        raise ValueError(
+            "scoring.descriptions must map declared check IDs to descriptions"
+        )
+    for check_id, description in descriptions.items():
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError(
+                f"scoring.descriptions[{check_id!r}] must be nonblank text"
+            )
+        _validate_utf8(description, f"scoring.descriptions[{check_id!r}]")
     items = [
-        ScoringItem(item.id, item.dimension, float(weights.get(item.id, 1)))
+        ScoringItem(
+            item.id,
+            item.dimension,
+            weight=float(weights.get(item.id, 1)),
+            description=descriptions.get(item.id),
+        )
         for item in items
     ]
     try:
