@@ -70,7 +70,7 @@ for (const locale of ["en", "zh-CN"]) for (const role of ["admin", "guest"]) {
       await cell("scored", "instruction").hover();
       expect((await cell("scored", "instruction").getAttribute("title")).length).toBeGreaterThan(500);
       await expect(sum("task_count")).toHaveText("3");
-      await expect(sum("rule_count")).toHaveText(locale === "en" ? "Unknown" : "未知");
+      await expect(sum("rule_count")).toHaveText("-");
       await expect(sum("rubric_count")).toHaveText("2");
       await cell("scored", "rule_count").click();
       await expect(sidebar.locator("[data-harbor-editor-path]")).toHaveText("tests/grader.json");
