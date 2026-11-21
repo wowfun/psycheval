@@ -254,12 +254,15 @@ class HostWorkBuddyAgent(HostACPAgent):
             tool_result_format="codebuddy",
             **kwargs,
         )
+        # Preserve links for the evidence reader's path checks.
+        self.logs_dir = self.logs_dir.absolute()
         self._profile_seeded = False
         self._family_capture = None
         self._usage_digest = None
         self._usage_evidence = None
         self._usage_history_cache = {}
         self._usage_collection_diagnostic = None
+        self._usage_collection_error_type = None
         self._agent_metadata = {
             "workbuddy_desktop_version": self.desktop_version,
             "workbuddy_cli_version": self.cli_version,
@@ -393,6 +396,7 @@ class HostWorkBuddyAgent(HostACPAgent):
                 "diagnostics": [
                     self._usage_collection_diagnostic or "native_usage_unavailable"
                 ],
+                "error_type": self._usage_collection_error_type,
             }
             self._usage_evidence = data["extra"]["workbuddy_usage"]
             self._publish_measurements(data, summary, None)
@@ -420,6 +424,7 @@ class HostWorkBuddyAgent(HostACPAgent):
             data.setdefault("extra", {})["workbuddy_usage"] = {
                 "status": "unavailable",
                 "diagnostics": ["invalid_usage_evidence"],
+                "error_type": None,
             }
             type(trajectory).model_validate(data)
         if captured:
@@ -494,6 +499,7 @@ class HostWorkBuddyAgent(HostACPAgent):
             self._measurement_marker = unavailable_marker()
 
     def _collect_usage(self, root, baseline):
+        stage = "read_summary"
         try:
             summary = _json(self.logs_dir / "acp.summary.json", label="ACP summary")
             if (
@@ -526,9 +532,11 @@ class HostWorkBuddyAgent(HostACPAgent):
                         "WorkBuddy family collection unavailable (%s)",
                         type(error).__name__,
                     )
+                stage = "capture_usage"
                 evidence = capture_usage(
                     root, self.logs_dir, summary, baseline, self.cli_version
                 )
+                stage = "publish_usage"
                 self._usage_digest = publish_usage(
                     self.logs_dir / USAGE_FILENAME, evidence
                 )
@@ -538,13 +546,17 @@ class HostWorkBuddyAgent(HostACPAgent):
                         ",".join(evidence["diagnostics"]),
                     )
         except Exception as error:  # noqa: BLE001 - preserve the primary execution error.
+            self._usage_collection_error_type = type(error).__name__
             self._usage_collection_diagnostic = (
                 str(error)
                 if isinstance(error, UsageLimitError)
                 else "native_usage_unavailable"
             )
             self.logger.warning(
-                "WorkBuddy usage collection unavailable (%s)",
+                "WorkBuddy usage collection unavailable "
+                "(stage=%s, error_type=%s, diagnostic=%s)",
+                stage,
+                self._usage_collection_error_type,
                 self._usage_collection_diagnostic,
             )
 
@@ -558,6 +570,7 @@ class HostWorkBuddyAgent(HostACPAgent):
         self._usage_evidence = None
         self._measurement_marker = None
         self._usage_collection_diagnostic = None
+        self._usage_collection_error_type = None
         usage_path = self.logs_dir / USAGE_FILENAME
         usage_path.unlink(missing_ok=True)
         usage_path.with_suffix(".tmp").unlink(missing_ok=True)

@@ -19,6 +19,7 @@ from psycheval.harbor.agents.acp.agent import HostACPAgent
 from psycheval.harbor.agents.acp.evidence import convert, outcome
 from psycheval.harbor.agents.acp.protocol import ProtocolError, StrictTransport
 from psycheval.harbor.agents.workbuddy import HostWorkBuddyAgent, inspect_workbuddy
+from psycheval.harbor.agents.workbuddy_usage import UsageLimitError
 from tests.harbor.environment_support import make_environment
 from tests.harbor.test_acp import _current_evidence
 
@@ -758,12 +759,23 @@ def test_generic_windows_boolean_and_background_cleanup(tmp_path):
 
 
 @windows
-def test_native_usage_pipeline_records_each_invocation_once(tmp_path):
+@pytest.mark.parametrize("relative_logs", [False, True], ids=["absolute", "relative"])
+def test_native_usage_pipeline_records_each_invocation_once(
+    tmp_path, monkeypatch, relative_logs
+):
+    monkeypatch.chdir(tmp_path)
+
     async def scenario():
-        host = make_environment(tmp_path / "host")
+        host = make_environment(
+            tmp_path / "host",
+            environment_kwargs={"workdir_root": tmp_path / "workspaces"},
+        )
+        logs_dir = host.trial_paths.agent_dir
+        if relative_logs:
+            logs_dir = logs_dir.relative_to(tmp_path)
         await host.start(False)
         agent = HostWorkBuddyAgent(
-            logs_dir=host.trial_paths.agent_dir,
+            logs_dir=logs_dir,
             model_name="b",
             **installation(tmp_path),
         )
@@ -954,7 +966,11 @@ def test_usage_enrichment_guards_and_failure_atomicity(tmp_path, monkeypatch, fa
     ).to_json_dict()
     assert projected == ([1] if failure in {"projection", "validation"} else [])
     assert result["steps"] == before["steps"]
-    assert result["extra"]["workbuddy_usage"]["status"] == "unavailable"
+    assert result["extra"]["workbuddy_usage"] == {
+        "status": "unavailable",
+        "diagnostics": ["invalid_usage_evidence"],
+        "error_type": None,
+    }
     assert len(result["extra"]["family"]["members"]) == 3
     assert original.to_json_dict() == before
 
@@ -1072,41 +1088,149 @@ def test_evidence_read_errors_name_their_own_artifact(tmp_path):
         workbuddy_agent._read_seed(path, label="usage evidence", maximum=1)
 
 
-@pytest.mark.parametrize("kind", ["limit", "untrusted"])
-def test_usage_capture_limit_is_visible_without_changing_execution(
-    tmp_path, monkeypatch, caplog, kind
+@pytest.mark.parametrize(
+    ("stage", "exception_class", "diagnostic"),
+    [
+        ("capture_usage", UsageLimitError, "history_byte_limit"),
+        ("capture_usage", ValueError, "native_usage_unavailable"),
+        ("publish_usage", PermissionError, "native_usage_unavailable"),
+    ],
+)
+def test_usage_collection_failure_is_visible_without_changing_execution(
+    tmp_path, monkeypatch, caplog, stage, exception_class, diagnostic
 ):
     from psycheval.harbor.agents import workbuddy as workbuddy_agent
-    from psycheval.harbor.agents import workbuddy_usage as workbuddy_usage
+    from psycheval.harbor.agents.acp import agent as acp_agent
 
     agent = HostWorkBuddyAgent(
         logs_dir=tmp_path / "logs", model_name="b", **installation(tmp_path)
     )
     agent.logs_dir.mkdir()
-    agent._invocation_id = "current"
-    (agent.logs_dir / "acp.summary.json").write_text(
-        json.dumps(
-            {
-                "invocation_id": "current",
-                "cleanup_complete": True,
-                "prompt_submitted": True,
-            }
-        ),
-        encoding="utf-8",
+    agent._child_env = {"CODEBUDDY_CONFIG_DIR": str(tmp_path / "private")}
+    trajectory = Trajectory.model_validate(
+        {
+            "schema_version": "ATIF-v1.7",
+            "session_id": "session",
+            "agent": {"name": "fixture", "version": "1"},
+            "steps": [{"step_id": 1, "source": "agent", "message": "fixture"}],
+        }
     )
 
-    def limited(*args):
-        if kind == "limit":
-            raise workbuddy_usage.UsageLimitError("history_byte_limit")
-        raise ValueError("PRIVATE_EXCEPTION_BODY")
+    async def execute(self, action, *_):
+        self._invocation_id = action
+        self._instruction = "fixture"
+        (self.logs_dir / "acp.summary.json").write_text(
+            json.dumps(
+                {
+                    "invocation_id": action,
+                    "session_id": "session",
+                    "host_os": "windows",
+                    "cleanup_complete": action == "run",
+                    "prompt_submitted": True,
+                }
+            ),
+            encoding="utf-8",
+        )
 
-    monkeypatch.setattr(workbuddy_agent, "capture_usage", limited)
-    agent._collect_usage(tmp_path, workbuddy_usage.HistoryBaseline({}))
-    assert agent._usage_digest is None
-    expected = "history_byte_limit" if kind == "limit" else "native_usage_unavailable"
-    assert agent._usage_collection_diagnostic == expected
-    assert expected in caplog.text
-    assert "PRIVATE_EXCEPTION_BODY" not in caplog.text
+    def fail(*_):
+        message = (
+            diagnostic
+            if exception_class is UsageLimitError
+            else "PRIVATE_EXCEPTION_BODY"
+        )
+        raise exception_class(message)
+
+    monkeypatch.setattr(agent, "_invocation_host", lambda host: host)
+    monkeypatch.setattr(HostACPAgent, "_run_invocation", execute)
+    monkeypatch.setattr(acp_agent, "convert", lambda *_: trajectory)
+    monkeypatch.setattr(
+        workbuddy_agent, "capture_usage", lambda *_: {"diagnostics": []}
+    )
+    monkeypatch.setattr(workbuddy_agent, stage, fail)
+
+    for invoke, expected_type, expected_code in (
+        (agent.run, exception_class.__name__, diagnostic),
+        (agent.resume, None, "native_usage_unavailable"),
+    ):
+        caplog.clear()
+        context = AgentContext()
+        asyncio.run(invoke("fixture", None, context))
+        agent.populate_context_post_run(context)
+
+        expected_usage = {
+            "status": "unavailable",
+            "diagnostics": [expected_code],
+            "error_type": expected_type,
+        }
+        trajectory_file = (agent.logs_dir / "trajectory.json").read_text(
+            encoding="utf-8"
+        )
+        measurements = (agent.logs_dir / "measurements.json").read_text(
+            encoding="utf-8"
+        )
+        assert json.loads(trajectory_file)["extra"]["workbuddy_usage"] == expected_usage
+        assert json.loads(measurements)["diagnostics"] == ["native_usage_unavailable"]
+        result = context.model_dump_json()
+        assert json.loads(result)["metadata"]["workbuddy_usage"] == expected_usage
+        assert not (agent.logs_dir / "workbuddy.usage.json").exists()
+
+        warnings = [
+            message
+            for message in caplog.messages
+            if message.startswith("WorkBuddy usage collection unavailable")
+        ]
+        if expected_type is None:
+            assert warnings == []
+        else:
+            assert warnings == [
+                "WorkBuddy usage collection unavailable "
+                f"(stage={stage}, error_type={expected_type}, diagnostic={expected_code})"
+            ]
+        assert all(
+            "PRIVATE_EXCEPTION_BODY" not in output
+            for output in (caplog.text, result, trajectory_file, measurements)
+        )
+
+
+def test_usage_summary_rejects_a_link_under_relative_logs(
+    tmp_path, monkeypatch, caplog
+):
+    from psycheval.harbor.agents import workbuddy as workbuddy_agent
+    from psycheval.harbor.agents.workbuddy_usage import HistoryBaseline
+
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "acp.summary.json").write_text(
+        '{"invocation_id":"run","cleanup_complete":true,"prompt_submitted":true}',
+        encoding="utf-8",
+    )
+    logs_dir = Path("logs")
+    if sys.platform == "win32":
+        import _winapi
+
+        # A junction can be created without Windows symlink privileges.
+        _winapi.CreateJunction(str(target), str(logs_dir.absolute()))
+    else:
+        logs_dir.symlink_to(target, target_is_directory=True)
+
+    def unexpected_capture(*_):
+        pytest.fail("usage capture admitted an ACP summary under a linked directory")
+
+    monkeypatch.setattr(workbuddy_agent, "capture_usage", unexpected_capture)
+    agent = HostWorkBuddyAgent(
+        logs_dir=logs_dir, model_name="b", **installation(tmp_path)
+    )
+    agent._invocation_id = "run"
+    agent._collect_usage(tmp_path, HistoryBaseline({}))
+    assert [
+        message
+        for message in caplog.messages
+        if message.startswith("WorkBuddy usage collection unavailable")
+    ] == [
+        "WorkBuddy usage collection unavailable "
+        "(stage=read_summary, error_type=ValueError, diagnostic=native_usage_unavailable)"
+    ]
 
 
 @windows

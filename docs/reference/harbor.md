@@ -294,9 +294,11 @@ the exact session through advertised resume/load support, excluding replay.
 ### WorkBuddy usage
 
 New WorkBuddy invocations retain bounded `agent/workbuddy.usage.json` evidence
-from the current root Session's native history after process cleanup. This history
-belongs to the Agent's isolated runtime profile; desktop chat history is not
-copied into it, and a fresh Agent starts with no historical sessions. A pre-call
+from the current root Session's native history after process cleanup. The adapter
+anchors relative Harbor log directories to the working directory at construction.
+The usage collector checks its evidence paths for links before reading them.
+This history belongs to the Agent's isolated runtime profile; desktop chat history
+is not copied into it, and a fresh Agent starts with no historical sessions. A pre-call
 baseline and the current conversation request identity exclude restored history
 and other invocations. Only request identities and numeric usage fields are
 retained; message bodies, tool results and credentials are excluded. Source
@@ -338,6 +340,12 @@ Each Trial token field requires complete verified coverage of that field;
 uncovered fields remain unknown while verified fields may retain their totals. Usage
 collection errors, unsupported formats, conflicts and limits retain categorical
 diagnostics without changing execution errors, cleanup or verifier admission.
+Collection exception warnings record the failure stage, exception class name,
+and diagnostic code. Unavailable WorkBuddy usage metadata in the trajectory
+and Harbor Agent result includes `error_type`. It holds the collection
+exception's class name, or null when collection is skipped or usage evidence
+fails validation or projection.
+Exception messages and tracebacks from the collector stay private.
 No collection occurs before cleanup is confirmed. Cost and model timing remain
 unknown without their own evidence. The live callback continues forwarding raw
 notifications, including repeated usage snapshots.
