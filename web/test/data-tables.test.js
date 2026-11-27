@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { installBrowserDom } from "./support/browser.js";
@@ -1195,4 +1196,87 @@ test("conflicted cell shows the saved revision and refreshes on cancel without l
   assert.match(mounted.cell.querySelector("details").textContent, /current saved value/);
   mounted.input.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   assert.equal(refreshed, 1);
+});
+
+test("table columns size adaptively without header clipping or fixed per-column minimums", () => {
+  const style = document.createElement("style");
+  style.textContent = [
+    "05-data-table.css",
+    "23-harbor-workbench.css",
+  ].map(name => readFileSync(new URL(`../../src/psycheval/assets/css/${name}`, import.meta.url), "utf8")).join("\n");
+  document.head.append(style);
+  const root = document.querySelector("#table-root");
+  try {
+    const columns = [
+      tables.selectionColumn({ key: "__select", selectionKey: row => row.id, selectionSet: new Set() }),
+      { key: "rubric_count", label: "Rubrics", valueType: "number", sortable: true, value: row => row.rubric_count },
+      { key: "scoring_item_count", label: "Scoring items", valueType: "number", sortable: true, value: row => row.scoring_item_count },
+      { key: "scoring_comment_count", label: "Scoring comments", valueType: "number", sortable: true, filterable: true, value: row => row.scoring_comment_count },
+      { key: "agent_steps", label: "Agent steps", valueType: "number", numeric: true, sortable: true, value: row => row.agent_steps },
+      { key: "finished_at_ms", label: "Last Turn End", valueType: "datetime", numeric: true, sortable: true, value: row => row.finished_at_ms },
+      { key: "instruction", label: "Instruction", valueType: "text", value: row => row.instruction },
+      { key: "question", label: "Question", valueType: "text", value: row => row.question },
+    ];
+    root.innerHTML = tables.renderDataTable({
+      tableId: "adaptive-widths",
+      tableClass: "harbor-overview-table",
+      columns,
+      rows: [{
+        id: "r1",
+        rubric_count: 9,
+        scoring_item_count: 107,
+        scoring_comment_count: 2,
+        agent_steps: 14,
+        finished_at_ms: 1_725_000_000_000,
+        instruction: "Short instruction",
+        question: "Short question",
+      }],
+      rowKey: row => row.id,
+    });
+
+    const tableStyle = window.getComputedStyle(root.querySelector("table.data-table"));
+    assert.equal(tableStyle.tableLayout, "auto");
+    assert.equal(tableStyle.minWidth, "max-content");
+
+    // Selection column remains fixed-width.
+    const selectTh = window.getComputedStyle(root.querySelector('thead th[data-value-type="selection"]'));
+    assert.equal(selectTh.width, "46px");
+
+    // Column headers never inherit body max-width caps or hardcoded per-column min-widths,
+    // and sort/filter headers stay compactly grouped instead of stretched with space-between.
+    for (const key of ["rubric_count", "scoring_item_count", "scoring_comment_count", "agent_steps", "finished_at_ms", "instruction", "question"]) {
+      const th = root.querySelector(`thead th[data-table-column="${key}"]`);
+      const thStyle = window.getComputedStyle(th);
+      const headCellStyle = window.getComputedStyle(th.querySelector(".table-head-cell"));
+      assert.equal(thStyle.maxWidth, "none", `${key}: header th must not cap max-width`);
+      assert.ok(["", "auto", "0px"].includes(thStyle.minWidth), `${key}: header th must not hardcode min-width, got ${thStyle.minWidth}`);
+      assert.equal(headCellStyle.maxWidth, "none", `${key}: header cell must not cap width`);
+      assert.equal(headCellStyle.display, "flex");
+      assert.equal(
+        headCellStyle.justifyContent,
+        th.classList.contains("num") ? "flex-end" : "flex-start",
+        `${key}: header alignment follows cell alignment without stretching gaps`,
+      );
+      const sortButton = th.querySelector(".sort-button");
+      if (sortButton) {
+        const sortStyle = window.getComputedStyle(sortButton);
+        assert.equal(sortStyle.width, "auto", `${key}: sort button sizes to label + icon`);
+        assert.equal(sortStyle.justifyContent, "flex-start");
+      }
+    }
+
+    // Numeric and datetime body cells stay untruncated; long text columns keep body caps without forced minimums.
+    for (const key of ["scoring_comment_count", "agent_steps", "finished_at_ms"]) {
+      const td = root.querySelector(`tbody td[data-table-column-key="${key}"]`);
+      assert.equal(window.getComputedStyle(td).getPropertyValue("--table-column-max").trim(), "none");
+    }
+    const instructionTd = root.querySelector('tbody td[data-table-column-key="instruction"]');
+    assert.ok(["", "auto", "0px"].includes(window.getComputedStyle(instructionTd).minWidth));
+    assert.equal(window.getComputedStyle(instructionTd).getPropertyValue("--table-column-max").trim(), "42ch");
+    const questionTd = root.querySelector('tbody td[data-table-column-key="question"]');
+    assert.ok(["", "auto", "0px"].includes(window.getComputedStyle(questionTd).minWidth));
+    assert.equal(window.getComputedStyle(questionTd).getPropertyValue("--table-column-max").trim(), "44ch");
+  } finally {
+    style.remove();
+  }
 });

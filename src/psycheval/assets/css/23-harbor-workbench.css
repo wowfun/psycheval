@@ -331,18 +331,13 @@
 .task-scoring-actions { flex-wrap:wrap; }
 .task-summary { padding:18px; overflow:visible; }
 .task-summary h2 { margin:0; }
-.harbor-overview-table th[data-table-column="rule_count"] { --table-column-max:20ch; min-width:112px; }
-.harbor-overview-table th[data-table-column="rubric_count"] { --table-column-max:20ch; min-width:128px; }
-.harbor-overview-table th[data-table-column="scoring_item_count"] { --table-column-max:24ch; min-width:184px; }
-.harbor-overview-table th[data-table-column^="meta:"] { --table-column-max:24ch; min-width:140px; }
 .harbor-workbench-tools [data-task-columns-control][hidden] { display:none; }
 .task-unexpanded { padding:0 16px 10px; margin:0; font-size:13px; }
-.harbor-overview-table [data-table-column="instruction"],
-.harbor-overview-table [data-table-column-key="instruction"] { --table-column-max:42ch; min-width:24ch; }
-.harbor-overview-table [data-table-column-key="question"],
-.harbor-overview-table [data-table-column-key="pass_criteria"],
-.harbor-overview-table [data-table-column-key="fail_criteria"],
-.harbor-overview-table [data-table-column-key="scope_limits"] { --table-column-max:44ch; min-width:24ch; }
+.harbor-overview-table td[data-table-column-key="instruction"] { --table-column-max:42ch; }
+.harbor-overview-table td[data-table-column-key="question"],
+.harbor-overview-table td[data-table-column-key="pass_criteria"],
+.harbor-overview-table td[data-table-column-key="fail_criteria"],
+.harbor-overview-table td[data-table-column-key="scope_limits"] { --table-column-max:44ch; }
 .harbor-overview-table [data-table-column-key="question"] .table-cell-content,
 .harbor-overview-table [data-table-column-key="pass_criteria"] .table-cell-content,
 .harbor-overview-table [data-table-column-key="fail_criteria"] .table-cell-content,

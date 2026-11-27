@@ -28,6 +28,11 @@ stays in that group's metric cells instead of being repeated in the selector.
 Workspace data tables share a bounded viewport for both scroll directions and
 an opaque sticky column header without gaps at the viewport edge. The table owns
 scrolling; surrounding panels supply spacing and optional compact height limits.
+Columns size adaptively to their full header controls (title, sort, and filter
+state) and visible content without header truncation or per-column fixed
+minimums; body cells of potentially long text, list, identity, path, or markup
+types cap width cleanly with full hover text, while numeric, timestamp, and
+status cells remain untruncated.
 Rows share hover, selection, focus, and activation behavior. Content tables retain
 their reading semantics and full text. Sorting, filtering, editing, and pagination
 remain capabilities supplied by each table's domain.
