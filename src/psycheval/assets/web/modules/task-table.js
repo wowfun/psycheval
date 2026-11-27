@@ -189,12 +189,12 @@ function taskSearchText(row) {
 }
 
 function renderTaskTable({ root, tableId, allRows, columns, search = "", selectedKey, onActivate, onChange, onSelectionChange, rowAttribute = "data-task-row", rows: suppliedRows = null }) {
-  const rows = suppliedRows ?? applyDataTableControls(tableId, search ? allRows.filter(row => taskSearchText(row).includes(search.trim().toLowerCase())) : allRows, columns, allRows);
+  const rows = suppliedRows ?? applyDataTableControls(tableId, search ? allRows.filter(row => taskSearchText(row).includes(search.trim().toLowerCase())) : allRows, columns);
   root.innerHTML = renderDataTable({ tableId, columns, rows, rowKey: row => row.key,
     tableClass: "harbor-overview-table", shellClass: "harbor-overview-table-shell",
     rowClass: row => `harbor-overview-row status-${esc(row.status)} ${taskRowIdentity(row) === selectedKey ? "selected-row" : ""}`,
     rowAttrs: row => `${rowAttribute} tabindex="0" data-task-row-key="${esc(row.key)}" data-task-row-token="${encodeURIComponent(row.key)}"`,
-    filterOptionsRows: allRows, emptyText: t("harbor_task_empty", "No Tasks"),
+    emptyText: t("harbor_task_empty", "No Tasks"),
   });
   bindDataTableControls(root, { tableId, columns, rows, rowKey: row => row.key, onChange, onSelectionChange });
   const byKey = new Map(rows.map(row => [row.key, row]));
