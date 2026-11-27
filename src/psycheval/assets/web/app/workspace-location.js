@@ -4,7 +4,7 @@ import { SORT_KEYS as SORTS } from "./catalog-sort.js";
 import { BROWSER_VIEW_LIMIT, VIEW_NAME_MAX_CHARS, VIEW_GROUPS as GROUPS, SUMMARY_DEFAULTS } from "./workspace-view-contract.js";
 
 const MAX_LOCATION_BYTES = 64 * 1024;
-const FACETS = ["categories", "tags", "agents", "models", "tasks", "jobs", "providers", "datasets", "results"];
+const FACETS = ["categories", "tags", "agents", "models", "tasks", "jobs", "providers", "datasets", "results", "review_comments"];
 const HOME_QUERY = Object.freeze({ state: "active", search: "", page: 1, page_size: 100, sort: "last_turn_end", direction: "desc", metric_scope: "family", ...Object.fromEntries(FACETS.map(key => [key, []])) });
 const REPORT_QUERY = Object.freeze({ state: "active", search: "", page: 1, page_size: 50, kinds: [], datasets: [], jobs: [] });
 const SUMMARY = SUMMARY_DEFAULTS;
@@ -36,6 +36,7 @@ function queryState(page, value = {}) {
   if (!Number.isSafeInteger(result.page) || result.page < 1 || !Number.isSafeInteger(result.page_size) || result.page_size < 1 || result.page_size > 100) invalid();
   if (page === "home" && (!(SORTS.has(result.sort) || result.sort.startsWith("metric:") && validMetricId(result.sort.slice(7))) || !["asc", "desc"].includes(result.direction))) invalid();
   if (page === "home" && !["root", "family"].includes(result.metric_scope)) invalid();
+  if (page === "home" && result.review_comments.some(key => !["commented", "uncommented"].includes(key))) invalid();
   if (page === "reports" && result.kinds.some(key => !["session", "dataset", "job", "unassociated"].includes(key))) invalid();
   return result;
 }

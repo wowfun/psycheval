@@ -9,6 +9,7 @@ import { closeModalSurface, openModalSurface } from "./modal-surfaces.js";
 import { renderMarkdown } from "./markdown.js";
 import { createSidebarController } from "./sidebar.js";
 import { createWorkspaceViewRepository } from "./workspace-view-repository.js";
+import { commentStatusLabel } from "./comments-ui.js";
 import { normalizeViewFilterValues } from "../app/workspace-view-contract.js";
 
 let liveWorkspaceViewRepository = null;
@@ -87,6 +88,7 @@ function workspaceViewFilters(value) {
     jobs: normalizeViewFilterValues(listValue(filters.jobs).map(String)),
     providers: normalizeViewFilterValues(listValue(filters.providers).map(String)),
     results: normalizeViewFilterValues(listValue(filters.results).map(String)),
+    review_comments: normalizeViewFilterValues(listValue(filters.review_comments).map(String)),
   };
 }
 
@@ -317,6 +319,7 @@ function currentWorkspaceViewFilters() {
     jobs: query.jobs,
     providers: query.providers,
     results: query.results,
+    review_comments: query.review_comments,
   });
 }
 
@@ -335,6 +338,7 @@ function renderWorkspaceViewCurrentConfiguration(dialog) {
   if (filters.jobs.length) fields.push([t("job", "Job"), filters.jobs.join(", ")]);
   if (filters.providers.length) fields.push([t("provider", "Provider"), filters.providers.join(", ")]);
   if (filters.results.length) fields.push([t("result", "Result"), filters.results.map(statusLabel).join(", ")]);
+  if (filters.review_comments.length) fields.push([t("comments", "Comments"), filters.review_comments.map(commentStatusLabel).join(", ")]);
   fields.push([t("summary_group_by", "Group by"), workspaceViewGroupByLabel(state.leaderboardSummaryGroupBy)]);
   target.innerHTML = fields.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join("");
 }
@@ -357,6 +361,7 @@ function workspaceViewFilterConfig(filters = currentWorkspaceViewFilters()) {
   if (filters.jobs.length) compact.jobs = [...filters.jobs];
   if (filters.providers.length) compact.providers = [...filters.providers];
   if (filters.results.length) compact.results = [...filters.results];
+  if (filters.review_comments.length) compact.review_comments = [...filters.review_comments];
   return compact;
 }
 
@@ -677,6 +682,7 @@ function workspaceViewConfigurationParts(view) {
     filters.jobs.length ? `${t("job", "Job")}: ${filters.jobs.join(", ")}` : "",
     filters.providers.length ? `${t("provider", "Provider")}: ${filters.providers.join(", ")}` : "",
     filters.results.length ? `${t("result", "Result")}: ${filters.results.join(", ")}` : "",
+    filters.review_comments.length ? `${t("comments", "Comments")}: ${filters.review_comments.map(commentStatusLabel).join(", ")}` : "",
     `${t("summary_group_by", "Group by")}: ${workspaceViewGroupByLabel(view?.group_by)}`,
   ].filter(Boolean);
 }
@@ -692,6 +698,7 @@ function workspaceViewOtherConditionsParts(view) {
     filters.search ? `${t("search", "Search")}: ${filters.search}` : "",
     filters.agents.length ? `${t("agent", "Agent")}: ${filters.agents.join(", ")}` : "",
     filters.results.length ? `${t("result", "Result")}: ${filters.results.map(statusLabel).join(", ")}` : "",
+    filters.review_comments.length ? `${t("comments", "Comments")}: ${filters.review_comments.map(commentStatusLabel).join(", ")}` : "",
   ].filter(Boolean);
 }
 
@@ -705,7 +712,7 @@ function workspaceViewOtherConditionsYaml(view) {
   ["state", "search"].forEach(key => {
     if (filters[key]) lines.push(`${key}: ${JSON.stringify(filters[key])}`);
   });
-  ["agents", "results"].forEach(key => {
+  ["agents", "results", "review_comments"].forEach(key => {
     if (!listValue(filters[key]).length) return;
     lines.push(`${key}:`);
     filters[key].forEach(value => lines.push(`  - ${JSON.stringify(String(value))}`));
@@ -733,7 +740,7 @@ function workspaceViewConfigurationYaml(view, options = {}) {
     }
     const listKeys = otherConditions !== null
       ? ["categories", "tags", "models", "tasks", "jobs", "providers"]
-      : ["categories", "tags", "agents", "models", "results", "tasks", "jobs", "providers"];
+      : ["categories", "tags", "agents", "models", "results", "review_comments", "tasks", "jobs", "providers"];
     listKeys.forEach(key => {
       if (!listValue(filters[key]).length) return;
       lines.push(`  ${key}:`);
@@ -784,7 +791,7 @@ function parseWorkspaceViewOtherConditions(value) {
     const listMatch = line.match(/^([a-z_]+):$/);
     if (listMatch) {
       listKey = listMatch[1];
-      if (!["agents", "results"].includes(listKey)) throw new Error(`Unsupported condition on line ${index + 1}.`);
+      if (!["agents", "results", "review_comments"].includes(listKey)) throw new Error(`Unsupported condition on line ${index + 1}.`);
       filters[listKey] = [];
       return;
     }
@@ -825,6 +832,7 @@ function workspaceViewEditedDefinition(view, field, value) {
     next.filters.search = parsed.search || "";
     next.filters.agents = listValue(parsed.agents);
     next.filters.results = listValue(parsed.results);
+    next.filters.review_comments = listValue(parsed.review_comments);
   }
   return { ...next, filters: workspaceViewFilterConfig(next.filters) };
 }
@@ -1100,6 +1108,7 @@ async function applySelectedWorkspaceViews() {
     model_provider: [],
     dataset_id: [],
     status: [],
+    review_comments: [],
   };
   renderWorkspaceViewRail();
   await loadCatalogPage({
@@ -1118,6 +1127,7 @@ async function applySelectedWorkspaceViews() {
     providers: [],
     datasets: [],
     results: [],
+    review_comments: [],
     views: payload.views,
   }, { force: true });
 }
@@ -1152,6 +1162,7 @@ async function clearWorkspaceViewConditions() {
     model_provider: [],
     dataset_id: [],
     status: [],
+    review_comments: [],
   };
   renderWorkspaceViewRail();
   await loadCatalogPage({
@@ -1170,6 +1181,7 @@ async function clearWorkspaceViewConditions() {
     providers: [],
     datasets: [],
     results: [],
+    review_comments: [],
     views: [],
   }, { force: true });
 }

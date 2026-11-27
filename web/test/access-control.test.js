@@ -477,3 +477,62 @@ test("dual-role login toggles annotator user_id, validates required id, and subm
   }
 });
 
+test("annotator role enables commenting without admin privileges and 403 comment-forbidden never reloads", async () => {
+  const shared = await import("../../src/psycheval/assets/web/modules/shared.js");
+  const previousRole = runtime.RENDER_OPTIONS.role;
+  const previousUserId = runtime.RENDER_OPTIONS.user_id;
+  const previousFetch = globalThis.fetch;
+  const navigationErrors = [];
+  const onJsdomError = error => navigationErrors.push(error.message);
+  browser.dom.virtualConsole.on("jsdomError", onJsdomError);
+  runtime.RENDER_OPTIONS.role = "annotator";
+  runtime.RENDER_OPTIONS.user_id = "alice";
+  let problemPayload = {
+    type: "urn:peval:problem:comment-forbidden",
+    detail: "Cannot edit another annotator's comment",
+  };
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 403,
+    statusText: "Forbidden",
+    text: async () => JSON.stringify(problemPayload),
+  });
+  try {
+    assert.equal(runtime.adminMode(), false);
+    assert.equal(shared.annotatorMode(), true);
+    assert.equal(shared.canAnnotate(), true);
+    assert.equal(shared.currentUserId(), "alice");
+    await assert.rejects(
+      effects.serveApi("/api/source-comments/src-1/c1", { method: "PATCH", body: { body: "x" } }),
+      /Cannot edit another annotator's comment/,
+    );
+    assert.equal(navigationErrors.some(message => message.includes("navigation")), false);
+
+    // Non-expired 403 (e.g. hitting an admin-only route) must also not reload-loop an annotator.
+    problemPayload = {
+      type: "urn:peval:problem:forbidden",
+      detail: "administrator access required",
+    };
+    await assert.rejects(
+      effects.serveApi("/api/config"),
+      /administrator access required/,
+    );
+    assert.equal(navigationErrors.some(message => message.includes("navigation")), false);
+
+    // An actual expired session (urn:peval:problem:session-expired) reloads into guest state.
+    problemPayload = {
+      type: "urn:peval:problem:session-expired",
+      detail: "annotator or administrator access required",
+    };
+    await assert.rejects(
+      effects.serveApi("/api/source-comments/src-1", { method: "POST", body: { body: "x" } }),
+      /annotator or administrator access required/,
+    );
+    assert.equal(navigationErrors.some(message => message.includes("navigation")), true);
+  } finally {
+    browser.dom.virtualConsole.off("jsdomError", onJsdomError);
+    globalThis.fetch = previousFetch;
+    runtime.RENDER_OPTIONS.role = previousRole;
+    runtime.RENDER_OPTIONS.user_id = previousUserId;
+  }
+});

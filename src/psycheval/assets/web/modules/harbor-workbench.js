@@ -17,8 +17,9 @@ import {
 import { createTaskSummaryState, renderTaskSummary, exportTasks, exportTaskSummaryImage, taskSummaryExportColumns, uniqueTasks } from "./task-summary.js";
 import { beginFeedback, pageFeedback, savedContentPreview } from "./action-feedback.js";
 import { openActionForm } from "./action-form.js";
+import { applyScoringCommentsToTask, createScoringCommentActions, openCommentsModal } from "./comments-ui.js";
 import { watchOperation } from "./operation-feedback.js";
-import { RENDER_OPTIONS, adminMode, browserStorage, esc, formatMessage, listValue, t } from "./shared.js";
+import { RENDER_OPTIONS, adminMode, browserStorage, canAnnotate, esc, formatMessage, listValue, t } from "./shared.js";
 import { applyDataTableControls, applyDataTableFilters, sortDataTableRows, bindDataTableControls, bindTableRowActivation, renderDataTable, selectionColumn, tableControls } from "./data-tables.js";
 import { serveApi, serveEtag } from "./http.js";
 import { createTaskBrowser } from "./harbor-task-browser.js";
@@ -177,6 +178,7 @@ function workbenchTaskBrowser() {
       readFile: (taskRef, path) => serveApi(`/api/harbor/datasets/${encodeURIComponent(taskRef.dataset_id)}/tasks/${encodeURIComponent(taskRef.task)}/files/${encodeURIComponent(path)}`),
       onContextMenu: canMutateSelectedTask() ? fileActionMenu : null,
       onError: error => taskFeedback("file", workbenchState.taskName, "read-file").error(error),
+      onScoringCommentsChange: (taskRef, itemKey, comments) => applyTaskScoringComments(taskRef, itemKey, comments, { syncBrowser: false }),
     });
   } else if (taskBrowser.state.root !== root) taskBrowser.attach(root);
   return taskBrowser;
@@ -336,6 +338,45 @@ function updateInventoryTask(datasetId, taskName, updatedTask) {
     Object.assign(workbenchState.taskDetail.task, updatedTask);
   }
   workbenchState.customMetadataVersion += 1;
+}
+
+function applyTaskScoringComments(taskRef, itemKey, comments, { syncBrowser = true } = {}) {
+  if (!taskRef?.dataset_id || !taskRef?.task) return;
+  const current = datasetForId(taskRef.dataset_id)?.tasks?.find(task => task.directory === taskRef.task);
+  if (current) applyScoringCommentsToTask(current, itemKey, comments);
+  const detailTask = workbenchState.taskDetail?.task;
+  if (
+    detailTask
+    && detailTask !== current
+    && workbenchState.datasetId === taskRef.dataset_id
+    && workbenchState.taskName === taskRef.task
+    && (syncBrowser || detailTask !== workbenchTaskBrowser()?.state?.detail?.task)
+  ) {
+    applyScoringCommentsToTask(detailTask, itemKey, comments);
+  }
+  if (syncBrowser) workbenchTaskBrowser()?.syncScoringComments(taskRef, itemKey, comments);
+  renderHarborWorkbench({ preserveEditors: true });
+}
+
+function openScoringItemCommentsModal(row, opener) {
+  if (!row?.scoringItem) return null;
+  const taskRef = { dataset_id: row.datasetId, task: row.taskName };
+  const itemKey = row.scoringItem.key;
+  const actions = createScoringCommentActions(taskRef, {
+    serveApi,
+    onUpdated: (updatedKey, next) => applyTaskScoringComments(taskRef, updatedKey, next),
+  });
+  const stepPrefix = row.scoringItem.step ? `${row.scoringItem.step} · ` : "";
+  return openCommentsModal({
+    title: `${row.taskName} · ${row.scoringItem.id}`,
+    subtitle: `${row.datasetId} · ${stepPrefix}${t(`task_scoring_${row.scoringItem.type}`, row.scoringItem.type)}`,
+    comments: listValue(row.scoringItem.comments),
+    canCreate: canAnnotate(),
+    opener,
+    onCreate: body => actions.onCreate(itemKey, body),
+    onUpdate: (comment, body) => actions.onUpdate(itemKey, comment, body),
+    onDelete: comment => actions.onDelete(itemKey, comment),
+  });
 }
 
 function sameCustomValue(left, right) {
@@ -759,6 +800,15 @@ function renderHarborOverview(surface, { allRows, columns, rows }) {
       restoreTableControls();
       renderHarborWorkbench();
     }), onSelectionChange: renderHarborWorkbench });
+  const rowByKey = new Map(displayRows.map(row => [row.key, row]));
+  container.querySelectorAll("[data-scoring-comments-open]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const targetRow = rowByKey.get(button.dataset.scoringCommentsOpen);
+      if (targetRow) openScoringItemCommentsModal(targetRow, button);
+    });
+  });
   const count = surface.querySelector("[data-harbor-overview-count]");
   if (count) count.textContent = `${new Set(rows.map(taskRowIdentity)).size} / ${allRows.length}`;
   renderScoringControls(surface, rows);
@@ -769,7 +819,16 @@ function scoringPath(row, column) {
   if (isCustomColumnKey(column)) return "task.toml";
   const resources = { skill_count: "skills", input_file_count: "files", has_prepare: "prepare" };
   if (resources[column]) return { resource: resources[column] };
-  if (row.scoringItem) return row.scoringItem.path;
+  if (row.scoringItem) {
+    return {
+      path: row.scoringItem.path,
+      preferredStep: row.scoringItem.step || "",
+      focusItemKey: row.scoringItem.key,
+    };
+  }
+  if (column === "scoring_comment_count") {
+    return row.task.scoring_paths?.rubric || row.task.scoring_paths?.rule || row.task.instruction_path || "instruction.md";
+  }
   const kind = column === "rule_count" ? "rule" : ["rubric_count", "scoring_item_count"].includes(column) ? "rubric" : null;
   return kind ? row.task.scoring_paths?.[kind] || row.task.instruction_path || "instruction.md" : null;
 }
@@ -1003,12 +1062,27 @@ async function selectOverviewRow(row, opener, preferredPath = null) {
   if (row.kind === "task") await loadSelectedTask(preferredPath);
 }
 
+function normalizePreferredTarget(preferredPath) {
+  if (!preferredPath) return { resource: null, path: null, preferredStep: undefined, focusItemKey: undefined };
+  if (typeof preferredPath === "string") return { resource: null, path: preferredPath, preferredStep: undefined, focusItemKey: undefined };
+  return {
+    resource: preferredPath.resource || null,
+    path: preferredPath.path || null,
+    preferredStep: preferredPath.preferredStep,
+    focusItemKey: preferredPath.focusItemKey,
+  };
+}
+
 async function openSelectedPath(preferredPath) {
   const detail = workbenchState.taskDetail;
   if (!detail) return;
-  if (preferredPath?.resource) { workbenchTaskBrowser()?.showResources(preferredPath.resource); return; }
-  const path = detail.tree.some(item => item.kind === "file" && item.path === preferredPath) ? preferredPath : detail.default_file_path;
-  if (path && workbenchTaskBrowser()?.currentFile()?.path !== path) await workbenchTaskBrowser()?.openPath(path);
+  const target = normalizePreferredTarget(preferredPath);
+  if (target.resource) { workbenchTaskBrowser()?.showResources(target.resource); return; }
+  const path = detail.tree.some(item => item.kind === "file" && item.path === target.path) ? target.path : detail.default_file_path;
+  const openOpts = { preferredStep: target.preferredStep, focusItemKey: target.focusItemKey };
+  if (path && (workbenchTaskBrowser()?.currentFile()?.path !== path || openOpts.focusItemKey)) {
+    await workbenchTaskBrowser()?.openPath(path, openOpts);
+  }
 }
 
 async function selectTask(taskName) {
@@ -1041,11 +1115,14 @@ async function loadSelectedTask(preferredPath = null) {
     renderSelectedTaskHeading(taskDetailRoot());
     renderFileTree(taskDetailRoot());
     renderDiagnostics(taskDetailRoot());
+    const target = normalizePreferredTarget(preferredPath);
     await workbenchTaskBrowser()?.setTaskDetail(detail, {
       taskRef: { dataset_id: datasetId, task: taskName },
-      preferredPath: preferredPath?.resource ? null : preferredPath,
+      preferredPath: target.resource ? null : target.path,
+      preferredStep: target.preferredStep,
+      focusItemKey: target.focusItemKey,
     });
-    if (preferredPath?.resource) workbenchTaskBrowser()?.showResources(preferredPath.resource);
+    if (target.resource) workbenchTaskBrowser()?.showResources(target.resource);
   } catch (error) {
     if (requestId === workbenchState.taskRequestId) feedback.error(error);
   }

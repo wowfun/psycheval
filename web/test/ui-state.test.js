@@ -1182,3 +1182,109 @@ test("HTML report previews fit an 1180px design viewport into the reader pane", 
   assert.equal(frame.style.transform, "scale(0.5)");
   reports.closeWorkspaceReportReader({ restoreFocus: false });
 });
+
+test("Leaderboard review_comments column shows by default for annotators/admins, stays hidden when empty for guests, and opens modal CRUD", async () => {
+  const previousRole = runtime.RENDER_OPTIONS.role;
+  const previousUserId = runtime.RENDER_OPTIONS.user_id;
+  const previousRows = runtime.state.catalogRows;
+  const previousPresence = runtime.state.catalogPage.column_presence;
+  const previousLayout = runtime.state.leaderboardColumnLayout;
+  const previousDraft = runtime.state.leaderboardColumnDraft;
+  const previousFetch = globalThis.fetch;
+  const row = {
+    source_key: "src-trial-1",
+    trial_key: "trial-1",
+    task_name: "office-one",
+    agent: "agent-a",
+    review_comments: [],
+    review_comment_count: 0,
+    review_comments_present: false,
+  };
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const path = String(url);
+    const method = options.method || "GET";
+    const body = options.body ? JSON.parse(String(options.body)) : null;
+    calls.push({ path, method, body });
+    if (method === "POST" && path === "/api/source-comments/src-trial-1") {
+      const comment = { id: "rc1", body: body.body, author_id: "alice", updated_at_ms: 1000, revision: "r1" };
+      return new Response(JSON.stringify({ source_key: "src-trial-1", comment, comments: [comment] }), { status: 201 });
+    }
+    return new Response(JSON.stringify({ items: [], total: 0 }));
+  };
+  try {
+    runtime.state.leaderboardColumnLayout = null;
+    runtime.state.leaderboardColumnDraft = null;
+    runtime.state.catalogRows = [row];
+    runtime.state.catalogPage.column_presence = { task_name: 1, review_comments: 0 };
+
+    // Guest hides empty review_comments column by default.
+    runtime.RENDER_OPTIONS.role = "guest";
+    runtime.RENDER_OPTIONS.user_id = null;
+    leaderboardTables.renderLeaderboard([row]);
+    assert.equal(document.querySelector('#leaderboard th[data-table-column="review_comments"]'), null);
+
+    // Guest shows review_comments when workspace has comments.
+    runtime.state.catalogPage.column_presence = { task_name: 1, review_comments: 1 };
+    leaderboardTables.renderLeaderboard([row]);
+    assert.ok(document.querySelector('#leaderboard th[data-table-column="review_comments"]'));
+
+    // Annotator shows review_comments even when column_presence is 0 and can add a comment via modal without calling /api/sources.
+    runtime.RENDER_OPTIONS.role = "annotator";
+    runtime.RENDER_OPTIONS.user_id = "alice";
+    runtime.state.catalogPage.column_presence = { task_name: 1, review_comments: 0 };
+    runtime.state.catalogPage.facets = { review_comments: [{ value: "uncommented", count: 1 }] };
+    leaderboardTables.renderLeaderboard([row]);
+    const trigger = document.querySelector('#leaderboard [data-review-comments-open="src-trial-1"]');
+    assert.ok(trigger);
+    trigger.click();
+    await tick();
+
+    const modal = document.querySelector("[data-comments-modal]");
+    assert.ok(modal);
+    assert.equal(modal.querySelector("[data-comment-composer]"), null);
+    modal.querySelector("[data-comment-composer-open]").click();
+    const textarea = modal.querySelector("[data-comment-composer] textarea");
+    textarea.value = "False negative judge score";
+    textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+    modal.querySelector("[data-comment-composer]").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await tick();
+    await tick();
+
+    assert.equal(calls.some(call => call.path === "/api/sources"), false);
+    assert.equal(calls.some(call => call.path === "/api/source-comments/src-trial-1" && call.method === "POST"), true);
+    assert.equal(row.review_comment_count, 1);
+    assert.equal(row.review_comments[0].body, "False negative judge score");
+    assert.deepEqual(runtime.state.catalogPage.facets.review_comments, [{ value: "commented", count: 1 }]);
+    modal.querySelector("[data-comments-modal-close]").click();
+
+    // Leaderboard review_comments filter menu renders Commented / Uncommented and requests catalog filter.
+    runtime.state.catalogPage.facets = {
+      review_comments: [{ value: "commented", count: 1 }, { value: "uncommented", count: 2 }],
+    };
+    leaderboardTables.renderLeaderboard([row]);
+    const lbFilter = document.querySelector('#leaderboard [data-filter-menu="review_comments"]');
+    assert.ok(lbFilter);
+    assert.deepEqual(
+      [...lbFilter.querySelectorAll("input")].map(input => input.value),
+      ["commented", "uncommented"],
+    );
+    lbFilter.querySelector('input[value="commented"]').click();
+    lbFilter.querySelector("[data-filter-apply]").click();
+    await tick();
+    assert.equal(
+      calls.some(call => call.path.includes("/api/catalog?") && call.path.includes("review_comment=commented")),
+      true,
+    );
+  } finally {
+    document.querySelector("[data-comments-modal]")?.remove();
+    document.body.classList.remove("comments-modal-open");
+    globalThis.fetch = previousFetch;
+    runtime.RENDER_OPTIONS.role = previousRole;
+    runtime.RENDER_OPTIONS.user_id = previousUserId;
+    runtime.state.catalogRows = previousRows;
+    runtime.state.catalogPage.column_presence = previousPresence;
+    runtime.state.leaderboardColumnLayout = previousLayout;
+    runtime.state.leaderboardColumnDraft = previousDraft;
+  }
+});

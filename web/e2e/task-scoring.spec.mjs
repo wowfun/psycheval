@@ -61,8 +61,8 @@ for (const locale of ["en", "zh-CN"]) for (const role of ["admin", "guest"]) {
       await expect(summary.locator('table')).toHaveCount(0);
       await summary.locator('[data-task-summary-group="overall"]').click();
       await summary.locator('[data-task-summary-toggle]').click();
-      expect(await table.locator("thead th").evaluateAll(nodes => nodes.map(node => node.dataset.columnKey || node.querySelector("[data-sort-key]")?.getAttribute("data-sort-key") || node.textContent.trim()))).toHaveLength(role === "admin" ? 11 : 10);
-      expect(await row("scored").locator("td").evaluateAll(nodes => nodes.map(n => n.dataset.tableColumnKey || n.querySelector("[data-table-selection-column]")?.getAttribute("data-table-selection-column")))).toEqual([...(role === "admin" ? ["__task_select"] : []), "dataset", "task", "tags", "instruction", "skill_count", "input_file_count", "has_prepare", "rule_count", "rubric_count", "scoring_item_count"]);
+      expect(await table.locator("thead th").evaluateAll(nodes => nodes.map(node => node.dataset.columnKey || node.querySelector("[data-sort-key]")?.getAttribute("data-sort-key") || node.textContent.trim()))).toHaveLength(role === "admin" ? 12 : 10);
+      expect(await row("scored").locator("td").evaluateAll(nodes => nodes.map(n => n.dataset.tableColumnKey || n.querySelector("[data-table-selection-column]")?.getAttribute("data-table-selection-column")))).toEqual([...(role === "admin" ? ["__task_select"] : []), "dataset", "task", "tags", "instruction", "skill_count", "input_file_count", "has_prepare", "rule_count", "rubric_count", "scoring_item_count", ...(role === "admin" ? ["scoring_comment_count"] : [])]);
       await expect(cell("scored", "rule_count")).toHaveText("2");
       await expect(cell("scored", "scoring_item_count")).toHaveText("3");
       await expect(cell("office-one", "rule_count")).toHaveText("");

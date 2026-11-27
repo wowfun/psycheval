@@ -247,6 +247,20 @@ Draft preview also accepts a new, contained scoring-file path without creating i
 Browsing, counting, and previewing never import Dataset plugins or run Task
 preparation, grading scripts, or model calls.
 
+Both the flattened Tasks table and structured `grader.json`/`judge.yaml` previews
+(shared by the Datasets Task sidebar and the Home Trial sidebar's Task tab)
+expose per-item plain-text scoring-item comments with author IDs and timestamps.
+Flattened table rows show a compact preview, count, commented/uncommented filter,
+and modal CRUD trigger; non-flattened Tasks show a Task-level scoring comment
+count column (visible by default for administrators/annotators or when populated)
+with the same commented/uncommented filter. On Home, the Leaderboard `Comments`
+column and the Trial sidebar's Verification panel (or Trajectory panel for
+non-Harbor Trials) expose Trial-level scoring-result comments CRUD, commented/uncommented
+filtering (including Saved Views and shared links), search, and spreadsheet export;
+for administrators and annotators the column defaults to visible when rows exist,
+while guests see it automatically when comments are present. Comment threads keep
+the text composer collapsed behind the Add comment button until clicked.
+
 The service persists Task inventory and Dataset aggregates in a disposable
 workspace cache. Startup checks sources in the background while returning the
 last valid snapshot; without one, the page shows loading. Refresh starts a shared

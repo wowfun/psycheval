@@ -65,6 +65,7 @@ function resetSummaryState() {
     providers: [],
     datasets: [],
     results: [],
+    review_comments: [],
     views: [],
   };
   runtime.state.workspaceViews = [];
@@ -163,7 +164,7 @@ test("summary cache ignores pagination, sorting, and chart statistic", async () 
     assert.equal(requests[0].path, "/api/catalog-summaries");
     assert.deepEqual(Object.keys(requests[0].body).sort(), [
       "agents", "browser_views", "categories", "datasets", "group_by", "jobs", "metric_scope", "models",
-      "providers", "results", "search", "state", "tags", "tasks", "views",
+      "providers", "results", "review_comments", "search", "state", "tags", "tasks", "views",
     ]);
     assert.equal(requests[0].body.page, undefined);
     assert.equal(requests[0].body.sort, undefined);

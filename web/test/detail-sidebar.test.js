@@ -438,6 +438,8 @@ test("guest verification is independent of Task resolution and child Agent navig
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(runtime.state.detailSidebar.tab, "verification");
     const sidebar = document.querySelector("#detail-sidebar");
+    assert.equal(sidebar.querySelector(".detail-sidebar-head .eyebrow"), null);
+    assert.equal(sidebar.querySelector("#detail-sidebar-title").textContent, "trial-one");
     assert.equal(sidebar.querySelector('[data-trial-panel="verification"]').hidden, false);
     assert.match(sidebar.querySelector(".verification-summary").textContent, /completed.*Score0/);
     assert.equal(sidebar.querySelector(".verification-metrics dd").textContent, "0");

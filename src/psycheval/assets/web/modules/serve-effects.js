@@ -1,9 +1,10 @@
 import { beginFeedback, pageFeedback } from "./action-feedback.js";
 import { offerRefresh } from "./operation-feedback.js";
-import { currentServeSourceMode, normalizeServeSourceMode, readableServeSources, selectedKey, sourceTagsFromValue, state } from "./runtime.js";
+import { currentServeSourceMode, normalizeServeSourceMode, readableServeSources, renderComparisonPanels, selectedKey, sourceTagsFromValue, state } from "./runtime.js";
 import { applyLeaderboardSearchMode, applyServeMutationPayload, refreshSourceCategoryOptions } from "./serve-catalog.js";
 import { reloadExpiredAdminSession, serveApi, serveEtag } from "./http.js";
-import { adminMode, listValue, t } from "./shared.js";
+import { adminMode, canAnnotate, listValue, t } from "./shared.js";
+import { openCommentsModal } from "./comments-ui.js";
 
 function formPayload(form) {
   const formData = new FormData(form);
@@ -149,6 +150,86 @@ function clearServeReportCacheExcept(mode) {
 function reportHasTrialKey(report, trialKey) {
   return Boolean(trialKey) && listValue(report?.trajectory_meta).some(meta => meta?.trial_key === trialKey);
 }
+function applySourceCommentsUpdate(sourceKey, comments) {
+  const next = listValue(comments);
+  const rows = listValue(state.catalogRows);
+  let delta = 0;
+  for (const row of rows) {
+    if (row?.source_key === sourceKey) {
+      const had = Boolean(row.review_comments_present || listValue(row.review_comments).length);
+      const has = next.length > 0;
+      if (had !== has) delta = has ? 1 : -1;
+      row.review_comments = next;
+      row.review_comment_count = next.length;
+      row.review_comments_present = has;
+    }
+  }
+  if (state.catalogPage?.column_presence && delta !== 0) {
+    const prev = Number(state.catalogPage.column_presence.review_comments || 0);
+    state.catalogPage.column_presence.review_comments = Math.max(0, prev + delta);
+  }
+  if (state.catalogPage?.facets && delta !== 0) {
+    const current = listValue(state.catalogPage.facets.review_comments);
+    const counts = new Map(current.map(item => [String(item?.value || ""), Number(item?.count || 0)]));
+    counts.set("commented", Math.max(0, (counts.get("commented") || 0) + delta));
+    counts.set("uncommented", Math.max(0, (counts.get("uncommented") || 0) - delta));
+    state.catalogPage.facets.review_comments = ["commented", "uncommented"]
+      .filter(value => (counts.get(value) || 0) > 0)
+      .map(value => ({ value, count: counts.get(value) }));
+  }
+  renderComparisonPanels({ refreshDetail: false });
+  if (state.detailSidebar?.reviewCommentsSourceKey === sourceKey) {
+    state.detailSidebar.reviewCommentsSync?.(next);
+  }
+}
+
+async function createSourceComment(sourceKey, body) {
+  const payload = await serveApi(`/api/source-comments/${encodeURIComponent(sourceKey)}`, {
+    method: "POST",
+    body: { body },
+  });
+  const next = listValue(payload?.comments);
+  applySourceCommentsUpdate(sourceKey, next);
+  return next;
+}
+
+async function updateSourceComment(sourceKey, comment, body) {
+  const payload = await serveApi(
+    `/api/source-comments/${encodeURIComponent(sourceKey)}/${encodeURIComponent(comment.id)}`,
+    { method: "PATCH", body: { body }, ifMatch: comment.revision },
+  );
+  const next = listValue(payload?.comments);
+  applySourceCommentsUpdate(sourceKey, next);
+  return next;
+}
+
+async function deleteSourceComment(sourceKey, comment) {
+  const payload = await serveApi(
+    `/api/source-comments/${encodeURIComponent(sourceKey)}/${encodeURIComponent(comment.id)}`,
+    { method: "DELETE", ifMatch: comment.revision },
+  );
+  const next = listValue(payload?.comments);
+  applySourceCommentsUpdate(sourceKey, next);
+  return next;
+}
+
+function openReviewCommentsModal(row, opener) {
+  const sourceKey = String(row?.source_key || "");
+  if (!sourceKey) return null;
+  const label = row?.display_alias || row?.task_name || row?.trial_key || sourceKey;
+  const subtitle = [row?.dataset_id, row?.job_name, row?.agent_name || row?.adapter].filter(Boolean).join(" · ");
+  return openCommentsModal({
+    title: `${label} · ${t("comments", "Comments")}`,
+    subtitle,
+    comments: listValue(row?.review_comments),
+    canCreate: canAnnotate(),
+    opener,
+    onCreate: body => createSourceComment(sourceKey, body),
+    onUpdate: (comment, body) => updateSourceComment(sourceKey, comment, body),
+    onDelete: comment => deleteSourceComment(sourceKey, comment),
+  });
+}
+
 function setServeStatus(text, error = false) {
   const feedback = pageFeedback("#leaderboard .leaderboard-action-row");
   if (error) feedback.error(text);
@@ -156,15 +237,19 @@ function setServeStatus(text, error = false) {
   else feedback.clear();
 }
 export {
+  applySourceCommentsUpdate,
   bindLeaderboardSearchControls,
   clearServeReportCacheExcept,
   commitSourceCellEdit,
+  createSourceComment,
+  deleteSourceComment,
   emptyServeReport,
   existingSourceCategoryOptions,
   existingSourceTagOptions,
   focusLeaderboardSearchInput,
   formPayload,
   normalizeAdapterValue,
+  openReviewCommentsModal,
   readableSourceKey,
   reloadExpiredAdminSession,
   reportHasTrialKey,
@@ -173,4 +258,5 @@ export {
   serveEtag,
   setAdapterChoice,
   setServeStatus,
+  updateSourceComment,
 };

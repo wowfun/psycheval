@@ -1,12 +1,14 @@
 import { $, RENDER_OPTIONS, esc, homeDetail, listValue, renderComparisonPanels, state, t } from "./runtime.js";
+import { annotatorMode, canAnnotate } from "./shared.js";
 import { stepTimingStats } from "./analysis-metrics.js";
 import { renderIncompleteTrajectory, renderSelectedWarnings, renderTrialInfo } from "./analysis-selected.js";
 import { bindBlockCopyControls, bindStepToggle, renderStep, renderStepsHeader } from "./steps.js";
-import { cancelTrialDetailRequest, sourceKeyForTrialKey } from "./serve-catalog.js";
+import { cancelTrialDetailRequest, catalogRowForSourceKey, sourceKeyForTrialKey } from "./serve-catalog.js";
 import { createVerificationBrowser } from "./verification-browser.js";
 import { renderVerificationSummary } from "./verification-formats.js";
 import { createTaskBrowser } from "./harbor-task-browser.js";
-import { serveApi } from "./serve-effects.js";
+import { createSourceComment, deleteSourceComment, serveApi, updateSourceComment } from "./serve-effects.js";
+import { createCommentThread } from "./comments-ui.js";
 import { createSidebarController } from "./sidebar.js";
 import { selectedTrajectoryDetail, renderTrajectoryNavigation, bindTrajectoryNavigation } from "./trajectory-family.js";
 import { bindServeSourceStateControls } from "./source-state-controls.js";
@@ -173,7 +175,7 @@ function renderDetailSidebar({ ifChanged = false } = {}) {
   target.innerHTML = `
     <div class="detail-sidebar-panel" role="complementary" aria-labelledby="detail-sidebar-title">
       <div class="detail-sidebar-head">
-        <div><p class="eyebrow">${esc(t("selected_trial_details", "Selected trial details"))}</p><h2 id="detail-sidebar-title">${esc(rootMeta.trial_key || "-")}</h2></div>
+        <h2 id="detail-sidebar-title">${esc(rootMeta.trial_key || "-")}</h2>
         <div class="detail-sidebar-actions">
 
           <button class="action-button compact" type="button" data-sidebar-close aria-label="${esc(t("close", "Close"))}">${esc(t("close", "Close"))}</button>
@@ -186,10 +188,12 @@ function renderDetailSidebar({ ifChanged = false } = {}) {
       <div class="detail-sidebar-navigation" data-trial-navigation>${renderTrajectoryNavigation(root, rootMeta)}</div>
       <div class="detail-sidebar-body">
         ${hasVerification ? `<section id="trial-panel-verification" role="tabpanel" aria-labelledby="trial-tab-verification" data-trial-panel="verification" ${sidebar.tab !== "verification" ? "hidden" : ""}>
+          <div data-trial-review-comments></div>
           <div data-verification-browser></div>
         </section>` : ""}
         ${task ? `<section id="trial-panel-task" role="tabpanel" aria-labelledby="trial-tab-task" data-trial-panel="task" ${sidebar.tab !== "task" ? "hidden" : ""}>${task}</section>` : ""}
         <section id="trial-panel-trajectory" role="tabpanel" aria-labelledby="trial-tab-trajectory" data-trial-panel="trajectory" class="detail-sidebar-steps" data-detail-sidebar-steps ${sidebar.tab !== "trajectory" ? "hidden" : ""}>
+          ${!hasVerification ? `<div data-trial-review-comments></div>` : ""}
           ${trial.detail_unavailable ? `<p class="copy">${esc(t("verification_trajectory_unavailable", "Trajectory unavailable; retained verification files remain accessible."))}</p>` : renderStepsHeader(trajectory, { headingId: "detail-sidebar-steps-title" })}
           <div class="detail-sidebar-step-list" data-detail-sidebar-step-list>${renderIncompleteTrajectory(trajectory)}${renderSelectedWarnings(trial)}${steps.map(step => renderStep(step, trial, timingStats, { open: String(step?.step_id) === selectedStepId, childIds })).join("")}</div>
         </section>
@@ -216,6 +220,7 @@ function renderDetailSidebar({ ifChanged = false } = {}) {
     sidebar.verificationBrowser.setSource(sourceKey, rootMeta.verifier_evidence?.revision || rootMeta.evidence_revision || state.catalogPage?.generation);
     sidebar.verificationBrowser.attach(target.querySelector("[data-verification-browser]"));
   }
+  mountTrialReviewComments(target, rootMeta, sidebar);
   target.querySelectorAll("[data-detail-sidebar-step-list] .step > summary").forEach(summary => {
     summary.addEventListener("click", event => {
       if (event.target.closest("button,a,input,select")) return;
@@ -255,6 +260,62 @@ function renderDetailSidebar({ ifChanged = false } = {}) {
     });
   });
   activate(sidebar.tab, tabChanged);
+}
+
+function mountTrialReviewComments(target, rootMeta, sidebar) {
+  const host = target.querySelector("[data-trial-review-comments]");
+  sidebar.reviewCommentsSourceKey = null;
+  sidebar.reviewCommentsSync = null;
+  if (!host) return;
+  const sourceKey = sourceKeyForTrialKey(rootMeta.trial_key) || state.selectedSourceKey;
+  if (!sourceKey) {
+    host.replaceChildren();
+    return;
+  }
+  const catalogRow = catalogRowForSourceKey(sourceKey);
+  const initialComments = listValue(catalogRow?.review_comments);
+  if (!initialComments.length && !canAnnotate()) {
+    host.replaceChildren();
+    return;
+  }
+  const box = document.createElement("details");
+  box.className = "trial-comments-bar";
+  box.open = initialComments.length > 0 || annotatorMode();
+  const summary = document.createElement("summary");
+  const title = document.createElement("span");
+  title.textContent = t("comments", "Comments");
+  const pill = document.createElement("span");
+  pill.className = "comment-count-pill";
+  pill.textContent = String(initialComments.length);
+  summary.append(title, pill);
+
+  const thread = createCommentThread({
+    comments: initialComments,
+    canCreate: canAnnotate(),
+    onCreate: async body => {
+      const next = await createSourceComment(sourceKey, body);
+      pill.textContent = String(next.length);
+      return next;
+    },
+    onUpdate: async (comment, body) => {
+      const next = await updateSourceComment(sourceKey, comment, body);
+      pill.textContent = String(next.length);
+      return next;
+    },
+    onDelete: async comment => {
+      const next = await deleteSourceComment(sourceKey, comment);
+      pill.textContent = String(next.length);
+      return next;
+    },
+  });
+  box.append(summary, thread.element);
+  host.replaceChildren(box);
+  sidebar.reviewCommentsSourceKey = sourceKey;
+  sidebar.reviewCommentsSync = next => {
+    const items = listValue(next);
+    pill.textContent = String(items.length);
+    thread.setComments(items);
+  };
 }
 
 function renderDetailSidebarTask(trial) {
@@ -300,6 +361,7 @@ function bindDetailSidebarTaskBrowser(target, trial) {
   }
   void sidebar.taskBrowser.loadTask(taskRef, {
     preferredPath,
+    preferredStep: stepName || "",
     strictPreferred: Boolean(stepName),
     contextKey: `${trial.trial_key || ""}\u0000${taskRef.dataset_id || ""}\u0000${taskRef.task || ""}\u0000${preferredPath || ""}`,
   });

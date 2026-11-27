@@ -8,7 +8,7 @@ import { renderDetailSidebar } from "./detail-sidebar.js";
 import { bindHomeControls } from "./home-controls.js";
 import { bindLeaderboardCatalogControls, catalogSortKey, filterOptions, leaderboardRows, metaFor, renderLeaderboardPanelControls, renderLeaderboardSearchControls, reportRows, requestCatalogFacets, requestCatalogSort, rowAnalysisCount, sourceForTrialIndex, sourceForTrialKey, syncSelectionWithVisibleRows, trajectoryFor } from "./serve-catalog.js";
 import { bindServeSourceStateControls } from "./source-state-controls.js";
-import { bindLeaderboardSearchControls, commitSourceCellEdit, existingSourceCategoryOptions, existingSourceTagOptions } from "./serve-effects.js";
+import { bindLeaderboardSearchControls, commitSourceCellEdit, existingSourceCategoryOptions, existingSourceTagOptions, openReviewCommentsModal } from "./serve-effects.js";
 import { bindWorkspaceReportLeaderboardControls, workspaceReportLeaderboardColumn } from "./workspace-reports.js";
 import { refreshWorkspaceViews } from "./workspace-views.js";
 import { finalMetric, tokenTotal, trialWallDurationMs } from "./analysis-metrics.js";
@@ -27,7 +27,7 @@ function initialAdapterDefaults() {
 function adapterDefaults() {
   return state.adapterDefaults || {};
 }
-const state = { view: null, selectedTrial: null, selectedStep: null, selectedTrajectory: null, detailSidebar: { open: false, pendingOpener: null, pendingOpenerSelector: null }, rowSelection: new Set(), tables: {}, boundGlobalControls: false, serveSources: [], sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { metric_scope: "family", state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], datasets: [], results: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: reportStore.reports, reportReader: reportStore.reader, workspaceViews: [], workspaceViewSummaries: [], workspaceViewsLoaded: false, workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" } };
+const state = { view: null, selectedTrial: null, selectedStep: null, selectedTrajectory: null, detailSidebar: { open: false, pendingOpener: null, pendingOpenerSelector: null }, rowSelection: new Set(), tables: {}, boundGlobalControls: false, serveSources: [], sourceCategoryOptions: [], catalogRows: [], catalogPage: { generation: 0, total: 0, page: 1, page_size: 100, facets: {}, checking: Boolean(RENDER_OPTIONS?.loading) }, catalogQuery: { metric_scope: "family", state: "active", page: 1, page_size: 100, search: "", sort: "last_turn_end", direction: "desc", categories: [], tags: [], agents: [], models: [], tasks: [], jobs: [], providers: [], datasets: [], results: [], review_comments: [], views: [] }, catalogLoading: false, catalogSearchTimer: null, selectedArtifactRevision: null, workspaceReports: reportStore.reports, reportReader: reportStore.reader, workspaceViews: [], workspaceViewSummaries: [], workspaceViewsLoaded: false, workspaceViewsLoading: false, workspaceViewsRefreshPromise: null, workspaceViewsRefreshQueued: false, workspaceViewsRefreshVersion: 0, workspaceViewSummaryGeneration: null, workspaceViewTableOpen: new Set(), workspaceViewSelection: new Set(), workspaceAppliedViewNames: new Set(), workspaceViewSave: { opener: null }, workspaceViewsClosed: false, workspaceViewScroll: { analysisTop: 0, indexTop: 0, indexLeft: 0, cardsTop: 0 }, selectedSourceKey: null, serveSourceMode: "active", serveReportCache: {}, adapterDefaults: initialAdapterDefaults(), notesEditor: null, search: { query: "", scope: "visible", normalSourceMode: "active" } };
 Object.defineProperty(state, "workspaceReports", {
   configurable: true,
   enumerable: true,
@@ -59,6 +59,7 @@ configureLeaderboardDataTables({
   catalogSortKey,
   filterOptions,
   leaderboardRows,
+  openReviewCommentsModal,
   renderLeaderboardPanelControls,
   renderLeaderboardSearchControls,
   reportRows,

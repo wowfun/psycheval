@@ -632,10 +632,100 @@ test("flattened search and Type filters project each scoring item once per updat
     typeMenu.querySelector("[data-filter-apply]").click();
     assert.equal(projected, 3, "filtering reuses the projection from the selection guard");
     assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 2);
+    assert.deepEqual(
+      [...document.querySelectorAll('[data-filter-menu="type"] input')].map(input => input.value),
+      ["rule"],
+    );
+    assert.deepEqual(
+      [...document.querySelectorAll('[data-filter-menu="scoring_comments"] input')].map(input => input.value),
+      ["uncommented"],
+    );
     assert.equal(document.querySelector('[data-task-summary] td[data-table-column-key="scoring_item_count"]').textContent, "3");
   } finally {
     Object.assign(state, previous);
     Object.assign(controls, previousControls);
+    search.value = previousSearch;
+  }
+});
+
+test("Datasets and Tasks tables derive filter options from currently visible rows", () => {
+  const state = harbor.workbenchState;
+  const previous = {
+    inventory: state.inventory,
+    datasetId: state.datasetId,
+    taskName: state.taskName,
+    datasetFilter: state.datasetFilter,
+    showTrash: state.showTrash,
+    flattened: state.flattened,
+    search: state.search,
+    registrySearch: state.registrySearch,
+    taskSelection: state.taskSelection,
+  };
+  const taskControls = tableControls("harbor-datasets");
+  const registryControls = tableControls("harbor-dataset-registry");
+  const previousTaskControls = { ...taskControls, filters: { ...(taskControls.filters || {}) } };
+  const previousRegistryControls = { ...registryControls, filters: { ...(registryControls.filters || {}) } };
+  const search = document.querySelector("[data-harbor-search]");
+  const previousSearch = search.value;
+  try {
+    const taskAlpha = { ...task("alpha", "valid"), tags: ["tag-a"], scoring_comment_count: 1, scoring_comments: { k1: [{ id: "c1", author_id: "alice", body: "note" }] } };
+    const taskBeta = { ...task("beta", "invalid"), tags: ["tag-b"], scoring_comment_count: 0, scoring_comments: {} };
+    Object.assign(state, {
+      inventory: {
+        datasets: [
+          { id: "ds-alpha", format: "harbor", read_only: false, task_count: 1, tasks: [taskAlpha], trash: [] },
+          { id: "ds-beta", format: "workbuddy", read_only: true, task_count: 1, tasks: [taskBeta], trash: [] },
+        ],
+      },
+      datasetId: "ds-alpha",
+      taskName: "alpha",
+      datasetFilter: null,
+      showTrash: false,
+      flattened: false,
+      search: "",
+      registrySearch: "",
+      taskSelection: new Set(),
+    });
+    taskControls.filters = {};
+    registryControls.filters = {};
+    const triggerRegistrySearch = value => {
+      const input = document.querySelector("[data-dataset-search]");
+      assert.ok(input);
+      input.value = value;
+      input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    };
+    triggerRegistrySearch("");
+    harbor.renderHarborWorkbench();
+
+    const taskChoices = key => [...document.querySelectorAll(`[data-harbor-overview] [data-filter-key="${key}"]`)].map(input => input.value);
+    const datasetChoices = key => [...document.querySelectorAll(`[data-harbor-dataset-registry] [data-filter-key="${key}"]`)].map(input => input.value);
+
+    assert.deepEqual(taskChoices("dataset"), ["ds-alpha", "ds-beta"]);
+    assert.deepEqual(taskChoices("tags"), ["tag-a", "tag-b"]);
+    assert.deepEqual(taskChoices("scoring_comment_count"), ["commented", "uncommented"]);
+    assert.deepEqual(datasetChoices("id"), ["ds-alpha", "ds-beta"]);
+
+    // Search narrows both Tasks and Datasets filter options to visible rows.
+    state.search = "alpha";
+    harbor.renderHarborWorkbench();
+    assert.deepEqual(taskChoices("dataset"), ["ds-alpha"]);
+    assert.deepEqual(taskChoices("tags"), ["tag-a"]);
+    assert.deepEqual(taskChoices("scoring_comment_count"), ["commented"]);
+
+    // Active filter on a column keeps that column visible even when search yields 0 rows.
+    taskControls.filters = { tags: ["tag-a"] };
+    state.search = "no-such-task";
+    harbor.renderHarborWorkbench();
+    assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 0);
+    assert.deepEqual(taskChoices("tags"), ["tag-a"]);
+    assert.equal(document.querySelector('[data-harbor-overview] input[data-filter-key="tags"][value="tag-a"]').checked, true);
+
+    triggerRegistrySearch("ds-beta");
+    assert.deepEqual(datasetChoices("id"), ["ds-beta"]);
+  } finally {
+    Object.assign(state, previous);
+    Object.assign(taskControls, previousTaskControls);
+    Object.assign(registryControls, previousRegistryControls);
     search.value = previousSearch;
   }
 });
@@ -1317,6 +1407,115 @@ test("closing an open filter menu flushes deferred background inventory updates"
     await tick();
     assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 2);
   } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("flattened table scoring_comments column opens modal, creates comments, filters, and updates task counts", async () => {
+  const previousFetch = globalThis.fetch;
+  const itemKey = JSON.stringify(["", "rubric", "fidelity"]);
+  const secondItemKey = JSON.stringify(["", "rubric", "accuracy"]);
+  const scoredTask = {
+    ...detail.task,
+    rule_count: 0,
+    rubric_count: 2,
+    scoring_item_count: 2,
+    scoring_comment_count: 0,
+    scoring_comments: {},
+    scoring_items: [
+      { key: itemKey, step: "", type: "rubric", id: "fidelity", question: "Fidelity?" },
+      { key: secondItemKey, step: "", type: "rubric", id: "accuracy", question: "Accuracy?" },
+    ],
+  };
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const path = String(url);
+    const method = options.method || "GET";
+    const body = options.body ? JSON.parse(String(options.body)) : null;
+    calls.push({ path, method, body });
+    if (method === "POST" && path === "/api/harbor/datasets/pbench/tasks/valid-task/scoring-comments") {
+      const comment = { id: "c1", body: body.body, author_id: "admin", updated_at_ms: 1000, revision: "r1" };
+      return new Response(JSON.stringify({ item_key: itemKey, comment, comments: [comment] }), { status: 201 });
+    }
+    if (path.startsWith("/api/harbor/datasets/pbench/tasks/valid-task")) {
+      return new Response(JSON.stringify({ dataset_id: "pbench", task: scoredTask, tree: [] }));
+    }
+    return new Response(JSON.stringify({}));
+  };
+  const previous = { ...harbor.workbenchState };
+  const controls = tableControls("harbor-datasets");
+  const previousControls = structuredClone(controls);
+  try {
+    Object.assign(harbor.workbenchState, {
+      inventory: { datasets: [{ id: "pbench", format: "harbor", read_only: false, tasks: [scoredTask], trash: [] }] },
+      datasetId: "pbench",
+      taskName: scoredTask.directory,
+      datasetFilter: null,
+      showTrash: false,
+      flattened: true,
+      search: "",
+      taskSelection: new Set(),
+      taskColumns: { layout: null, draft: null, search: "" },
+    });
+    controls.filters = {};
+    harbor.renderHarborWorkbench();
+
+    const trigger = document.querySelector("[data-scoring-comments-open]");
+    assert.ok(trigger);
+    trigger.click();
+    await tick();
+
+    const modal = document.querySelector("[data-comments-modal]");
+    assert.ok(modal);
+    assert.equal(modal.querySelector("[data-comment-composer]"), null);
+    modal.querySelector("[data-comment-composer-open]").click();
+    const textarea = modal.querySelector("[data-comment-composer] textarea");
+    textarea.value = "Clarify rubric threshold";
+    textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+    modal.querySelector("[data-comment-composer]").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await tick();
+    await tick();
+
+    assert.equal(calls.some(call => call.method === "POST" && call.body?.body === "Clarify rubric threshold"), true);
+    assert.equal(scoredTask.scoring_comment_count, 1);
+    assert.equal(scoredTask.scoring_comments[itemKey].length, 1);
+    modal.querySelector("[data-comments-modal-close]").click();
+
+    const commentFilter = document.querySelector('[data-filter-menu="scoring_comments"]');
+    assert.ok(commentFilter);
+    const uncommented = commentFilter.querySelector('input[value="uncommented"]');
+    assert.ok(uncommented);
+    uncommented.click();
+    commentFilter.querySelector("[data-filter-apply]").click();
+    assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 1);
+    assert.match(document.querySelector("[data-harbor-overview-row]").textContent, /accuracy/);
+
+    // Unflattened Tasks table also supports filtering by scoring comment status.
+    const uncommentedTask = {
+      ...detail.task,
+      directory: "other-task",
+      rule_count: 1,
+      rubric_count: 0,
+      scoring_item_count: 1,
+      scoring_comment_count: 0,
+      scoring_comments: {},
+      scoring_items: [{ key: JSON.stringify(["", "rule", "r1"]), step: "", type: "rule", id: "r1" }],
+    };
+    controls.filters = {};
+    harbor.workbenchState.flattened = false;
+    harbor.workbenchState.inventory = { datasets: [{ id: "pbench", format: "harbor", read_only: false, tasks: [scoredTask, uncommentedTask], trash: [] }] };
+    harbor.renderHarborWorkbench();
+    const unflatFilter = document.querySelector('[data-filter-menu="scoring_comment_count"]');
+    assert.ok(unflatFilter);
+    unflatFilter.querySelector('input[value="commented"]').click();
+    unflatFilter.querySelector("[data-filter-apply]").click();
+    assert.equal(document.querySelectorAll("[data-harbor-overview-row]").length, 1);
+    assert.match(document.querySelector("[data-harbor-overview-row]").textContent, /valid-task/);
+  } finally {
+    document.querySelector("[data-comments-modal]")?.remove();
+    document.body.classList.remove("comments-modal-open");
+    Object.assign(harbor.workbenchState, previous);
+    Object.assign(controls, previousControls);
     globalThis.fetch = previousFetch;
   }
 });

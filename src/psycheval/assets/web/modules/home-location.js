@@ -7,11 +7,11 @@ import { closeDetailSidebar } from "./detail-sidebar.js";
 import { HOME_QUERY, encodeWorkspaceLocation } from "../app/workspace-location.js";
 import { tableSortKey } from "../app/catalog-sort.js";
 
-const FILTER_KEYS = { source_category: "categories", source_tags: "tags", agent: "agents", model: "models", task_name: "tasks", job_name: "jobs", model_provider: "providers", dataset_id: "datasets", status: "results" };
+const FILTER_KEYS = { source_category: "categories", source_tags: "tags", agent: "agents", model: "models", task_name: "tasks", job_name: "jobs", model_provider: "providers", dataset_id: "datasets", status: "results", review_comments: "review_comments" };
 function captureHomeLocation() {
   const object = { ...state.homeLocationTarget };
   return { object, state: {
-    query: { ...Object.fromEntries(Object.keys(HOME_QUERY).map(key => [key, state.catalogQuery[key]])), sort: catalogSortKey(state.catalogQuery.sort) },
+    query: { ...Object.fromEntries(Object.keys(HOME_QUERY).map(key => [key, state.catalogQuery[key] ?? (Array.isArray(HOME_QUERY[key]) ? [] : HOME_QUERY[key])])), sort: catalogSortKey(state.catalogQuery.sort) },
     views: captureAppliedViewSnapshots(),
     summary: { group_by: state.leaderboardSummaryGroupBy, statistic: state.leaderboardSummaryStatistic, table_open: state.leaderboardSummaryTableOpen, chart_type: state.leaderboardSummaryChartType, metrics: state.leaderboardSummaryMetrics === null ? null : [...state.leaderboardSummaryMetrics], comparison_groups: state.leaderboardSummaryComparisonGroups === null ? null : [...state.leaderboardSummaryComparisonGroups] },
   } };

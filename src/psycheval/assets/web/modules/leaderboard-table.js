@@ -2,12 +2,13 @@ import { createColumnControl } from "./column-control.js";
 import { validMetricId } from "../app/metric-contract.js";
 import { metricDefinitions, formatMetric, metricSortKey, metricSearchText, metricProvenanceHint, hasPartialMetricCoverage } from "./metric-presentation.js";
 import { renderDateTime } from "./date-time.js";
-import { $, RENDER_OPTIONS, adminMode, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, modelDisplayName, statusLabel, t } from "./shared.js";
+import { $, RENDER_OPTIONS, adminMode, canAnnotate, esc, fmtCost, fmtDate, fmtMs, fmtNum, fmtPct, fmtTps, fmtTtft, hasMetricValue, listValue, lower, modelDisplayName, statusLabel, t } from "./shared.js";
 import { loadColumnLayout, normalizeColumnLayout, presenceForColumns, resolveColumns } from "./table-columns.js";
+import { commentFullTooltip, commentPreviewText, commentStatusLabel, renderCommentCellPreview } from "./comments-ui.js";
 
 import { configureDataTable, activeFilterValues, agentNameFor, bindDataTableControls, filterLabel, filterValues, renderDataSelection, renderDataTable, selectionColumn } from "./data-tables.js";
 
-const requiredDependencies = ["state", "renderComparisonPanels", "renderReadOnlySourceCategory", "renderReadOnlySourceTags", "renderTaskAlias", "sessionAliasValue", "sourceCategoryEditValue", "sourceCategoryFor", "sourceCategoryValue", "sourceIdentityFor", "sourceTagsEditValue", "sourceTagsFor", "sourceTagsValue", "bindServeExportControls", "bindTrialSelection", "bindServeSourceStateControls", "bindLeaderboardSearchControls", "commitSourceCellEdit", "existingSourceCategoryOptions", "existingSourceTagOptions", "bindLeaderboardCatalogControls", "catalogSortKey", "filterOptions", "leaderboardRows", "renderLeaderboardPanelControls", "renderLeaderboardSearchControls", "reportRows", "requestCatalogFacets", "requestCatalogSort", "rowAnalysisCount", "bindWorkspaceReportLeaderboardControls", "workspaceReportLeaderboardColumn"];
+const requiredDependencies = ["state", "renderComparisonPanels", "renderReadOnlySourceCategory", "renderReadOnlySourceTags", "renderTaskAlias", "sessionAliasValue", "sourceCategoryEditValue", "sourceCategoryFor", "sourceCategoryValue", "sourceIdentityFor", "sourceTagsEditValue", "sourceTagsFor", "sourceTagsValue", "bindServeExportControls", "bindTrialSelection", "bindServeSourceStateControls", "bindLeaderboardSearchControls", "commitSourceCellEdit", "existingSourceCategoryOptions", "existingSourceTagOptions", "bindLeaderboardCatalogControls", "catalogSortKey", "filterOptions", "leaderboardRows", "openReviewCommentsModal", "renderLeaderboardPanelControls", "renderLeaderboardSearchControls", "reportRows", "requestCatalogFacets", "requestCatalogSort", "rowAnalysisCount", "bindWorkspaceReportLeaderboardControls", "workspaceReportLeaderboardColumn"];
 let deps;
 
 function configureLeaderboardDataTables(provided) {
@@ -67,6 +68,21 @@ function leaderboardColumns() {
     { key: "model_provider", label: t("provider", "Provider"), valueType: "identity", defaultVisible: false, filterable: true, sortable: true, value: row => row?.model_provider || "-" },
     metricColumn("score"),
     { key: "status", label: t("result", "Result"), valueType: "status", filterable: true, value: row => row.status || "-", filterLabel: value => statusLabel(value), html: row => `<span class="stamp ${lower(row.status || "passed")}">${esc(statusLabel(row.status))}</span>` },
+    {
+      key: "review_comments",
+      label: t("comments", "Comments"),
+      valueType: "text",
+      filterable: true,
+      filterLabel: commentStatusLabel,
+      filterValues: row => [(row?.review_comments_present || listValue(row?.review_comments).length > 0) ? "commented" : "uncommented"],
+      value: row => commentPreviewText(row?.review_comments),
+      cellTitle: row => commentFullTooltip(row?.review_comments),
+      html: row => renderCommentCellPreview(row?.review_comments, {
+        canAdd: canAnnotate(),
+        ariaLabel: `${deps.sessionAliasValue(row) || row?.trial_key || ""} ${t("comments", "Comments")}`.trim(),
+        buttonAttrs: `data-review-comments-open="${esc(row?.source_key || "")}"`,
+      }),
+    },
     { key: "finished_at_ms", label: t("last_turn_end", "Last Turn End"), valueType: "datetime", numeric: true, sortable: true, value: row => row.finished_at_ms, format: (value, row) => `${lastTurnEndHint(row) ? "≈ " : ""}${fmtDate(value)}`, html: renderLastTurnEnd, cellTitle: row => `${fmtDate(row.finished_at_ms)} · ${lastTurnEndHint(row)}\n${metricProvenanceHint(row.metric_provenance?.last_turn_finished_at_ms)}` },
     metricColumn("duration_ms"),
     metricColumn("ttft_ms"),
@@ -155,6 +171,7 @@ function leaderboardColumnContext(rows = deps.leaderboardRows()) {
     serverPresence,
     key => activeFilterValues("leaderboard", key),
   );
+  if (canAnnotate() && rows.length > 0) presence.review_comments = true;
   return { columns, layout, presence };
 }
 function displayLeaderboardColumns(rows = deps.leaderboardRows()) {
@@ -240,5 +257,14 @@ function bindLeaderboardControls() {
   deps.bindTrialSelection(target);
   deps.bindLeaderboardCatalogControls(target);
   bindLeaderboardColumnControls(target);
+  const rowBySource = new Map(rows.map(row => [String(row?.source_key || ""), row]));
+  target.querySelectorAll("[data-review-comments-open]").forEach(button => {
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const row = rowBySource.get(button.dataset.reviewCommentsOpen);
+      if (row) deps.openReviewCommentsModal(row, button);
+    });
+  });
 }
 export { bindLeaderboardControls, bindLeaderboardColumnControls, configureLeaderboardDataTables, currentLeaderboardColumnLayout, displayLeaderboardColumns, leaderboardColumns, renderLeaderboard, renderLeaderboardColumnControls, renderLeaderboardExportControls, renderRowSelection, leaderboardSelectionColumn };

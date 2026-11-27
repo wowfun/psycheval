@@ -329,3 +329,89 @@ test("localhost Task browser reveals previewable and metadata-only files, hides 
   await remoteBrowser.setTaskDetail(detail(), { taskRef: { dataset_id: "ds", task: "t1" } });
   assert.equal(remoteRoot.querySelector("[data-file-reveal]"), null);
 });
+
+test("scoring preview renders inline per-item comment threads, step selector, focus highlight, and CRUD sync", async () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  const root = document.createElement("div");
+  root.innerHTML = '<header class="harbor-editor-head"></header><button data-harbor-save></button><textarea data-harbor-editor></textarea>';
+  document.body.append(root);
+  const itemKey = JSON.stringify(["", "rubric", "fidelity"]);
+  const stepOneKey = JSON.stringify(["one", "rubric", "fidelity"]);
+  const synced = [];
+  let store = {
+    [itemKey]: [
+      { id: "c1", body: "Initial check", author_id: "alice", updated_at_ms: 1000, revision: "r1" },
+    ],
+  };
+  globalThis.fetch = async (url, options = {}) => {
+    const path = String(url);
+    const method = options.method || "GET";
+    const body = options.body ? JSON.parse(String(options.body)) : null;
+    calls.push({ path, method, body });
+    if (method === "POST" && path.endsWith("/scoring-comments")) {
+      const created = { id: "c2", body: body.body, author_id: "admin", updated_at_ms: 2000, revision: "r2" };
+      store[body.item_key] = [...(store[body.item_key] || []), created];
+      return { ok: true, status: 201, statusText: "Created", text: async () => JSON.stringify({ item_key: body.item_key, comment: created, comments: store[body.item_key] }) };
+    }
+    throw new Error(`unexpected fetch: ${method} ${path}`);
+  };
+  try {
+    const taskBrowser = createTaskBrowser({
+      root,
+      editable: false,
+      readFile: async () => ({
+        content: "saved yaml",
+        preview: { kind: "judge", items: [{ id: "fidelity", question: "Matches evidence?" }], config: {} },
+      }),
+      onScoringCommentsChange: (taskRef, key, comments) => synced.push({ taskRef, key, comments }),
+    });
+    const taskDetail = {
+      dataset_id: "office",
+      task: {
+        directory: "office-one",
+        scoring_items: [
+          { key: itemKey, step: "", type: "rubric", id: "fidelity", path: "tests/judge.yaml" },
+          { key: stepOneKey, step: "one", type: "rubric", id: "fidelity", path: "tests/judge.yaml" },
+        ],
+        scoring_comments: store,
+      },
+      default_file_path: "tests/judge.yaml",
+      tree: [{ path: "tests/judge.yaml", kind: "file", previewable: true, editable: false }],
+    };
+    await taskBrowser.setTaskDetail(taskDetail, {
+      taskRef: { dataset_id: "office", task: "office-one" },
+      focusItemKey: itemKey,
+    });
+    const focused = root.querySelector(".task-scoring-preview-item.is-focused");
+    assert.ok(focused);
+    assert.match(focused.textContent, /Initial check/);
+    const stepSelect = root.querySelector("[data-scoring-comment-step]");
+    assert.ok(stepSelect);
+
+    assert.equal(focused.querySelector("[data-comment-composer]"), null);
+    focused.querySelector("[data-comment-composer-open]").click();
+    const textarea = focused.querySelector("[data-comment-composer] textarea");
+    textarea.value = "Inline follow-up";
+    textarea.dispatchEvent(new window.Event("input", { bubbles: true }));
+    focused.querySelector("[data-comment-composer]").dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+    await tick();
+    await tick();
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].body.item_key, itemKey);
+    assert.equal(calls[0].body.body, "Inline follow-up");
+    assert.equal(synced.length, 1);
+    assert.equal(synced[0].comments.length, 2);
+
+    // Syncing external updates from the flattened table modal updates the inline thread.
+    taskBrowser.syncScoringComments({ dataset_id: "office", task: "office-one" }, itemKey, [
+      ...store[itemKey],
+      { id: "c3", body: "From modal", author_id: "alice", updated_at_ms: 3000, revision: "r3" },
+    ]);
+    assert.match(root.querySelector(".task-scoring-preview-item").textContent, /From modal/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    root.remove();
+  }
+});

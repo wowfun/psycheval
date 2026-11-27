@@ -95,3 +95,9 @@ test("Info and Timing links retain the source and child identity", () => {
     assert.deepEqual(decodeWorkspaceLocation("home", new URL(href, "http://localhost")).object, object);
   }
 });
+
+test("review_comments filter round trips in Home locations and rejects invalid statuses", () => {
+  const href = encodeWorkspaceLocation("home", { state: { query: { review_comments: ["commented"] } } }, "http://localhost");
+  assert.deepEqual(decodeWorkspaceLocation("home", new URL(href)).state.query.review_comments, ["commented"]);
+  assert.throws(() => encodeWorkspaceLocation("home", { state: { query: { review_comments: ["other"] } } }, "http://localhost"));
+});

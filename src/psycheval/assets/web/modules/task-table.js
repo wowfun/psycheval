@@ -1,6 +1,7 @@
-import { esc, t } from "./shared.js";
+import { canAnnotate, esc, listValue, t } from "./shared.js";
 import { applyDataTableControls, bindDataTableControls, bindTableRowActivation, renderDataTable } from "./data-tables.js";
 import { customValuePresent, formatCustomColumnValue, isComplexCustomValue } from "./task-custom-columns.js";
+import { commentFullTooltip, commentPreviewText, commentStatusLabel, renderCommentCellPreview } from "./comments-ui.js";
 
 const searchCache = new WeakMap();
 const INSTRUCTION_EXCERPT_LENGTH = 240;
@@ -110,6 +111,18 @@ function taskColumns({ selection, rename, scoring = false, flattened = false, ed
           cellTitle: row => row.task?.rule_count_source === "manual" ? t("task_rules_manual", "Manually entered") : row.dataset?.format === "workbuddy.v1" ? (canEditRuleCount?.(row) ? t("task_rules_edit", "Double-click to enter a rule count") : t("task_rules_unknown", "Rule count unknown")) : t("task_rules_description", "Deterministic scoring rules") },
         { key: "rubric_count", label: t("task_rubrics", "Rubrics"), valueType: "number", sortable: true, presence: alwaysPresent, value: row => row.task?.rubric_count, format: value => value ?? "" },
         { key: "scoring_item_count", label: t("task_scoring_items", "Scoring items"), valueType: "number", sortable: true, presence: alwaysPresent, value: row => row.task?.scoring_item_count, format: value => value ?? "" },
+        {
+          key: "scoring_comment_count",
+          label: t("scoring_comments", "Scoring comments"),
+          valueType: "number",
+          sortable: true,
+          filterable: true,
+          presence: row => canAnnotate() || Number(row.task?.scoring_comment_count || 0) > 0,
+          value: row => Number(row.task?.scoring_comment_count || 0) || null,
+          filterLabel: commentStatusLabel,
+          filterValues: row => [Number(row.task?.scoring_comment_count || 0) > 0 ? "commented" : "uncommented"],
+          format: value => value ?? "",
+        },
       ]),
     ];
     return [
@@ -129,19 +142,40 @@ function taskColumns({ selection, rename, scoring = false, flattened = false, ed
 function scoringItemColumns(presence = () => true) {
   const typeLabel = value => value ? t(`task_scoring_${value}`, value) : "";
   return [
-    ["step", "task_scoring_step", "Step"], ["id", "task_scoring_id", "ID"],
-    ["type", "task_scoring_type", "Type"], ["question", "task_scoring_question", "Question"],
-    ["pass_criteria", "task_scoring_pass", "Pass criteria"], ["fail_criteria", "task_scoring_fail", "Fail criteria"],
-    ["scope_limits", "task_scoring_scope", "Scope limits"], ["artifact_refs", "task_scoring_artifacts", "Artifact refs"],
-  ].map(([key, label, fallback]) => ({
-    key, label: t(label, fallback), valueType: "text", sortable: ["step", "id", "type"].includes(key), presence,
-    value: row => row.scoringItem?.[key] ?? "",
-    ...(key === "type" ? {
-      filterable: true, filterLabel: typeLabel, format: typeLabel,
-      // The filter menu derives options from unflattened Tasks.
-      filterValues: row => row.scoringItem ? [row.scoringItem.type] : row.task?.scoring_items?.map(item => item.type) || [],
-    } : { format: scoringText }),
-  }));
+    ...[
+      ["step", "task_scoring_step", "Step"], ["id", "task_scoring_id", "ID"],
+      ["type", "task_scoring_type", "Type"], ["question", "task_scoring_question", "Question"],
+      ["pass_criteria", "task_scoring_pass", "Pass criteria"], ["fail_criteria", "task_scoring_fail", "Fail criteria"],
+      ["scope_limits", "task_scoring_scope", "Scope limits"], ["artifact_refs", "task_scoring_artifacts", "Artifact refs"],
+    ].map(([key, label, fallback]) => ({
+      key, label: t(label, fallback), valueType: "text", sortable: ["step", "id", "type"].includes(key), presence,
+      value: row => row.scoringItem?.[key] ?? "",
+      ...(key === "type" ? {
+        filterable: true, filterLabel: typeLabel, format: typeLabel,
+        filterValues: row => row.scoringItem ? [row.scoringItem.type] : row.task?.scoring_items?.map(item => item.type) || [],
+      } : { format: scoringText }),
+    })),
+    {
+      key: "scoring_comments",
+      label: t("comments", "Comments"),
+      valueType: "text",
+      filterable: true,
+      presence: row => canAnnotate() || listValue(row.scoringItem?.comments).length > 0 || Number(row.task?.scoring_comment_count || 0) > 0,
+      value: row => commentPreviewText(row.scoringItem?.comments),
+      filterLabel: commentStatusLabel,
+      filterValues: row => row.scoringItem
+        ? [listValue(row.scoringItem.comments).length ? "commented" : "uncommented"]
+        : listValue(row.task?.scoring_items).map(item => listValue(item?.comments).length ? "commented" : "uncommented"),
+      cellTitle: row => commentFullTooltip(row.scoringItem?.comments),
+      html: row => row.scoringItem
+        ? renderCommentCellPreview(row.scoringItem.comments, {
+            canAdd: canAnnotate(),
+            ariaLabel: `${row.scoringItem.id || ""} ${t("comments", "Comments")}`.trim(),
+            buttonAttrs: `data-scoring-comments-open="${esc(row.key)}"`,
+          })
+        : `<span class="muted">-</span>`,
+    },
+  ];
 }
 
 function scoringText(value) {
@@ -177,14 +211,26 @@ function customMetadataSearchParts(metadata) {
   return parts;
 }
 
+function scoringCommentSearchParts(scoringComments) {
+  if (!scoringComments || typeof scoringComments !== "object") return [];
+  const parts = [];
+  for (const list of Object.values(scoringComments)) {
+    for (const item of listValue(list)) {
+      if (item?.author_id) parts.push(String(item.author_id));
+      if (item?.body) parts.push(String(item.body));
+    }
+  }
+  return parts;
+}
+
 function taskSearchText(row) {
   const context = [row.datasetId, row.taskName, row.packageName, row.status, t(`harbor_status_${row.status}`, row.status), row.diagnostics].filter(Boolean).join(" ");
   const task = row.task;
   if (!task) return context.toLowerCase();
   const cached = searchCache.get(task);
-  if (cached && cached.context === context && cached.instruction === task.instruction && cached.tags === task.tags && cached.customMetadata === task.custom_metadata) return cached.text;
-  const text = [context, ...(task.tags || []), task.instruction, ...customMetadataSearchParts(task.custom_metadata)].filter(Boolean).join(" ").toLowerCase();
-  searchCache.set(task, { context, instruction: task.instruction, tags: task.tags, customMetadata: task.custom_metadata, text });
+  if (cached && cached.context === context && cached.instruction === task.instruction && cached.tags === task.tags && cached.customMetadata === task.custom_metadata && cached.scoringComments === task.scoring_comments) return cached.text;
+  const text = [context, ...(task.tags || []), task.instruction, ...customMetadataSearchParts(task.custom_metadata), ...scoringCommentSearchParts(task.scoring_comments)].filter(Boolean).join(" ").toLowerCase();
+  searchCache.set(task, { context, instruction: task.instruction, tags: task.tags, customMetadata: task.custom_metadata, scoringComments: task.scoring_comments, text });
   return text;
 }
 

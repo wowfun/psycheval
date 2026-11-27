@@ -1,5 +1,6 @@
-import { esc, listValue, localFileRevealEnabled, t } from "./shared.js";
+import { canAnnotate, esc, listValue, localFileRevealEnabled, t } from "./shared.js";
 import { bindFilePreviewToggle, createFileMarkdown, createFileRead, formatBytes, renderFileTree, selectFile, showFileText } from "./file-browser.js";
+import { applyScoringCommentsToTask, createScoringCommentActions } from "./comments-ui.js";
 import { createScoringPreview } from "./task-file-preview.js";
 import { serveApi } from "./http.js";
 
@@ -16,6 +17,7 @@ function createTaskBrowser(options = {}) {
     onContextMenu: options.onContextMenu || null,
     onDirtyChange: options.onDirtyChange || null,
     onError: options.onError || null,
+    onScoringCommentsChange: options.onScoringCommentsChange || null,
     detail: null,
     taskRef: null,
     contextKey: null,
@@ -37,6 +39,9 @@ function createTaskBrowser(options = {}) {
     structuredError: "",
     structuredRequest: 0,
     structuredBusy: false,
+    preferredStep: null,
+    selectedCommentStep: null,
+    focusItemKey: null,
   };
 
   function attach(root) {
@@ -139,6 +144,9 @@ function createTaskBrowser(options = {}) {
     browser.detail = detail && typeof detail === "object" ? detail : null;
     browser.taskRef = normalizeTaskRef(selection.taskRef) || detailTaskRef(browser.detail);
     browser.contextKey = selection.contextKey || taskContextKey(browser.taskRef, selection);
+    browser.preferredStep = selection.preferredStep ?? null;
+    browser.selectedCommentStep = selection.preferredStep ?? null;
+    browser.focusItemKey = selection.focusItemKey ?? null;
     browser.filePath = null;
     browser.fileRevision = null;
     browser.savedText = "";
@@ -175,6 +183,13 @@ function createTaskBrowser(options = {}) {
       showUnavailable(path, t("task_file_unavailable", "Task file unavailable"));
       return null;
     }
+    if (options.preferredStep !== undefined) {
+      browser.preferredStep = options.preferredStep;
+      browser.selectedCommentStep = options.preferredStep;
+    } else if (options.focusItemKey === undefined) {
+      browser.selectedCommentStep = browser.preferredStep;
+    }
+    browser.focusItemKey = options.focusItemKey ?? null;
     return openItem(item, options);
   }
 
@@ -277,6 +292,9 @@ function createTaskBrowser(options = {}) {
     browser.revealError = "";
     browser.previewStatus = "empty";
     browser.previewMessage = "";
+    browser.preferredStep = null;
+    browser.selectedCommentStep = null;
+    browser.focusItemKey = null;
     if (!keepRoot) browser.root = null;
   }
 
@@ -293,6 +311,54 @@ function createTaskBrowser(options = {}) {
       onContextMenu: browser.onContextMenu,
       collapsed,
     });
+  }
+
+  function scoringStepsForPath(filePath) {
+    const pathText = String(filePath || "");
+    const stepMatch = pathText.match(/^steps\/([^/]+)\/tests\/(?:grader\.json|judge\.yaml)$/);
+    if (stepMatch) return [stepMatch[1]];
+    const items = listValue(browser.detail?.task?.scoring_items);
+    const matched = [];
+    for (const item of items) {
+      if (item?.path === pathText) {
+        const step = String(item.step || "");
+        if (!matched.includes(step)) matched.push(step);
+      }
+    }
+    return matched.length ? matched : [""];
+  }
+
+  function applyLocalScoringComments(itemKey, comments) {
+    applyScoringCommentsToTask(browser.detail?.task, itemKey, comments);
+    if (browser.taskRef) browser.onScoringCommentsChange?.(browser.taskRef, itemKey, comments);
+  }
+
+  function scoringCommentOptions() {
+    if (!browser.taskRef || !browser.detail?.task) return null;
+    const ref = browser.taskRef;
+    const steps = scoringStepsForPath(browser.filePath);
+    const activeStep = (browser.selectedCommentStep != null && steps.includes(browser.selectedCommentStep))
+      ? browser.selectedCommentStep
+      : (browser.preferredStep != null && steps.includes(browser.preferredStep))
+        ? browser.preferredStep
+        : (steps[0] ?? "");
+    const actions = createScoringCommentActions(ref, {
+      serveApi,
+      onUpdated: (itemKey, next) => applyLocalScoringComments(itemKey, next),
+    });
+    return {
+      commentsByKey: browser.detail.task.scoring_comments || {},
+      steps,
+      activeStep,
+      focusItemKey: browser.focusItemKey,
+      canCreate: canAnnotate(),
+      isDraft: browser.dirty,
+      onStepChange(step) {
+        browser.selectedCommentStep = step;
+        renderPreview();
+      },
+      ...actions,
+    };
   }
 
   function renderPreview(metadataItem = null) {
@@ -333,7 +399,9 @@ function createTaskBrowser(options = {}) {
     }
     const markdown = browser.previewStatus === "ready" ? createFileMarkdown(browser.filePath, browser.draftText) : null;
     const scoring = browser.previewStatus === "ready" && isScoringFile();
-    const structured = scoring && browser.structuredText === browser.draftText ? createScoringPreview(browser.structured) : null;
+    const structured = scoring && browser.structuredText === browser.draftText
+      ? createScoringPreview(browser.structured, scoringCommentOptions())
+      : null;
     const rendered = markdown || structured;
     editor.hidden = Boolean(rendered) && !browser.raw;
     if (preview) {
@@ -517,6 +585,13 @@ function createTaskBrowser(options = {}) {
       if (browser.filePath !== path) return;
       browser.savedText = content;
       setDirty(node("[data-harbor-editor]")?.value !== content);
+    },
+    syncScoringComments(taskRef, itemKey, comments) {
+      if (!browser.taskRef || !taskRef) return;
+      if (browser.taskRef.dataset_id !== taskRef.dataset_id || browser.taskRef.task !== taskRef.task) return;
+      if (!browser.detail?.task || typeof browser.detail.task !== "object") return;
+      applyScoringCommentsToTask(browser.detail.task, itemKey, comments);
+      if (browser.previewStatus === "ready" && isScoringFile()) renderPreview();
     },
     attach,
     clear,

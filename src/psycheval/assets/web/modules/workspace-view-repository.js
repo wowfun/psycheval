@@ -4,10 +4,10 @@ const BROWSER_VIEW_VERSION = 1;
 const VIEW_NOTES_BYTE_LIMIT = 1024 * 1024;
 const FILTER_KEYS = new Set([
   "state", "search", "categories", "tags", "agents", "models", "results",
-  "tasks", "jobs", "providers",
+  "tasks", "jobs", "providers", "review_comments",
 ]);
 const LIST_FILTER_KEYS = [
-  "categories", "tags", "agents", "models", "results", "tasks", "jobs", "providers",
+  "categories", "tags", "agents", "models", "results", "tasks", "jobs", "providers", "review_comments",
 ];
 const VIEW_KEYS = new Set(["name", "filters", "group_by", "notes"]);
 

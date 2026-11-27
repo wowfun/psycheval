@@ -37,7 +37,7 @@ test("summary follows filtered tasks and counts disjoint unknowns accurately", (
   const root = document.createElement("div");
   renderTaskSummary(root, [tasks[1], row("bad", { rule_count: 1, rubric_count: null, scoring_item_count: null })], { ...createTaskSummaryState(), groupBy: "overall", open: true }, { onChange() {}, onExport() {} });
   assert.match(root.querySelector('td[data-table-column-key="scoring_item_count"]').title, /2 Tasks/);
-  assert.deepEqual(taskColumns({ scoring: true }).map(c => c.key), ["dataset", "task", "tags", "instruction", "skill_count", "input_file_count", "has_prepare", "rule_count", "rubric_count", "scoring_item_count"]);
+  assert.deepEqual(taskColumns({ scoring: true }).map(c => c.key), ["dataset", "task", "tags", "instruction", "skill_count", "input_file_count", "has_prepare", "rule_count", "rubric_count", "scoring_item_count", "scoring_comment_count"]);
   assert.deepEqual(taskColumns().map(c => c.key), ["dataset", "task", "package", "status", "diagnostics"]);
 });
 
